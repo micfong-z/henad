@@ -3,8 +3,8 @@
 `ui/editor/sheet/` shows a sheet, a model file of `kind = "sheet"` (`agents/henad-graph-sheet.md`),
 in the Editor tab as its Sheet and Card panes, and holds the New model dialog. The canvas and the
 code view are in `agents/henad-app-editor.md`, and the expert mode stays there beside the canvas it
-extends. The Sheet pane edits every section (S16a, S16b). The Card pane is read-only: chips, blanks
-and selects show the sheet and nothing edits it.
+extends. The Sheet pane edits every section (S16a, S16b), those of a world of agents included
+(S26). The Card pane is read-only: chips, blanks and selects show the sheet and nothing edits it.
 
 `mod.rs` holds `SheetEditor`: a `SheetBuilder` over the `SheetDocument` (so new draws take fresh
 keys), its canonical text (`text`, which Save model writes and Apply reads through
@@ -47,32 +47,34 @@ preview line and leaves the checker's `SHEET_EMPTY` warning out of the list. The
 `SHEET_EMPTY` with "+ Add property" as a `filled_button`, and the Card pane, with no card, shows
 `card_header("cell")` and `BLANK_MODEL_CARD` (also under a tick card with no lines).
 
-`sheet_pane.rs` draws `SheetSection::ALL` in order, each heading from `SheetSection::heading` with
-its help button, under `ui.push_id(PaneState::widgets)`, an id per sheet opened (`PaneState::new`
-takes the load number from `SheetEditor::new`, not the preview key, which changes on every edit).
-The field ids (`widgets.with(...)`, `start_field_id(widgets, property, slot)`) and the picker's
-Number box derive from it, so a refused draft never shows in another sheet, and removing a by-chance
-row forgets the drafts of that row and every row after it. The pane collects at most one `Pending`
-edit per frame (a boxed closure, `starts_only`, `from_form`), run through `SheetEditor::edit` after
-drawing. A refusal shows as the form's message or as `PaneState::refusal` under the Cells section,
-through `refusal_text`. The world: `CELLS_ON_A_GRID`, Size as two `commit_field`s named `WIDTH_NAME`
-and `HEIGHT_NAME` (a whole number of cells from 1 to `henad_graph::limits::MAX_GRID_SIDE`, D72, with
-`world_side_out_of_range` for any other number, a fraction or a percent included, and
-`TYPE_ONE_NUMBER` for text that is no number), Edges as a `ComboBox` named `EDGES_LABEL` with
-`WRAP_TOOLTIP` or `WALLS_SENTENCE` and the grey sentence (no torus mark, D93), then the Time line:
-`ONE_TICK_IS`, the length field named `TICK_LENGTH_NAME` while a unit is set (0 or less becomes 1),
-and the unit select named `TICK_UNIT_NAME` with `tick_unit_choice` (None first, "one step (no
-unit)", which writes no `[time]`). The Cells table (`CELLS_COLUMNS`): the name as a frameless button
-named `edit_property_heading` that opens the property form, the kind (`STATES_KIND` with a swatch
-per state, `NUMBER_KIND`, or `INTEGER_KIND` with `INTEGER_KIND_TOOLTIP`, D23), Starts as (a select
-named `starts_place` showing `starts_text`: `starts_all` per state and `BY_CHANCE`, or `A_VALUE` and
-`A_RANDOM_NUMBER`, the latter for Number only, since the lowering refuses a random whole number),
-and `changed_by` over the Become and Set lines of the cards that run each tick. By chance draws each
-row on a line of its own (state select, `WITH_CHANCE`, the number, × named `remove_row_name`), "+
-Add row" named `add_row_name` (the first state no row draws), and `OTHERWISE` with its select. A new
-by-chance start draws the second state with an empty chance, otherwise the first. A Number start
-shows `STARTS_AT` or `RANDOM_NUMBER_BETWEEN` .. `RANDOM_NUMBER_AND` (0 and 1 to start). Each Starts
-as number (`start_number`, D111) is a `commit_field` named `starts_field_name(place, ...)` showing
+`sheet_pane.rs` draws `SheetSection::shown(made_of)` in order (`ALL` for cells, `AGENT_WORLD` with
+Agents, Ground and Events in place of Cells), each heading from `SheetSection::heading` with its
+help button, under `ui.push_id(PaneState::widgets)`, an id per sheet opened (`PaneState::new` takes
+the load number from `SheetEditor::new`, not the preview key, which changes on every edit). The
+field ids (`widgets.with(...)`, `start_field_id(widgets, property, slot)`) and the picker's Number
+box derive from it, so a refused draft never shows in another sheet, and removing a by-chance row
+forgets the drafts of that row and every row after it. The pane collects at most one `Pending` edit
+per frame (a boxed closure, `starts_only`, `from_form`), run through `SheetEditor::edit` after
+drawing. A refusal shows as the form's message or as `PaneState::refusal` under the Cells or Agents
+section, through `refusal_text`. The world: `CELLS_ON_A_GRID`, Size as two `commit_field`s named
+`WIDTH_NAME` and `HEIGHT_NAME` (a whole number of cells from 1 to
+`henad_graph::limits::MAX_GRID_SIDE`, D72, with `world_side_out_of_range` for any other number, a
+fraction or a percent included, and `TYPE_ONE_NUMBER` for text that is no number), Edges as a
+`ComboBox` named `EDGES_LABEL` with `WRAP_TOOLTIP` or `WALLS_SENTENCE` and the grey sentence (no
+torus mark, D93), then the Time line: `ONE_TICK_IS`, the length field named `TICK_LENGTH_NAME` while
+a unit is set (0 or less becomes 1), and the unit select named `TICK_UNIT_NAME` with
+`tick_unit_choice` (None first, "one step (no unit)", which writes no `[time]`). The Cells table
+(`CELLS_COLUMNS`): the name as a frameless button named `edit_property_heading` that opens the
+property form, the kind (`STATES_KIND` with a swatch per state, `NUMBER_KIND`, or `INTEGER_KIND`
+with `INTEGER_KIND_TOOLTIP`, D23), Starts as (a select named `starts_place` showing `starts_text`:
+`starts_all` per state and `BY_CHANCE`, or `A_VALUE` and `A_RANDOM_NUMBER`, the latter for Number
+only, since the lowering refuses a random whole number), and `changed_by` over the Become and Set
+lines of the cards that run each tick. By chance draws each row on a line of its own (state select,
+`WITH_CHANCE`, the number, × named `remove_row_name`), "+ Add row" named `add_row_name` (the first
+state no row draws), and `OTHERWISE` with its select. A new by-chance start draws the second state
+with an empty chance, otherwise the first. A Number start shows `STARTS_AT` or
+`RANDOM_NUMBER_BETWEEN` .. `RANDOM_NUMBER_AND` (0 and 1 to start). Each Starts as number
+(`start_number`, D111) is a `commit_field` named `starts_field_name(place, ...)` showing
 `literal_words` (a percent as typed), with "Use a parameter" beside it opening `CHOOSE_A_PARAMETER`.
 A parameter chip replaces the field and reopens `Blank::picker_title` with the Number box. A row's
 empty field empties the chance, text that does not read keeps the old value with `TYPE_A_CHANCE` or
@@ -134,6 +136,52 @@ heading, each line's number and sentence from `card_lines`, or `BUTTON_CARD_EMPT
 adds with `AddButton` and `SetButtonSteps` (one property as `properties`, every property as `thing =
 "cells"`), renames and sets steps, and deletes and adds again a button whose kind changes. A refusal
 shows as the form's message (`FormKind` on `Pending`).
+
+**A world of agents** (S26). The pane works on a *thing*, `cells`, `ground` or the agent kind's id:
+`properties_of`, `find_property`, `all_properties` (also behind `starts_of` and
+`without_starts_or_words` in `mod.rs`, so a start of any thing waits for Start again) and
+`measured_thing` (the cells, or the first kind of agent, which Measures and Buttons act on).
+`property_table` draws any thing's table and `property_form_or_add` its form or "+ Add property",
+named `add_property_name(kind)` under the agents and `ADD_GROUND_PROPERTY_NAME` under the ground.
+`PropertyForm::thing` keeps the form under its own table. `form_kinds` offers States and Number,
+Integer for cells and agents (the ground lowers only numbers and states), and for agents Yes or no,
+then Position or Heading while the agents hold none, and always the property's own kind. A new
+property starts in its first state, at 0, at no (`Bool(false)`), anywhere at random (a Position) or
+with no start (a Heading). `kind_words` and `starts_text(document, property)` read every kind and
+start ("Anywhere at random", `on_ground_start`, `PAINTED`, "All Yes", `HEADING_START`).
+`start_select` offers by kind: a state or By chance (with `PAINTED` as a selected entry that
+changes nothing while the start is painted), All Yes or All No, Anywhere at random or each state of
+a ground States property that `StartsAs::paints_single_cells` accepts, the predicate the lowering's
+`on_ground` uses, A value or A random number. No control paints, so a ground made on the pane offers
+no on-ground start, and choosing a state or By chance replaces a painted start until Undo. A Heading
+shows `HEADING_START`, an Arrow its start through `Sentences::slot`, and a painted start
+`painted_shapes` with no control.
+The Number start's lead is `every_starts_at(thing_word)`. `NumberTarget` (`Start` or `Kept`) is what
+`number_field` (the old start field, taking a `NumberField` with an optional `limit` that also
+refuses an empty field), `pick_number` and the New parameter dialog fill. `changing_lines` adds
+Steer, Keep between, Leave on a ground property and a Move for the card's Position and Heading.
+`sheet_pane/agents.rs` holds the three sections. Agents: the name (`AGENT_NAME_FIELD`,
+`rename_kind` renames and gives the kind the id its new name mints while its id is the one its old
+name mints, a refused `ChangeId` leaving the old id), the number at the start (`AGENT_COUNT_NAME`)
+and at most (`AGENT_MAX_NAME`, `AGENT_MAX_TOOLTIP`), each an integer with `integer_up_to`
+(1 to the most, which is 1 to `MAX_AGENTS`, a smaller most lowering the count with it), then the
+table and the refusal. Ground: `GROUND_EMPTY` or the table, then per Number property `marks_row`
+(`MARKS_LABEL`, a select named `marks_name` of `MARKS_NONE`, `MARKS_LARGEST`, `MARKS_ADD_UP`, one
+`SetMarks`, a share of 1 put in when the share is blank, and while marked `KEPT_LEAD` a
+`number_field` named from `kept_place` from 0 to 1 with `KEPT_OUT_OF_RANGE`, `KEPT_TAIL`) and per
+States property `blocked_row` (`blocked_lead`, a box per state named `blocked_state_name`,
+`SetBlocked`). Events: `EVENTS_EMPTY`, each name a `commit_field` named `event_name_name` with the
+two checks, × named `delete_event_name`, and `EventForm` (`NEW_EVENT`, `EVENT_NAME_FIELD`, Done or
+Enter). Measures count agents (`COUNT_AGENTS_MEASURE`, `COUNT_AGENTS_LEAD`,
+`count_agents_measure`) and average a Number, Integer or Position. Colours draw `colours_of` for
+the cells (`COLOR_CELLS_BY`), or for the agents (`COLOR_AGENTS_BY`) and the ground
+(`COLOR_GROUND_BY`, once it has a property), offering States, Number, Integer and Heading
+(`ByHeading` with `BY_HEADING_NOTE`). The select's choice compares with the rule's own property, so
+a thing with no rule takes one from the property it shows. Buttons act on `measured_thing`: Run once
+reads `run_once(thing_word)`, Start again offers the thing's properties with a start and the
+ground's, `button_edit` keeps a button's other steps (set everywhere) and puts its start-again step
+in the old one's place, and `button_does` joins steps that set to one value
+(`set_everywhere`, "Set To food and To home to 0 everywhere").
 
 The toolbar (`toolbar_ui`, a `Panel::top` above both panes): the model name as a frameless button
 named `model_name_button` ("Model name: X. Rename", tooltip `RENAME_MODEL_TOOLTIP`) that opens
@@ -279,10 +327,10 @@ is one step of time)", or "Tick 4 (4 days)" through `time_axis::elapsed_text` on
 time scale). No autosave and no Facilitator panel (D61).
 
 **The New model dialog** (`new_model.rs`, D57, D71). `NewModelDialog` sits in
-`EditorPanel::new_model` while open: the `StarterChoice`s (`starter_choices`: each sheet starter of
-a world made of cells, with its file name, the model name read from it, and its description from
-`STARTER_CHOICES` by that name, the agent starters held out since the sheet pane has no agent
-section), the chosen index, the Name text and `name_typed`. `choose` sets the index and, until the
+`EditorPanel::new_model` while open: the `StarterChoice`s (`starter_choices`: every sheet starter,
+grid and agent alike (D64, D67), with its file name, the model name read from it, and its
+description from `STARTER_CHOICES` by that name), the chosen index, the Name text, `name_typed` and
+`made_of`. `choose` sets the index and, until the
 author types in Name, the name to the starter's. "Untitled model" is the default name of Blank, the
 first choice. `open_new_model` opens it from the Editor header's New model, the File menu's first
 entry and the Model tab's New model. `lib.rs` calls `new_model_modal` every frame beside the other
@@ -296,14 +344,17 @@ and a refused one keeps the starter's name with the reason as the file status), 
 no file name and brings the Editor to the front. The world question of the final dialog shows only
 under Blank, and Blank is offered first (S16a). `starter_choices` puts Blank first (`file_name`
 `None`, "Untitled model" as its name), and the world question (`WORLD_QUESTION`, `CELLS_ON_A_GRID`
-chosen, `AGENTS_IN_OPEN_SPACE` disabled until S26) shows under Blank while it is chosen.
-`create_blank_model` loads `blank_model(name)`: 100 by 100 cells that wrap, the id minted from the
-name (or `untitled_model`), no property, parameter or card.
+or `AGENTS_IN_OPEN_SPACE` into `made_of`) shows under Blank while it is chosen. `create_blank_model`
+loads `blank_model(name)`: 100 by 100 cells that wrap, the id minted from the name (or
+`untitled_model`), no property, parameter or card. `create_blank_agent_model` loads
+`blank_agent_model(name)`: the same world made of agents, one kind `agent` named `BLANK_AGENT_NAME`
+with 1000 agents and room for a million, a Position that starts anywhere at random (through
+`SheetBuilder`, so its start takes a key) and a Heading.
 
 `src/tests/sheet_editor.rs` holds
 `every_sheet_starter_opens_as_a_sheet_previews_at_tick_zero_plays_and_applies` (each starter waits
 at tick 0 in the preview run of its world, `PreviewRun::Grid` or `PreviewRun::Agents`, plays past
-it, applies and builds), `the_new_model_dialog_offers_every_grid_starter_and_no_agent_starter`,
+it, applies and builds), `the_new_model_dialog_offers_every_starter_with_its_description`,
 `the_card_pane_reads_the_life_lines_as_their_sentences` (and the vote's "otherwise"),
 `apply_installs_and_builds_the_sheet`,
 `save_writes_the_canonical_text_and_the_saved_file_reopens_to_the_same_document` (a hand-edited
@@ -358,7 +409,8 @@ label-in-name check of D112), and from S16b
 starter's purpose, Randomise and Clear, then `align_with_starter` against `without_card_lines` of
 the starter equal in canonical text, Undo through each step to Blank and Redo back, the same walk
 with Cmd+Z and Shift+Cmd+Z, Cmd+Y, the About modal and a focused field keeping the keys),
-`aligning_a_starter_with_itself_changes_nothing_and_restores_a_changed_key`,
+`aligning_a_starter_with_itself_changes_nothing_and_restores_a_changed_key` (Game of Life's cells,
+then the ants' agent and ground starts),
 `parameters_edit_on_the_sheet_by_the_rules_of_the_page`,
 `a_parameter_edit_after_play_restarts_at_tick_zero_with_the_notice` (a purpose, its Undo and its
 Redo do not),
@@ -372,4 +424,21 @@ the field, reversed ends kept),
 for a long sheet), `align_with_starter` (keys of drawing lines and starts, a parameter's `step` and
 `means`, a state's or measure's colour the palette names alike, no id) and `without_card_lines`
 (card lines, the cards that run each tick and `next_line`) sit in `src/tests/support.rs`. Keep
-them.
+them. The alignment covers the properties of every thing and copies no parameter's type. The
+random walk's rebuild, which has no card lines, sets Steps per tick to Number in the expected
+document. `src/tests/sheet_agents.rs` (S26), on the helpers
+`sheet_pane.rs` shares as `pub(super)`, holds
+`a_blank_agent_model_builds_the_random_walk_sheet_by_accessible_names` (New model, Agents in open
+space, 1000 by 1000, Walker, 10000, two parameters, Average of Position, Colour agents by Heading,
+the purpose, then equal to `without_card_lines` of the starter after `align_with_starter`),
+`the_agents_take_a_name_and_an_integer_up_to_the_most_the_world_holds`,
+`agents_take_states_numbers_and_yes_or_no_and_no_start_on_an_unpainted_ground` (the kinds
+offered, starts, no on-ground start on a ground made on the pane, a count of agents, the buttons),
+`a_ground_property_adds_up_its_marks_fades_and_blocks_agents` (only States and Number for the
+ground, `marks = "add_up"` lowering to `combine = "sum"`),
+`events_are_added_renamed_and_deleted_on_the_sheet`,
+`the_ant_starter_shows_its_ground_and_starts_ants_on_single_painted_cells` (the painted entry,
+only Food and Nest offered, the Food start lowering) and
+`the_agent_sections_show_no_forbidden_word_in_any_state` (at least 25 states, the agent starters,
+and the label-in-name check). `the_sheet_editor_never_shows_a_forbidden_word` opens the help of
+each section `SheetSection::shown` lists for the starter's world.

@@ -25,9 +25,9 @@ use std::fmt;
 use henad_core::metadata::TimeUnit;
 
 use super::document::{
-    Around, CardRuns, CellWhich, ChipRelation, CompareTest, LineKind, LineMode, PickRule, PropertyType, SheetCard,
-    SheetChip, SheetDocument, SheetEvent, SheetLine, SheetLiteral, SheetParameter, SheetProperty, SheetValue, Slot,
-    SummaryKind,
+    Around, CardRuns, CellWhich, ChipRelation, CompareTest, LineKind, LineMode, MadeOf, PickRule, PropertyType,
+    SheetCard, SheetChip, SheetDocument, SheetEvent, SheetLine, SheetLiteral, SheetParameter, SheetProperty,
+    SheetValue, Slot, SummaryKind,
 };
 use super::writer::format_number;
 
@@ -1732,6 +1732,13 @@ pub enum SheetSection {
     World,
     /// The properties every cell has.
     Cells,
+    /// The kind of agent of a world of agents: its name, how many there are and the properties every agent has.
+    Agents,
+    /// The cells under the agents: their properties, how marks left on them combine, and the cells agents cannot
+    /// enter.
+    Ground,
+    /// The things that happen to agents that Record lines count.
+    Events,
     /// The named numbers lines can use.
     Parameters,
     /// The numbers drawn on the plot.
@@ -1743,7 +1750,7 @@ pub enum SheetSection {
 }
 
 impl SheetSection {
-    /// Every section, in the order the sheet shows them.
+    /// Every section of a world of cells, in the order the sheet shows them.
     pub const ALL: [Self; 7] = [
         Self::Purpose,
         Self::World,
@@ -1754,12 +1761,36 @@ impl SheetSection {
         Self::Buttons,
     ];
 
+    /// Every section of a world of agents, in the order the sheet shows them.
+    pub const AGENT_WORLD: [Self; 9] = [
+        Self::Purpose,
+        Self::World,
+        Self::Agents,
+        Self::Ground,
+        Self::Events,
+        Self::Parameters,
+        Self::Measures,
+        Self::Colours,
+        Self::Buttons,
+    ];
+
+    /// Returns the sections of a world made of `made_of`, in the order the sheet shows them.
+    pub fn shown(made_of: MadeOf) -> &'static [Self] {
+        match made_of {
+            MadeOf::Agents => &Self::AGENT_WORLD,
+            _ => &Self::ALL,
+        }
+    }
+
     /// Heading of the section, such as "Purpose".
     pub fn heading(self) -> &'static str {
         match self {
             Self::Purpose => "Purpose",
             Self::World => "World",
             Self::Cells => "Cells",
+            Self::Agents => "Agents",
+            Self::Ground => "Ground",
+            Self::Events => "Events",
             Self::Parameters => "Parameters",
             Self::Measures => "Measures",
             Self::Colours => "Colours",
@@ -1786,6 +1817,19 @@ impl SheetSection {
                 "A property is something every cell has. A States property is one of a few named states, such as Dead \
                  or Alive. A Number property holds a number. Starts as says what every cell holds when the run starts."
             }
+            Self::Agents => {
+                "The agents move in open space. Name them and say how many there are at the start. Every agent has \
+                 each property listed here. Starts as says what every agent holds when the run starts."
+            }
+            Self::Ground => {
+                "The ground is the grid of cells under the agents. Agents read it and leave marks on its Number \
+                 properties. Marks says how the marks left on one cell in one tick combine, and a share of each mark \
+                 can fade every tick. Agents never enter a blocked cell."
+            }
+            Self::Events => {
+                "An event is something that happens to an agent. A Record line counts it each time, and a measure \
+                 can plot the count."
+            }
             Self::Parameters => {
                 "A parameter is a named number with a slider. Lines can use it. The value here is the one the model \
                  keeps. The slider beside the world tries other values in the run without changing the model."
@@ -1811,6 +1855,9 @@ impl SheetSection {
             Self::Purpose => "Spread of a disease through a town. Look for waves of infection.",
             Self::World => "One tick is 1 day",
             Self::Cells => "Status: States Dead, Alive. Starts as Alive with chance 0.3, otherwise Dead",
+            Self::Agents => "Walker: 10000 at the start. Position starts anywhere at random",
+            Self::Ground => "To food: Number. Marks keep the largest. Each tick keeps 0.999 of it",
+            Self::Events => "Delivery: an ant carrying food reaches the Nest",
             Self::Parameters => "Infection rate = 0.3 per day",
             Self::Measures => "Number of cells whose Status is Alive",
             Self::Colours => "Colour cells by Status",
@@ -2328,6 +2375,213 @@ pub fn button_name_taken(name: &str) -> String {
     format!("A button called {name} already exists.")
 }
 
+// Agents, the ground and events on the sheet
+
+/// Accessible name of the name of the kind of agent.
+pub const AGENT_NAME_FIELD: &str = "Name of the agents";
+
+/// Label of the number of agents at the start.
+pub const AGENT_COUNT_LABEL: &str = "Number at the start";
+
+/// Accessible name of the number of agents at the start.
+pub const AGENT_COUNT_NAME: &str = "Number of agents at the start";
+
+/// Label of the largest number of agents the world holds.
+pub const AGENT_MAX_LABEL: &str = "At most";
+
+/// Accessible name of the largest number of agents the world holds.
+pub const AGENT_MAX_NAME: &str = "Most agents the world holds";
+
+/// Tooltip of the largest number of agents the world holds.
+pub const AGENT_MAX_TOOLTIP: &str = "The world keeps room for this many agents.";
+
+/// Message on a kind of agent with no name.
+pub const AGENT_NAME_MISSING: &str = "Type a name for the agents.";
+
+/// Returns the message on a number of agents that is no integer from 1 to `most`, such as "Type an integer from 1 to
+/// 1000000.".
+pub fn integer_up_to(most: u32) -> String {
+    format!("Type an integer from 1 to {most}.")
+}
+
+/// Name of the kind of agent of a blank model of agents.
+pub const BLANK_AGENT_NAME: &str = "Agent";
+
+/// Returns the accessible name of [`ADD_PROPERTY`] under a kind of thing named `thing`, such as "Add property to
+/// Walker".
+pub fn add_property_name(thing: &str) -> String {
+    format!("Add property to {thing}")
+}
+
+/// Accessible name of [`ADD_PROPERTY`] under the ground.
+pub const ADD_GROUND_PROPERTY_NAME: &str = "Add property to the ground";
+
+/// Kind of an agent's place in the world.
+pub const POSITION_KIND: &str = "Position";
+
+/// Kind of an agent's direction of travel.
+pub const HEADING_KIND: &str = "Heading";
+
+/// Kind of a property that holds yes or no.
+pub const YES_NO_KIND: &str = "Yes or no";
+
+/// Kind of a property that holds an arrow in the plane.
+pub const ARROW_KIND: &str = "Arrow";
+
+/// Description of [`POSITION_KIND`].
+pub const POSITION_KIND_DESCRIPTION: &str = "Where the agent is in the world.";
+
+/// Description of [`HEADING_KIND`].
+pub const HEADING_KIND_DESCRIPTION: &str = "The direction the agent last moved in.";
+
+/// Description of [`YES_NO_KIND`].
+pub const YES_NO_KIND_DESCRIPTION: &str = "Holds yes or no, such as whether an agent is hungry.";
+
+/// Value yes of a Yes or no property.
+pub const YES: &str = "Yes";
+
+/// Value no of a Yes or no property.
+pub const NO: &str = "No";
+
+/// Choice of Starts as where every agent starts at a random place.
+pub const ANYWHERE_AT_RANDOM: &str = "Anywhere at random";
+
+/// Returns the choice of Starts as where every agent starts on a cell whose ground `property` is `state`, such as "On
+/// a cell whose Ground is Nest".
+pub fn on_ground_start(property: &str, state: &str) -> String {
+    format!("On a cell whose {property} is {state}")
+}
+
+/// Starts as of a Heading, which takes its first value from the first move.
+pub const HEADING_START: &str = "None until the first move";
+
+/// Choice of Starts as of a ground property painted with shapes in the file.
+pub const PAINTED: &str = "Painted";
+
+/// Returns the note under a painted start, painted `base` with `shapes` shapes on it, such as "Open, with 4 shapes
+/// painted on it".
+pub fn painted_shapes(base: &str, shapes: usize) -> String {
+    match shapes {
+        1 => format!("{base}, with 1 shape painted on it"),
+        _ => format!("{base}, with {shapes} shapes painted on it"),
+    }
+}
+
+/// Returns the words before the number of [`A_VALUE`] for a kind of thing called `thing`, such as "Every agent starts
+/// at".
+pub fn every_starts_at(thing: &str) -> String {
+    format!("Every {thing} starts at")
+}
+
+/// Text of the Ground section with no property, above the button that adds one.
+pub const GROUND_EMPTY: &str =
+    "The cells under the agents. Add a property to give the agents a trail to leave or cells to avoid.";
+
+/// Label of how marks left on one cell in one tick combine.
+pub const MARKS_LABEL: &str = "Marks";
+
+/// Tooltip of [`MARKS_LABEL`].
+pub const MARKS_TOOLTIP: &str = "What a cell keeps when several agents leave some on it in one tick.";
+
+/// Choice of [`MARKS_LABEL`] for a property agents leave nothing on.
+pub const MARKS_NONE: &str = "Not marked";
+
+/// Choice of [`MARKS_LABEL`] where a cell keeps the largest mark.
+pub const MARKS_LARGEST: &str = "Keep the largest";
+
+/// Choice of [`MARKS_LABEL`] where a cell adds up the marks.
+pub const MARKS_ADD_UP: &str = "Add up";
+
+/// Returns the accessible name of the marks rule of `property`, such as "To food marks".
+pub fn marks_name(property: &str) -> String {
+    format!("{property} marks")
+}
+
+/// Words before the share of a mark left after each tick.
+pub const KEPT_LEAD: &str = "Each tick keeps";
+
+/// Words after the share of a mark left after each tick.
+pub const KEPT_TAIL: &str = "of it";
+
+/// Returns the place of the share of `property` left after each tick, such as "To food, share kept each tick".
+pub fn kept_place(property: &str) -> String {
+    format!("{property}, share kept each tick")
+}
+
+/// Message on a share kept each tick outside 0 to 1.
+pub const KEPT_OUT_OF_RANGE: &str = "Type a share from 0 to 1, such as 0.99.";
+
+/// Returns the words before the states of `property` that agents cannot enter, such as "Agents cannot enter cells
+/// whose Ground is".
+pub fn blocked_lead(property: &str) -> String {
+    format!("Agents cannot enter cells whose {property} is")
+}
+
+/// Returns the accessible name of the box that keeps agents out of `state`, such as "Agents cannot enter Obstacle".
+pub fn blocked_state_name(state: &str) -> String {
+    format!("Agents cannot enter {state}")
+}
+
+/// Text of the Events section with no event.
+pub const EVENTS_EMPTY: &str = "No events yet. Add one for a Record line to count.";
+
+/// Button that opens the event form.
+pub const ADD_EVENT: &str = "+ Add event";
+
+/// Heading of the event form.
+pub const NEW_EVENT: &str = "New event";
+
+/// Placeholder of an event's name.
+pub const EVENT_NAME_PLACEHOLDER: &str = "Such as Delivery";
+
+/// Accessible name of a new event's name.
+pub const EVENT_NAME_FIELD: &str = "Event name";
+
+/// Message on an event with no name.
+pub const EVENT_NAME_MISSING: &str = "Type a name for the event.";
+
+/// Returns the message on an event named `name`, which another event holds.
+pub fn event_name_taken(name: &str) -> String {
+    format!("An event called {name} already exists.")
+}
+
+/// Returns the accessible name of the name field of the event `event`, such as "Name of event Delivery".
+pub fn event_name_name(event: &str) -> String {
+    format!("Name of event {event}")
+}
+
+/// Returns the accessible name of the button that deletes the event `event`, such as "Delete event Delivery".
+pub fn delete_event_name(event: &str) -> String {
+    format!("Delete event {event}")
+}
+
+/// Words before the property that colours the agents.
+pub const COLOR_AGENTS_BY: &str = "Colour agents by";
+
+/// Words before the property that colours the ground.
+pub const COLOR_GROUND_BY: &str = "Colour ground by";
+
+/// Note under agents coloured by their heading.
+pub const BY_HEADING_NOTE: &str = "Each agent takes one of eight hues by the direction it last moved in.";
+
+/// Kind of a measure that counts the agents in a state.
+pub const COUNT_AGENTS_MEASURE: &str = "Number of agents in a state";
+
+/// Words before the property of a measure that counts the agents in a state.
+pub const COUNT_AGENTS_LEAD: &str = "Number of agents whose";
+
+/// Returns the words of a measure that counts the agents whose `property` is `state`, such as "Number of agents whose
+/// Cargo is Searching".
+pub fn count_agents_measure(property: &str, state: &str) -> String {
+    format!("Number of agents whose {property} is {state}")
+}
+
+/// Returns what a button does that sets the ground `properties` to `value` everywhere, such as "Set To food and To
+/// home to 0 everywhere".
+pub fn set_everywhere(properties: &[String], value: &str) -> String {
+    format!("Set {} to {value} everywhere", word_list(properties))
+}
+
 // The New model dialog
 
 /// Heading of the New model dialog, and the top bar's button that opens it.
@@ -2336,8 +2590,8 @@ pub const NEW_MODEL: &str = "New model";
 /// Label of the starters.
 pub const START_FROM: &str = "Start from";
 
-/// Starters of a cells model with their descriptions, in the order the dialog shows them.
-pub const STARTER_CHOICES: [(&str, &str); 5] = [
+/// Starters with their descriptions, in the order the dialog shows them.
+pub const STARTER_CHOICES: [(&str, &str); 9] = [
     ("Blank", "An empty grid of cells to build on."),
     (
         "Game of Life",
@@ -2351,6 +2605,19 @@ pub const STARTER_CHOICES: [(&str, &str); 5] = [
     (
         "Forest fire",
         "Trees grow, lightning strikes, and fire spreads to neighbours.",
+    ),
+    (
+        "Random walk",
+        "Walkers take random steps and spread evenly across the plane.",
+    ),
+    ("Boids", "Birds steer by the birds around them and form flocks."),
+    (
+        "Bounded confidence",
+        "People move their opinion towards the opinions close to it.",
+    ),
+    (
+        "Ant foraging",
+        "Ants lay trails and find a short path from the nest to food.",
     ),
 ];
 

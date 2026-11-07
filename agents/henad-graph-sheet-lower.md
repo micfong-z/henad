@@ -346,6 +346,7 @@ from `log10(max(v, 1e-30)) / decades + 1` or `v` on a linear scale, through a `c
 a Number property linearly), `measures_ground` and Set everywhere. `on_ground` places an agent at
 `floor(center * size) + 0.5` of a cell shape painting its state, drawn by `rand.float` keyed
 `starts_as.cell` among several; a state the base or a larger shape paints is `ON_GROUND_CELLS`.
+`StartsAs::paints_single_cells` decides it, and the sheet pane offers the same states.
 
 On a card of agents `Builder::my_cell` is one `space.cell_of` of my position per pass
 (`GROUP_GROUND`, path `agents.<position>`). A place is `Operand::Place(PlaceValue)`: `xy` (`vec2i`),

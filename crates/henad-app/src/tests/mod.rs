@@ -11,6 +11,7 @@ mod graph_regions;
 mod install;
 mod preview_params;
 mod runaway;
+mod sheet_agents;
 mod sheet_editor;
 mod sheet_pane;
 mod threads;

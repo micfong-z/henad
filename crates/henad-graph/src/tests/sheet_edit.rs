@@ -13,8 +13,9 @@ use super::sheet_writer::assert_hunks;
 use crate::keys::KeyStream;
 use crate::sheet::check;
 use crate::sheet::document::{
-    Around, ButtonStepRule, CardRuns, CompareTest, Edges, LineKind, MeasureRule, ParameterType, PropertyType,
-    SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetTime, SheetValue, Slot, StartRule, StartsAs, StartsAsRow,
+    Around, BlockedState, ButtonStepRule, CardRuns, CompareTest, Edges, LineKind, Marks, MeasureRule, ParameterType,
+    PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetTime, SheetValue, Slot, StartRule, StartsAs,
+    StartsAsRow,
 };
 use crate::sheet::edit::{
     IdSpace, LineField, MoveDirection, STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem,
@@ -1688,8 +1689,42 @@ fn random_edit(rng: &mut u64, document: &SheetDocument) -> SheetEdit {
             direction: [MoveDirection::Up, MoveDirection::Down][below(rng, 2)],
         },
         24 => SheetEdit::DeleteLine { line },
-        _ => match below(rng, 4) {
+        _ => match below(rng, 7) {
             0 => SheetEdit::DrawNewNumbers { line },
+            4 => SheetEdit::SetAgentKind {
+                kind: document.agents.first().map(|kind| kind.id.clone()).unwrap_or_default(),
+                count: [0, 5, 50][below(rng, 3)],
+                max_count: [10, 100][below(rng, 2)],
+            },
+            5 => SheetEdit::SetMarks {
+                property: pick(rng, &properties).cloned().unwrap_or_default(),
+                marks: [None, Some(Marks::Largest), Some(Marks::AddUp)][below(rng, 3)],
+                kept_per_tick: [
+                    Slot::Blank,
+                    Slot::Filled(SheetValue::Literal(SheetLiteral::Number(0.9))),
+                ][below(rng, 2)]
+                .clone(),
+            },
+            6 => {
+                let ground_states: Vec<(String, String)> = document
+                    .ground
+                    .iter()
+                    .flat_map(|ground| &ground.properties)
+                    .flat_map(|property| {
+                        property
+                            .states
+                            .iter()
+                            .map(|state| (property.id.clone(), state.id.clone()))
+                    })
+                    .chain([("nothing".to_owned(), "nothing".to_owned())])
+                    .collect();
+                let (property, state) = pick(rng, &ground_states).cloned().unwrap_or_default();
+                SheetEdit::SetBlocked {
+                    property,
+                    state,
+                    blocked: below(rng, 2) == 0,
+                }
+            }
             1 => SheetEdit::SetTime {
                 time: [None, Some(SheetTime::new(2.0, TimeUnit::Hour))][below(rng, 2)],
             },
@@ -1820,4 +1855,132 @@ fn a_new_button_and_card_take_their_ids() {
     assert!(document.cards.iter().all(|card| card.id != "reset"));
     assert!(document.buttons.iter().any(|button| button.id == "reset"));
     assert!(!check::check(document).has_errors());
+}
+
+#[test]
+fn the_agents_take_a_count_up_to_their_largest_number() {
+    let mut builder = builder_of("random_walk.toml");
+    let set = |count: u32, max_count: u32| SheetEdit::SetAgentKind {
+        kind: "walker".to_owned(),
+        count,
+        max_count,
+    };
+    run(&mut builder, set(500, 2000));
+    let walker = &builder.document().agents[0];
+    assert_eq!((walker.count, walker.max_count), (500, 2000));
+    assert!(write(builder.document()).contains("count = 500\nmax_count = 2000\n"));
+    for refused in [set(0, 10), set(11, 10)] {
+        assert!(matches!(builder.apply(refused), Err(SheetEditError::Invalid(_))));
+    }
+    let missing = builder.apply(SheetEdit::SetAgentKind {
+        kind: "bird".to_owned(),
+        count: 1,
+        max_count: 1,
+    });
+    assert!(matches!(missing, Err(SheetEditError::Missing(_))));
+    assert_eq!(
+        builder.document().agents[0].count,
+        500,
+        "a refused edit changes nothing"
+    );
+}
+
+#[test]
+fn a_ground_property_takes_its_marks_and_fading_and_comes_and_goes_with_the_ground() {
+    let mut builder = builder_of("ants.toml");
+    let kept = Slot::Filled(SheetValue::Chip(SheetChip::Param("trail_kept_per_tick".to_owned())));
+    run(
+        &mut builder,
+        SheetEdit::SetMarks {
+            property: "to_food".to_owned(),
+            marks: Some(Marks::AddUp),
+            kept_per_tick: kept.clone(),
+        },
+    );
+    let written = write(builder.document());
+    assert!(written.contains("id = \"to_food\"\nname = \"To food\"\ntype = \"number\"\nmarks = \"add_up\""));
+    let lowered = crate::sheet::SheetFile::parse(&written).expect("the sheet lowers");
+    assert!(
+        lowered.lowered().to_toml().contains("combine = \"sum\""),
+        "add up lowers to a sum"
+    );
+
+    // No marks rule takes the fading with it, since a property that fades names its marks rule.
+    run(
+        &mut builder,
+        SheetEdit::SetMarks {
+            property: "to_home".to_owned(),
+            marks: None,
+            kept_per_tick: kept.clone(),
+        },
+    );
+    let ground = builder.document().ground.as_ref().expect("a ground");
+    let to_home = &ground.properties[2];
+    assert_eq!((to_home.marks, to_home.kept_per_tick.is_blank()), (None, true));
+    for (property, error) in [
+        ("ground", "a States property"),
+        ("cargo", "an agent property"),
+        ("nothing", "none"),
+    ] {
+        let refused = builder.apply(SheetEdit::SetMarks {
+            property: property.to_owned(),
+            marks: Some(Marks::Largest),
+            kept_per_tick: Slot::Blank,
+        });
+        assert!(refused.is_err(), "marks on {error} are refused");
+    }
+
+    // A blocked state is held once, and letting in a state that was not blocked changes nothing.
+    let blocked = |builder: &SheetBuilder| builder.document().ground.as_ref().expect("a ground").blocked.clone();
+    let block = |state: &str, kept_out: bool| SheetEdit::SetBlocked {
+        property: "ground".to_owned(),
+        state: state.to_owned(),
+        blocked: kept_out,
+    };
+    run(&mut builder, block("food", true));
+    run(&mut builder, block("food", true));
+    assert_eq!(
+        blocked(&builder),
+        [
+            BlockedState::new("ground", "obstacle"),
+            BlockedState::new("ground", "food")
+        ]
+    );
+    run(&mut builder, block("obstacle", false));
+    run(&mut builder, block("nest", false));
+    assert_eq!(blocked(&builder), [BlockedState::new("ground", "food")]);
+    assert!(
+        builder.apply(block("lava", true)).is_err(),
+        "a state the property lacks"
+    );
+    assert!(
+        builder
+            .apply(SheetEdit::SetBlocked {
+                property: "to_food".to_owned(),
+                state: "open".to_owned(),
+                blocked: true,
+            })
+            .is_err(),
+        "a Number property has no states to block"
+    );
+
+    // The ground comes with its first property and goes with its last.
+    let mut walk = builder_of("random_walk.toml");
+    let made = run(
+        &mut walk,
+        SheetEdit::AddProperty {
+            thing: "ground".to_owned(),
+            name: "Trail".to_owned(),
+            property_type: PropertyType::Number,
+        },
+    );
+    assert!(walk.document().ground.is_some());
+    run(
+        &mut walk,
+        SheetEdit::Delete {
+            item: SheetItem::Property(made[0].clone()),
+        },
+    );
+    assert_eq!(walk.document().ground, None);
+    assert_eq!(write(walk.document()), sheet_text("random_walk.toml"));
 }

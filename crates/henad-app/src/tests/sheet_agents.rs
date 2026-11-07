@@ -1,0 +1,547 @@
+//! Tests of the Sheet pane in a world of agents: the random walk's sheet built from a blank model of agents by
+//! accessible names, the number and the name of the agents, the kinds and starts of agents' properties, the ground with
+//! its marks, fading and blocked states, events, colours and buttons, and the words rule over every new section.
+
+use egui::accesskit::Role;
+use egui::{Key, Modifiers};
+use henad_graph::sheet::SheetFile;
+use henad_graph::sheet::document::{
+    BlockedState, ButtonStepRule, ColorRuleKind, MadeOf, Marks, ParameterType, PropertyType, SheetLiteral, SheetValue,
+    Slot, StartRule,
+};
+use henad_graph::sheet::sentence::{
+    ADD_BUTTON, ADD_EVENT, ADD_GROUND_PROPERTY_NAME, ADD_MEASURE, ADD_PARAMETER, AGENT_COUNT_NAME, AGENT_MAX_NAME,
+    AGENT_NAME_FIELD, AGENT_NAME_MISSING, AGENTS_IN_OPEN_SPACE, ANYWHERE_AT_RANDOM, AVERAGE_MEASURE, BUTTON_NAME_FIELD,
+    BY_HEADING_NOTE, CANCEL, COLOR_AGENTS_BY, COLOR_GROUND_BY, COUNT_AGENTS_MEASURE, CREATE_PARAMETER, DONE,
+    EVENT_NAME_FIELD, EVENT_NAME_MISSING, EVENTS_EMPTY, GROUND_EMPTY, HEADING_START, KEPT_OUT_OF_RANGE,
+    MEASURE_PROPERTY_NAME, NUMBER_KIND, PAINTED, START_AGAIN_FOR, STATES_KIND, YES_NO_KIND, add_property_name,
+    blocked_state_name, count_agents_measure, event_name_taken, integer_up_to, marks_name, run_once,
+};
+use henad_graph::sheet::sentence::{MARKS_ADD_UP, MARKS_LARGEST, MARKS_NONE};
+
+use super::sheet_pane::{
+    TALL_SCREEN, assert_control_holds, center_of, choose, click, enter_into, field_value, sheet, shows,
+    starter_document, text, type_into,
+};
+use crate::tests::support::{Harness, Node, align_with_starter, forbidden_words, without_card_lines};
+use crate::ui::editor::sheet::new_model::create_blank_agent_model;
+
+/// Returns a harness whose Editor holds a blank model of agents on a tall screen, or `None` to skip on a machine
+/// without a device.
+fn blank_agents() -> Option<Harness> {
+    let mut harness = Harness::new()?;
+    harness.screen = TALL_SCREEN;
+    create_blank_agent_model(&mut harness.app, "");
+    harness.settle();
+    Some(harness)
+}
+
+/// Clicks the one control named exactly `name` that is no label, such as an item of an open select whose words a
+/// label of the sheet also shows.
+fn click_control(harness: &mut Harness, name: &str) {
+    let nodes = harness.settle();
+    let found: Vec<&Node> = nodes
+        .iter()
+        .filter(|node| node.label == name && node.role != Role::Label && node.bounds.is_some())
+        .collect();
+    assert_eq!(found.len(), 1, "one control is named {name}: {found:?}");
+    let position = found[0].bounds.expect("bounds").center();
+    harness.click_at(position);
+    harness.settle();
+}
+
+/// Adds a parameter named `name` keeping `default` in `min` to `max` through "+ Add parameter".
+fn add_parameter(harness: &mut Harness, name: &str, default: &str, min: &str, max: &str) {
+    click(harness, ADD_PARAMETER);
+    type_into(harness, "Parameter name", name);
+    type_into(harness, "Max", max);
+    type_into(harness, "Min", min);
+    type_into(harness, "Default value", default);
+    click(harness, CREATE_PARAMETER);
+    harness.settle();
+}
+
+/// Adds a property named `name` of the kind named `kind` to the kind of thing whose "+ Add property" is named `add`.
+fn add_property(harness: &mut Harness, add: &str, name: &str, kind: &str) {
+    click(harness, add);
+    type_into(harness, "Property name", name);
+    click(harness, kind);
+    click(harness, DONE);
+    harness.settle();
+}
+
+/// Returns the names of the radio buttons a settled frame shows, in reading order.
+fn radio_names(harness: &mut Harness) -> Vec<String> {
+    let nodes = harness.settle();
+    let mut radios: Vec<&Node> = nodes.iter().filter(|node| node.role == Role::RadioButton).collect();
+    radios.sort_by(|a, b| {
+        let (a, b) = (a.bounds.expect("bounds").min, b.bounds.expect("bounds").min);
+        (a.y, a.x).partial_cmp(&(b.y, b.x)).expect("finite bounds")
+    });
+    radios.iter().map(|node| node.label.clone()).collect()
+}
+
+/// Opens the select named `select` and returns, sorted and once each, the texts it shows that start a Position on the
+/// ground. The select stays open.
+fn on_ground_offers(harness: &mut Harness, select: &str) -> Vec<String> {
+    click(harness, select);
+    let mut offers: Vec<String> = harness
+        .accessible_texts()
+        .into_iter()
+        .filter(|shown| shown.starts_with("On a cell whose "))
+        .collect();
+    offers.sort();
+    offers.dedup();
+    offers
+}
+
+#[test]
+fn a_blank_agent_model_builds_the_random_walk_sheet_by_accessible_names() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    click(&mut harness, "New model");
+    harness.click_name_field();
+    harness.press(Key::A, Modifiers::COMMAND);
+    harness.frame(vec![egui::Event::Text("Random walk".to_owned())]);
+    click(&mut harness, AGENTS_IN_OPEN_SPACE);
+    click(&mut harness, "Create");
+    harness.settle();
+    assert_eq!(sheet(&harness).document().world.made_of, MadeOf::Agents);
+    assert_eq!(field_value(&mut harness, AGENT_NAME_FIELD), "Agent");
+    assert!(
+        shows(&mut harness, ANYWHERE_AT_RANDOM),
+        "Position starts anywhere at random"
+    );
+    assert!(shows(&mut harness, HEADING_START));
+    assert!(shows(&mut harness, GROUND_EMPTY));
+    assert!(shows(&mut harness, EVENTS_EMPTY));
+
+    enter_into(&mut harness, "Width in cells", "1000");
+    enter_into(&mut harness, "Height in cells", "1000");
+    enter_into(&mut harness, AGENT_NAME_FIELD, "Walker");
+    enter_into(&mut harness, AGENT_COUNT_NAME, "10000");
+    add_parameter(&mut harness, "Steps per tick", "4", "0", "16");
+    add_parameter(&mut harness, "Step size", "2", "0.1", "20");
+    click(&mut harness, ADD_MEASURE);
+    click(&mut harness, AVERAGE_MEASURE);
+    click(&mut harness, MEASURE_PROPERTY_NAME);
+    click_control(&mut harness, "Position");
+    click(&mut harness, DONE);
+    harness.settle();
+    click(&mut harness, COLOR_AGENTS_BY);
+    click_control(&mut harness, "Heading");
+    assert!(shows(&mut harness, BY_HEADING_NOTE));
+    let starter = starter_document("random_walk.toml");
+    let purpose = starter.sheet.purpose.clone().expect("a purpose");
+    type_into(&mut harness, "Purpose", &purpose);
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.settle();
+
+    // Only a counting blank on the card makes Steps per tick an integer, and this rebuild adds no card line.
+    let mut expected = without_card_lines(&starter);
+    for parameter in &mut expected.parameters {
+        if parameter.id == "steps_per_tick" {
+            parameter.parameter_type = ParameterType::Number;
+        }
+    }
+    let aligned = align_with_starter(sheet(&harness).document(), &expected);
+    assert_eq!(
+        aligned.to_text().expect("the rebuild writes"),
+        expected.to_text().expect("the starter writes"),
+        "the rebuild equals the starter without its card lines"
+    );
+}
+
+#[test]
+fn the_agents_take_a_name_and_an_integer_up_to_the_most_the_world_holds() {
+    let Some(mut harness) = blank_agents() else {
+        return;
+    };
+    let kind = |harness: &Harness| sheet(harness).document().agents[0].clone();
+    for typed in ["0", "1.5", "abc", "1000001"] {
+        enter_into(&mut harness, AGENT_COUNT_NAME, typed);
+        assert!(shows(&mut harness, &integer_up_to(1_000_000)), "{typed} is refused");
+        assert_eq!(kind(&harness).count, 1000);
+    }
+    enter_into(&mut harness, AGENT_COUNT_NAME, "2000");
+    assert_eq!(kind(&harness).count, 2000);
+    // A smaller world holds fewer agents at the start too.
+    enter_into(&mut harness, AGENT_MAX_NAME, "500");
+    assert_eq!((kind(&harness).count, kind(&harness).max_count), (500, 500));
+    enter_into(&mut harness, AGENT_MAX_NAME, "20000000");
+    assert!(shows(&mut harness, &integer_up_to(henad_graph::limits::MAX_AGENTS)));
+
+    // The kind's id follows its name, and the name of its "+ Add property" follows too.
+    enter_into(&mut harness, AGENT_NAME_FIELD, "Bird");
+    assert_eq!(
+        (kind(&harness).id.as_str(), kind(&harness).name.as_str()),
+        ("bird", "Bird")
+    );
+    center_of(&mut harness, &add_property_name("Bird"));
+    enter_into(&mut harness, AGENT_NAME_FIELD, " ");
+    assert!(shows(&mut harness, AGENT_NAME_MISSING));
+    assert_eq!(kind(&harness).name, "Bird");
+}
+
+#[test]
+fn agents_take_states_numbers_and_yes_or_no_and_no_start_on_an_unpainted_ground() {
+    let Some(mut harness) = blank_agents() else {
+        return;
+    };
+    let add = add_property_name("Agent");
+    let property = |harness: &Harness, id: &str| {
+        sheet(harness).document().agents[0]
+            .properties
+            .iter()
+            .find(|property| property.id == id)
+            .cloned()
+            .expect("the property")
+    };
+
+    // A Position and a Heading are offered only while the agents lack one.
+    click(&mut harness, &add);
+    assert_eq!(
+        radio_names(&mut harness),
+        [STATES_KIND, NUMBER_KIND, "Integer", YES_NO_KIND]
+    );
+    click(&mut harness, CANCEL);
+
+    add_property(&mut harness, &add, "Hungry", YES_NO_KIND);
+    assert_eq!(
+        property(&harness, "hungry").starts_as.map(|start| start.value),
+        Some(Slot::Filled(SheetValue::Literal(SheetLiteral::Bool(false))))
+    );
+    choose(&mut harness, "Hungry starts as", "All Yes");
+    assert_eq!(
+        property(&harness, "hungry").starts_as.map(|start| start.value),
+        Some(Slot::Filled(SheetValue::Literal(SheetLiteral::Bool(true))))
+    );
+    add_property(&mut harness, &add, "Energy", NUMBER_KIND);
+    enter_into(&mut harness, "Energy starts as: number", "5");
+    assert!(shows(&mut harness, "Every agent starts at"));
+
+    // No control paints the ground, so a Position cannot start on a state of a ground made here.
+    click(&mut harness, ADD_GROUND_PROPERTY_NAME);
+    type_into(&mut harness, "Property name", "Ground");
+    type_into(&mut harness, "State 1 name", "Open");
+    type_into(&mut harness, "State 2 name", "Nest");
+    click(&mut harness, DONE);
+    harness.settle();
+    let ground = sheet(&harness).document().ground.clone().expect("a ground");
+    assert_eq!(ground.properties[0].property_type, PropertyType::States);
+    assert_eq!(
+        on_ground_offers(&mut harness, "Position starts as"),
+        Vec::<String>::new()
+    );
+    click_control(&mut harness, ANYWHERE_AT_RANDOM);
+    assert_eq!(
+        property(&harness, "position").starts_as.map(|start| start.rule),
+        Some(StartRule::Anywhere)
+    );
+
+    // A count of agents in a state reads in the agents' words.
+    click(&mut harness, &add);
+    type_into(&mut harness, "Property name", "Mood");
+    type_into(&mut harness, "State 1 name", "Calm");
+    type_into(&mut harness, "State 2 name", "Angry");
+    click(&mut harness, DONE);
+    harness.settle();
+    click(&mut harness, "Plot Angry");
+    let measure = sheet(&harness).document().measures[0].clone();
+    assert_eq!(measure.over.as_deref(), Some("agent"));
+    assert!(shows(&mut harness, &count_agents_measure("Mood", "Angry")));
+    click(&mut harness, ADD_MEASURE);
+    assert!(shows(&mut harness, COUNT_AGENTS_MEASURE));
+    click(&mut harness, CANCEL);
+
+    // A button runs once over every agent, and starts the ground's properties again too.
+    click(&mut harness, ADD_BUTTON);
+    type_into(&mut harness, BUTTON_NAME_FIELD, "Scatter");
+    click(&mut harness, &run_once("agent"));
+    click(&mut harness, DONE);
+    harness.settle();
+    click(&mut harness, ADD_BUTTON);
+    type_into(&mut harness, BUTTON_NAME_FIELD, "Repaint");
+    choose(&mut harness, START_AGAIN_FOR, "Ground");
+    click(&mut harness, DONE);
+    harness.settle();
+    let buttons = sheet(&harness).document().buttons.clone();
+    assert_eq!(buttons[0].does[0].rule, ButtonStepRule::RunOnce);
+    let card = buttons[0].does[0].card.clone().expect("a card");
+    assert!(
+        sheet(&harness)
+            .document()
+            .cards
+            .iter()
+            .any(|known| known.id == card && known.every == "agent")
+    );
+    assert_eq!(buttons[1].does[0].properties, ["ground"]);
+}
+
+#[test]
+fn a_ground_property_adds_up_its_marks_fades_and_blocks_agents() {
+    let Some(mut harness) = blank_agents() else {
+        return;
+    };
+    assert!(shows(&mut harness, GROUND_EMPTY));
+    // The ground holds only numbers and states.
+    click(&mut harness, ADD_GROUND_PROPERTY_NAME);
+    assert_eq!(radio_names(&mut harness), [STATES_KIND, NUMBER_KIND]);
+    click(&mut harness, CANCEL);
+    add_property(&mut harness, ADD_GROUND_PROPERTY_NAME, "Trail", NUMBER_KIND);
+    let trail = |harness: &Harness| sheet(harness).document().ground.clone().expect("a ground").properties[0].clone();
+    assert_eq!(trail(&harness).marks, None);
+    choose(&mut harness, &marks_name("Trail"), MARKS_LARGEST);
+    assert_eq!(trail(&harness).marks, Some(Marks::Largest));
+    assert_eq!(
+        trail(&harness).kept_per_tick,
+        Slot::Filled(SheetValue::Literal(SheetLiteral::Number(1.0))),
+        "a property that takes marks keeps all of it each tick to start with"
+    );
+    choose(&mut harness, &marks_name("Trail"), MARKS_ADD_UP);
+    assert_eq!(trail(&harness).marks, Some(Marks::AddUp));
+    assert!(text(&harness).contains("marks = \"add_up\""));
+    let lowered = SheetFile::parse(&text(&harness)).expect("the sheet lowers");
+    assert!(
+        lowered.lowered().to_toml().contains("combine = \"sum\""),
+        "add up lowers to a sum"
+    );
+
+    // The share kept each tick is from 0 to 1, and no marks rule takes it away.
+    for typed in ["2", " "] {
+        enter_into(&mut harness, "Trail, share kept each tick: number", typed);
+        assert!(shows(&mut harness, KEPT_OUT_OF_RANGE), "{typed:?} is refused");
+    }
+    enter_into(&mut harness, "Trail, share kept each tick: number", "0.99");
+    assert_eq!(
+        trail(&harness).kept_per_tick,
+        Slot::Filled(SheetValue::Literal(SheetLiteral::Number(0.99)))
+    );
+    assert!(text(&harness).contains("kept_per_tick = 0.99"));
+    choose(&mut harness, &marks_name("Trail"), MARKS_NONE);
+    assert_eq!(
+        (trail(&harness).marks, trail(&harness).kept_per_tick),
+        (None, Slot::Blank)
+    );
+
+    // A box keeps agents out of the cells of a state.
+    click(&mut harness, ADD_GROUND_PROPERTY_NAME);
+    type_into(&mut harness, "Property name", "Terrain");
+    type_into(&mut harness, "State 1 name", "Open");
+    type_into(&mut harness, "State 2 name", "Rock");
+    click(&mut harness, DONE);
+    harness.settle();
+    click(&mut harness, &blocked_state_name("Rock"));
+    let blocked = |harness: &Harness| sheet(harness).document().ground.clone().expect("a ground").blocked;
+    assert_eq!(blocked(&harness), [BlockedState::new("terrain", "rock")]);
+    click(&mut harness, &blocked_state_name("Rock"));
+    assert!(blocked(&harness).is_empty());
+
+    // The ground is coloured on its own, and goes with its last property.
+    choose(&mut harness, COLOR_GROUND_BY, "Trail");
+    assert_eq!(
+        sheet(&harness).document().colors.get("ground").map(|rule| rule.rule),
+        Some(ColorRuleKind::Shaded)
+    );
+    for name in ["Trail", "Terrain"] {
+        click(&mut harness, &format!("Edit property {name}"));
+        click(&mut harness, "Delete property");
+        harness.settle();
+    }
+    assert_eq!(sheet(&harness).document().ground, None);
+    assert!(shows(&mut harness, GROUND_EMPTY));
+}
+
+#[test]
+fn events_are_added_renamed_and_deleted_on_the_sheet() {
+    let Some(mut harness) = blank_agents() else {
+        return;
+    };
+    let events = |harness: &Harness| sheet(harness).document().events.clone();
+    click(&mut harness, ADD_EVENT);
+    click(&mut harness, DONE);
+    assert!(shows(&mut harness, EVENT_NAME_MISSING));
+    type_into(&mut harness, EVENT_NAME_FIELD, "Delivery");
+    click(&mut harness, DONE);
+    harness.settle();
+    assert_eq!(events(&harness)[0].id, "delivery");
+    click(&mut harness, ADD_EVENT);
+    type_into(&mut harness, EVENT_NAME_FIELD, "delivery");
+    harness.press(Key::Enter, Modifiers::NONE);
+    assert!(shows(&mut harness, &event_name_taken("delivery")));
+    click(&mut harness, CANCEL);
+    enter_into(&mut harness, "Name of event Delivery", "Arrival");
+    assert_eq!(
+        (events(&harness)[0].id.as_str(), events(&harness)[0].name.as_str()),
+        ("delivery", "Arrival")
+    );
+    click(&mut harness, "Delete event Arrival");
+    harness.settle();
+    assert!(events(&harness).is_empty());
+    assert!(shows(&mut harness, EVENTS_EMPTY));
+}
+
+#[test]
+fn the_ant_starter_shows_its_ground_and_starts_ants_on_single_painted_cells() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    click(&mut harness, "New model");
+    click(&mut harness, "Ant foraging");
+    click(&mut harness, "Create");
+    harness.settle();
+    assert_eq!(field_value(&mut harness, AGENT_NAME_FIELD), "Ant");
+    assert_eq!(field_value(&mut harness, AGENT_COUNT_NAME), "2000");
+    let ground = sheet(&harness).document().ground.clone().expect("a ground");
+    assert_eq!(ground.properties[1].marks, Some(Marks::Largest));
+    assert!(shows(&mut harness, MARKS_LARGEST));
+    let nodes = harness.settle();
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node.role == Role::Button && node.label == "Trail kept per tick"),
+        "the share kept each tick shows its parameter as a chip"
+    );
+    assert!(shows(&mut harness, "Open, with 4 shapes painted on it"));
+    assert!(shows(&mut harness, "On a cell whose Ground is Nest"));
+
+    // The painted start shows in its select, and choosing it again changes nothing.
+    let before = text(&harness);
+    click(&mut harness, "Ground starts as");
+    click_control(&mut harness, PAINTED);
+    assert_eq!(text(&harness), before);
+
+    // The ants start only on a state painted on single cells, and the sheet still lowers after the choice.
+    assert_eq!(
+        on_ground_offers(&mut harness, "Position starts as"),
+        ["On a cell whose Ground is Food", "On a cell whose Ground is Nest"]
+    );
+    click_control(&mut harness, "On a cell whose Ground is Food");
+    let position = sheet(&harness).document().agents[0]
+        .properties
+        .iter()
+        .find(|property| property.id == "position")
+        .and_then(|property| property.starts_as.clone())
+        .expect("a start");
+    assert_eq!(
+        (position.rule, position.property.as_deref(), position.state.as_deref()),
+        (StartRule::OnGround, Some("ground"), Some("food"))
+    );
+    SheetFile::parse(&text(&harness)).expect("a start on the food lowers");
+    assert!(shows(
+        &mut harness,
+        "Start again: every property, Set To food and To home to 0 everywhere"
+    ));
+    let nodes = harness.settle();
+    let rock = nodes
+        .iter()
+        .find(|node| node.label == blocked_state_name("Obstacle"))
+        .expect("the Obstacle box");
+    assert_eq!(rock.role, Role::CheckBox);
+}
+
+#[test]
+fn the_agent_sections_show_no_forbidden_word_in_any_state() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    let mut texts = Vec::new();
+    let mut states = 0;
+    let mut record = |harness: &mut Harness| {
+        texts.push(harness.accessible_texts());
+        states += 1;
+    };
+    click(&mut harness, "New model");
+    click(&mut harness, AGENTS_IN_OPEN_SPACE);
+    record(&mut harness);
+    click(&mut harness, "Create");
+    record(&mut harness);
+    let add = add_property_name("Agent");
+    click(&mut harness, &add);
+    record(&mut harness);
+    click(&mut harness, YES_NO_KIND);
+    record(&mut harness);
+    click(&mut harness, NUMBER_KIND);
+    record(&mut harness);
+    click(&mut harness, CANCEL);
+    add_property(&mut harness, &add, "Hungry", YES_NO_KIND);
+    record(&mut harness);
+    click(&mut harness, "Hungry starts as");
+    record(&mut harness);
+    harness.press(Key::Escape, Modifiers::NONE);
+    click(&mut harness, "Position starts as");
+    record(&mut harness);
+    harness.press(Key::Escape, Modifiers::NONE);
+    enter_into(&mut harness, AGENT_COUNT_NAME, "0");
+    record(&mut harness);
+    enter_into(&mut harness, AGENT_NAME_FIELD, " ");
+    record(&mut harness);
+    click(&mut harness, ADD_GROUND_PROPERTY_NAME);
+    record(&mut harness);
+    click(&mut harness, NUMBER_KIND);
+    type_into(&mut harness, "Property name", "Trail");
+    click(&mut harness, DONE);
+    record(&mut harness);
+    click(&mut harness, &marks_name("Trail"));
+    record(&mut harness);
+    click(&mut harness, MARKS_ADD_UP);
+    record(&mut harness);
+    enter_into(&mut harness, "Trail, share kept each tick: number", "abc");
+    record(&mut harness);
+    click(&mut harness, "Trail, share kept each tick: use a parameter");
+    record(&mut harness);
+    harness.press(Key::Escape, Modifiers::NONE);
+    click(&mut harness, ADD_GROUND_PROPERTY_NAME);
+    type_into(&mut harness, "Property name", "Terrain");
+    type_into(&mut harness, "State 1 name", "Open");
+    type_into(&mut harness, "State 2 name", "Rock");
+    click(&mut harness, DONE);
+    record(&mut harness);
+    click(&mut harness, ADD_EVENT);
+    record(&mut harness);
+    click(&mut harness, DONE);
+    record(&mut harness);
+    click(&mut harness, CANCEL);
+    click(&mut harness, COLOR_AGENTS_BY);
+    record(&mut harness);
+    harness.press(Key::Escape, Modifiers::NONE);
+    click(&mut harness, COLOR_GROUND_BY);
+    record(&mut harness);
+    harness.press(Key::Escape, Modifiers::NONE);
+    click(&mut harness, ADD_MEASURE);
+    record(&mut harness);
+    click(&mut harness, CANCEL);
+    click(&mut harness, ADD_BUTTON);
+    record(&mut harness);
+    click(&mut harness, CANCEL);
+    for help in ["Help: Agents", "Help: Ground", "Help: Events"] {
+        click(&mut harness, help);
+        record(&mut harness);
+        harness.press(Key::Escape, Modifiers::NONE);
+    }
+    for starter in ["boids.toml", "bounded_confidence.toml", "ants.toml"] {
+        let text = starter_document(starter).to_text().expect("the starter writes");
+        harness.open_sheet(&text);
+        record(&mut harness);
+    }
+    assert!(states >= 25, "only {states} states were drawn");
+    let all: Vec<String> = texts.into_iter().flatten().collect();
+    let found = forbidden_words(&all);
+    assert!(found.is_empty(), "forbidden words: {found:?}");
+
+    // Each control with words of its own holds them in its name.
+    harness.open_sheet(&starter_document("ants.toml").to_text().expect("the starter writes"));
+    let nodes = harness.settle();
+    for visible in ["+ Add property", ADD_EVENT, "Obstacle", "To food", "Cargo"] {
+        assert_control_holds(&nodes, visible);
+    }
+    click(&mut harness, &add_property_name("Ant"));
+    let nodes = harness.settle();
+    for visible in [DONE, CANCEL, STATES_KIND, NUMBER_KIND, YES_NO_KIND] {
+        assert_control_holds(&nodes, visible);
+    }
+}

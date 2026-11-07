@@ -23,12 +23,15 @@ once with a card of the button's id), `SetButtonSteps`, `AddCard` (`cell_tick` o
 `<agent kind>_tick`, before the cards that run once); `Rename`, `ChangeId`, `Recolor` (a measure
 drawn in its state's colour follows the state) and `Delete` over a `SheetItem` (property, state,
 parameter, measure, event, button, card, agent kind); `SetStartsAs` (one edit for a Starts as
-commit, the old key kept), `SetColorRule`; and the line commands `AddLine` (a `Box<SheetLine>`
-template at the end of a card or a When or Repeat), `SetSlot` and `SetField` (a `LineField`) at a
-slot path, `ChooseCondition` (a `ConditionItem`), `UseOneSide`, `UseCountForEach`,
-`MoveConditionInto`, `RenameResult`, `SetNote`, `MoveLine`, `DeleteLine`, `DrawNewNumbers`,
-`ChangeToRate` and `ChangeToChance`. "Remove this When" is `DeleteLine` on the When, and "Add for
-each" is `SetSlot` of `tries`.
+commit, the old key kept), `SetColorRule`; `SetAgentKind` (the number of agents at the start, from 1
+to the largest number, and that largest number), `SetMarks` (a Number property of the ground: how
+marks combine, and the share kept per tick, which no marks rule clears), `SetBlocked` (a state of a
+States property of the ground kept from agents or let in, held once); and the line commands
+`AddLine` (a `Box<SheetLine>` template at the end of a card or a When or Repeat), `SetSlot` and
+`SetField` (a `LineField`) at a slot path, `ChooseCondition` (a `ConditionItem`), `UseOneSide`,
+`UseCountForEach`, `MoveConditionInto`, `RenameResult`, `SetNote`, `MoveLine`, `DeleteLine`,
+`DrawNewNumbers`, `ChangeToRate` and `ChangeToChance`. "Remove this When" is `DeleteLine` on the
+When, and "Add for each" is `SetSlot` of `tries`.
 
 Ids: `mint_id(name, space, is_taken)` lower-cases the name, turns each run of other characters than
 `a-z0-9` into one `_`, puts `x` before a leading digit (and mints `x` for a name with no letter or
@@ -61,7 +64,8 @@ skips, but a blank outside the card lines (a start's chance or value, `kept_per_
 `on_ground` start's property) and a few agent line fields (a Record's event, some agent slots) are
 checker errors after a delete. A deleted When or Repeat leaves its lines one level up in its place,
 a deleted card takes its lines, and a deleted button takes the cards that run once that no other
-button runs. An agent kind is not deleted.
+button runs. An agent kind is not deleted. A `[ground]` table comes with the first ground property
+`AddProperty` adds, and a delete that leaves it with no property and no blocked state removes it.
 
 Lines (`lines.rs`): a slot path is the author format's keys joined by dots (`condition.rate`,
 `whose.right`, `items.2`, `row.0.condition`, `branches.alive`, `summaries.0.value`), each step but
@@ -127,4 +131,7 @@ across cards and `next_line` one past), `a_seeded_key_stream_gives_its_known_fir
 automatic names, the condition offers, the for-each and fold offers, deletes that leave skipped
 lines and no error, colours, rate units and marks, Starts as commits, new buttons and cards, and
 `every_edit_leaves_a_document_that_reads_back` (random command sequences on every sheet: the text
-reads back to the same document, the checker never panics, no two lines share a key).
+reads back to the same document, the checker never panics, no two lines share a key),
+`the_agents_take_a_count_up_to_their_largest_number` and
+`a_ground_property_takes_its_marks_and_fading_and_comes_and_goes_with_the_ground` (an add-up mark
+writes `marks = "add_up"` and lowers to `combine = "sum"`).

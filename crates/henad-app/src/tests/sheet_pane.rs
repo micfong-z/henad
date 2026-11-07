@@ -43,7 +43,7 @@ fn blank() -> Option<Harness> {
 }
 
 /// Sheet in the harness's Editor.
-fn sheet(harness: &Harness) -> &SheetEditor {
+pub(super) fn sheet(harness: &Harness) -> &SheetEditor {
     harness.app.editor.model.sheet().expect("a sheet")
 }
 
@@ -64,7 +64,7 @@ fn settle_preview(harness: &mut Harness) {
 }
 
 /// Returns the centre of the one node of a settled frame named exactly `name`.
-fn center_of(harness: &mut Harness, name: &str) -> egui::Pos2 {
+pub(super) fn center_of(harness: &mut Harness, name: &str) -> egui::Pos2 {
     let nodes = harness.settle();
     let found: Vec<&Node> = nodes
         .iter()
@@ -75,27 +75,27 @@ fn center_of(harness: &mut Harness, name: &str) -> egui::Pos2 {
 }
 
 /// Clicks the one widget named exactly `name`.
-fn click(harness: &mut Harness, name: &str) {
+pub(super) fn click(harness: &mut Harness, name: &str) {
     let position = center_of(harness, name);
     harness.click_at(position);
 }
 
 /// Replaces the text of the field named `name` with `text`, without committing it.
-fn type_into(harness: &mut Harness, name: &str, text: &str) {
+pub(super) fn type_into(harness: &mut Harness, name: &str, text: &str) {
     click(harness, name);
     harness.press(Key::A, Modifiers::COMMAND);
     harness.frame(vec![Event::Text(text.to_owned())]);
 }
 
 /// Replaces the text of the field named `name` with `text` and presses Enter.
-fn enter_into(harness: &mut Harness, name: &str, text: &str) {
+pub(super) fn enter_into(harness: &mut Harness, name: &str, text: &str) {
     type_into(harness, name, text);
     harness.press(Key::Enter, Modifiers::NONE);
     harness.settle();
 }
 
 /// Chooses `item` in the select named `select`.
-fn choose(harness: &mut Harness, select: &str, item: &str) {
+pub(super) fn choose(harness: &mut Harness, select: &str, item: &str) {
     click(harness, select);
     click(harness, item);
     harness.settle();
@@ -103,7 +103,7 @@ fn choose(harness: &mut Harness, select: &str, item: &str) {
 
 /// Returns whether a settled frame shows `text` as a label, a value or a description, or as the end of one after an
 /// icon.
-fn shows(harness: &mut Harness, text: &str) -> bool {
+pub(super) fn shows(harness: &mut Harness, text: &str) -> bool {
     harness
         .accessible_texts()
         .iter()
@@ -361,7 +361,7 @@ fn the_world_takes_the_engine_grid_limit_and_refuses_past_it() {
 }
 
 /// Returns the value of the field named exactly `name` in a settled frame.
-fn field_value(harness: &mut Harness, name: &str) -> String {
+pub(super) fn field_value(harness: &mut Harness, name: &str) -> String {
     harness
         .settle()
         .into_iter()
@@ -711,7 +711,7 @@ fn the_edited_sections_show_no_forbidden_word_in_any_state() {
 
 /// Asserts that a button or a radio button of `nodes` shows `visible` and that its name holds it, a leading "+ " and
 /// a trailing "..." aside.
-fn assert_control_holds(nodes: &[Node], visible: &str) {
+pub(super) fn assert_control_holds(nodes: &[Node], visible: &str) {
     use egui::accesskit::Role;
 
     let words = visible.trim_start_matches("+ ").trim_end_matches("...").to_lowercase();
@@ -725,10 +725,10 @@ fn assert_control_holds(nodes: &[Node], visible: &str) {
 // Parameters, measures, colours, buttons, the model name and undo
 
 /// Height in points of a screen that holds every section of a long sheet.
-const TALL_SCREEN: egui::Vec2 = egui::vec2(1600.0, 2600.0);
+pub(super) const TALL_SCREEN: egui::Vec2 = egui::vec2(1600.0, 2600.0);
 
 /// Returns the document of the starter whose file is named `file_name`.
-fn starter_document(file_name: &str) -> SheetDocument {
+pub(super) fn starter_document(file_name: &str) -> SheetDocument {
     let starter = starters()
         .iter()
         .find(|starter| starter.file_name == file_name)
@@ -739,7 +739,7 @@ fn starter_document(file_name: &str) -> SheetDocument {
 }
 
 /// Returns the canonical text of the sheet in the harness's Editor.
-fn text(harness: &Harness) -> String {
+pub(super) fn text(harness: &Harness) -> String {
     sheet(harness).text().to_owned()
 }
 
@@ -875,6 +875,29 @@ fn aligning_a_starter_with_itself_changes_nothing_and_restores_a_changed_key() {
     }
     assert_ne!(changed, starter);
     assert_eq!(align_with_starter(&changed, &starter), starter);
+
+    // The starts of agents' and ground properties are aligned too. The ants' starts draw nothing, so each is given a
+    // key first.
+    let ants = starter_document("ants.toml");
+    assert_eq!(align_with_starter(&ants, &ants), ants);
+    let with_keys = |key: u32| {
+        let mut keyed = ants.clone();
+        let agents = keyed.agents.iter_mut().flat_map(|kind| &mut kind.properties);
+        let ground = keyed.ground.iter_mut().flat_map(|ground| &mut ground.properties);
+        for start in agents.chain(ground).filter_map(|property| property.starts_as.as_mut()) {
+            start.key = Some(key);
+        }
+        keyed
+    };
+    let (keyed, changed) = (with_keys(1), with_keys(7));
+    assert!(
+        changed
+            .ground
+            .as_ref()
+            .is_some_and(|ground| ground.properties[0].starts_as.is_some())
+    );
+    assert_ne!(changed, keyed);
+    assert_eq!(align_with_starter(&changed, &keyed), keyed);
 }
 
 #[test]

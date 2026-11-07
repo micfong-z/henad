@@ -19,7 +19,7 @@ use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{EdgeView, GridView, PointView, StatDescriptor, StatEntry, StatValue};
 use henad_explore::model_file::ModelFile;
 
-use henad_graph::sheet::document::{CardRuns, SheetDocument};
+use henad_graph::sheet::document::{CardRuns, SheetDocument, SheetProperty};
 use henad_graph::sheet::sentence::FORBIDDEN_WORDS;
 
 use crate::state::AppState;
@@ -605,6 +605,16 @@ pub fn opens_a_node_graph(text: &str) -> bool {
     text.contains(crate::ui::editor::NEW_NODE_GRAPH)
 }
 
+/// Returns every property of `document`: those of the cells, of each kind of agent, then of the ground.
+fn all_properties(document: &SheetDocument) -> impl Iterator<Item = &SheetProperty> {
+    document
+        .cells
+        .iter()
+        .flatten()
+        .chain(document.agents.iter().flat_map(|kind| &kind.properties))
+        .chain(document.ground.iter().flat_map(|ground| &ground.properties))
+}
+
 /// Returns every forbidden word in `texts`, with the text that holds it.
 pub fn forbidden_words(texts: &[String]) -> Vec<(String, String)> {
     texts
@@ -645,9 +655,10 @@ pub fn without_card_lines(starter: &SheetDocument) -> SheetDocument {
 /// nothing about the editor.
 ///
 /// Each drawing line takes the key of the starter's line of the same id, and each start the key of the starter's
-/// property of the same id, when both draw. A parameter takes the step and the meaning of the starter's parameter of
-/// the same id. No control sets either. A state or a measure takes the starter's colour when the palette names the two
-/// colours alike, since a starter's colour can lie outside the palette the editor offers. No id is copied.
+/// property of the same id, when both draw, whatever kind of thing holds the property. A parameter takes the step and
+/// the meaning of the starter's parameter of the same id. No control sets either. A state or a measure takes the
+/// starter's colour when the palette names the two colours alike, since a starter's colour can lie outside the palette
+/// the editor offers. No id is copied.
 pub fn align_with_starter(rebuilt: &SheetDocument, starter: &SheetDocument) -> SheetDocument {
     use crate::ui::editor::sheet::widgets::color_name;
 
@@ -662,8 +673,10 @@ pub fn align_with_starter(rebuilt: &SheetDocument, starter: &SheetDocument) -> S
             }
         }
     }
-    let their_properties = starter.cells.as_deref().unwrap_or_default();
-    for property in aligned.cells.iter_mut().flatten() {
+    let their_properties: Vec<&SheetProperty> = all_properties(starter).collect();
+    let agents = aligned.agents.iter_mut().flat_map(|kind| &mut kind.properties);
+    let ground = aligned.ground.iter_mut().flat_map(|ground| &mut ground.properties);
+    for property in aligned.cells.iter_mut().flatten().chain(agents).chain(ground) {
         let Some(theirs) = their_properties.iter().find(|known| known.id == property.id) else {
             continue;
         };

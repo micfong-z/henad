@@ -309,6 +309,18 @@ impl StartsAs {
             shapes: Vec::new(),
         }
     }
+
+    /// Returns whether this start paints `state` on single cells only, so that agents can start on it.
+    ///
+    /// That holds for a [`StartRule::Painted`] start whose base is another state, with at least one placed
+    /// [`ShapeKind::Cell`] shape of `state` and no larger shape of it.
+    pub fn paints_single_cells(&self, state: &str) -> bool {
+        let mut shapes = self.shapes.iter().filter(|shape| shape.state == state);
+        self.rule == StartRule::Painted
+            && self.base.as_deref() != Some(state)
+            && shapes.clone().all(|shape| shape.shape == ShapeKind::Cell)
+            && shapes.any(|shape| shape.center.is_some())
+    }
 }
 
 /// Value of a start's `rule` key.

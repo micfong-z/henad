@@ -38,7 +38,7 @@ use crate::node::{Node, NodeBody};
 use crate::sheet::check::Place;
 use crate::sheet::document::{
     ButtonStepRule, CellWhich, ColorRuleKind, Edges, LineKind, Marks, PropertyType, ShadeScale, ShapeKind, SheetChip,
-    SheetLine, SheetProperty, SheetValue, Slot, StartRule, StartsAs,
+    SheetLine, SheetProperty, SheetValue, Slot, StartsAs,
 };
 use crate::sheet::sentence;
 use crate::types::ValueType;
@@ -462,6 +462,7 @@ pub(super) fn on_ground(
     owner: String,
     place: Place,
 ) -> Result<InputValue, String> {
+    let state = start.state.as_deref().unwrap_or("");
     let painted = start
         .property
         .as_deref()
@@ -475,25 +476,16 @@ pub(super) fn on_ground(
                 .find(|property| property.id == id)
         })
         .and_then(|property| property.starts_as.as_ref())
-        .filter(|painted| painted.rule == StartRule::Painted);
-    let state = start.state.as_deref().unwrap_or("");
+        .filter(|painted| painted.paints_single_cells(state));
     let Some(painted) = painted else {
         return Err(sentence::ON_GROUND_CELLS.to_owned());
     };
-    let larger = painted.base.as_deref() == Some(state)
-        || painted
-            .shapes
-            .iter()
-            .any(|shape| shape.state == state && shape.shape != ShapeKind::Cell);
     let cells: Vec<[f64; 2]> = painted
         .shapes
         .iter()
-        .filter(|shape| shape.state == state && shape.shape == ShapeKind::Cell)
+        .filter(|shape| shape.state == state)
         .filter_map(|shape| shape.center)
         .collect();
-    if larger || cells.is_empty() {
-        return Err(sentence::ON_GROUND_CELLS.to_owned());
-    }
     let [width, height] = grid_size(builder, site);
     let mut centers = Vec::with_capacity(cells.len());
     for [cx, cy] in &cells {

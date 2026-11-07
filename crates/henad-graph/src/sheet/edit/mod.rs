@@ -61,10 +61,10 @@ use self::lines::{PathStep, is_block};
 use self::references::{Change, Target, all_properties, all_properties_mut, change_references};
 use super::check::{RESERVED_IDS, RESERVED_PARAMETER_IDS, RESERVED_PREFIX, holds_draw, is_result_kind};
 use super::document::{
-    AgentKind, Around, ButtonStep, ButtonStepRule, CardRuns, CellWhich, ColorRule, ColorRuleKind, CompareTest, Edges,
-    LineKind, LineMode, LookSummary, MadeOf, MeasureRule, ParameterType, PickRule, PropertyType, SheetButton,
-    SheetCard, SheetChip, SheetDocument, SheetEvent, SheetLine, SheetLiteral, SheetMeasure, SheetParameter,
-    SheetProperty, SheetState, SheetTime, SheetValue, Slot, StartRule, StartsAs,
+    AgentKind, Around, BlockedState, ButtonStep, ButtonStepRule, CardRuns, CellWhich, ColorRule, ColorRuleKind,
+    CompareTest, Edges, LineKind, LineMode, LookSummary, MadeOf, Marks, MeasureRule, ParameterType, PickRule,
+    PropertyType, SheetButton, SheetCard, SheetChip, SheetDocument, SheetEvent, SheetLine, SheetLiteral, SheetMeasure,
+    SheetParameter, SheetProperty, SheetState, SheetTime, SheetValue, Slot, StartRule, StartsAs,
 };
 use super::limits::{MAX_LINES_PER_CARD, MAX_NESTING, MAX_SHEET_ID_BYTES};
 use super::rates::{chance_from_rate, rate_from_chance, shortest_f32, tick_in};
@@ -500,6 +500,38 @@ pub enum SheetEdit {
         thing: String,
         /// New rule, `None` for none.
         rule: Option<ColorRule>,
+    },
+    /// Sets the number of agents of a kind at the start and the largest number the world holds.
+    SetAgentKind {
+        /// Id of the kind of agent.
+        kind: String,
+        /// Number of agents at the start, from 1 to `max_count`.
+        count: u32,
+        /// Largest number of agents the world holds.
+        max_count: u32,
+    },
+    /// Sets how agents' marks on a Number property of the ground combine, and the share of it left after a tick's
+    /// fading.
+    ///
+    /// No marks rule takes the fading away too, since a property that fades names its marks rule.
+    SetMarks {
+        /// Id of the Number property of the ground.
+        property: String,
+        /// How marks combine, `None` for a property that takes no marks.
+        marks: Option<Marks>,
+        /// Share left after a tick's fading, blank for a property that does not fade.
+        kept_per_tick: Slot,
+    },
+    /// Lets agents enter the cells of a state of a ground property, or keeps them out.
+    ///
+    /// A state blocked twice is held once, and a state let in that was not blocked changes nothing.
+    SetBlocked {
+        /// Id of the States property of the ground.
+        property: String,
+        /// Id of the state.
+        state: String,
+        /// Whether agents are kept out of the state's cells.
+        blocked: bool,
     },
     /// Adds a line at the end of a card or of a When or Repeat line, and returns its id.
     ///
@@ -989,7 +1021,18 @@ impl Draft {
             SheetEdit::Rename { item, name } => self.rename(&item, &name)?,
             SheetEdit::ChangeId { item, id } => self.change_id(&item, &id)?,
             SheetEdit::Recolor { item, color } => self.recolor(&item, color)?,
-            SheetEdit::Delete { item } => self.delete(&item)?,
+            SheetEdit::Delete { item } => {
+                self.delete(&item)?;
+                // A ground with nothing left on it goes, as it came with its first property.
+                if self
+                    .document
+                    .ground
+                    .as_ref()
+                    .is_some_and(|ground| ground.properties.is_empty() && ground.blocked.is_empty())
+                {
+                    self.document.ground = None;
+                }
+            }
             SheetEdit::SetStartsAs { property, starts_as } => {
                 self.touched_starts.push(property.clone());
                 let property = self.property_mut(&property)?;
@@ -1011,6 +1054,26 @@ impl Draft {
                     }
                 }
             }
+            SheetEdit::SetAgentKind { kind, count, max_count } => {
+                if count == 0 || count > max_count {
+                    return Err(SheetEditError::Invalid(format!(
+                        "the agents '{kind}' need a count from 1 to the largest number the world holds"
+                    )));
+                }
+                let kind = self.agent_kind_mut(&kind)?;
+                kind.count = count;
+                kind.max_count = max_count;
+            }
+            SheetEdit::SetMarks {
+                property,
+                marks,
+                kept_per_tick,
+            } => self.set_marks(&property, marks, kept_per_tick)?,
+            SheetEdit::SetBlocked {
+                property,
+                state,
+                blocked,
+            } => self.set_blocked(&property, &state, blocked)?,
             SheetEdit::AddLine { card, inside, line } => return self.add_line(&card, inside.as_deref(), *line),
             SheetEdit::SetSlot { line, path, value } => self.set_slot(&line, &path, value)?,
             SheetEdit::SetField { line, phrase, field } => self.set_field(&line, &phrase, field)?,
@@ -1509,6 +1572,56 @@ impl Draft {
                 .find(|kind| kind.id == thing)
                 .map(|kind| kind.properties.as_slice()),
         }
+    }
+
+    /// Returns the property `id` of the ground, mutable, and an error naming `what` when the ground holds no such
+    /// property or it is no property of type `property_type`.
+    fn ground_property_mut(
+        &mut self,
+        id: &str,
+        property_type: PropertyType,
+        what: &str,
+    ) -> Result<&mut SheetProperty, SheetEditError> {
+        let property = self
+            .document
+            .ground
+            .as_mut()
+            .and_then(|ground| ground.properties.iter_mut().find(|property| property.id == id))
+            .ok_or_else(|| missing("ground property", id))?;
+        if property.property_type != property_type {
+            return Err(SheetEditError::Invalid(format!("'{id}' is no {what} of the ground")));
+        }
+        Ok(property)
+    }
+
+    /// Sets the marks rule and the share kept per tick of the Number property `id` of the ground. No marks rule clears
+    /// the share kept.
+    fn set_marks(&mut self, id: &str, marks: Option<Marks>, kept_per_tick: Slot) -> Result<(), SheetEditError> {
+        let property = self.ground_property_mut(id, PropertyType::Number, "Number property")?;
+        property.marks = marks;
+        property.kept_per_tick = if marks.is_some() { kept_per_tick } else { Slot::Blank };
+        Ok(())
+    }
+
+    /// Keeps agents out of the cells whose ground property `property` is `state`, or lets them in.
+    fn set_blocked(&mut self, property: &str, state: &str, blocked: bool) -> Result<(), SheetEditError> {
+        let holder = self.ground_property_mut(property, PropertyType::States, "States property")?;
+        if !holder.states.iter().any(|known| known.id == state) {
+            return Err(missing("state", state));
+        }
+        let ground = self.document.ground.get_or_insert_with(Default::default);
+        let held = ground
+            .blocked
+            .iter()
+            .any(|known| known.property == property && known.state == state);
+        if blocked && !held {
+            ground.blocked.push(BlockedState::new(property, state));
+        } else if !blocked {
+            ground
+                .blocked
+                .retain(|known| !(known.property == property && known.state == state));
+        }
+        Ok(())
     }
 
     /// Returns the kind of agent `id`, mutable.

@@ -399,6 +399,30 @@ fn a_become_inside_a_repeat_applies_when_any_time_holds() {
     );
 }
 
+/// [`StartsAs::paints_single_cells`](crate::sheet::document::StartsAs::paints_single_cells) holds for each state of the
+/// ants' ground that agents can start on, and a start on each such state lowers while a start on any other is refused.
+#[test]
+fn agents_start_on_exactly_the_states_painted_on_single_cells() {
+    let text = starter("ants.toml");
+    let sheet = crate::sheet::ParsedSheet::parse(text).expect("the starter reads");
+    let ground = sheet
+        .document()
+        .ground
+        .as_ref()
+        .and_then(|ground| ground.properties.first())
+        .expect("the ants have a ground property");
+    let start = ground.starts_as.as_ref().expect("the ground is painted");
+    for (state, single) in [("open", false), ("obstacle", false), ("food", true), ("nest", true)] {
+        assert_eq!(start.paints_single_cells(state), single, "{state}");
+        let moved = edited(
+            text,
+            "state = \"nest\"\n\n[[agents.property]]",
+            &format!("state = \"{state}\"\n\n[[agents.property]]"),
+        );
+        assert_eq!(SheetFile::parse(&moved).is_ok(), single, "{state}");
+    }
+}
+
 /// The refusals the ground leaves: walls around agents that move by an arrow, the cell ahead of agents that move by an
 /// arrow, and a start on a state the ground paints larger than one cell. Each gives one located error.
 #[test]

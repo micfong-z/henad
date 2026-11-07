@@ -181,6 +181,7 @@ nav = [
             { "#94, 2026-11-07" = "developing/agent-record/20261107-94-preview-parameters.md" },
             { "#95, 2026-11-07" = "developing/agent-record/20261107-95-lane-packing.md" },
             { "#96, 2026-11-07" = "developing/agent-record/20261107-96-sheet-editing-part-2.md" },
+            { "#97, 2026-11-07" = "developing/agent-record/20261107-97-agents-on-the-sheet.md" },
         ] },
     ] },
 ]

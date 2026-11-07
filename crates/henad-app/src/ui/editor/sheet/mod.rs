@@ -64,7 +64,7 @@ pub struct SheetEditor {
     load: u64,
     /// Program the preview runs, compiled on first use.
     program: Option<CompiledProgram>,
-    /// Start of each property of the cells when the preview was last built, `None` before the first build.
+    /// Start of each property when the preview was last built, `None` before the first build.
     built_starts: Option<Vec<(String, Option<StartsAs>)>>,
     /// Notice of the last edit, such as [`RESTART_NOTICE`], `None` while none shows.
     notice: Option<&'static str>,
@@ -454,7 +454,7 @@ fn toolbar_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, past_start: bool) {
     }
 }
 
-/// Returns `document` with no name, no purpose and no property of the cells holding a start.
+/// Returns `document` with no name, no purpose and no property holding a start.
 ///
 /// Two sheets equal apart from these differ only in what leaves the running world alone, as [`SheetEditor::edit`]
 /// treats a new start, a new name or a new purpose.
@@ -462,18 +462,17 @@ fn without_starts_or_words(document: &SheetDocument) -> SheetDocument {
     let mut document = document.clone();
     document.sheet.name.clear();
     document.sheet.purpose = None;
-    for property in document.cells.iter_mut().flatten() {
+    let agents = document.agents.iter_mut().flat_map(|kind| &mut kind.properties);
+    let ground = document.ground.iter_mut().flat_map(|ground| &mut ground.properties);
+    for property in document.cells.iter_mut().flatten().chain(agents).chain(ground) {
         property.starts_as = None;
     }
     document
 }
 
-/// Returns the start of each property of the cells of `document`, by id.
+/// Returns the start of each property of `document`, by id.
 fn starts_of(document: &SheetDocument) -> Vec<(String, Option<StartsAs>)> {
-    document
-        .cells
-        .iter()
-        .flatten()
+    sheet_pane::all_properties(document)
         .map(|property| (property.id.clone(), property.starts_as.clone()))
         .collect()
 }

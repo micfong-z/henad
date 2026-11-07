@@ -1,20 +1,24 @@
 //! The New model dialog: a sheet model started blank or from one of the sheet starters, under a name.
 //!
-//! "Start from" lists Blank, then the grid starters [`henad_graph::sheet::starters`] returns, each with its one-line
-//! description. Under Blank alone the dialog asks what the world is made of, and only cells on a grid can be chosen.
-//! The Name field follows the chosen starter's name, or "Untitled model" for Blank, until the author types in it.
-//! Create opens the sheet in the Editor, and so does Enter in the Name field. Cancel, Escape and a click beside the
-//! dialog close it.
+//! "Start from" lists Blank, then the starters [`henad_graph::sheet::starters`] returns, grid and agent starters alike,
+//! each with its one-line description. Under Blank alone the dialog asks what the world is made of: cells on a grid
+//! or agents in open space. The Name field follows the chosen starter's name, or "Untitled model" for Blank, until the
+//! author types in it. Create opens the sheet in the Editor, and so does Enter in the Name field. Cancel, Escape and a
+//! click beside the dialog close it.
 //!
-//! A blank model is a world of 100 by 100 cells that wraps around, with no property, no parameter and no card.
+//! A blank model is a world of 100 by 100 cells that wraps around, with no parameter and no card. A blank world of
+//! cells has no property. A blank world of agents holds 1000 agents called Agent, room for a million, each with a
+//! Position that starts anywhere at random and a Heading.
 
 use egui::{Context, Id, Key, Modal, RichText, TextEdit};
 use henad_graph::sheet::ParsedSheet;
-use henad_graph::sheet::document::{Edges, MadeOf, SheetDocument, SheetHeader, SheetWorld};
+use henad_graph::sheet::document::{
+    AgentKind, Edges, MadeOf, PropertyType, SheetDocument, SheetHeader, SheetWorld, StartRule, StartsAs,
+};
 use henad_graph::sheet::edit::{IdSpace, SheetBuilder, SheetEdit, mint_id};
 use henad_graph::sheet::sentence::{
-    AGENTS_IN_OPEN_SPACE, CANCEL, CELLS_ON_A_GRID, CREATE, NAME_LABEL, NEW_MODEL, START_FROM, STARTER_CHOICES,
-    UNTITLED_MODEL, WORLD_QUESTION,
+    AGENTS_IN_OPEN_SPACE, BLANK_AGENT_NAME, CANCEL, CELLS_ON_A_GRID, CREATE, HEADING_KIND, NAME_LABEL, NEW_MODEL,
+    POSITION_KIND, START_FROM, STARTER_CHOICES, UNTITLED_MODEL, WORLD_QUESTION,
 };
 
 use super::SheetEditor;
@@ -31,6 +35,12 @@ const BLANK: &str = "Blank";
 /// Side in cells of a blank model's grid.
 const BLANK_SIDE: u32 = 100;
 
+/// Number of agents of a blank model of agents at the start.
+const BLANK_AGENT_COUNT: u32 = 1000;
+
+/// Largest number of agents a blank model of agents holds.
+const BLANK_AGENT_MAX: u32 = 1_000_000;
+
 /// One starter the dialog offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StarterChoice {
@@ -44,8 +54,6 @@ pub struct StarterChoice {
 
 /// Returns the starters the dialog offers: Blank, then the starters in the order [`henad_graph::sheet::starters`]
 /// returns them.
-///
-/// Note that only the starters of a world made of cells are offered. The Editor has no sheet pane section for agents.
 pub fn starter_choices() -> Vec<StarterChoice> {
     let blank = StarterChoice {
         file_name: None,
@@ -54,11 +62,7 @@ pub fn starter_choices() -> Vec<StarterChoice> {
     };
     let starters = henad_graph::sheet::starters().iter().filter_map(|starter| {
         let parsed = ParsedSheet::parse(starter.text).ok()?;
-        let document = parsed.document();
-        if document.world.made_of != MadeOf::Cells {
-            return None;
-        }
-        let name = document.sheet.name.clone();
+        let name = parsed.document().sheet.name.clone();
         Some(StarterChoice {
             file_name: Some(starter.file_name),
             description: description_of(&name),
@@ -87,6 +91,8 @@ pub struct NewModelDialog {
     pub name: String,
     /// Whether the author typed in the Name field. Until then the name follows the chosen starter.
     pub name_typed: bool,
+    /// What a blank world is made of.
+    pub made_of: MadeOf,
 }
 
 impl Default for NewModelDialog {
@@ -96,6 +102,7 @@ impl Default for NewModelDialog {
             chosen: 0,
             name: UNTITLED_MODEL.to_owned(),
             name_typed: false,
+            made_of: MadeOf::Cells,
         }
     }
 }
@@ -150,7 +157,7 @@ pub fn new_model_modal(ctx: &Context, app: &mut AppState) {
                     ui.weak(description);
                 }
                 if choice.file_name.is_none() && dialog.chosen == index {
-                    world_question(ui);
+                    world_question(ui, &mut dialog.made_of);
                 }
             });
         }
@@ -181,9 +188,11 @@ pub fn new_model_modal(ctx: &Context, app: &mut AppState) {
     if create {
         let chosen = dialog.choices.get(dialog.chosen).map(|choice| choice.file_name);
         let name = dialog.name.trim().to_owned();
+        let made_of = dialog.made_of;
         app.editor.new_model = None;
         match chosen {
             Some(Some(file_name)) => create_model(app, file_name, &name),
+            Some(None) if made_of == MadeOf::Agents => create_blank_agent_model(app, &name),
             Some(None) => create_blank_model(app, &name),
             None => {}
         }
@@ -192,12 +201,11 @@ pub fn new_model_modal(ctx: &Context, app: &mut AppState) {
     }
 }
 
-/// Draws the world question under Blank: a world of cells on a grid, chosen, and agents in open space, disabled.
-fn world_question(ui: &mut egui::Ui) {
+/// Draws the world question under Blank: a world of cells on a grid or of agents in open space, chosen in `made_of`.
+fn world_question(ui: &mut egui::Ui, made_of: &mut MadeOf) {
     ui.label(WORLD_QUESTION);
-    let mut cells = true;
-    ui.radio_value(&mut cells, true, CELLS_ON_A_GRID);
-    ui.add_enabled_ui(false, |ui| ui.radio_value(&mut cells, false, AGENTS_IN_OPEN_SPACE));
+    ui.radio_value(made_of, MadeOf::Cells, CELLS_ON_A_GRID);
+    ui.radio_value(made_of, MadeOf::Agents, AGENTS_IN_OPEN_SPACE);
 }
 
 /// Returns a blank model named `name`: a world of 100 by 100 cells that wraps around, with nothing else.
@@ -211,11 +219,61 @@ pub fn blank_model(name: &str) -> SheetDocument {
     )
 }
 
+/// Returns a blank model of agents named `name`: 1000 agents called Agent in a world 100 by 100 that wraps around, each
+/// with a Position that starts anywhere at random and a Heading.
+///
+/// The model's id is minted from its name, as [`blank_model`] mints it.
+pub fn blank_agent_model(name: &str) -> SheetDocument {
+    let mut document = blank_model(name);
+    document.world = SheetWorld::new(MadeOf::Agents, BLANK_SIDE, BLANK_SIDE, Edges::Wrap);
+    let kind = mint_id(BLANK_AGENT_NAME, IdSpace::Thing, |_| false).unwrap_or_default();
+    document.agents.push(AgentKind::new(
+        kind.clone(),
+        BLANK_AGENT_NAME,
+        BLANK_AGENT_COUNT,
+        BLANK_AGENT_MAX,
+    ));
+    let mut builder = SheetBuilder::new(document.clone());
+    let built = (|| {
+        let position = builder.apply(SheetEdit::AddProperty {
+            thing: kind.clone(),
+            name: POSITION_KIND.to_owned(),
+            property_type: PropertyType::Position,
+        })?;
+        builder.apply(SheetEdit::SetStartsAs {
+            property: position.into_iter().next().unwrap_or_default(),
+            starts_as: Some(Box::new(StartsAs::new(StartRule::Anywhere))),
+        })?;
+        builder.apply(SheetEdit::AddProperty {
+            thing: kind,
+            name: HEADING_KIND.to_owned(),
+            property_type: PropertyType::Heading,
+        })
+    })();
+    // The commands run on a fresh kind of agent, which takes all three.
+    match built {
+        Ok(_) => builder.into_document(),
+        Err(_) => document,
+    }
+}
+
 /// Opens a blank model named `name` in the Editor, and brings the Editor to the front. An empty name takes
 /// [`UNTITLED_MODEL`].
 pub fn create_blank_model(app: &mut AppState, name: &str) {
-    let name = if name.is_empty() { UNTITLED_MODEL } else { name };
-    app.editor.load_sheet(SheetEditor::new(blank_model(name)), None);
+    open_blank(app, blank_model(if name.is_empty() { UNTITLED_MODEL } else { name }));
+}
+
+/// Opens a blank model of agents named `name` in the Editor, as [`create_blank_model`] opens one of cells.
+pub fn create_blank_agent_model(app: &mut AppState, name: &str) {
+    open_blank(
+        app,
+        blank_agent_model(if name.is_empty() { UNTITLED_MODEL } else { name }),
+    );
+}
+
+/// Opens the blank model `document` in the Editor with no file name, and brings the Editor to the front.
+fn open_blank(app: &mut AppState, document: SheetDocument) {
+    app.editor.load_sheet(SheetEditor::new(document), None);
     app.editor.file_status = None;
     app.focus_request = Some(Tab::Editor);
 }

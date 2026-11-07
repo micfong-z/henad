@@ -20,7 +20,7 @@ use henad_graph::sheet::document::{
     LineKind, MadeOf, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, StartRule,
     StartsAs,
 };
-use henad_graph::sheet::sentence::{A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE};
+use henad_graph::sheet::sentence::{A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE, STARTER_CHOICES};
 use henad_graph::sheet::{ParsedSheet, starters};
 use web_time::Instant;
 
@@ -438,26 +438,26 @@ fn the_cells_table_reads_each_start_in_the_wording_table_words() {
     let mut document = ParsedSheet::parse(starter_text("forest_fire.toml"))
         .expect("the starter reads")
         .into_document();
-    assert_eq!(starts_text(cover(&mut document)), BY_CHANCE);
+    assert_eq!(starts_text(&document.clone(), cover(&mut document)), BY_CHANCE);
 
     let mut all_trees = StartsAs::new(StartRule::Value);
     all_trees.value = Slot::Filled(SheetValue::Chip(SheetChip::State("tree".to_owned())));
     cover(&mut document).starts_as = Some(all_trees);
-    assert_eq!(starts_text(cover(&mut document)), "All Tree");
+    assert_eq!(starts_text(&document.clone(), cover(&mut document)), "All Tree");
 
     let mut random = StartsAs::new(StartRule::Value);
     random.value = Slot::Filled(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomNumber))));
     cover(&mut document).starts_as = Some(random);
-    assert_eq!(starts_text(cover(&mut document)), A_RANDOM_NUMBER);
+    assert_eq!(starts_text(&document.clone(), cover(&mut document)), A_RANDOM_NUMBER);
 
     let mut number = StartsAs::new(StartRule::Value);
     number.value = Slot::Filled(SheetValue::Literal(SheetLiteral::Number(2.0)));
     cover(&mut document).starts_as = Some(number);
-    assert_eq!(starts_text(cover(&mut document)), A_VALUE);
+    assert_eq!(starts_text(&document.clone(), cover(&mut document)), A_VALUE);
 }
 
 #[test]
-fn the_new_model_dialog_offers_every_grid_starter_and_no_agent_starter() {
+fn the_new_model_dialog_offers_every_starter_with_its_description() {
     let choices = starter_choices();
     assert_eq!(choices[0].name, "Blank", "Blank comes first");
     assert_eq!(choices[0].file_name, None);
@@ -467,11 +467,13 @@ fn the_new_model_dialog_offers_every_grid_starter_and_no_agent_starter() {
         let document = ParsedSheet::parse(starter.text)
             .expect("the starter reads")
             .into_document();
-        let cells = document.world.made_of == MadeOf::Cells;
-        agent_starters += usize::from(!cells);
-        assert_eq!(offered.contains(&starter.file_name), cells, "{}", starter.file_name);
+        agent_starters += usize::from(document.world.made_of == MadeOf::Agents);
+        assert!(offered.contains(&starter.file_name), "{}", starter.file_name);
     }
-    assert!(agent_starters > 0, "an agent starter is held out");
+    assert_eq!(agent_starters, 4, "the four agent starters are offered (D64, D67)");
+    for choice in &choices {
+        assert!(choice.description.is_some(), "{} has a description", choice.name);
+    }
 }
 
 #[test]
@@ -489,10 +491,9 @@ fn new_model_opens_a_dialog_and_create_opens_the_chosen_sheet() {
     );
     let dialog = harness.app.editor.new_model.clone().expect("the dialog is open");
     let names: Vec<&str> = dialog.choices().iter().map(|choice| choice.name.as_str()).collect();
-    assert_eq!(
-        names,
-        ["Blank", "Game of Life", "SIR epidemic", "Majority vote", "Forest fire"]
-    );
+    // Blank, the four grid starters, then the four agent starters, each in the wording table's order.
+    let expected: Vec<&str> = STARTER_CHOICES.iter().map(|(name, _)| *name).collect();
+    assert_eq!(names, expected);
     // The world question under Blank holds radio buttons of its own.
     let mut radios: Vec<&Node> = nodes
         .iter()
@@ -1016,8 +1017,17 @@ fn the_sheet_editor_never_shows_a_forbidden_word() {
     for starter in starters() {
         harness.open_sheet(starter.text);
         texts.extend(harness.accessible_texts());
-        for help in HELP_BUTTONS {
-            harness.click(help);
+        let made_of = ParsedSheet::parse(starter.text)
+            .expect("the starter reads")
+            .document()
+            .world
+            .made_of;
+        let helps = henad_graph::sheet::sentence::SheetSection::shown(made_of)
+            .iter()
+            .map(|section| section.help_name())
+            .chain(["Help: lines".to_owned()]);
+        for help in helps {
+            harness.click(&help);
             texts.extend(harness.accessible_texts());
             harness.press(egui::Key::Escape, egui::Modifiers::NONE);
         }

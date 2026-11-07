@@ -2,16 +2,17 @@
 //! [`SheetSection`](henad_graph::sheet::sentence::SheetSection), each heading with its "?" help.
 //!
 //! Purpose, World (with the length of one tick), Cells (each property with its kind, its start and the lines that
-//! change it), Parameters, Measures, Colours and Buttons. Every section is edited here: the purpose, the size and the
-//! edges of the grid, the length of one tick, each property of the cells with its kind, its states and how it starts,
-//! each parameter's name, value, range and unit, the measures plotted, the property that colours the cells, and the
-//! buttons beside the world.
+//! change it), Parameters, Measures, Colours and Buttons. A world of agents shows Agents, Ground and Events in place of
+//! Cells. Every section is edited here: the purpose, the size and the edges of the grid, the length of one tick, each
+//! property of a kind of thing with its kind, its states and how it starts, each parameter's name, value, range and
+//! unit, the measures plotted, the property that colours each kind of thing, and the buttons beside the world. The
+//! sections of a world of agents are drawn by [`agents`].
 //!
 //! Every edit runs commands through [`SheetEditor::edit`]. A number field commits on Enter or on losing focus, and
 //! text it cannot read stays in the field with a red message under its row. A property is added or changed through
-//! the *property form* under the Cells table, a measure through the *measure form* and a button through the *button
-//! form*. A Starts as number is a plain field with "Use a parameter" beside it, and a chosen parameter shows as its
-//! chip. A parameter's slider commits once, when it is let go.
+//! the *property form* under the table of its kind of thing, a measure through the *measure form* and a button through
+//! the *button form*. A Starts as number is a plain field with "Use a parameter" beside it, and a chosen parameter
+//! shows as its chip. A parameter's slider commits once, when it is let go.
 
 use egui::{
     Button, ComboBox, CornerRadius, Frame, Id, Key, Label, Rect, RichText, Sense, Slider, TextEdit, Ui, Vec2, vec2,
@@ -42,16 +43,22 @@ use henad_graph::sheet::sentence::{
     PLOTTED, PROPERTY_NAME_FIELD, PROPERTY_NAME_MISSING, PROPERTY_NAME_PLACEHOLDER, PURPOSE_PLACEHOLDER,
     RANDOM_NUMBER_AND, RANDOM_NUMBER_BETWEEN, REMOVE_ROW_LABEL, SHADE, SHADE_COLORS, SHADE_DARK_TO, SHADE_ENDS_EQUAL,
     SHADE_FROM, SHADE_LIGHT, SHEET_EMPTY, SIZE_BY, SIZE_LABEL, START_AGAIN, START_AGAIN_FOR, START_AGAIN_TO_SEE,
-    STARTS_AT, STATE_NAMES_REPEATED, STATES_KIND, STATES_KIND_DESCRIPTION, SentenceChip, Sentences, SheetSection,
-    StartsField, TICK_LENGTH_NAME, TICK_UNIT_NAME, TOO_FEW_STATES, TYPE_A_CHANCE, TYPE_ONE_NUMBER,
-    UNIT_FIELD_PLACEHOLDER, UNIT_LABEL, USE_A_PARAMETER, WALLS, WALLS_SENTENCE, WIDTH_NAME, WITH_CHANCE, WRAP_AROUND,
-    WRAP_SENTENCE, WRAP_TOOLTIP, add_row_name, average_measure, button_name_taken, changed_by, count_measure,
-    delete_button_name, delete_parameter_name, edit_button_name, edit_property_heading, literal_words,
-    measure_color_name, parameter_max_name, parameter_min_name, parameter_name_taken, parameter_unit_name, plot_state,
-    property_name_taken, read_typed_number, remove_measure_name, remove_row_name, remove_state_name, run_once,
-    sheet_parameter_name_field, sheet_trying_value, start_again_for, starts_all, starts_field_name, starts_high_place,
-    starts_low_place, starts_otherwise_name, starts_place, starts_row_place, state_color_name, state_name_field,
-    tick_unit_choice, unit_suggestions, value_field_name, value_slider_name, world_side_out_of_range,
+    STATE_NAMES_REPEATED, STATES_KIND, STATES_KIND_DESCRIPTION, SentenceChip, Sentences, SheetSection, StartsField,
+    TICK_LENGTH_NAME, TICK_UNIT_NAME, TOO_FEW_STATES, TYPE_A_CHANCE, TYPE_ONE_NUMBER, UNIT_FIELD_PLACEHOLDER,
+    UNIT_LABEL, USE_A_PARAMETER, WALLS, WALLS_SENTENCE, WIDTH_NAME, WITH_CHANCE, WRAP_AROUND, WRAP_SENTENCE,
+    WRAP_TOOLTIP, add_row_name, average_measure, button_name_taken, changed_by, count_measure, delete_button_name,
+    delete_parameter_name, edit_button_name, edit_property_heading, literal_words, measure_color_name,
+    parameter_max_name, parameter_min_name, parameter_name_taken, parameter_unit_name, plot_state, property_name_taken,
+    read_typed_number, remove_measure_name, remove_row_name, remove_state_name, run_once, sheet_parameter_name_field,
+    sheet_trying_value, start_again_for, starts_all, starts_field_name, starts_high_place, starts_low_place,
+    starts_otherwise_name, starts_place, starts_row_place, state_color_name, state_name_field, tick_unit_choice,
+    unit_suggestions, value_field_name, value_slider_name, world_side_out_of_range,
+};
+use henad_graph::sheet::sentence::{
+    ANYWHERE_AT_RANDOM, ARROW_KIND, BY_HEADING_NOTE, COLOR_AGENTS_BY, COLOR_GROUND_BY, COUNT_AGENTS_LEAD,
+    COUNT_AGENTS_MEASURE, HEADING_KIND, HEADING_KIND_DESCRIPTION, HEADING_START, NO, PAINTED, POSITION_KIND,
+    POSITION_KIND_DESCRIPTION, YES, YES_NO_KIND, YES_NO_KIND_DESCRIPTION, count_agents_measure, every_starts_at,
+    on_ground_start, painted_shapes, set_everywhere,
 };
 use henad_graph::value::Color;
 
@@ -65,6 +72,8 @@ use super::widgets::{
 };
 use crate::ui::sweep::layout::{add_button, destructive_button, filled_button};
 
+mod agents;
+
 /// A value the world tries for a parameter of the sheet while the model keeps its own (D88).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SheetTrial {
@@ -76,6 +85,9 @@ pub struct SheetTrial {
 
 /// Kind of thing whose properties the Cells section lists.
 const CELLS: &str = "cells";
+
+/// Kind of thing whose properties the Ground section lists.
+const GROUND: &str = "ground";
 
 /// Width in points of a number field.
 const FIELD_WIDTH: f32 = 56.0;
@@ -108,15 +120,17 @@ pub struct PaneState {
     /// Id the pane's widgets are keyed under, one for each sheet opened. A field's refused text then stays with the
     /// sheet it was typed in.
     widgets: Id,
-    /// Property form under the Cells table, `None` while it is closed.
+    /// Property form under the table of its kind of thing, `None` while it is closed.
     property_form: Option<PropertyForm>,
     /// Measure form under the Plotted list, `None` while it is closed.
     measure_form: Option<MeasureForm>,
     /// Button form, `None` while it is closed.
     button_form: Option<ButtonForm>,
+    /// Event form, `None` while it is closed.
+    event_form: Option<agents::EventForm>,
     /// New parameter dialog with the Starts as number it fills, or `None` for a parameter that "+ Add parameter"
     /// adds. The whole is `None` while the dialog is closed.
-    new_parameter: Option<(Option<StartTarget>, NewParameterDialog)>,
+    new_parameter: Option<(Option<NumberTarget>, NewParameterDialog)>,
     /// Reason the last edit outside the forms was refused, `None` while none shows.
     refusal: Option<String>,
     /// Id of the parameter whose new name was refused, with the message under it, `None` while none shows.
@@ -131,6 +145,7 @@ impl PaneState {
             property_form: None,
             measure_form: None,
             button_form: None,
+            event_form: None,
             new_parameter: None,
             refusal: None,
             parameter_message: None,
@@ -142,6 +157,7 @@ impl PaneState {
         self.property_form = None;
         self.measure_form = None;
         self.button_form = None;
+        self.event_form = None;
         self.new_parameter = None;
         self.refusal = None;
         self.parameter_message = None;
@@ -168,13 +184,14 @@ struct MeasureForm {
 
 impl MeasureForm {
     /// Returns the form for a measure of `document`: a count of the first States property, or an average when the
-    /// cells have none.
+    /// kind of thing measured has none.
     fn add(document: &SheetDocument) -> Self {
-        let first = cell_properties(document)
+        let properties = properties_of(document, measured_thing(document));
+        let first = properties
             .iter()
             .find(|property| property.property_type == PropertyType::States);
         Self {
-            average: first.is_none() && !cell_properties(document).is_empty(),
+            average: first.is_none() && !properties.is_empty(),
             property: first.map(|property| property.id.clone()),
             ..Self::default()
         }
@@ -234,9 +251,11 @@ impl ButtonForm {
     }
 }
 
-/// The form that adds a property to the cells or changes one.
+/// The form that adds a property to a kind of thing or changes one.
 #[derive(Debug, Clone)]
 struct PropertyForm {
+    /// Kind of thing the property belongs to: `cells`, `ground` or an agent kind's id.
+    thing: String,
     /// Id of the property the form changes, `None` for a new property.
     editing: Option<String>,
     /// Name of the property when the form opened.
@@ -281,9 +300,10 @@ impl FormState {
 }
 
 impl PropertyForm {
-    /// Returns the form that adds a property: a States property with two empty states.
-    fn add() -> Self {
+    /// Returns the form that adds a property to `thing`: a States property with two empty states.
+    fn add(thing: &str) -> Self {
         Self {
+            thing: thing.to_owned(),
             editing: None,
             original: String::new(),
             name: String::new(),
@@ -295,9 +315,9 @@ impl PropertyForm {
         }
     }
 
-    /// Returns the form that changes `property`. Its states count as coloured by hand, and a new name keeps their
-    /// colours.
-    fn edit(property: &SheetProperty) -> Self {
+    /// Returns the form that changes `property` of `thing`. Its states count as coloured by hand, and a new name keeps
+    /// their colours.
+    fn edit(property: &SheetProperty, thing: &str) -> Self {
         let states = if property.property_type == PropertyType::States {
             property
                 .states
@@ -313,6 +333,7 @@ impl PropertyForm {
             vec![FormState::empty(0), FormState::empty(1)]
         };
         Self {
+            thing: thing.to_owned(),
             editing: Some(property.id.clone()),
             original: property.name.clone(),
             name: property.name.clone(),
@@ -338,13 +359,65 @@ enum StartSlot {
     High,
 }
 
-/// A number of a property's Starts as.
+/// A number of the sheet that a field, its "Use a parameter" and the New parameter dialog fill.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct StartTarget {
-    /// Id of the property.
-    property: String,
-    /// Place of the number.
-    slot: StartSlot,
+enum NumberTarget {
+    /// A number of a property's Starts as.
+    Start {
+        /// Id of the property.
+        property: String,
+        /// Place of the number.
+        slot: StartSlot,
+    },
+    /// The share of a Number property of the ground left after each tick.
+    Kept {
+        /// Id of the property.
+        property: String,
+    },
+}
+
+impl NumberTarget {
+    /// Returns the edit that puts `value` at the target.
+    ///
+    /// A start's number is a changed start. The share kept changes the run, and keeps the property's marks rule.
+    fn edit(&self, value: Slot) -> Pending {
+        match self.clone() {
+            Self::Start { property, slot } => start_edit(property, move |start| set_start_slot(start, slot, value)),
+            Self::Kept { property } => Pending {
+                starts_only: false,
+                form: None,
+                run: Box::new(move |builder| {
+                    let marks = all_properties(builder.document())
+                        .find(|known| known.id == property)
+                        .and_then(|known| known.marks);
+                    builder
+                        .apply(SheetEdit::SetMarks {
+                            property,
+                            marks,
+                            kept_per_tick: value,
+                        })
+                        .map(drop)
+                }),
+            },
+        }
+    }
+}
+
+/// A number field of the sheet with "Use a parameter" beside it, or the chip of the parameter it holds.
+struct NumberField<'a> {
+    /// Place of the number in an accessible name, such as "Status starts as, row 1".
+    place: String,
+    /// Id of the field.
+    id: Id,
+    /// Value the sheet holds there, `None` where the sheet holds nothing.
+    current: Option<&'a Slot>,
+    /// What the number fills.
+    target: NumberTarget,
+    /// Whether the number is a chance or any other number.
+    number_use: NumberUse,
+    /// Range a typed number must fall in, with the message for a number outside it, `None` for any number. A field
+    /// with a range cannot be left empty either.
+    limit: Option<(f64, f64, &'static str)>,
 }
 
 /// One edit of the sheet: commands run on a copy of it, kept when every command is accepted.
@@ -359,6 +432,8 @@ enum FormKind {
     Measure,
     /// The button form.
     Button,
+    /// The event form.
+    Event,
 }
 
 /// An edit made during the frame, run once the pane is drawn.
@@ -396,17 +471,13 @@ impl Pending {
     }
 }
 
-/// Draws every section of `sheet`, in the order of [`SheetSection::ALL`], each heading with its help, and runs the
-/// edits made in it.
+/// Draws every section of `sheet`, in the order of [`SheetSection::shown`] for its world, each heading with its help,
+/// and runs the edits made in it.
 ///
 /// `past_start` is whether the preview has passed tick 0 or a button was pressed in it. A changed Starts as then says
 /// "Start again to see it". `trials` holds the values the world tries, each shown under its parameter.
 pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials: &[SheetTrial]) {
-    let stale: Vec<String> = sheet
-        .document()
-        .cells
-        .iter()
-        .flatten()
+    let stale: Vec<String> = all_properties(sheet.document())
         .filter(|property| past_start && sheet.start_changed(&property.id))
         .map(|property| property.id.clone())
         .collect();
@@ -417,7 +488,7 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
         } = &mut *sheet;
         let document = builder.document();
         ui.push_id(pane.widgets, |ui| {
-            for section in SheetSection::ALL {
+            for &section in SheetSection::shown(document.world.made_of) {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(section.heading()).strong());
@@ -427,6 +498,9 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
                     SheetSection::Purpose => purpose(ui, document, pane.widgets, &mut pending),
                     SheetSection::World => world(ui, document, pane.widgets, &mut pending),
                     SheetSection::Cells => cells(ui, document, pane, &stale, &mut pending),
+                    SheetSection::Agents => agents::agents(ui, document, pane, &stale, &mut pending),
+                    SheetSection::Ground => agents::ground(ui, document, pane, &stale, &mut pending),
+                    SheetSection::Events => agents::events(ui, document, pane, &mut pending),
                     SheetSection::Parameters => parameters(ui, document, pane, trials, &mut pending),
                     SheetSection::Measures => measures(ui, document, pane, &mut pending),
                     SheetSection::Colours => colours(ui, document, pane.widgets, &mut pending),
@@ -449,6 +523,7 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
                 Some(FormKind::Property) => pane.property_form = None,
                 Some(FormKind::Measure) => pane.measure_form = None,
                 Some(FormKind::Button) => pane.button_form = None,
+                Some(FormKind::Event) => pane.event_form = None,
                 None => {}
             }
         }
@@ -458,6 +533,7 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
                 Some(FormKind::Property) if let Some(open) = &mut pane.property_form => open.message = message,
                 Some(FormKind::Measure) if let Some(open) = &mut pane.measure_form => open.message = message,
                 Some(FormKind::Button) if let Some(open) = &mut pane.button_form => open.message = message,
+                Some(FormKind::Event) if let Some(open) = &mut pane.event_form => open.message = message,
                 _ => pane.refusal = message,
             }
         }
@@ -624,16 +700,37 @@ fn time_line(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut O
 /// Draws the Cells table, with each property's start as controls, and the property form or "+ Add property" under
 /// it. A sheet with no property says how to start.
 fn cells(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, stale: &[String], pending: &mut Option<Pending>) {
-    let properties = document.cells.as_deref().unwrap_or_default();
+    let properties = properties_of(document, CELLS);
     if properties.is_empty() {
         ui.label(SHEET_EMPTY);
     } else {
-        egui::Grid::new("henad_sheet_cells").num_columns(4).show(ui, |ui| {
+        property_table(ui, document, CELLS, pane, stale, pending);
+    }
+    ui.add_space(4.0);
+    property_form_or_add(ui, document, CELLS, ADD_PROPERTY, properties.is_empty(), pane, pending);
+    if let Some(refusal) = &pane.refusal {
+        message_ui(ui, refusal);
+    }
+}
+
+/// Draws the table of the properties of `thing`: each property's name, which opens the property form, its kind, its
+/// start as controls, and the lines that change it. `stale` holds the properties whose start waits for Start again.
+fn property_table(
+    ui: &mut Ui,
+    document: &SheetDocument,
+    thing: &str,
+    pane: &mut PaneState,
+    stale: &[String],
+    pending: &mut Option<Pending>,
+) {
+    egui::Grid::new(("henad_sheet_properties", thing))
+        .num_columns(4)
+        .show(ui, |ui| {
             for column in CELLS_COLUMNS {
                 ui.weak(column);
             }
             ui.end_row();
-            for property in properties {
+            for property in properties_of(document, thing) {
                 let edit = add_button(
                     ui,
                     true,
@@ -641,11 +738,11 @@ fn cells(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, stale: &[S
                     &edit_property_heading(&property.name),
                 );
                 if edit.clicked() {
-                    pane.property_form = Some(PropertyForm::edit(property));
+                    pane.property_form = Some(PropertyForm::edit(property, thing));
                 }
                 kind_ui(ui, property);
                 ui.vertical(|ui| {
-                    starts_ui(ui, document, property, pane, pending);
+                    starts_ui(ui, document, thing, property, pane, pending);
                     if stale.contains(&property.id) {
                         ui.weak(START_AGAIN_TO_SEE);
                     }
@@ -654,30 +751,39 @@ fn cells(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, stale: &[S
                 ui.end_row();
             }
         });
-    }
-    ui.add_space(4.0);
-    if let Some(form) = &mut pane.property_form {
+}
+
+/// Draws the property form under the table of `thing` while it is open for that thing, or the button that opens it,
+/// named `add_name`. The button is the section's primary action while `primary` holds.
+fn property_form_or_add(
+    ui: &mut Ui,
+    document: &SheetDocument,
+    thing: &str,
+    add_name: &str,
+    primary: bool,
+    pane: &mut PaneState,
+    pending: &mut Option<Pending>,
+) {
+    if let Some(form) = pane.property_form.as_mut().filter(|form| form.thing == thing) {
         let mut close = false;
         property_form(ui, document, form, &mut close, pending);
         if close {
             pane.property_form = None;
         }
-    } else {
-        let button = if properties.is_empty() {
-            filled_button(ADD_PROPERTY.to_owned())
-        } else {
-            Button::new(ADD_PROPERTY)
-        };
-        if ui.add(button).clicked() {
-            pane.property_form = Some(PropertyForm::add());
-        }
+        return;
     }
-    if let Some(refusal) = &pane.refusal {
-        message_ui(ui, refusal);
+    let button = if primary {
+        filled_button(ADD_PROPERTY.to_owned())
+    } else {
+        Button::new(ADD_PROPERTY)
+    };
+    if add_button(ui, true, button, add_name).clicked() {
+        pane.property_form = Some(PropertyForm::add(thing));
     }
 }
 
-/// Draws the kind of `property`: "States" with each state's swatch and name, "Number" or "Integer".
+/// Draws the kind of `property`: "States" with each state's swatch and name, "Number", "Integer", "Yes or no",
+/// "Position", "Heading" or "Arrow".
 fn kind_ui(ui: &mut Ui, property: &SheetProperty) {
     match property.property_type {
         PropertyType::States => {
@@ -695,26 +801,58 @@ fn kind_ui(ui: &mut Ui, property: &SheetProperty) {
         PropertyType::WholeNumber => {
             ui.label(INTEGER_KIND).on_hover_text(INTEGER_KIND_TOOLTIP);
         }
-        _ => {
-            ui.label(NUMBER_KIND);
+        kind => {
+            ui.label(kind_words(kind));
         }
     }
 }
 
-/// Returns how `property` starts: "All Dead", "By chance", "A value" or "A random number".
+/// Returns the word of a property's kind, such as "Number" or "Yes or no".
+fn kind_words(kind: PropertyType) -> &'static str {
+    match kind {
+        PropertyType::States => STATES_KIND,
+        PropertyType::WholeNumber => INTEGER_KIND,
+        PropertyType::YesNo => YES_NO_KIND,
+        PropertyType::Position => POSITION_KIND,
+        PropertyType::Heading => HEADING_KIND,
+        PropertyType::Arrow => ARROW_KIND,
+        _ => NUMBER_KIND,
+    }
+}
+
+/// Returns how `property` of `document` starts: "All Dead", "By chance", "A value", "A random number", "Anywhere at
+/// random", "On a cell whose Ground is Nest", "Painted" or "All Yes".
 ///
-/// A start of another rule returns an empty string. Only the ground or the agents of an agent world take one.
-pub fn starts_text(property: &SheetProperty) -> String {
+/// A Heading, which takes its first value from the first move, returns [`HEADING_START`], and a property with no
+/// start an empty string.
+pub fn starts_text(document: &SheetDocument, property: &SheetProperty) -> String {
     let Some(starts) = &property.starts_as else {
-        return String::new();
+        return if property.property_type == PropertyType::Heading {
+            HEADING_START.to_owned()
+        } else {
+            String::new()
+        };
     };
     match starts.rule {
         StartRule::ByChance => BY_CHANCE.to_owned(),
+        StartRule::Anywhere => ANYWHERE_AT_RANDOM.to_owned(),
+        StartRule::Painted => PAINTED.to_owned(),
+        StartRule::OnGround => {
+            let ground = starts.property.as_deref().and_then(|id| find_property(document, id));
+            let state = ground
+                .zip(starts.state.as_deref())
+                .and_then(|(ground, state)| state_name(ground, state));
+            match (ground, state) {
+                (Some(ground), Some(state)) => on_ground_start(&ground.name, state),
+                _ => String::new(),
+            }
+        }
         StartRule::Value => match starts.value.value() {
             Some(SheetValue::Chip(SheetChip::State(state))) => match state_name(property, state) {
                 Some(name) => starts_all(name),
                 None => A_VALUE.to_owned(),
             },
+            Some(SheetValue::Literal(SheetLiteral::Bool(yes))) => starts_all(if *yes { YES } else { NO }),
             Some(SheetValue::Phrase(phrase)) if phrase.kind == LineKind::RandomNumber => A_RANDOM_NUMBER.to_owned(),
             _ => A_VALUE.to_owned(),
         },
@@ -738,65 +876,129 @@ fn state_name<'a>(property: &'a SheetProperty, state_id: &str) -> Option<&'a str
 
 /// A choice in the select of a Starts as.
 enum StartChoice {
-    /// Every cell starts in the state of this id.
+    /// Every element starts in the state of this id.
     All(String),
-    /// Each cell draws its state.
+    /// Each element draws its state.
     ByChance,
-    /// Every cell starts at one number.
+    /// Every element starts at one number.
     Value,
-    /// Every cell draws a number between two numbers.
+    /// Every element draws a number between two numbers.
     RandomNumber,
+    /// Every element starts at yes or at no.
+    YesNo(bool),
+    /// Every agent starts at a random place.
+    Anywhere,
+    /// Every agent starts on a cell whose ground property of the first id is the state of the second.
+    OnGround(String, String),
 }
 
-/// Draws the Starts as of `property`: its select and, under it, the rows of a by-chance start or the numbers of a
-/// Number property.
-fn starts_ui(
+/// Adds the select of the Starts as of `property`, showing `selected`, and returns the choice made in it.
+fn start_select(
     ui: &mut Ui,
     document: &SheetDocument,
     property: &SheetProperty,
-    pane: &mut PaneState,
-    pending: &mut Option<Pending>,
-) {
-    let selected = starts_text(property);
+    selected: &str,
+) -> Option<StartChoice> {
     let mut choice = None;
-    let states = property.property_type == PropertyType::States;
+    let mut offer = |ui: &mut Ui, words: &str, made: StartChoice| {
+        if ui.selectable_label(selected == words, words).clicked() {
+            choice = Some(made);
+        }
+    };
     let combo = ComboBox::from_id_salt(("henad_sheet_starts", &property.id))
-        .selected_text(&selected)
-        .show_ui(ui, |ui| {
-            if states {
+        .selected_text(selected)
+        .show_ui(ui, |ui| match property.property_type {
+            PropertyType::States => {
+                // No control paints, so a painted start shows as its own entry, and choosing it again changes nothing.
+                if selected == PAINTED {
+                    ui.add(Button::selectable(true, PAINTED));
+                }
                 for state in &property.states {
-                    let words = starts_all(&state.name);
-                    if ui.selectable_label(selected == words, &words).clicked() {
-                        choice = Some(StartChoice::All(state.id.clone()));
+                    offer(ui, &starts_all(&state.name), StartChoice::All(state.id.clone()));
+                }
+                offer(ui, BY_CHANCE, StartChoice::ByChance);
+            }
+            PropertyType::YesNo => {
+                offer(ui, &starts_all(YES), StartChoice::YesNo(true));
+                offer(ui, &starts_all(NO), StartChoice::YesNo(false));
+            }
+            PropertyType::Position => {
+                offer(ui, ANYWHERE_AT_RANDOM, StartChoice::Anywhere);
+                for ground in properties_of(document, GROUND)
+                    .iter()
+                    .filter(|ground| ground.property_type == PropertyType::States)
+                {
+                    let painted = ground.starts_as.as_ref();
+                    for state in ground
+                        .states
+                        .iter()
+                        .filter(|state| painted.is_some_and(|start| start.paints_single_cells(&state.id)))
+                    {
+                        offer(
+                            ui,
+                            &on_ground_start(&ground.name, &state.name),
+                            StartChoice::OnGround(ground.id.clone(), state.id.clone()),
+                        );
                     }
                 }
-                if ui.selectable_label(selected == BY_CHANCE, BY_CHANCE).clicked() {
-                    choice = Some(StartChoice::ByChance);
-                }
-            } else {
-                if ui.selectable_label(selected == A_VALUE, A_VALUE).clicked() {
-                    choice = Some(StartChoice::Value);
-                }
+            }
+            kind => {
+                offer(ui, A_VALUE, StartChoice::Value);
                 // A draw truncated to a whole number would never reach the high end.
-                if property.property_type == PropertyType::Number
-                    && ui
-                        .selectable_label(selected == A_RANDOM_NUMBER, A_RANDOM_NUMBER)
-                        .clicked()
-                {
-                    choice = Some(StartChoice::RandomNumber);
+                if kind == PropertyType::Number {
+                    offer(ui, A_RANDOM_NUMBER, StartChoice::RandomNumber);
                 }
             }
         });
     set_name(ui, combo.response.id, &starts_place(&property.name));
-    if let Some(choice) = choice {
+    choice
+}
+
+/// Draws the Starts as of `property`, a property of `thing`: its select and, under it, the rows of a by-chance start,
+/// the numbers of a Number property or the shapes of a painted one.
+///
+/// A Heading shows that it starts with the first move, and an Arrow its start in words, since neither has a control
+/// of its own.
+fn starts_ui(
+    ui: &mut Ui,
+    document: &SheetDocument,
+    thing: &str,
+    property: &SheetProperty,
+    pane: &mut PaneState,
+    pending: &mut Option<Pending>,
+) {
+    let selected = starts_text(document, property);
+    match property.property_type {
+        PropertyType::Heading => {
+            ui.weak(&selected);
+            return;
+        }
+        PropertyType::Arrow => {
+            if let Some(start) = &property.starts_as {
+                ui.weak(Sentences::new(document).slot(&start.value, Some(&property.id)));
+            }
+            return;
+        }
+        _ => {}
+    }
+    if let Some(choice) = start_select(ui, document, property, &selected) {
         choose_start(property, &selected, choice, pending);
     }
     let Some(start) = &property.starts_as else {
         return;
     };
+    let states = property.property_type == PropertyType::States;
     match start.rule {
         StartRule::ByChance => chance_rows(ui, document, property, start, pane, pending),
-        StartRule::Value if !states => {
+        StartRule::Painted => {
+            let base = start
+                .base
+                .as_deref()
+                .and_then(|base| state_name(property, base))
+                .unwrap_or_default();
+            ui.weak(painted_shapes(base, start.shapes.len()));
+        }
+        StartRule::Value if !states && property.property_type != PropertyType::YesNo => {
             let random = holds_random_number(&start.value);
             let slots: &[StartSlot] = if random {
                 &[StartSlot::Low, StartSlot::High]
@@ -810,7 +1012,7 @@ fn starts_ui(
                     ui.label(RANDOM_NUMBER_AND);
                     start_number(ui, document, property, start, StartSlot::High, pane, pending);
                 } else {
-                    ui.label(STARTS_AT);
+                    ui.label(every_starts_at(&Sentences::new(document).thing_word(thing)));
                     start_number(ui, document, property, start, StartSlot::Value, pane, pending);
                 }
             });
@@ -852,6 +1054,18 @@ fn choose_start(property: &SheetProperty, selected: &str, choice: StartChoice, p
             phrase.high = number(1.0);
             let mut start = StartsAs::new(StartRule::Value);
             start.value = Slot::Filled(SheetValue::Phrase(Box::new(phrase)));
+            start
+        }
+        StartChoice::YesNo(yes) => {
+            let mut start = StartsAs::new(StartRule::Value);
+            start.value = Slot::Filled(SheetValue::Literal(SheetLiteral::Bool(yes)));
+            start
+        }
+        StartChoice::Anywhere if selected != ANYWHERE_AT_RANDOM => StartsAs::new(StartRule::Anywhere),
+        StartChoice::OnGround(ground, state) => {
+            let mut start = StartsAs::new(StartRule::OnGround);
+            start.property = Some(ground);
+            start.state = Some(state);
             start
         }
         _ => return,
@@ -988,14 +1202,9 @@ fn start_edit(property: String, change: impl FnOnce(&mut StartsAs) + 'static) ->
     }
 }
 
-/// Returns the start of property `property` of the cells of `document`.
+/// Returns the start of property `property` of `document`.
 fn start_of(document: &SheetDocument, property: &str) -> Option<StartsAs> {
-    document
-        .cells
-        .iter()
-        .flatten()
-        .find(|known| known.id == property)
-        .and_then(|known| known.starts_as.clone())
+    find_property(document, property)?.starts_as.clone()
 }
 
 /// Returns the number at `slot` of `start`.
@@ -1063,18 +1272,44 @@ fn start_number(
     pending: &mut Option<Pending>,
 ) {
     let chance = matches!(slot, StartSlot::Row(_));
-    let number_use = if chance { NumberUse::Chance } else { NumberUse::Number };
     let place = match slot {
         StartSlot::Row(index) => starts_row_place(&property.name, index + 1),
         StartSlot::Value => starts_place(&property.name),
         StartSlot::Low => starts_low_place(&property.name),
         StartSlot::High => starts_high_place(&property.name),
     };
-    let current = start_slot(start, slot);
-    let target = StartTarget {
-        property: property.id.clone(),
-        slot,
+    let field = NumberField {
+        place,
+        id: start_field_id(pane.widgets, &property.id, slot),
+        current: start_slot(start, slot),
+        target: NumberTarget::Start {
+            property: property.id.clone(),
+            slot,
+        },
+        number_use: if chance { NumberUse::Chance } else { NumberUse::Number },
+        limit: None,
     };
+    number_field(ui, document, field, pane, pending);
+}
+
+/// Draws `field`: a text field with "Use a parameter" beside it, or the chip of the parameter it holds. A click on the
+/// chip reopens the full picker. A typed number, a parameter picked or a new parameter fills the field's target.
+fn number_field(
+    ui: &mut Ui,
+    document: &SheetDocument,
+    field: NumberField<'_>,
+    pane: &mut PaneState,
+    pending: &mut Option<Pending>,
+) {
+    let NumberField {
+        place,
+        id,
+        current,
+        target,
+        number_use,
+        limit,
+    } = field;
+    let chance = number_use == NumberUse::Chance;
     let choice = match current.and_then(Slot::value) {
         Some(SheetValue::Chip(SheetChip::Param(parameter))) => {
             let name = document
@@ -1104,35 +1339,36 @@ fn start_number(
                 Some(SheetValue::Literal(literal)) => literal_words(*literal),
                 _ => String::new(),
             };
-            let field = if chance {
+            let word = if chance {
                 StartsField::Chance
             } else {
                 StartsField::Number
             };
-            commit_field(
-                ui,
-                start_field_id(pane.widgets, &property.id, slot),
-                &starts_field_name(&place, field),
-                &text,
-                FIELD_WIDTH,
-                |typed| {
-                    let value = if typed.trim().is_empty() {
-                        Slot::Blank
-                    } else {
-                        match number_use.read(typed) {
-                            Ok(literal) => Slot::Filled(SheetValue::Literal(literal)),
-                            Err(message) if message == TYPE_ONE_NUMBER && chance => {
-                                return Some(TYPE_A_CHANCE.to_owned());
+            commit_field(ui, id, &starts_field_name(&place, word), &text, FIELD_WIDTH, |typed| {
+                let value = if typed.trim().is_empty() {
+                    if let Some((_, _, message)) = limit {
+                        return Some(message.to_owned());
+                    }
+                    Slot::Blank
+                } else {
+                    match number_use.read(typed) {
+                        Ok(literal) => {
+                            if let Some((low, high, message)) = limit
+                                && !literal.number().is_some_and(|number| (low..=high).contains(&number))
+                            {
+                                return Some(message.to_owned());
                             }
-                            Err(message) => return Some(message.to_owned()),
+                            Slot::Filled(SheetValue::Literal(literal))
                         }
-                    };
-                    *pending = Some(start_edit(target.property.clone(), move |start| {
-                        set_start_slot(start, slot, value);
-                    }));
-                    None
-                },
-            );
+                        Err(message) if message == TYPE_ONE_NUMBER && chance => {
+                            return Some(TYPE_A_CHANCE.to_owned());
+                        }
+                        Err(message) => return Some(message.to_owned()),
+                    }
+                };
+                *pending = Some(target.edit(value));
+                None
+            });
             let button = add_button(
                 ui,
                 true,
@@ -1149,35 +1385,20 @@ fn start_number(
             .show(ui, &button)
         }
     };
-    pick_start_number(
-        document,
-        &property.id,
-        current,
-        target,
-        number_use,
-        choice,
-        pane,
-        pending,
-    );
+    pick_number(document, current, target, number_use, choice, pane, pending);
 }
 
-/// Takes `choice`, made in the picker of the number `target` of a start that holds `current`: a parameter or a typed
-/// number goes into the start, and "New parameter..." opens the New parameter dialog.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the picker, the start and the pane each take a part"
-)]
-fn pick_start_number(
+/// Takes `choice`, made in the picker of the number `target` that holds `current`: a parameter or a typed number goes
+/// into the target, and "New parameter..." opens the New parameter dialog.
+fn pick_number(
     document: &SheetDocument,
-    property: &str,
     current: Option<&Slot>,
-    target: StartTarget,
+    target: NumberTarget,
     number_use: NumberUse,
     choice: Option<PickerChoice>,
     pane: &mut PaneState,
     pending: &mut Option<Pending>,
 ) {
-    let slot = target.slot;
     let value = match choice {
         Some(PickerChoice::Item { item, .. }) => match document.parameters.get(item) {
             Some(parameter) => Slot::Filled(SheetValue::Chip(SheetChip::Param(parameter.id.clone()))),
@@ -1194,9 +1415,7 @@ fn pick_start_number(
         Some(PickerChoice::Number(literal)) => Slot::Filled(SheetValue::Literal(literal)),
         None => return,
     };
-    *pending = Some(start_edit(property.to_owned(), move |start| {
-        set_start_slot(start, slot, value);
-    }));
+    *pending = Some(target.edit(value));
 }
 
 /// Returns the group of the sheet's parameters in a picker, each with its value and unit in grey.
@@ -1220,8 +1439,8 @@ fn parameters_group(document: &SheetDocument) -> PickerGroup {
     }
 }
 
-/// Draws the New parameter dialog while it is open. Create adds the parameter and puts it in the Starts as number it
-/// was opened from, as one edit, or adds it alone when "+ Add parameter" opened the dialog.
+/// Draws the New parameter dialog while it is open. Create adds the parameter and puts it in the number it was opened
+/// from, as one edit, or adds it alone when "+ Add parameter" opened the dialog.
 ///
 /// An edit that fills a start counts as a changed start, since only the start uses the new parameter. Past the start
 /// it therefore waits for Start again, as a parameter chosen from the picker does.
@@ -1237,7 +1456,7 @@ fn new_parameter(ui: &Ui, document: &SheetDocument, pane: &mut PaneState, pendin
             let target = target.clone();
             pane.new_parameter = None;
             *pending = Some(Pending {
-                starts_only: target.is_some(),
+                starts_only: matches!(target, Some(NumberTarget::Start { .. })),
                 form: None,
                 run: Box::new(move |builder| {
                     let made = builder.apply(SheetEdit::AddParameter {
@@ -1248,14 +1467,11 @@ fn new_parameter(ui: &Ui, document: &SheetDocument, pane: &mut PaneState, pendin
                         default: parameter.default,
                         unit: parameter.unit,
                     })?;
-                    let Some(StartTarget { property, slot }) = target else {
+                    let Some(target) = target else {
                         return Ok(());
                     };
                     let id = made.into_iter().next().unwrap_or_default();
-                    (start_edit(property, move |start| {
-                        set_start_slot(start, slot, Slot::Filled(SheetValue::Chip(SheetChip::Param(id))));
-                    })
-                    .run)(builder)
+                    (target.edit(Slot::Filled(SheetValue::Chip(SheetChip::Param(id)))).run)(builder)
                 }),
             });
         }
@@ -1285,18 +1501,30 @@ fn property_form(
                 field.request_focus();
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(KIND_LABEL);
-            ui.radio_value(&mut form.kind, PropertyType::States, STATES_KIND);
-            ui.radio_value(&mut form.kind, PropertyType::Number, NUMBER_KIND);
-            ui.radio_value(&mut form.kind, PropertyType::WholeNumber, INTEGER_KIND)
-                .on_hover_text(INTEGER_KIND_TOOLTIP);
+            for kind in form_kinds(document, form) {
+                let radio = ui.radio_value(&mut form.kind, kind, kind_words(kind));
+                if kind == PropertyType::WholeNumber {
+                    radio.on_hover_text(INTEGER_KIND_TOOLTIP);
+                }
+            }
         });
         match form.kind {
             PropertyType::States => state_rows(ui, form),
             PropertyType::WholeNumber => {
                 ui.weak(INTEGER_KIND_TOOLTIP);
             }
+            PropertyType::YesNo => {
+                ui.weak(YES_NO_KIND_DESCRIPTION);
+            }
+            PropertyType::Position => {
+                ui.weak(POSITION_KIND_DESCRIPTION);
+            }
+            PropertyType::Heading => {
+                ui.weak(HEADING_KIND_DESCRIPTION);
+            }
+            PropertyType::Arrow => {}
             _ => {
                 ui.weak(NUMBER_KIND_DESCRIPTION);
             }
@@ -1378,6 +1606,40 @@ fn state_rows(ui: &mut Ui, form: &mut PropertyForm) {
     }
 }
 
+/// Returns the kinds the property form offers: States and Number for every kind of thing, Integer for cells and
+/// agents, then for agents Yes or no, and a Position or a Heading while the agents have none. A property's own kind is
+/// always offered.
+///
+/// The ground holds only numbers and states.
+fn form_kinds(document: &SheetDocument, form: &PropertyForm) -> Vec<PropertyType> {
+    let mut kinds = vec![PropertyType::States, PropertyType::Number];
+    if form.thing != GROUND {
+        kinds.push(PropertyType::WholeNumber);
+    }
+    if form.thing != CELLS && form.thing != GROUND {
+        kinds.push(PropertyType::YesNo);
+        for built_in in [PropertyType::Position, PropertyType::Heading] {
+            let held = properties_of(document, &form.thing)
+                .iter()
+                .any(|property| property.property_type == built_in && Some(&property.id) != form.editing.as_ref());
+            if !held {
+                kinds.push(built_in);
+            }
+        }
+    }
+    let own = form
+        .editing
+        .as_deref()
+        .and_then(|id| find_property(document, id))
+        .map(|property| property.property_type);
+    if let Some(own) = own
+        && !kinds.contains(&own)
+    {
+        kinds.push(own);
+    }
+    kinds
+}
+
 /// Returns the colour a new state takes at row `index`.
 fn default_color(index: usize) -> Color {
     STATE_COLORS[index % STATE_COLORS.len()]
@@ -1394,10 +1656,8 @@ fn check_form(document: &SheetDocument, form: &PropertyForm) -> Result<(), Strin
     if name.is_empty() {
         return Err(PROPERTY_NAME_MISSING.to_owned());
     }
-    let taken = document
-        .cells
+    let taken = properties_of(document, &form.thing)
         .iter()
-        .flatten()
         .filter(|property| Some(&property.id) != form.editing.as_ref())
         .any(|property| property.name.to_lowercase() == name.to_lowercase());
     if taken {
@@ -1420,11 +1680,12 @@ fn check_form(document: &SheetDocument, form: &PropertyForm) -> Result<(), Strin
     Ok(())
 }
 
-/// Returns the edit Done makes from `form`: a new property with its states, starting in its first state or at 0, or
-/// the changes to a property the form edits.
+/// Returns the edit Done makes from `form`: a new property with its states and its first start, or the changes to a
+/// property the form edits.
 ///
-/// A changed kind clears every reference to the property and starts it afresh. A removed state clears its references,
-/// its measures and its start rows.
+/// A new property starts in its first state, at 0, at no, anywhere at random for a Position, and with no start for a
+/// Heading. A changed kind clears every reference to the property and starts it afresh. A removed state clears its
+/// references, its measures and its start rows.
 fn form_edit(form: PropertyForm) -> EditRun {
     Box::new(move |builder| {
         let states: Vec<FormState> = form
@@ -1436,7 +1697,7 @@ fn form_edit(form: PropertyForm) -> EditRun {
         let id = match &form.editing {
             None => builder
                 .apply(SheetEdit::AddProperty {
-                    thing: CELLS.to_owned(),
+                    thing: form.thing.clone(),
                     name,
                     property_type: form.kind,
                 })?
@@ -1453,12 +1714,7 @@ fn form_edit(form: PropertyForm) -> EditRun {
                 id.clone()
             }
         };
-        let current = builder
-            .document()
-            .cells
-            .iter()
-            .flatten()
-            .find(|property| property.id == id)
+        let current = find_property(builder.document(), &id)
             .cloned()
             .ok_or_else(|| SheetEditError::Missing(format!("the sheet has no property '{id}'")))?;
         let fresh = form.editing.is_none() || current.property_type != form.kind;
@@ -1487,18 +1743,27 @@ fn form_edit(form: PropertyForm) -> EditRun {
                 }
             }
         }
-        let mut start = StartsAs::new(StartRule::Value);
-        start.value = Slot::Filled(match first {
-            Some(state) => SheetValue::Chip(SheetChip::State(state)),
-            None => SheetValue::Literal(SheetLiteral::Number(0.0)),
-        });
+        let start = match form.kind {
+            PropertyType::Heading => None,
+            PropertyType::Position => Some(StartsAs::new(StartRule::Anywhere)),
+            kind => {
+                let mut start = StartsAs::new(StartRule::Value);
+                start.value = Slot::Filled(match first {
+                    Some(state) => SheetValue::Chip(SheetChip::State(state)),
+                    None if kind == PropertyType::YesNo => SheetValue::Literal(SheetLiteral::Bool(false)),
+                    None => SheetValue::Literal(SheetLiteral::Number(0.0)),
+                });
+                Some(start)
+            }
+        };
         builder.apply(SheetEdit::SetStartsAs {
             property: id.clone(),
-            starts_as: Some(Box::new(start)),
+            starts_as: start.map(Box::new),
         })?;
         // The first property made colours the cells. A States property does so through its command.
-        let uncoloured = !builder.document().colors.contains_key(CELLS)
-            && !cell_properties(builder.document())
+        let uncoloured = form.thing == CELLS
+            && !builder.document().colors.contains_key(CELLS)
+            && !properties_of(builder.document(), CELLS)
                 .iter()
                 .any(|property| property.property_type == PropertyType::States);
         if form.editing.is_none() && uncoloured {
@@ -1559,14 +1824,24 @@ fn change_states(
     Ok(())
 }
 
-/// Returns the numbers of the lines that change property `property_id` on the cards that run each tick.
+/// Returns the numbers of the lines that change property `property_id` on the cards that run each tick: a Become, a
+/// Set, a Steer or a Keep between of it, a Leave on it, and for an agent's Position or Heading a Move.
 fn changing_lines(document: &SheetDocument, property_id: &str) -> Vec<usize> {
     let mut numbers = Vec::new();
     for card in document.cards.iter().filter(|card| card.runs == CardRuns::EachTick) {
+        let moved = properties_of(document, &card.every).iter().any(|property| {
+            property.id == property_id
+                && matches!(property.property_type, PropertyType::Position | PropertyType::Heading)
+        });
         let relations = CardRelations::new(document, card);
         for &line_id in relations.order() {
-            let changes = relations.line(line_id).is_some_and(|line| {
-                matches!(line.kind, LineKind::Become | LineKind::Set) && line.property.as_deref() == Some(property_id)
+            let changes = relations.line(line_id).is_some_and(|line| match line.kind {
+                LineKind::Become | LineKind::Set | LineKind::Steer | LineKind::KeepBetween => {
+                    line.property.as_deref() == Some(property_id)
+                }
+                LineKind::Leave => line.ground_property.as_deref() == Some(property_id),
+                LineKind::Move => moved,
+                _ => false,
             });
             if changes && let Some(number) = relations.number(line_id) {
                 numbers.push(number);
@@ -1576,9 +1851,46 @@ fn changing_lines(document: &SheetDocument, property_id: &str) -> Vec<usize> {
     numbers
 }
 
-/// Returns the properties of the cells of `document`.
-fn cell_properties(document: &SheetDocument) -> &[SheetProperty] {
-    document.cells.as_deref().unwrap_or_default()
+/// Returns the properties of the kind of thing `thing`: `cells`, `ground` or an agent kind's id. A kind of thing the
+/// sheet lacks has none.
+fn properties_of<'a>(document: &'a SheetDocument, thing: &str) -> &'a [SheetProperty] {
+    match thing {
+        CELLS => document.cells.as_deref().unwrap_or_default(),
+        GROUND => document
+            .ground
+            .as_ref()
+            .map(|ground| ground.properties.as_slice())
+            .unwrap_or_default(),
+        _ => document
+            .agents
+            .iter()
+            .find(|kind| kind.id == thing)
+            .map(|kind| kind.properties.as_slice())
+            .unwrap_or_default(),
+    }
+}
+
+/// Returns every property of `document`: those of the cells, of each kind of agent, then of the ground.
+pub(super) fn all_properties(document: &SheetDocument) -> impl Iterator<Item = &SheetProperty> {
+    document
+        .cells
+        .iter()
+        .flatten()
+        .chain(document.agents.iter().flat_map(|kind| &kind.properties))
+        .chain(document.ground.iter().flat_map(|ground| &ground.properties))
+}
+
+/// Returns the property `id` of any kind of thing of `document`.
+fn find_property<'a>(document: &'a SheetDocument, id: &str) -> Option<&'a SheetProperty> {
+    all_properties(document).find(|property| property.id == id)
+}
+
+/// Returns the kind of thing the Measures and Buttons sections act on: the cells of a grid, or the first kind of agent.
+fn measured_thing(document: &SheetDocument) -> &str {
+    match document.world.made_of {
+        MadeOf::Agents => document.agents.first().map_or(CELLS, |kind| kind.id.as_str()),
+        _ => CELLS,
+    }
 }
 
 /// Returns the step of a slider over `range`: about a 200th of it, rounded down to 1, 2 or 5 times a power of ten.
@@ -1884,9 +2196,9 @@ fn value_slider(
 }
 
 /// Returns how `state` of `property` is named on its own: its name, or the property's name and its name when another
-/// property of the cells holds a state of that name.
+/// property of the kind of thing measured holds a state of that name.
 fn state_label(document: &SheetDocument, property: &SheetProperty, state: &SheetState) -> String {
-    let shared = cell_properties(document).iter().any(|other| {
+    let shared = properties_of(document, measured_thing(document)).iter().any(|other| {
         other.id != property.id
             && other
                 .states
@@ -1925,7 +2237,8 @@ fn averages_of<'a>(document: &'a SheetDocument, property: &str) -> Vec<&'a Sheet
         .collect()
 }
 
-/// Returns the command that adds a measure counting the cells whose `property` is `state`, named by the state.
+/// Returns the command that adds a measure counting the cells or agents whose `property` is `state`, named by the
+/// state.
 fn add_count(document: &SheetDocument, property: &SheetProperty, state: &SheetState) -> SheetEdit {
     let taken = document
         .measures
@@ -1939,7 +2252,7 @@ fn add_count(document: &SheetDocument, property: &SheetProperty, state: &SheetSt
     SheetEdit::AddMeasure {
         name,
         rule: MeasureRule::CountInState,
-        over: Some(CELLS.to_owned()),
+        over: Some(measured_thing(document).to_owned()),
         property: Some(property.id.clone()),
         state: Some(state.id.clone()),
         event: None,
@@ -1951,7 +2264,7 @@ fn add_count(document: &SheetDocument, property: &SheetProperty, state: &SheetSt
 /// Returns the words of `measure` in the Plotted list, such as "Number of cells whose Status is Alive", or its name for
 /// a measure no form of the pane makes.
 fn measure_words(document: &SheetDocument, measure: &SheetMeasure) -> String {
-    let property = |id: &str| cell_properties(document).iter().find(|known| known.id == id);
+    let property = |id: &str| find_property(document, id);
     match measure.rule {
         MeasureRule::CountInState => {
             let found = measure.property.as_deref().and_then(property);
@@ -1959,7 +2272,12 @@ fn measure_words(document: &SheetDocument, measure: &SheetMeasure) -> String {
                 .zip(measure.state.as_deref())
                 .and_then(|(found, state)| found.states.iter().find(|known| known.id == state));
             match (found, state) {
-                (Some(found), Some(state)) => count_measure(&found.name, &state.name),
+                (Some(found), Some(state)) if measure.over.as_deref() == Some(CELLS) => {
+                    count_measure(&found.name, &state.name)
+                }
+                (Some(found), Some(state)) if measure.over.as_deref() != Some(GROUND) => {
+                    count_agents_measure(&found.name, &state.name)
+                }
                 _ => measure.name.clone(),
             }
         }
@@ -1976,7 +2294,7 @@ fn measure_words(document: &SheetDocument, measure: &SheetMeasure) -> String {
 /// Draws the Measures section: a Plot box beside each state, the Plotted list with each measure's colour and remove
 /// button, and the measure form or "+ Add measure".
 fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, pending: &mut Option<Pending>) {
-    for property in cell_properties(document)
+    for property in properties_of(document, measured_thing(document))
         .iter()
         .filter(|property| property.property_type == PropertyType::States)
     {
@@ -2086,20 +2404,26 @@ fn measure_form(
     close: &mut bool,
     pending: &mut Option<Pending>,
 ) {
-    let properties = cell_properties(document);
-    let states: Vec<&SheetProperty> = properties
-        .iter()
-        .filter(|property| property.property_type == PropertyType::States)
-        .collect();
-    let numbers: Vec<&SheetProperty> = properties
-        .iter()
-        .filter(|property| matches!(property.property_type, PropertyType::Number | PropertyType::WholeNumber))
-        .collect();
+    let properties = properties_of(document, measured_thing(document));
+    let agents = measured_thing(document) != CELLS;
+    let of_kind = |kinds: &[PropertyType]| -> Vec<&SheetProperty> {
+        properties
+            .iter()
+            .filter(|property| kinds.contains(&property.property_type))
+            .collect()
+    };
+    let states = of_kind(&[PropertyType::States]);
+    // An average of agents' positions is their centre.
+    let numbers = of_kind(&[PropertyType::Number, PropertyType::WholeNumber, PropertyType::Position]);
     Frame::group(ui.style()).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.strong(NEW_MEASURE);
         let average = form.average;
-        ui.radio_value(&mut form.average, false, COUNT_MEASURE);
+        ui.radio_value(
+            &mut form.average,
+            false,
+            if agents { COUNT_AGENTS_MEASURE } else { COUNT_MEASURE },
+        );
         ui.radio_value(&mut form.average, true, AVERAGE_MEASURE);
         if form.average != average {
             *form = MeasureForm {
@@ -2121,7 +2445,7 @@ fn measure_form(
                     form.property = Some(chosen);
                 }
             } else {
-                ui.label(COUNT_MEASURE_LEAD);
+                ui.label(if agents { COUNT_AGENTS_LEAD } else { COUNT_MEASURE_LEAD });
                 if let Some(chosen) = property_select(
                     ui,
                     "henad_sheet_measure_property",
@@ -2186,10 +2510,11 @@ fn measure_form(
 /// Returns the message on a count with no property or no state, an average with no number property, or a measure
 /// already plotted.
 fn measure_edit(document: &SheetDocument, form: &MeasureForm) -> Result<SheetEdit, String> {
-    let property = form
-        .property
-        .as_deref()
-        .and_then(|id| cell_properties(document).iter().find(|known| known.id == id));
+    let property = form.property.as_deref().and_then(|id| {
+        properties_of(document, measured_thing(document))
+            .iter()
+            .find(|known| known.id == id)
+    });
     if form.average {
         let Some(property) = property else {
             return Err(MEASURE_NEEDS_NUMBER_PROPERTY.to_owned());
@@ -2200,7 +2525,7 @@ fn measure_edit(document: &SheetDocument, form: &MeasureForm) -> Result<SheetEdi
         return Ok(SheetEdit::AddMeasure {
             name: average_measure(&property.name),
             rule: MeasureRule::Average,
-            over: Some(CELLS.to_owned()),
+            over: Some(measured_thing(document).to_owned()),
             property: None,
             state: None,
             event: None,
@@ -2253,71 +2578,129 @@ fn shaded_rule(property: &str, previous: Option<&ColorRule>) -> ColorRule {
     rule
 }
 
-/// Returns the command that colours the cells by `property`: by its states' colours for a States property, and
-/// shaded as [`shaded_rule`] says otherwise.
-fn color_rule_edit(property: &SheetProperty, previous: Option<&ColorRule>) -> SheetEdit {
-    let rule = if property.property_type == PropertyType::States {
-        let mut rule = ColorRule::new(ColorRuleKind::ByState);
-        rule.property = Some(property.id.clone());
-        rule
-    } else {
-        shaded_rule(&property.id, previous)
+/// Returns the command that colours `thing` by `property`: by its states' colours for a States property, by heading
+/// for a Heading, and shaded as [`shaded_rule`] says otherwise.
+fn color_rule_edit(thing: &str, property: &SheetProperty, previous: Option<&ColorRule>) -> SheetEdit {
+    let rule = match property.property_type {
+        PropertyType::States => {
+            let mut rule = ColorRule::new(ColorRuleKind::ByState);
+            rule.property = Some(property.id.clone());
+            rule
+        }
+        PropertyType::Heading => ColorRule::new(ColorRuleKind::ByHeading),
+        _ => shaded_rule(&property.id, previous),
     };
     SheetEdit::SetColorRule {
-        thing: CELLS.to_owned(),
+        thing: thing.to_owned(),
         rule: Some(rule),
     }
 }
 
-/// Draws the Colours section: "Colour cells by" a property, with its states' colours under a States property, and
-/// the hue and the range of the shading of a Number property. `widgets` is the id the pane's widgets are keyed under.
-///
-/// With no rule, or a rule over no property of the cells, the select shows the first States property, or else the
-/// first property.
+/// Draws the Colours section: the property that colours the cells, or in a world of agents the property that colours
+/// the agents and the one that colours the ground. `widgets` is the id the pane's widgets are keyed under.
 fn colours(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Option<Pending>) {
-    let properties = cell_properties(document);
-    let rule = document.colors.get(CELLS);
-    let chosen = rule
-        .and_then(|rule| rule.property.as_deref())
-        .and_then(|id| properties.iter().find(|property| property.id == id))
+    if document.world.made_of != MadeOf::Agents {
+        colours_of(ui, document, CELLS, COLOR_CELLS_BY, widgets, pending);
+        return;
+    }
+    colours_of(
+        ui,
+        document,
+        measured_thing(document),
+        COLOR_AGENTS_BY,
+        widgets,
+        pending,
+    );
+    if !properties_of(document, GROUND).is_empty() {
+        ui.add_space(4.0);
+        colours_of(ui, document, GROUND, COLOR_GROUND_BY, widgets, pending);
+    }
+}
+
+/// Draws what colours `thing`: `label` and a select of its properties, with the states' colours under a States
+/// property, the note on a heading, and the hue and the range of the shading of a Number property.
+///
+/// With no rule, or a rule over no property of `thing`, the select shows the first States property, or else the first
+/// property that can colour.
+fn colours_of(
+    ui: &mut Ui,
+    document: &SheetDocument,
+    thing: &str,
+    label: &str,
+    widgets: Id,
+    pending: &mut Option<Pending>,
+) {
+    let properties: Vec<&SheetProperty> = properties_of(document, thing)
+        .iter()
+        .filter(|property| {
+            matches!(
+                property.property_type,
+                PropertyType::States | PropertyType::Number | PropertyType::WholeNumber | PropertyType::Heading
+            )
+        })
+        .collect();
+    let rule = document.colors.get(thing);
+    let ruled = rule.and_then(|rule| {
+        if rule.rule == ColorRuleKind::ByHeading {
+            return properties
+                .iter()
+                .find(|property| property.property_type == PropertyType::Heading);
+        }
+        let id = rule.property.as_deref()?;
+        properties.iter().find(|property| property.id == id)
+    });
+    let chosen = ruled
         .or_else(|| {
             properties
                 .iter()
                 .find(|property| property.property_type == PropertyType::States)
         })
         .or(properties.first());
-    let Some(chosen) = chosen else {
+    let Some(&chosen) = chosen else {
         return;
     };
     ui.horizontal(|ui| {
-        ui.label(COLOR_CELLS_BY);
-        let all: Vec<&SheetProperty> = properties.iter().collect();
-        if let Some(picked) = property_select(ui, "henad_sheet_color_by", COLOR_CELLS_BY, &all, Some(&chosen.id), "")
+        ui.label(label);
+        let picked = property_select(
+            ui,
+            &format!("henad_sheet_color_by_{thing}"),
+            label,
+            &properties,
+            ruled.map(|property| property.id.as_str()),
+            &chosen.name,
+        );
+        if let Some(picked) = picked
             && let Some(property) = properties.iter().find(|property| property.id == picked)
         {
-            *pending = Some(Pending::one(color_rule_edit(property, rule)));
+            *pending = Some(Pending::one(color_rule_edit(thing, property, rule)));
         }
     });
-    if chosen.property_type == PropertyType::States {
-        ui.horizontal_wrapped(|ui| {
-            for state in &chosen.states {
-                swatch(ui, state.color);
-                ui.weak(&state.name);
-                ui.add_space(6.0);
-            }
-        });
-        return;
+    match chosen.property_type {
+        PropertyType::States => {
+            ui.horizontal_wrapped(|ui| {
+                for state in &chosen.states {
+                    swatch(ui, state.color);
+                    ui.weak(&state.name);
+                    ui.add_space(6.0);
+                }
+            });
+        }
+        PropertyType::Heading => {
+            ui.weak(BY_HEADING_NOTE);
+        }
+        _ => {
+            let shading = shaded_rule(
+                &chosen.id,
+                rule.filter(|rule| rule.property.as_deref() == Some(&chosen.id)),
+            );
+            shading_ui(ui, thing, &shading, widgets, pending);
+        }
     }
-    let shading = shaded_rule(
-        &chosen.id,
-        rule.filter(|rule| rule.property.as_deref() == Some(&chosen.id)),
-    );
-    shading_ui(ui, &shading, widgets, pending);
 }
 
-/// Draws the hue and the range of `shading`, the rule that shades the cells by a Number property. A new hue or end
+/// Draws the hue and the range of `shading`, the rule that shades `thing` by a Number property. A new hue or end
 /// commits the rule with it. `widgets` is the id the pane's widgets are keyed under.
-fn shading_ui(ui: &mut Ui, shading: &ColorRule, widgets: Id, pending: &mut Option<Pending>) {
+fn shading_ui(ui: &mut Ui, thing: &str, shading: &ColorRule, widgets: Id, pending: &mut Option<Pending>) {
     let hue = shading.hue.unwrap_or(ShadeHue::Blue);
     let hue_words = |hue: ShadeHue| {
         let index = ShadeHue::ALL.iter().position(|known| *known == hue).unwrap_or_default();
@@ -2326,7 +2709,7 @@ fn shading_ui(ui: &mut Ui, shading: &ColorRule, widgets: Id, pending: &mut Optio
     ui.horizontal(|ui| {
         ui.label(SHADE);
         let mut picked = hue;
-        let combo = ComboBox::from_id_salt("henad_sheet_shade")
+        let combo = ComboBox::from_id_salt(("henad_sheet_shade", thing))
             .selected_text(hue_words(hue))
             .show_ui(ui, |ui| {
                 for known in ShadeHue::ALL {
@@ -2338,7 +2721,7 @@ fn shading_ui(ui: &mut Ui, shading: &ColorRule, widgets: Id, pending: &mut Optio
             let mut rule = shading.clone();
             rule.hue = Some(picked);
             *pending = Some(Pending::one(SheetEdit::SetColorRule {
-                thing: CELLS.to_owned(),
+                thing: thing.to_owned(),
                 rule: Some(rule),
             }));
         }
@@ -2354,8 +2737,8 @@ fn shading_ui(ui: &mut Ui, shading: &ColorRule, widgets: Id, pending: &mut Optio
             );
         }
     });
-    let darkest_id = widgets.with("henad_sheet_shade_darkest");
-    let lightest_id = widgets.with("henad_sheet_shade_lightest");
+    let darkest_id = widgets.with(("henad_sheet_shade_darkest", thing));
+    let lightest_id = widgets.with(("henad_sheet_shade_lightest", thing));
     // The ends left out read as 0 and 1, as the lowering reads them.
     let (darkest_at, lightest_at) = (shading.darkest.unwrap_or(0.0), shading.lightest.unwrap_or(1.0));
     ui.horizontal(|ui| {
@@ -2381,7 +2764,7 @@ fn shading_ui(ui: &mut Ui, shading: &ColorRule, widgets: Id, pending: &mut Optio
                             rule.lightest = Some(value);
                         }
                         *pending = Some(Pending::one(SheetEdit::SetColorRule {
-                            thing: CELLS.to_owned(),
+                            thing: thing.to_owned(),
                             rule: Some(rule),
                         }));
                         None
@@ -2397,32 +2780,53 @@ fn shading_ui(ui: &mut Ui, shading: &ColorRule, widgets: Id, pending: &mut Optio
     }
 }
 
-/// Returns what `button` does in words, such as "Start again: Status", "Start again: every property" or "Run once,
-/// every cell".
+/// Returns what `button` does in words, such as "Start again: Status", "Start again: every property", "Run once,
+/// every cell" or "Set To food and To home to 0 everywhere".
+///
+/// Steps one after another that set properties to the same value everywhere read as one.
 fn button_does(document: &SheetDocument, button: &SheetButton) -> String {
-    let does: Vec<String> = button
-        .does
-        .iter()
-        .map(|step| match step.rule {
-            ButtonStepRule::StartAgain => match step.properties.as_slice() {
+    let sentences = Sentences::new(document);
+    let name_of = |id: &str| find_property(document, id).map_or_else(|| id.to_owned(), |known| known.name.clone());
+    let mut does: Vec<String> = Vec::new();
+    let mut set: Option<(Vec<String>, String)> = None;
+    for step in &button.does {
+        if step.rule == ButtonStepRule::SetEverywhere {
+            let property = step.property.as_deref().unwrap_or_default();
+            let value = sentences.slot(&step.value, Some(property));
+            match &mut set {
+                Some((properties, held)) if *held == value => properties.push(name_of(property)),
+                _ => {
+                    if let Some((properties, value)) = set.take() {
+                        does.push(set_everywhere(&properties, &value));
+                    }
+                    set = Some((vec![name_of(property)], value));
+                }
+            }
+            continue;
+        }
+        if let Some((properties, value)) = set.take() {
+            does.push(set_everywhere(&properties, &value));
+        }
+        does.push(if step.rule == ButtonStepRule::StartAgain {
+            match step.properties.as_slice() {
                 [] => start_again_for(EVERY_PROPERTY),
                 properties => {
-                    let names: Vec<&str> = properties
-                        .iter()
-                        .map(|id| {
-                            cell_properties(document)
-                                .iter()
-                                .find(|known| known.id == *id)
-                                .map_or(id.as_str(), |known| known.name.as_str())
-                        })
-                        .collect();
+                    let names: Vec<String> = properties.iter().map(|id| name_of(id)).collect();
                     start_again_for(&names.join(", "))
                 }
-            },
-            ButtonStepRule::RunOnce => run_once("cell"),
-            _ => SET_EVERYWHERE.to_owned(),
-        })
-        .collect();
+            }
+        } else {
+            let thing = step
+                .card
+                .as_deref()
+                .and_then(|card| document.cards.iter().find(|known| known.id == card))
+                .map_or(CELLS, |card| card.every.as_str());
+            run_once(&sentences.thing_word(thing))
+        });
+    }
+    if let Some((properties, value)) = set {
+        does.push(set_everywhere(&properties, &value));
+    }
     does.join(", ")
 }
 
@@ -2521,7 +2925,18 @@ fn button_form(
     close: &mut bool,
     pending: &mut Option<Pending>,
 ) {
-    let properties: Vec<&SheetProperty> = cell_properties(document).iter().collect();
+    let thing = measured_thing(document);
+    // Agents' buttons start the ground's properties again too.
+    let properties: Vec<&SheetProperty> = properties_of(document, thing)
+        .iter()
+        .chain(if thing == CELLS {
+            &[][..]
+        } else {
+            properties_of(document, GROUND)
+        })
+        .filter(|property| property.starts_as.is_some())
+        .collect();
+    let thing_word = Sentences::new(document).thing_word(thing);
     Frame::group(ui.style()).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let heading = match &form.editing {
@@ -2559,7 +2974,7 @@ fn button_form(
                 set_name(ui, combo.response.id, START_AGAIN_FOR);
             });
         });
-        ui.radio_value(&mut form.run_once, true, run_once("cell"));
+        ui.radio_value(&mut form.run_once, true, run_once(&thing_word));
         if let Some(message) = &form.message {
             message_ui(ui, message);
         }
@@ -2571,7 +2986,12 @@ fn button_form(
         });
         if done {
             match check_button_form(document, form) {
-                Ok(()) => *pending = Some(Pending::from_form(FormKind::Button, button_edit(form.clone()))),
+                Ok(()) => {
+                    *pending = Some(Pending::from_form(
+                        FormKind::Button,
+                        button_edit(form.clone(), thing.to_owned()),
+                    ));
+                }
                 Err(message) => form.message = Some(message),
             }
         }
@@ -2599,21 +3019,23 @@ fn check_button_form(document: &SheetDocument, form: &ButtonForm) -> Result<(), 
     Ok(())
 }
 
-/// Returns the steps of a button that starts `property` again, or every property of the cells for `None`.
-fn start_again_steps(property: Option<String>) -> Vec<ButtonStep> {
+/// Returns the step of a button that starts `property` again, or every property of `thing` for `None`.
+fn start_again_step(property: Option<String>, thing: &str) -> ButtonStep {
     let mut step = ButtonStep::new(ButtonStepRule::StartAgain);
     match property {
         Some(property) => step.properties = vec![property],
-        None => step.thing = Some(CELLS.to_owned()),
+        None => step.thing = Some(thing.to_owned()),
     }
-    vec![step]
+    step
 }
 
-/// Returns the edit Done of the button form makes from `form`: a new button, or the changes to the button it edits.
+/// Returns the edit Done of the button form makes from `form` for a button of `thing`: a new button, or the changes to
+/// the button it edits.
 ///
 /// A button whose kind changes, from Start again to Run once or back, is deleted and added again under its new name,
-/// and a Run once button's card goes with it.
-fn button_edit(form: ButtonForm) -> EditRun {
+/// and a Run once button's card goes with it. A Start again button keeps the steps no control of the form sets, such
+/// as setting a property everywhere, and its new start-again step takes the place of the old ones.
+fn button_edit(form: ButtonForm, thing: String) -> EditRun {
     Box::new(move |builder| {
         let name = form.name.trim().to_owned();
         let rule = if form.run_once {
@@ -2649,7 +3071,7 @@ fn button_edit(form: ButtonForm) -> EditRun {
                     .apply(SheetEdit::AddButton {
                         name,
                         rule,
-                        thing: CELLS.to_owned(),
+                        thing: thing.clone(),
                     })?
                     .into_iter()
                     .next()
@@ -2659,14 +3081,25 @@ fn button_edit(form: ButtonForm) -> EditRun {
         if form.run_once {
             return Ok(());
         }
-        builder
-            .apply(SheetEdit::SetButtonSteps {
-                button: id,
-                does: start_again_steps(form.property),
-            })
-            .map(drop)
+        let kept: Vec<ButtonStep> = builder
+            .document()
+            .buttons
+            .iter()
+            .find(|button| button.id == id)
+            .map(|button| button.does.clone())
+            .unwrap_or_default();
+        let start_again_index = kept
+            .iter()
+            .position(|step| step.rule == ButtonStepRule::StartAgain)
+            .unwrap_or_default();
+        let mut does: Vec<ButtonStep> = kept
+            .into_iter()
+            .filter(|step| step.rule != ButtonStepRule::StartAgain)
+            .collect();
+        does.insert(
+            start_again_index.min(does.len()),
+            start_again_step(form.property, &thing),
+        );
+        builder.apply(SheetEdit::SetButtonSteps { button: id, does }).map(drop)
     })
 }
-
-/// What a button step does that sets one property everywhere. No control of a grid sheet writes such a step.
-const SET_EVERYWHERE: &str = "Set everywhere";

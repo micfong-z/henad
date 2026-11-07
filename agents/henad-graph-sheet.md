@@ -133,9 +133,11 @@ enums `AddButton` and `AddItem` (labels, tooltips, headings, patterns; `+ Chance
 accessible name, picker title), `LineSelect`, `DrawKind` and `ConditionKind`. A template takes the
 line number, the line word ("line 2", "Clear line 1") or the line prefix ("Line 2", "Clear line 1")
 it needs. Beyond the card it holds the sheet (`SheetSection` with each heading, help text and
-example, the World and Time words, the property form and its checks, Starts as with `StartsField`
-and the `starts_*_place` functions, the Parameters, Measures, Colours and Buttons words,
-`SHEET_EMPTY`), the New model and New parameter dialogs, the top bar, the world tabs
+example, `SheetSection::shown` for a world of cells or of agents, the World and Time words, the
+property form and its checks, Starts as with `StartsField` and the `starts_*_place` functions, the
+Parameters, Measures, Colours and Buttons words, `SHEET_EMPTY`, and from S26 the Agents, Ground and
+Events words, which round 1 supplies since the final `SPEC.md` has none), the New model and New
+parameter dialogs (`STARTER_CHOICES` with every starter's description), the top bar, the world tabs
 (`tick_counter`, the tried-value words, `PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the
 conversion. Rows the wording table marks "Not built" are left out. The rate notes are templates
 taking numbers already formatted (`rate_note`, `rate_for_each_note`, `worked_out_rate_note`,
@@ -318,8 +320,8 @@ and the empty "for each"; `for_each_words`; and no fixed entry holding a forbidd
 tests sit in `src/tests/sheet_writer.rs`: `every_sheet_is_a_fixed_point`,
 `the_rust_writer_agrees_with_check_py_apart_from_comments` against `src/tests/golden/` (the
 reference writer's text for the four author-format examples with comment lines removed, each line's
-note dropped first since the ants starter holds one the example lacks;
-`golden/README.md` holds the procedure, the script's SHA-256 and the rules in full),
+note dropped first since the ants starter holds one the example lacks; `golden/README.md` holds the
+procedure, the script's SHA-256 and the rules in full),
 `a_hand_edited_sheet_reads_back_to_its_canonical_text`,
 `unusual_values_read_back_to_the_same_document`, `a_number_that_is_not_finite_is_refused`,
 `numbers_follow_the_sheet_number_rule`, `every_line_sentence_equals_its_comment`, the three diffs of
@@ -346,17 +348,18 @@ and the D14 warning. Reader tests sit in `src/tests/sheet_document.rs`, over ele
 eight starters, and three test sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and
 `ants.toml` are the author format's examples, and `random_walk.toml`, `bounded_confidence.toml` and
 `sir_chance.toml` (round 1's SIR with chances per tick, sheet id `sir_chance`) were written from
-round 1's models, as `vote.toml` and `forest_fire.toml` were. `mobile_sir.toml` holds a chance once
-for each infected person within reach, in a world 1 cell wide so every person reaches every other.
-Every sheet holds `always` and `any_state` written in, Game of Life's Clear is a Run once card
-holding "Become Dead from any state, always", and both SIR sheets name their button `new_outbreak`,
-"New outbreak". The written sheets' keys were minted at random. Their text is the writer's canonical
-text, comments included. The bounded confidence colour rule is `shaded` over `opinion` with no
-colours, since the schema holds no ramp. The test helper `sheets()` lists the starters from
-`starters()`, then the test sheets, so every starter is among the sheets the tests read.
-`starters_returns_the_grid_sheets_then_the_agent_sheets` holds the list and each starter's world,
-and `the_sheets_written_from_round_1_read_their_values` a value of each written sheet.
-`every_sheet_reads` (places on every line table, the ants' chip in
+round 1's models, as `vote.toml` and `forest_fire.toml` were. The random walk's measure is "Average
+of Position" (`average_of_position`), the name the sheet editor's average gives it (S26).
+`mobile_sir.toml` holds a chance once for each infected person within reach, in a world 1 cell wide
+so every person reaches every other. Every sheet holds `always` and `any_state` written in, Game of
+Life's Clear is a Run once card holding "Become Dead from any state, always", and both SIR sheets
+name their button `new_outbreak`, "New outbreak". The written sheets' keys were minted at random.
+Their text is the writer's canonical text, comments included. The bounded confidence colour rule is
+`shaded` over `opinion` with no colours, since the schema holds no ramp. The test helper `sheets()`
+lists the starters from `starters()`, then the test sheets, so every starter is among the sheets the
+tests read. `starters_returns_the_grid_sheets_then_the_agent_sheets` holds the list and each
+starter's world, and `the_sheets_written_from_round_1_read_their_values` a value of each written
+sheet. `every_sheet_reads` (places on every line table, the ants' chip in
 `[[card.line.l7.row.condition.items]]`, and a depth at most half the limit),
 `every_table_reads_its_values`, `a_sheet_with_an_unknown_key_is_refused_on_the_key` (also with
 `\r\n` line ends), `a_newer_sheet_version_is_refused_on_its_key`,
