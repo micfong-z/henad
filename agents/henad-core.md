@@ -68,6 +68,10 @@ henad-core takes a wildcard arm. The arms sit in the kit's `declared.rs` (`prepe
 `LaneSpec`, `BufferSpec` and `PassSpec` stay `&'static`, and hand-written models fill the last two.
 `Structure::GpuGrid` holds `Cow`s, and `Structure::GpuAgents` holds `Cow`s of `GpuBufferInfo` and
 `GpuPassInfo`, descriptions that a compiled model and a model composed at run time both fill.
+`metadata::TimeUnit` (second to year) is the one unit of time in the workspace: `as_str` and
+`parse` name it in a file, `plural` is the word a sheet's Time line shows, and `days` takes a month
+as 30.44 days and a year as 365.25 (`time_unit_factors_follow_their_known_answers`). henad-graph's
+sheet reads `[time] tick_unit` and a rate's `rate_unit` through it.
 `binding::named_buffer_target` is `buffer_target` for a binding name built at run time.
 `Network` keeps its adjacency rows in compressed sparse row (CSR) form with slack, beside an edge
 list the view draws. A full row relocates to the end, the engine repacks after a tick once

@@ -35,7 +35,7 @@ use henad_core::params::ParamKind;
 use henad_core::provenance::ModelCode;
 use henad_graph::document::World;
 use henad_graph::host::HostEvaluator;
-use henad_graph::model_text::{LineEnds, ParamTable, toml_string as string, write_param};
+use henad_graph::model_text::{LineEnds, ModelHeader, ParamTable, toml_string as string, write_param};
 use henad_graph::wgsl::{AgentProgram, GridProgram};
 use henad_graph::{GraphFile, GraphFileError, KIND_GRAPH};
 
@@ -186,11 +186,11 @@ impl ModelFile {
     /// place.
     pub fn parse(text: &str) -> Result<Self, ModelFileError> {
         let (read, line_ends) = LineEnds::normalize(text);
-        let header: HeaderTable = toml::from_str(&read).map_err(|error| toml_error(text, &line_ends, &error))?;
-        let kind = header
+        let header = ModelHeader::read(&read).map_err(|error| toml_error(text, &line_ends, &error))?;
+        header
             .check(&[KIND_GPU_GRID, KIND_GRAPH])
-            .map_err(|(message, span)| placed(text, &line_ends, message, span))?;
-        if kind.as_deref() == Some(KIND_GRAPH) {
+            .map_err(|problem| placed(text, &line_ends, problem.message, problem.span))?;
+        if header.kind() == Some(KIND_GRAPH) {
             return GraphFile::parse(text)
                 .map(|file| Self::Graph(Box::new(file)))
                 .map_err(ModelFileError::from);
@@ -341,10 +341,10 @@ impl GridRuleFile {
         let placed = |message: String, span: Range<usize>| placed(text, &line_ends, message, span);
 
         // The header first, so that a file of another version reads as one even when its keys are new.
-        let header: HeaderTable = toml::from_str(&read).map_err(toml_error)?;
+        let header = ModelHeader::read(&read).map_err(toml_error)?;
         header
             .check(&[KIND_GPU_GRID])
-            .map_err(|(message, span)| placed(message, span))?;
+            .map_err(|problem| placed(problem.message, problem.span))?;
 
         let file: FileTable = toml::from_str(&read).map_err(toml_error)?;
         let step = step_offset(&read, &file.step.wgsl).ok_or_else(|| {
@@ -559,59 +559,7 @@ fn canonical_text(rule: &GridRule) -> String {
     text
 }
 
-/// The header keys of a model file, read before the rest and ignoring every other key.
-#[derive(Deserialize)]
-struct HeaderTable {
-    #[serde(default)]
-    format: Option<Spanned<String>>,
-    #[serde(default)]
-    format_version: Option<Spanned<u64>>,
-    #[serde(default)]
-    kind: Option<Spanned<String>>,
-}
-
-impl HeaderTable {
-    /// Checks the header's values against `kinds`, the kinds the caller reads, and returns the kind, `None` when the
-    /// file writes none.
-    ///
-    /// # Errors
-    ///
-    /// Returns the message and the place of the first value that this build cannot read.
-    fn check(self, kinds: &[&str]) -> Result<Option<String>, (String, Range<usize>)> {
-        if let Some(format) = self.format
-            && format.get_ref() != FORMAT
-        {
-            let message = format!(
-                "the file's format is '{}', but a model file's format must be '{FORMAT}'",
-                format.get_ref()
-            );
-            return Err((message, format.span()));
-        }
-        if let Some(version) = self.format_version
-            && *version.get_ref() != FORMAT_VERSION
-        {
-            let message = format!(
-                "the file is model file version {}, but this build only reads version {FORMAT_VERSION}",
-                version.get_ref()
-            );
-            return Err((message, version.span()));
-        }
-        if let Some(kind) = &self.kind
-            && !kinds.contains(&kind.get_ref().as_str())
-        {
-            let known: Vec<String> = kinds.iter().map(|known| format!("'{known}'")).collect();
-            let message = format!(
-                "the file contains a model of kind '{}', but this build only reads {}",
-                kind.get_ref(),
-                known.join(" and ")
-            );
-            return Err((message, kind.span()));
-        }
-        Ok(self.kind.map(Spanned::into_inner))
-    }
-}
-
-/// A model file as TOML holds it. [`HeaderTable`] checks the header's values.
+/// A model file as TOML holds it. [`ModelHeader`] checks the header's values.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileTable {

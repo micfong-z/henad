@@ -24,6 +24,85 @@ impl Backend {
     }
 }
 
+/// Unit of time that one tick of a model stands for.
+///
+/// A sheet's Time line and a rate name their unit with this type. [`Self::days`] converts one unit to
+/// days, taking a month as 30.44 days and a year as 365.25 days.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TimeUnit {
+    /// One second.
+    Second,
+    /// One minute.
+    Minute,
+    /// One hour.
+    Hour,
+    /// One day.
+    Day,
+    /// Seven days.
+    Week,
+    /// A twelfth of a year, 30.44 days.
+    Month,
+    /// 365.25 days.
+    Year,
+}
+
+impl TimeUnit {
+    /// Every unit, from the shortest to the longest.
+    pub const ALL: [Self; 7] = [
+        Self::Second,
+        Self::Minute,
+        Self::Hour,
+        Self::Day,
+        Self::Week,
+        Self::Month,
+        Self::Year,
+    ];
+
+    /// Returns the unit's name in a file, such as `day`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Second => "second",
+            Self::Minute => "minute",
+            Self::Hour => "hour",
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+            Self::Year => "year",
+        }
+    }
+
+    /// Returns the unit that [`Self::as_str`] names `name`, or `None` for any other text.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|unit| unit.as_str() == name)
+    }
+
+    /// Returns the unit's plural name, as the Time line of a sheet shows it, such as `days`.
+    pub fn plural(self) -> &'static str {
+        match self {
+            Self::Second => "seconds",
+            Self::Minute => "minutes",
+            Self::Hour => "hours",
+            Self::Day => "days",
+            Self::Week => "weeks",
+            Self::Month => "months",
+            Self::Year => "years",
+        }
+    }
+
+    /// Returns the length of one unit in days.
+    pub fn days(self) -> f64 {
+        match self {
+            Self::Second => 1.0 / 86_400.0,
+            Self::Minute => 1.0 / 1440.0,
+            Self::Hour => 1.0 / 24.0,
+            Self::Day => 1.0,
+            Self::Week => 7.0,
+            Self::Month => 30.44,
+            Self::Year => 365.25,
+        }
+    }
+}
+
 /// One lane of a CPU agent model's struct-of-arrays storage.
 ///
 /// `agent_lanes!` generates one `LaneSpec` per lane.
@@ -190,5 +269,28 @@ impl ModelMetadata {
     pub fn replays_exactly(mut self, replays_exactly: bool) -> Self {
         self.replays_exactly = replays_exactly;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TimeUnit;
+
+    #[test]
+    fn time_unit_factors_follow_their_known_answers() {
+        assert_eq!(TimeUnit::Week.days(), 7.0);
+        assert_eq!(TimeUnit::Month.days(), 30.44);
+        assert_eq!(TimeUnit::Year.days(), 365.25);
+        assert_eq!(TimeUnit::Hour.days(), 1.0 / 24.0);
+        assert_eq!(TimeUnit::Day.days(), 1.0);
+        assert!((TimeUnit::Minute.days() * 1440.0 - 1.0).abs() < 1e-15);
+        assert!((TimeUnit::Second.days() * 86_400.0 - 1.0).abs() < 1e-15);
+        for unit in TimeUnit::ALL {
+            assert_eq!(TimeUnit::parse(unit.as_str()), Some(unit));
+            assert_eq!(unit.plural(), format!("{}s", unit.as_str()));
+        }
+        assert_eq!(TimeUnit::parse("fortnight"), None);
+        assert_eq!(TimeUnit::parse("days"), None);
+        assert_eq!(TimeUnit::parse("Day"), None);
     }
 }

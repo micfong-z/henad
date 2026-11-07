@@ -175,6 +175,11 @@ mod named_only {
         henad::DiagnosticSeverity,
     );
 
+    /// Days in one month, through the unit of time a sheet's Time line names.
+    fn days_in_a_month() -> f64 {
+        henad::TimeUnit::Month.days()
+    }
+
     /// Work budgets that [`henad::gpu::Demand::shortfalls`] holds a model to.
     const WORK_BUDGETS: [u64; 2] = [henad::gpu::SUBMISSION_WORK_BUDGET, henad::gpu::HOST_WORK_BUDGET];
 
@@ -203,6 +208,9 @@ mod named_only {
         henad::graph::starters::Starter,
         henad::graph::wgsl::GridProgram,
         henad::graph::wgsl::GeneratedShader,
+        henad::graph::sheet::ParsedSheet,
+        henad::graph::sheet::SheetFileError,
+        henad::graph::sheet::document::SheetDocument,
     );
 
     /// Returns whether every graph starter reads and checks without an error, for a host built with `model-files`.

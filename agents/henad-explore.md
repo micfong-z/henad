@@ -143,35 +143,36 @@ plan checks (`MergeError::CodeChanged`). Compiled against compiled keeps `BuildC
 Behind the `model-files` feature, which turns on henad-compute's `runtime-wgsl` and henad-graph,
 `model_file.rs` holds `ModelFile`, an enum over the kinds of model file:
 `GpuGrid(Box<GridRuleFile>)` and `Graph(Box<GraphFile>)`, both boxed for clippy's
-`large_enum_variant`. `ModelFile::parse` reads the header, checks `format`, `format_version` and
-a `kind` of `gpu_grid` or `graph`, then hands the whole text to `GraphFile::parse` for `graph` and
-to `GridRuleFile::parse` otherwise (a missing `kind` then reports as a missing key). Only
-`GraphFile::parse` holds a file to henad-graph's `MAX_FILE_BYTES` (1 MiB), and a grid rule reads
-as it did before G1 (`only_a_graph_is_held_to_the_graph_size_limit`). `GraphFileError` maps onto
-`Toml` and `Format`. The
-enum forwards `to_toml`, `code` and `entry`, and adds `id`, `rule` and `graph` (each `Option`) and
-`warnings` (the graph checker's, empty for a rule). For a graph, `entry` returns
-`ModelFileError::Graph` with the checker's errors, then with `HostEvaluator::new`'s (an init pass
-the host cannot run), then with `GridProgram::compile`'s, and otherwise builds the entry through
-`GridProgram::entry`, or for a graph of agents `AgentProgram::compile`'s errors or
-`AgentProgram::entry`. `ModelFileError::Unsupported` stays in the enum and no kind returns it.
-`GridRuleFile`, a grid
-rule as one TOML file, behaves as `ModelFile` did before the enum. `GridRuleFile::parse` reads line
-ends as `\n` and maps every span back to the text as passed (`LineEnds`, which henad-graph's
-`model_text` holds with `toml_string`, `ParamTable` and `write_param`). It reads the header keys
-first, ignoring the rest, so a later version or another kind reads as one before an unknown key is
-refused, then refuses an unknown key in every table. The file holds `format = "henad-model"`,
-`format_version = 1` and `kind = "gpu_grid"`, then `id`, `name` and `description`, `[grid]` (width,
-height, boundary), `[[state]]` (label, a colour of 3 or 4 bytes, `initial`), `[[param]]` in the
-`--params --json` vocabulary, and `[step] wgsl`, a string the file holds verbatim, as a `'''`
-literal does. A step holding `'''` is refused by `parse` and `from_rule` alike, since the canonical
-text could not hold it, as is a step holding an ASCII control character other than a tab or a line
-end (the C1 characters pass, as TOML allows them). `from_rule` (which reads its canonical text back
-through `parse`), `rule`, `to_toml` (the canonical text: keys in a fixed order, one form per value,
-the step verbatim), `code` (a `ModelCode` of `GridRule::CODE_FORMAT` over the canonical text) and
-`entry`, which runs `GridRule::check_declarations` and places each problem at its table or key, then
-compiles and places each problem of the step at its file line by the string's start offset.
-`ModelFileError` is `Toml`, `Format`, `Rule`, `Graph` or `Unsupported`, each of `CodeDiagnostic`s.
+`large_enum_variant`. `ModelFile::parse` reads the header through henad-graph's
+`model_text::ModelHeader`, checks `format`, `format_version` and a `kind` of `gpu_grid` or `graph`
+(a refused kind's message names them as "'gpu_grid' or 'graph'"), then hands the whole text to
+`GraphFile::parse` for `graph` and to `GridRuleFile::parse` otherwise (a missing `kind` then reports
+as a missing key). Only `GraphFile::parse` holds a file to henad-graph's `MAX_FILE_BYTES` (1 MiB),
+and a grid rule reads as it did before G1 (`only_a_graph_is_held_to_the_graph_size_limit`).
+`GraphFileError` maps onto `Toml` and `Format`. The enum forwards `to_toml`, `code` and `entry`, and
+adds `id`, `rule` and `graph` (each `Option`) and `warnings` (the graph checker's, empty for a
+rule). For a graph, `entry` returns `ModelFileError::Graph` with the checker's errors, then with
+`HostEvaluator::new`'s (an init pass the host cannot run), then with `GridProgram::compile`'s, and
+otherwise builds the entry through `GridProgram::entry`, or for a graph of agents
+`AgentProgram::compile`'s errors or `AgentProgram::entry`. `ModelFileError::Unsupported` stays in
+the enum and no kind returns it. `GridRuleFile`, a grid rule as one TOML file, behaves as
+`ModelFile` did before the enum. `GridRuleFile::parse` reads line ends as `\n` and maps every span
+back to the text as passed (`LineEnds`, which henad-graph's `model_text` holds with `ModelHeader`,
+`toml_string`, `ParamTable` and `write_param`). It reads the header keys first through `ModelHeader`
+with the kinds `["gpu_grid"]`, ignoring the rest, so a later version or another kind reads as one
+before an unknown key is refused, then refuses an unknown key in every table. The file holds
+`format = "henad-model"`, `format_version = 1` and `kind = "gpu_grid"`, then `id`, `name` and
+`description`, `[grid]` (width, height, boundary), `[[state]]` (label, a colour of 3 or 4 bytes,
+`initial`), `[[param]]` in the `--params --json` vocabulary, and `[step] wgsl`, a string the file
+holds verbatim, as a `'''` literal does. A step holding `'''` is refused by `parse` and `from_rule`
+alike, since the canonical text could not hold it, as is a step holding an ASCII control character
+other than a tab or a line end (the C1 characters pass, as TOML allows them). `from_rule` (which
+reads its canonical text back through `parse`), `rule`, `to_toml` (the canonical text: keys in a
+fixed order, one form per value, the step verbatim), `code` (a `ModelCode` of
+`GridRule::CODE_FORMAT` over the canonical text) and `entry`, which runs
+`GridRule::check_declarations` and places each problem at its table or key, then compiles and places
+each problem of the step at its file line by the string's start offset. `ModelFileError` is `Toml`,
+`Format`, `Rule`, `Graph` or `Unsupported`, each of `CodeDiagnostic`s.
 `specs/models/` holds the example model files, which the spec tests, reading the top level of
 `specs/`, leave alone.
 `docs/reference/model-files.md` includes `life_rule.toml` whole, and henad-cli's model file tests

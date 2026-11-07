@@ -11,32 +11,41 @@ public fields. `node.rs` holds `Node`, `NodeBody` (`node`, `region_members`, `re
 `ConfigValue`, `PortRef` and `MemberName`. `types.rs` holds `ValueType` and `Rate`, and `ids.rs`
 holds `NodeId` and the grammars `is_id` and `is_port_segment`. `limits.rs` holds the limits of
 `ir-spec.md` section 13 as the plan changes them. `model_text.rs` holds what every kind of model
-file shares (`LineEnds`, `toml_string`, `ParamTable`, `write_param`), and henad-explore's
-`model_file.rs` reads them from here. `reader.rs` is private and turns text into the document and
-`Places`. `writer.rs` is private and writes the semantic text. `editor.rs` holds `EditorRegion`.
-`file.rs` holds `GraphFile`, `GraphFileError`, `Places` and the constants `FORMAT`,
-`FORMAT_VERSION`, `KIND_GRAPH`, `LIBRARY` and `CODE_FORMAT`, and the crate-private `Placer`, which
-places many diagnostics with one scan of the text. `catalogue/` holds the node kinds, `draw.rs`
-the counter-based draw words and `draw.wgsl` their WGSL twin, `check/` the checker, `host/` the
-host evaluator, `wgsl/` the WGSL compiler of grid and agents graphs and `edit/` the edit commands
-and `GraphBuilder`. henad-graph takes henad-compute with `runtime-wgsl` on, for the public specs and
-`compose_wgsl`. `starters/` at the crate root holds the grid starters
-(`game_of_life`, `vote`, `sir`) and the agent starters (`boids`, `ants`, `random_walk`), ported to
-one GPU target with `node_<model>` ids and no `apply` key. `starters.rs` embeds them with
-`include_str!` (`scripts/check_packaging.sh` refuses a path out of the crate) and returns the grid
-ones through `starters()`, the agent ones through `agent_starters()`, and either through
-`starter(file_name)`. The Editor's starter menu lists both, grid first, and the
-grid-only tests read `starters()`. Both compile to WGSL.
+file shares (`ModelHeader`, `HeaderProblem`, `read_header`, `LineEnds`, `toml_string`, `ParamTable`,
+`write_param`), and henad-explore's `model_file.rs` reads them from here. `sheet/` holds the author
+document, a model file of kind `sheet`, and `agents/henad-graph-sheet.md` describes it.
+`reader.rs` is private and turns text into the document and `Places`. `writer.rs` is private and
+writes the semantic text. `editor.rs` holds `EditorRegion`. `file.rs` holds `GraphFile`,
+`GraphFileError`, `Places` and the constants `FORMAT`, `FORMAT_VERSION`, `KIND_GRAPH`, `LIBRARY`
+and `CODE_FORMAT`, and the crate-private `Placer`, which places many diagnostics with one scan of
+the text. `catalogue/` holds the node kinds, `draw.rs` the counter-based draw words and `draw.wgsl`
+their WGSL twin, `check/` the checker, `host/` the host evaluator, `wgsl/` the WGSL compiler of grid
+and agents graphs and `edit/` the edit commands and `GraphBuilder`. henad-graph takes henad-compute
+with `runtime-wgsl` on, for the public specs and `compose_wgsl`. `starters/` at the crate root holds
+the grid starters (`game_of_life`, `vote`, `sir`) and the agent starters (`boids`, `ants`,
+`random_walk`), ported to one GPU target with `node_<model>` ids and no `apply` key. `starters.rs`
+embeds them with `include_str!` (`scripts/check_packaging.sh` refuses a path out of the crate) and
+returns the grid ones through `starters()`, the agent ones through `agent_starters()`, and either
+through `starter(file_name)`. The Editor's starter menu lists both, grid first, and the grid-only
+tests read `starters()`. Both compile to WGSL.
 Game of Life's Randomise is the 9-node press-seed form (`ctx.press_seed`, `ctx.index`,
 `rng.hash`, `bits.xor`, `rng.hash`, `rng.threshold`, `rng.below`, `logic.select`, `lane.set`).
 The exact ports (`gpu_sir_exact.toml`) sit in henad-models' `tests/fixtures/graphs/`, and
 henad-models' `src/tests/graph_corpus.rs` holds every grid corpus file's init to its stock seed
 (`agents/models.md`).
 
-**The reader** checks the header first, as `model_file.rs` does: `format`, `format_version`,
-`kind` and `[graph] library`, ignoring other keys. It checks `MAX_FILE_BYTES` before any of that,
-and holds the canonical text to the same size after the read, so every file that reads has a
-canonical text that reads back (`a_file_whose_canonical_text_passes_the_limit_is_refused`).
+**The header.** `ModelHeader::read` reads `format`, `format_version`, `kind`, `[graph] library`
+and `[sheet] version`, ignoring every other key, and `ModelHeader::check(kinds)` refuses another
+format, another version or a kind outside `kinds`, naming them as a list ending in "or" ("this
+reader only reads 'gpu_grid' or 'graph'"). The graph reader, the sheet reader and henad-explore's
+`ModelFile` and `GridRuleFile` all call it, and each reader checks its own version key after it.
+`read_header(text)` returns the kind of any TOML text, a file its reader refuses included. It reads
+`kind` alone, so a header key of the wrong type cannot hide it.
+
+**The reader** checks the header first through `ModelHeader` with the kinds `["graph"]`, then
+`[graph] library`. It checks `MAX_FILE_BYTES` before any of that, and holds the canonical text to
+the same size after the read, so every file that reads has a canonical text that reads back
+(`a_file_whose_canonical_text_passes_the_limit_is_refused`).
 Every semantic table is `deny_unknown_fields`, which is how an `apply` key, `[[pass.var]]`, `after`
 and `[network]` are refused. The reader checks only what the document's own types need: table
 shapes, node ids, port and config key grammars, type strings, literal forms and finite floats. It

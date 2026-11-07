@@ -463,7 +463,7 @@ fn the_header_dispatches_on_the_kind() {
     let ModelFileError::Format(diagnostic) = &error else {
         panic!("{error:?}");
     };
-    assert!(diagnostic.message.contains("'gpu_grid' and 'graph'"), "{diagnostic}");
+    assert!(diagnostic.message.contains("'gpu_grid' or 'graph'"), "{diagnostic}");
     assert_eq!(diagnostic.line, Some(5), "{diagnostic}");
 
     // A graph's own reader reports a key it does not know, at its line.

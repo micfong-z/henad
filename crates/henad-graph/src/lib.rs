@@ -53,6 +53,7 @@ pub mod model_text;
 pub mod node;
 pub mod normal;
 mod reader;
+pub mod sheet;
 pub mod starters;
 pub mod types;
 pub mod value;

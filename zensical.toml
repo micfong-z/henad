@@ -157,6 +157,7 @@ nav = [
             { "#70, 2026-11-03" = "developing/agent-record/20261103-70-round-3-audit.md" },
             { "#71, 2026-11-07" = "developing/agent-record/20261107-71-editor-model-enum.md" },
             { "#72, 2026-11-07" = "developing/agent-record/20261107-72-workgroup-counters.md" },
+            { "#73, 2026-11-07" = "developing/agent-record/20261107-73-sheet-document.md" },
         ] },
     ] },
 ]

@@ -1,4 +1,5 @@
-//! Tests of the reader, the canonical writer, the code identity, the catalogue, the library lock and the checker.
+//! Tests of the reader, the canonical writer, the code identity, the catalogue, the library lock, the checker and the
+//! sheet reader.
 
 mod agent_rules;
 mod agent_wgsl;
@@ -16,5 +17,6 @@ mod known_answers;
 mod library_lock;
 mod mutation;
 mod regions;
+mod sheet_document;
 mod support;
 mod wgsl;

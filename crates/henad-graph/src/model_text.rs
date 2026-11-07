@@ -1,11 +1,165 @@
-//! Text forms that every kind of model file shares: line ends, TOML strings and the `[[param]]` table.
+//! Text forms that every kind of model file shares: the header, line ends, TOML strings and the `[[param]]` table.
+//!
+//! The *header* is the three keys every model file opens with, `format`, `format_version` and `kind`. A reader checks
+//! them before the rest of the file, with [`ModelHeader::check`], so a file of another version or kind reads as one
+//! even when it holds keys this build does not know.
 
 use std::ops::Range;
 
 use serde::Deserialize;
+use toml::Spanned;
+
+use crate::file::{FORMAT, FORMAT_VERSION};
 
 use henad_core::helpers::check_choice_options;
 use henad_core::params::{ChoiceOptions, ParamDescriptor, ParamFormat, ParamKind};
+
+/// Header keys of a model file, and the version key of each kind's own table, read ignoring every other key.
+///
+/// The version keys are `[graph] library` and `[sheet] version`. A reader checks them with the header, so a newer file
+/// is refused on its version before an unknown key is.
+#[derive(Debug, Deserialize)]
+pub struct ModelHeader {
+    #[serde(default)]
+    format: Option<Spanned<String>>,
+    #[serde(default)]
+    format_version: Option<Spanned<i64>>,
+    #[serde(default)]
+    kind: Option<Spanned<String>>,
+    #[serde(default)]
+    graph: Option<HeaderGraph>,
+    #[serde(default)]
+    sheet: Option<HeaderSheet>,
+}
+
+/// The `library` key of a graph file's `[graph]` table, read with the header.
+#[derive(Debug, Deserialize)]
+struct HeaderGraph {
+    #[serde(default)]
+    library: Option<Spanned<i64>>,
+}
+
+/// The `version` key of a sheet's `[sheet]` table, read with the header.
+#[derive(Debug, Deserialize)]
+struct HeaderSheet {
+    #[serde(default)]
+    version: Option<Spanned<i64>>,
+}
+
+/// Value in a model file's header that this build cannot read, with its bytes in the text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct HeaderProblem {
+    /// Message naming the value and the values this build reads.
+    pub message: String,
+    /// Bytes of the value in the text the header was read from.
+    pub span: Range<usize>,
+}
+
+impl ModelHeader {
+    /// Reads the header of the model file held in `text`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the TOML crate's error for text that is not TOML, or for a header key of the wrong type.
+    pub fn read(text: &str) -> Result<Self, toml::de::Error> {
+        toml::from_str(text)
+    }
+
+    /// Value of the `kind` key, `None` when the file writes none.
+    pub fn kind(&self) -> Option<&str> {
+        self.kind.as_ref().map(|kind| kind.get_ref().as_str())
+    }
+
+    /// Checks `format`, `format_version` and `kind` against the values this build reads, where `kinds` lists the kinds
+    /// the caller reads.
+    ///
+    /// A key the file does not write passes, and the reader of the whole file then reports it missing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first value that this build cannot read, in the order of the keys above.
+    pub fn check(&self, kinds: &[&str]) -> Result<(), HeaderProblem> {
+        if let Some(format) = &self.format
+            && format.get_ref() != FORMAT
+        {
+            return Err(HeaderProblem {
+                message: format!(
+                    "the file's format is '{}', but a model file's format must be '{FORMAT}'",
+                    format.get_ref()
+                ),
+                span: format.span(),
+            });
+        }
+        if let Some(version) = &self.format_version
+            && *version.get_ref() != FORMAT_VERSION
+        {
+            return Err(HeaderProblem {
+                message: format!(
+                    "the file is model file version {}, but this build only reads version {FORMAT_VERSION}",
+                    version.get_ref()
+                ),
+                span: version.span(),
+            });
+        }
+        if let Some(kind) = &self.kind
+            && !kinds.contains(&kind.get_ref().as_str())
+        {
+            return Err(HeaderProblem {
+                message: format!(
+                    "the file contains a model of kind '{}', but this reader only reads {}",
+                    kind.get_ref(),
+                    kind_list(kinds)
+                ),
+                span: kind.span(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The `library` key of the `[graph]` table, `None` when the file writes none.
+    pub(crate) fn graph_library(&self) -> Option<&Spanned<i64>> {
+        self.graph.as_ref()?.library.as_ref()
+    }
+
+    /// The `version` key of the `[sheet]` table, `None` when the file writes none.
+    pub(crate) fn sheet_version(&self) -> Option<&Spanned<i64>> {
+        self.sheet.as_ref()?.version.as_ref()
+    }
+}
+
+/// Returns `kinds` quoted and joined by [`or_list`], such as `'gpu_grid', 'graph' or 'sheet'`.
+fn kind_list(kinds: &[&str]) -> String {
+    if kinds.is_empty() {
+        return "no kind".to_owned();
+    }
+    let quoted: Vec<String> = kinds.iter().map(|kind| format!("'{kind}'")).collect();
+    let quoted: Vec<&str> = quoted.iter().map(String::as_str).collect();
+    or_list(&quoted)
+}
+
+/// Returns `items` joined as a list ending in "or", such as `a, b or c`, and the one item alone.
+pub(crate) fn or_list(items: &[&str]) -> String {
+    match items.split_last() {
+        None => String::new(),
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
+/// The `kind` key of a model file, read ignoring every other key and its type.
+#[derive(Deserialize)]
+struct HeaderKind {
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+/// Returns the `kind` of the model file held in `text`, `None` when the text is not TOML or writes no kind as a string.
+///
+/// The kind reads even from a file whose reader refuses it, a header key of the wrong type included.
+pub fn read_header(text: &str) -> Option<String> {
+    toml::from_str::<HeaderKind>(text).ok()?.kind
+}
 
 /// Line ends written `\r\n` that reading a text turned into `\n`.
 ///

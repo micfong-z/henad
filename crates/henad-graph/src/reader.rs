@@ -21,7 +21,7 @@ use crate::document::{
 use crate::editor::EditorRegion;
 use crate::file::{BodyPlaces, NodePlaces, Places};
 use crate::ids::{NodeId, is_port_segment};
-use crate::model_text::ParamTable;
+use crate::model_text::{ModelHeader, ParamTable};
 use crate::node::{Node, NodeBody, OP_FUNCTION_CALL};
 use crate::types::ValueType;
 use crate::value::{Color, ConfigValue, InputValue, Literal, MemberName, PortRef};
@@ -62,87 +62,40 @@ pub(crate) struct ReadFile {
 /// Reads `text`, whose line ends are already `\n`.
 pub(crate) fn read(text: &str) -> Result<ReadFile, ReadProblem> {
     // The header first, so that a file of another version reads as one even when its keys are new.
-    let header: HeaderTable = toml::from_str(text)?;
-    header.check()?;
+    let header = ModelHeader::read(text)?;
+    header
+        .check(&[KIND])
+        .map_err(|problem| Placed(problem.message, problem.span))?;
+    check_library(&header)?;
     let file: FileTable = toml::from_str(text)?;
     Ok(file.into_read_file()?)
 }
 
-/// The header keys of a graph file, read before the rest and ignoring every other key.
-#[derive(Deserialize)]
-struct HeaderTable {
-    #[serde(default)]
-    format: Option<Spanned<String>>,
-    #[serde(default)]
-    format_version: Option<Spanned<i64>>,
-    #[serde(default)]
-    kind: Option<Spanned<String>>,
-    #[serde(default)]
-    graph: Option<HeaderGraph>,
-}
-
-/// The `library` key of the `[graph]` table, read with the header.
-#[derive(Deserialize)]
-struct HeaderGraph {
-    #[serde(default)]
-    library: Option<Spanned<i64>>,
-}
-
-impl HeaderTable {
-    /// Checks the header's values, and returns the first that this build cannot read.
-    fn check(self) -> Result<(), Placed> {
-        if let Some(format) = self.format
-            && format.get_ref() != crate::file::FORMAT
-        {
-            let message = format!(
-                "the file's format is '{}', but a model file's format must be '{}'",
-                format.get_ref(),
-                crate::file::FORMAT
-            );
-            return Err(Placed(message, format.span()));
-        }
-        if let Some(version) = self.format_version
-            && *version.get_ref() != crate::file::FORMAT_VERSION
-        {
-            let message = format!(
-                "the file is model file version {}, but this build only reads version {}",
-                version.get_ref(),
-                crate::file::FORMAT_VERSION
-            );
-            return Err(Placed(message, version.span()));
-        }
-        if let Some(kind) = self.kind
-            && kind.get_ref() != KIND
-        {
-            let message = format!(
-                "the file contains a model of kind '{}', but this reader only reads '{KIND}'",
-                kind.get_ref()
-            );
-            return Err(Placed(message, kind.span()));
-        }
-        if let Some(library) = self.graph.and_then(|graph| graph.library) {
-            let number = *library.get_ref();
-            if number < 1 {
-                return Err(Placed(
-                    format!("the file names node library {number}, but libraries count from 1"),
-                    library.span(),
-                ));
-            }
-            if number > i64::from(crate::file::LIBRARY) {
-                return Err(Placed(
-                    format!(
-                        "the file uses node library {number}, and this build reads up to {}",
-                        crate::file::LIBRARY
-                    ),
-                    library.span(),
-                ));
-            }
-        }
-        Ok(())
+/// Checks the `[graph] library` key read with the header, and returns it when this build cannot read it.
+fn check_library(header: &ModelHeader) -> Result<(), Placed> {
+    let Some(library) = header.graph_library() else {
+        return Ok(());
+    };
+    let number = *library.get_ref();
+    if number < 1 {
+        return Err(Placed(
+            format!("the file names node library {number}, but libraries count from 1"),
+            library.span(),
+        ));
     }
+    if number > i64::from(crate::file::LIBRARY) {
+        return Err(Placed(
+            format!(
+                "the file uses node library {number}, and this build reads up to {}",
+                crate::file::LIBRARY
+            ),
+            library.span(),
+        ));
+    }
+    Ok(())
 }
 
-/// A graph file as TOML holds it. [`HeaderTable`] checks the header's values.
+/// A graph file as TOML holds it. [`ModelHeader`] checks the header's values.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileTable {

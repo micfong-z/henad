@@ -11,7 +11,7 @@ pub use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelSetE
 pub use henad_compute::fault::{Fault, FaultKind, install_panic_hook};
 pub use henad_compute::simulation::{ExportError, RunSetup, SetupError, Simulation, SimulationViews, StatSample};
 pub use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
-pub use henad_core::metadata::{Backend, GpuBufferInfo, GpuPassInfo, LaneSpec, ModelMetadata, Structure};
+pub use henad_core::metadata::{Backend, GpuBufferInfo, GpuPassInfo, LaneSpec, ModelMetadata, Structure, TimeUnit};
 pub use henad_core::provenance::{BuildInfo, CodeOrigin, ModelCode, ModelSource};
 pub use henad_core::send_sync::{WasmNotSend, WasmNotSync};
 pub use henad_core::topology::TopologyHint;
@@ -283,13 +283,14 @@ pub mod rules {
 /// and [`agent_starters`](graph::starters::agent_starters) return the graph files a new graph model begins from.
 /// [`GridProgram`](graph::wgsl::GridProgram) compiles a graph on a grid to WGSL and builds its entry, and
 /// [`AgentProgram`](graph::wgsl::AgentProgram) does the same for a graph of agents. A [`ModelFile`](rules::ModelFile)
-/// of kind `graph` holds a [`GraphFile`](graph::GraphFile).
+/// of kind `graph` holds a [`GraphFile`](graph::GraphFile). [`ParsedSheet`](graph::sheet::ParsedSheet) reads a model
+/// file of kind `sheet`, the author document a researcher builds without nodes.
 #[cfg(feature = "model-files")]
 #[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
 pub mod graph {
     pub use henad_graph::{
         CODE_FORMAT, FORMAT, FORMAT_VERSION, GraphFile, GraphFileError, KIND_GRAPH, LIBRARY, catalogue, check,
-        document, draw, edit, editor, file, host, ids, limits, model_text, node, starters, types, value, wgsl,
+        document, draw, edit, editor, file, host, ids, limits, model_text, node, sheet, starters, types, value, wgsl,
     };
 }
 
