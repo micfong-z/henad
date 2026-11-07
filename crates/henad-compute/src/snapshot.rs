@@ -31,6 +31,34 @@ pub struct Snapshot {
     pub view: SnapshotView,
     /// Current stat values, one per stat series.
     pub stats: Vec<StatEntry>,
+    /// Counts of the elements each probe of the model fired for on the latest counted step, empty for a model that
+    /// counts nothing and on the CPU path.
+    pub fire_counts: FireCounts,
+}
+
+/// Counts of the elements each probe of a GPU model fired for on one step, with the tick that step reached.
+///
+/// A GPU engine counts on the last step of each batch of steps it records, and reads the counts back with the stats.
+/// The counts of a model with no probes are empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FireCounts {
+    /// Tick the counted step reached, 0 before the first counted step.
+    pub tick: u64,
+    /// Number of elements each probe fired for on the counted step, in the order of the probes.
+    pub counts: Vec<u32>,
+}
+
+impl FireCounts {
+    /// Creates the counts `counts` of the step that reached `tick`.
+    pub fn new(tick: u64, counts: Vec<u32>) -> Self {
+        Self { tick, counts }
+    }
+
+    /// Returns whether the counts hold no probe.
+    pub fn is_empty(&self) -> bool {
+        self.counts.is_empty()
+    }
 }
 
 /// View layers of a snapshot, copied from a CPU model or held on the GPU.

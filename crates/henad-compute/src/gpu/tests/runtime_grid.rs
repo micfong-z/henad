@@ -27,6 +27,7 @@ fn step_block(hooks: &impl GridHooks, width: u32, height: u32, params: &[ParamVa
         seed,
         press: GridPress::new(0, 0),
         tick: 0,
+        counting: false,
     };
     hooks.pass_params_bytes(GridPassId::Step(0), ctx, params)
 }

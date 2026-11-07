@@ -26,7 +26,7 @@ use crate::value::{ConfigValue, InputValue, PortRef};
 use crate::wgsl::agent_hooks::AgentGraphHooks;
 use crate::wgsl::emit::FIRST_COUNTER;
 use crate::wgsl::uniform::Dispatch;
-use crate::wgsl::{Compiled, GeneratedShader, ShaderRole, compile_shaders};
+use crate::wgsl::{Compiled, GeneratedShader, Probes, ShaderRole, compile_shaders};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{Domain as EngineDomain, Geometry};
 use henad_core::spatial_hash::SpatialHash;
@@ -125,8 +125,8 @@ fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase
     if stage == PassStage::Init {
         return false;
     }
-    let compiled =
-        compile_shaders(document, &report, &evaluator, None).unwrap_or_else(|problems| panic!("{what}: {problems:#?}"));
+    let compiled = compile_shaders(document, &report, &evaluator, None, &Probes::default())
+        .unwrap_or_else(|problems| panic!("{what}: {problems:#?}"));
     let shader = case_shader(&compiled, &what);
     let world = HostWorld::Grid {
         width: case.width,
@@ -323,8 +323,8 @@ fn run_agent_pass_case(
     if stage == PassStage::Init {
         return false;
     }
-    let (evaluator, _, compiled) =
-        crate::wgsl::agents::compile_parts(&file).unwrap_or_else(|problems| panic!("{what}: {problems:#?}"));
+    let (evaluator, _, compiled) = crate::wgsl::agents::compile_parts(&file, &Probes::default())
+        .unwrap_or_else(|problems| panic!("{what}: {problems:#?}"));
     let document = evaluator.document();
     let position = document
         .passes
@@ -424,6 +424,7 @@ fn run_agent_pass_case(
                 groups_x: groups.0,
                 hash,
                 texture: [grid_width, grid_height],
+                counting: false,
             },
         )
         .unwrap_or_else(|error| panic!("{what}: {error}"));
@@ -720,8 +721,14 @@ fn run_node_case(device: &TestDevice, def: &NodeDef, name: &str, case: &NodeCase
     assert!(!report.has_errors(), "{what}: {:#?}", report.diagnostics);
     let evaluator = HostEvaluator::from_document(&document).unwrap_or_else(|error| panic!("{what}: {error}"));
     let document = evaluator.document();
-    let compiled = compile_shaders(document, &report, &evaluator, case.context.iteration)
-        .unwrap_or_else(|problems| panic!("{what}: {problems:#?}"));
+    let compiled = compile_shaders(
+        document,
+        &report,
+        &evaluator,
+        case.context.iteration,
+        &Probes::default(),
+    )
+    .unwrap_or_else(|problems| panic!("{what}: {problems:#?}"));
     let shader = case_shader(&compiled, &what);
     let context = &case.context;
     let width = context.element + 1;
@@ -897,8 +904,8 @@ fn a_counter_over_many_workgroups_equals_the_host_total() {
     let file = GraphFile::parse(&text).expect("the file reads");
     let report = file.check();
     assert!(!report.has_errors(), "{:#?}", report.diagnostics);
-    let (evaluator, _, compiled) =
-        crate::wgsl::agents::compile_parts(&file).unwrap_or_else(|problems| panic!("{problems:#?}"));
+    let (evaluator, _, compiled) = crate::wgsl::agents::compile_parts(&file, &Probes::default())
+        .unwrap_or_else(|problems| panic!("{problems:#?}"));
     let document = evaluator.document();
     let shader = compiled
         .shaders
@@ -953,6 +960,7 @@ fn a_counter_over_many_workgroups_equals_the_host_total() {
                 groups_x: groups.0,
                 hash: None,
                 texture: [grid_width, grid_height],
+                counting: false,
             },
         )
         .unwrap_or_else(|error| panic!("{error}"));

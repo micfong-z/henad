@@ -11,7 +11,7 @@ use henad_core::params::ParamValue;
 use crate::runner::{
     DEFAULT_STOP_TIMEOUT, Driver, Pace, RUN_TO_PUBLISH_INTERVAL, RunnerShutdown, SharedSlot, SimLoop, SnapshotSlot,
 };
-use crate::snapshot::{CpuLayers, GridSnapshot, PointSnapshot, Snapshot, SnapshotView};
+use crate::snapshot::{CpuLayers, FireCounts, GridSnapshot, PointSnapshot, Snapshot, SnapshotView};
 use std::time::Duration;
 use web_time::Instant;
 
@@ -644,6 +644,7 @@ fn build_snapshot(
         view_ms,
         view,
         stats: state.stats(),
+        fire_counts: FireCounts::default(),
     }
 }
 

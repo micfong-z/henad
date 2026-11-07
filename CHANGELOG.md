@@ -39,6 +39,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - GPU model specs (henad-compute `runtime-wgsl`, at `henad_compute::gpu`): `GpuAgentSpec`, `AgentHooks`, `AgentBufferSpec`, `AgentPassSpec`, `AgentDisplaySpec`, `AgentReduceSpec`, `AgentActionSpec`, per-pass `SideTable` (`swapping`, `in_place`, `new`) of `SideRow` and `BufferSide`; `GpuGridSpec`, `GridHooks`, `GridActionSpec`; `ShaderSpec`, `ShaderBinding`. `henad_compute::entry::EntryDeclarations`, `ModelEntry::from_gpu_grid_spec`, `from_gpu_agent_spec`.
 - `GpuSimState::read_buffer` (provided, default `None`), implemented by both GPU engines.
 - Sheets (henad-graph `sheet`, facade `henad::graph::sheet`): model files of `kind = "sheet"`, sheet version 1. `ParsedSheet::parse` (header and `[sheet] version` first, every table refusing an unknown key, places per table and key in `SheetPlaces`), `SheetDocument` (world, `[time]`, properties, agent kinds, ground, events, parameters with a `unit`, measures, colour rules, buttons, cards, lines as `SheetLine` with `LineKind`, slots blank when absent, values as literal, chip, phrase or list, a percent `{ percent = 30 }` a literal read by `SheetLiteral::number` as 0.3), `SheetFileError`, limits in `sheet::limits`. `TimeUnit` (henad-core `metadata`, facade root): `as_str`, `parse`, `plural`, `days`. `model_text::ModelHeader`, `HeaderProblem`, `read_header`: one header check for every kind; a refused kind lists the kinds read with "or".
+- Fire-count channel: `GpuGridSpec::fire_counters`, `GpuAgentSpec::fire_counters` (empty from `new`); the last step of each `encode_steps` call clears the range and counts through a second uniform block per step pass (`GridPassCtx::counting`, `AgentRun::counting`, `AgentRun::with_counting`), never a storage binding; grid stats clear leaves the range; `GpuSimState::fire_counts` (provided, default empty), `FireCounts` (`henad::runner`). henad-graph probes: `Probes` (`henad_graph::wgsl`), `GridProgram::compile_with_probes`, `AgentProgram::compile_with_probes` (a `bool` output of a tick pass per probe, outside the file's text and code identity; a probed grid step binds `counters`), `HostEvaluator::run_pass_counting`.
 - `GpuGridSpec::counters` (reduce counters, one per stat from `new`), `GridPassCtx::tick`.
 - `henad::gpu` re-exports `PassKind`, `HostWork`, `SUBMISSION_WORK_BUDGET`, `HOST_WORK_BUDGET`.
 - `GpuBufferInfo`, `GpuPassInfo` (`henad_core::metadata`, facade root). `binding::named_buffer_target`.
@@ -67,6 +68,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - Breaking: `GpuSimThread::new` and `new_in` take a `FaultSink` for a panic out of the loop, as `SimThread::new` does (was: `ctx.faults`); device errors still go to `ctx.faults`. The app's GPU runner reports into `sim_faults`, replaced at each teardown.
 - Breaking: dropping a `SimThread` or `GpuSimThread` waits at most `DEFAULT_STOP_TIMEOUT` (2 s) for its thread, then detaches it and logs (was: joined); `stop(timeout)` returns `RunnerShutdown` (`Joined`, `Detached(DetachedRunner)`); `runner::Driver::shutdown` takes a timeout and returns it.
 - Graph editor: a move of a node, or Arrange, leaves the preview running (preview key follows the code); Arrange puts a region's input half in the column before its body.
+- Breaking: `Snapshot` gains `fire_counts` (`FireCounts`, empty on the CPU path and for a model with no probes).
 
 ### Fixed
 
@@ -80,7 +82,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - Views: `GridView`, `PointView` and `EdgeView` borrow their palettes for `'a`; a snapshot's palette is a `Vec<[u8; 4]>`.
 - Metadata: build `ModelMetadata` with `ModelMetadata::new(backend, structure).palette(..).replays_exactly(..)`; add a wildcard arm to matches on `Structure`.
 - Results: add arms for `ResumeError::CodeChanged` and `MergeError::CodeChanged`; build a `RecordedBuild` through `From`; pass `entry.source()` to `ResumeScan::read`.
-- Runners: pass `ctx.faults.clone()` as `GpuSimThread::new`'s new last argument to keep its panics in the device's sink; a drop no longer waits for a stuck thread; call `stop(timeout)` and match `RunnerShutdown` where the thread has to be gone; `runner::Driver::shutdown` takes a timeout and returns `RunnerShutdown`.
+- Runners: pass `ctx.faults.clone()` as `GpuSimThread::new`'s new last argument to keep its panics in the device's sink; a drop no longer waits for a stuck thread; call `stop(timeout)` and match `RunnerShutdown` where the thread has to be gone; `runner::Driver::shutdown` takes a timeout and returns `RunnerShutdown`; a `Snapshot` literal adds `fire_counts: FireCounts::default()`.
 
 ## [0.3.0] - 2026-10-10
 

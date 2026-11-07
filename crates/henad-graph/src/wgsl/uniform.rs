@@ -1,9 +1,10 @@
 //! Uniform blocks of generated shaders: the fields a shader reads, their layout, and the bytes the host writes.
 //!
 //! A *field* is one member of a shader's `HenadParams` struct. Its value comes from the host: the grid's size, a value
-//! of the pass's prelude that the host evaluates, a draw's key word, the press count, a table of powers, or whether a
-//! pass bound to a parameter runs. Members follow WGSL's layout rules for the uniform address space: a scalar takes 4
-//! bytes, a `vec2` takes 8 bytes at an 8-byte offset, and a table takes 16 bytes per four entries at a 16-byte offset.
+//! of the pass's prelude that the host evaluates, a draw's key word, the press count, a table of powers, whether a
+//! pass bound to a parameter runs, or whether a step counts its probes. Members follow WGSL's layout rules for the
+//! uniform address space: a scalar takes 4 bytes, a `vec2` takes 8 bytes at an 8-byte offset, and a table takes 16
+//! bytes per four entries at a 16-byte offset.
 
 use henad_core::spatial_hash::HashGrid;
 
@@ -139,6 +140,8 @@ pub(crate) enum FieldSource {
     HashInverse,
     /// Size of the display texture in texels.
     Texture,
+    /// Whether the block is a step's counting block, 1 or 0. A step's probes count under it.
+    CountFires,
 }
 
 /// Values of the engine's dispatch of a pass that a uniform block of an agents world reads.
@@ -150,6 +153,8 @@ pub(crate) struct Dispatch {
     pub hash: Option<HashGrid>,
     /// Size of the display texture.
     pub texture: [u32; 2],
+    /// Whether the block is a step's counting block.
+    pub counting: bool,
 }
 
 /// Shape of a uniform field.
@@ -280,6 +285,7 @@ impl UniformBlock {
                 FieldSource::HashCell => vec![hash.cell_w.to_bits(), hash.cell_h.to_bits()],
                 FieldSource::HashInverse => vec![(1.0 / hash.cell_w).to_bits(), (1.0 / hash.cell_h).to_bits()],
                 FieldSource::Texture => dispatch.texture.to_vec(),
+                FieldSource::CountFires => vec![u32::from(dispatch.counting)],
                 FieldSource::Press => vec![context.press],
                 FieldSource::Enabled { position } => vec![u32::from(evaluator.is_enabled(*position, params))],
                 FieldSource::Key { position, draw } => {

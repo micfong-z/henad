@@ -16,6 +16,7 @@ use henad_core::authoring::primitives::space::Boundary;
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::params::ParamKind;
 
+use super::probes::ProbeSlot;
 use super::uniform::{FieldShape, FieldSource, UniformBlock, WgslType};
 use super::{NodeRange, WORKGROUP_SIZE};
 use crate::catalogue::effective_config;
@@ -155,6 +156,10 @@ pub(crate) struct EmitInput<'a> {
     pub outer_iteration: Option<u32>,
     /// Plan of an agents world, `None` for a grid.
     pub agents: Option<&'a AgentPlan>,
+    /// Probes of the tick passes, which a step counts under its counting block.
+    pub probes: &'a [ProbeSlot],
+    /// Word of `counters` that holds the count of the first probe. The count of probe `i` is at `fire_base + i`.
+    pub fire_base: usize,
 }
 
 /// One shader written out.
@@ -369,6 +374,9 @@ struct Emitter<'a> {
     /// Slot in the workgroup array `henad_counter_tally` of each document counter some pass of the shader adds to, by
     /// the counter's position among the document's counters.
     counter_slots: BTreeMap<usize, usize>,
+    /// Position among the probes of the probe each slot of the workgroup array `henad_fire_tally` tallies, in slot
+    /// order.
+    fire_slots: Vec<usize>,
 }
 
 /// State of the emission of one pass's body.
@@ -433,6 +441,7 @@ pub(crate) fn emit(
         reads_other: BTreeSet::new(),
         packed: BTreeMap::new(),
         counter_slots: BTreeMap::new(),
+        fire_slots: Vec::new(),
     };
     if input.agents.is_some() {
         emitter.agent_fields(role);
@@ -671,6 +680,9 @@ impl Emitter<'_> {
         for instruction in &program.element {
             self.instruction(&mut block, instruction, indent, &mut inner);
         }
+        if matches!(self.role, Role::Step { .. }) {
+            self.probe_tallies(&mut block, indent, &mut inner);
+        }
         for &lane in &written {
             let Some(wgsl) = self.input.lanes.get(lane).and_then(|plan| plan.wgsl) else {
                 continue;
@@ -760,6 +772,76 @@ impl Emitter<'_> {
         text.append(inner);
         text.push("    }\n");
         text
+    }
+
+    /// Writes the tally of each probe of the pass of `block`: under the counting block, 1 into the probe's slot of
+    /// `henad_fire_tally` for an element at which the probe's output holds.
+    fn probe_tallies(&mut self, block: &mut Block<'_>, indent: &str, text: &mut Text) {
+        let probes: Vec<ProbeSlot> = self
+            .input
+            .probes
+            .iter()
+            .filter(|probe| probe.position == block.position)
+            .copied()
+            .collect();
+        if probes.is_empty() {
+            return;
+        }
+        self.field(
+            "henad_count_fires",
+            FieldShape::Value(WgslType::U32),
+            FieldSource::CountFires,
+        );
+        for probe in probes {
+            let fired = self.slot(block, probe.slot, probe.node);
+            let local = self.fire_slots.len();
+            self.fire_slots.push(probe.index);
+            text.node_line(
+                &block.pass.id,
+                probe.node,
+                &format!(
+                    "{indent}if (params.henad_count_fires != 0u && {fired}) {{\n{indent}    \
+                     atomicAdd(&henad_fire_tally[{local}u], 1u);\n{indent}}}\n"
+                ),
+            );
+        }
+    }
+
+    /// Returns the lines of `main` that zero the workgroup array `henad_fire_tally` under the counting block, before a
+    /// barrier, with `local` the invocation's index in its workgroup of `size`.
+    fn fire_zero_lines(&self, local: &str, size: u32) -> String {
+        let fired = self.fire_slots.len();
+        if fired == 0 {
+            return String::new();
+        }
+        // A barrier needs uniform control flow, and the flag is a uniform, the same for every invocation.
+        format!(
+            "    if (params.henad_count_fires != 0u) {{\n        for (var henad_f = {local}; henad_f < {fired}u; \
+             henad_f = henad_f + {size}u) {{\n            atomicStore(&henad_fire_tally[henad_f], 0u);\n        \
+             }}\n        workgroupBarrier();\n    }}\n"
+        )
+    }
+
+    /// Returns the lines at the end of `main` that add each non-zero slot of `henad_fire_tally` to its probe's word of
+    /// `counters` under the counting block, one global atomic per slot per workgroup, with `local` the invocation's
+    /// index in its workgroup of `size`.
+    fn fire_flush_lines(&self, local: &str, size: u32) -> String {
+        if self.fire_slots.is_empty() {
+            return String::new();
+        }
+        let mut lines = String::from("    if (params.henad_count_fires != 0u) {\n        workgroupBarrier();\n");
+        for (slot, &index) in self.fire_slots.iter().enumerate() {
+            lines.push_str(&format!(
+                "        if ({local} == {invocation}u) {{\n            let henad_fires_{slot} = \
+                 atomicLoad(&henad_fire_tally[{slot}u]);\n            \
+                 if (henad_fires_{slot} != 0u) {{\n                \
+                 atomicAdd(&counters[{word}u], henad_fires_{slot});\n            }}\n        }}\n",
+                invocation = slot as u32 % size,
+                word = self.input.fire_base + index
+            ));
+        }
+        lines.push_str("    }\n");
+        lines
     }
 
     /// Returns the expression of `slot`, and records a host slot the body reads.
@@ -2197,7 +2279,7 @@ impl Emitter<'_> {
         }
         // The tick lives in the counters, read with an atomic load, and the step's last pass advances it.
         let writes_tick = matches!(self.role, Role::Step { writes_tick: true });
-        if self.reads_tick || writes_tick {
+        if self.reads_tick || writes_tick || !self.fire_slots.is_empty() {
             self.uses.counters = true;
         }
         if self.uses.hash {
@@ -2277,6 +2359,12 @@ impl Emitter<'_> {
                 "var<workgroup> henad_counter_tally: array<atomic<u32>, {counted}>;\n\n"
             ));
         }
+        let fired = self.fire_slots.len();
+        if fired > 0 {
+            text.text.push_str(&format!(
+                "var<workgroup> henad_fire_tally: array<atomic<u32>, {fired}>;\n\n"
+            ));
+        }
         let tick_line = if self.reads_tick {
             format!("    let henad_tick = atomicLoad(&counters[{TICK_WORD}u]);\n")
         } else {
@@ -2336,6 +2424,8 @@ impl Emitter<'_> {
                      0u);\n    }}\n    workgroupBarrier();\n"
                 ));
             }
+            text.text
+                .push_str(&self.fire_zero_lines("henad_lid.x", LINEAR_WORKGROUP));
             match self.role {
                 Role::Reduce => {
                     if tallies > 0 {
@@ -2416,6 +2506,8 @@ impl Emitter<'_> {
                     ));
                 }
             }
+            text.text
+                .push_str(&self.fire_flush_lines("henad_lid.x", LINEAR_WORKGROUP));
             text.push("}\n");
         }
         let workgroup_bytes = match self.role {
@@ -2427,7 +2519,7 @@ impl Emitter<'_> {
                 };
                 tallies as u64 * 4 + sums
             }
-            _ => counted as u64 * 4,
+            _ => (counted + fired) as u64 * 4,
         };
         Emitted {
             text: text.text,
@@ -2511,6 +2603,17 @@ impl Emitter<'_> {
                 "var<storage, read_write> henad_tick_out: array<u32>",
             );
         }
+        let fired = self.fire_slots.len();
+        if fired > 0 {
+            // The reduce tallies come first, and the step adds to the probes' words after them.
+            bind(
+                &mut bindings,
+                &mut declarations,
+                "counters",
+                storage(false),
+                "var<storage, read_write> counters: array<atomic<u32>>",
+            );
+        }
         let uniform = UniformBlock::new(std::mem::take(&mut self.fields));
         bind(
             &mut bindings,
@@ -2564,6 +2667,11 @@ impl Emitter<'_> {
                 "var<workgroup> henad_partial: array<atomic<u32>, {counters}>;\n\n"
             ));
         }
+        if fired > 0 {
+            text.text.push_str(&format!(
+                "var<workgroup> henad_fire_tally: array<atomic<u32>, {fired}>;\n\n"
+            ));
+        }
         text.text.push_str(&format!(
             "@compute @workgroup_size({WORKGROUP_SIZE}, {WORKGROUP_SIZE})\n"
         ));
@@ -2579,13 +2687,22 @@ impl Emitter<'_> {
         };
         match self.role {
             Role::Step { .. } | Role::Action | Role::Color | Role::Merge(_) => {
-                text.push("fn main(@builtin(global_invocation_id) henad_id: vec3<u32>) {\n");
+                if fired > 0 {
+                    text.push(
+                        "fn main(\n    @builtin(global_invocation_id) henad_id: vec3<u32>,\n    \
+                         @builtin(local_invocation_index) henad_local: u32,\n) {\n",
+                    );
+                } else {
+                    text.push("fn main(@builtin(global_invocation_id) henad_id: vec3<u32>) {\n");
+                }
                 text.push(&tick_line);
                 if writes_tick {
                     text.push(
                         "    if (henad_id.x == 0u && henad_id.y == 0u) {\n        henad_tick_out[0] = henad_tick + 1u;\n    }\n",
                     );
                 }
+                text.text
+                    .push_str(&self.fire_zero_lines("henad_local", WORKGROUP_SIZE * WORKGROUP_SIZE));
                 // The bounds check guards a block. An early return would leave the end of `main` in non-uniform
                 // control flow.
                 text.push("    if (henad_id.x < params.henad_width && henad_id.y < params.henad_height) {\n");
@@ -2597,7 +2714,10 @@ impl Emitter<'_> {
                 inner.push("    let henad_index = henad_id.y * params.henad_width + henad_id.x;\n");
                 inner.append(body);
                 text.append(inner.indented());
-                text.push("    }\n}\n");
+                text.push("    }\n");
+                text.text
+                    .push_str(&self.fire_flush_lines("henad_local", WORKGROUP_SIZE * WORKGROUP_SIZE));
+                text.push("}\n");
             }
             Role::Display => {
                 text.push("fn main(@builtin(global_invocation_id) henad_id: vec3<u32>) {\n");
@@ -2672,7 +2792,7 @@ impl Emitter<'_> {
                 };
                 counters as u64 * 4 + sums
             } else {
-                0
+                fired as u64 * 4
             },
             sum_lanes: self.sum_lanes,
         }

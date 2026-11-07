@@ -16,6 +16,7 @@ mod host;
 mod known_answers;
 mod library_lock;
 mod mutation;
+mod probes;
 mod regions;
 mod sheet_document;
 mod support;

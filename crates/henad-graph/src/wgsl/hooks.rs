@@ -126,7 +126,10 @@ impl GraphHooks {
             world,
             &self.own(params),
             &Self::context(id, ctx),
-            &super::uniform::Dispatch::default(),
+            &super::uniform::Dispatch {
+                counting: ctx.counting,
+                ..super::uniform::Dispatch::default()
+            },
         )
     }
 }

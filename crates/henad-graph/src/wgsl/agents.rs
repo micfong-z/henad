@@ -11,7 +11,8 @@
 //! element. A lane that a tick pass writes and another agent reads is dual, its sides swapped at the end of the step.
 //! A field holds its layers one after another in `field_<id>_cells`, and a field that takes deposits holds their merged
 //! values in `accum_<id>_cells`. The engine's `counters` hold the fault word, then the document's counters, then the
-//! tallies of the reduce leaf, which the engine clears before each leaf.
+//! tallies of the reduce leaf, which the engine clears before each leaf, then the counts of the probes that
+//! [`AgentProgram::compile_with_probes`] takes.
 
 use std::fmt;
 use std::sync::Arc;
@@ -32,6 +33,7 @@ use henad_core::view::StatDescriptor;
 
 use super::agent_hooks::{AgentGraphHooks, BufferSource, ReducePass, StatSlot, WalkCharge};
 use super::emit::{self, AGENT_COLORS, AgentPlan, EmitInput, Emitted, FIRST_COUNTER, FieldPlan, LanePlan, Role};
+use super::probes::{self, Probes};
 use super::uniform::WgslType;
 use super::{
     GeneratedShader, ShaderRole, WORKGROUP_SIZE, any_instruction, compose, oversized, place, uniform::UniformBlock,
@@ -83,6 +85,8 @@ struct AgentParts {
     index: bool,
     counter_words: usize,
     cleared: std::ops::Range<usize>,
+    /// Words of `counters` that hold the counts of the probes.
+    fire_counters: std::ops::Range<usize>,
     sum_lanes: usize,
     reduce_domain: EngineDomain,
     init_cost: u64,
@@ -261,8 +265,22 @@ impl AgentProgram {
     /// its pass and node, and a diagnostic for a graph that models no agents. A shader past the composer's size limit
     /// is reported against the pass whose nodes wrote most of it. A shader that does not compose is a fault of the
     /// compiler, reported against the node that wrote the line where it can be placed.
-    #[expect(clippy::too_many_lines, reason = "every declaration of the entry is read here once")]
     pub fn compile(file: &GraphFile) -> Result<Self, Vec<CodeDiagnostic>> {
+        Self::compile_with_probes(file, &Probes::default())
+    }
+
+    /// Checks `file` and compiles every pass the GPU runs, each step counting the fires of its probes in `probes`.
+    ///
+    /// The probes change the shaders and the spec's
+    /// [`GpuAgentSpec::fire_counters`](henad_compute::gpu::GpuAgentSpec::fire_counters), and leave the file's text and
+    /// its code identity alone. A probe names a node as the file writes it, outside every function.
+    ///
+    /// # Errors
+    ///
+    /// Returns the problems of [`Self::compile`], and a problem for each probe that names no `bool` output of a tick
+    /// pass.
+    #[expect(clippy::too_many_lines, reason = "every declaration of the entry is read here once")]
+    pub fn compile_with_probes(file: &GraphFile, probes: &Probes) -> Result<Self, Vec<CodeDiagnostic>> {
         let report = file.check();
         if report.has_errors() {
             return Err(report.errors().cloned().collect());
@@ -274,7 +292,7 @@ impl AgentProgram {
                 "the graph models a grid, and the compiler of agents compiles graphs of agents alone",
             )]);
         };
-        let (evaluator, report, compiled) = compile_parts(file)?;
+        let (evaluator, report, compiled) = compile_parts(file, probes)?;
         let evaluator = Arc::new(evaluator);
         let CompiledAgents {
             shaders,
@@ -283,6 +301,7 @@ impl AgentProgram {
             sources,
             index,
             tallies,
+            fire_counters,
         } = compiled;
         let document = evaluator.document();
         let pos_buffer = plan.position_lane.unwrap_or_default();
@@ -528,6 +547,7 @@ impl AgentProgram {
                 index,
                 counter_words: plan.counter_words,
                 cleared,
+                fire_counters,
                 sum_lanes: sum_lanes.len(),
                 reduce_domain,
                 init_cost,
@@ -606,6 +626,7 @@ impl AgentProgram {
         spec.index = parts.index;
         spec.counters = parts.counter_words;
         spec.cleared_counters = parts.cleared.clone();
+        spec.fire_counters = parts.fire_counters.clone();
         spec.steps = steps;
         spec.color = of_role(ShaderRole::Color).next().map(linear);
         spec.display = of_role(ShaderRole::Display).next().map(|shader| {
@@ -661,13 +682,14 @@ impl AgentProgram {
 }
 
 /// Returns the host evaluator of `file`, a checked graph of agents, with a lane and a pass for each field update, the
-/// check of its normalised document, and its shaders.
+/// check of its normalised document, and its shaders, each step counting the fires of its probes in `probes`.
 ///
 /// # Errors
 ///
-/// Returns the problems [`AgentProgram::compile`] returns after the check, each placed in `file`.
+/// Returns the problems [`AgentProgram::compile_with_probes`] returns after the check, each placed in `file`.
 pub(crate) fn compile_parts(
     file: &GraphFile,
+    probes: &Probes,
 ) -> Result<(HostEvaluator, CheckReport, CompiledAgents), Vec<CodeDiagnostic>> {
     let document = file.document();
     let (augmented, updates) = with_field_updates(document);
@@ -680,7 +702,7 @@ pub(crate) fn compile_parts(
             ))]
         })?
         .check();
-    let compiled = compile_agent_shaders(document, &report, &evaluator, &updates).map_err(|problems| {
+    let compiled = compile_agent_shaders(document, &report, &evaluator, &updates, probes).map_err(|problems| {
         problems
             .into_iter()
             .map(|problem| place(file, problem))
@@ -700,14 +722,17 @@ pub(crate) struct CompiledAgents {
     pub index: bool,
     /// Number of tallies of the reduce leaf.
     pub tallies: usize,
+    /// Words of `counters` that hold the probes' counts, after the reduce leaf's tallies.
+    pub fire_counters: std::ops::Range<usize>,
 }
 
 /// Writes and composes every shader of `document`, a graph of agents, whose host evaluator `evaluator` holds the
-/// passes of `updates` after the document's own.
+/// passes of `updates` after the document's own, each step counting the fires of its probes in `probes`.
 ///
 /// # Errors
 ///
-/// Returns a diagnostic for each node no shader can run, and each problem of composition.
+/// Returns a diagnostic for each node no shader can run, each probe that names no `bool` output of a tick pass, and
+/// each problem of composition.
 #[expect(
     clippy::too_many_lines,
     reason = "the buffer plan, the side tables and the shader list read in order"
@@ -717,9 +742,14 @@ pub(crate) fn compile_agent_shaders(
     report: &CheckReport,
     evaluator: &HostEvaluator,
     updates: &[(String, usize)],
+    probes: &Probes,
 ) -> Result<CompiledAgents, Vec<CodeDiagnostic>> {
     let mut problems = Vec::new();
     let augmented = evaluator.document();
+    let probe_slots = probes::resolve(probes, augmented, evaluator, report).unwrap_or_else(|found| {
+        problems.extend(found);
+        Vec::new()
+    });
     let doc_lanes = document.lanes.len();
     let is_update = |position: usize| updates.iter().any(|(_, known)| *known == position);
     let lanes: Vec<LanePlan> = augmented
@@ -1089,7 +1119,10 @@ pub(crate) fn compile_agent_shaders(
                 .map(|program| program.tallies)
                 .sum::<usize>()
         });
-    first_plan.counter_words = FIRST_COUNTER + counters + reduce_tallies;
+    // The probes' counts follow the reduce leaf's tallies.
+    let fire_base = FIRST_COUNTER + counters + reduce_tallies;
+    let fire_counters = fire_base..fire_base + probes.len();
+    first_plan.counter_words = fire_counters.end;
     let input = EmitInput {
         document: augmented,
         report,
@@ -1098,6 +1131,8 @@ pub(crate) fn compile_agent_shaders(
         tick_buffer,
         outer_iteration: None,
         agents: Some(&first_plan),
+        probes: &probe_slots,
+        fire_base,
     };
     for ShaderPlan {
         role,
@@ -1157,6 +1192,7 @@ pub(crate) fn compile_agent_shaders(
             counters: shader_tallies,
             grid_sum_lanes: Vec::new(),
             pass_id: henad_compute::gpu::GridPassId::Display,
+            workgroup_bytes,
             agent: Some(AgentShader {
                 pass,
                 domain,
@@ -1175,6 +1211,7 @@ pub(crate) fn compile_agent_shaders(
         sources,
         index,
         tallies,
+        fire_counters,
     })
 }
 

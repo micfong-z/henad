@@ -31,6 +31,12 @@ pub struct CounterReadback {
     /// Whether the latest map to finish failed.
     failed: bool,
     values: Vec<u32>,
+    /// Tag of the latest copy into the staging buffer, given by [`Self::encode_copy_tagged`].
+    copy_tag: u64,
+    /// Tag of the copy the map in flight reads.
+    map_tag: u64,
+    /// Tag of the copy that [`Self::values`] holds.
+    values_tag: u64,
 }
 
 impl CounterReadback {
@@ -58,6 +64,9 @@ impl CounterReadback {
             copied: false,
             failed: false,
             values: vec![0; count],
+            copy_tag: 0,
+            map_tag: 0,
+            values_tag: 0,
         }
     }
 
@@ -95,11 +104,20 @@ impl CounterReadback {
     /// mapped or pending a map is invalid. The sample is then dropped, and the stats repeat the older values with no
     /// error.
     pub fn encode_copy(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        self.encode_copy_tagged(encoder, 0);
+    }
+
+    /// Records the copy of [`Self::encode_copy`], and tags it with `tag`, which [`Self::values_tag`] returns once the
+    /// map of this copy lands.
+    ///
+    /// A copy skipped while a map is in flight leaves the tag of the copy before it.
+    pub(crate) fn encode_copy_tagged(&mut self, encoder: &mut wgpu::CommandEncoder, tag: u64) {
         if self.pending.is_some() {
             return;
         }
         encoder.copy_buffer_to_buffer(&self.storage, 0, &self.staging, 0, self.size());
         self.copied = true;
+        self.copy_tag = tag;
     }
 
     /// Starts the async map. Call it once, immediately after submitting the encoder that
@@ -109,6 +127,7 @@ impl CounterReadback {
             return;
         }
         self.copied = false;
+        self.map_tag = self.copy_tag;
         let (tx, rx) = flume::bounded(1);
         self.staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
             drop(tx.send(result));
@@ -244,6 +263,7 @@ impl CounterReadback {
         self.values.copy_from_slice(&words[..n]);
         drop(data);
         self.staging.unmap();
+        self.values_tag = self.map_tag;
 
         true
     }
@@ -251,6 +271,11 @@ impl CounterReadback {
     /// Most recently read-back values, all zero until the first readback completes.
     pub fn values(&self) -> &[u32] {
         &self.values
+    }
+
+    /// Tag of the copy that [`Self::values`] holds, 0 until a tagged copy lands.
+    pub(crate) fn values_tag(&self) -> u64 {
+        self.values_tag
     }
 
     /// Most recently read-back values, each word's bits reinterpreted as an `f32`, for

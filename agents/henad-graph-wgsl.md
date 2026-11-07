@@ -119,3 +119,32 @@ and an `atomicMax` of 0 on it changes nothing. Tests:
 `no_step_returns_early` (`wgsl.rs`) every starter's and fixture's shaders but the display, and
 `a_counter_over_many_workgroups_equals_the_host_total` (`gpu_cases.rs`) a million agents, half
 adding 0, to the host's total on the device.
+
+**Probes** (`wgsl/probes.rs`). `GridProgram::compile_with_probes(file, &Probes)` and
+`AgentProgram::compile_with_probes` take a `Probes` list beside the file, each a `PortRef` to a
+`bool` output of a node in a tick pass, and `compile` passes an empty one. Probes are no part of the
+document, so the canonical text and the code identity ignore them, and a graph with none compiles to
+the shaders of `compile` (`probes_leave_the_code_identity_and_text_alone`). `probes::resolve` finds
+each in the evaluator's programs and refuses one that names no output of a tick pass (an output of a
+`math.expr` or `fn.call` included, which normalisation expands into copies), a node with a `region`,
+which runs per iteration, and an output of another type than `bool`. A probe of a pass that `enabled
+= false` turns off keeps its word and builds no tally. In the step that runs its pass, after the
+element's instructions, `if (params.henad_count_fires != 0u && <output>)` adds 1 to the probe's slot
+of `var<workgroup> henad_fire_tally`. `main` zeroes the slots before a barrier, and after a barrier
+at its end the invocation `slot % 256` adds each non-zero slot to word `fire_base + i` of
+`counters`, both inside `if (params.henad_count_fires != 0u)` at the top level of `main`. The flag
+is a uniform, so the branch is uniform and a step outside the counted step pays one test.
+`henad_count_fires` (`FieldSource::CountFires`, `Dispatch::counting`) comes from
+`GridPassCtx::counting` or `AgentRun::counting`. The counts follow the reduce tallies: on a grid at
+the reduce shader's counters (at least 1), the spec's `counters` growing by one word per probe, and
+over agents after the fault word, the tick, the document's counters and the leaf's tallies, in
+`counter_words`. A grid step with probes binds `counters` as a runtime-sized array and takes
+`local_invocation_index`, so a starter's step gains one storage binding. Each slot adds four bytes
+to the step's `workgroup_bytes`, which `GeneratedShader::pass_spec` now copies for every grid
+shader. `HostEvaluator::run_pass_counting` counts the same probes on the host, adding to the probe's
+count for each element where its output holds. Tests in `tests/probes.rs`:
+`a_probe_on_each_transition_row_counts_as_the_host_does` (the Game of Life starter with its step
+written as two `cat.transition` rows, every tick for 50 ticks and after 64 steps),
+`a_probe_over_agents_counts_as_the_host_does` and the refusals. henad-models' `graph_probes.rs`
+holds every starter probed on its `bool` outputs within 8 storage bindings and the SIR starter
+stepping as it does with no probe.

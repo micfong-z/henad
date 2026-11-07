@@ -19,7 +19,7 @@ use crate::gpu::shader_spec::ShaderBinding;
 use crate::gpu::sides::BufferSide;
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
-use crate::snapshot::GpuSnapshot;
+use crate::snapshot::{FireCounts, GpuSnapshot};
 
 /// The uniform every display and reduce shader reads, generated from `henad::dims` through `grid_dims.wgsl`.
 pub(crate) type Dims = crate::shader_bindings::henad::dims::Dims;
@@ -46,22 +46,33 @@ impl GridBuffer {
     }
 }
 
+/// The two bind groups of a pass, one for each side holding the current state.
+struct SideBinds {
+    a: wgpu::BindGroup,
+    b: wgpu::BindGroup,
+}
+
+impl SideBinds {
+    fn pick(&self, a_is_current: bool) -> &wgpu::BindGroup {
+        if a_is_current { &self.a } else { &self.b }
+    }
+}
+
 /// A built pass, with one bind group for each side holding the current state.
 struct BuiltPass {
     label: String,
     pipeline: wgpu::ComputePipeline,
-    bind_a: wgpu::BindGroup,
-    bind_b: wgpu::BindGroup,
+    binds: SideBinds,
     /// Uniform block bound as `params`, kept so a press can rewrite an action's.
     uniform: Option<wgpu::Buffer>,
+    /// Bind groups of the counting block of a step pass, `None` for a spec with no fire counters and for every pass
+    /// that is no step or binds no `params`.
+    counting: Option<SideBinds>,
 }
 
 impl BuiltPass {
-    fn bind(&self, a_is_current: bool) -> &wgpu::BindGroup {
-        if a_is_current { &self.bind_a } else { &self.bind_b }
-    }
-
-    /// Records the pass into `encoder` as a compute pass of its own, over `groups` workgroups.
+    /// Records the pass into `encoder` as a compute pass of its own, over `groups` workgroups, through its counting
+    /// block when `counting` holds and the pass has one.
     fn encode(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -69,13 +80,18 @@ impl BuiltPass {
         a_is_current: bool,
         label: &str,
         timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
+        counting: bool,
     ) {
+        let binds = match &self.counting {
+            Some(binds) if counting => binds,
+            _ => &self.binds,
+        };
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some(label),
             timestamp_writes,
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, self.bind(a_is_current), &[]);
+        pass.set_bind_group(0, binds.pick(a_is_current), &[]);
         pass.dispatch_workgroups(groups.0, groups.1, 1);
     }
 }
@@ -138,6 +154,8 @@ pub(crate) struct GpuGridEngine {
     current_is_a: bool,
     /// Steps done when the latest reduce pass was recorded, which the stat values hook reads.
     stats_tick: u64,
+    /// Tick the latest counted step reached, 0 before the first.
+    counted_tick: u64,
 }
 
 impl std::fmt::Debug for GpuGridEngine {
@@ -269,13 +287,16 @@ impl GpuGridEngine {
             seed,
             press,
             tick: 0,
+            counting: false,
         };
+        let counts_fires = !spec.fire_counters.is_empty();
 
         // Every layout entry and every bind group entry comes from the name its shader gives the
         // binding, so a slot index cannot disagree with the shader that owns it.
         let build = |label: String, pass: &GridPassSpec, uniform_of: GridPassId| -> BuiltPass {
             let shader = &pass.shader;
-            let uniform = shader.bindings.iter().any(|decl| decl.name == "params").then(|| {
+            let binds_params = shader.bindings.iter().any(|decl| decl.name == "params");
+            let uniform = binds_params.then(|| {
                 uniform_buffer(
                     device,
                     queue,
@@ -283,6 +304,23 @@ impl GpuGridEngine {
                     &spec.hooks.pass_params_bytes(uniform_of, pass_ctx, params),
                 )
             });
+            // A step's counting block differs from its block in the counting flag alone.
+            let counting_uniform =
+                (counts_fires && binds_params && matches!(uniform_of, GridPassId::Step(_))).then(|| {
+                    uniform_buffer(
+                        device,
+                        queue,
+                        &format!("{label}_counting_params"),
+                        &spec.hooks.pass_params_bytes(
+                            uniform_of,
+                            GridPassCtx {
+                                counting: true,
+                                ..pass_ctx
+                            },
+                            params,
+                        ),
+                    )
+                });
             let resolve = |decl: &ShaderBinding, a_is_current: bool| -> wgpu::BindingResource<'_> {
                 if let Some((buffer_label, writes)) = decl.buffer_target() {
                     let k = spec
@@ -297,10 +335,6 @@ impl GpuGridEngine {
                     return buffers[k].side(side, a_is_current).as_entire_binding();
                 }
                 match decl.name.as_ref() {
-                    "params" => uniform
-                        .as_ref()
-                        .unwrap_or_else(|| panic!("{id}: `params` has no uniform"))
-                        .as_entire_binding(),
                     "dims" => dims_buffer.as_entire_binding(),
                     "counters" => readback.binding(),
                     "partials" => lane_reduce
@@ -321,14 +355,20 @@ impl GpuGridEngine {
                 label: Some(&format!("{label}_layout")),
                 entries: &entries,
             });
-            let make = |a_is_current: bool, side: &str| {
+            let make = |a_is_current: bool, side: &str, uniform: Option<&wgpu::Buffer>| {
                 let entries: Vec<wgpu::BindGroupEntry<'_>> = shader
                     .bindings
                     .iter()
                     .enumerate()
                     .map(|(i, decl)| wgpu::BindGroupEntry {
                         binding: i as u32,
-                        resource: resolve(decl, a_is_current),
+                        resource: if decl.name == "params" {
+                            uniform
+                                .unwrap_or_else(|| panic!("{id}: `params` has no uniform"))
+                                .as_entire_binding()
+                        } else {
+                            resolve(decl, a_is_current)
+                        },
                     })
                     .collect();
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -337,14 +377,21 @@ impl GpuGridEngine {
                     entries: &entries,
                 })
             };
-            let (bind_a, bind_b) = (make(true, "a"), make(false, "b"));
+            let binds = SideBinds {
+                a: make(true, "a", uniform.as_ref()),
+                b: make(false, "b", uniform.as_ref()),
+            };
+            let counting = counting_uniform.as_ref().map(|counting_uniform| SideBinds {
+                a: make(true, "counting_a", Some(counting_uniform)),
+                b: make(false, "counting_b", Some(counting_uniform)),
+            });
             let pipeline = compute_pipeline(device, &label, &shader.source, &layout);
             BuiltPass {
                 label,
                 pipeline,
-                bind_a,
-                bind_b,
+                binds,
                 uniform: uniform.clone(),
+                counting,
             }
         };
 
@@ -415,6 +462,7 @@ impl GpuGridEngine {
             params: params.to_vec(),
             current_is_a: true,
             stats_tick: 0,
+            counted_tick: 0,
             spec,
         }
     }
@@ -479,6 +527,7 @@ impl SimState for GpuGridEngine {
             seed: self.seed,
             press: self.press,
             tick: self.stats_tick,
+            counting: false,
         };
         stat_entries(
             &self.spec.stats,
@@ -524,7 +573,13 @@ impl GpuSimState for GpuGridEngine {
             return;
         }
         let last_pass = self.steps.len().saturating_sub(1);
+        let fires = self.spec.fire_counters.clone();
         for i in 0..count {
+            // The last step of the call counts fires into a range cleared just before it.
+            let counting = i == count - 1 && !fires.is_empty();
+            if counting {
+                self.readback.encode_clear_range(encoder, fires.clone());
+            }
             for (k, pass) in self.steps.iter().enumerate() {
                 let is_first = i == 0 && k == 0;
                 let is_last = i == count - 1 && k == last_pass;
@@ -544,11 +599,15 @@ impl GpuSimState for GpuGridEngine {
                     self.current_is_a,
                     "gpu_grid_step_pass",
                     timestamp_writes,
+                    counting,
                 );
             }
             self.current_is_a = !self.current_is_a;
         }
         self.tick += u64::from(count);
+        if !fires.is_empty() {
+            self.counted_tick = self.tick;
+        }
     }
 
     fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
@@ -570,6 +629,7 @@ impl GpuSimState for GpuGridEngine {
             seed: self.seed,
             press: self.press,
             tick: self.tick,
+            counting: false,
         };
         if !self.rerun(index, ctx) {
             return true;
@@ -582,7 +642,14 @@ impl GpuSimState for GpuGridEngine {
                         .pass_params_bytes(GridPassId::Action { action: index, pass: k }, ctx, &self.params);
                 self.queue.write_buffer(uniform, 0, &bytes);
             }
-            pass.encode(encoder, self.step_workgroups, self.current_is_a, &pass.label, None);
+            pass.encode(
+                encoder,
+                self.step_workgroups,
+                self.current_is_a,
+                &pass.label,
+                None,
+                false,
+            );
         }
         true
     }
@@ -594,6 +661,7 @@ impl GpuSimState for GpuGridEngine {
             self.current_is_a,
             "gpu_grid_display_pass",
             None,
+            false,
         );
         self.encode_stats_passes(encoder);
     }
@@ -602,15 +670,24 @@ impl GpuSimState for GpuGridEngine {
         // Clear -> accumulate -> copy out. wgpu inserts the barriers between these because they
         // are separate passes/copies within the one encoder.
         self.stats_tick = self.tick;
-        self.readback.encode_clear(encoder);
+        let fires = self.spec.fire_counters.clone();
+        if fires.is_empty() {
+            self.readback.encode_clear(encoder);
+        } else {
+            // The fire counts of the last counted step stay for the copy.
+            self.readback.encode_clear_range(encoder, 0..fires.start);
+            self.readback
+                .encode_clear_range(encoder, fires.end..self.spec.counters.max(1));
+        }
         self.reduce.encode(
             encoder,
             self.cell_workgroups,
             self.current_is_a,
             "gpu_grid_reduce_pass",
             None,
+            false,
         );
-        self.readback.encode_copy(encoder);
+        self.readback.encode_copy_tagged(encoder, self.counted_tick);
         if let Some(lane_reduce) = &mut self.lane_reduce {
             lane_reduce.encode(encoder);
         }
@@ -648,6 +725,17 @@ impl GpuSimState for GpuGridEngine {
             display: Some(Arc::clone(&self.display)),
             agents: None,
         }
+    }
+
+    fn fire_counts(&self) -> FireCounts {
+        let fires = self.spec.fire_counters.clone();
+        if fires.is_empty() {
+            return FireCounts::default();
+        }
+        FireCounts::new(
+            self.readback.values_tag(),
+            self.readback.values().get(fires).unwrap_or_default().to_vec(),
+        )
     }
 
     fn read_buffer(&self, index: usize) -> Option<Vec<u32>> {
@@ -788,6 +876,10 @@ impl<M: GpuGridModel> GpuSimState for GpuGridState<M> {
     /// Returns the display layer alone. A `GpuGridModel` has no agent layer.
     fn view(&self) -> GpuSnapshot {
         self.engine.view()
+    }
+
+    fn fire_counts(&self) -> FireCounts {
+        self.engine.fire_counts()
     }
 
     fn read_buffer(&self, index: usize) -> Option<Vec<u32>> {

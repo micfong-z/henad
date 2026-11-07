@@ -158,6 +158,7 @@ impl AgentGraphHooks {
             groups_x: ctx.groups_x,
             hash: ctx.geom.index,
             texture: [ctx.geom.display.0, ctx.geom.display.1],
+            counting: run.counting,
         };
         block.bytes(
             &self.evaluator,

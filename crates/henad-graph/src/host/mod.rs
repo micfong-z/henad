@@ -753,6 +753,51 @@ impl HostEvaluator {
         run::run(program, lanes, &values, context, stream).map_err(|error| self.located(error))
     }
 
+    /// Runs the pass `pass` as [`Self::run_pass`] does, and adds to `counts` the fires of each probe of `probes` whose
+    /// output the pass computes: 1 to the probe's count for every element at which its output holds.
+    ///
+    /// `counts` holds one count per probe, in the order of `probes`. A probe of another pass leaves its count alone, so
+    /// one `counts` runs through every tick pass of a step as the GPU's counted step counts.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`Self::run_pass`], and [`HostError::Fault`] for `counts` of another length than
+    /// `probes`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments of `run_pass` and the probes with their counts"
+    )]
+    pub fn run_pass_counting(
+        &self,
+        pass: &str,
+        lanes: &mut HostLanes,
+        params: &[ParamValue],
+        context: &RunContext,
+        stream: &mut u64,
+        probes: &crate::wgsl::Probes,
+        counts: &mut [u32],
+    ) -> Result<PassOutcome, HostError> {
+        if counts.len() != probes.len() {
+            return Err(HostError::Fault {
+                pass: pass.to_owned(),
+                node: None,
+                reason: format!("{} counts for {} probes", counts.len(), probes.len()),
+            });
+        }
+        let (_, program) = self.program(pass)?;
+        self.check_lanes(pass, lanes)?;
+        let values = self.param_values(params);
+        let mut fires: Vec<(usize, &mut u32)> = probes
+            .outputs()
+            .iter()
+            .zip(counts.iter_mut())
+            .filter_map(|(output, count)| {
+                crate::wgsl::probes::output_slot(program, output).map(|(_, slot)| (slot, count))
+            })
+            .collect();
+        run::run_counting(program, lanes, &values, context, stream, &mut fires).map_err(|error| self.located(error))
+    }
+
     /// Returns every value the element block of the pass `pass` computes at `element`, by node and port, with
     /// `iteration` as the iteration word of a region around the pass's top. Writes go nowhere.
     ///

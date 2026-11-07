@@ -94,7 +94,21 @@ types an unsuffixed literal falls back to.
   with `GpuLaneReduce::over_blocks` after the counters' copy, reads both back together, and calls
   `GridHooks::stats_with_sums` (provided, default `stats`) with each lane's total. A spec with no
   sums builds no tree and runs as before, and `demand` counts the partials buffer. `init_cost` is
-  the host's cost per cell at build. `from_model` and
+  the host's cost per cell at build. `fire_counters` (empty from `new`) is the range of `counters` a
+  step's probes count into, after the reduce tallies on a graph, and `assert_contracts` refuses one
+  ending past `counters`. With a non-empty range each step pass that binds `params` gets a second
+  uniform buffer and bind group pair, its counting block, written once at build from
+  `pass_params_bytes` with `GridPassCtx.counting` set. The last step of each `encode_steps` call
+  clears the range (`encode_clear_range`) and binds the counting blocks, and the engine records the
+  tick that step reached. The stats clear then clears every word but the range, the reduce tallies
+  and the counts read back in one readback, and the copy carries that tick as its tag
+  (`CounterReadback::encode_copy_tagged`, `values_tag` once the map lands).
+  `GpuSimState::fire_counts` (default empty) returns the range's words of the latest landed readback
+  with that tick as a `FireCounts` (`snapshot.rs`), and `GpuSimThread` puts it in
+  `Snapshot.fire_counts`, which the CPU runner leaves empty. The counting flag sits in the uniform
+  block, never in a storage binding. `gpu/tests/fire_counts.rs` holds
+  `a_counted_step_reads_the_last_steps_count_in_calls_of_1_3_and_64` (both engines) and
+  `a_grid_reads_its_tallies_and_its_fire_range_in_one_readback`. `from_model` and
   `single_step` put every buffer in the dual set, one step pass labelled `step`, the swapping
   table on step, display and reduce and the in-place table on actions, which is the orientation
   stock shaders assume. `GpuGridEngine` builds every wgpu object from a spec and implements `SimState` and
@@ -130,9 +144,11 @@ types an unsuffixed literal falls back to.
   (`henad-models/src/tests/gpu_agent_adapter.rs`) holds `gpu_ants` and `gpu_boids` built through
   the public constructors from owned strings equal to their registered entries in `Debug`, schema
   hash, needs, demand and stepped stats. Keep it.
-  `GpuAgentSpec` also holds `color`, a pass run before the display in every snapshot that writes
-  the colour buffer (`None` for a model whose steps write it), `cleared_counters`, a range of the
-  counters the engine clears before each reduce leaf for counts taken afresh, and `init_cost`. Each
+  `GpuAgentSpec` also holds `color`, a pass run before the display in every snapshot that writes the
+  colour buffer (`None` for a model whose steps write it), `cleared_counters`, a range of the
+  counters the engine clears before each reduce leaf for counts taken afresh, `fire_counters`, the
+  counterpart of the grid spec's fire range over its own counters (counting blocks for the step
+  passes, written with `AgentRun::counting` set through `with_counting`), and `init_cost`. Each
   pass spec holds a `cost`, `uniform_bytes` and `workgroup_bytes`, and an action a `rerun_cost`, all
   zero for a hand-written model. `demand` counts a pass's work as its cost times its invocations
   (texels for the display), and host work as the init or rerun cost times the larger of agents and

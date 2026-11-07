@@ -73,16 +73,35 @@ const SUM_CHUNK: usize = 8192;
 /// # Errors
 ///
 /// Returns [`HostError::Fault`] for a value the program cannot use, such as a lane of another size than the world's.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the staging, the elements and the commit read in order"
-)]
 pub(super) fn run(
     program: &Program,
     lanes: &mut HostLanes,
     params: &[HostValue],
     context: &RunContext,
     stream: &mut u64,
+) -> Result<PassOutcome, HostError> {
+    run_counting(program, lanes, params, context, stream, &mut [])
+}
+
+/// Runs `program` as [`run`] does, and adds 1 to the count of each entry of `fires` for every element at which the
+/// `bool` in its slot holds once the element's block has run.
+///
+/// Each entry of `fires` is a slot of the program and the count it adds to.
+///
+/// # Errors
+///
+/// Returns the errors of [`run`].
+#[expect(
+    clippy::too_many_lines,
+    reason = "the staging, the elements and the commit read in order"
+)]
+pub(super) fn run_counting(
+    program: &Program,
+    lanes: &mut HostLanes,
+    params: &[HostValue],
+    context: &RunContext,
+    stream: &mut u64,
+    fires: &mut [(usize, &mut u32)],
 ) -> Result<PassOutcome, HostError> {
     let elements = match program.domain {
         Some(domain) => lanes.world().elements(domain).ok_or_else(|| HostError::Fault {
@@ -164,6 +183,11 @@ pub(super) fn run(
     for element in 0..elements {
         machine.element = u32::try_from(element).unwrap_or(u32::MAX);
         machine.execute(&program.element, &mut frame)?;
+        for (slot, count) in fires.iter_mut() {
+            if frame.get(*slot) == Some(&HostValue::Bool(true)) {
+                **count = count.wrapping_add(1);
+            }
+        }
     }
     for (tally, slot) in machine.tallies.iter().zip(&program.tally_slots) {
         if let Some(target) = frame.get_mut(*slot) {

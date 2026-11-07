@@ -264,12 +264,25 @@ pub struct AgentRun {
     /// Steps done when the hook runs: zero at construction, the engine's tick at a press, and for the stat values the
     /// steps done when the reduce leaf was recorded.
     pub tick: u64,
+    /// Whether the block is the counting block of a step pass. The last step of each batch binds it, every other
+    /// block holds false, and [`Self::new`] leaves it false.
+    pub counting: bool,
 }
 
 impl AgentRun {
     /// Creates the values of a run on `seed` after `presses` presses and `tick` steps.
     pub fn new(seed: Option<u64>, presses: u32, tick: u64) -> Self {
-        Self { seed, presses, tick }
+        Self {
+            seed,
+            presses,
+            tick,
+            counting: false,
+        }
+    }
+
+    /// Returns the values with [`Self::counting`] set to `counting`.
+    pub fn with_counting(self, counting: bool) -> Self {
+        Self { counting, ..self }
     }
 }
 
@@ -484,6 +497,12 @@ pub struct GpuAgentSpec {
     /// Range of [`Self::counters`] that the engine clears before every reduce leaf, for counts that the leaf takes
     /// afresh. [`Self::new`] leaves this empty.
     pub cleared_counters: Range<usize>,
+    /// Range of [`Self::counters`] that the step passes count fires into, empty for a model with no probes, as
+    /// [`Self::new`] leaves it.
+    ///
+    /// The engine clears the range before the last step of each batch of steps and binds that step's counting blocks,
+    /// written with [`AgentRun::counting`] set. The counts read back with the other counters.
+    pub fire_counters: Range<usize>,
     /// Cost per element of the init passes the host runs at build, in work units. Zero for a model seeded otherwise,
     /// and [`Self::new`] leaves it at zero.
     pub init_cost: u64,
@@ -509,6 +528,7 @@ impl fmt::Debug for GpuAgentSpec {
             .field("actions", &self.actions)
             .field("color", &self.color)
             .field("cleared_counters", &self.cleared_counters)
+            .field("fire_counters", &self.fire_counters)
             .field("init_cost", &self.init_cost)
             .field("stats", &self.stats)
             .finish_non_exhaustive()
@@ -541,6 +561,7 @@ impl GpuAgentSpec {
             actions: Vec::new(),
             color: None,
             cleared_counters: 0..0,
+            fire_counters: 0..0,
             init_cost: 0,
             stats: stats.into(),
             hooks,
@@ -803,10 +824,16 @@ impl GpuAgentSpec {
     /// Panics if the position or colour buffer is not drawable, since the view binds both as vertex streams and wgpu
     /// refuses any other buffer at the first draw. Panics if no step pass has a writable binding of a double buffered
     /// buffer that reaches [`BufferSide::Next`]. The sides swap every step, and the state would otherwise alternate
-    /// between the seed and the cleared side.
+    /// between the seed and the cleared side. Panics if [`Self::fire_counters`] ends past [`Self::counters`].
     pub(crate) fn assert_contracts(&self) {
         let id = &*self.id;
         assert_buffer_labels(id, self.buffers.iter().map(|buffer| buffer.label.as_ref()));
+        assert!(
+            self.fire_counters.end <= self.counters,
+            "{id}: the fire counters {:?} end past the {} counters",
+            self.fire_counters,
+            self.counters
+        );
         for (role, index) in [("position", self.pos_buffer), ("colour", self.color_buffer)] {
             assert!(
                 index < self.buffers.len(),

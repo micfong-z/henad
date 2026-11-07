@@ -14,7 +14,7 @@ use super::wgsl::{LANE_SEED_BODY, POWI_BODY, repeat_nodes};
 use crate::GraphFile;
 use crate::draw::{PHASE_TICK, draw_bits, key_word};
 use crate::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
-use crate::wgsl::compile_shaders;
+use crate::wgsl::{Probes, compile_shaders};
 
 /// Returns the test device, or `None` with a note naming the skipped test `test` when this machine has none.
 #[expect(
@@ -42,8 +42,8 @@ fn on_device(device: &TestDevice, nodes: &str, seed: Option<u64>, tick: u32) -> 
     let report = file.check();
     let evaluator = HostEvaluator::new(&file).unwrap_or_else(|error| panic!("{:?}", error.diagnostics()));
     let document = evaluator.document();
-    let compiled =
-        compile_shaders(document, &report, &evaluator, None).unwrap_or_else(|problems| panic!("{problems:#?}"));
+    let compiled = compile_shaders(document, &report, &evaluator, None, &Probes::default())
+        .unwrap_or_else(|problems| panic!("{problems:#?}"));
     let shader = compiled
         .shaders
         .iter()
@@ -481,8 +481,8 @@ fn a_repeat_runs_in_stats_view_and_action_passes_on_the_device() {
     assert!(!report.has_errors(), "{:#?}", report.diagnostics);
     let evaluator = HostEvaluator::new(&file).unwrap_or_else(|error| panic!("{:?}", error.diagnostics()));
     let document = evaluator.document();
-    let compiled =
-        compile_shaders(document, &report, &evaluator, None).unwrap_or_else(|problems| panic!("{problems:#?}"));
+    let compiled = compile_shaders(document, &report, &evaluator, None, &Probes::default())
+        .unwrap_or_else(|problems| panic!("{problems:#?}"));
     let HostWorld::Grid { width, height, .. } = WORLD else {
         unreachable!("the tests' world is a grid");
     };

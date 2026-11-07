@@ -77,6 +77,13 @@ builds run in (`SweepOptions::in_build_pool`, `Executor::with_build_pool`), and 
 build in their lane pools either way. A pause never changes a result. A run's trajectory depends
 on its seed and schedule alone.
 
+A GPU engine with a fire range counts the last step of each `encode_steps` call, and the runner
+needs no change for it. The runner cuts a batch into chunks of at most `MAX_STEPS_PER_SUBMISSION`
+and at each tick an action is due, so each chunk's last step counts, and a snapshot's passes follow
+the batch's last chunk. `Snapshot.fire_counts` then reads the step before the snapshot, with the
+tick it reached, a few milliseconds stale as the stats are. Flat out that is one counting step in
+64. At the editor's 1 to 60 ticks per second every step counts.
+
 The UI thread only ever reads the latest snapshot (`snapshot.rs`) and never touches the live
 `SimState` directly. Publishing goes through a `SnapshotSlot`, holding the `fresh` snapshot plus a
 `spare` the host hands back for its buffers. Recycling is only an optimisation. Dropping a snapshot

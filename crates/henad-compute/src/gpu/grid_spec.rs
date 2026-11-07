@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::marker::PhantomData;
+use std::ops::Range;
 
 use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
 use henad_core::metadata::Structure;
@@ -164,6 +165,9 @@ pub struct GridPassCtx {
     /// Steps done when the hook runs: zero at construction, and for the stat values the steps done when the reduce
     /// pass was recorded.
     pub tick: u64,
+    /// Whether the block is the counting block of a step pass. The last step of each batch binds it, and every other
+    /// block holds false.
+    pub counting: bool,
 }
 
 /// Buffers that a rerun on the host wrote, each as its buffer's position in [`GpuGridSpec::buffers`] and its new
@@ -292,6 +296,13 @@ pub struct GpuGridSpec {
     /// Number of `atomic<u32>` counters the reduce shader's `counters` binding holds, at least 1. [`Self::new`] sets
     /// one per stat series, as a model type's reduce shader counts.
     pub counters: usize,
+    /// Range of [`Self::counters`] that the step passes count fires into, empty for a model with no probes, as
+    /// [`Self::new`] leaves it.
+    ///
+    /// The engine clears the range before the last step of each batch of steps and binds that step's counting blocks,
+    /// written with [`GridPassCtx::counting`] set. The stats clear leaves the range alone, and the counts read back
+    /// with the reduce tallies.
+    pub fire_counters: Range<usize>,
     /// Number of float lanes the reduce shader sums. A shader that sums any binds `partials` as `array<f32>` and writes
     /// the total of workgroup `block` at `partials[block * sums + lane]`, `block` being `wid.y * groups_x + wid.x` over
     /// the cell workgroups. [`GridHooks::stats_with_sums`] receives each lane's total. [`Self::new`] sets zero.
@@ -316,6 +327,7 @@ impl fmt::Debug for GpuGridSpec {
             .field("actions", &self.actions)
             .field("stats", &self.stats)
             .field("counters", &self.counters)
+            .field("fire_counters", &self.fire_counters)
             .field("sums", &self.sums)
             .field("init_cost", &self.init_cost)
             .finish_non_exhaustive()
@@ -325,8 +337,8 @@ impl fmt::Debug for GpuGridSpec {
 impl GpuGridSpec {
     /// Creates the spec of model `id` with no actions.
     ///
-    /// [`Self::actions`], [`Self::counters`], [`Self::sums`] and [`Self::init_cost`] are public fields, for a model
-    /// that declares otherwise.
+    /// [`Self::actions`], [`Self::counters`], [`Self::fire_counters`], [`Self::sums`] and [`Self::init_cost`] are
+    /// public fields, for a model that declares otherwise.
     #[expect(
         clippy::too_many_arguments,
         reason = "every argument is a declaration the engine cannot run without"
@@ -351,6 +363,7 @@ impl GpuGridSpec {
             reduce,
             actions: Vec::new(),
             counters: stats.len().max(1),
+            fire_counters: 0..0,
             sums: 0,
             stats,
             init_cost: 0,
@@ -554,10 +567,17 @@ impl GpuGridSpec {
     /// # Panics
     ///
     /// Panics if a buffer label is reserved or ends in `_in` or `_out`, if a shader declares a workgroup size other
-    /// than [`Self::workgroup_size`] on both sides, or if a side table holds another number of rows than there are
-    /// buffers.
+    /// than [`Self::workgroup_size`] on both sides, if a side table holds another number of rows than there are
+    /// buffers, or if [`Self::fire_counters`] ends past [`Self::counters`].
     pub(crate) fn assert_contracts(&self) {
         assert_buffer_labels(&self.id, self.buffers.iter().map(|buffer| buffer.label.as_ref()));
+        assert!(
+            self.fire_counters.end <= self.counters.max(1),
+            "{}: the fire counters {:?} end past the {} counters",
+            self.id,
+            self.fire_counters,
+            self.counters.max(1)
+        );
         // Every pass dispatches square workgroups of `workgroup_size`.
         let square = [self.workgroup_size, self.workgroup_size, 1];
         for (label, pass) in self.passes() {
@@ -778,6 +798,7 @@ mod tests {
             seed: Some(7),
             press: GridPress::new(9, 1),
             tick: 0,
+            counting: false,
         };
         for pass in [GridPassId::Step(0), GridPassId::Display, GridPassId::Reduce] {
             assert_eq!(

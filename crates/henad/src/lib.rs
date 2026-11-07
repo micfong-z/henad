@@ -96,7 +96,7 @@ pub mod runner {
     };
     pub use henad_compute::runner::{DEFAULT_STOP_TIMEOUT, DetachedRunner, RunnerShutdown};
     pub use henad_compute::snapshot::{
-        CpuLayers, EdgeSnapshot, GpuSnapshot, GridSnapshot, PointSnapshot, Snapshot, SnapshotView,
+        CpuLayers, EdgeSnapshot, FireCounts, GpuSnapshot, GridSnapshot, PointSnapshot, Snapshot, SnapshotView,
     };
     pub use henad_core::model::SimState;
 }

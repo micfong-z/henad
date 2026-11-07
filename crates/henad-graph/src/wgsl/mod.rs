@@ -22,14 +22,20 @@
 //!
 //! *Regions.* A Repeat is a counted `for` loop that the compiler writes, with its accumulators as `var`s before it. A
 //! grid count is unrolled over its stencil, one test per neighbour.
+//!
+//! *Probes.* [`GridProgram::compile_with_probes`] takes [`Probes`] beside the file, Boolean outputs of tick passes
+//! whose fires a step counts on the engine's counted step. The counts sit in `counters` after the reduce tallies, in
+//! [`GpuGridSpec::fire_counters`].
 
 pub(crate) mod agent_hooks;
 pub(crate) mod agents;
 pub(crate) mod emit;
 mod hooks;
+pub(crate) mod probes;
 pub(crate) mod uniform;
 
 pub use agents::AgentProgram;
+pub use probes::Probes;
 
 use std::borrow::Cow;
 use std::fmt;
@@ -120,6 +126,8 @@ pub struct GeneratedShader {
     grid_sum_lanes: Vec<(usize, usize)>,
     /// Pass of the spec the shader is, for its uniform block.
     pass_id: GridPassId,
+    /// Bytes of the shader's `var<workgroup>` declarations.
+    workgroup_bytes: u64,
     /// What the agents engine reads of a shader of an agents world, `None` for a grid.
     agent: Option<agents::AgentShader>,
 }
@@ -243,15 +251,7 @@ impl GeneratedShader {
         );
         pass.cost = self.cost;
         pass.uniform_bytes = self.uniform.size as u64;
-        if self.role == ShaderRole::Reduce {
-            // `block_sum` keeps one float per invocation of the workgroup.
-            let sums = if self.grid_sum_lanes.is_empty() {
-                0
-            } else {
-                u64::from(WORKGROUP_SIZE * WORKGROUP_SIZE) * std::mem::size_of::<f32>() as u64
-            };
-            pass.workgroup_bytes = self.counters as u64 * std::mem::size_of::<u32>() as u64 + sums;
-        }
+        pass.workgroup_bytes = self.workgroup_bytes;
         pass
     }
 }
@@ -277,6 +277,8 @@ struct GridParts {
     shaders: Vec<GeneratedShader>,
     hooks: Arc<GraphHooks>,
     counters: usize,
+    /// Words of `counters` that hold the counts of the probes.
+    fire_counters: Range<usize>,
     init_cost: u64,
     rerun_costs: Vec<u64>,
 }
@@ -365,8 +367,21 @@ impl GridProgram {
     /// its pass and node, and a diagnostic for a graph that is no grid. A shader past the composer's size limit is
     /// reported against the pass whose nodes wrote most of it. A shader that does not compose is a fault of the
     /// compiler, reported against the node that wrote the line where it can be placed.
-    #[expect(clippy::too_many_lines, reason = "every declaration of the entry is read here once")]
     pub fn compile(file: &GraphFile) -> Result<Self, Vec<CodeDiagnostic>> {
+        Self::compile_with_probes(file, &Probes::default())
+    }
+
+    /// Checks `file` and compiles every pass the GPU runs, each step counting the fires of its probes in `probes`.
+    ///
+    /// The probes change the shaders and the spec's [`GpuGridSpec::fire_counters`], and leave the file's text and its
+    /// code identity alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns the problems of [`Self::compile`], and a problem for each probe that names no `bool` output of a tick
+    /// pass.
+    #[expect(clippy::too_many_lines, reason = "every declaration of the entry is read here once")]
+    pub fn compile_with_probes(file: &GraphFile, probes: &Probes) -> Result<Self, Vec<CodeDiagnostic>> {
         let report = file.check();
         if report.has_errors() {
             return Err(report.errors().cloned().collect());
@@ -379,7 +394,7 @@ impl GridProgram {
                  `AgentProgram`",
             )]);
         };
-        let compiled = compile_shaders(document, &report, &evaluator, None).map_err(|problems| {
+        let compiled = compile_shaders(document, &report, &evaluator, None, probes).map_err(|problems| {
             problems
                 .into_iter()
                 .map(|problem| place(file, problem))
@@ -391,6 +406,7 @@ impl GridProgram {
             lanes,
             tick_buffer,
             dual,
+            fire_counters,
         } = compiled;
 
         let mut buffers: Vec<GridBufferSpec> = lanes
@@ -410,7 +426,12 @@ impl GridProgram {
             })
             .collect();
         let reduce = shaders.iter().find(|shader| shader.role == ShaderRole::Reduce);
-        let counters = reduce.map_or(1, GeneratedShader::counters);
+        debug_assert_eq!(
+            reduce.map_or(1, GeneratedShader::counters),
+            fire_counters.start,
+            "the probes' counts follow the reduce tallies"
+        );
+        let counters = fire_counters.end;
         let sum_lanes = reduce.map(|shader| shader.grid_sum_lanes.clone()).unwrap_or_default();
         let stats = stat_sources(document, &evaluator, reduce);
         let actions = document
@@ -523,6 +544,7 @@ impl GridProgram {
                 shaders,
                 hooks,
                 counters,
+                fire_counters,
                 init_cost,
                 rerun_costs,
             }),
@@ -577,6 +599,7 @@ impl GridProgram {
             })
             .collect();
         spec.counters = parts.counters;
+        spec.fire_counters = parts.fire_counters.clone();
         spec.sums = parts.hooks.sum_lanes.len();
         spec.init_cost = parts.init_cost;
         spec
@@ -609,6 +632,8 @@ pub(crate) struct Compiled {
     pub tick_buffer: bool,
     /// Positions of the dual lanes.
     pub dual: Vec<usize>,
+    /// Words of `counters` that hold the probes' counts, after the reduce tallies.
+    pub fire_counters: Range<usize>,
 }
 
 /// Returns whether an instruction of `block`, or of a region body in it, meets `test`.
@@ -637,11 +662,12 @@ struct ShaderPlan {
 }
 
 /// Writes and composes every shader of `document`, with `outer_iteration` as the iteration word around every pass's
-/// top for a test.
+/// top for a test, each step counting the fires of its probes in `probes`.
 ///
 /// # Errors
 ///
-/// Returns a diagnostic for each node no shader can run, and each problem of composition.
+/// Returns a diagnostic for each node no shader can run, each probe that names no `bool` output of a tick pass, and
+/// each problem of composition.
 #[expect(
     clippy::too_many_lines,
     reason = "the buffer plan, the side tables and the shader list read in order"
@@ -651,8 +677,13 @@ pub(crate) fn compile_shaders(
     report: &CheckReport,
     evaluator: &HostEvaluator,
     outer_iteration: Option<u32>,
+    probes: &Probes,
 ) -> Result<Compiled, Vec<CodeDiagnostic>> {
     let mut problems = Vec::new();
+    let probe_slots = probes::resolve(probes, document, evaluator, report).unwrap_or_else(|found| {
+        problems.extend(found);
+        Vec::new()
+    });
     let lanes: Vec<LanePlan> = document
         .lanes
         .iter()
@@ -745,6 +776,12 @@ pub(crate) fn compile_shaders(
         }
         SideTable::new(rows)
     };
+    // The probes' counts follow the reduce tallies, at least one word, in `counters`.
+    let reduce_tallies = runs(PassStage::Stats)
+        .filter_map(program)
+        .map(|program| program.tallies)
+        .sum::<usize>()
+        .max(1);
     let input = EmitInput {
         document,
         report,
@@ -753,6 +790,8 @@ pub(crate) fn compile_shaders(
         tick_buffer,
         outer_iteration,
         agents: None,
+        probes: &probe_slots,
+        fire_base: reduce_tallies,
     };
     let cost_of = |positions: &[usize]| {
         positions
@@ -851,7 +890,7 @@ pub(crate) fn compile_shaders(
             uniform,
             counters,
             sum_lanes,
-            ..
+            workgroup_bytes,
         } = emitted;
         if text.len() > MAX_FILE_BYTES {
             problems.push(oversized(&label, text.len(), &ranges));
@@ -881,6 +920,7 @@ pub(crate) fn compile_shaders(
             counters,
             grid_sum_lanes: sum_lanes,
             pass_id,
+            workgroup_bytes,
             agent: None,
         });
     }
@@ -892,6 +932,7 @@ pub(crate) fn compile_shaders(
         lanes,
         tick_buffer,
         dual: dual.into_iter().map(|(lane, _)| lane).collect(),
+        fire_counters: reduce_tallies..reduce_tallies + probes.len(),
     })
 }
 

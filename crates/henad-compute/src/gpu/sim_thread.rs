@@ -10,7 +10,7 @@ use henad_core::model::SimState;
 
 use crate::gpu::primitives::readback::StatsPoll;
 use crate::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
-use crate::snapshot::GpuSnapshot;
+use crate::snapshot::{FireCounts, GpuSnapshot};
 
 /// Runner interface of a GPU state, driven by [`GpuSimThread`] on top of [`SimState`].
 ///
@@ -81,6 +81,14 @@ pub trait GpuSimState: SimState {
     ///
     /// The result is cloned into every snapshot. Keep it to `Arc` clones of things built once at construction.
     fn view(&self) -> GpuSnapshot;
+
+    /// Returns the fire counts the latest completed stats readback holds, with the tick of the step they counted.
+    ///
+    /// A state counts on the last step of each [`Self::encode_steps`] call, so a snapshot after a batch reads the
+    /// batch's last step. The default returns empty counts, for a model with no probes.
+    fn fire_counts(&self) -> FireCounts {
+        FireCounts::default()
+    }
 
     /// Returns the current side of the state's buffer `index` as raw words, blocking on the GPU.
     ///
@@ -679,6 +687,7 @@ impl Loop {
             engine_ms: self.gpu_us_per_step.unwrap_or(0.0) / 1000.0,
             view: SnapshotView::Gpu(self.state.view()),
             stats: self.state.stats(),
+            fire_counts: self.state.fire_counts(),
         };
         crate::runner::publish(&self.slot, snap);
         // After the lock, so waking the UI can never make it block on us.
