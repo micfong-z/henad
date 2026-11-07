@@ -1,5 +1,5 @@
 //! Tests of the reader, the canonical writer, the code identity, the catalogue, the library lock and the checker, and
-//! of the sheet reader, writer and checker.
+//! of the sheet reader, writer, checker and lowering.
 
 mod agent_rules;
 mod agent_wgsl;
@@ -20,6 +20,7 @@ mod probes;
 mod regions;
 mod sheet_check;
 mod sheet_document;
+mod sheet_lower;
 mod sheet_mutation;
 mod sheet_sentence;
 mod sheet_writer;

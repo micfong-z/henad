@@ -1,0 +1,1257 @@
+//! The lowering of grid sheets: Game of Life and Majority vote checked and compiled, ids, keys and the line table, the
+//! code identity under the author format's edits, known answers on the host, the two ways a world starts again,
+//! skipped lines, the refusals of the line kinds this version does not lower, buttons, measures, colours, the node
+//! limits and a mutation corpus.
+
+use std::collections::BTreeSet;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use henad_core::action::action_seed;
+use henad_core::authoring::primitives::space::Boundary;
+use henad_core::explore::fingerprint::fnv1a64;
+use henad_core::params::ParamValue;
+
+use super::sheet_document::{mutate, sheets};
+use crate::document::PassStage;
+use crate::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
+use crate::limits::MAX_NODES_IN_FILE;
+use crate::sheet::limits::MAX_LINES_PER_CARD;
+use crate::sheet::{NodeOwner, SheetFile, SheetFileError, sentence, starters};
+use crate::wgsl::GridProgram;
+
+/// Text of the Game of Life starter.
+fn life() -> &'static str {
+    starters()[0].text
+}
+
+/// Text of the Majority vote starter.
+fn vote() -> &'static str {
+    starters()[1].text
+}
+
+/// Returns `text` with `old` replaced by `new` once, where `text` must hold `old`.
+fn edited(text: &str, old: &str, new: &str) -> String {
+    assert!(text.contains(old), "the text holds no {old:?}");
+    text.replacen(old, new, 1)
+}
+
+/// Lowers `text`, which must lower.
+fn lowered(text: &str) -> SheetFile {
+    SheetFile::parse(text).unwrap_or_else(|error| panic!("the sheet does not lower: {error}"))
+}
+
+/// Returns the errors of lowering `text`, which must hold some.
+fn refusals(text: &str) -> Vec<henad_core::diagnostic::CodeDiagnostic> {
+    match SheetFile::parse(text) {
+        Ok(_) => panic!("the sheet lowers:\n{text}"),
+        Err(SheetFileError::Invalid(errors)) => errors.as_slice().to_vec(),
+        Err(other) => panic!("the sheet does not read: {other}"),
+    }
+}
+
+/// Returns the bytes of `text` that `diagnostic` points at.
+fn placed_at<'a>(diagnostic: &henad_core::diagnostic::CodeDiagnostic, text: &'a str) -> &'a str {
+    let span = diagnostic
+        .span
+        .clone()
+        .unwrap_or_else(|| panic!("{diagnostic} has no place"));
+    &text[span]
+}
+
+/// Game of Life on a wrapping grid `side` cells wide and high.
+fn life_of_side(side: u32) -> String {
+    let text = edited(life(), "width = 1024", &format!("width = {side}"));
+    edited(&text, "height = 1024", &format!("height = {side}"))
+}
+
+/// Game of Life with line `table` added to the card that runs each tick as line `l5`.
+fn life_with_line(table: &str) -> String {
+    let text = edited(life(), "next_line = 5", "next_line = 6");
+    let text = edited(
+        &text,
+        "lines = [\"l1\", \"l2\", \"l3\"]",
+        "lines = [\"l1\", \"l2\", \"l3\", \"l5\"]",
+    );
+    edited(
+        &text,
+        "# Lines of Clear: run once, every cell, when pressed",
+        &format!("{table}\n\n# Lines of Clear: run once, every cell, when pressed"),
+    )
+}
+
+#[test]
+fn game_of_life_and_vote_lower_check_and_compile() {
+    for starter in starters() {
+        let file = lowered(starter.text);
+        assert!(
+            file.warnings().is_empty(),
+            "{}: {:?}",
+            starter.file_name,
+            file.warnings()
+        );
+        let report = file.lowered().check();
+        assert!(
+            report.diagnostics.is_empty(),
+            "{}: {:#?}\n{}",
+            starter.file_name,
+            report.diagnostics,
+            file.lowered().to_toml()
+        );
+        let program = GridProgram::compile(file.lowered())
+            .unwrap_or_else(|problems| panic!("{}: {problems:#?}", starter.file_name));
+        let entry = program.entry();
+        assert_eq!(entry.id(), file.document().sheet.id);
+        assert_eq!(file.code(), file.lowered().code());
+        assert_eq!(file.to_toml(), starter.text, "a starter is its own canonical text");
+    }
+}
+
+#[test]
+fn the_lowered_vote_counts_its_block_and_lets_line_2_win() {
+    let file = lowered(vote());
+    let document = file.lowered().document();
+    let tick = document
+        .passes
+        .iter()
+        .find(|pass| pass.stage == PassStage::Tick)
+        .expect("a tick pass");
+    assert_eq!(tick.id, "tick_cell_tick");
+    let count = tick
+        .body
+        .nodes
+        .iter()
+        .find(|node| node.op == "grid.count")
+        .expect("a grid count");
+    assert_eq!(file.line_map().line_of(count.id), Some("l1"));
+    assert_eq!(count.config["include_center"], crate::value::ConfigValue::Bool(true));
+    let transition = tick
+        .body
+        .nodes
+        .iter()
+        .find(|node| node.op == "cat.transition")
+        .expect("a transition");
+    let ids: Vec<&str> = transition.config["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .filter_map(|rule| rule.as_table()?.get("id")?.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        ["l2_a", "l2_b", "l3_a", "l3_b"],
+        "a change from any state takes a row per state"
+    );
+}
+
+#[test]
+fn lowering_is_deterministic() {
+    for text in [life().to_owned(), vote().to_owned(), kinds()] {
+        let first = lowered(&text).lowered().to_toml();
+        let second = lowered(&text).lowered().to_toml();
+        assert_eq!(first, second);
+    }
+}
+
+#[test]
+fn lowered_ids_sit_in_their_line_blocks() {
+    for text in [life().to_owned(), vote().to_owned(), kinds()] {
+        let file = lowered(&text);
+        for (id, origin) in file.line_map().iter() {
+            match &origin.owner {
+                NodeOwner::Line(line) => {
+                    let k: u32 = line[1..].parse().expect("a line id");
+                    assert!(
+                        (1000 * k + 1..=1000 * k + 999).contains(&id.number()),
+                        "{id} sits outside the block of {line}"
+                    );
+                }
+                NodeOwner::Sheet => assert!(id.number() <= 999, "{id} is the sheet's and past n999"),
+            }
+        }
+    }
+}
+
+#[test]
+fn the_line_map_covers_every_written_node() {
+    for text in [life().to_owned(), vote().to_owned(), kinds()] {
+        let file = lowered(&text);
+        let written: BTreeSet<_> = file
+            .lowered()
+            .document()
+            .passes
+            .iter()
+            .flat_map(|pass| pass.body.nodes.iter().map(|node| node.id))
+            .collect();
+        let mapped: BTreeSet<_> = file.line_map().iter().map(|(id, _)| id).collect();
+        assert_eq!(written, mapped);
+        assert_eq!(file.line_map().len(), written.len());
+        // Line 3 of Game of Life writes its two comparisons and their and, all from its condition.
+        let paths: Vec<&str> = file
+            .line_map()
+            .nodes_of("l3")
+            .filter_map(|id| file.line_map().origin(id))
+            .map(|origin| origin.path.as_str())
+            .collect();
+        if text == life() {
+            assert_eq!(paths, ["condition.right.1", "condition.right.2", "condition.right.2"]);
+        }
+    }
+}
+
+#[test]
+fn two_draws_with_one_key_are_an_error_naming_both() {
+    // The start of `mood` holds no key and takes one derived from the sheet and property ids. The start of `status`
+    // stores that key, so both draw the same numbers, which the checker cannot see and the lowering refuses.
+    let derived = (fnv1a64(b"game_of_life/mood") & 0xffff_ffff) as u32;
+    let text = edited(life(), "key = 2929187291", &format!("key = {derived}"));
+    let text = edited(
+        &text,
+        "[[parameter]]",
+        "[[cells.property]]\nid = \"mood\"\nname = \"Mood\"\ntype = \"states\"\nstates = [\n  { id = \"calm\", name = \
+         \"Calm\", color = \"#202020\" },\n  { id = \"angry\", name = \"Angry\", color = \"#E04040\" },\n]\n\n\
+         [cells.property.starts_as]\nrule = \"by_chance\"\notherwise = \"calm\"\n\n[[cells.property.starts_as.row]]\n\
+         state = \"angry\"\nchance = 0.5\n\n[[parameter]]",
+    );
+    let errors = refusals(&text);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let message = &errors[0].message;
+    assert!(
+        message.contains("property 'mood'") && message.contains("property 'status'"),
+        "{message}"
+    );
+    let mood = text.find("[[cells.property]]\nid = \"mood\"").expect("the property");
+    assert_eq!(
+        errors[0].span.as_ref().map(|span| span.start),
+        Some(mood),
+        "{:?}",
+        errors[0]
+    );
+}
+
+#[test]
+fn a_start_with_no_key_takes_one_from_the_sheet_and_property_ids() {
+    let text = edited(life(), "key = 2929187291\n", "");
+    let file = lowered(&text);
+    assert_eq!(file.warnings().len(), 1, "{:?}", file.warnings());
+    let derived = (fnv1a64(b"game_of_life/status") & 0xffff_ffff) as u32;
+    let path = (fnv1a64(b"starts_as.row") & 0xffff_ffff) as u32;
+    let key = crate::normal::compose_key(derived, path);
+    assert!(
+        file.lowered().to_toml().contains(&format!("config.key = {key}\n")),
+        "{}",
+        file.lowered().to_toml()
+    );
+}
+
+#[test]
+fn a_percent_lowers_to_its_number_divided_by_100() {
+    let decimal = edited(life(), "chance = { param = \"initial_density\" }", "chance = 0.25");
+    let percent = edited(
+        life(),
+        "chance = { param = \"initial_density\" }",
+        "chance = { percent = 25 }",
+    );
+    assert_eq!(
+        lowered(&decimal).lowered().to_toml(),
+        lowered(&percent).lowered().to_toml()
+    );
+    let compared = edited(life(), "right = 3\n", "right = { percent = 300 }\n");
+    assert_eq!(code(&compared), code(life()));
+}
+
+#[test]
+fn a_measure_is_a_stat_named_after_it() {
+    let file = lowered(life());
+    let stats = &file.lowered().document().stats;
+    assert_eq!(stats.len(), 1);
+    assert_eq!(stats[0].label, "Alive");
+    assert_eq!(stats[0].from.port.as_deref(), Some("alive"));
+}
+
+/// Returns the code of `text`, which must lower.
+fn code(text: &str) -> henad_core::provenance::ModelCode {
+    lowered(text).code()
+}
+
+#[test]
+fn renaming_a_result_keeps_the_code() {
+    let renamed = edited(life(), "name = \"Alive neighbours\"", "name = \"Live neighbours\"");
+    assert_eq!(code(&renamed), code(life()));
+}
+
+#[test]
+fn reordering_two_independent_lines_keeps_the_code() {
+    let reordered = edited(
+        life(),
+        "lines = [\"l1\", \"l2\", \"l3\"]",
+        "lines = [\"l1\", \"l3\", \"l2\"]",
+    );
+    assert_eq!(
+        lowered(&reordered).lowered().to_toml(),
+        lowered(life()).lowered().to_toml()
+    );
+}
+
+#[test]
+fn editing_a_note_purpose_or_comment_keeps_the_code() {
+    let noted = edited(
+        life(),
+        "start_state = \"dead\"\n",
+        "start_state = \"dead\"\nnote = \"Birth\"\n",
+    );
+    assert_eq!(code(&noted), code(life()));
+    let purpose = edited(life(), "Conway's Game of Life.", "John Conway's Game of Life.");
+    assert_eq!(code(&purpose), code(life()));
+    let comment = edited(
+        life(),
+        "# Each tick, every cell\n",
+        "# Each tick, every cell, by hand\n",
+    );
+    assert_eq!(code(&comment), code(life()));
+}
+
+#[test]
+fn renaming_a_parameter_changes_the_code() {
+    let renamed = edited(life(), "name = \"Initial density\"", "name = \"Starting density\"");
+    assert_ne!(code(&renamed), code(life()));
+}
+
+#[test]
+fn renaming_a_state_changes_the_code() {
+    let renamed = edited(life(), "name = \"Alive\", color", "name = \"Living\", color");
+    assert_ne!(code(&renamed), code(life()));
+}
+
+#[test]
+fn renaming_the_model_changes_the_code() {
+    let renamed = edited(life(), "name = \"Game of Life\"", "name = \"Life\"");
+    assert_ne!(code(&renamed), code(life()));
+}
+
+#[test]
+fn changing_a_default_changes_the_code() {
+    let changed = edited(life(), "default = 0.3", "default = 0.4");
+    assert_ne!(code(&changed), code(life()));
+}
+
+#[test]
+fn changing_a_colour_changes_the_code() {
+    let changed = edited(life(), "color = \"#151515\"", "color = \"#101010\"");
+    assert_ne!(code(&changed), code(life()));
+}
+
+#[test]
+fn drawing_new_numbers_changes_the_code() {
+    let changed = edited(life(), "key = 2929187291", "key = 2929187292");
+    assert_ne!(code(&changed), code(life()));
+}
+
+#[test]
+fn reordering_two_changes_that_can_both_apply_changes_the_code() {
+    let reordered = edited(
+        vote(),
+        "lines = [\"l1\", \"l2\", \"l3\"]",
+        "lines = [\"l1\", \"l3\", \"l2\"]",
+    );
+    assert_ne!(code(&reordered), code(vote()));
+}
+
+/// Parameter values of Game of Life at their defaults.
+const LIFE_PARAMS: [ParamValue; 1] = [ParamValue::F32(0.3)];
+
+/// Returns the alive cells of a Game of Life world `side` cells wide, as column and row.
+fn alive(lanes: &HostLanes, side: u32) -> BTreeSet<(u32, u32)> {
+    let status = lanes.column("status").expect("a status lane");
+    (0..side * side)
+        .filter(|&cell| status.get(cell as usize) == Some(HostValue::Category(1)))
+        .map(|cell| (cell % side, cell / side))
+        .collect()
+}
+
+/// Runs `ticks` ticks of the lowered Game of Life `file` on a world `side` cells wide from the alive cells `cells`, and
+/// returns the alive cells after each tick, the planted ones first.
+fn run_life(file: &SheetFile, side: u32, cells: &[(u32, u32)], ticks: u32) -> Vec<BTreeSet<(u32, u32)>> {
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let world = HostWorld::Grid {
+        width: side,
+        height: side,
+        boundary: Boundary::Torus,
+    };
+    let mut lanes = HostLanes::new(evaluator.document(), world).expect("lanes");
+    let status = lanes.column_mut("status").expect("a status lane");
+    for &(x, y) in cells {
+        assert!(status.set((y * side + x) as usize, HostValue::Category(1)));
+    }
+    let mut states = vec![alive(&lanes, side)];
+    let mut stream = 0;
+    for tick in 0..ticks {
+        evaluator
+            .run_pass(
+                "tick_cell_tick",
+                &mut lanes,
+                &LIFE_PARAMS,
+                &RunContext::tick(Some(1), tick),
+                &mut stream,
+            )
+            .expect("a tick runs");
+        states.push(alive(&lanes, side));
+    }
+    states
+}
+
+#[test]
+fn the_life_sheet_blinker_has_period_2() {
+    let file = lowered(&life_of_side(32));
+    let states = run_life(&file, 32, &[(15, 14), (15, 15), (15, 16)], 4);
+    assert_eq!(states[1], BTreeSet::from([(14, 15), (15, 15), (16, 15)]));
+    assert_eq!(states[2], states[0]);
+    assert_eq!(states[3], states[1]);
+    assert_eq!(states[4], states[0]);
+}
+
+#[test]
+fn the_life_sheet_glider_moves_one_cell_diagonally_every_4_ticks() {
+    let file = lowered(&life_of_side(32));
+    let glider = [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)];
+    let states = run_life(&file, 32, &glider, 8);
+    for (period, shift) in [(4, 1), (8, 2)] {
+        let moved: BTreeSet<(u32, u32)> = glider.iter().map(|&(x, y)| (x + shift, y + shift)).collect();
+        assert_eq!(states[period], moved, "after {period} ticks");
+    }
+    assert!(states.iter().all(|state| state.len() == 5), "a glider keeps 5 cells");
+}
+
+/// Returns the lanes of the lowered Game of Life on a world `side` cells wide after its start at `seed`.
+fn started(evaluator: &HostEvaluator, side: u32, seed: u64) -> HostLanes {
+    let world = HostWorld::Grid {
+        width: side,
+        height: side,
+        boundary: Boundary::Torus,
+    };
+    evaluator.init(world, &LIFE_PARAMS, Some(seed)).expect("the start runs")
+}
+
+#[test]
+fn a_rebuild_at_one_seed_replays_the_same_start() {
+    let file = lowered(&life_of_side(64));
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let first = alive(&started(&evaluator, 64, 7), 64);
+    let again = alive(&started(&evaluator, 64, 7), 64);
+    let other = alive(&started(&evaluator, 64, 8), 64);
+    assert_eq!(first, again);
+    assert_ne!(first, other);
+    // About 30% of 4096 cells start alive.
+    assert!((1000..1500).contains(&first.len()), "{} alive", first.len());
+}
+
+#[test]
+fn a_start_again_button_draws_a_new_layout_each_press() {
+    let file = lowered(&life_of_side(64));
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let press = |presses: u32| {
+        let mut lanes = started(&evaluator, 64, 7);
+        let mut stream = action_seed(Some(7));
+        let mut layouts = Vec::new();
+        for press in 1..=presses {
+            evaluator
+                .rerun("randomise", press, &mut lanes, &LIFE_PARAMS, Some(7), &mut stream)
+                .expect("the press runs");
+            layouts.push(alive(&lanes, 64));
+        }
+        layouts
+    };
+    let layouts = press(2);
+    let start = alive(&started(&evaluator, 64, 7), 64);
+    assert_ne!(layouts[0], start);
+    assert_ne!(layouts[1], layouts[0]);
+    assert_eq!(press(2), layouts, "the presses replay");
+}
+
+#[test]
+fn a_skipped_line_and_its_dependents_are_left_out() {
+    // Line 1 loses the state it counts, and lines 2 and 3 read its result.
+    let text = edited(
+        life(),
+        "left = { their = \"status\" }\nright = { state = \"alive\" }\n",
+        "left = { their = \"status\" }\n",
+    );
+    let file = lowered(&text);
+    let skipped: Vec<&str> = ["l1", "l2", "l3"]
+        .into_iter()
+        .filter(|line| file.line_map().nodes_of(line).next().is_none())
+        .collect();
+    assert_eq!(skipped, ["l1", "l2", "l3"]);
+    assert_eq!(file.warnings().len(), 3, "{:?}", file.warnings());
+    let tick = &file.lowered().document().passes[1];
+    assert_eq!(tick.stage, PassStage::Tick);
+    assert!(tick.body.nodes.is_empty(), "{:?}", tick.body.nodes);
+    assert!(GridProgram::compile(file.lowered()).is_ok());
+
+    // Line 3 alone loses its numbers, and line 2 still runs.
+    let text = edited(life(), "right = [2, 3]\n", "");
+    let file = lowered(&text);
+    assert!(file.line_map().nodes_of("l3").next().is_none());
+    assert!(file.line_map().nodes_of("l2").next().is_some());
+    let rules = file
+        .lowered()
+        .to_toml()
+        .lines()
+        .filter(|line| line.contains("phase = 0"))
+        .count();
+    assert_eq!(rules, 1 + 2, "line 2's row and the two rows of Clear");
+}
+
+/// Lines of each kind this version does not lower, each as line `l5` of Game of Life, with the error its refusal
+/// gives.
+const NOT_YET_LINES: [(&str, &str); 8] = [
+    (
+        "[card.line.l5]\nkind = \"chance\"\nname = \"Spark\"\nkey = 11\nchance = 0.5",
+        sentence::NOT_YET_CHANCE,
+    ),
+    (
+        "[card.line.l5]\nkind = \"rate\"\nname = \"Spark\"\nkey = 12\nrate = 0.5\nrate_unit = \"day\"",
+        sentence::NOT_YET_RATE,
+    ),
+    (
+        "[card.line.l5]\nkind = \"look_around\"\nname = \"Around\"\naround = \"cells_8\"\nsummaries = [\n  { id = \
+         \"alive_around\", name = \"Alive around\", summary = \"count\" },\n]",
+        sentence::NOT_YET_LOOK_AROUND,
+    ),
+    (
+        "[card.line.l5]\nkind = \"calculate\"\nname = \"Double\"\nformula = \"l1 * 2\"",
+        sentence::NOT_YET_CALCULATE,
+    ),
+    (
+        "[card.line.l5]\nkind = \"choose\"\nname = \"Pick\"\notherwise = 0\n\n[[card.line.l5.row]]\nvalue = 1\n\n\
+         [card.line.l5.row.condition]\nkind = \"compare\"\ntest = \"is\"\nleft = { result = \"l1\" }\nright = 3",
+        sentence::NOT_YET_CHOOSE,
+    ),
+    (
+        "[card.line.l5]\nkind = \"depending_on\"\nname = \"By status\"\nproperty = \"status\"\nbranches = { dead = 0, \
+         alive = 1 }",
+        sentence::NOT_YET_DEPENDING_ON,
+    ),
+    (
+        "[card.line.l5]\nkind = \"random_number\"\nname = \"Noise\"\nkey = 13\nlow = 0\nhigh = 1",
+        sentence::NOT_YET_RANDOM_NUMBER,
+    ),
+    (
+        "[card.line.l5]\nkind = \"become\"\nproperty = \"status\"\nnew_state = \"dead\"\nstart_state = \"alive\"\n\n\
+         [card.line.l5.condition]\nkind = \"chance\"\nkey = 14\nchance = 0.1",
+        sentence::NOT_YET_CHANCE,
+    ),
+];
+
+#[test]
+fn each_interim_refusal_gives_one_located_error() {
+    for (table, words) in NOT_YET_LINES {
+        let text = life_with_line(table);
+        let errors = refusals(&text);
+        assert_eq!(errors.len(), 1, "{table}: {errors:?}");
+        assert_eq!(errors[0].message, words);
+        assert!(placed_at(&errors[0], &text).starts_with("[card.line.l5]"), "{table}");
+    }
+    let repeat = edited(life(), "lines = [\"l1\", \"l2\", \"l3\"]", "lines = [\"l1\", \"l5\"]");
+    let repeat = edited(&repeat, "next_line = 5", "next_line = 6");
+    let repeat = edited(
+        &repeat,
+        "# Become Alive from Dead",
+        "[card.line.l5]\nkind = \"repeat\"\ntimes = 2\nlines = [\"l2\", \"l3\"]\n\n# Become Alive from Dead",
+    );
+    let errors = refusals(&repeat);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].message, sentence::NOT_YET_REPEAT);
+
+    let boids = sheets()
+        .into_iter()
+        .find(|(name, _)| *name == "boids.toml")
+        .map(|(_, text)| text)
+        .expect("the boids sheet");
+    let errors = refusals(boids);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].message, sentence::NOT_YET_AGENTS);
+    assert!(placed_at(&errors[0], boids).starts_with("[world]"));
+}
+
+#[test]
+fn a_second_card_that_runs_each_tick_is_refused() {
+    let text = edited(life(), "runs = \"once\"", "runs = \"each_tick\"");
+    let text = edited(&text, "[[button]]\nid = \"clear\"", "[[button]]\nid = \"clear_button\"");
+    let text = edited(
+        &text,
+        "rule = \"run_once\"\ncard = \"clear\"\n",
+        "rule = \"start_again\"\nproperties = [\"status\"]\n",
+    );
+    let errors = refusals(&text);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].message.contains("card 'clear'"), "{}", errors[0].message);
+}
+
+#[test]
+fn a_grid_sheet_with_no_property_lowers_to_nothing() {
+    let text = "format = \"henad-model\"\nformat_version = 1\nkind = \"sheet\"\n\n[sheet]\nversion = 1\nid = \
+                \"blank\"\nname = \"Untitled model\"\nnext_line = 1\n\n[world]\nmade_of = \"cells\"\nwidth = 100\n\
+                height = 100\nedges = \"wrap\"\n";
+    let file = lowered(text);
+    assert_eq!(
+        file.warnings()
+            .iter()
+            .map(|warning| warning.message.as_str())
+            .collect::<Vec<_>>(),
+        [sentence::SHEET_EMPTY]
+    );
+    let document = file.lowered().document();
+    assert!(document.lanes.is_empty() && document.params.is_empty() && document.passes.is_empty());
+    assert!(file.line_map().is_empty());
+    // A graph with no lane cannot run, so its build reports the sheet's emptiness as the graph's.
+    assert!(file.lowered().check().has_errors());
+}
+
+#[test]
+fn the_largest_grid_sheet_lowers_under_half_the_node_limit() {
+    let text = largest_grid_sheet();
+    let file = lowered(&text);
+    assert!(file.warnings().is_empty(), "{:?}", file.warnings());
+    let lines: usize = file.document().cards[0].line_tables.len();
+    assert_eq!(lines, MAX_LINES_PER_CARD);
+    let nodes = file.line_map().len();
+    assert!(nodes < MAX_NODES_IN_FILE / 2, "{nodes} nodes");
+    let report = file.lowered().check();
+    assert!(!report.has_errors(), "{:#?}", report.diagnostics);
+}
+
+/// Returns a grid sheet whose card holds [`MAX_LINES_PER_CARD`] lines of the kinds Game of Life uses, over four States
+/// properties: a Count of each property's alive neighbours every four lines, each followed by Become lines reading
+/// it, at most 48 Becomes a property.
+fn largest_grid_sheet() -> String {
+    let mut text = String::from(
+        "format = \"henad-model\"\nformat_version = 1\nkind = \"sheet\"\n\n[sheet]\nversion = 1\nid = \"largest\"\nname \
+         = \"Largest\"\n",
+    );
+    text.push_str(&format!("next_line = {}\n\n", MAX_LINES_PER_CARD + 1));
+    text.push_str("[world]\nmade_of = \"cells\"\nwidth = 64\nheight = 64\nedges = \"wrap\"\n\n");
+    for property in 0..4 {
+        text.push_str(&format!(
+            "[[cells.property]]\nid = \"p{property}\"\nname = \"P{property}\"\ntype = \"states\"\nstates = [\n  {{ id = \
+             \"dead\", name = \"Dead\", color = \"#151515\" }},\n  {{ id = \"alive\", name = \"Alive\", color = \
+             \"#00E676\" }},\n]\n\n[cells.property.starts_as]\nrule = \"value\"\nvalue = {{ state = \"dead\" }}\n\n"
+        ));
+    }
+    let ids: Vec<String> = (1..=MAX_LINES_PER_CARD).map(|k| format!("\"l{k}\"")).collect();
+    text.push_str(&format!(
+        "[[card]]\nid = \"cell_tick\"\nevery = \"cells\"\nruns = \"each_tick\"\nlines = [{}]\n\n",
+        ids.join(", ")
+    ));
+    let mut count = 0;
+    for k in 1..=MAX_LINES_PER_CARD {
+        let property = (k - 1) / 4 % 4;
+        if (k - 1) % 4 == 0 {
+            count = k;
+            text.push_str(&format!(
+                "[card.line.l{k}]\nkind = \"count\"\nname = \"Around {k}\"\naround = \"cells_8\"\n\n[card.line.l{k}.whose]\n\
+                 kind = \"compare\"\ntest = \"is\"\nleft = {{ their = \"p{property}\" }}\nright = {{ state = \"alive\" }}\n\n"
+            ));
+        } else {
+            let (new_state, start_state) = if k % 2 == 0 {
+                ("alive", "dead")
+            } else {
+                ("dead", "alive")
+            };
+            text.push_str(&format!(
+                "[card.line.l{k}]\nkind = \"become\"\nproperty = \"p{property}\"\nnew_state = \"{new_state}\"\n\
+                 start_state = \"{start_state}\"\n\n[card.line.l{k}.condition]\nkind = \"compare\"\ntest = \
+                 \"not_one_of\"\nleft = {{ result = \"l{count}\" }}\nright = [2, 3]\n\n"
+            ));
+        }
+    }
+    text
+}
+
+/// A grid sheet over the line kinds of this lowering: Counts by `grid.count` and by a fold, an all of holding a none
+/// of, two Sets of one property, the outside test, a Set inside a When on an any of, and Becomes with one of, within
+/// and `my_new`.
+fn kinds() -> String {
+    include_str!("sheets/kinds.toml").to_owned()
+}
+
+#[test]
+fn the_kinds_sheet_runs_its_lines_on_the_host() {
+    let parsed = crate::sheet::ParsedSheet::parse(&kinds()).expect("the kinds sheet reads");
+    assert_eq!(
+        parsed.document().to_text().as_deref(),
+        Ok(kinds().as_str()),
+        "the kinds sheet is canonical"
+    );
+    let file = lowered(&kinds());
+    assert!(file.warnings().is_empty(), "{:?}", file.warnings());
+    let report = file.lowered().check();
+    assert!(
+        !report.has_errors(),
+        "{:#?}\n{}",
+        report.diagnostics,
+        file.lowered().to_toml()
+    );
+    assert!(GridProgram::compile(file.lowered()).is_ok());
+    let tick = &file.lowered().document().passes[1];
+    assert!(tick.body.nodes.iter().any(|node| node.op == "grid.count"));
+    assert!(tick.body.nodes.iter().any(|node| node.op == "grid.fold"));
+
+    let side = 8u32;
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let world = HostWorld::Grid {
+        width: side,
+        height: side,
+        boundary: Boundary::Torus,
+    };
+    let mut lanes = HostLanes::new(evaluator.document(), world).expect("lanes");
+    let cells = (side * side) as usize;
+    let mut rng = 0x6b69_6e64_7300_0001u64;
+    let mut status = vec![false; cells];
+    let mut flag = vec![false; cells];
+    for cell in 0..cells {
+        rng = henad_core::authoring::primitives::rng::xorshift64(rng);
+        status[cell] = rng.is_multiple_of(3);
+        flag[cell] = (rng >> 8).is_multiple_of(2);
+        assert!(
+            lanes
+                .column_mut("status")
+                .expect("status")
+                .set(cell, HostValue::Category(u32::from(status[cell])))
+        );
+        assert!(
+            lanes
+                .column_mut("flag")
+                .expect("flag")
+                .set(cell, HostValue::Bool(flag[cell]))
+        );
+        assert!(lanes.column_mut("level").expect("level").set(cell, HostValue::F32(7.0)));
+    }
+    let mut stream = 0;
+    evaluator
+        .run_pass(
+            "tick_cell_tick",
+            &mut lanes,
+            &[],
+            &RunContext::tick(Some(1), 0),
+            &mut stream,
+        )
+        .expect("a tick runs");
+
+    let at = |x: i64, y: i64| ((y.rem_euclid(side as i64)) * side as i64 + x.rem_euclid(side as i64)) as usize;
+    for cell in 0..cells {
+        let (x, y) = ((cell as u32 % side) as i64, (cell as u32 / side) as i64);
+        let mut alive_around = 0u32;
+        for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+            alive_around += u32::from(status[at(x + dx, y + dy)]);
+        }
+        let mut flagged_around = 0u32;
+        for (dx, dy) in [(0, -1), (-1, 0), (1, 0), (0, 1)] {
+            flagged_around += u32::from(flag[at(x + dx, y + dy)]);
+        }
+        let crowded = !(1..=3).contains(&alive_around);
+        let level = if crowded { 5.0 } else { alive_around as f32 };
+        let lone_flag = flagged_around >= 1 && !flag[cell];
+        let new_flag = status[cell] || lone_flag || flag[cell];
+        let new_status = if status[cell] {
+            alive_around > 1
+        } else {
+            alive_around == 3 || level >= 5.0
+        };
+        assert_eq!(
+            lanes.column("level").and_then(|lane| lane.get(cell)),
+            Some(HostValue::F32(level)),
+            "level at {cell}"
+        );
+        assert_eq!(
+            lanes.column("flag").and_then(|lane| lane.get(cell)),
+            Some(HostValue::Bool(new_flag)),
+            "flag at {cell}"
+        );
+        assert_eq!(
+            lanes.column("status").and_then(|lane| lane.get(cell)),
+            Some(HostValue::Category(u32::from(new_status))),
+            "status at {cell}"
+        );
+    }
+}
+
+#[test]
+fn the_sheet_lowering_never_panics_on_the_mutation_corpus() {
+    let mut rng = 0x6c6f_7765_7200_0007u64;
+    let (mut cases, mut lowered_cases) = (0usize, 0usize);
+    let texts: Vec<String> = sheets()
+        .into_iter()
+        .map(|(_, text)| text.to_owned())
+        .chain([kinds()])
+        .collect();
+    for text in &texts {
+        // Edits of a sheet that does not lower count toward the corpus, and not toward the share that lowers.
+        let lowers = SheetFile::parse(text).is_ok();
+        for edit in 0..200 {
+            let mut edited = mutate(text, &mut rng);
+            if edit % 3 == 0 {
+                edited = mutate(&edited, &mut rng);
+            }
+            let outcome = exercise(&edited);
+            if lowers {
+                cases += 1;
+                lowered_cases += usize::from(outcome);
+            }
+        }
+        for (index, line) in text.lines().enumerate() {
+            if line.contains(" = ") {
+                let edited: Vec<&str> = text
+                    .lines()
+                    .enumerate()
+                    .filter(|(other, _)| *other != index)
+                    .map(|(_, line)| line)
+                    .collect();
+                let outcome = exercise(&edited.join("\n"));
+                if lowers {
+                    cases += 1;
+                    lowered_cases += usize::from(outcome);
+                }
+            }
+        }
+    }
+    assert!(
+        lowered_cases * 4 > cases,
+        "only {lowered_cases} of {cases} edits of the sheets that lower still lowered"
+    );
+}
+
+/// Reads, checks and lowers `text`, and returns whether it lowered. A panic fails the test with the text.
+fn exercise(text: &str) -> bool {
+    let outcome = catch_unwind(AssertUnwindSafe(|| match SheetFile::parse(text) {
+        Ok(file) => {
+            let document = file.lowered().document();
+            let nodes: usize = document.passes.iter().map(|pass| pass.body.nodes.len()).sum();
+            assert_eq!(nodes, file.line_map().len());
+            true
+        }
+        Err(error) => {
+            assert!(!error.diagnostics().is_empty());
+            false
+        }
+    }));
+    outcome.unwrap_or_else(|_| panic!("the lowering panicked on:\n{text}"))
+}
+
+/// Two cells properties for a Game of Life sheet: `level`, a Number starting at a random number between 0 and 1, and
+/// `mood`, a States property starting calm.
+const EXTRA_PROPERTIES: &str = "[[cells.property]]\nid = \"level\"\nname = \"Level\"\ntype = \"number\"\n\n\
+                                [cells.property.starts_as]\nrule = \"value\"\nkey = 77\n\n\
+                                [cells.property.starts_as.value]\nkind = \"random_number\"\nlow = 0\nhigh = 1\n\n\
+                                [[cells.property]]\nid = \"mood\"\nname = \"Mood\"\ntype = \"states\"\nstates = [\n  \
+                                { id = \"calm\", name = \"Calm\", color = \"#2060E0\" },\n  { id = \"excited\", name = \
+                                \"Excited\", color = \"#E06020\" },\n]\n\n[cells.property.starts_as]\nrule = \"value\"\n\
+                                value = { state = \"calm\" }\n\n";
+
+/// Returns `text`, a Game of Life sheet, with [`EXTRA_PROPERTIES`] after its `status` property and `parts` before its
+/// first card. `parts` holds measures, colours or buttons.
+fn life_with(text: &str, parts: &str) -> String {
+    let text = edited(text, "[[parameter]]", &format!("{EXTRA_PROPERTIES}[[parameter]]"));
+    edited(
+        &text,
+        "# Each tick, every cell\n",
+        &format!("{parts}# Each tick, every cell\n"),
+    )
+}
+
+/// Returns the value of the `level` lane at every cell.
+fn levels(lanes: &HostLanes) -> Vec<f32> {
+    let column = lanes.column("level").expect("a level lane");
+    (0..column.len())
+        .map(|cell| match column.get(cell) {
+            Some(HostValue::F32(value)) => value,
+            other => panic!("level at {cell} is {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn a_set_everywhere_button_writes_its_value_on_every_cell() {
+    let wipe = "[[button]]\nid = \"wipe\"\nname = \"Wipe\"\n\n[[button.does]]\nrule = \"set_everywhere\"\nproperty = \
+                \"status\"\nvalue = { state = \"dead\" }\n\n[[button.does]]\nrule = \"set_everywhere\"\nproperty = \
+                \"level\"\nvalue = 0.5\n\n";
+    let file = lowered(&life_with(&life_of_side(16), wipe));
+    assert!(file.warnings().is_empty(), "{:?}", file.warnings());
+    let document = file.lowered().document();
+    let pass = document
+        .passes
+        .iter()
+        .find(|pass| pass.id == "button_wipe")
+        .expect("the action pass");
+    assert_eq!(pass.stage, PassStage::Action);
+    assert_eq!(pass.action.as_deref(), Some("wipe"));
+    let action = document
+        .actions
+        .iter()
+        .position(|action| action.id == "wipe")
+        .expect("the action");
+    assert!(document.actions[action].runs.is_empty());
+
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let mut lanes = started(&evaluator, 16, 7);
+    assert!(!alive(&lanes, 16).is_empty(), "the start leaves some cells alive");
+    let mut stream = action_seed(Some(7));
+    evaluator
+        .run_pass(
+            "button_wipe",
+            &mut lanes,
+            &LIFE_PARAMS,
+            &RunContext::action(Some(7), action, 1, 0),
+            &mut stream,
+        )
+        .expect("the press runs");
+    assert!(alive(&lanes, 16).is_empty());
+    assert!(levels(&lanes).iter().all(|&level| level == 0.5));
+}
+
+#[test]
+fn a_property_set_twice_by_one_button_is_refused() {
+    let twice = "[[button]]\nid = \"wipe\"\nname = \"Wipe\"\n\n[[button.does]]\nrule = \"set_everywhere\"\nproperty = \
+                 \"status\"\nvalue = { state = \"dead\" }\n\n[[button.does]]\nrule = \"set_everywhere\"\nproperty = \
+                 \"status\"\nvalue = { state = \"alive\" }\n\n";
+    let text = life_with(life(), twice);
+    let errors = refusals(&text);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].message.contains("'status' is changed twice by one button"),
+        "{}",
+        errors[0].message
+    );
+    assert_eq!(placed_at(&errors[0], &text), "[[button]]");
+    assert_eq!(
+        errors[0].span.as_ref().map(|span| span.start),
+        text.find("[[button]]\nid = \"wipe\""),
+        "the error sits at the button"
+    );
+}
+
+#[test]
+fn a_start_again_button_on_some_properties_reruns_only_their_starts() {
+    let file = lowered(&life_with(&life_of_side(64), ""));
+    assert!(file.warnings().is_empty(), "{:?}", file.warnings());
+    let document = file.lowered().document();
+    let randomise = document
+        .actions
+        .iter()
+        .find(|action| action.id == "randomise")
+        .expect("the action");
+    assert_eq!(randomise.runs, ["restart_randomise"]);
+    let restart = document
+        .passes
+        .iter()
+        .find(|pass| pass.id == "restart_randomise")
+        .expect("the restart pass");
+    assert_eq!(restart.stage, PassStage::Init);
+    assert_eq!(restart.enabled, crate::document::PassEnabled::Literal(false));
+    let paths: BTreeSet<&str> = restart
+        .body
+        .nodes
+        .iter()
+        .filter_map(|node| file.line_map().origin(node.id))
+        .map(|origin| origin.path.as_str())
+        .collect();
+    assert_eq!(paths, BTreeSet::from(["cells.status.starts_as"]));
+
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let press = |presses: u32| {
+        let mut lanes = started(&evaluator, 64, 7);
+        let mut stream = action_seed(Some(7));
+        let mut states = Vec::new();
+        for press in 1..=presses {
+            evaluator
+                .rerun("randomise", press, &mut lanes, &LIFE_PARAMS, Some(7), &mut stream)
+                .expect("the press runs");
+            states.push((alive(&lanes, 64), levels(&lanes)));
+        }
+        states
+    };
+    let start = started(&evaluator, 64, 7);
+    let (start_alive, start_levels) = (alive(&start, 64), levels(&start));
+    assert!(
+        start_levels.iter().any(|&level| level != start_levels[0]),
+        "the levels start at random"
+    );
+    let states = press(2);
+    assert_ne!(states[0].0, start_alive);
+    assert_ne!(states[1].0, states[0].0);
+    assert!(
+        states.iter().all(|(_, levels)| *levels == start_levels),
+        "the levels stay"
+    );
+    assert_eq!(press(2), states, "the presses replay");
+}
+
+#[test]
+fn a_random_number_start_draws_between_its_values() {
+    let file = lowered(&life_with(&life_of_side(64), ""));
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let levels = levels(&started(&evaluator, 64, 7));
+    assert!(levels.iter().all(|level| (0.0..1.0).contains(level)), "{levels:?}");
+    let mean = levels.iter().map(|&level| f64::from(level)).sum::<f64>() / levels.len() as f64;
+    assert!((mean - 0.5).abs() < 0.05, "mean {mean}");
+}
+
+#[test]
+fn a_random_number_start_of_a_whole_number_is_refused() {
+    let text = life_with(life(), "");
+    let text = edited(
+        &text,
+        "name = \"Level\"\ntype = \"number\"",
+        "name = \"Level\"\ntype = \"whole_number\"",
+    );
+    let errors = refusals(&text);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].message.contains("starts a Number property only"),
+        "{}",
+        errors[0].message
+    );
+    assert_eq!(placed_at(&errors[0], &text), "[[cells.property]]");
+    assert_eq!(
+        errors[0].span.as_ref().map(|span| span.start),
+        text.find("[[cells.property]]\nid = \"level\""),
+        "the error sits at the property"
+    );
+}
+
+/// Returns `value` as `f64`, for a measure's value.
+fn number(value: Option<HostValue>) -> f64 {
+    match value {
+        Some(HostValue::F64(value)) => value,
+        Some(HostValue::F32(value)) => f64::from(value),
+        other => panic!("{other:?} is no number"),
+    }
+}
+
+#[test]
+fn the_average_total_and_spread_measures_match_a_reference() {
+    let measures = "[[measure]]\nid = \"mean_level\"\nname = \"Mean level\"\ncolor = \"#2060E0\"\nrule = \
+                    \"average\"\nover = \"cells\"\nvalue = { my = \"level\" }\n\n[[measure]]\nid = \"total_level\"\n\
+                    name = \"Total level\"\ncolor = \"#E06020\"\nrule = \"total\"\nover = \"cells\"\nvalue = { my = \
+                    \"level\" }\n\n[[measure]]\nid = \"spread_level\"\nname = \"Spread of level\"\ncolor = \
+                    \"#20A060\"\nrule = \"spread\"\nover = \"cells\"\nvalue = { my = \"level\" }\n\n";
+    let text = edited(
+        &life_with(&life_of_side(8), ""),
+        "[color.cells]",
+        &format!("{measures}[color.cells]"),
+    );
+    let file = lowered(&text);
+    assert!(file.warnings().is_empty(), "{:?}", file.warnings());
+    let labels: Vec<&str> = file
+        .lowered()
+        .document()
+        .stats
+        .iter()
+        .map(|stat| stat.label.as_str())
+        .collect();
+    assert_eq!(labels, ["Alive", "Mean level", "Total level", "Spread of level"]);
+
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let world = HostWorld::Grid {
+        width: 8,
+        height: 8,
+        boundary: Boundary::Torus,
+    };
+    let mut lanes = HostLanes::new(evaluator.document(), world).expect("lanes");
+    let planted: Vec<f32> = (0..64u16).map(|cell| f32::from(cell % 7) * 0.25 - 0.5).collect();
+    for (cell, &level) in planted.iter().enumerate() {
+        assert!(
+            lanes
+                .column_mut("level")
+                .expect("level")
+                .set(cell, HostValue::F32(level))
+        );
+    }
+    let mut stream = 0;
+    let outcome = evaluator
+        .run_pass(
+            "measures",
+            &mut lanes,
+            &LIFE_PARAMS,
+            &RunContext::tick(Some(1), 0),
+            &mut stream,
+        )
+        .expect("the measures run");
+    let values: Vec<f64> = evaluator.document().stats[1..]
+        .iter()
+        .map(|stat| number(outcome.value(&stat.from)))
+        .collect();
+
+    let total: f64 = planted.iter().map(|&level| f64::from(level)).sum();
+    let mean = total / 64.0;
+    let mean_square = planted.iter().map(|&level| f64::from(level * level)).sum::<f64>() / 64.0;
+    let spread = (mean_square - mean * mean).max(0.0).sqrt();
+    for (found, expected) in values.iter().zip([mean, total, spread]) {
+        assert!(
+            (found - expected).abs() < 1e-9,
+            "{values:?} against {mean}, {total}, {spread}"
+        );
+    }
+    assert!(spread > 0.1, "the planted levels spread");
+}
+
+#[test]
+fn colouring_by_a_second_states_property_writes_a_view_pass() {
+    let text = edited(
+        &life_with(life(), ""),
+        "[color.cells]\nrule = \"by_state\"\nproperty = \"status\"",
+        "[color.cells]\nrule = \"by_state\"\nproperty = \"mood\"",
+    );
+    let file = lowered(&text);
+    assert!(file.warnings().is_empty(), "{:?}", file.warnings());
+    let document = file.lowered().document();
+    let view = document
+        .passes
+        .iter()
+        .find(|pass| pass.id == "colours")
+        .expect("the view pass");
+    assert_eq!(view.stage, PassStage::View);
+    let color = view
+        .body
+        .nodes
+        .iter()
+        .find(|node| node.op == "view.color")
+        .expect("a view.color");
+    assert_eq!(
+        color.config["palette"],
+        crate::value::ConfigValue::String("mood".to_owned())
+    );
+    assert!(view.body.nodes.iter().all(|node| node.op != "view.ramp"));
+    assert!(GridProgram::compile(file.lowered()).is_ok());
+
+    // The first States property takes its colours without a view pass.
+    let first = lowered(&life_with(life(), ""));
+    assert!(
+        first
+            .lowered()
+            .document()
+            .passes
+            .iter()
+            .all(|pass| pass.id != "colours")
+    );
+}
+
+#[test]
+fn a_shaded_number_ramps_into_its_palette() {
+    let text = edited(
+        &life_with(life(), ""),
+        "[color.cells]\nrule = \"by_state\"\nproperty = \"status\"",
+        "[color.cells]\nrule = \"shaded\"\nproperty = \"level\"",
+    );
+    let file = lowered(&text);
+    assert!(file.warnings().is_empty(), "{:?}", file.warnings());
+    let document = file.lowered().document();
+    let palette = document
+        .palettes
+        .iter()
+        .find(|palette| palette.id == "shaded_level")
+        .expect("the palette");
+    assert_eq!(palette.colors.len(), 8);
+    let view = document
+        .passes
+        .iter()
+        .find(|pass| pass.id == "colours")
+        .expect("the view pass");
+    let ramp = view
+        .body
+        .nodes
+        .iter()
+        .find(|node| node.op == "view.ramp")
+        .expect("a view.ramp");
+    assert_eq!(
+        ramp.config["palette"],
+        crate::value::ConfigValue::String("shaded_level".to_owned())
+    );
+    assert!(view.body.nodes.iter().any(|node| node.op == "view.color"));
+    let report = file.lowered().check();
+    assert!(!report.has_errors(), "{:#?}", report.diagnostics);
+    assert!(GridProgram::compile(file.lowered()).is_ok());
+}
+
+#[test]
+fn a_shading_on_a_log_scale_is_refused() {
+    let shaded = edited(
+        &life_with(life(), ""),
+        "[color.cells]\nrule = \"by_state\"\nproperty = \"status\"",
+        "[color.cells]\nrule = \"shaded\"\nproperty = \"level\"",
+    );
+    for keys in ["scale = \"log\"\ndecades = 3", "scale = \"log\"", "decades = 3"] {
+        let text = edited(
+            &shaded,
+            "property = \"level\"\n",
+            &format!("property = \"level\"\n{keys}\n"),
+        );
+        let errors = refusals(&text);
+        assert_eq!(errors.len(), 1, "{keys}: {errors:?}");
+        assert!(errors[0].message.contains("log scale"), "{}", errors[0].message);
+        assert!(placed_at(&errors[0], &text).starts_with("[color.cells]"), "{keys}");
+    }
+    let linear = edited(
+        &shaded,
+        "property = \"level\"\n",
+        "property = \"level\"\nscale = \"linear\"\n",
+    );
+    assert!(SheetFile::parse(&linear).is_ok());
+}
+
+#[test]
+fn a_line_past_the_node_limit_of_a_line_is_refused_naming_the_limit() {
+    let numbers: Vec<String> = (0..600).map(|number| number.to_string()).collect();
+    let table = format!(
+        "[card.line.l5]\nkind = \"compare\"\nname = \"Listed\"\ntest = \"one_of\"\nleft = {{ result = \"l1\" }}\n\
+         right = [{}]",
+        numbers.join(", ")
+    );
+    let text = life_with_line(&table);
+    let errors = refusals(&text);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0]
+            .message
+            .contains(&format!("more than {} nodes", crate::sheet::limits::MAX_NODES_PER_LINE)),
+        "{}",
+        errors[0].message
+    );
+    assert!(placed_at(&errors[0], &text).starts_with("[card.line.l5]"));
+}
+
+#[test]
+fn a_sheet_past_the_node_limit_of_the_sheet_is_refused_naming_the_limit() {
+    let measures: String = (0..150)
+        .map(|index| {
+            format!(
+                "[[measure]]\nid = \"spread_{index}\"\nname = \"Spread {index}\"\ncolor = \"#20A060\"\nrule = \
+                 \"spread\"\nover = \"cells\"\nvalue = {{ my = \"level\" }}\n\n"
+            )
+        })
+        .collect();
+    let text = edited(
+        &life_with(life(), ""),
+        "[color.cells]",
+        &format!("{measures}[color.cells]"),
+    );
+    let errors = refusals(&text);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0]
+            .message
+            .contains(&format!("more than {} nodes", crate::sheet::limits::MAX_SHEET_NODES)),
+        "{}",
+        errors[0].message
+    );
+}
+
+#[test]
+fn a_sheet_error_list_holds_its_first_error_first() {
+    use henad_core::diagnostic::CodeDiagnostic;
+
+    let errors = crate::sheet::SheetErrors::new(CodeDiagnostic::error("first"), [CodeDiagnostic::error("second")]);
+    let error = SheetFileError::Invalid(errors);
+    assert_eq!(error.diagnostic().message, "first");
+    assert_eq!(error.diagnostics().len(), 2);
+    assert_eq!(error.to_string().lines().count(), 2);
+}

@@ -1364,7 +1364,7 @@ pub(super) fn holds_draw(line: &SheetLine) -> bool {
     matches!(
         line.kind,
         LineKind::Chance | LineKind::Rate | LineKind::RandomNumber | LineKind::RandomDirection | LineKind::PickCell
-    ) || slots(line).any(value_draws)
+    ) || line.slot_values().any(value_draws)
 }
 
 /// Returns whether `value` draws random numbers.
@@ -1378,7 +1378,7 @@ pub(super) fn value_draws(value: &SheetValue) -> bool {
 
 /// Returns whether `line` or a phrase inside it draws a rate.
 fn holds_rate(line: &SheetLine) -> bool {
-    line.kind == LineKind::Rate || slots(line).any(value_rates)
+    line.kind == LineKind::Rate || line.slot_values().any(value_rates)
 }
 
 /// Returns whether `value` draws a rate.
@@ -1388,42 +1388,4 @@ pub(super) fn value_rates(value: &SheetValue) -> bool {
         SheetValue::List(items) => items.iter().any(value_rates),
         _ => false,
     }
-}
-
-/// Returns every value in the slots of `line`, the lines inside a block left out.
-fn slots(line: &SheetLine) -> impl Iterator<Item = &SheetValue> {
-    [
-        &line.distance,
-        &line.place,
-        &line.left,
-        &line.right,
-        &line.tolerance,
-        &line.chance,
-        &line.rate,
-        &line.tries,
-        &line.low,
-        &line.high,
-        &line.length,
-        &line.times,
-        &line.value,
-        &line.strength,
-        &line.minimum,
-        &line.maximum,
-        &line.amount,
-        &line.only,
-        &line.whose,
-        &line.condition,
-        &line.otherwise,
-    ]
-    .into_iter()
-    .filter_map(Slot::value)
-    .chain(line.branches.values())
-    .chain(line.summaries.iter().filter_map(|summary| summary.value.value()))
-    .chain(&line.items)
-    .chain(
-        line.rows
-            .iter()
-            .flat_map(|row| [&row.value, &row.condition])
-            .filter_map(Slot::value),
-    )
 }

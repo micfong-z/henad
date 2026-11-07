@@ -159,7 +159,7 @@ fn report(document: &SheetDocument, parsed: Option<&ParsedSheet>) -> SheetReport
 }
 
 /// Returns the bytes of the table `place` names in the places of `parsed`.
-fn span_of(parsed: &ParsedSheet, place: &Place) -> Option<Range<usize>> {
+pub(super) fn span_of(parsed: &ParsedSheet, place: &Place) -> Option<Range<usize>> {
     let root = &parsed.places().root;
     let table = match place {
         Place::Sheet => root.table("sheet"),
@@ -182,7 +182,7 @@ fn span_of(parsed: &ParsedSheet, place: &Place) -> Option<Range<usize>> {
 
 /// A table of a sheet that a finding is about.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Place {
+pub(super) enum Place {
     /// The `[sheet]` table.
     Sheet,
     /// The `[world]` table.
@@ -211,7 +211,7 @@ enum Place {
 
 /// A kind of thing whose properties a sheet lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Thing {
+pub(super) enum Thing {
     /// The cells of a grid world.
     Cells,
     /// The kind of agent at an index of [`SheetDocument::agents`].

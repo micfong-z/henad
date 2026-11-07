@@ -22,8 +22,10 @@
 //! every table. It does not check what the lines mean. [`check`] does: references, types, ids and the lines that
 //! cannot run yet, and [`relations`] holds the order of a card's lines and the "otherwise" rule.
 //! [`document::SheetDocument::to_text`] writes the canonical text of a sheet, with the sentence of each line from
-//! [`sentence`] in a comment above it, and reading that text returns the same document. [`starters`] returns the
-//! sheets a new model begins from.
+//! [`sentence`] in a comment above it, and reading that text returns the same document. [`SheetFile::parse`] reads,
+//! checks and lowers a sheet to the graph it runs as, whose code identity is the sheet's, and [`LineMap`] names the
+//! line or part of the sheet each node of that graph comes from. [`starters`] returns the sheets a new model begins
+//! from.
 //!
 //! ```
 //! use henad_graph::sheet::ParsedSheet;
@@ -57,13 +59,17 @@ use henad_core::diagnostic::CodeDiagnostic;
 
 pub mod check;
 pub mod document;
+mod file;
 pub mod limits;
+mod lower;
 mod reader;
 pub mod relations;
 pub mod sentence;
 mod starters;
 mod writer;
 
+pub use file::SheetFile;
+pub use lower::table::{LineMap, NodeOrigin, NodeOwner};
 pub use reader::{ParsedSheet, SheetPlaces, TablePlaces};
 pub use starters::starters;
 pub use writer::{SheetWriteError, format_number};
@@ -74,7 +80,7 @@ pub const KIND_SHEET: &str = "sheet";
 /// Newest version of the author format this build reads, the `version` key of the `[sheet]` table.
 pub const SHEET_VERSION: u32 = 1;
 
-/// Reason a sheet cannot be read.
+/// Reason a sheet cannot be read, checked or lowered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SheetFileError {
@@ -83,21 +89,67 @@ pub enum SheetFileError {
     Toml(Box<CodeDiagnostic>),
     /// The file declares another format, version, kind or sheet version, or holds a value a sheet cannot hold.
     Format(Box<CodeDiagnostic>),
+    /// The sheet reads, and its check or its lowering finds errors, each placed at its table.
+    Invalid(SheetErrors),
 }
 
 impl SheetFileError {
-    /// Diagnostic the error carries.
+    /// First diagnostic the error carries.
     pub fn diagnostic(&self) -> &CodeDiagnostic {
         match self {
             Self::Toml(diagnostic) | Self::Format(diagnostic) => diagnostic,
+            Self::Invalid(errors) => errors.first(),
+        }
+    }
+
+    /// Every diagnostic the error carries, at least one.
+    pub fn diagnostics(&self) -> &[CodeDiagnostic] {
+        match self {
+            Self::Toml(diagnostic) | Self::Format(diagnostic) => std::slice::from_ref(diagnostic),
+            Self::Invalid(errors) => errors.as_slice(),
         }
     }
 }
 
-/// Writes the diagnostic.
+/// Errors of a sheet's check or lowering, at least one, in the order they were found.
+///
+/// The list is never empty. Only [`SheetErrors::new`] builds one, from a first error and the rest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SheetErrors {
+    /// The errors, never empty.
+    diagnostics: Vec<CodeDiagnostic>,
+}
+
+impl SheetErrors {
+    /// Creates the list of `first` followed by `rest`.
+    pub fn new(first: CodeDiagnostic, rest: impl IntoIterator<Item = CodeDiagnostic>) -> Self {
+        let mut diagnostics = vec![first];
+        diagnostics.extend(rest);
+        Self { diagnostics }
+    }
+
+    /// First error of the list.
+    pub fn first(&self) -> &CodeDiagnostic {
+        // `new` puts one error in the list, and nothing removes one.
+        &self.diagnostics[0]
+    }
+
+    /// Every error of the list, at least one.
+    pub fn as_slice(&self) -> &[CodeDiagnostic] {
+        &self.diagnostics
+    }
+}
+
+/// Writes every diagnostic, one per line.
 impl fmt::Display for SheetFileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.diagnostic())
+        for (index, diagnostic) in self.diagnostics().iter().enumerate() {
+            if index > 0 {
+                writeln!(f)?;
+            }
+            write!(f, "{diagnostic}")?;
+        }
+        Ok(())
     }
 }
 

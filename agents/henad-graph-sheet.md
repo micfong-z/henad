@@ -17,8 +17,12 @@ reads names through. `SheetDocument` writes its own `Debug` ending in `finish_no
 (`sheet::sentence`), the wording table and `Sentences`. `sheet/writer.rs` is private, and `sheet`
 re-exports `format_number`. `sheet/relations.rs` is public (`sheet::relations`), `CardRelations`.
 `sheet/check/` is public (`sheet::check`): `mod.rs` holds `check`, `SheetReport`, `SheetDiagnostic`,
-`ParsedSheet::check`, the private `Checker` and `Place`; `declarations.rs` the tables outside the
-cards; `lines.rs` the cards, lines and values; `formula.rs` the Calculate formula parser.
+`ParsedSheet::check`, the private `Checker`, and `Place`, `Thing` and `span_of`, visible to `sheet`
+for the lowering's errors; `declarations.rs` the tables outside the cards; `lines.rs` the cards,
+lines and values; `formula.rs` the Calculate formula parser. `sheet/file.rs` is private, and `sheet`
+re-exports `SheetFile`. `sheet/lower/` is private, and `sheet` re-exports `LineMap`, `NodeOrigin`
+and `NodeOwner` from `lower/table.rs`. `SheetLine::slot_values` (crate-private, `document.rs`)
+returns every value in a line's slots, for the checker and the lowering.
 `sheet/limits.rs` holds the sheet's limits apart from `crate::limits`, so `library.lock` stays as it
 is: `MAX_SHEET_BYTES` (1 MiB), `MAX_NESTING` (24), `MAX_LINES_PER_CARD` (256), `MAX_NODES_PER_LINE`
 and `MAX_SHEET_NODES` (999 each, for the lowering's `n(1000k + j)` ids), `MAX_SHEET_ID_BYTES` (48,
@@ -199,6 +203,114 @@ Repeat among its blocks at any depth, reads `not_run_when_unfinished` with the d
 number, or else the nearest skipped Repeat's. A result without a name reads as its sentence in a
 note. Outside the cards a blank or unusable value is an error. A value's type walk through results
 stops past `MAX_NESTING`.
+
+**Sheet files.** `SheetFile::parse(text)` reads (the reader's errors), checks (the checker's errors
+as `SheetFileError::Invalid`, every one placed), lowers (the lowering's problems, also `Invalid`,
+placed at their tables through `check::span_of`) and reads the lowered document back through
+`GraphFile::from_document`. It keeps the `ParsedSheet` (text, places, line ends), the canonical text
+(`to_toml`), the checker's warnings placed (`warnings`, skip warnings included), the lowered
+`GraphFile` (`lowered`) and the `LineMap` (`line_map`). `code()` is the lowered graph's `code()`
+(D8): the IR's `name` is `[sheet] name`, both descriptions stay empty, and nothing else of the sheet
+text enters it. `Invalid` holds a `SheetErrors`, never empty, since `SheetErrors::new` takes a first
+error and the rest. `SheetFileError::diagnostics` returns every diagnostic, `diagnostic` the first,
+and `Display` writes each on its line. `SheetFile` and `LineMap` write their own `Debug`.
+
+**The lowering** (`sheet/lower/`, grid sheets, S7). `lower::lower(&document, &report)` builds a
+`GraphDocument` through its constructors in a fixed order (`world.rs`: the grid, a category per
+States property with state ids as variant names and state names as labels, a lane per property,
+`u8` for states, `f32` for Number, `i32` for Whole number, `bool` for Yes/No, the first state as a
+category lane's `initial`, then `[[param]]` per parameter, `u32` for a Whole number from 0, `f32`
+otherwise, step 1 for a Whole number with none), then the passes in stack order: `start_cells`
+(`start.rs`), `tick_<card>` or `tick_cells` with no card (`card.rs`, a grid runs exactly one tick
+pass, so a second card that runs each tick over the cells is an error), `colours` (`colours.rs`, no
+pass when the rule is `by_state` on the first States property, `view.color` through the category for
+another, `view.ramp` over 0 to 1 into the palette `shaded_<property>` for `shaded`, and an error
+for `scale = "log"` or `decades`, since only a linear shading lowers), `measures`
+(`measures.rs`: one `stat.count_by` per property shared by its counts, `stat.mean`, `stat.sum`, a
+spread as two means and `f64` arithmetic, each `[[stat]]` labelled with the measure's name, D13),
+and per button an `[[action]]` (`buttons.rs`). A world of agents is `NOT_YET_AGENTS` at `[world]`.
+A grid sheet with no cells property lowers to the world alone, with the checker's `SHEET_EMPTY`
+warning, and its graph's check reports the missing lane. The `[time]` table is not lowered until
+rates lower (S21).
+
+Nodes are written with temporary ids into `Draft`s at a `Site` (pass, owner, slot path, region),
+and `Builder::finish` numbers them (`ids.rs`, R4 and D44): line `l<k>` owns `n(1000k + j)`, `j` in
+the line's own emission order, and the sheet owns `n1` up in a walk of the passes, each pass's
+sheet nodes ordered by `SheetKey` (`GROUP_READ` the shared `lane.get` per property, `GROUP_PART`
+starts, colours and steps, `GROUP_CHANGE` a property's transition or chain write, `GROUP_MEASURE`),
+then emission order. No id depends on another line's display place. Past `MAX_NODES_PER_LINE` a line
+is refused at its table, past `MAX_SHEET_NODES` the sheet. `LineMap` (`table.rs`) maps every
+written node id to its `NodeOrigin` (owner `Line(id)` or `Sheet`, and a path such as
+`condition.right.2`, `cells.status.starts_as`, `measure.alive` or `card.cell_tick.status`), never
+by division, since normalisation copies take ids past the file's last.
+
+Keys (`keys.rs`, R3, D12, D45): an owner's key is the stored one or the low 32 bits of
+`fnv1a64("<sheet id>/<owner id>")` (the checker warns), and each draw takes `compose_key(owner key,
+low 32 bits of fnv1a64(slot path))`, written straight on the draw, since the lowering writes no
+function. A start's paths are `starts_as.row` and `starts_as.value`, a restart pass's the same with
+`.<button>` added, since no two draws of a file share a key. `keys::clashes` is V18 after
+lowering: a key two owners take is an error naming both, at the second.
+
+Starts: All [state], a number, yes or no or a parameter write the value (a fraction truncated into
+a Whole number), a `random_number` phrase is `rand.float(high - low) + low` on a Number property
+and an error on any other (a truncated draw never reaches the high end), and by chance draws
+once per cell: `rand.chance` for one row, `rand.float(1)` against running sums of the chances for
+more, rows chosen through a `logic.select` chain, the "otherwise" state last. Painted, anywhere and
+on-ground starts are errors on a grid. Buttons: Start again runs `start_cells` when it names every
+property with a start, otherwise a disabled init pass `restart_<button>` of those properties; Set
+everywhere and Run once write the one action pass `button_<button>` (a property written twice in
+it is an error, a card run by two buttons is an error), and a button holding both forms is an
+error. Draws in a rerun key on the press count, so each press draws a new layout, and a rebuild at
+one seed replays the start (D73).
+
+Cards (`card.rs`): lines lower in display order, a skipped line (`SheetReport::is_skipped`, which
+holds its dependents) left out (D39, D84). A Count over cells is `grid.count` (one per counted
+state, added in `u32`) when its test is `their` States property `is`, `is_not`, `one_of` or
+`not_one_of` states (`is_not` counts the other states, exact at walls), and otherwise a `grid.fold`
+(`moore_row_major` or `von_neumann`, `include_center` for the 3 by 3 block, `boundary = "domain"`)
+with a `count` accumulator, `their` as `lane.get_at` of its `cell`, and a `region.put` whose `when`
+is the test. Compare tests: `cmp.*`, `one_of` an or of `cmp.eq`, `not_one_of` an and of `cmp.ne`,
+`within` as `abs(a - b) <= tolerance` in `f32`, `outside` an or of `cmp.lt` low and `cmp.gt` high
+(D82). All of, any of and none of fold with `logic.and`, `logic.or` and `logic.not`, a constant
+side folded away (`Builder::join`); `always` is the literal `true`. A When's condition, joined with
+the When around it, is joined by `logic.and` into each change inside. Becomes of one property are
+one `cat.transition` (rule id the line id, or `<line>_<state>` per state for `any_state`, the
+`from == to` row kept so a higher any-state line wins, at most `MAX_TRANSITION_RULES` rows), Sets a
+`logic.select` chain from the bottom row up over `my` X, each select owned by its line, and either
+written by one `lane.set` the sheet owns. Rows come in a stable topological sort: display order
+where `CardRelations::can_both_apply`, line id order otherwise, so a reorder that cannot change the
+result leaves the text. `my_new X` writes X's changes when first read, and the checker places it
+below every change of X. Values (`value.rs`, `Operand`): a count is `u32`, a typed number takes the
+type it meets when that type holds it exactly (`common_type`), else both sides go to `f32` through
+`conv.*`; a percent is its number divided by 100 (D110); a state chip takes the category of the
+value it meets. Interim refusals (D38), one located error per line at its line table in the
+author's words, whatever the line's skip: `NOT_YET_CHANCE`, `NOT_YET_RATE`,
+`NOT_YET_LOOK_AROUND`, `NOT_YET_CALCULATE`, `NOT_YET_CHOOSE`, `NOT_YET_DEPENDING_ON`,
+`NOT_YET_RANDOM_NUMBER` and `NOT_YET_REPEAT`, for the line's kind or a phrase in any slot. Record on
+a cells card is an error (D66), and so is an agents-only line kind.
+
+Lowering tests sit in `src/tests/sheet_lower.rs`, on the host evaluator:
+`game_of_life_and_vote_lower_check_and_compile` (no warning, no graph diagnostic, `GridProgram`,
+an entry), the vote's block count and rows, `lowering_is_deterministic`,
+`lowered_ids_sit_in_their_line_blocks`, `the_line_map_covers_every_written_node`,
+`two_draws_with_one_key_are_an_error_naming_both` (two starts, since no line draws in S7), the
+derived key, the percent, the measure's label, one test per identity row of the author format for
+grids (a result rename, a reorder of independent lines, a note, `purpose` or comment keep the code;
+a parameter, state or model rename, a default, a colour, new numbers and a reorder of changes that
+can both apply change it), `the_life_sheet_blinker_has_period_2` and
+`the_life_sheet_glider_moves_one_cell_diagonally_every_4_ticks` (32 by 32, lanes planted, D74),
+`a_rebuild_at_one_seed_replays_the_same_start`,
+`a_start_again_button_draws_a_new_layout_each_press`,
+`a_skipped_line_and_its_dependents_are_left_out`, `each_interim_refusal_gives_one_located_error`
+(and the agents world), the second tick card, the empty grid,
+`the_largest_grid_sheet_lowers_under_half_the_node_limit` (a card of `MAX_LINES_PER_CARD` count and
+Become lines over four properties), `the_kinds_sheet_runs_its_lines_on_the_host` (the test sheet
+`src/tests/sheets/kinds.toml`, canonical, every line kind against a Rust reference over one tick),
+the parts on Game of Life with a random Number `level` and a States `mood` added (`life_with`):
+Set everywhere and a property set twice, Start again on some properties (`restart_randomise`,
+`level` left alone, presses replay), the random start's range and its refusal on a Whole number,
+average, total and spread against a Rust reference, `view.color` and `view.ramp`, the log scale
+refused, both node limits named, and `the_sheet_lowering_never_panics_on_the_mutation_corpus`.
 
 **Tests** of the wording table and the sentences sit in `src/tests/sheet_sentence.rs`:
 `every_wording_table_entry_equals_the_final_words` holds the final wording table's rows as literals

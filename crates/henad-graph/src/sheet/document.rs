@@ -933,6 +933,44 @@ impl SheetLine {
             note: None,
         }
     }
+
+    /// Returns every value in the slots of the line, the lines inside a block left out.
+    pub(crate) fn slot_values(&self) -> impl Iterator<Item = &SheetValue> {
+        [
+            &self.distance,
+            &self.place,
+            &self.left,
+            &self.right,
+            &self.tolerance,
+            &self.chance,
+            &self.rate,
+            &self.tries,
+            &self.low,
+            &self.high,
+            &self.length,
+            &self.times,
+            &self.value,
+            &self.strength,
+            &self.minimum,
+            &self.maximum,
+            &self.amount,
+            &self.only,
+            &self.whose,
+            &self.condition,
+            &self.otherwise,
+        ]
+        .into_iter()
+        .filter_map(Slot::value)
+        .chain(self.branches.values())
+        .chain(self.summaries.iter().filter_map(|summary| summary.value.value()))
+        .chain(&self.items)
+        .chain(
+            self.rows
+                .iter()
+                .flat_map(|row| [&row.value, &row.condition])
+                .filter_map(Slot::value),
+        )
+    }
 }
 
 /// Value of a line's `kind` key.

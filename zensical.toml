@@ -165,6 +165,7 @@ nav = [
             { "#78, 2026-11-07" = "developing/agent-record/20261107-78-sheet-writer.md" },
             { "#79, 2026-11-07" = "developing/agent-record/20261107-79-time-axis.md" },
             { "#80, 2026-11-07" = "developing/agent-record/20261107-80-sheet-checker.md" },
+            { "#81, 2026-11-07" = "developing/agent-record/20261107-81-grid-lowering.md" },
         ] },
     ] },
 ]
