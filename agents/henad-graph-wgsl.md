@@ -56,10 +56,10 @@ file), since the written report has no types for copies. Positions of passes and
 that document everywhere after. Every shader but the display is a linear pass
 (`@workgroup_size(256)`, `linear_index` over `henad_groups_x`), each pass body inside `henad_index <
 params.henad_agents` or `henad_cells`. Steps: each enabled tick pass, then one `update_<field>` per
-field that takes deposits over `Cells(layers)` (`max(field, bitcast(accum))`, `accum` zeroed, then
-the `finish` body through the merged lane), then `advance_tick` when a GPU pass reads the tick. The
-tick lives in word `TICK_WORD` (1) of the engine's `counters`, read with `atomicLoad`, and
-`advance_tick` adds 1 from invocation 0 after the step's last pass. Word `FAULT_WORD` (0) is the
+field that takes deposits over `Cells(layers)` (`max(field, bitcast(accum))` or a sum's add, `accum`
+zeroed, then the `finish` body through the merged lane), then `advance_tick` when a GPU pass reads
+the tick. The tick lives in word `TICK_WORD` (1) of the engine's `counters`, read with `atomicLoad`,
+and `advance_tick` adds 1 from invocation 0 after the step's last pass. Word `FAULT_WORD` (0) is the
 fault, the document's counters start at `FIRST_COUNTER` (2), and the reduce leaf's tallies follow,
 `cleared_counters` in the spec. Buffers: each `[[lane]]` at its own position as `lane_<id>_<domain>`
 (a `vec2` one interleaved `vec2<T>`, the position lane drawable, a lane of `CheckReport::dual_lanes`
@@ -113,7 +113,14 @@ tallies equals the host's total. The step's `workgroup_bytes` are four a slot, w
 pass over agents (its contexts, and no function holds a sink), and the compiler refuses one
 anywhere else. `field.deposit` issues its `atomicMax` only inside the test that the value is above
 0, so a zero, a negative or a NaN issues no atomic. An `accum` word starts at 0 and never falls,
-and an `atomicMax` of 0 on it changes nothing. Tests:
+and an `atomicMax` of 0 on it changes nothing. A field whose `combine` is a sum
+(`FieldPlan::combine`, and `Operation::Deposit::combine` at the node) adds `u32(round(value * 2^k))`
+with `atomicAdd` inside the same test, the scale 2^k a literal. The product by a power of two is
+exact, and WGSL's `round` rounds half to even as `f32::round_ties_even` does on the host. Its field
+update reads the word as `henad_word` and merges `field + f32(henad_word) * 2^-k`, both literals
+from `literal`, where the max reads the word's bits as `henad_deposit` and merges `max(field,
+henad_deposit)`. The scale and the resolution both come from `FieldCombine::deposit_scale` and
+`resolution()`, one capped exponent. The word starts at 0 for both, so the zeroing stays. Tests:
 `each_counter_flushes_once_per_workgroup_after_a_top_level_barrier` and
 `a_deposit_issues_no_atomic_unless_its_value_is_above_zero` (`agent_wgsl.rs`) hold the text,
 `no_step_returns_early` (`wgsl.rs`) every starter's and fixture's shaders but the display, and

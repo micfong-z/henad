@@ -7,7 +7,8 @@
 //! a model. A case of a view kind colours its output from the palette `ramp`. A case whose pass runs in the init stage
 //! runs on the host alone, since a model's init passes never run on the device.
 //!
-//! A counter that a million agents add to, over thousands of workgroups, is held to the host's total too.
+//! A counter that a million agents add to, over thousands of workgroups, is held to the host's total too, and so is
+//! the word of a million deposits into one cell of a field that adds up.
 
 use henad_core::authoring::primitives::space::Boundary;
 
@@ -881,6 +882,68 @@ fn counted_amount(index: u32) -> u32 {
     }
 }
 
+/// Runs `shader`, a step of `compiled`, over the words of `lanes` on `device`: [`MANY_AGENTS`] agents in a world of
+/// 100 by 100 units, the engine's `counters` starting at 0.
+fn run_many_agents_step(
+    device: &TestDevice,
+    evaluator: &HostEvaluator,
+    compiled: &crate::wgsl::agents::CompiledAgents,
+    shader: &GeneratedShader,
+    lanes: &HostLanes,
+) -> super::support::ShaderResult {
+    let world = *lanes.world();
+    let (grid_width, grid_height, _) = world.domain_grid();
+    let geometry = Geometry {
+        num_agents: MANY_AGENTS,
+        extent: Extent { w: 100.0, h: 100.0 },
+        width: grid_width,
+        height: grid_height,
+        n_cells: grid_width * grid_height,
+        display: (grid_width, grid_height),
+        index: None,
+    };
+    let words: Vec<Vec<u32>> = compiled
+        .sources
+        .iter()
+        .map(|source| AgentGraphHooks::words(source, lanes, &geometry))
+        .collect();
+    let labels: Vec<String> = compiled.buffers.iter().map(|buffer| buffer.label.to_string()).collect();
+    let groups = (MANY_AGENTS.div_ceil(256), 1);
+    let params = evaluator.param_values(&[]);
+    let uniform = shader
+        .uniform()
+        .bytes(
+            evaluator,
+            world,
+            &params,
+            &RunContext::tick(None, 0),
+            &Dispatch {
+                groups_x: groups.0,
+                hash: None,
+                texture: [grid_width, grid_height],
+                counting: false,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    let named: Vec<(&str, Vec<u32>)> = vec![("counters", vec![0u32; compiled.plan.counter_words.max(1)])];
+    run_shader(
+        device,
+        shader,
+        &ShaderRun {
+            width: grid_width,
+            height: grid_height,
+            buffers: &words,
+            labels: &labels,
+            uniform: &uniform,
+            agents: Some(AgentShape {
+                groups,
+                texture: (grid_width, grid_height),
+                named: &named,
+            }),
+        },
+    )
+}
+
 /// A counter that every agent of a million adds to, half of them 0, ends at the host's total after one step on the
 /// device, each workgroup's tally flushed with one global atomic.
 #[test]
@@ -917,27 +980,12 @@ fn a_counter_over_many_workgroups_equals_the_host_total() {
         width: 100.0,
         height: 100.0,
     };
-    let (grid_width, grid_height, _) = world.domain_grid();
     let mut lanes = HostLanes::new(document, world).expect("the lanes");
     let column = lanes.column_mut("amount").expect("the lane");
     for index in 0..MANY_AGENTS {
         assert!(column.set(index as usize, HostValue::U32(counted_amount(index))));
     }
-    let geometry = Geometry {
-        num_agents: MANY_AGENTS,
-        extent: Extent { w: 100.0, h: 100.0 },
-        width: grid_width,
-        height: grid_height,
-        n_cells: grid_width * grid_height,
-        display: (grid_width, grid_height),
-        index: None,
-    };
-    let words: Vec<Vec<u32>> = compiled
-        .sources
-        .iter()
-        .map(|source| AgentGraphHooks::words(source, &lanes, &geometry))
-        .collect();
-    let labels: Vec<String> = compiled.buffers.iter().map(|buffer| buffer.label.to_string()).collect();
+    let result = run_many_agents_step(&device, &evaluator, &compiled, shader, &lanes);
 
     let mut stream = 0;
     evaluator
@@ -947,44 +995,116 @@ fn a_counter_over_many_workgroups_equals_the_host_total() {
     let written_total = (0..MANY_AGENTS).fold(0u32, |total, index| total.wrapping_add(counted_amount(index)));
     assert_eq!(host_total, written_total, "the host adds every amount, wrapping");
 
-    let groups = (MANY_AGENTS.div_ceil(256), 1);
-    let params = evaluator.param_values(&[]);
-    let uniform = shader
-        .uniform()
-        .bytes(
-            &evaluator,
-            world,
-            &params,
-            &RunContext::tick(None, 0),
-            &Dispatch {
-                groups_x: groups.0,
-                hash: None,
-                texture: [grid_width, grid_height],
-                counting: false,
-            },
-        )
-        .unwrap_or_else(|error| panic!("{error}"));
-    let named: Vec<(&str, Vec<u32>)> = vec![("counters", vec![0u32; compiled.plan.counter_words.max(1)])];
-    let result = run_shader(
-        &device,
-        shader,
-        &ShaderRun {
-            width: grid_width,
-            height: grid_height,
-            buffers: &words,
-            labels: &labels,
-            uniform: &uniform,
-            agents: Some(AgentShape {
-                groups,
-                texture: (grid_width, grid_height),
-                named: &named,
-            }),
-        },
-    );
     assert_eq!(
         result.named[0][FIRST_COUNTER],
         host_total,
         "the counter on the device\n{}",
         shader.text()
+    );
+}
+
+/// Returns the amount agent `index` deposits in [`many_deposits_into_one_cell_add_up_exactly_on_device_and_host`]:
+/// a negative value or a NaN for one index in sixteen each, an odd multiple of 2^-11 for one in four, which lies
+/// halfway between two multiples of the resolution 2^-10, and below 2^-6 from a hash for the rest.
+fn deposited_amount(index: u32) -> f32 {
+    let hash = index.wrapping_mul(0x9e37_79b9).rotate_left(13);
+    match index % 16 {
+        0 => -(hash as f32),
+        1 => f32::NAN,
+        2 | 6 | 10 | 14 => ((hash % 16) * 2 + 1) as f32 / 2048.0,
+        _ => (hash >> 8) as f32 / 16_777_216.0 / 64.0,
+    }
+}
+
+/// A million deposits of varied amounts into one cell of a field that adds up at the resolution 2^-10 leave the same
+/// word on the device and on the host after one step: the amounts each rounded half to even to a count of the
+/// resolution and added up, a negative amount and a NaN adding 0.
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "the skip is information for a reader of the test output"
+)]
+fn many_deposits_into_one_cell_add_up_exactly_on_device_and_host() {
+    let Some(device) = test_device() else {
+        eprintln!("skipping many_deposits_into_one_cell_add_up_exactly_on_device_and_host: no adapter");
+        return;
+    };
+    let mut text = super::case_files::agents_header(MANY_AGENTS, 100, 100);
+    text.push_str(
+        "\n[[lane]]\nid = \"case_position\"\ndomain = \"agents\"\ntype = \"vec2f\"\nrole = \"position\"\n\n\
+         [[lane]]\nid = \"amount\"\ndomain = \"agents\"\ntype = \"f32\"\n\n\
+         [[field]]\nid = \"f\"\ntype = \"f32\"\nlayers = [\"value\"]\nstatic = false\ncombine = \"sum\"\n\
+         resolution = 0.0009765625\n\n\
+         [[pass]]\nid = \"lay\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"agents\"\n\n\
+         [[pass.node]]\nid = \"n1\"\nop = \"lane.get\"\nconfig.lane = \"case_position\"\n\n\
+         [[pass.node]]\nid = \"n2\"\nop = \"space.cell_of\"\nin.p = \"n1\"\n\n\
+         [[pass.node]]\nid = \"n3\"\nop = \"lane.get\"\nconfig.lane = \"amount\"\n\n\
+         [[pass.node]]\nid = \"n4\"\nop = \"field.deposit\"\nconfig.field = \"f\"\n\
+         in.layer = { layer = \"f.value\" }\nin.at = \"n2.cell\"\nin.value = \"n3\"\n",
+    );
+    let file = GraphFile::parse(&text).expect("the file reads");
+    let report = file.check();
+    assert!(!report.has_errors(), "{:#?}", report.diagnostics);
+    let (evaluator, _, compiled) = crate::wgsl::agents::compile_parts(&file, &Probes::default())
+        .unwrap_or_else(|problems| panic!("{problems:#?}"));
+    let document = evaluator.document();
+    let shader = compiled
+        .shaders
+        .iter()
+        .find(|shader| shader.passes().iter().any(|pass| pass == "lay"))
+        .expect("the step shader");
+    let world = HostWorld::Agents {
+        count: MANY_AGENTS,
+        width: 100.0,
+        height: 100.0,
+    };
+    let mut lanes = HostLanes::new(document, world).expect("the lanes");
+    let column = lanes.column_mut("case_position").expect("the lane");
+    for index in 0..MANY_AGENTS {
+        assert!(column.set(index as usize, HostValue::Vec2F([0.5, 0.5])));
+    }
+    let column = lanes.column_mut("amount").expect("the lane");
+    for index in 0..MANY_AGENTS {
+        assert!(column.set(index as usize, HostValue::F32(deposited_amount(index))));
+    }
+    let result = run_many_agents_step(&device, &evaluator, &compiled, shader, &lanes);
+
+    let mut stream = 0;
+    evaluator
+        .run_pass("lay", &mut lanes, &[], &RunContext::tick(None, 0), &mut stream)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let host_word = match lanes.deposits("f.value").and_then(|column| column.get(0)) {
+        Some(HostValue::U32(word)) => word,
+        other => panic!("the host's deposit word is {other:?}"),
+    };
+    let written_word = (0..MANY_AGENTS).fold(0u32, |total, index| {
+        let amount = deposited_amount(index);
+        let count = if amount > 0.0 {
+            (amount * 1024.0).round_ties_even() as u32
+        } else {
+            0
+        };
+        total.wrapping_add(count)
+    });
+    assert_eq!(host_word, written_word, "the host adds every count of the resolution");
+    assert!(
+        written_word > 1 << 20 && written_word < 1 << 24,
+        "the total {written_word} merges exactly"
+    );
+
+    let accum = compiled
+        .buffers
+        .iter()
+        .position(|buffer| buffer.label == compiled.plan.fields[0].accum_label())
+        .expect("the deposits' buffer");
+    assert_eq!(
+        result.buffers[accum][0],
+        host_word,
+        "the deposit word on the device\n{}",
+        shader.text()
+    );
+    assert!(
+        result.buffers[accum][1..].iter().all(|&word| word == 0),
+        "no other cell takes a deposit"
     );
 }

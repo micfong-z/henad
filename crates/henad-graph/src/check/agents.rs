@@ -1,12 +1,14 @@
 //! Rules of fields, counters, other elements and folds: V12, V14, V25, the place of `lane.get_at`, the nesting of
-//! regions, and V18 after normalisation.
+//! regions, the wrap bound of a field that adds up, and V18 after normalisation.
 
 use std::collections::BTreeMap;
+
+use henad_core::params::ParamKind;
 
 use super::Checker;
 use super::view::BodyView;
 use crate::catalogue::Effect;
-use crate::document::{Domain, LaneRole, PassStage};
+use crate::document::{Domain, FieldCombine, GraphDocument, LaneRole, PassStage};
 use crate::ids::NodeId;
 use crate::value::{ConfigValue, InputValue, Literal};
 
@@ -44,6 +46,24 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, view: &BodyView<'_>) {
                     field.id
                 ),
                 view.config_place(position, "field"),
+            );
+        }
+        if def.has_effect(Effect::Deposits)
+            && let Some(field) = field
+            && let Some(bound) = field.combine.and_then(FieldCombine::wrap_bound)
+            && let Some(largest) = largest_deposit(document, node.inputs.get("value"))
+            && f64::from(largest) >= bound
+        {
+            view.error(
+                checker,
+                position,
+                format!(
+                    "{} deposits up to {largest:?} into the field '{}', and a cell of that field wraps once it takes \
+                     {bound:?} in a tick (2^32 times its resolution)",
+                    view.name(position),
+                    field.id
+                ),
+                view.input_place(position, "value"),
             );
         }
         if def.has_effect(Effect::WritesField)
@@ -95,6 +115,19 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, view: &BodyView<'_>) {
         if def.is_region {
             check_nesting(checker, view, position);
         }
+    }
+}
+
+/// Returns the largest value a deposit's `value` input `input` can take when the file fixes it: a literal, or the
+/// maximum of a parameter.
+fn largest_deposit(document: &GraphDocument, input: Option<&InputValue>) -> Option<f32> {
+    match input? {
+        InputValue::Literal(Literal::F32(value)) => Some(*value),
+        InputValue::Param(id) => match document.params.iter().find(|param| param.id() == id)?.kind() {
+            ParamKind::F32 { max, .. } => Some(*max),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

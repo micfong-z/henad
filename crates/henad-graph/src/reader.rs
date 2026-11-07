@@ -293,6 +293,8 @@ struct FieldTable {
     #[serde(default)]
     combine: Option<FieldCombineName>,
     #[serde(default)]
+    resolution: Option<Spanned<f64>>,
+    #[serde(default)]
     finish: Option<String>,
     #[serde(default)]
     initial: Option<Spanned<RawValue>>,
@@ -303,6 +305,7 @@ struct FieldTable {
 #[serde(rename_all = "lowercase")]
 enum FieldCombineName {
     Max,
+    Sum,
 }
 
 /// A `[[counter]]` table.
@@ -515,8 +518,9 @@ impl FileTable {
         }
         let mut fields = Vec::with_capacity(self.fields.len());
         for table in self.fields {
-            places.fields.push(table.span());
-            fields.push(read_field(table.into_inner(), &categories)?);
+            let span = table.span();
+            places.fields.push(span.clone());
+            fields.push(read_field(table.into_inner(), span, &categories)?);
         }
         let mut counters = Vec::with_capacity(self.counters.len());
         for table in self.counters {
@@ -754,20 +758,44 @@ fn read_lane(table: LaneTable, categories: &[Category]) -> Result<Lane, Placed> 
     })
 }
 
-fn read_field(table: FieldTable, categories: &[Category]) -> Result<Field, Placed> {
+/// Reads the `[[field]]` table `table`, which spans `span` of the file.
+fn read_field(table: FieldTable, span: Range<usize>, categories: &[Category]) -> Result<Field, Placed> {
     let value_type = read_type(&table.value_type)?;
     let initial = match &table.initial {
         Some(raw) => Some(read_literal(raw)?),
         None => default_initial(&value_type, categories),
+    };
+    let combine = match (table.combine, table.resolution) {
+        (None, None) => None,
+        (Some(FieldCombineName::Max), None) => Some(FieldCombine::Max),
+        (Some(FieldCombineName::Sum), Some(resolution)) => {
+            Some(FieldCombine::sum(*resolution.get_ref()).map_err(|message| Placed(message, resolution.span()))?)
+        }
+        (Some(FieldCombineName::Sum), None) => {
+            return Err(Placed(
+                format!(
+                    "the field '{}' adds up its deposits, and needs a `resolution`",
+                    table.id
+                ),
+                span,
+            ));
+        }
+        (_, Some(resolution)) => {
+            return Err(Placed(
+                format!(
+                    "the field '{}' has a `resolution`, and only a field with `combine = \"sum\"` takes one",
+                    table.id
+                ),
+                resolution.span(),
+            ));
+        }
     };
     Ok(Field {
         id: table.id,
         value_type,
         layers: table.layers.unwrap_or_else(|| vec!["value".to_owned()]),
         is_static: table.is_static,
-        combine: table.combine.map(|combine| match combine {
-            FieldCombineName::Max => FieldCombine::Max,
-        }),
+        combine,
         finish: table.finish,
         initial,
     })

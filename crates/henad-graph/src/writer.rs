@@ -46,6 +46,9 @@ pub(crate) fn semantic_text(document: &GraphDocument) -> String {
         key(&mut text, "static", &field.is_static.to_string());
         if let Some(combine) = field.combine {
             key(&mut text, "combine", &toml_string(combine.as_str()));
+            if let Some(resolution) = combine.resolution() {
+                key(&mut text, "resolution", &format!("{:?}", f64::from(resolution)));
+            }
         }
         if let Some(finish) = &field.finish {
             key(&mut text, "finish", &toml_string(finish));

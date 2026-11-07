@@ -21,7 +21,7 @@ use super::uniform::{FieldShape, FieldSource, UniformBlock, WgslType};
 use super::{NodeRange, WORKGROUP_SIZE};
 use crate::catalogue::effective_config;
 use crate::check::CheckReport;
-use crate::document::{Domain, GraphDocument, Pass, PassEnabled};
+use crate::document::{Domain, FieldCombine, GraphDocument, Pass, PassEnabled};
 use crate::host::HostEvaluator;
 use crate::host::compile::{
     CompareOp, DrawForm, Instruction, LogicOp, Operation, Program, RadiusFold, Repeat, RepeatAccumulator, StencilFold,
@@ -97,6 +97,8 @@ pub(crate) struct FieldPlan {
     pub dynamic: bool,
     /// Position of the field's first layer among the deposit columns of the host lanes.
     pub first_deposit: usize,
+    /// Rule that merges the field's deposits, `None` for a static field.
+    pub combine: Option<FieldCombine>,
 }
 
 impl FieldPlan {
@@ -1427,6 +1429,7 @@ impl Emitter<'_> {
                 layer,
                 at,
                 value,
+                combine,
             } => {
                 let Some(field) = self.input.agents.and_then(|plan| plan.field_of_deposit(*first)) else {
                     self.refuse(&pass_id, Some(node), "deposits into a field the GPU does not hold");
@@ -1439,15 +1442,23 @@ impl Emitter<'_> {
                 self.deposited.insert(field);
                 let n = node.number();
                 // A deposit of zero, of a negative value or of a NaN would add 0 and issues no atomic. The bits of every
-                // value above 0 order as the value.
+                // value above 0 order as the value. A sum adds the value as a count of its resolution, and the product
+                // by the power of two 2^k is exact.
+                let word = format!("{label}[henad_deposit_layer_n{n} * params.henad_cells + henad_deposit_cell_n{n}]");
+                let atomic = match combine.deposit_scale() {
+                    Some(scale) => {
+                        let scale = literal(HostValue::F32(scale)).unwrap_or_default();
+                        format!("atomicAdd(&{word}, u32(round(henad_deposit_n{n} * {scale})))")
+                    }
+                    None => format!("atomicMax(&{word}, bitcast<u32>(henad_deposit_n{n}))"),
+                };
                 lines.push_str(&format!(
                     "{indent}let henad_deposit_layer_n{n} = {layer};\n\
                      {indent}let henad_deposit_cell_n{n} = {at};\n\
                      {indent}let henad_deposit_n{n} = {value};\n\
                      {indent}if (henad_deposit_n{n} > 0.0f && henad_deposit_cell_n{n} < params.henad_cells && \
                      henad_deposit_layer_n{n} < {layers}u) {{\n\
-                     {indent}    atomicMax(&{label}[henad_deposit_layer_n{n} * params.henad_cells + \
-                     henad_deposit_cell_n{n}], bitcast<u32>(henad_deposit_n{n}));\n\
+                     {indent}    {atomic};\n\
                      {indent}}}\n"
                 ));
             }
@@ -2477,10 +2488,23 @@ impl Emitter<'_> {
                     ));
                     let mut inner = Text::default();
                     inner.push("    let henad_index = henad_slot % params.henad_cells;\n");
+                    // A sum's word as a count of its resolution is exact in `f32` below 2^24, and so is its product
+                    // by the power of two.
+                    let (read, merged) = match field.combine.and_then(FieldCombine::resolution) {
+                        Some(resolution) => (
+                            format!("let henad_word = atomicLoad(&{accum}[henad_slot]);"),
+                            format!(
+                                "{label}[henad_slot] + f32(henad_word) * {}",
+                                literal(HostValue::F32(resolution)).unwrap_or_default()
+                            ),
+                        ),
+                        None => (
+                            format!("let henad_deposit = bitcast<f32>(atomicLoad(&{accum}[henad_slot]));"),
+                            format!("max({label}[henad_slot], henad_deposit)"),
+                        ),
+                    };
                     inner.text.push_str(&format!(
-                        "    let henad_deposit = bitcast<f32>(atomicLoad(&{accum}[henad_slot]));\n    \
-                         atomicStore(&{accum}[henad_slot], 0u);\n    let henad_merged = max({label}[henad_slot], \
-                         henad_deposit);\n"
+                        "    {read}\n    atomicStore(&{accum}[henad_slot], 0u);\n    let henad_merged = {merged};\n"
                     ));
                     if body.text.is_empty() {
                         inner

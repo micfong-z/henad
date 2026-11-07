@@ -216,3 +216,35 @@ A rule binds at most five storage buffers in each pass, within the WebGPU baseli
 The limits bound the work of one cell.
 The time of a tick also grows with the grid, and a step near the limit on a large grid can take a long time per tick.
 A submission of many such ticks can then trip the operating system's GPU watchdog, and the device can be lost.
+
+## Fields of a graph model
+
+A file of kind `graph` holds a graph model, which the Editor writes in its canonical form.
+The types of [`henad-graph`](https://docs.rs/henad-graph) document its tables.
+A graph model of agents can hold `[[field]]` tables, layers of values that tile the world.
+A tick pass reads a field with `field.get` and deposits into it with `field.deposit`.
+
+| Key | Value |
+|---|---|
+| `id` | Id of the field |
+| `type` | `"f32"`, or a category as `"cat:<id>"` for a static field |
+| `layers` | Names of the layers, `["value"]` when left out |
+| `static` | `true` for a field that only init passes write and that takes no deposits |
+| `combine` | Rule that merges the deposits of a field that is not static: `"max"` or `"sum"` |
+| `resolution` | Step that a `"sum"` counts deposits in, a power of two from 1 down to 2^-24 written as a number, such as `1.52587890625e-5` for 2^-16. Required with `"sum"`, and refused with any other rule |
+| `finish` | Id of a function run on each cell after the merge. Optional |
+| `initial` | Value of every cell at the start. When left out, 0 or the category's first variant |
+
+A deposit below 0 counts as 0, and so does a NaN.
+After the last tick pass of each tick, the field update merges the deposits into the field, then runs `finish` on each cell.
+With `"max"`, a cell becomes the larger of itself and its largest deposit.
+With `"sum"`, each deposit is rounded half to even to a whole number of resolutions, the numbers add up in one 32-bit word per cell, and the cell becomes itself plus the word times the resolution.
+Whole numbers add up in any order to the same word, so a run replays exactly on one device and the word on the device equals the word the host evaluator computes.
+A total under 2^24 resolutions merges exactly.
+
+The word wraps once a cell takes 2^32 times the resolution in one tick, 65536 at 2^-16.
+A deposit whose amount is a number or a parameter reaching that bound is refused when the file is checked, with the bound in the message.
+Any other deposit is not checked against it, so a model whose cells can take that much in a tick needs a coarser resolution.
+
+A resolution that is not a power of two, such as 0.001, is refused at its line, with the nearest allowed value in the message.
+A power of two keeps the products of the deposit and the merge exact on every device, including one that compiles with fast math.

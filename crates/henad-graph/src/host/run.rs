@@ -347,6 +347,16 @@ pub(crate) fn finish(
     Ok(frame)
 }
 
+/// Returns the word that a sum adds for `deposited`, a deposit at or above 0: the deposit as a count of the resolution,
+/// rounded half to even, and `u32::MAX` past the word.
+///
+/// `scale` is the sum's [`crate::document::FieldCombine::deposit_scale`] 2^k. The device computes
+/// `u32(round(value * 2^k))`. The product by a power of two is exact, WGSL's `round` rounds half to even, and both
+/// conversions saturate.
+fn sum_word(deposited: f32, scale: f32) -> u32 {
+    (deposited * scale).round_ties_even() as u32
+}
+
 /// Runs only the element block of `program` at `element`, with `iteration` as the iteration word of the region around
 /// it, and returns the frame. Every lane must already hold the element.
 ///
@@ -489,6 +499,7 @@ impl Machine<'_> {
                 layer,
                 at,
                 value,
+                combine,
             } => {
                 let HostValue::Layer(number) = frame[*layer] else {
                     return Err(mismatch(self));
@@ -499,11 +510,22 @@ impl Machine<'_> {
                 let HostValue::Cell(cell) = frame[*at] else {
                     return Err(mismatch(self));
                 };
+                // `f32::max` returns 0 for a NaN.
                 let deposited = float(self, *value)?.max(0.0);
-                if let Some(column) = self.deposits.get_mut(*first + number as usize).and_then(Option::as_mut)
-                    && let Some(HostValue::F32(held)) = column.get(cell as usize)
-                {
-                    column.set(cell as usize, HostValue::F32(held.max(deposited)));
+                let Some(column) = self.deposits.get_mut(*first + number as usize).and_then(Option::as_mut) else {
+                    return Ok(());
+                };
+                match (combine.deposit_scale(), column.get(cell as usize)) {
+                    (Some(scale), Some(HostValue::U32(held))) => {
+                        column.set(
+                            cell as usize,
+                            HostValue::U32(held.wrapping_add(sum_word(deposited, scale))),
+                        );
+                    }
+                    (_, Some(HostValue::F32(held))) => {
+                        column.set(cell as usize, HostValue::F32(held.max(deposited)));
+                    }
+                    _ => {}
                 }
                 return Ok(());
             }

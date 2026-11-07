@@ -269,6 +269,27 @@ and `OwnCell` is never written and required in a pass over agents. `PassCase` ga
 agents header over a world of `width` by `height`), `deposits` and the counters before and after,
 and a lane id of a case may be a field layer `<field>.<layer>`.
 
+**Fields that add up** (row D). `FieldCombine` is `Copy` and `Eq`, so a sum holds its resolution as
+an exponent: `FieldCombine::Sum { resolution_shift }`, the resolution 2^-k for k from 0 to
+`MAX_RESOLUTION_SHIFT` (24), `resolution()` its `f32`, `deposit_scale()` 2^k and `wrap_bound()` 2^32
+times the resolution. All three take the exponent from one private helper capped at 24, so a
+hand-built shift past 24 still counts and merges at one resolution. The file writes `combine =
+"sum"` and `resolution` as a number in the writer's form (`1.52587890625e-5` for 2^-16), and the
+reader takes `resolution` only with `sum`, needs it there, and refuses any other value at the key
+with the nearest allowed one (`FieldCombine::sum`). Every `GraphFile` comes through the reader, so
+no checked document holds a shift past 24. `check/agents.rs` refuses a deposit into a sum whose
+`value` is a literal at or past the wrap bound, or a parameter whose maximum is, and names the
+bound. Other deposits can still wrap at run time, as a counter does. The host's deposit column of a
+sum is `u32`, the total as a count of the resolution: `host::run::sum_word` rounds `max(value, 0)`
+times `deposit_scale()` half to even and saturates, a NaN adding 0, and the column adds it wrapping.
+`HostLanes::deposits` documents both column types. The catalogue case `a sum in whole resolutions,
+rounded half to even` holds ties at 0.25. Tests: `tests/sum_fields.rs` (round trip, refusals, wrap
+bound, one exponent for every shift), `gpu_cases.rs`'s
+`many_deposits_into_one_cell_add_up_exactly_on_device_and_host` (a million deposits into one cell at
+2^-10, NaNs, negatives and ties included, the word equal on both), and henad-models'
+`graph_sum_fields.rs` (a run replays bit for bit, and the field after one tick is the host's word
+times the resolution through the `finish`).
+
 **Normalisation** (`normal.rs`, `expr.rs`). `normalise_body` replaces each `math.expr` by its
 expansion and each `fn.call` by a copy of its function's body, through a queue, so nested calls and
 expressions in functions settle without recursion, and stops past `MAX_NODES_INLINED`. Copies take

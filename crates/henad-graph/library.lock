@@ -30,7 +30,7 @@ kind ctx.index since=1 signature=8f6dfc1e24575221 semantics=6769e4345ed05c2e cas
 kind ctx.press_seed since=1 signature=dac440b12d82a439 semantics=e010b69e5da38e0d cases=de4f4142dfa08b21 parity=exact cost=Units(1)
 kind ctx.tick since=1 signature=2c05b11a601b21c7 semantics=e3f55a0b81181b16 cases=f2296816717a6c3e parity=exact cost=Units(1)
 kind ctx.world since=1 signature=9169d61e1f3dd469 semantics=7f7d410e4c52505d cases=7a395256ea383f0c parity=exact cost=Units(1)
-kind field.deposit since=1 signature=5eca23e579354a28 semantics=c375c58fd8ac15d3 cases=2720fb9eda42d57f parity=exact cost=Units(1)
+kind field.deposit since=1 signature=5eca23e579354a28 semantics=28236dbbb21bdd52 cases=27c465a3223bf466 parity=exact cost=Units(1)
 kind field.get since=1 signature=b40299c2a4f6ba6c semantics=8c11ec7a7c324a3f cases=ec6b439490939679 parity=exact cost=Units(1)
 kind field.set since=1 signature=6b31b040c187a1a8 semantics=828bc93b6a226e64 cases=264ae8230d6ea960 parity=exact cost=Units(1)
 kind fn.call since=1 signature=df054fc6235cdbc4 semantics=ea458d8280e3159d cases=b7faa64e499389cc parity=exact cost=Units(1)

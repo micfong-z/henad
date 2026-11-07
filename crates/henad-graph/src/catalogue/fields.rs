@@ -9,9 +9,16 @@ use super::{
 };
 use crate::types::Rate;
 
-/// The head of an agents case: a position lane and a field `f` of two layers that takes deposits.
+/// The head of an agents case: a position lane and a field `f` of two layers that takes deposits, keeping the largest
+/// or, with `sum`, adding them up at a resolution of 0.25.
 macro_rules! field_head {
     () => {
+        concat!(field_head!(lanes), "combine = \"max\"\n")
+    };
+    (sum) => {
+        concat!(field_head!(lanes), "combine = \"sum\"\nresolution = 0.25\n")
+    };
+    (lanes) => {
         r#"[[lane]]
 id = "pos"
 domain = "agents"
@@ -23,7 +30,6 @@ id = "f"
 type = "f32"
 layers = ["a", "b"]
 static = false
-combine = "max"
 "#
     };
 }
@@ -183,9 +189,10 @@ in.value = "n3"
 "#
 );
 
-const DEPOSIT: &str = concat!(
-    field_head!(),
-    r#"
+/// The lane `r` and a tick pass in which each agent deposits its `r` into its own cell of the layer `f.b`.
+macro_rules! deposit_pass {
+    () => {
+        r#"
 [[lane]]
 id = "r"
 domain = "agents"
@@ -220,7 +227,12 @@ in.layer = { layer = "f.b" }
 in.at = "n2.cell"
 in.value = "n3"
 "#
-);
+    };
+}
+
+const DEPOSIT: &str = concat!(field_head!(), deposit_pass!());
+
+const DEPOSIT_SUM: &str = concat!(field_head!(sum), deposit_pass!());
 
 const COUNT_EVENTS: &str = r#"[[lane]]
 id = "pos"
@@ -436,7 +448,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         id: "field.deposit",
         group: "Fields",
         label: "Deposit",
-        semantics: "Contributes `max(value, 0)` to the cell `at` of the layer `layer` of `field`, a field that takes deposits. Deposits merge with the field's `combine` from 0, its identity, and land at the field update after the last tick pass, which sets each cell to the field's `finish` of the larger of the cell and its merged deposit. A deposit at the reference to no cell is dropped, and the deposit returns nothing.",
+        semantics: "Contributes `max(value, 0)` to the cell `at` of the layer `layer` of `field`, a field that takes deposits, and a NaN contributes 0. Deposits merge with the field's `combine` from 0, its identity, and land at the field update after the last tick pass. With `max` the update sets each cell to the field's `finish` of the larger of the cell and its largest deposit. With `sum` each deposit is rounded half to even to a whole number of the field's `resolution`, a power of two 2^-k, the numbers add up in one 32-bit word per cell, and the update sets each cell to the field's `finish` of the cell plus the word times the resolution. The word wraps when a cell takes 2^32 times the resolution in one tick, and a total under 2^24 resolutions merges exactly. A deposit at the reference to no cell is dropped, and the deposit returns nothing.",
         contexts: ContextSet {
             tick: true,
             ..ContextSet::NONE
@@ -452,29 +464,54 @@ pub(super) static KINDS: &[NodeDef] = &[
             input_up_to("value", SocketType::Fixed(TypeClass::F32), Rate::Element),
         ],
         effects: &[Effect::Deposits],
-        cases: &[pass_case(
-            "the larger of two, clamped at zero",
-            PassCase {
-                width: 3,
-                height: 2,
-                agents: 4,
-                tables: DEPOSIT,
-                before: &[
-                    (
-                        "pos",
-                        &[
-                            Vec2F([0.5, 0.5]),
-                            Vec2F([0.7, 0.2]),
-                            Vec2F([1.5, 0.5]),
-                            Vec2F([2.5, 1.5]),
-                        ],
-                    ),
-                    ("r", &[F32(0.5), F32(2.0), F32(0.25), F32(-1.0)]),
-                ],
-                deposits: &[("f.b", &[F32(2.0), F32(0.25), F32(0.0), F32(0.0), F32(0.0), F32(0.0)])],
-                ..PassCase::EMPTY
-            },
-        )],
+        cases: &[
+            pass_case(
+                "the larger of two, clamped at zero",
+                PassCase {
+                    width: 3,
+                    height: 2,
+                    agents: 4,
+                    tables: DEPOSIT,
+                    before: &[
+                        (
+                            "pos",
+                            &[
+                                Vec2F([0.5, 0.5]),
+                                Vec2F([0.7, 0.2]),
+                                Vec2F([1.5, 0.5]),
+                                Vec2F([2.5, 1.5]),
+                            ],
+                        ),
+                        ("r", &[F32(0.5), F32(2.0), F32(0.25), F32(-1.0)]),
+                    ],
+                    deposits: &[("f.b", &[F32(2.0), F32(0.25), F32(0.0), F32(0.0), F32(0.0), F32(0.0)])],
+                    ..PassCase::EMPTY
+                },
+            ),
+            pass_case(
+                "a sum in whole resolutions, rounded half to even",
+                PassCase {
+                    width: 3,
+                    height: 2,
+                    agents: 4,
+                    tables: DEPOSIT_SUM,
+                    before: &[
+                        (
+                            "pos",
+                            &[
+                                Vec2F([0.5, 0.5]),
+                                Vec2F([0.7, 0.2]),
+                                Vec2F([1.5, 0.5]),
+                                Vec2F([2.5, 1.5]),
+                            ],
+                        ),
+                        ("r", &[F32(0.5), F32(0.375), F32(0.625), F32(-1.0)]),
+                    ],
+                    deposits: &[("f.b", &[U32(4), U32(2), U32(0), U32(0), U32(0), U32(0)])],
+                    ..PassCase::EMPTY
+                },
+            ),
+        ],
         ..BASE
     },
     NodeDef {

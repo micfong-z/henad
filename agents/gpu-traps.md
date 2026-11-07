@@ -105,7 +105,11 @@ is about not undoing them.
   henad-graph's `a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` is `#[ignore]`d
   for it. A2's contraction probe (henad-models' `graph_ants_parity.rs`) found `a * b + c` written
   as one expression and as two `let`s rounded alike, both fused, on every one of 6216 inputs where
-  a fused and a rounded result differ, so a `let` boundary does not stop contraction.
+  a fused and a rounded result differ, so a `let` boundary does not stop contraction. A field
+  that adds up (henad-graph's `combine = "sum"`) keeps to a power-of-two resolution 2^-k for this:
+  the deposit's product by 2^k and the merge's `f32(word) * 2^-k` are exact below 2^24, so a
+  contraction of the merge's add has nothing to round differently, and the integer `atomicAdd` in
+  between is unaffected. A resolution such as 0.001 would round in both products.
 - **wgpu checks no shader's workgroup memory against the device.** A generated reduce shader with
   `var<workgroup>` past `max_compute_workgroup_storage_size` built on Metal with no error and
   counted wrong: 66560 bytes on a 16 KiB device reported 8192 for a stat of 4096 cells. A uniform

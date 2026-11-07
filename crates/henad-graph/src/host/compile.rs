@@ -13,7 +13,7 @@ use super::HostError;
 use super::value::{BinaryOp, Conversion, HostValue, UnaryOp, extreme_of};
 use crate::catalogue::{Effect, NodeDef, OutputRate, effective_config, lookup, transition_rule_ids};
 use crate::check::literal_of;
-use crate::document::{Domain, GraphDocument, Pass};
+use crate::document::{Domain, FieldCombine, GraphDocument, Pass};
 use crate::ids::NodeId;
 use crate::node::{Combine, Node};
 use crate::reader::read_u64;
@@ -248,6 +248,7 @@ pub(crate) enum Operation {
         layer: usize,
         at: usize,
         value: usize,
+        combine: FieldCombine,
     },
     CounterAdd {
         counter: usize,
@@ -1310,6 +1311,13 @@ impl<'a> Compiler<'a> {
                     layer: self.layer_input(position)?,
                     at: self.required(position, "at")?,
                     value: self.required(position, "value")?,
+                    combine: self
+                        .document
+                        .fields
+                        .iter()
+                        .find(|field| field.id == field_id)
+                        .and_then(|field| field.combine)
+                        .unwrap_or(FieldCombine::Max),
                 }
             }
             "counter.add" => Operation::CounterAdd {

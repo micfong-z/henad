@@ -19,5 +19,6 @@ mod mutation;
 mod probes;
 mod regions;
 mod sheet_document;
+mod sum_fields;
 mod support;
 mod wgsl;

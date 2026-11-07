@@ -803,6 +803,7 @@ pub(crate) fn compile_agent_shaders(
             first: column,
             dynamic: !field.is_static,
             first_deposit: deposit,
+            combine: field.combine.filter(|_| !field.is_static),
         });
         column += field.layers.len();
         if !field.is_static {

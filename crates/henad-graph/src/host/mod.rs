@@ -22,10 +22,11 @@ use henad_core::authoring::primitives::space::Boundary;
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::params::ParamValue;
 
-use crate::document::{Domain, GraphDocument, PassEnabled, PassStage, World};
+use crate::document::{Domain, FieldCombine, GraphDocument, PassEnabled, PassStage, World};
 use crate::draw::{PHASE_INIT, PHASE_TICK, action_phase};
 use crate::file::GraphFile;
 use crate::ids::NodeId;
+use crate::types::ValueType;
 use crate::value::PortRef;
 
 pub use value::{HostValue, LaneColumn};
@@ -199,7 +200,12 @@ impl HostLanes {
                     .ok_or_else(|| refused(format!("the field '{}' does not fit the host", field.id)))?;
                 columns.push(column);
                 if !field.is_static {
-                    let column = LaneColumn::filled(&id, &field.value_type, elements, HostValue::F32(0.0))
+                    // A sum holds its total as a count of its resolution, the word the device adds to.
+                    let (deposit_type, zero) = match field.combine {
+                        Some(FieldCombine::Sum { .. }) => (ValueType::U32, HostValue::U32(0)),
+                        _ => (field.value_type.clone(), HostValue::F32(0.0)),
+                    };
+                    let column = LaneColumn::filled(&id, &deposit_type, elements, zero)
                         .ok_or_else(|| refused(format!("the field '{}' does not fit the host", field.id)))?;
                     deposits.push(column);
                 }
@@ -245,6 +251,9 @@ impl HostLanes {
     }
 
     /// Returns the deposits of the field layer `<field>.<layer>` that the field update has not merged.
+    ///
+    /// A field whose `combine` is a [`FieldCombine::Sum`] holds `u32` words, each total as a count of the field's
+    /// resolution, and a field that keeps the largest deposit holds `f32` values.
     pub fn deposits(&self, id: &str) -> Option<&LaneColumn> {
         self.deposits.iter().find(|column| column.id() == id)
     }

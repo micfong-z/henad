@@ -358,20 +358,103 @@ impl Lane {
 }
 
 /// Rule that merges deposits into a field.
+///
+/// Every rule merges from 0. A deposit is clamped at 0 first, and a NaN deposits 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FieldCombine {
-    /// Keeps the largest deposit.
+    /// Keeps the largest deposit, and the field update keeps the larger of the cell and that deposit.
     Max,
+    /// Adds up the deposits, and the field update adds the total to the cell.
+    ///
+    /// Each deposit is rounded half to even to a whole number of the resolution 2^-`resolution_shift`, and the
+    /// numbers add up in one 32-bit word per cell. Integer addition is associative, so the total does not depend on
+    /// the order of the deposits, and a run replays exactly. The word wraps once a cell takes
+    /// [`Self::wrap_bound`] in one tick.
+    ///
+    /// A total below 2^24 resolutions merges exactly in `f32`.
+    Sum {
+        /// Exponent `k` of the resolution 2^-`k`, from 0 to [`Self::MAX_RESOLUTION_SHIFT`].
+        resolution_shift: u8,
+    },
 }
 
 impl FieldCombine {
+    /// Largest exponent `k` of a sum's resolution 2^-`k`.
+    pub const MAX_RESOLUTION_SHIFT: u8 = 24;
+
     /// Returns the name a file writes for the rule.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Max => "max",
+            Self::Sum { .. } => "sum",
         }
     }
+
+    /// Returns the sum whose resolution is `resolution`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the nearest allowed value when `resolution` is not exactly 2^-`k` for `k` from 0 to
+    /// [`Self::MAX_RESOLUTION_SHIFT`].
+    pub fn sum(resolution: f64) -> Result<Self, String> {
+        (0..=Self::MAX_RESOLUTION_SHIFT)
+            .find(|&shift| resolution == power_of_two(shift))
+            .map(|resolution_shift| Self::Sum { resolution_shift })
+            .ok_or_else(|| {
+                let nearest = if resolution.is_nan() || resolution <= 0.0 {
+                    Self::MAX_RESOLUTION_SHIFT
+                } else {
+                    // A positive value past the largest exponent's range clamps to 1 or to 2^-24.
+                    (-resolution.log2())
+                        .round()
+                        .clamp(0.0, f64::from(Self::MAX_RESOLUTION_SHIFT)) as u8
+                };
+                format!(
+                    "the resolution {resolution:?} is not a power of two from 1 down to 2^-{}. The nearest allowed \
+                     value is {:?} (2^-{nearest})",
+                    Self::MAX_RESOLUTION_SHIFT,
+                    power_of_two(nearest)
+                )
+            })
+    }
+
+    /// Resolution of a sum, 2^-`resolution_shift`, or `None` for another rule.
+    ///
+    /// Note that a `Sum` built by hand past [`Self::MAX_RESOLUTION_SHIFT`] takes the largest exponent here, in
+    /// [`Self::deposit_scale`] and in [`Self::wrap_bound`] alike.
+    pub fn resolution(self) -> Option<f32> {
+        self.resolution_exponent().map(|shift| power_of_two(shift) as f32)
+    }
+
+    /// Factor 2^`resolution_shift` that turns a deposit into a count of a sum's resolution, or `None` for another rule.
+    ///
+    /// The deposit and the merge take the exponent from the same place, so this factor times [`Self::resolution`] is
+    /// exactly 1.
+    pub fn deposit_scale(self) -> Option<f32> {
+        self.resolution_exponent()
+            .map(|shift| f32::from_bits((127 + u32::from(shift)) << 23))
+    }
+
+    /// Total a cell of a sum takes in one tick before its word wraps, 2^32 times the resolution, or `None` for another
+    /// rule.
+    pub fn wrap_bound(self) -> Option<f64> {
+        self.resolution_exponent()
+            .map(|shift| power_of_two(shift) * 4_294_967_296.0)
+    }
+
+    /// Exponent `k` of a sum's resolution 2^-`k`, capped at [`Self::MAX_RESOLUTION_SHIFT`], or `None` for another rule.
+    fn resolution_exponent(self) -> Option<u8> {
+        match self {
+            Self::Max => None,
+            Self::Sum { resolution_shift } => Some(resolution_shift.min(Self::MAX_RESOLUTION_SHIFT)),
+        }
+    }
+}
+
+/// Returns 2^-`shift`, built from its exponent bits, so exact for every `u8`.
+fn power_of_two(shift: u8) -> f64 {
+    f64::from_bits((1023 - u64::from(shift)) << 52)
 }
 
 /// A `[[field]]` table: layers of values that tile the world, on the agents topology.
@@ -386,7 +469,7 @@ pub struct Field {
     pub layers: Vec<String>,
     /// Whether the field is written only in init and action passes and never deposited into.
     pub is_static: bool,
-    /// Rule that merges deposits. Absent on a static field.
+    /// Rule that merges deposits. Absent on a static field. A file writes a sum's resolution as the key `resolution`.
     pub combine: Option<FieldCombine>,
     /// Id of the function run per cell after the merge.
     pub finish: Option<String>,
