@@ -1,9 +1,11 @@
-//! The sheet reader over the four example sheets, its refusals, its blanks and a mutation corpus.
+//! The sheet reader over the starters and the test sheets, its refusals, its blanks and a mutation corpus.
 //!
-//! The sheets under `sheets/` are round 1's Game of Life, SIR with rates, boids and ants in the author format, with
-//! the stored forms of the final editor: every condition that always holds written `{ kind = "always" }`, every
-//! Become from any state written `start_state = "any_state"`, Game of Life's Clear a button that runs a card once, and
-//! SIR's button named New outbreak.
+//! The starters in the crate's `sheets/` directory are round 1's Game of Life and Majority vote. The test sheets under
+//! `sheets/` here are round 1's SIR with rates, boids and ants from the author format's examples, and its forest fire,
+//! random walk, bounded confidence and SIR with chances written from round 1's models. Every sheet holds the stored
+//! forms of the final editor: every condition that always holds written `{ kind = "always" }`, every Become from any
+//! state written `start_state = "any_state"`, Game of Life's Clear a button that runs a card once, and the SIR buttons
+//! named New outbreak.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -13,20 +15,31 @@ use henad_core::metadata::TimeUnit;
 
 use crate::model_text::{ModelHeader, read_header};
 use crate::sheet::document::{
-    Around, ButtonStepRule, CardRuns, ChipRelation, CompareTest, Edges, LineKind, MadeOf, PropertyType, SheetChip,
-    SheetDocument, SheetLine, SheetLiteral, SheetValue, Slot, StartRule, SummaryKind,
+    Around, ButtonStepRule, CardRuns, ChipRelation, CompareTest, Edges, LineKind, MadeOf, MeasureRule, PropertyType,
+    SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetValue, Slot, StartRule, SummaryKind,
 };
 use crate::sheet::limits::{MAX_LINES_PER_CARD, MAX_NESTING, MAX_SHEET_BYTES};
-use crate::sheet::{ParsedSheet, SheetFileError, TablePlaces};
+use crate::sheet::{ParsedSheet, SheetFileError, TablePlaces, starters};
 
-/// Every sheet the tests read, by file name.
-pub(super) fn sheets() -> [(&'static str, &'static str); 4] {
-    [
-        ("game_of_life.toml", include_str!("sheets/game_of_life.toml")),
+/// Every sheet the tests read, by file name: the starters of [`starters`], then the test sheets.
+pub(super) fn sheets() -> Vec<(&'static str, &'static str)> {
+    let test_sheets = [
         ("sir.toml", include_str!("sheets/sir.toml")),
         ("boids.toml", include_str!("sheets/boids.toml")),
         ("ants.toml", include_str!("sheets/ants.toml")),
-    ]
+        ("forest_fire.toml", include_str!("sheets/forest_fire.toml")),
+        ("random_walk.toml", include_str!("sheets/random_walk.toml")),
+        (
+            "bounded_confidence.toml",
+            include_str!("sheets/bounded_confidence.toml"),
+        ),
+        ("sir_chance.toml", include_str!("sheets/sir_chance.toml")),
+    ];
+    starters()
+        .iter()
+        .map(|starter| (starter.file_name, starter.text))
+        .chain(test_sheets)
+        .collect()
 }
 
 /// Returns the sheet `file_name` of [`sheets`].
@@ -217,6 +230,71 @@ fn every_table_reads_its_values() {
         phrase(&randomise.length).formula.as_deref(),
         Some("length(my.velocity)")
     );
+}
+
+#[test]
+fn starters_returns_game_of_life_and_vote() {
+    let names: Vec<&str> = starters().iter().map(|starter| starter.file_name).collect();
+    assert_eq!(names, ["game_of_life.toml", "vote.toml"]);
+    // The forest fire waits as test data until its chances lower.
+    assert!(!names.contains(&"forest_fire.toml"));
+    for starter in starters() {
+        let document = read(starter.text).into_document();
+        assert_eq!(document.world.made_of, MadeOf::Cells, "{}", starter.file_name);
+    }
+    assert_eq!(read(sheet_text("vote.toml")).document().sheet.name, "Majority vote");
+}
+
+#[test]
+fn the_sheets_written_from_round_1_read_their_values() {
+    // Majority vote: "otherwise become A" from any state, always.
+    let vote = read(sheet_text("vote.toml")).into_document();
+    assert_eq!(line(&vote, "l1").around, Some(Around::Block3x3));
+    let follow_b = line(&vote, "l2");
+    assert_eq!(follow_b.start_state.as_deref(), Some("any_state"));
+    assert_eq!(phrase(&follow_b.condition).test, Some(CompareTest::AtLeast));
+    let follow_a = line(&vote, "l3");
+    assert_eq!(follow_a.start_state.as_deref(), Some("any_state"));
+    assert_eq!(phrase(&follow_a.condition).kind, LineKind::Always);
+
+    // Forest fire: two independent chances, each on a line with its own key, and a burn-out that always holds.
+    let fire = read(sheet_text("forest_fire.toml")).into_document();
+    assert_eq!(line(&fire, "l1").around, Some(Around::Cells4));
+    assert_eq!(phrase(&line(&fire, "l3").condition).kind, LineKind::Chance);
+    assert_eq!(phrase(&line(&fire, "l4").condition).kind, LineKind::Always);
+    assert!(line(&fire, "l3").key.is_some() && line(&fire, "l5").key.is_some());
+    assert_eq!(fire.parameters[2].default, 1e-5);
+    assert_eq!(fire.buttons[0].does[0].properties, ["cover"]);
+
+    // SIR with chances: "for each of" Infected neighbours, no time scale, and the New outbreak card.
+    let sir = read(sheet_text("sir_chance.toml")).into_document();
+    assert!(sir.time.is_none());
+    let infection = phrase(&line(&sir, "l2").condition);
+    assert_eq!(infection.kind, LineKind::Chance);
+    assert_eq!(infection.tries.value(), Some(&SheetValue::Chip(result("l1"))));
+    assert_eq!(sir.buttons[0].id, "new_outbreak");
+    assert_eq!(sir.cards[1].id, "new_outbreak");
+    assert_eq!(sir.cards[1].runs, CardRuns::Once);
+
+    // Random walk: a Move by inside a Repeat.
+    let walk = read(sheet_text("random_walk.toml")).into_document();
+    assert_eq!(walk.world.made_of, MadeOf::Agents);
+    let repeat = line(&walk, "l1");
+    assert_eq!(repeat.kind, LineKind::Repeat);
+    assert_eq!(repeat.lines, ["l2"]);
+    assert_eq!(phrase(&line(&walk, "l2").value).kind, LineKind::RandomDirection);
+
+    // Bounded confidence: a filter comparing their value with mine, me included.
+    let opinions = read(sheet_text("bounded_confidence.toml")).into_document();
+    let like_minded = line(&opinions, "l1");
+    assert_eq!(like_minded.include_me, Some(true));
+    let only = phrase(&like_minded.only);
+    assert_eq!(only.test, Some(CompareTest::Within));
+    assert_eq!(
+        only.right.value(),
+        Some(&SheetValue::Chip(SheetChip::My("opinion".to_owned())))
+    );
+    assert_eq!(opinions.measures[1].rule, MeasureRule::Spread);
 }
 
 /// Returns the depth of the deepest table or list in `text`, the file itself counted as depth 1.

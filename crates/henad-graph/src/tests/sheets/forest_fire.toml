@@ -1,0 +1,169 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "forest_fire"
+name = "Forest fire"
+purpose = "Self-organised criticality. Pattern to look for: fires of every size, and a tree density that settles near a steady value with a lightning-to-growth ratio far below 1."
+next_line = 6
+
+[world]
+made_of = "cells"
+width = 1024
+height = 1024
+edges = "wrap"
+
+[[cells.property]]
+id = "cover"
+name = "Cover"
+type = "states"
+states = [
+  { id = "empty", name = "Empty", color = "#261E18" },
+  { id = "tree", name = "Tree", color = "#2EA043" },
+  { id = "burning", name = "Burning", color = "#FF7020" },
+]
+
+[cells.property.starts_as]
+rule = "by_chance"
+key = 2518941465
+otherwise = "empty"
+
+[[cells.property.starts_as.row]]
+state = "tree"
+chance = { param = "initial_trees" }
+
+[[parameter]]
+id = "initial_trees"
+name = "Initial trees"
+type = "number"
+min = 0
+max = 1
+default = 0.5
+step = 0.01
+
+[[parameter]]
+id = "growth_chance"
+name = "Growth chance"
+type = "number"
+min = 0
+max = 0.1
+default = 0.01
+step = 0.001
+means = "Chance per tick that a tree grows on an empty cell (p)"
+
+[[parameter]]
+id = "lightning_chance"
+name = "Lightning chance"
+type = "number"
+min = 0
+max = 0.001
+default = 1e-5
+step = 1e-6
+means = "Chance per tick that lightning strikes a tree with no burning neighbour (f)"
+
+[[measure]]
+id = "empty"
+name = "Empty"
+color = "#786450"
+rule = "count_in_state"
+over = "cells"
+property = "cover"
+state = "empty"
+
+[[measure]]
+id = "tree"
+name = "Tree"
+color = "#2EA043"
+rule = "count_in_state"
+over = "cells"
+property = "cover"
+state = "tree"
+
+[[measure]]
+id = "burning"
+name = "Burning"
+color = "#FF7020"
+rule = "count_in_state"
+over = "cells"
+property = "cover"
+state = "burning"
+
+[color.cells]
+rule = "by_state"
+property = "cover"
+
+[[button]]
+id = "replant"
+name = "Replant"
+
+[[button.does]]
+rule = "start_again"
+properties = ["cover"]
+
+# Each tick, every cell
+[[card]]
+id = "cell_tick"
+every = "cells"
+runs = "each_tick"
+lines = ["l1", "l2", "l3", "l4", "l5"]
+
+# Burning neighbours = count of the 4 cells around me whose Cover is Burning
+[card.line.l1]
+kind = "count"
+name = "Burning neighbours"
+around = "cells_4"
+
+[card.line.l1.whose]
+kind = "compare"
+test = "is"
+left = { their = "cover" }
+right = { state = "burning" }
+
+# Become Burning if Tree, when Burning neighbours is at least 1
+[card.line.l2]
+kind = "become"
+property = "cover"
+new_state = "burning"
+start_state = "tree"
+
+[card.line.l2.condition]
+kind = "compare"
+test = "at_least"
+left = { result = "l1" }
+right = 1
+
+# Otherwise become Burning if Tree, with chance Lightning chance
+[card.line.l3]
+kind = "become"
+key = 3688405984
+property = "cover"
+new_state = "burning"
+start_state = "tree"
+
+[card.line.l3.condition]
+kind = "chance"
+chance = { param = "lightning_chance" }
+
+# Become Empty if Burning, always
+[card.line.l4]
+kind = "become"
+property = "cover"
+new_state = "empty"
+start_state = "burning"
+
+[card.line.l4.condition]
+kind = "always"
+
+# Become Tree if Empty, with chance Growth chance
+[card.line.l5]
+kind = "become"
+key = 1270439170
+property = "cover"
+new_state = "tree"
+start_state = "empty"
+
+[card.line.l5.condition]
+kind = "chance"
+chance = { param = "growth_chance" }

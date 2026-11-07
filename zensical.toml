@@ -159,6 +159,7 @@ nav = [
             { "#72, 2026-11-07" = "developing/agent-record/20261107-72-workgroup-counters.md" },
             { "#73, 2026-11-07" = "developing/agent-record/20261107-73-sheet-document.md" },
             { "#74, 2026-11-07" = "developing/agent-record/20261107-74-fire-count-channel.md" },
+            { "#75, 2026-11-07" = "developing/agent-record/20261107-75-starter-sheets-and-fixtures.md" },
         ] },
     ] },
 ]

@@ -3,11 +3,11 @@
 //! Each starter is an example model ported to one GPU target, with the model id `node_<model>`, or a model of its own
 //! such as the random walk. A starter reads and checks with no error.
 
-/// A graph file a new graph model begins from.
+/// A model file a new model begins from: a graph file, or a sheet of [`crate::sheet::starters`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Starter {
-    /// Name of the file in the crate's `starters` directory, such as `sir.toml`.
+    /// Name of the file in the crate's `starters` directory, or its `sheets` directory for a sheet, such as `sir.toml`.
     pub file_name: &'static str,
     /// Text of the file.
     pub text: &'static str,

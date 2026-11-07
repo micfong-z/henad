@@ -1,0 +1,131 @@
+# Round 1 Vote, lowered by hand.
+# B in my block = count of the 3 by 3 block, me included, whose Opinion is B;
+# Set Opinion to B when B in my block is at least 5; otherwise set Opinion to A.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "r1_vote"
+name = "Vote (round 1)"
+description = "Round 1 author model lowered to library 1"
+
+[graph]
+topology = "grid"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "r1_vote"
+name = "Vote (round 1)"
+description = "Round 1 author model lowered to library 1"
+
+[grid]
+width = 1024
+height = 1024
+boundary = "torus"
+
+[[category]]
+id = "opinion"
+variants = [
+  { name = "A", label = "A", color = [26, 26, 46, 255] },
+  { name = "B", label = "B", color = [242, 166, 59, 255] },
+]
+
+[[lane]]
+id = "opinion"
+domain = "cells"
+type = "cat:opinion"
+storage = "u8"
+initial = { cat = "opinion.A" }
+
+[[param]]
+id = "initial_share_of_b"
+label = "Initial share of B"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.5
+step = 0.01
+
+[[stat]]
+label = "Holding B"
+from = "n31.B"
+color = [242, 166, 59, 255]
+
+[[pass]]
+id = "start_cells"
+stage = "init"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n1"
+op = "rand.chance"
+config.key = 3100000101
+in.p = { param = "initial_share_of_b" }
+
+[[pass.node]]
+id = "n2"
+op = "logic.select"
+in.cond = "n1"
+in.if_true = { cat = "opinion.B" }
+in.if_false = { cat = "opinion.A" }
+
+[[pass.node]]
+id = "n3"
+op = "lane.set"
+config.lane = "opinion"
+in.value = "n2"
+
+[[pass]]
+id = "tick_cells"
+stage = "tick"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n11"
+op = "grid.count"
+config.lane = "opinion"
+config.neighborhood = "moore"
+config.include_center = true
+in.value = { cat = "opinion.B" }
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n12"
+op = "cmp.ge"
+in.a = "n11"
+in.b = { u32 = 5 }
+
+[[pass.node]]
+id = "n13"
+op = "logic.select"
+in.cond = "n12"
+in.if_true = { cat = "opinion.B" }
+in.if_false = { cat = "opinion.A" }
+
+[[pass.node]]
+id = "n14"
+op = "lane.set"
+config.lane = "opinion"
+in.value = "n13"
+
+[[pass]]
+id = "measures_cells"
+stage = "stats"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n30"
+op = "lane.get"
+config.lane = "opinion"
+
+[[pass.node]]
+id = "n31"
+op = "stat.count_by"
+config.category = "opinion"
+in.value = "n30"

@@ -19,7 +19,7 @@
 //!
 //! [`ParsedSheet::parse`] reads a sheet into a [`document::SheetDocument`] and records the place of every table and
 //! key in [`SheetPlaces`]. The reader checks the header and the `[sheet] version` first and refuses an unknown key in
-//! every table. It does not check what the lines mean.
+//! every table. It does not check what the lines mean. [`starters`] returns the sheets a new model begins from.
 //!
 //! ```
 //! use henad_graph::sheet::ParsedSheet;
@@ -52,8 +52,10 @@ use henad_core::diagnostic::CodeDiagnostic;
 pub mod document;
 pub mod limits;
 mod reader;
+mod starters;
 
 pub use reader::{ParsedSheet, SheetPlaces, TablePlaces};
+pub use starters::starters;
 
 /// Value of the `kind` key of a sheet.
 pub const KIND_SHEET: &str = "sheet";

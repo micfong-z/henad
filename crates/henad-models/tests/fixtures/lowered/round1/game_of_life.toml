@@ -1,0 +1,189 @@
+# Round 1 Game of Life, lowered by hand to today's IR (library 1) as the lowering step would write it.
+# Author lines: Status starts as "Alive with chance Initial density, otherwise Dead";
+# Each tick: Alive neighbours = count of the 8 cells around me whose Status is Alive;
+# Become Alive if Dead when Alive neighbours is 3; Become Dead if Alive when Alive neighbours is not one of 2, 3.
+# Buttons: Randomise = Start again: Status; Clear = Set Status to Dead everywhere.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "r1_game_of_life"
+name = "Game of Life (round 1)"
+description = "Round 1 author model lowered to library 1"
+
+[graph]
+topology = "grid"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "r1_game_of_life"
+name = "Game of Life (round 1)"
+description = "Round 1 author model lowered to library 1"
+
+[grid]
+width = 1024
+height = 1024
+boundary = "torus"
+
+[[category]]
+id = "status"
+variants = [
+  { name = "Dead", label = "Dead", color = [21, 21, 21, 255] },
+  { name = "Alive", label = "Alive", color = [0, 230, 118, 255] },
+]
+
+[[lane]]
+id = "status"
+domain = "cells"
+type = "cat:status"
+storage = "u8"
+initial = { cat = "status.Dead" }
+
+[[param]]
+id = "initial_density"
+label = "Initial density"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.3
+step = 0.01
+
+[[stat]]
+label = "Alive"
+from = "n31.Alive"
+color = [0, 230, 118, 255]
+
+[[action]]
+id = "randomise"
+label = "Randomise"
+runs = ["start_cells"]
+
+[[action]]
+id = "clear"
+label = "Clear"
+runs = []
+
+# Starts as: one init pass for the cells.
+[[pass]]
+id = "start_cells"
+stage = "init"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n1"
+op = "rand.chance"
+config.key = 3100000001
+in.p = { param = "initial_density" }
+
+[[pass.node]]
+id = "n2"
+op = "logic.select"
+in.cond = "n1"
+in.if_true = { cat = "status.Alive" }
+in.if_false = { cat = "status.Dead" }
+
+[[pass.node]]
+id = "n3"
+op = "lane.set"
+config.lane = "status"
+in.value = "n2"
+
+# Each tick, every cell.
+[[pass]]
+id = "tick_cells"
+stage = "tick"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n10"
+op = "lane.get"
+config.lane = "status"
+
+[[pass.node]]
+id = "n11"
+op = "grid.count"
+config.lane = "status"
+config.neighborhood = "moore"
+config.include_center = false
+in.value = { cat = "status.Alive" }
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n12"
+op = "cmp.eq"
+in.a = "n11"
+in.b = { u32 = 3 }
+
+[[pass.node]]
+id = "n13"
+op = "cmp.ne"
+in.a = "n11"
+in.b = { u32 = 2 }
+
+[[pass.node]]
+id = "n14"
+op = "cmp.ne"
+in.a = "n11"
+in.b = { u32 = 3 }
+
+[[pass.node]]
+id = "n15"
+op = "logic.and"
+in.a = "n13"
+in.b = "n14"
+
+[[pass.node]]
+id = "n16"
+op = "cat.transition"
+config.category = "status"
+config.rules = [
+  { id = "line_2", from = "Dead", to = "Alive", phase = 0 },
+  { id = "line_3", from = "Alive", to = "Dead", phase = 0 },
+]
+in.state = "n10"
+in.rule.line_2.when = "n12"
+in.rule.line_3.when = "n15"
+
+[[pass.node]]
+id = "n17"
+op = "lane.set"
+config.lane = "status"
+in.value = "n16.next"
+
+# Measures: the Plot tick beside Alive.
+[[pass]]
+id = "measures_cells"
+stage = "stats"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n30"
+op = "lane.get"
+config.lane = "status"
+
+[[pass.node]]
+id = "n31"
+op = "stat.count_by"
+config.category = "status"
+in.value = "n30"
+
+# Button Clear: Set Status to Dead everywhere.
+[[pass]]
+id = "button_clear"
+stage = "action"
+action = "clear"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n40"
+op = "lane.set"
+config.lane = "status"
+in.value = { cat = "status.Dead" }

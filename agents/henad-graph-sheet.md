@@ -13,6 +13,7 @@ plain public data, every type `#[non_exhaustive]` with a constructor (`new`, or 
 private `stored_names!` macro, which also implements the crate-private `StoredName` trait the reader
 reads names through. `SheetDocument` writes its own `Debug` ending in `finish_non_exhaustive`.
 `sheet/reader.rs` is private, and `sheet` re-exports `ParsedSheet`, `SheetPlaces` and `TablePlaces`.
+`sheet/starters.rs` is private, and `sheet` re-exports `starters`.
 `sheet/limits.rs` holds the sheet's limits apart from `crate::limits`, so `library.lock` stays as it
 is: `MAX_SHEET_BYTES` (1 MiB), `MAX_NESTING` (24), `MAX_LINES_PER_CARD` (256), `MAX_NODES_PER_LINE`
 and `MAX_SHEET_NODES` (999 each, for the lowering's `n(1000k + j)` ids) and `MAX_SHEET_ID_BYTES`
@@ -70,11 +71,32 @@ per element under a key holding a list with a table in it). `SheetPlaces::line(c
 reaches a line table. Places are offsets into the text with line ends made `\n`, and
 `ParsedSheet::place` maps a diagnostic back to the text as passed.
 
-**Tests** sit in `src/tests/sheet_document.rs`, over the four sheets in `src/tests/sheets/`: round
-1's Game of Life, SIR with rates, boids and ants in the author format, with `always` and `any_state`
-written in, Game of Life's Clear a Run once card holding "Become Dead from any state, always", and
-SIR's button `new_outbreak`, "New outbreak". Their generated comments keep the wording before the
-final editor, apart from the lines added. `every_sheet_reads` (places on every line table, the ants'
+**Starters.** `sheet::starters()` returns the sheet starters as `crate::starters::Starter` values
+(file name and text), embedded with `include_str!` from the crate's `sheets/` directory, since the
+packaging check refuses a path out of the crate: `game_of_life.toml` and `vote.toml` ("Majority
+vote"). A sheet enters `sheets/` and `starters()` only in the milestone whose lowering runs it, so
+the New model dialog never lists a sheet that cannot run, and a test looping over `starters()`
+passes at every merge. Until then a sheet is test data in `src/tests/sheets/`: the forest fire until
+its chances lower, random walk, boids and bounded confidence until agents lower, ants after them,
+SIR with rates once rates lower. `sir_chance.toml` stays test data. The graph starters stay graph
+files in `starters/`.
+
+**Tests** sit in `src/tests/sheet_document.rs`, over nine sheets: the two starters, and seven test
+sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and `ants.toml` are the author format's
+examples, and `forest_fire.toml`, `random_walk.toml`, `bounded_confidence.toml` and
+`sir_chance.toml` (round 1's SIR with chances per tick, sheet id `sir_chance`) were written from
+round 1's models, as `vote.toml` was. Every sheet holds `always` and `any_state` written in, Game
+of Life's Clear is a Run once card holding "Become Dead from any state, always", and both SIR
+sheets name their button `new_outbreak`, "New outbreak". The written sheets' keys were minted at
+random. Their tables follow the author format's canonical order, and their generated comments keep
+the wording before the final editor, with "from any state" for `any_state` and ", always" for
+`always`. The bounded confidence colour rule is `shaded` over `opinion` with no colours, since
+the schema holds no ramp. The test helper `sheets()` lists the starters from `starters()`, then the
+test sheets, so every starter is among the sheets the tests read.
+`starters_returns_game_of_life_and_vote` holds the list, the forest fire's absence and each starter
+a grid sheet, and `the_sheets_written_from_round_1_read_their_values` a value of each written
+sheet.
+`every_sheet_reads` (places on every line table, the ants'
 chip in `[[card.line.l7.row.condition.items]]`, and a depth at most half the limit),
 `every_table_reads_its_values`, `a_sheet_with_an_unknown_key_is_refused_on_the_key` (also with
 `\r\n` line ends), `a_newer_sheet_version_is_refused_on_its_key`,

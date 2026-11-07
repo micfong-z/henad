@@ -106,6 +106,18 @@ fast math the loop and its copies differ by up to 2 units in the last place (rec
 `src/tests/graph_grid_sums.rs` reduces a grid graph's `stat.sum` and `stat.mean` of an `f32` lane
 and a `vec2f` sum on the device through the engine's `partials` tree, at sizes from 1 by 1 to 300
 by 211, to closed forms that every order of addition reaches exactly. Keep these files.
+`tests/fixtures/lowered/` holds the hand-lowered references a lowered sheet is compared with: round
+1's eight models in `round1/` (`r1_<model>`, SIR with chances per tick, Seed outbreak as round 1
+named it) and the rates design's `sir_rates.toml`, `sird_competing.toml` and `sird_higher_wins.toml`
+in `rates/` (`r2_<model>`, the tick length a `tick_length` parameter in days). They are graph files
+written by hand, with hand-numbered node ids and keys, and no script writes them.
+`tests/fixtures/docs/lowered_fixture.md` holds the procedure: the mapping from each author form to
+the graph, the rate conversion, and the 20-step `henad-cli --model-file` run with every action that
+checks a file before it is committed, again after any edit. They sit apart from
+`tests/fixtures/graphs/`, whose loaders hold every file to a stock model.
+`src/tests/lowered_fixtures.rs` holds `every_lowered_fixture_reads`: the two directories hold
+exactly these eleven files, each with `kind = "graph"` in its header, read by `GraphFile::parse` and
+checked with no error. Keep these files.
 
 ## Adding a new model
 

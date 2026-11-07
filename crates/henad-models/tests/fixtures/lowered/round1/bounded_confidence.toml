@@ -1,0 +1,413 @@
+# Round 1 bounded confidence among moving people, lowered by hand.
+# Person: Position anywhere at random; Opinion a random number between 0 and 1.
+# Each tick: Like-minded = look at people within Hearing range, me included, only those whose
+# Opinion is within Confidence of mine: average of their Opinion;
+# Steer Opinion towards Like-minded's average Opinion, strength Persuasion;
+# Move by a random direction of length Wander.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "r1_bounded_confidence"
+name = "Bounded confidence (round 1)"
+description = "Round 1 author model lowered to library 1"
+
+[graph]
+topology = "agents"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "r1_bounded_confidence"
+name = "Bounded confidence (round 1)"
+description = "Round 1 author model lowered to library 1"
+
+[agents]
+count = 20000
+max_count = 1000000
+width = 1000.0
+height = 1000.0
+
+# Colours: shaded by Opinion, 0 blue to 1 orange (the editor writes an 8-step ramp).
+[[palette]]
+id = "opinion_shade"
+colors = [
+  [0, 92, 230, 255],
+  [40, 120, 235, 255],
+  [90, 150, 240, 255],
+  [150, 180, 240, 255],
+  [245, 190, 130, 255],
+  [245, 160, 80, 255],
+  [240, 130, 40, 255],
+  [230, 100, 0, 255],
+]
+
+[[lane]]
+id = "position"
+domain = "agents"
+type = "vec2f"
+initial = { vec2f = [0.0, 0.0] }
+role = "position"
+
+[[lane]]
+id = "opinion"
+domain = "agents"
+type = "f32"
+initial = { f32 = 0.0 }
+
+[[param]]
+id = "confidence"
+label = "Confidence"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.2
+step = 0.01
+
+[[param]]
+id = "hearing_range"
+label = "Hearing range"
+kind = "f32"
+min = 1.0
+max = 100.0
+default = 20.0
+step = 1.0
+
+[[param]]
+id = "persuasion"
+label = "Persuasion"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 1.0
+step = 0.01
+
+[[param]]
+id = "wander"
+label = "Wander"
+kind = "f32"
+min = 0.0
+max = 20.0
+default = 2.0
+step = 0.1
+
+[[action]]
+id = "mix_opinions"
+label = "Mix opinions"
+runs = ["start_people_opinion"]
+
+[[stat]]
+label = "Average opinion"
+from = "n41.mean"
+color = [0, 122, 245, 255]
+
+[[stat]]
+label = "Spread of opinion"
+from = "n47"
+color = [240, 130, 40, 255]
+
+[[pass]]
+id = "start_people"
+stage = "init"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n1"
+op = "ctx.world"
+
+[[pass.node]]
+id = "n2"
+op = "vec.split"
+in.v = "n1"
+
+[[pass.node]]
+id = "n3"
+op = "rand.float"
+config.key = 3100000501
+in.max = "n2.x"
+
+[[pass.node]]
+id = "n4"
+op = "rand.float"
+config.key = 3100000502
+in.max = "n2.y"
+
+[[pass.node]]
+id = "n5"
+op = "vec.make"
+in.x = "n3"
+in.y = "n4"
+
+[[pass.node]]
+id = "n6"
+op = "lane.set"
+config.lane = "position"
+in.value = "n5"
+
+# Opinion's Starts as sits in its own init pass, so the button "Start again: Opinion" can rerun it alone.
+[[pass]]
+id = "start_people_opinion"
+stage = "init"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n7"
+op = "rand.float"
+config.key = 3100000503
+in.max = { f32 = 1.0 }
+
+[[pass.node]]
+id = "n8"
+op = "lane.set"
+config.lane = "opinion"
+in.value = "n7"
+
+[[pass]]
+id = "tick_people"
+stage = "tick"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n10"
+op = "lane.get"
+config.lane = "position"
+
+[[pass.node]]
+id = "n11"
+op = "lane.get"
+config.lane = "opinion"
+
+# One shared cell size for every radius walk: the current largest distance over 3 (change A).
+[[pass.node]]
+id = "n12"
+op = "math.div"
+in.a = { param = "hearing_range" }
+in.b = { f32 = 3.0 }
+
+[[pass.node]]
+id = "n13"
+op = "agent.radius_fold"
+config.exclude_self = false
+config.acc = [
+  { name = "total", type = "f32", combine = "sum" },
+  { name = "count", type = "u32", combine = "count" },
+]
+in.center = "n10"
+in.radius = { param = "hearing_range" }
+in.cell_size = "n12"
+in.when = { bool = true }
+in.init.total = { f32 = 0.0 }
+in.init.count = { u32 = 0 }
+
+[[pass.node]]
+id = "n14"
+op = "lane.get_at"
+config.lane = "opinion"
+in.at = "n13.other"
+region = "n13"
+
+[[pass.node]]
+id = "n15"
+op = "math.sub"
+in.a = "n14"
+in.b = "n11"
+region = "n13"
+
+[[pass.node]]
+id = "n16"
+op = "math.abs"
+in.a = "n15"
+region = "n13"
+
+[[pass.node]]
+id = "n17"
+op = "cmp.le"
+in.a = "n16"
+in.b = { param = "confidence" }
+region = "n13"
+
+[[pass.node]]
+id = "n18"
+op = "region.put"
+config.acc = "total"
+in.value = "n14"
+in.when = "n17"
+region = "n13"
+
+[[pass.node]]
+id = "n19"
+op = "region.put"
+config.acc = "count"
+in.value = { u32 = 1 }
+in.when = "n17"
+region = "n13"
+
+# Average of an empty set is nothing, and a change fed nothing does nothing.
+[[pass.node]]
+id = "n20"
+op = "conv.to_f32"
+in.a = "n13.count"
+
+[[pass.node]]
+id = "n21"
+op = "math.div"
+in.a = "n13.total"
+in.b = "n20"
+
+[[pass.node]]
+id = "n22"
+op = "cmp.gt"
+in.a = "n13.count"
+in.b = { u32 = 0 }
+
+# Steer Opinion towards the average: mine + (average - mine) x Persuasion.
+[[pass.node]]
+id = "n23"
+op = "math.sub"
+in.a = "n21"
+in.b = "n11"
+
+[[pass.node]]
+id = "n24"
+op = "math.mul"
+in.a = "n23"
+in.b = { param = "persuasion" }
+
+[[pass.node]]
+id = "n25"
+op = "math.add"
+in.a = "n11"
+in.b = "n24"
+
+[[pass.node]]
+id = "n26"
+op = "logic.select"
+in.cond = "n22"
+in.if_true = "n25"
+in.if_false = "n11"
+
+[[pass.node]]
+id = "n27"
+op = "lane.set"
+config.lane = "opinion"
+in.value = "n26"
+
+# Move by a random direction of length Wander.
+[[pass.node]]
+id = "n28"
+op = "rand.float"
+config.key = 3100000504
+in.max = { f32 = 6.2831855 }
+
+[[pass.node]]
+id = "n29"
+op = "vec.from_angle"
+in.angle = "n28"
+in.length = { param = "wander" }
+
+[[pass.node]]
+id = "n30"
+op = "ctx.world"
+
+[[pass.node]]
+id = "n31"
+op = "math.add"
+in.a = "n10"
+in.b = "n29"
+
+[[pass.node]]
+id = "n32"
+op = "space.wrap"
+in.v = "n31"
+in.world = "n30"
+
+[[pass.node]]
+id = "n33"
+op = "lane.set"
+config.lane = "position"
+in.value = "n32"
+
+[[pass]]
+id = "colour_people"
+stage = "view"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n35"
+op = "lane.get"
+config.lane = "opinion"
+
+[[pass.node]]
+id = "n36"
+op = "view.ramp"
+config.palette = "opinion_shade"
+in.value = "n35"
+in.low = { f32 = 0.0 }
+in.high = { f32 = 1.0 }
+
+[[pass.node]]
+id = "n37"
+op = "view.color"
+config.palette = "opinion_shade"
+in.index = "n36"
+
+# Measures: average and spread (standard deviation) of Opinion.
+[[pass]]
+id = "measures_people"
+stage = "stats"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n40"
+op = "lane.get"
+config.lane = "opinion"
+
+[[pass.node]]
+id = "n41"
+op = "stat.mean"
+config.chunk_acc = "f64"
+in.value = "n40"
+
+[[pass.node]]
+id = "n42"
+op = "math.mul"
+in.a = "n40"
+in.b = "n40"
+
+[[pass.node]]
+id = "n43"
+op = "stat.mean"
+config.chunk_acc = "f64"
+in.value = "n42"
+
+[[pass.node]]
+id = "n44"
+op = "math.mul"
+in.a = "n41.mean"
+in.b = "n41.mean"
+
+[[pass.node]]
+id = "n45"
+op = "math.sub"
+in.a = "n43.mean"
+in.b = "n44"
+
+[[pass.node]]
+id = "n46"
+op = "math.max"
+in.a = "n45"
+in.b = { f64 = 0.0 }
+
+[[pass.node]]
+id = "n47"
+op = "math.sqrt"
+in.a = "n46"
