@@ -2,11 +2,12 @@
 //! applies and saves its canonical text, and the New model dialog opens a sheet starter under a name.
 
 use henad_core::diagnostic::DiagnosticSeverity;
+use henad_graph::sheet::check::check;
 use henad_graph::sheet::document::{
     LineKind, MadeOf, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, StartRule,
     StartsAs,
 };
-use henad_graph::sheet::sentence::{A_RANDOM_NUMBER, A_VALUE, BY_CHANCE};
+use henad_graph::sheet::sentence::{A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE, FORBIDDEN_WORDS};
 use henad_graph::sheet::{ParsedSheet, starters};
 use web_time::Instant;
 
@@ -14,7 +15,7 @@ use crate::state::{AppState, PreviewRun};
 use crate::tests::support::step_past;
 use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState, poll_at};
 use crate::ui::editor::sheet::SheetEditor;
-use crate::ui::editor::sheet::card_pane::card_lines;
+use crate::ui::editor::sheet::card_pane::{CardLine, LineNote, NoteColor, card_lines};
 use crate::ui::editor::sheet::new_model::{new_model_modal, starter_choices};
 use crate::ui::editor::sheet::sheet_pane::starts_text;
 use crate::ui::editor::{ApplyOutcome, EditorModel, apply, editor_ui, open_text, preview_running_text, save_name};
@@ -138,7 +139,7 @@ fn the_card_pane_reads_the_life_lines_as_their_sentences() {
         .expect("the starter reads")
         .into_document();
     let sentences = henad_graph::sheet::sentence::Sentences::new(&document);
-    let lines: Vec<(usize, String)> = card_lines(&document, &sentences, &document.cards[0])
+    let lines: Vec<(usize, String)> = card_lines(&document, &sentences, &check(&document), 0)
         .into_iter()
         .map(|line| (line.number, line.sentence))
         .collect();
@@ -162,7 +163,7 @@ fn the_card_pane_reads_the_life_lines_as_their_sentences() {
         .expect("the vote reads")
         .into_document();
     let sentences = henad_graph::sheet::sentence::Sentences::new(&vote);
-    let lines = card_lines(&vote, &sentences, &vote.cards[0]);
+    let lines = card_lines(&vote, &sentences, &check(&vote), 0);
     assert_eq!(
         lines[2].sentence,
         "otherwise (when line 2 does not apply) become A from any state, always"
@@ -483,6 +484,7 @@ fn top(node: &Node) -> f32 {
 struct Node {
     label: String,
     value: String,
+    description: String,
     role: egui::accesskit::Role,
     bounds: Option<egui::Rect>,
 }
@@ -523,6 +525,7 @@ impl Harness {
                 // A submenu's button ends with its arrow.
                 label: node.label().unwrap_or_default().trim_end_matches(" ⏵").to_owned(),
                 value: node.value().unwrap_or_default().to_owned(),
+                description: node.description().unwrap_or_default().to_owned(),
                 role: node.role(),
                 bounds: node.bounds().map(|rect| {
                     egui::Rect::from_min_max(
@@ -691,12 +694,12 @@ fn new_model_opens_a_dialog_and_create_opens_the_chosen_sheet() {
     assert_eq!(document.sheet.id, "game_of_life");
     assert_eq!(document.sheet.name, "My life");
     let labels = harness.labels();
-    for sentence in [
-        "Alive neighbours = count of the 8 cells around me whose Status is Alive",
-        "Become Alive from Dead, when Alive neighbours is 3",
-        "Become Dead from Alive, when Alive neighbours is none of the numbers 2, 3",
+    for line in [
+        "Line 1: Alive neighbours = count of the 8 cells around me whose Status is Alive",
+        "Line 2: Become Alive from Dead, when Alive neighbours is 3",
+        "Line 3: Become Dead from Alive, when Alive neighbours is none of the numbers 2, 3",
     ] {
-        assert!(labels.iter().any(|label| label == sentence), "{sentence} is missing");
+        assert!(labels.iter().any(|label| label == line), "{line} is missing");
     }
 
     // Cancel closes the dialog and leaves the Editor alone, and so does Escape.
@@ -806,4 +809,538 @@ fn the_empty_editor_names_every_way_in() {
         crate::ui::editor::EMPTY_EDITOR,
         "Editor is empty. Press New model, New node graph, New grid rule or Open model to start."
     );
+}
+
+/// Returns the lines of card `card` of the sheet `text` as the Card pane shows them.
+fn lines_of(text: &str, card: usize) -> Vec<CardLine> {
+    let document = ParsedSheet::parse(text).expect("the sheet reads").into_document();
+    let sentences = henad_graph::sheet::sentence::Sentences::new(&document);
+    card_lines(&document, &sentences, &check(&document), card)
+}
+
+/// Returns Game of Life with line 2 moved above line 1. Line 1 then uses Alive neighbours from below it.
+fn life_with_a_result_below() -> String {
+    let text = starter_text("game_of_life.toml");
+    let moved = text.replacen(
+        "lines = [\"l1\", \"l2\", \"l3\"]",
+        "lines = [\"l2\", \"l1\", \"l3\"]",
+        1,
+    );
+    assert_ne!(moved, text, "the lines of the card were found");
+    moved
+}
+
+/// Returns Game of Life with an old state on line 2 that Status lacks, an error of the checker at that line.
+fn life_with_an_error_at_line_two() -> String {
+    let text = starter_text("game_of_life.toml");
+    let broken = text.replacen("start_state = \"dead\"\n", "start_state = \"zombie\"\n", 1);
+    assert_ne!(broken, text, "the old state of line 2 was found");
+    broken
+}
+
+/// Returns the words of `text`, split at every character that is not a letter or a digit.
+fn words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+}
+
+/// Returns whether `text` belongs to a control that opens or creates a node graph, which the words rule exempts.
+fn opens_a_node_graph(text: &str) -> bool {
+    text.contains(crate::ui::editor::NEW_NODE_GRAPH)
+}
+
+/// Returns every forbidden word in `texts`, with the text that holds it.
+fn forbidden_words(texts: &[String]) -> Vec<(String, String)> {
+    texts
+        .iter()
+        .filter(|text| !opens_a_node_graph(text))
+        .flat_map(|text| {
+            words(text)
+                .filter(|word| {
+                    FORBIDDEN_WORDS
+                        .iter()
+                        .any(|forbidden| forbidden.eq_ignore_ascii_case(word))
+                })
+                .map(|word| (word.to_owned(), text.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+impl Harness {
+    /// Returns the label, the value and the description of every node of a settled frame.
+    fn accessible_texts(&mut self) -> Vec<String> {
+        self.settle()
+            .into_iter()
+            .flat_map(|node| [node.label, node.value, node.description])
+            .filter(|text| !text.is_empty())
+            .collect()
+    }
+
+    /// Opens the sheet `text` in the Editor and draws it.
+    fn open_sheet(&mut self, text: &str) {
+        open(&mut self.app, text);
+        self.settle();
+    }
+}
+
+#[test]
+fn every_line_of_the_life_starter_reads_its_sentence_by_accessible_name() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    let nodes = harness.settle();
+    let mut lines: Vec<&Node> = nodes
+        .iter()
+        .filter(|node| {
+            node.role == egui::accesskit::Role::Group
+                && (node.label.starts_with("Line ") || node.label.starts_with("Clear line "))
+        })
+        .collect();
+    lines.sort_by(|a, b| top(a).total_cmp(&top(b)));
+    let labels: Vec<&str> = lines.iter().map(|node| node.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "Line 1: Alive neighbours = count of the 8 cells around me whose Status is Alive",
+            "Line 2: Become Alive from Dead, when Alive neighbours is 3",
+            "Line 3: Become Dead from Alive, when Alive neighbours is none of the numbers 2, 3",
+            "Clear line 1: Become Dead from any state, always",
+        ]
+    );
+    let named =
+        |role: egui::accesskit::Role, label: &str| nodes.iter().any(|node| node.role == role && node.label == label);
+    for (role, label) in [
+        (egui::accesskit::Role::Group, "Sheet"),
+        (egui::accesskit::Role::Group, "Card"),
+        (egui::accesskit::Role::List, "Lines"),
+        (egui::accesskit::Role::List, "Lines of Clear"),
+        (egui::accesskit::Role::Button, "Alive neighbours"),
+        (egui::accesskit::Role::Button, "Alive"),
+        (egui::accesskit::Role::Button, "any state"),
+        (egui::accesskit::Role::Button, "Clear line 1: choose when, now always"),
+        (egui::accesskit::Role::ComboBox, "Line 2: comparison"),
+        (egui::accesskit::Role::Button, "Help: lines"),
+        (egui::accesskit::Role::Button, "Help: World"),
+    ] {
+        assert!(named(role, label), "no {role:?} named {label}");
+    }
+    let texts = harness.accessible_texts();
+    for text in [
+        "Each tick, every cell",
+        "3 lines",
+        "1 line",
+        henad_graph::sheet::sentence::LAW,
+    ] {
+        assert!(texts.iter().any(|known| known == text), "{text} is missing");
+    }
+}
+
+#[test]
+fn a_skipped_line_shows_its_note_under_it() {
+    let lines = lines_of(&life_with_a_skipped_line(), 0);
+    assert_eq!(
+        lines[1].notes,
+        [LineNote {
+            text: "Not run yet: choose the old state".to_owned(),
+            color: NoteColor::Amber,
+        }]
+    );
+    assert!(lines[0].notes.is_empty() && lines[2].notes.is_empty());
+    assert!(
+        lines[1]
+            .controls()
+            .iter()
+            .any(|control| control.name == "Line 2: choose the old state"),
+        "the empty old state is a blank"
+    );
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(&life_with_a_skipped_line());
+    let nodes = harness.settle();
+    let top_of = |text: &str| {
+        nodes
+            .iter()
+            .find(|node| node.label.starts_with(text) || node.value == text)
+            .map(top)
+            .unwrap_or_else(|| panic!("{text} is missing"))
+    };
+    let note = top_of("Not run yet: choose the old state");
+    assert!(
+        top_of("Line 2: ") < note && note < top_of("Line 3: "),
+        "the note sits under line 2"
+    );
+}
+
+#[test]
+fn a_checker_error_shows_at_its_line() {
+    let lines = lines_of(&life_with_an_error_at_line_two(), 0);
+    assert!(
+        lines[1]
+            .notes
+            .iter()
+            .any(|note| note.color == NoteColor::Red && note.text.contains("zombie")),
+        "{:?}",
+        lines[1].notes
+    );
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(&life_with_an_error_at_line_two());
+    let nodes = harness.settle();
+    let error = nodes
+        .iter()
+        .filter(|node| node.value.contains("zombie") && node.role == egui::accesskit::Role::Label)
+        .map(top)
+        .collect::<Vec<_>>();
+    let line = |prefix: &str| {
+        nodes
+            .iter()
+            .find(|node| node.label.starts_with(prefix))
+            .map(top)
+            .expect("the line")
+    };
+    assert_eq!(
+        error.len(),
+        1,
+        "the error shows once, under its line and not in the list below"
+    );
+    assert!(line("Line 2: ") < error[0] && error[0] < line("Line 3: "));
+}
+
+/// Returns Game of Life with a line table `l9` that no lines list names. The card never shows it.
+fn life_with_an_unlisted_line() -> String {
+    let text = starter_text("game_of_life.toml");
+    let added = text.replacen(
+        "# Lines of Clear",
+        "[card.line.l9]\nkind = \"become\"\nproperty = \"status\"\nnew_state = \"dead\"\nstart_state = \"alive\"\n\n\
+         # Lines of Clear",
+        1,
+    );
+    assert_ne!(added, text, "the Clear card was found");
+    added
+}
+
+#[test]
+fn an_error_at_a_line_the_card_does_not_show_stays_in_the_list() {
+    let text = life_with_an_unlisted_line();
+    let document = ParsedSheet::parse(&text).expect("the sheet reads").into_document();
+    let messages: Vec<String> = check(&document)
+        .diagnostics
+        .into_iter()
+        .filter(|diagnostic| diagnostic.line.as_deref() == Some("l9"))
+        .map(|diagnostic| diagnostic.diagnostic.message)
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("listed in no lines list")),
+        "{messages:?}"
+    );
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(&text);
+    let nodes = harness.settle();
+    for message in &messages {
+        let shown = nodes
+            .iter()
+            .filter(|node| node.role == egui::accesskit::Role::Label && node.value.contains(message.as_str()))
+            .count();
+        assert_eq!(shown, 1, "{message} shows {shown} times");
+    }
+}
+
+#[test]
+fn a_result_used_above_its_line_is_red_with_its_tooltip() {
+    let lines = lines_of(&life_with_a_result_below(), 0);
+    assert_eq!(lines[0].sentence, "Become Alive from Dead, when Alive neighbours is 3");
+    assert_eq!(
+        lines[0]
+            .red_chips
+            .iter()
+            .map(|(_, tooltip)| tooltip.as_str())
+            .collect::<Vec<_>>(),
+        ["Alive neighbours is below this line. Move this line under it, or choose another value."]
+    );
+    assert_eq!(
+        lines[0].notes,
+        [LineNote {
+            text: "Uses Alive neighbours, which is below this line".to_owned(),
+            color: NoteColor::Red,
+        }]
+    );
+    assert!(lines[2].red_chips.is_empty(), "line 3 sits below the result it uses");
+}
+
+#[test]
+fn chips_name_the_property_when_two_share_a_state_name() {
+    let mut document = ParsedSheet::parse(starter_text("game_of_life.toml"))
+        .expect("the starter reads")
+        .into_document();
+    let mut mood = SheetProperty::new("mood", "Mood", henad_graph::sheet::document::PropertyType::States);
+    mood.states = vec![
+        henad_graph::sheet::document::SheetState::new("calm", "Calm", [0, 0, 255, 255]),
+        henad_graph::sheet::document::SheetState::new("lively", "Alive", [255, 0, 0, 255]),
+    ];
+    document.cells.as_mut().expect("cells").push(mood);
+    let sentences = henad_graph::sheet::sentence::Sentences::new(&document);
+    let lines = card_lines(&document, &sentences, &check(&document), 0);
+    let chips: Vec<String> = lines[1].controls().into_iter().map(|control| control.name).collect();
+    assert_eq!(chips[..2], ["Status Alive".to_owned(), "Dead".to_owned()]);
+    assert_eq!(
+        lines[1].swatches.iter().map(|(_, color)| *color).collect::<Vec<_>>(),
+        [
+            egui::Color32::from_rgb(0x00, 0xe6, 0x76),
+            egui::Color32::from_rgb(0x15, 0x15, 0x15)
+        ],
+        "each state chip carries its state's colour"
+    );
+}
+
+#[test]
+fn otherwise_carries_its_partner_as_a_description() {
+    let lines = lines_of(starter_text("forest_fire.toml"), 0);
+    assert_eq!(lines[2].otherwise, ["l2"]);
+    let tooltip = "Line 2 also changes Cover for a cell that is Tree. When both apply, line 2 wins.";
+    assert_eq!(lines[2].otherwise_tooltip, tooltip);
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("forest_fire.toml"));
+    let nodes = harness.settle();
+    let otherwise: Vec<&Node> = nodes
+        .iter()
+        .filter(|node| {
+            node.role == egui::accesskit::Role::Label && node.label == "otherwise (when line 2 does not apply)"
+        })
+        .collect();
+    assert_eq!(otherwise.len(), 1, "{otherwise:?}");
+    assert_eq!(otherwise[0].description, tooltip);
+    assert!(
+        nodes.iter().any(|node| node.label
+            == "Line 3: otherwise (when line 2 does not apply) become Burning from Tree, with chance Lightning chance"),
+        "line 3 reads its otherwise"
+    );
+}
+
+#[test]
+fn a_help_popover_opens_and_closes() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    harness.click("Help: World");
+    let nodes = harness.settle();
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node.role == egui::accesskit::Role::Dialog && node.label == "World help"),
+        "the popover has a dialog role"
+    );
+    let texts = harness.accessible_texts();
+    for text in [
+        henad_graph::sheet::sentence::SheetSection::World.help(),
+        "Example:",
+        "One tick is 1 day",
+    ] {
+        assert!(texts.iter().any(|known| known == text), "{text} is missing");
+    }
+    harness.click("Close help");
+    let texts = harness.accessible_texts();
+    assert!(
+        !texts.iter().any(|known| known == "Close help"),
+        "Close help closed the popover"
+    );
+}
+
+#[test]
+fn each_lines_help_button_opens_its_own_popover() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let text = starter_text("game_of_life.toml");
+    let two_tick_cards = text.replacen("runs = \"once\"", "runs = \"each_tick\"", 1);
+    assert_ne!(two_tick_cards, text, "the Clear card was found");
+    harness.open_sheet(&two_tick_cards);
+    let nodes = harness.settle();
+    let buttons: Vec<egui::Pos2> = nodes
+        .iter()
+        .filter(|node| node.role == egui::accesskit::Role::Button && node.label == "Help: lines")
+        .filter_map(|node| node.bounds.map(|bounds| bounds.center()))
+        .collect();
+    assert_eq!(buttons.len(), 2, "each card that runs every tick has a Lines help");
+    let lines_help = |harness: &mut Harness| -> Vec<egui::Rect> {
+        harness
+            .settle()
+            .into_iter()
+            .filter(|node| node.role == egui::accesskit::Role::Dialog && node.label == "Lines help")
+            .filter_map(|node| node.bounds)
+            .collect()
+    };
+    harness.click_at(buttons[0]);
+    assert_eq!(lines_help(&mut harness).len(), 1, "the first button opens a popover");
+    // A press on the second button opens its own popover. A shared one would close instead.
+    harness.click_at(buttons[1]);
+    let open = lines_help(&mut harness);
+    assert_eq!(open.len(), 1, "the second button opens its own popover");
+    assert!(
+        open[0].top() >= buttons[1].y,
+        "the popover sits below the second button"
+    );
+}
+
+#[test]
+fn the_sheet_editor_never_shows_a_forbidden_word() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let mut texts = Vec::new();
+    for starter in starters() {
+        harness.open_sheet(starter.text);
+        texts.extend(harness.accessible_texts());
+        for help in HELP_BUTTONS {
+            harness.click(help);
+            texts.extend(harness.accessible_texts());
+            harness.press(egui::Key::Escape, egui::Modifiers::NONE);
+        }
+    }
+    for text in [life_with_a_skipped_line(), life_with_a_result_below()] {
+        harness.open_sheet(&text);
+        texts.extend(harness.accessible_texts());
+    }
+    harness.click("New model");
+    texts.extend(harness.accessible_texts());
+    assert!(
+        texts.iter().any(|text| text == "Start from"),
+        "the New model dialog was drawn"
+    );
+    let found = forbidden_words(&texts);
+    assert!(found.is_empty(), "forbidden words: {found:?}");
+}
+
+#[test]
+fn every_accessible_name_holds_its_visible_words() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    for text in starters()
+        .iter()
+        .map(|starter| starter.text.to_owned())
+        .chain([life_with_a_skipped_line(), life_with_a_result_below()])
+    {
+        harness.open_sheet(&text);
+        let nodes = harness.settle();
+        let document = ParsedSheet::parse(&text).expect("the sheet reads").into_document();
+        let sentences = henad_graph::sheet::sentence::Sentences::new(&document);
+        let report = check(&document);
+        for card in 0..document.cards.len() {
+            for line in card_lines(&document, &sentences, &report, card) {
+                for control in line.controls() {
+                    assert!(
+                        nodes.iter().any(|node| node.label == control.name),
+                        "{} has no control named {}",
+                        line.label(),
+                        control.name
+                    );
+                    if control.select {
+                        continue;
+                    }
+                    let visible = control.visible.trim_end_matches("...").trim().to_lowercase();
+                    assert!(
+                        control.name.to_lowercase().contains(&visible),
+                        "{:?} does not hold its visible words {:?}",
+                        control.name,
+                        control.visible
+                    );
+                }
+            }
+        }
+    }
+    // Each help popover and the New model dialog hold controls whose visible words are fixed.
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    for help in HELP_BUTTONS {
+        harness.click(help);
+        let nodes = harness.settle();
+        assert_control_holds(&nodes, CLOSE_HELP);
+        harness.press(egui::Key::Escape, egui::Modifiers::NONE);
+    }
+    harness.click("New model");
+    let nodes = harness.settle();
+    for visible in [CREATE, CANCEL]
+        .into_iter()
+        .chain(starter_choices().iter().map(|choice| choice.name.as_str()))
+    {
+        assert_control_holds(&nodes, visible);
+    }
+}
+
+/// Accessible names of the "?" buttons of the Game of Life sheet, each of which opens a help popover.
+const HELP_BUTTONS: [&str; 8] = [
+    "Help: Purpose",
+    "Help: World",
+    "Help: Cells",
+    "Help: Parameters",
+    "Help: Measures",
+    "Help: Colours",
+    "Help: Buttons",
+    "Help: lines",
+];
+
+/// Asserts that a button, a radio button or a check box of `nodes` shows `visible` and that its name holds it.
+fn assert_control_holds(nodes: &[Node], visible: &str) {
+    use egui::accesskit::Role;
+
+    let named = nodes.iter().any(|node| {
+        matches!(node.role, Role::Button | Role::RadioButton | Role::CheckBox)
+            && node.label.to_lowercase().contains(&visible.to_lowercase())
+    });
+    assert!(named, "no control's name holds its visible words {visible:?}");
+}
+
+#[test]
+fn the_world_tabs_show_no_forbidden_word_from_a_sheet() {
+    for starter in starters() {
+        let entry = henad_explore::model_file::ModelFile::parse(starter.text)
+            .and_then(|file| file.entry())
+            .expect("the starter has an entry");
+        let mut texts = vec![entry.name().to_owned(), entry.description().to_owned()];
+        texts.extend(
+            entry
+                .param_descriptors()
+                .iter()
+                .filter(|param| !param.is_hidden())
+                .map(|param| param.label().to_owned()),
+        );
+        texts.extend(entry.stat_descriptors().iter().map(|stat| stat.label().to_owned()));
+        texts.extend(
+            entry
+                .action_descriptors()
+                .iter()
+                .map(|action| action.label().to_owned()),
+        );
+        texts.push(tick_counter_words(entry.metadata()));
+        let found = forbidden_words(&texts);
+        assert!(found.is_empty(), "{}: {found:?}", starter.file_name);
+    }
+}
+
+/// Returns the words of the tick counter that the run of a sheet with `metadata` shows at tick 4, one tick long.
+fn tick_counter_words(metadata: &henad_core::metadata::ModelMetadata) -> String {
+    let elapsed = metadata.time.as_ref().map(|scale| {
+        crate::ui::time_axis::elapsed_text(
+            4,
+            crate::ui::time_axis::RunTime {
+                unit: scale.unit,
+                tick_length: 1.0,
+            },
+        )
+    });
+    henad_graph::sheet::sentence::tick_counter(4, elapsed.as_deref())
 }

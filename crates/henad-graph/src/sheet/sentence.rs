@@ -14,8 +14,10 @@
 //! - A *line word* names a line inside a sentence: "line 2", or on a button's card "Clear line 1".
 //! - A *line prefix* starts an accessible name: "Line 2", or on a button's card "Clear line 1".
 //! - A *blank* is an empty slot, written `...` in a sentence written as plain text.
+//! - A *chip* is a chosen value in a sentence, such as a state, a parameter or a result.
 //!
-//! [`Sentences`] writes the sentence of a line and the heading of a card from a [`SheetDocument`].
+//! [`Sentences`] writes the sentence of a line and the heading of a card from a [`SheetDocument`]. The sentence comes
+//! as plain text or as its [`SentencePart`]s, the words, chips, blanks and selects the card draws.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -89,6 +91,12 @@ pub fn line_prefix(button: Option<&str>, number: usize) -> String {
         Some(button) => format!("{button} line {number}"),
         None => format!("Line {number}"),
     }
+}
+
+/// Returns the accessible name of a line on the card, such as "Line 2: Become Alive from Dead, when Alive neighbours is
+/// 3", where `prefix` is the line prefix and `sentence` the line's sentence.
+pub fn line_name(prefix: &str, sentence: &str) -> String {
+    format!("{prefix}: {sentence}")
 }
 
 /// Returns the name of the menu of a line's tools, such as "Line 2 actions", where `prefix` is the line prefix.
@@ -754,6 +762,9 @@ impl DrawKind {
     }
 }
 
+/// Words the optional "for each ..." blank shows.
+pub const FOR_EACH_BLANK_WORDS: &str = "for each ...";
+
 /// Returns the accessible name of the optional "for each ..." blank, such as "Line 2: for each, optional".
 pub fn for_each_optional_name(prefix: &str) -> String {
     format!("{prefix}: for each, optional")
@@ -810,6 +821,9 @@ pub fn use_instead_label(comparison: &str) -> String {
 pub fn use_instead_name(prefix: &str, comparison: &str) -> String {
     format!("{prefix}: use {comparison} instead")
 }
+
+/// Word "from" of a Become line, between its new state and its old state.
+pub const FROM_WORD: &str = "from";
 
 /// Tooltip of the word "from" of a Become line.
 pub const FROM_TOOLTIP: &str = "Only cells in this state now change";
@@ -1624,6 +1638,9 @@ pub fn chances_per_tick_note(lines: &[usize]) -> String {
 
 // The Lines help
 
+/// Heading of the Lines help.
+pub const LINES_HELP_HEADING: &str = "Lines";
+
 /// Text of the Lines help.
 pub const LINES_HELP: &str = "Every cell follows these lines each tick, from the top. A line either works out a \
                               result, which lines below it can use, or changes one of my properties. Everyone reads \
@@ -1639,6 +1656,11 @@ pub const HELP_EXAMPLE_LABEL: &str = "Example:";
 
 /// Button that closes a help popover.
 pub const CLOSE_HELP: &str = "Close help";
+
+/// Returns the accessible name of the help popover under `heading`, such as "World help" or "Lines help".
+pub fn help_dialog_name(heading: &str) -> String {
+    format!("{heading} help")
+}
 
 /// Words the card and the text a sheet produces never show, outside the controls that open a node graph.
 pub const FORBIDDEN_WORDS: [&str; 19] = [
@@ -2570,6 +2592,190 @@ pub(crate) fn plural(name: &str) -> String {
     }
 }
 
+// Parts of a sentence
+
+/// One part of a line's sentence as the card draws it.
+///
+/// [`Sentences::line_parts`] returns a line's parts in order, and [`sentence_text`] joins them into the sentence as
+/// plain text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SentencePart {
+    /// Words between the values of the line, such as " = count of ".
+    Text(String),
+    /// A condition word in plain bold text: "when", "with chance" or "at rate", or on a When line "When", "When with
+    /// chance" or "When at rate".
+    ConditionWord(&'static str),
+    /// The word "from" of a Become line, which has the tooltip [`FROM_TOOLTIP`].
+    From,
+    /// A chosen value, drawn as a chip.
+    Chip(SentenceChip),
+    /// An empty slot, drawn as a dashed button that shows [`Blank::word`]. Plain text reads it as [`BLANK_TEXT`].
+    Blank(Blank),
+    /// A select inside the line and the words chosen in it, empty while nothing is chosen. Plain text reads an empty
+    /// select as [`BLANK_TEXT`].
+    Select(LineSelect, String),
+    /// The grey "always" of a change whose condition always holds.
+    Always,
+    /// The words "otherwise (when line 2 does not apply)" before a change, with the numbers of the higher lines that
+    /// override it.
+    Otherwise(Vec<usize>),
+    /// The empty optional "for each ..." blank after a chance or a rate. Plain text leaves it out.
+    ForEachBlank(DrawKind),
+}
+
+impl SentencePart {
+    /// Returns the part as plain text.
+    pub fn text(&self) -> String {
+        match self {
+            Self::Select(_, words) if words.is_empty() => BLANK_TEXT.to_owned(),
+            Self::Text(words) | Self::Select(_, words) => words.clone(),
+            Self::ConditionWord(words) => (*words).to_owned(),
+            Self::From => FROM_WORD.to_owned(),
+            Self::Chip(chip) => chip.text(),
+            Self::Blank(_) => BLANK_TEXT.to_owned(),
+            Self::Always => ALWAYS.to_owned(),
+            Self::Otherwise(lines) => otherwise_words(lines),
+            Self::ForEachBlank(_) => String::new(),
+        }
+    }
+}
+
+/// A chosen value in a line's sentence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentenceChip {
+    /// What the chip refers to. It picks the chip's colour.
+    pub kind: ChipKind,
+    /// Grey word before the name: "my", "my new" or "their", empty for any other chip.
+    pub lead: &'static str,
+    /// Name of what the chip refers to, such as "Alive neighbours", "Status Alive" or "3".
+    pub name: String,
+}
+
+impl SentenceChip {
+    /// Returns the visible text of the chip: its lead and its name, such as "my Food".
+    pub fn text(&self) -> String {
+        if self.lead.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} {}", self.lead, self.name)
+        }
+    }
+}
+
+/// What a chip of a sentence refers to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChipKind {
+    /// A typed number, a percent, yes or no.
+    Literal,
+    /// The parameter of this id.
+    Parameter(String),
+    /// The property of this id, of the thing itself or of the thing it looks at.
+    Property(String),
+    /// A state of a property.
+    State {
+        /// Id of the property the state belongs to, `None` for a state that no property has.
+        property: Option<String>,
+        /// Id of the state.
+        state: String,
+    },
+    /// Any state, the old state of a Become line that changes a cell in any state.
+    AnyState,
+    /// The result of the line of this id, or a part or a property of it.
+    Result(String),
+    /// A relation to the agent looked at, such as "distance to them".
+    Relation,
+}
+
+/// Returns `parts` joined into the sentence as plain text.
+pub fn sentence_text(parts: &[SentencePart]) -> String {
+    parts.iter().map(SentencePart::text).collect()
+}
+
+/// Parts of a sentence being written. Adjacent words merge into one [`SentencePart::Text`].
+#[derive(Debug, Default)]
+struct Parts(Vec<SentencePart>);
+
+impl Parts {
+    /// Returns parts holding `words` alone.
+    fn text(words: &str) -> Self {
+        let mut parts = Self::default();
+        parts.push(words);
+        parts
+    }
+
+    /// Returns parts holding `part` alone.
+    fn part(part: SentencePart) -> Self {
+        let mut parts = Self::default();
+        parts.add(part);
+        parts
+    }
+
+    /// Returns `groups` with `separator` between each two.
+    fn join(groups: impl IntoIterator<Item = Self>, separator: &str) -> Self {
+        let mut parts = Self::default();
+        for (index, group) in groups.into_iter().enumerate() {
+            if index > 0 {
+                parts.push(separator);
+            }
+            parts.append(group);
+        }
+        parts
+    }
+
+    /// Adds `words` at the end, merged into the last part when that part is words.
+    fn push(&mut self, words: &str) {
+        if words.is_empty() {
+            return;
+        }
+        if let Some(SentencePart::Text(last)) = self.0.last_mut() {
+            last.push_str(words);
+        } else {
+            self.0.push(SentencePart::Text(words.to_owned()));
+        }
+    }
+
+    /// Adds `part` at the end.
+    fn add(&mut self, part: SentencePart) {
+        match part {
+            SentencePart::Text(words) => self.push(&words),
+            part => self.0.push(part),
+        }
+    }
+
+    /// Adds every part of `other` at the end.
+    fn append(&mut self, other: Self) {
+        for part in other.0 {
+            self.add(part);
+        }
+    }
+
+    /// Replaces the words of the first part with `map` of them, when the first part is words.
+    fn map_first_text(&mut self, map: fn(&str) -> String) {
+        if let Some(SentencePart::Text(first)) = self.0.first_mut() {
+            *first = map(first);
+        }
+    }
+
+    /// Merges every run of adjacent words into one part.
+    fn merge_text(&mut self) {
+        for part in std::mem::take(&mut self.0) {
+            self.add(part);
+        }
+    }
+
+    /// Returns the parts as plain text.
+    fn plain(&self) -> String {
+        sentence_text(&self.0)
+    }
+
+    /// Returns the parts in order.
+    fn into_vec(self) -> Vec<SentencePart> {
+        self.0
+    }
+}
+
 /// Writer of the sentences of one sheet's lines and cards, holding the sheet's names by id.
 ///
 /// Every reference that names nothing in the sheet reads as its id, and every blank slot as [`BLANK_TEXT`].
@@ -2662,58 +2868,104 @@ impl<'a> Sentences<'a> {
         }
     }
 
-    /// Returns the sentence of line `line_id`, where `otherwise` holds the numbers of the higher lines that override
-    /// it, empty for a line that no line overrides.
+    /// Returns the sentence of line `line_id` as plain text, where `otherwise` holds the numbers of the higher lines
+    /// that override it, empty for a line that no line overrides.
     ///
-    /// A line that no card holds reads as [`BLANK_TEXT`].
+    /// A line that no card holds reads as [`BLANK_TEXT`]. The text joins the parts of [`Self::line_parts`].
     pub fn line(&self, line_id: &str, otherwise: &[usize]) -> String {
+        sentence_text(&self.line_parts(line_id, otherwise))
+    }
+
+    /// Returns the parts of the sentence of line `line_id` as the card draws them, where `otherwise` holds the numbers
+    /// of the higher lines that override it, empty for a line that no line overrides.
+    ///
+    /// A line that no card holds reads as one part of [`BLANK_TEXT`].
+    pub fn line_parts(&self, line_id: &str, otherwise: &[usize]) -> Vec<SentencePart> {
         let Some(line) = self.lines.get(line_id) else {
-            return BLANK_TEXT.to_owned();
+            return vec![SentencePart::Text(BLANK_TEXT.to_owned())];
         };
         if is_result_kind(line.kind) {
             let phrase = self.phrase(line, false);
             return match &line.name {
-                Some(name) if !(line.kind == LineKind::Compare && *name == phrase) => format!("{name} = {phrase}"),
-                _ => phrase,
+                Some(name) if !(line.kind == LineKind::Compare && *name == phrase.plain()) => {
+                    let mut parts = Parts::text(&format!("{name} = "));
+                    parts.append(phrase);
+                    parts.into_vec()
+                }
+                _ => phrase.into_vec(),
             };
         }
-        let text = match line.kind {
-            LineKind::When => return format!("{}:", self.condition(&line.condition, true)),
-            LineKind::Repeat => return format!("Repeat {} times:", self.slot(&line.times, None)),
-            LineKind::Always => return ALWAYS.to_owned(),
+        let mut change = match line.kind {
+            LineKind::When => {
+                let mut parts = self.condition(&line.condition, true);
+                parts.push(":");
+                return parts.into_vec();
+            }
+            LineKind::Repeat => {
+                let mut parts = Parts::text("Repeat ");
+                parts.append(self.slot_parts(&line.times, None, Blank::Number));
+                parts.push(" times:");
+                return parts.into_vec();
+            }
+            LineKind::Always => return vec![SentencePart::Text(ALWAYS.to_owned())],
             _ => self.change(line),
         };
         if otherwise.is_empty() {
-            upper_first(&text)
+            change.map_first_text(upper_first);
+            change.into_vec()
         } else {
-            format!("{} {}", otherwise_words(otherwise), lower_first(&text))
+            let mut parts = Parts::part(SentencePart::Otherwise(otherwise.to_vec()));
+            parts.push(" ");
+            change.map_first_text(lower_first);
+            parts.append(change);
+            parts.into_vec()
         }
     }
 
     /// Returns the words of the result line or phrase `line` after its name, such as "Alive neighbours is 3".
     pub fn result_words(&self, line: &SheetLine) -> String {
-        self.phrase(line, false)
+        self.phrase(line, false).plain()
     }
 
-    /// Returns the words of a change line with its condition, with the first letter in upper case.
-    fn change(&self, line: &SheetLine) -> String {
+    /// Returns the parts of a change line with its condition, with the first letter in upper case.
+    fn change(&self, line: &SheetLine) -> Parts {
         let property = self.property_name(line.property.as_deref());
-        let body = match line.kind {
+        let mut parts = Parts::default();
+        match line.kind {
             LineKind::Become => {
-                let new = self.state_name(line.property.as_deref(), line.new_state.as_deref());
-                let old = match line.start_state.as_deref() {
-                    Some(ANY_STATE_ID) => ANY_STATE.to_owned(),
-                    other => self.state_name(line.property.as_deref(), other),
-                };
-                format!("Become {new} from {old}")
+                parts.push("Become ");
+                parts.append(self.state_part(line.property.as_deref(), line.new_state.as_deref(), Blank::State));
+                parts.push(" ");
+                parts.add(SentencePart::From);
+                parts.push(" ");
+                match line.start_state.as_deref() {
+                    Some(ANY_STATE_ID) => parts.add(SentencePart::Chip(SentenceChip {
+                        kind: ChipKind::AnyState,
+                        lead: "",
+                        name: ANY_STATE.to_owned(),
+                    })),
+                    other => parts.append(self.state_part(line.property.as_deref(), other, Blank::OldState)),
+                }
             }
-            LineKind::Set => format!("Set {property} to {}", self.slot(&line.value, None)),
-            LineKind::Steer => format!(
-                "Steer {property} {} {}, strength {}",
-                mode_words(line.mode),
-                self.slot(&line.value, None),
-                self.slot(&line.strength, None)
-            ),
+            LineKind::Set => {
+                parts.push("Set ");
+                match line.property.as_deref() {
+                    Some(id) => parts.add(SentencePart::Chip(SentenceChip {
+                        kind: ChipKind::Property(id.to_owned()),
+                        lead: "",
+                        name: property,
+                    })),
+                    None => parts.add(SentencePart::Blank(Blank::NumberProperty)),
+                }
+                parts.push(" to ");
+                parts.append(self.slot_parts(&line.value, None, Blank::Number));
+            }
+            LineKind::Steer => {
+                parts.push(&format!("Steer {property} {} ", mode_words(line.mode)));
+                parts.append(self.slot_parts(&line.value, None, Blank::Value));
+                parts.push(", strength ");
+                parts.append(self.slot_parts(&line.strength, None, Blank::Number));
+            }
             LineKind::KeepBetween => {
                 let arrow = line
                     .property
@@ -2725,136 +2977,178 @@ impl<'a> Sentences<'a> {
                 } else {
                     property
                 };
-                format!(
-                    "Keep {measured} between {} and {}",
-                    self.slot(&line.minimum, None),
-                    self.slot(&line.maximum, None)
-                )
+                parts.push(&format!("Keep {measured} between "));
+                parts.append(self.slot_parts(&line.minimum, None, Blank::Number));
+                parts.push(" and ");
+                parts.append(self.slot_parts(&line.maximum, None, Blank::Number));
             }
-            LineKind::Move => format!("Move {} {}", mode_words(line.mode), self.slot(&line.value, None)),
-            LineKind::Leave => format!(
-                "Leave {} on {}",
-                self.slot(&line.amount, None),
-                self.property_name(line.ground_property.as_deref())
-            ),
-            LineKind::Record => format!(
+            LineKind::Move => {
+                parts.push(&format!("Move {} ", mode_words(line.mode)));
+                parts.append(self.slot_parts(&line.value, None, Blank::Value));
+            }
+            LineKind::Leave => {
+                parts.push("Leave ");
+                parts.append(self.slot_parts(&line.amount, None, Blank::Number));
+                parts.push(&format!(" on {}", self.property_name(line.ground_property.as_deref())));
+            }
+            LineKind::Record => parts.push(&format!(
                 "Record a {}",
                 line.event.as_deref().map_or(BLANK_TEXT, |id| self
                     .events
                     .get(id)
                     .map_or(id, |event| event.name.as_str()))
-            ),
-            _ => line.kind.as_str().to_owned(),
-        };
+            )),
+            _ => parts.push(line.kind.as_str()),
+        }
         let takes_condition = matches!(
             line.kind,
             LineKind::Become | LineKind::Set | LineKind::Leave | LineKind::Record
         );
         if takes_condition || !line.condition.is_blank() {
-            format!("{body}, {}", self.condition(&line.condition, false))
-        } else {
-            body
+            parts.push(", ");
+            parts.append(self.condition(&line.condition, false));
         }
+        parts
     }
 
-    /// Returns the condition in `slot`: "always", "when ...", "with chance ..." or "at rate ...", or on a When line
-    /// "When ...", "When with chance ..." or "When at rate ...".
-    fn condition(&self, slot: &Slot, on_when_line: bool) -> String {
-        let blank_head = if on_when_line { "When " } else { "" };
+    /// Returns the parts of the condition in `slot`: "always", "when ...", "with chance ..." or "at rate ...", or on a
+    /// When line "When ...", "When with chance ..." or "When at rate ...".
+    fn condition(&self, slot: &Slot, on_when_line: bool) -> Parts {
         let Some(value) = slot.value() else {
-            return format!("{blank_head}{BLANK_TEXT}");
+            let mut parts = if on_when_line {
+                Parts::text("When ")
+            } else {
+                Parts::default()
+            };
+            parts.add(SentencePart::Blank(Blank::When));
+            return parts;
         };
-        if let SheetValue::Phrase(phrase) = value {
-            match phrase.kind {
-                LineKind::Always if on_when_line => return format!("When {ALWAYS}"),
-                LineKind::Always => return ALWAYS.to_owned(),
-                LineKind::Chance => {
-                    let head = condition_head(ConditionKind::Chance, on_when_line);
-                    return format!("{head} {}", self.chance_body(phrase));
-                }
-                LineKind::Rate => {
-                    let head = condition_head(ConditionKind::Rate, on_when_line);
-                    return format!("{head} {}", self.rate_body(phrase));
-                }
-                _ => {}
-            }
-        }
-        let head = condition_head(ConditionKind::When, on_when_line);
-        format!("{head} {}", self.value(value, None))
+        let (kind, body) = match value {
+            SheetValue::Phrase(phrase) => match phrase.kind {
+                LineKind::Always if on_when_line => return Parts::text(&format!("When {ALWAYS}")),
+                LineKind::Always => return Parts::part(SentencePart::Always),
+                LineKind::Chance => (ConditionKind::Chance, self.chance_body(phrase)),
+                LineKind::Rate => (ConditionKind::Rate, self.rate_body(phrase)),
+                _ => (ConditionKind::When, self.value_parts(value, None)),
+            },
+            _ => (ConditionKind::When, self.value_parts(value, None)),
+        };
+        let mut parts = Parts::part(SentencePart::ConditionWord(condition_head(kind, on_when_line)));
+        parts.push(" ");
+        parts.append(body);
+        parts
     }
 
     /// Returns the words of the value in `slot`, [`BLANK_TEXT`] for a blank slot.
     ///
     /// `about` is the property that a state in the slot belongs to.
     pub fn slot(&self, slot: &Slot, about: Option<&str>) -> String {
-        slot.value()
-            .map_or_else(|| BLANK_TEXT.to_owned(), |value| self.value(value, about))
+        self.slot_parts(slot, about, Blank::Value).plain()
+    }
+
+    /// Returns the parts of the value in `slot`, or `blank` for a blank slot.
+    ///
+    /// `about` is the property that a state in the slot belongs to.
+    fn slot_parts(&self, slot: &Slot, about: Option<&str>, blank: Blank) -> Parts {
+        slot.value().map_or_else(
+            || Parts::part(SentencePart::Blank(blank)),
+            |value| self.value_parts(value, about),
+        )
     }
 
     /// Returns the words of `value`, where `about` is the property that a state in it belongs to.
     pub fn value(&self, value: &SheetValue, about: Option<&str>) -> String {
+        self.value_parts(value, about).plain()
+    }
+
+    /// Returns the parts of `value`, where `about` is the property that a state in it belongs to.
+    fn value_parts(&self, value: &SheetValue, about: Option<&str>) -> Parts {
         match value {
-            SheetValue::Literal(literal) => literal_words(*literal),
-            SheetValue::Chip(chip) => self.chip(chip, about),
+            SheetValue::Literal(literal) => Parts::part(SentencePart::Chip(SentenceChip {
+                kind: ChipKind::Literal,
+                lead: "",
+                name: literal_words(*literal),
+            })),
+            SheetValue::Chip(chip) => Parts::part(SentencePart::Chip(self.chip(chip, about))),
             SheetValue::Phrase(phrase) if phrase.kind == LineKind::Calculate => {
-                format!("({})", self.phrase(phrase, true))
+                let mut parts = Parts::text("(");
+                parts.append(self.phrase(phrase, true));
+                parts.push(")");
+                parts
             }
             SheetValue::Phrase(phrase) => self.phrase(phrase, true),
-            SheetValue::List(items) => {
-                let words: Vec<String> = items.iter().map(|item| self.value(item, about)).collect();
-                words.join(", ")
-            }
+            SheetValue::List(items) => Parts::join(items.iter().map(|item| self.value_parts(item, about)), ", "),
         }
     }
 
-    /// Returns the words of `chip`, where `about` is the property that a state chip belongs to.
-    fn chip(&self, chip: &SheetChip, about: Option<&str>) -> String {
+    /// Returns the chip of `chip`, where `about` is the property that a state chip belongs to.
+    fn chip(&self, chip: &SheetChip, about: Option<&str>) -> SentenceChip {
+        let property = |id: &str, lead: &'static str| SentenceChip {
+            kind: ChipKind::Property(id.to_owned()),
+            lead,
+            name: self.property_name(Some(id)),
+        };
         match chip {
-            SheetChip::Param(id) => self
-                .parameters
-                .get(id.as_str())
-                .map_or_else(|| id.clone(), |parameter| parameter.name.clone()),
-            SheetChip::My(id) => format!("my {}", self.property_name(Some(id))),
-            SheetChip::MyNew(id) => format!("my new {}", self.property_name(Some(id))),
-            SheetChip::Their(id) => format!("their {}", self.property_name(Some(id))),
-            SheetChip::Relation(relation) => relation_words(*relation).to_owned(),
-            SheetChip::State(id) => self.state_name(about, Some(id)),
+            SheetChip::Param(id) => SentenceChip {
+                kind: ChipKind::Parameter(id.clone()),
+                lead: "",
+                name: self
+                    .parameters
+                    .get(id.as_str())
+                    .map_or_else(|| id.clone(), |parameter| parameter.name.clone()),
+            },
+            SheetChip::My(id) => property(id, "my"),
+            SheetChip::MyNew(id) => property(id, "my new"),
+            SheetChip::Their(id) => property(id, "their"),
+            SheetChip::Relation(relation) => SentenceChip {
+                kind: ChipKind::Relation,
+                lead: "",
+                name: relation_words(*relation).to_owned(),
+            },
+            SheetChip::State(id) => self.state_chip(about, id),
             SheetChip::Result { line, part, property } => {
                 let result = self.lines.get(line.as_str());
                 let base = result
                     .and_then(|result| result.name.clone())
                     .unwrap_or_else(|| line.clone());
-                if let Some(part) = part {
+                let name = if let Some(part) = part {
                     if part == "open" {
-                        return format!("{base} is open");
+                        format!("{base} is open")
+                    } else {
+                        let part = result
+                            .and_then(|result| result.summaries.iter().find(|summary| summary.id == *part))
+                            .map_or(part.as_str(), |summary| summary.name.as_str());
+                        format!("{} {part}", possessive(&base))
                     }
-                    let part = result
-                        .and_then(|result| result.summaries.iter().find(|summary| summary.id == *part))
-                        .map_or(part.as_str(), |summary| summary.name.as_str());
-                    return format!("{} {part}", possessive(&base));
-                }
-                match property {
-                    Some(property) => format!("{} {}", possessive(&base), self.property_name(Some(property))),
-                    None => base,
+                } else {
+                    match property {
+                        Some(property) => format!("{} {}", possessive(&base), self.property_name(Some(property))),
+                        None => base,
+                    }
+                };
+                SentenceChip {
+                    kind: ChipKind::Result(line.clone()),
+                    lead: "",
+                    name,
                 }
             }
         }
     }
 
-    /// Returns the words of the phrase or result line `line` after its name.
+    /// Returns the parts of the phrase or result line `line` after its name.
     ///
     /// `inline` is whether the phrase sits inside a slot, where an all of reads as its items joined by "and".
     #[expect(clippy::too_many_lines, reason = "one arm per line kind reads best as one table")]
-    fn phrase(&self, line: &SheetLine, inline: bool) -> String {
+    fn phrase(&self, line: &SheetLine, inline: bool) -> Parts {
         match line.kind {
             LineKind::Count => {
-                let mut text = format!("count of {}", self.around(line));
+                let mut parts = Parts::text("count of ");
+                parts.append(self.around(line));
                 if !line.whose.is_blank() {
-                    let whose = self.slot(&line.whose, None);
-                    text.push_str(" whose ");
-                    text.push_str(whose.strip_prefix("their ").unwrap_or(&whose));
+                    parts.push(" whose ");
+                    parts.append(self.whose(&line.whose, Blank::Property));
                 }
-                text
+                parts
             }
             LineKind::LookAround => {
                 // A Total or average line of a cells card is a Look around over cells with one summary.
@@ -2862,64 +3156,83 @@ impl<'a> Sentences<'a> {
                     && line.only.is_blank()
                     && let Some(kind @ (SummaryKind::Total | SummaryKind::Average)) = summary.summary
                 {
-                    let value = self.slot(&summary.value, None);
-                    let property = value.strip_prefix("their ").unwrap_or(&value);
-                    return format!("{} of {property} over {cells}", summary_word(kind));
+                    let mut parts = Parts::part(SentencePart::Select(
+                        LineSelect::TotalOrAverage,
+                        summary_word(kind).to_owned(),
+                    ));
+                    parts.push(" of ");
+                    parts.append(self.whose(&summary.value, Blank::NumberProperty));
+                    parts.push(" over ");
+                    parts.add(SentencePart::Select(LineSelect::WhichCells, cells.to_owned()));
+                    return parts;
                 }
-                let mut text = format!("look at {}", self.around(line));
+                let mut parts = Parts::text("look at ");
+                parts.append(self.around(line));
                 if !line.only.is_blank() {
-                    let only = self.slot(&line.only, None);
-                    text.push_str(", only those whose ");
-                    text.push_str(only.strip_prefix("their ").unwrap_or(&only));
+                    parts.push(", only those whose ");
+                    parts.append(self.whose(&line.only, Blank::Property));
                 }
-                let summaries: Vec<String> = line
-                    .summaries
-                    .iter()
-                    .map(|summary| match summary.summary {
-                        Some(SummaryKind::Count) => format!("count ({})", summary.name),
-                        kind => format!(
-                            "{} of {} ({})",
-                            kind.map_or(BLANK_TEXT, summary_word),
-                            self.slot(&summary.value, None),
-                            summary.name
-                        ),
-                    })
-                    .collect();
-                format!("{text}: {}", summaries.join(", "))
+                parts.push(": ");
+                let summaries = line.summaries.iter().map(|summary| match summary.summary {
+                    Some(SummaryKind::Count) => Parts::text(&format!("count ({})", summary.name)),
+                    kind => {
+                        let mut parts = Parts::text(&format!("{} of ", kind.map_or(BLANK_TEXT, summary_word)));
+                        parts.append(self.slot_parts(&summary.value, None, Blank::Value));
+                        parts.push(&format!(" ({})", summary.name));
+                        parts
+                    }
+                });
+                parts.append(Parts::join(summaries, ", "));
+                parts
             }
             LineKind::PickCell => {
                 let open = if line.open_only == Some(true) { "open " } else { "" };
-                match line.pick {
+                Parts::text(&match line.pick {
                     Some(PickRule::Random) => format!("a random {open}neighbouring cell"),
                     pick => format!(
                         "the {open}neighbouring cell with the {} {} (ties at random)",
                         pick.map_or(BLANK_TEXT, |pick| pick.as_str()),
                         self.property_name(line.ranked_by.as_deref())
                     ),
-                }
+                })
             }
             LineKind::LookAtCell => match line.which {
-                Some(CellWhich::Here) => "the cell I am on".to_owned(),
-                Some(CellWhich::Ahead) => "the cell ahead of me".to_owned(),
-                Some(CellWhich::At) => format!("the cell at {}", self.slot(&line.place, None)),
-                None => BLANK_TEXT.to_owned(),
+                Some(CellWhich::Here) => Parts::text("the cell I am on"),
+                Some(CellWhich::Ahead) => Parts::text("the cell ahead of me"),
+                Some(CellWhich::At) => {
+                    let mut parts = Parts::text("the cell at ");
+                    parts.append(self.slot_parts(&line.place, None, Blank::Value));
+                    parts
+                }
+                None => Parts::text(BLANK_TEXT),
             },
-            LineKind::Chance => format!(
-                "{} {}",
-                condition_head(ConditionKind::Chance, false),
-                self.chance_body(line)
-            ),
-            LineKind::Rate => format!(
-                "{} {}",
-                condition_head(ConditionKind::Rate, false),
-                self.rate_body(line)
-            ),
-            LineKind::RandomNumber => format!(
-                "a random number between {} and {}",
-                self.slot(&line.low, None),
-                self.slot(&line.high, None)
-            ),
-            LineKind::RandomDirection => format!("a random direction of length {}", self.slot(&line.length, None)),
+            LineKind::Chance => {
+                let mut parts = Parts::part(SentencePart::ConditionWord(condition_head(
+                    ConditionKind::Chance,
+                    false,
+                )));
+                parts.push(" ");
+                parts.append(self.chance_body(line));
+                parts
+            }
+            LineKind::Rate => {
+                let mut parts = Parts::part(SentencePart::ConditionWord(condition_head(ConditionKind::Rate, false)));
+                parts.push(" ");
+                parts.append(self.rate_body(line));
+                parts
+            }
+            LineKind::RandomNumber => {
+                let mut parts = Parts::text("a random number between ");
+                parts.append(self.slot_parts(&line.low, None, Blank::Number));
+                parts.push(" and ");
+                parts.append(self.slot_parts(&line.high, None, Blank::Number));
+                parts
+            }
+            LineKind::RandomDirection => {
+                let mut parts = Parts::text("a random direction of length ");
+                parts.append(self.slot_parts(&line.length, None, Blank::Number));
+                parts
+            }
             LineKind::Compare => self.compare(line),
             LineKind::AllOf if inline => self.inline_all_of(line),
             LineKind::AllOf | LineKind::AnyOf | LineKind::NoneOf => {
@@ -2928,27 +3241,29 @@ impl<'a> Sentences<'a> {
                     LineKind::AnyOf => "any of",
                     _ => "none of",
                 };
-                let items: Vec<String> = line.items.iter().map(|item| self.value(item, None)).collect();
-                if items.is_empty() {
-                    format!("{words} {BLANK_TEXT}")
+                let mut parts = Parts::text(&format!("{words} "));
+                if line.items.is_empty() {
+                    parts.add(SentencePart::Blank(Blank::YesOrNoList));
                 } else {
-                    format!("{words} {}", items.join(", "))
+                    parts.append(Parts::join(
+                        line.items.iter().map(|item| self.value_parts(item, None)),
+                        ", ",
+                    ));
                 }
+                parts
             }
             LineKind::Choose => {
-                let mut rows: Vec<String> = line
-                    .rows
-                    .iter()
-                    .map(|row| {
-                        format!(
-                            "{}, {}",
-                            self.slot(&row.value, None),
-                            self.condition(&row.condition, false)
-                        )
-                    })
-                    .collect();
-                rows.push(format!("otherwise {}", self.slot(&line.otherwise, None)));
-                format!("choose, first that applies: {}", rows.join("; "))
+                let rows = line.rows.iter().map(|row| {
+                    let mut parts = self.slot_parts(&row.value, None, Blank::Value);
+                    parts.push(", ");
+                    parts.append(self.condition(&row.condition, false));
+                    parts
+                });
+                let mut otherwise = Parts::text("otherwise ");
+                otherwise.append(self.slot_parts(&line.otherwise, None, Blank::Value));
+                let mut parts = Parts::text("choose, first that applies: ");
+                parts.append(Parts::join(rows.chain(std::iter::once(otherwise)), "; "));
+                parts
             }
             LineKind::DependingOn => {
                 let property = line.property.as_deref();
@@ -2966,87 +3281,141 @@ impl<'a> Sentences<'a> {
                             .map(String::as_str)
                             .filter(|state| !states.contains(state)),
                     );
-                let branches: Vec<String> = ordered
-                    .filter_map(|state| {
-                        line.branches.get(state).map(|value| {
-                            format!(
-                                "{} -> {}",
-                                self.state_name(property, Some(state)),
-                                self.value(value, None)
-                            )
-                        })
+                let branches = ordered.filter_map(|state| {
+                    line.branches.get(state).map(|value| {
+                        let mut parts = Parts::text(&format!("{} -> ", self.state_name(property, Some(state))));
+                        parts.append(self.value_parts(value, None));
+                        parts
                     })
-                    .collect();
-                format!(
-                    "depending on my {}: {}",
-                    self.property_name(property),
-                    branches.join(", ")
-                )
+                });
+                let mut parts = Parts::text(&format!("depending on my {}: ", self.property_name(property)));
+                parts.append(Parts::join(branches, ", "));
+                parts
             }
-            LineKind::Calculate => self.formula(line.formula.as_deref().unwrap_or(BLANK_TEXT)),
-            LineKind::Always => ALWAYS.to_owned(),
+            LineKind::Calculate => match line.formula.as_deref() {
+                Some(formula) => self.formula(formula),
+                None => Parts::part(SentencePart::Blank(Blank::Number)),
+            },
+            LineKind::Always => Parts::text(ALWAYS),
             _ => self.change(line),
         }
     }
 
-    /// Returns the words of a chance after "with chance": its chance and its "for each".
-    fn chance_body(&self, line: &SheetLine) -> String {
-        format!("{}{}", self.slot(&line.chance, None), self.for_each(&line.tries))
+    /// Returns the parts after "whose" or "only those whose": the value in `slot` with the word "their" of its first
+    /// chip left out, and its comparison as plain words. An empty `slot` reads as `blank`.
+    fn whose(&self, slot: &Slot, blank: Blank) -> Parts {
+        let mut parts = self.slot_parts(slot, None, blank);
+        if let Some(SentencePart::Chip(chip)) = parts.0.first_mut()
+            && chip.lead == "their"
+        {
+            chip.lead = "";
+        }
+        for part in &mut parts.0 {
+            if let SentencePart::Select(LineSelect::Comparison, words) = part {
+                *part = SentencePart::Text(std::mem::take(words));
+            }
+        }
+        parts.merge_text();
+        parts
     }
 
-    /// Returns the words of a rate after "at rate": its rate, its unit and its "for each".
-    fn rate_body(&self, line: &SheetLine) -> String {
-        format!(
-            "{} per {}{}",
-            self.slot(&line.rate, None),
-            line.rate_unit.map_or(BLANK_TEXT, rate_unit_word),
-            self.for_each(&line.tries)
-        )
+    /// Returns the parts of a chance after "with chance": its chance and its "for each".
+    fn chance_body(&self, line: &SheetLine) -> Parts {
+        let mut parts = self.slot_parts(&line.chance, None, Blank::Chance);
+        parts.append(self.for_each(&line.tries, DrawKind::Chance));
+        parts
     }
 
-    /// Returns " for each ..." for a filled "for each" slot, and nothing for a blank one.
+    /// Returns the parts of a rate after "at rate": its rate, its unit and its "for each".
+    fn rate_body(&self, line: &SheetLine) -> Parts {
+        let mut parts = self.slot_parts(&line.rate, None, Blank::Rate);
+        parts.push(" per ");
+        parts.add(SentencePart::Select(
+            LineSelect::UnitOfTime,
+            line.rate_unit.map(rate_unit_word).unwrap_or_default().to_owned(),
+        ));
+        parts.append(self.for_each(&line.tries, DrawKind::Rate));
+        parts
+    }
+
+    /// Returns " for each ..." for a filled "for each" slot of a draw of `draw`, and the empty optional blank for a
+    /// blank one.
     ///
     /// A named result reads in the singular through [`for_each_words`].
-    fn for_each(&self, tries: &Slot) -> String {
+    fn for_each(&self, tries: &Slot, draw: DrawKind) -> Parts {
         match tries.value() {
-            None => String::new(),
+            None => Parts::part(SentencePart::ForEachBlank(draw)),
             Some(SheetValue::Chip(SheetChip::Result {
                 line,
                 part: None,
                 property: None,
-            })) => match self.lines.get(line.as_str()).and_then(|line| line.name.as_deref()) {
-                Some(name) => format!(" for each {}", for_each_words(name)),
-                None => format!(" for each {line}"),
-            },
-            Some(value) => format!(" for each {}", self.value(value, None)),
+            })) => {
+                let name = self
+                    .lines
+                    .get(line.as_str())
+                    .and_then(|line| line.name.as_deref())
+                    .map_or_else(|| line.clone(), for_each_words);
+                let mut parts = Parts::text(" for each ");
+                parts.add(SentencePart::Chip(SentenceChip {
+                    kind: ChipKind::Result(line.clone()),
+                    lead: "",
+                    name,
+                }));
+                parts
+            }
+            Some(value) => {
+                let mut parts = Parts::text(" for each ");
+                parts.append(self.value_parts(value, None));
+                parts
+            }
         }
     }
 
-    /// Returns the words of a comparison.
-    fn compare(&self, line: &SheetLine) -> String {
+    /// Returns the parts of a comparison.
+    fn compare(&self, line: &SheetLine) -> Parts {
         let about = Self::compared_property(&line.left);
-        let left = self.slot(&line.left, None);
+        let of_states = about
+            .and_then(|id| self.properties.get(id))
+            .is_some_and(|property| property.property_type == PropertyType::States);
+        let mut parts = self.slot_parts(&line.left, None, Blank::Value);
         let Some(test) = line.test else {
-            return format!("{left} {BLANK_TEXT} {}", self.slot(&line.right, about));
+            parts.push(" ");
+            parts.add(SentencePart::Select(LineSelect::Comparison, String::new()));
+            parts.push(" ");
+            parts.append(self.slot_parts(&line.right, about, Blank::Value));
+            return parts;
         };
         match test {
-            CompareTest::Within => format!(
-                "{left} is within {} of {}",
-                self.slot(&line.tolerance, None),
-                self.slot(&line.right, about)
-            ),
-            CompareTest::Outside => outside_words(&left, &self.slot(&line.low, None), &self.slot(&line.high, None)),
+            CompareTest::Within => {
+                parts.push(" is within ");
+                parts.append(self.slot_parts(&line.tolerance, None, Blank::Number));
+                parts.push(" of ");
+                parts.append(self.slot_parts(&line.right, about, Blank::Number));
+            }
+            CompareTest::Outside => {
+                parts.push(" is less than ");
+                parts.append(self.slot_parts(&line.low, None, Blank::LowerNumber));
+                parts.push(" or more than ");
+                parts.append(self.slot_parts(&line.high, None, Blank::UpperNumber));
+            }
             _ => {
-                let of_states = about
-                    .and_then(|id| self.properties.get(id))
-                    .is_some_and(|property| property.property_type == PropertyType::States);
-                format!(
-                    "{left} {} {}",
-                    comparison_words(test, of_states),
-                    self.slot(&line.right, about)
-                )
+                let list = matches!(test, CompareTest::OneOf | CompareTest::NotOneOf);
+                let blank = match (of_states, list) {
+                    (true, true) => Blank::StateList,
+                    (true, false) => Blank::State,
+                    (false, true) => Blank::NumberList,
+                    (false, false) => Blank::Number,
+                };
+                parts.push(" ");
+                parts.add(SentencePart::Select(
+                    LineSelect::Comparison,
+                    comparison_words(test, of_states).to_owned(),
+                ));
+                parts.push(" ");
+                parts.append(self.slot_parts(&line.right, about, blank));
             }
         }
+        parts
     }
 
     /// Returns the property that the value in `slot` reads, `None` when it reads none.
@@ -3061,62 +3430,74 @@ impl<'a> Sentences<'a> {
         }
     }
 
-    /// Returns the words of an all of inside a slot: its items joined by "and", and its draws after commas.
-    fn inline_all_of(&self, line: &SheetLine) -> String {
+    /// Returns the parts of an all of inside a slot: its items joined by "and", and its draws after commas.
+    fn inline_all_of(&self, line: &SheetLine) -> Parts {
         let is_draw = |item: &SheetValue| match item {
             SheetValue::Phrase(phrase) => matches!(phrase.kind, LineKind::Chance | LineKind::Rate),
             _ => false,
         };
-        let tests: Vec<String> = line
+        let tests: Vec<Parts> = line
             .items
             .iter()
             .filter(|item| !is_draw(item))
-            .map(|item| self.value(item, None))
+            .map(|item| self.value_parts(item, None))
             .collect();
-        let mut parts: Vec<String> = Vec::new();
+        let mut groups: Vec<Parts> = Vec::new();
         if !tests.is_empty() {
-            parts.push(tests.join(" and "));
+            groups.push(Parts::join(tests, " and "));
         }
-        parts.extend(
+        groups.extend(
             line.items
                 .iter()
                 .filter(|item| is_draw(item))
-                .map(|item| self.value(item, None)),
+                .map(|item| self.value_parts(item, None)),
         );
-        if parts.is_empty() {
-            format!("all of {BLANK_TEXT}")
+        if groups.is_empty() {
+            let mut parts = Parts::text("all of ");
+            parts.add(SentencePart::Blank(Blank::YesOrNoList));
+            parts
         } else {
-            parts.join(", ")
+            Parts::join(groups, ", ")
         }
     }
 
-    /// Returns the words of the neighbourhood a Count or Look around line looks at.
-    fn around(&self, line: &SheetLine) -> String {
+    /// Returns the parts of the neighbourhood a Count or Look around line looks at.
+    fn around(&self, line: &SheetLine) -> Parts {
         match line.around {
             Some(Around::AgentsWithin) => {
                 let thing = line
                     .agent_kind
                     .as_deref()
                     .map_or_else(|| BLANK_TEXT.to_owned(), |kind| plural(&self.thing_word(kind)));
-                let mut text = format!("{thing} within {}", self.slot(&line.distance, None));
+                let mut parts = Parts::text(&format!("{thing} within "));
+                parts.append(self.slot_parts(&line.distance, None, Blank::Number));
                 if line.include_me == Some(true) {
-                    text.push_str(" including me");
+                    parts.push(" including me");
                 }
-                text
+                parts
             }
-            Some(around) => around_words(around).unwrap_or(BLANK_TEXT).to_owned(),
-            None => BLANK_TEXT.to_owned(),
+            around => Parts::part(SentencePart::Select(
+                LineSelect::WhichCells,
+                around.and_then(around_words).unwrap_or_default().to_owned(),
+            )),
         }
     }
 
-    /// Returns the words of `formula`: its references by name, its operators as words, and the parentheses of a call
+    /// Returns the parts of `formula`: its references by name, its operators as words, and the parentheses of a call
     /// left out.
-    fn formula(&self, formula: &str) -> String {
-        let mut words: Vec<String> = Vec::new();
+    ///
+    /// The operator of a formula of one operator between two values, as a Calculate line of a cells card holds, is
+    /// the select of the operation.
+    fn formula(&self, formula: &str) -> Parts {
+        let mut words: Vec<Parts> = Vec::new();
         // Whether each open parenthesis is a call's. The words leave a call's parentheses out.
         let mut calls: Vec<bool> = Vec::new();
         let mut glue_next = false;
         let tokens = formula_tokens(formula);
+        let binary = tokens.len() == 3
+            && tokens
+                .get(1)
+                .is_some_and(|operator| operation_words(operator).is_some());
         for (index, token) in tokens.iter().enumerate() {
             let previous = index.checked_sub(1).and_then(|before| tokens.get(before));
             let word = match token.as_str() {
@@ -3126,42 +3507,54 @@ impl<'a> Sentences<'a> {
                     if call {
                         continue;
                     }
-                    words.push("(".to_owned());
+                    words.push(Parts::text("("));
                     glue_next = true;
                     continue;
                 }
                 ")" => {
                     if !calls.pop().unwrap_or(false) {
                         match words.last_mut() {
-                            Some(last) => last.push(')'),
-                            None => words.push(")".to_owned()),
+                            Some(last) => last.push(")"),
+                            None => words.push(Parts::text(")")),
                         }
                     }
                     continue;
                 }
-                "," => "and".to_owned(),
+                "," => Parts::text("and"),
                 "-" if previous.is_none_or(|previous| {
                     operation_words(previous).is_some() || matches!(previous.as_str(), "(" | ",")
                 }) =>
                 {
-                    words.push("-".to_owned());
+                    words.push(Parts::text("-"));
                     glue_next = true;
                     continue;
                 }
                 operator if operation_words(operator).is_some() => {
-                    operation_words(operator).unwrap_or_default().to_owned()
+                    let operation = operation_words(operator).unwrap_or_default();
+                    if binary {
+                        Parts::part(SentencePart::Select(LineSelect::Operation, operation.to_owned()))
+                    } else {
+                        Parts::text(operation)
+                    }
                 }
                 function if function_words(function).is_some() => {
-                    function_words(function).unwrap_or_default().to_owned()
+                    Parts::text(function_words(function).unwrap_or_default())
                 }
                 reference if reference.starts_with(|first: char| first.is_ascii_alphabetic()) => {
-                    self.formula_reference(reference)
+                    Parts::part(SentencePart::Chip(self.formula_reference(reference)))
                 }
-                other => other.to_owned(),
+                number if number.starts_with(|first: char| first.is_ascii_digit() || first == '.') => {
+                    Parts::part(SentencePart::Chip(SentenceChip {
+                        kind: ChipKind::Literal,
+                        lead: "",
+                        name: number.to_owned(),
+                    }))
+                }
+                other => Parts::text(other),
             };
             if glue_next {
                 match words.last_mut() {
-                    Some(last) => last.push_str(&word),
+                    Some(last) => last.append(word),
                     None => words.push(word),
                 }
                 glue_next = false;
@@ -3170,18 +3563,23 @@ impl<'a> Sentences<'a> {
             }
         }
         if words.is_empty() {
-            BLANK_TEXT.to_owned()
+            Parts::part(SentencePart::Blank(Blank::Number))
         } else {
-            words.join(" ")
+            Parts::join(words, " ")
         }
     }
 
-    /// Returns the words of a reference in a formula: `my.x`, `my_new.x`, `l2`, `l2.amount`, or a parameter id.
-    fn formula_reference(&self, reference: &str) -> String {
+    /// Returns the chip of a reference in a formula: `my.x`, `my_new.x`, `l2`, `l2.amount`, or a parameter id.
+    fn formula_reference(&self, reference: &str) -> SentenceChip {
         let (head, tail) = reference.split_once('.').unwrap_or((reference, ""));
+        let property = |lead: &'static str| SentenceChip {
+            kind: ChipKind::Property(tail.to_owned()),
+            lead,
+            name: self.property_name(Some(tail)),
+        };
         match head {
-            "my" => return format!("my {}", self.property_name(Some(tail))),
-            "my_new" => return format!("my new {}", self.property_name(Some(tail))),
+            "my" => return property("my"),
+            "my_new" => return property("my new"),
             _ => {}
         }
         if is_line_id(head) {
@@ -3223,13 +3621,31 @@ impl<'a> Sentences<'a> {
         }
     }
 
-    /// Returns the name of state `id` of property `about`, or of the first property with such a state when `about`
-    /// names none, as [`shared_state_name`] writes it.
-    ///
-    /// An unknown state reads as its id, and `None` as [`BLANK_TEXT`].
+    /// Returns the name of state `id` of property `about`, as [`Self::state_chip`] names it, or [`BLANK_TEXT`] for
+    /// `None`.
     fn state_name(&self, about: Option<&str>, id: Option<&str>) -> String {
-        let Some(id) = id else {
-            return BLANK_TEXT.to_owned();
+        id.map_or_else(|| BLANK_TEXT.to_owned(), |id| self.state_chip(about, id).name)
+    }
+
+    /// Returns the parts of state `id` of property `about`: its chip, or `blank` for `None`.
+    fn state_part(&self, about: Option<&str>, id: Option<&str>, blank: Blank) -> Parts {
+        Parts::part(id.map_or(SentencePart::Blank(blank), |id| {
+            SentencePart::Chip(self.state_chip(about, id))
+        }))
+    }
+
+    /// Returns the chip of state `id` of property `about`, or of the first property with such a state when `about`
+    /// names none, named as [`shared_state_name`] writes it.
+    ///
+    /// An unknown state is named by its id and belongs to no property.
+    fn state_chip(&self, about: Option<&str>, id: &str) -> SentenceChip {
+        let unknown = || SentenceChip {
+            kind: ChipKind::State {
+                property: None,
+                state: id.to_owned(),
+            },
+            lead: "",
+            name: id.to_owned(),
         };
         let owner = about
             .and_then(|about| self.properties.get(about))
@@ -3240,17 +3656,24 @@ impl<'a> Sentences<'a> {
                     .find(|property| property.states.iter().any(|state| state.id == id))
             });
         let Some(owner) = owner else {
-            return id.to_owned();
+            return unknown();
         };
         let Some(state) = owner.states.iter().find(|state| state.id == id) else {
-            return id.to_owned();
+            return unknown();
         };
         let shared = self.all_properties().any(|property| {
             property.id != owner.id
                 && property.property_type == PropertyType::States
                 && property.states.iter().any(|other| other.name == state.name)
         });
-        shared_state_name(&owner.name, &state.name, shared)
+        SentenceChip {
+            kind: ChipKind::State {
+                property: Some(owner.id.clone()),
+                state: id.to_owned(),
+            },
+            lead: "",
+            name: shared_state_name(&owner.name, &state.name, shared),
+        }
     }
 
     /// Returns every property of every kind of thing, in sheet order.

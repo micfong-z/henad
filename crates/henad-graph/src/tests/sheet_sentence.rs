@@ -97,6 +97,10 @@ fn every_wording_table_entry_equals_the_final_words() {
         ("Line 2", sentence::line_prefix(None, 2)),
         ("Clear line 1", sentence::line_word(Some("Clear"), 1)),
         ("Clear line 1", sentence::line_prefix(Some("Clear"), 1)),
+        (
+            "Line 2: Become Alive from Dead, when Alive neighbours is 3",
+            sentence::line_name("Line 2", "Become Alive from Dead, when Alive neighbours is 3"),
+        ),
         ("Line 2 actions", sentence::line_actions_name("Line 2")),
         ("Rename line 2", sentence::rename_line("line 2")),
         ("Move line 2 up", sentence::move_line_up("line 2")),
@@ -218,6 +222,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         ("Line 2: total or average", LineSelect::TotalOrAverage.name("Line 2")),
         ("Line 2: operation", LineSelect::Operation.name("Line 2")),
         ("unit", fixed(sentence::UNIT_PLACEHOLDER)),
+        ("for each ...", fixed(sentence::FOR_EACH_BLANK_WORDS)),
         ("Line 2: for each, optional", sentence::for_each_optional_name("Line 2")),
         (
             "Optional: make the rate grow with a count",
@@ -244,6 +249,7 @@ fn every_wording_table_entry_equals_the_final_words() {
             "Line 5: use is more than 0 instead",
             sentence::use_instead_name("Line 5", "is more than 0"),
         ),
+        ("from", fixed(sentence::FROM_WORD)),
         ("Only cells in this state now change", fixed(sentence::FROM_TOOLTIP)),
         ("Status Alive", sentence::shared_state_name("Status", "Alive", true)),
         ("Alive", sentence::shared_state_name("Status", "Alive", false)),
@@ -657,6 +663,9 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         ("Example:", fixed(sentence::HELP_EXAMPLE_LABEL)),
         ("Close help", fixed(sentence::CLOSE_HELP)),
+        ("Lines", fixed(sentence::LINES_HELP_HEADING)),
+        ("World help", sentence::help_dialog_name(SheetSection::World.heading())),
+        ("Lines help", sentence::help_dialog_name(sentence::LINES_HELP_HEADING)),
         (
             "pass, stage, lane, domain, IR, shader, WGSL, kernel, buffer, node, port, wire, category, variant, seed, \
              stream, accumulator, region, compile",
@@ -1493,6 +1502,25 @@ fn a_total_or_average_line_reads_over_its_cells() {
 }
 
 #[test]
+fn an_empty_total_or_average_value_is_a_number_property_blank() {
+    use crate::sheet::sentence::SentencePart;
+
+    let mut game = document("game_of_life.toml");
+    let mut summary = LookSummary::new("summary", "Total around");
+    summary.summary = Some(SummaryKind::Total);
+    let line = game.cards[0].line_tables.get_mut("l1").expect("line 1");
+    *line = SheetLine::new(LineKind::LookAround);
+    line.name = Some("Total around".to_owned());
+    line.around = Some(Around::Cells8);
+    line.summaries = vec![summary];
+    let sentences = Sentences::new(&game);
+    let parts = sentences.line_parts("l1", &[]);
+    assert!(parts.contains(&SentencePart::Blank(Blank::NumberProperty)), "{parts:?}");
+    assert!(!parts.contains(&SentencePart::Blank(Blank::Property)), "{parts:?}");
+    assert_eq!(Blank::NumberProperty.name("Line 1"), "Line 1: choose a number property");
+}
+
+#[test]
 fn no_fixed_wording_entry_holds_a_forbidden_word() {
     let fixed_entries = [
         sentence::LAW,
@@ -1504,6 +1532,9 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
         sentence::NO_YES_OR_NO_RESULT,
         sentence::NO_STATES,
         sentence::LINES_HELP,
+        sentence::LINES_HELP_HEADING,
+        sentence::FOR_EACH_BLANK_WORDS,
+        sentence::FROM_WORD,
         sentence::RATE_IN_BUTTON_CARD,
         sentence::NOT_YET_RATE,
         sentence::NOT_YET_REPEAT,
@@ -1535,7 +1566,9 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
         sentence::DIAGRAM_NOTE,
     ];
     let mut texts: Vec<String> = fixed_entries.iter().map(|text| (*text).to_owned()).collect();
+    texts.push(sentence::help_dialog_name(sentence::LINES_HELP_HEADING));
     for section in SheetSection::ALL {
+        texts.push(sentence::help_dialog_name(section.heading()));
         texts.push(section.help().to_owned());
         texts.push(section.help_example().to_owned());
     }
@@ -1564,6 +1597,126 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
                     .any(|forbidden| forbidden.eq_ignore_ascii_case(word)),
                 "{text:?} holds the forbidden word {word:?}"
             );
+        }
+    }
+}
+
+#[test]
+fn the_parts_of_a_life_line_name_each_chip_select_and_word() {
+    use crate::sheet::sentence::{ChipKind, SentenceChip, SentencePart};
+
+    let game = document("game_of_life.toml");
+    let sentences = Sentences::new(&game);
+    let chip = |kind: ChipKind, name: &str| {
+        SentencePart::Chip(SentenceChip {
+            kind,
+            lead: "",
+            name: name.to_owned(),
+        })
+    };
+    let state = |id: &str, name: &str| {
+        chip(
+            ChipKind::State {
+                property: Some("status".to_owned()),
+                state: id.to_owned(),
+            },
+            name,
+        )
+    };
+    let text = |words: &str| SentencePart::Text(words.to_owned());
+    assert_eq!(
+        sentences.line_parts("l1", &[]),
+        [
+            text("Alive neighbours = count of "),
+            SentencePart::Select(LineSelect::WhichCells, "the 8 cells around me".to_owned()),
+            text(" whose "),
+            chip(ChipKind::Property("status".to_owned()), "Status"),
+            text(" is "),
+            state("alive", "Alive"),
+        ]
+    );
+    assert_eq!(
+        sentences.line_parts("l2", &[]),
+        [
+            text("Become "),
+            state("alive", "Alive"),
+            text(" "),
+            SentencePart::From,
+            text(" "),
+            state("dead", "Dead"),
+            text(", "),
+            SentencePart::ConditionWord("when"),
+            text(" "),
+            chip(ChipKind::Result("l1".to_owned()), "Alive neighbours"),
+            text(" "),
+            SentencePart::Select(LineSelect::Comparison, "is".to_owned()),
+            text(" "),
+            chip(ChipKind::Literal, "3"),
+        ]
+    );
+    let line_three = sentences.line_parts("l3", &[]);
+    assert_eq!(
+        line_three[line_three.len() - 3..],
+        [chip(ChipKind::Literal, "2"), text(", "), chip(ChipKind::Literal, "3")]
+    );
+    assert_eq!(
+        sentences.line_parts("l4", &[]),
+        [
+            text("Become "),
+            state("dead", "Dead"),
+            text(" "),
+            SentencePart::From,
+            text(" "),
+            chip(ChipKind::AnyState, "any state"),
+            text(", "),
+            SentencePart::Always,
+        ]
+    );
+}
+
+#[test]
+fn otherwise_blanks_and_the_empty_for_each_are_parts_of_their_own() {
+    use crate::sheet::sentence::{SentencePart, sentence_text};
+
+    let fire = document("forest_fire.toml");
+    let sentences = Sentences::new(&fire);
+    let parts = sentences.line_parts("l3", &[2]);
+    assert_eq!(parts.first(), Some(&SentencePart::Otherwise(vec![2])));
+    assert_eq!(parts.get(1), Some(&SentencePart::Text(" become ".to_owned())));
+    assert_eq!(parts.last(), Some(&SentencePart::ForEachBlank(DrawKind::Chance)));
+    assert_eq!(
+        sentence_text(&parts),
+        "otherwise (when line 2 does not apply) become Burning from Tree, with chance Lightning chance"
+    );
+
+    let mut game = document("game_of_life.toml");
+    let line = game.cards[0].line_tables.get_mut("l2").expect("line 2");
+    line.start_state = None;
+    line.condition = Slot::Blank;
+    let sentences = Sentences::new(&game);
+    let parts = sentences.line_parts("l2", &[]);
+    assert!(parts.contains(&SentencePart::Blank(Blank::OldState)), "{parts:?}");
+    assert_eq!(parts.last(), Some(&SentencePart::Blank(Blank::When)));
+    assert_eq!(sentence_text(&parts), "Become Alive from ..., ...");
+}
+
+#[test]
+fn no_line_of_a_test_sheet_holds_two_adjacent_word_parts() {
+    use crate::sheet::sentence::SentencePart;
+
+    for (file_name, _) in sheets() {
+        let sheet = document(file_name);
+        let sentences = Sentences::new(&sheet);
+        for card in &sheet.cards {
+            for id in card.line_tables.keys() {
+                let parts = sentences.line_parts(id, &[]);
+                assert!(
+                    parts
+                        .windows(2)
+                        .all(|pair| !matches!(pair, [SentencePart::Text(_), SentencePart::Text(_)])),
+                    "{file_name} {id} splits its words: {parts:?}"
+                );
+            }
         }
     }
 }

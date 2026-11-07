@@ -148,6 +148,10 @@ formula's operators as "plus", "minus", "times", "divided by" and "to the power 
 parentheses left out and a Calculate inside a slot in parentheses. Agent lines keep round 1's words
 in those conventions, "including me" for `include_me`, an all of inside a slot joined by "and" with
 its draws after commas. A state chip that another States property also names reads "Status Alive".
+`line_parts` returns the same sentence as `SentencePart`s, which `line` joins through
+`sentence_text`: words, a bold `ConditionWord`, `From`, a `Chip` (`ChipKind` and a grey `lead` such
+as "my"), a `Blank`, a `Select`, `Always`, `Otherwise` and the empty `ForEachBlank`, which reads as
+nothing. One builder (`Parts`) writes both forms, so the card and the writer never differ.
 
 **Places.** `SheetPlaces::root` is a `TablePlaces` tree that follows the TOML structure: `table`
 (the header, an inline table's braces, or the first key naming an implicit table such as
@@ -274,8 +278,9 @@ and agent lowering, node ids, keys, the line table, the interim refusals and the
 **Tests** of the wording table and the sentences sit in `src/tests/sheet_sentence.rs`:
 `every_wording_table_entry_equals_the_final_words` holds the final wording table's rows as literals
 copied in and compares each entry, a template called with the table's example; the starters' and
-test sheets' sentences, Game of Life's three exactly; `for_each_words`; and no fixed entry holding a
-forbidden word. Writer tests sit in `src/tests/sheet_writer.rs`: `every_sheet_is_a_fixed_point`,
+test sheets' sentences, Game of Life's three exactly; the parts of its lines, blanks, "otherwise"
+and the empty "for each"; `for_each_words`; and no fixed entry holding a forbidden word. Writer
+tests sit in `src/tests/sheet_writer.rs`: `every_sheet_is_a_fixed_point`,
 `the_rust_writer_agrees_with_check_py_apart_from_comments` against `src/tests/golden/` (the
 reference writer's text for the four author-format examples with comment lines removed;
 `golden/README.md` holds the procedure, the script's SHA-256 and the rules in full),

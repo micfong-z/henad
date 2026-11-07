@@ -9,6 +9,7 @@
 //! only while the sheet reads, checks and lowers, and the preview waits paused at tick 0 until Play.
 
 pub mod card_pane;
+pub mod help;
 pub mod new_model;
 pub mod sheet_pane;
 
@@ -151,6 +152,8 @@ impl SheetEditor {
 }
 
 /// Draws the sheet editor: the Sheet pane on the left and the Card pane beside it, each scrolling on its own.
+///
+/// Each pane is a group named by its heading.
 pub fn sheet_ui(ui: &mut egui::Ui, sheet: &SheetEditor) {
     let width = ui.available_width();
     Panel::left("henad_sheet_pane")
@@ -165,6 +168,7 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &SheetEditor) {
                 .id_salt("henad_sheet_pane_scroll")
                 .auto_shrink([false; 2])
                 .show(ui, |ui| sheet_pane::sheet_pane(ui, sheet.document()));
+            pane_group(ui, SHEET_PANE);
         });
     CentralPanel::no_frame().show(ui, |ui| {
         Frame::NONE.inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
@@ -172,7 +176,36 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &SheetEditor) {
             ScrollArea::vertical()
                 .id_salt("henad_card_pane_scroll")
                 .auto_shrink([false; 2])
-                .show(ui, |ui| card_pane::card_pane(ui, sheet.document()));
+                .show(ui, |ui| card_pane::card_pane(ui, sheet.document(), sheet.report()));
+            pane_group(ui, CARD_PANE);
+        });
+    });
+}
+
+/// Gives the node of `ui` the role of a group named `name` with the bounds of what `ui` holds, as a pane of the sheet
+/// editor takes.
+fn pane_group(ui: &egui::Ui, name: &str) {
+    accessible_group(
+        ui.ctx(),
+        ui.unique_id(),
+        egui::accesskit::Role::Group,
+        name,
+        ui.min_rect(),
+    );
+}
+
+/// Gives the accessible node `id` of a `Ui` the role `role`, the name `name` and the bounds `rect`.
+///
+/// egui gives the node of a `Ui` no bounds, and an accessibility client places a named group by them.
+pub fn accessible_group(ctx: &egui::Context, id: egui::Id, role: egui::accesskit::Role, name: &str, rect: egui::Rect) {
+    ctx.accesskit_node_builder(id, |node| {
+        node.set_role(role);
+        node.set_label(name);
+        node.set_bounds(egui::accesskit::Rect {
+            x0: rect.min.x.into(),
+            y0: rect.min.y.into(),
+            x1: rect.max.x.into(),
+            y1: rect.max.y.into(),
         });
     });
 }

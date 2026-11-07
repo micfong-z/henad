@@ -642,22 +642,26 @@ fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
     }
 }
 
-/// Draws the state of the preview, the outcome of the last Apply of a sheet, and every problem of the sheet's check, or
-/// the problems that stop it lowering.
+/// Draws the state of the preview, the outcome of the last Apply of a sheet, every problem of the sheet's check that is
+/// not drawn on the card, and the problems that stop it lowering. A problem about a line the card shows sits under
+/// that line on the card.
 fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel) {
     let Some(sheet) = panel.model.sheet() else {
         return;
     };
     preview_ui(ui, &panel.preview.state, false);
-    let mut live: Vec<&CodeDiagnostic> = sheet
-        .report()
-        .diagnostics
+    let report = &sheet.report().diagnostics;
+    let mut known: Vec<&CodeDiagnostic> = report.iter().map(|diagnostic| &diagnostic.diagnostic).collect();
+    // A problem of a line the card shows is drawn under the line, and the list keeps the others.
+    let mut live: Vec<&CodeDiagnostic> = report
         .iter()
+        .filter(|diagnostic| !sheet::card_pane::draws_diagnostic(sheet.document(), diagnostic))
         .map(|diagnostic| &diagnostic.diagnostic)
         .collect();
     // The check's errors are among the problems that stop a sheet lowering. The lowering's own problems follow them.
     for problem in sheet.lowering_problems() {
-        if !live.iter().any(|known| known.message == problem.message) {
+        if !known.iter().any(|known| known.message == problem.message) {
+            known.push(problem);
             live.push(problem);
         }
     }
@@ -672,7 +676,7 @@ fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel) {
             for diagnostic in outcome
                 .diagnostics()
                 .iter()
-                .filter(|diagnostic| !live.iter().any(|known| known.message == diagnostic.message))
+                .filter(|diagnostic| !known.iter().any(|known| known.message == diagnostic.message))
             {
                 ui.colored_label(ui.visuals().error_fg_color, diagnostic_text(diagnostic));
             }

@@ -38,6 +38,20 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   status text reads them from the theme. The theme's neutral surfaces and strokes in `init.rs`
   predate MCS and stay as they are. Data colours (the plot series, the heatmap scale and its
   no-data grey) are not MCS and come from `ui/results/plot.rs`.
+- **Chips of the sheet editor take MCS mappings** (`ui/editor/sheet/card_pane.rs`). A result chip
+  fills with blue 900 and writes in blue 200, a result its line cannot use with red 900 and red
+  200, and every other chip with gray 800 and gray 100, its lead word ("my") and the parameter's
+  slider mark in gray 400. A blank is a gray 500 dashed outline around its word in gray 400, a
+  select a gray 700 outline. The law box fills with gray 900, and a highlighted line with blue
+  950. A state's swatch is the state's own colour, a data colour from the sheet. The primary
+  action is blue 700, never the prototype's orange.
+- **The words rule of sheet mode.** The Editor tab in sheet mode and the text a sheet puts in the
+  world tabs (names, measures, buttons, the tick counter) never show a word of
+  `henad_graph::sheet::sentence::FORBIDDEN_WORDS` ("node", "seed", "compile" and the rest). The
+  Model, Performance and System tabs are outside it, and so are the world tabs' own controls
+  (Seed, Build, Unlimited TPS) and the controls that open or create a node graph (New node graph).
+  Every word of sheet mode comes from `sheet::sentence`, and every accessible name there holds the
+  control's visible words.
 - **No superfluous politeness.** No "please", no apology.
 - **"can" for ability, "might" for possibility.** Never "may".
 - **Articles are optional.** "Load model" is as good as "Load the model". Drop the article when it

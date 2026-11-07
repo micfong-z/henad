@@ -1,5 +1,5 @@
 //! The Sheet pane: what a sheet model holds, read-only, one section per heading of
-//! [`SheetSection`](henad_graph::sheet::sentence::SheetSection).
+//! [`SheetSection`](henad_graph::sheet::sentence::SheetSection), each heading with its "?" help.
 //!
 //! Purpose, World (with the length of one tick), Cells (each property with its kind, its start and the lines that
 //! change it), Parameters, Measures, Colours and Buttons.
@@ -17,13 +17,17 @@ use henad_graph::sheet::sentence::{
     WALLS_SENTENCE, WRAP_AROUND, WRAP_SENTENCE, changed_by, run_once, starts_all, tick_unit_choice,
 };
 
+use super::help::{Help, help_button};
 use crate::ui::kv_grid;
 
-/// Draws every section of `document`, in the order of [`SheetSection::ALL`].
+/// Draws every section of `document`, in the order of [`SheetSection::ALL`], each heading with its help.
 pub fn sheet_pane(ui: &mut egui::Ui, document: &SheetDocument) {
     for section in SheetSection::ALL {
         ui.add_space(6.0);
-        ui.label(RichText::new(section.heading()).strong());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(section.heading()).strong());
+            help_button(ui, Help::Section(section));
+        });
         match section {
             SheetSection::Purpose => purpose(ui, document),
             SheetSection::World => world(ui, document),

@@ -1018,6 +1018,11 @@ The **Name** field follows the starter's name until you type in it.
 The sheet opens in two panes.
 **Sheet** lists what every cell has and what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.
 **Card** lists the lines every cell follows each tick, numbered from 1, each as a sentence such as "Become Alive from Dead, when Alive neighbours is 3".
+In a sentence, each chosen value is a chip: a result in blue, a state with its colour, a parameter with a slider mark, and "my" before a property in grey.
+An empty slot is a dashed box that names what it wants, such as "old state".
+Hover over a result chip to highlight the line that works it out.
+Hover over "otherwise" to highlight the higher line and read which line wins when both apply.
+Press the help button beside a heading for a short explanation with an example.
 The world stays in the Viewport, Playback, Pacing, Parameters and Charts tabs.
 
 A sheet starts at a small size in the Viewport, paused at tick 0 with the start drawn.
@@ -1025,7 +1030,7 @@ Press Play in the Playback tab to run it, and <span class="ui" markdown>:materia
 Once you select another model in the Model tab, Build builds that model instead.
 The tick counter says what a tick is: "Tick 4 (a tick is one step of time)".
 Press <span class="ui" markdown>:material-check: Apply</span> to install the model at its own size, and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the sheet as a model file.
-A sheet that holds a problem still opens, with the problem listed under the panes at its line.
+A sheet that holds a problem still opens, with the problem under its line on the card, or listed under the panes when no line holds it.
 
 ### Grid rules
 
