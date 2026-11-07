@@ -19,7 +19,9 @@
 //! A sheet of agents lowers the same way over its one kind of agent: the init pass `start_<kind>`, the tick pass of
 //! its card, a view pass for its colours, the measures and the buttons, each pass over the agents. [`agents`] holds
 //! the looks at agents within a distance, [`motion`] the changes that steer, hold and move an agent, and [`repeat`] the
-//! Repeat lines.
+//! Repeat lines. The ground under the agents lowers to fields, its own passes over the cells and the lines that read
+//! and mark it, as [`ground`] describes, and Pick a cell as [`pick`] does. [`fuse`] holds the folds over the cells
+//! around. The looks and picks of a card over one neighbourhood share them.
 //!
 //! The lowering refuses, each at its table, the line kinds this version does not lower, and a sheet past the node
 //! limits of [`crate::sheet::limits`].
@@ -30,11 +32,14 @@ mod calculate;
 mod card;
 mod colours;
 mod draw;
+mod fuse;
+mod ground;
 mod ids;
 mod keys;
 mod look;
 mod measures;
 mod motion;
+mod pick;
 mod rates;
 mod repeat;
 mod start;
@@ -48,12 +53,13 @@ use self::ids::{Numberer, Owner, SheetKey};
 use self::table::{LineMap, NodeOrigin};
 use self::value::Operand;
 use super::check::{Place, SheetReport, Thing};
-use super::document::{Edges, MadeOf, MeasureRule, SheetDocument, SheetProperty};
+use super::document::{Edges, LineKind, LineMode, MadeOf, PropertyType, SheetDocument, SheetProperty};
 use super::sentence;
 use crate::document::{Domain, GraphDocument, Pass};
 use crate::ids::NodeId;
 use crate::node::Node;
-use crate::value::{ConfigValue, InputValue, PortRef};
+use crate::types::ValueType;
+use crate::value::{ConfigValue, InputValue, Literal, MemberName, PortRef};
 use crate::wgsl::FaultNames;
 
 /// A sheet lowered to a graph document, with the table of its nodes.
@@ -94,33 +100,56 @@ pub(super) fn lower(document: &SheetDocument, report: &SheetReport) -> Result<Lo
         return builder.finish();
     }
     world::declare(&mut builder);
+    ground::declare(&mut builder);
     start::lower(&mut builder);
+    builder.on_ground(start::lower);
     card::lower_tick(&mut builder);
     colours::lower(&mut builder);
+    builder.on_ground(colours::lower);
     measures::lower(&mut builder);
+    builder.on_ground(measures::lower);
     buttons::lower(&mut builder);
     builder.finish()
 }
 
-/// Records a problem for each table of a sheet of agents that this version does not lower: walls, the ground and
-/// events.
+/// Records a problem for each table of a sheet of agents that this version does not lower: walls around agents that
+/// move by an arrow, and the first Move by line of a sheet whose ground blocks some states.
 fn refuse_agent_tables(builder: &mut Builder<'_>) {
     let document = builder.document;
+    let first_move_by = document.cards.iter().enumerate().find_map(|(card_index, card)| {
+        let relations = super::relations::CardRelations::new(document, card);
+        relations
+            .order()
+            .iter()
+            .find(|id| {
+                relations
+                    .line(id)
+                    .is_some_and(|line| line.kind == LineKind::Move && line.mode != Some(LineMode::To))
+            })
+            .map(|id| Place::Line(card_index, (*id).to_owned()))
+    });
+    let Some(move_by) = first_move_by else {
+        return;
+    };
     if document.world.edges == Edges::Walls {
         builder.problem(sentence::NOT_YET_AGENT_WALLS, Place::World);
     }
-    if let Some(ground) = &document.ground {
-        if !ground.properties.is_empty() {
-            builder.problem(sentence::NOT_YET_GROUND, Place::Property(Thing::Ground, 0));
-        } else if !ground.blocked.is_empty() {
-            builder.problem(sentence::NOT_YET_GROUND, Place::World);
-        }
+    if document
+        .ground
+        .as_ref()
+        .is_some_and(|ground| !ground.blocked.is_empty())
+    {
+        builder.problem(sentence::NOT_YET_BLOCKED_MOVE_BY, move_by);
     }
-    for (index, measure) in document.measures.iter().enumerate() {
-        if measure.rule == MeasureRule::EventCount {
-            builder.problem(sentence::NOT_YET_RECORD, Place::Measure(index));
-        }
-    }
+}
+
+/// Returns whether a card of `document` moves agents to places. The Heading of such agents is a step between cells.
+fn moves_to_cells(document: &SheetDocument) -> bool {
+    document
+        .cards
+        .iter()
+        .flat_map(|card| card.line_tables.values())
+        .any(|line| line.kind == LineKind::Move && line.mode == Some(LineMode::To))
 }
 
 /// Where a node is written: its pass, owner, slot path and region.
@@ -178,6 +207,8 @@ struct PassDraft {
     reads: HashMap<String, Operand>,
     /// Properties the pass writes.
     written: HashSet<String>,
+    /// The `space.cell_of` of my position in a pass over agents, written at its first use.
+    my_cell: Option<NodeId>,
 }
 
 /// State of one lowering.
@@ -205,6 +236,15 @@ struct Builder<'a> {
     fault_names: Vec<(NodeId, String)>,
     /// Node whose output is the result of each line lowered so far, as a temporary id, with the line's id.
     results: Vec<(NodeId, String)>,
+    /// Whether a card moves the agents to places, so the Heading is a whole step between cells.
+    cell_mover: bool,
+    /// Field and layer of each property of the ground, by property id.
+    ground_layers: HashMap<String, (String, String)>,
+    /// Function that fades each field of the ground whose properties fade: its id, the share kept per tick and the
+    /// slot path of its nodes.
+    fades: Vec<(String, InputValue, String)>,
+    /// Index of the measure of each `[[stat]]` written so far, in the order of the stats.
+    stat_measures: Vec<usize>,
 }
 
 impl<'a> Builder<'a> {
@@ -228,6 +268,37 @@ impl<'a> Builder<'a> {
             dropped: HashSet::new(),
             fault_names: Vec::new(),
             results: Vec::new(),
+            cell_mover: document.world.made_of == MadeOf::Agents && moves_to_cells(document),
+            ground_layers: HashMap::new(),
+            fades: Vec::new(),
+            stat_measures: Vec::new(),
+        }
+    }
+
+    /// Runs `lower` over the ground, when the sheet's agents walk on a ground with properties.
+    fn on_ground(&mut self, lower: fn(&mut Self)) {
+        if !self.is_agents() || self.ground_layers.is_empty() {
+            return;
+        }
+        let thing = self.thing;
+        self.thing = Thing::Ground;
+        lower(self);
+        self.thing = thing;
+    }
+
+    /// Returns whether the sheet's kind of thing, as lowered now, is the ground.
+    fn is_ground(&self) -> bool {
+        self.thing == Thing::Ground
+    }
+
+    /// Returns the type of the lane or field of property `property`.
+    ///
+    /// The Heading of agents that move to places is a step between cells, a `vec2i`.
+    fn lane_type(&self, property: &SheetProperty) -> ValueType {
+        if property.property_type == PropertyType::Heading && self.cell_mover {
+            ValueType::Vec2I
+        } else {
+            world::lane_type(property)
         }
     }
 
@@ -244,7 +315,12 @@ impl<'a> Builder<'a> {
                 .agents
                 .get(index)
                 .map_or(&[][..], |kind| kind.properties.as_slice()),
-            _ => self.document.cells.as_deref().unwrap_or(&[]),
+            Thing::Ground => self
+                .document
+                .ground
+                .as_ref()
+                .map_or(&[][..], |ground| ground.properties.as_slice()),
+            Thing::Cells => self.document.cells.as_deref().unwrap_or(&[]),
         }
     }
 
@@ -260,21 +336,30 @@ impl<'a> Builder<'a> {
     fn thing_id(&self) -> &'a str {
         match self.thing {
             Thing::Agents(index) => self.document.agents.get(index).map_or("", |kind| kind.id.as_str()),
-            _ => "cells",
+            Thing::Ground => "ground",
+            Thing::Cells => "cells",
         }
     }
 
-    /// First segment of the slot path of a node the sheet owns for a property: `cells` or `agents`.
+    /// First segment of the slot path of a node the sheet owns for a property: `cells`, `agents` or `ground`.
     fn property_path(&self) -> &'static str {
-        if self.is_agents() { "agents" } else { "cells" }
+        match self.thing {
+            Thing::Agents(_) => "agents",
+            Thing::Ground => "ground",
+            Thing::Cells => "cells",
+        }
     }
 
-    /// Words naming the sheet's kind of thing in a message: "the cells" or "the agents".
+    /// Words naming the sheet's kind of thing in a message: "the cells", "the agents" or "the ground".
     fn thing_words(&self) -> &'static str {
-        if self.is_agents() { "the agents" } else { "the cells" }
+        match self.thing {
+            Thing::Agents(_) => "the agents",
+            Thing::Ground => "the ground",
+            Thing::Cells => "the cells",
+        }
     }
 
-    /// Domain of every pass the sheet lowers to.
+    /// Domain of the passes over the sheet's kind of thing: the agents, or the cells of the grid or the ground.
     fn domain(&self) -> Domain {
         if self.is_agents() {
             Domain::Agents
@@ -304,6 +389,7 @@ impl<'a> Builder<'a> {
             drafts: Vec::new(),
             reads: HashMap::new(),
             written: HashSet::new(),
+            my_cell: None,
         });
         self.passes.len() - 1
     }
@@ -373,7 +459,7 @@ impl<'a> Builder<'a> {
         if self.dropped.contains(property) {
             return Err(format!("'{property}' has no value to read"));
         }
-        let value_type = world::lane_type(found);
+        let value_type = self.lane_type(found);
         let site = Site {
             pass,
             owner: Owner::Sheet(SheetKey {
@@ -383,7 +469,12 @@ impl<'a> Builder<'a> {
             path: format!("{}.{property}", self.property_path()),
             region: None,
         };
-        let node = self.emit(&site, "lane.get", vec![("lane", text(property))], Vec::new());
+        let node = if self.is_ground() {
+            let (config, inputs) = self.ground_access(property)?;
+            self.emit(&site, "field.get", config, inputs)
+        } else {
+            self.emit(&site, "lane.get", vec![("lane", text(property))], Vec::new())
+        };
         let read = Operand::Link(PortRef { node, port: None }, value_type);
         self.passes[pass].reads.insert(property.to_owned(), read.clone());
         Ok(read)
@@ -398,13 +489,41 @@ impl<'a> Builder<'a> {
         if !self.passes[site.pass].written.insert(property.to_owned()) {
             return Err(format!("'{property}' is changed twice by one button"));
         }
-        self.emit(
-            site,
-            "lane.set",
-            vec![("lane", text(property))],
-            vec![("value".to_owned(), value)],
-        );
+        if self.is_ground() {
+            let (config, mut inputs) = self.ground_access(property)?;
+            inputs.push(("value".to_owned(), value));
+            self.emit(site, "field.set", config, inputs);
+        } else {
+            self.emit(
+                site,
+                "lane.set",
+                vec![("lane", text(property))],
+                vec![("value".to_owned(), value)],
+            );
+        }
         Ok(())
+    }
+
+    /// Returns the configuration and the layer input of a node that reads or writes the ground property `property`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the message for a property of the ground that has no field.
+    fn ground_access(&self, property: &str) -> Result<GroundAccess, String> {
+        let (field, layer) = self
+            .ground_layers
+            .get(property)
+            .ok_or_else(|| format!("'{property}' is no property of the ground"))?;
+        Ok((
+            vec![("field", text(field))],
+            vec![(
+                "layer".to_owned(),
+                InputValue::Literal(Literal::Layer(MemberName {
+                    owner: field.clone(),
+                    member: layer.clone(),
+                })),
+            )],
+        ))
     }
 
     /// Numbers every node, checks the keys of the draws, and returns the document with its table.
@@ -448,6 +567,29 @@ impl<'a> Builder<'a> {
                 );
             }
         }
+        for (id, kept, path) in std::mem::take(&mut self.fades) {
+            let function = ground::fade_function(&id, kept, || {
+                numberer
+                    .next_of_sheet()
+                    .map(|number| NodeId::new(number).unwrap_or_else(|| unreachable!("node ids count from 1")))
+                    .map_err(|message| {
+                        vec![Problem {
+                            message,
+                            place: Place::Sheet,
+                        }]
+                    })
+            })?;
+            for node in &function.body.nodes {
+                map.insert(
+                    node.id,
+                    NodeOrigin {
+                        owner: table::NodeOwner::Sheet,
+                        path: path.clone(),
+                    },
+                );
+            }
+            self.graph.functions.push(function);
+        }
         let renumber = |id: NodeId| renumbered.get(&id).copied().unwrap_or(id);
         for draft in self.passes {
             let mut pass = draft.pass;
@@ -489,6 +631,9 @@ impl<'a> Builder<'a> {
         }
     }
 }
+
+/// Configuration and inputs of a node that reads or writes a property of the ground.
+type GroundAccess = (Vec<(&'static str, ConfigValue)>, Vec<(String, InputValue)>);
 
 /// Returns `value` as a configuration string.
 fn text(value: &str) -> ConfigValue {

@@ -98,7 +98,10 @@ fn nodes_of_kind<'a>(file: &'a SheetFile, op: &'a str) -> impl Iterator<Item = &
 #[test]
 fn every_agent_sheet_lowers_checks_and_compiles_on_the_host() {
     let names: Vec<&str> = agent_sheets().iter().map(|(name, _)| *name).collect();
-    assert_eq!(names, ["random_walk.toml", "boids.toml", "bounded_confidence.toml"]);
+    assert_eq!(
+        names,
+        ["random_walk.toml", "boids.toml", "bounded_confidence.toml", "ants.toml"]
+    );
     for (file_name, text) in agent_sheets().into_iter().chain([("mobile_sir.toml", MOBILE)]) {
         let file = lowered(text);
         assert!(file.warnings().is_empty(), "{file_name}: {:?}", file.warnings());
@@ -123,13 +126,13 @@ fn every_agent_sheet_lowers_checks_and_compiles_on_the_host() {
                 assert_eq!(id.number() / 1000, number, "{file_name}: {id} of {line}");
             }
         }
-        let written = file
-            .lowered()
-            .document()
-            .passes
-            .iter()
-            .flat_map(|pass| &pass.body.nodes)
-            .count();
+        let document = file.lowered().document();
+        let written = document.passes.iter().flat_map(|pass| &pass.body.nodes).count()
+            + document
+                .functions
+                .iter()
+                .flat_map(|function| &function.body.nodes)
+                .count();
         assert_eq!(
             written,
             file.line_map().len(),
@@ -425,17 +428,7 @@ fn each_agent_refusal_gives_one_located_error() {
     };
     let walls = edited(sheet("random_walk.toml"), "edges = \"wrap\"", "edges = \"walls\"");
     one(&walls, sentence::NOT_YET_AGENT_WALLS, "[world]");
-    let pick = boids_with(
-        "[card.line.l9]\nkind = \"pick_cell\"\nname = \"Spot\"\nkey = 5\npick = \"random\"\naround = \"cells_8\"\nopen_only = true",
-    );
-    one(&pick, sentence::NOT_YET_PICK_CELL, "[card.line.l9]");
-    let record = edited(
-        &boids_with("[card.line.l9]\nkind = \"record\"\nevent = \"turn\""),
-        "[[parameter]]",
-        "[[event]]\nid = \"turn\"\nname = \"Turn\"\n\n[[parameter]]",
-    );
-    one(&record, sentence::NOT_YET_RECORD, "[card.line.l9]");
-    // A Move to needs a place, and only a Pick a cell gives one yet. Each line takes its own error.
+    // A Move to below a Move by is refused at the Move to, and the pick that names its place lowers.
     let move_to = edited(
         &boids_with(
             "[card.line.l9]\nkind = \"pick_cell\"\nname = \"Spot\"\nkey = 5\npick = \"random\"\naround = \"cells_8\"\n\
@@ -445,11 +438,7 @@ fn each_agent_refusal_gives_one_located_error() {
         "\"l7\", \"l9\", \"l10\"]",
     );
     let move_to = edited(&move_to, "next_line = 10", "next_line = 11");
-    let errors = refusals(&move_to);
-    assert_eq!(errors.len(), 2, "{errors:#?}");
-    assert_eq!(errors[0].message, sentence::NOT_YET_PICK_CELL);
-    assert_eq!(errors[1].message, sentence::moved_by_already("Line 7"));
-    assert!(placed_at(&errors[1], &move_to).starts_with("[card.line.l10]"));
+    one(&move_to, &sentence::moved_by_already("Line 7"), "[card.line.l10]");
     let set_after_steer = boids_with(
         "[card.line.l9]\nkind = \"set\"\nproperty = \"velocity\"\nvalue = { my = \"velocity\" }\n\n\
          [card.line.l9.condition]\nkind = \"always\"",
@@ -459,25 +448,24 @@ fn each_agent_refusal_gives_one_located_error() {
         &sentence::steered_already("Line 3", "Velocity"),
         "[card.line.l9]",
     );
-    let become_in_repeat = edited(
+    let record_in_repeat = edited(
         &edited(
-            sheet("bounded_confidence.toml"),
-            "[[agents.property]]\nid = \"opinion\"",
-            "[[agents.property]]\nid = \"mood\"\nname = \"Mood\"\ntype = \"states\"\nstates = [\n  { id = \"calm\", name = \
-             \"Calm\", color = \"#007AF5\" },\n  { id = \"cross\", name = \"Cross\", color = \"#E43748\" },\n]\n\n\
-             [agents.property.starts_as]\nrule = \"value\"\nvalue = { state = \"calm\" }\n\n\
-             [[agents.property]]\nid = \"opinion\"",
+            &edited(
+                sheet("random_walk.toml"),
+                "lines = [\"l2\"]",
+                "lines = [\"l2\", \"l3\"]",
+            ),
+            "next_line = 3",
+            "next_line = 4",
         ),
-        "lines = [\"l1\", \"l2\", \"l3\"]",
-        "lines = [\"l1\", \"l2\", \"l3\", \"l4\"]",
+        "[[parameter]]",
+        "[[event]]\nid = \"turn\"\nname = \"Turn\"\n\n[[parameter]]",
     );
-    let become_in_repeat = edited(&become_in_repeat, "next_line = 4", "next_line = 6");
-    let become_in_repeat = format!(
-        "{become_in_repeat}\n\n[card.line.l4]\nkind = \"repeat\"\ntimes = 2\nlines = [\"l5\"]\n\n[card.line.l5]\n\
-         kind = \"become\"\nproperty = \"mood\"\nnew_state = \"cross\"\nstart_state = \"calm\"\n\n\
-         [card.line.l5.condition]\nkind = \"always\"\n"
+    let record_in_repeat = format!(
+        "{record_in_repeat}\n\n[card.line.l3]\nkind = \"record\"\nevent = \"turn\"\n\n[card.line.l3.condition]\n\
+         kind = \"always\"\n"
     );
-    one(&become_in_repeat, sentence::NOT_YET_REPEAT_CHANGE, "[card.line.l5]");
+    one(&record_in_repeat, sentence::NOT_YET_REPEAT_CHANGE, "[card.line.l3]");
     // The checker refuses a look inside a Repeat and a second kind of agent, each at its table.
     let look_in_repeat = edited(
         &edited(
@@ -512,18 +500,6 @@ fn each_agent_refusal_gives_one_located_error() {
         errors.iter().any(|error| error.message == sentence::ONE_AGENT_KIND),
         "{errors:#?}"
     );
-}
-
-#[test]
-fn a_look_at_the_cells_around_an_agent_waits_for_the_ground() {
-    let text = boids_with(
-        "[card.line.l9]\nkind = \"count\"\nname = \"Near\"\naround = \"cells_8\"\n\n[card.line.l9.whose]\n\
-         kind = \"compare\"\ntest = \"more_than\"\nleft = { my = \"velocity\" }\nright = 1",
-    );
-    let errors = refusals(&text);
-    assert_eq!(errors.len(), 1, "{errors:#?}");
-    assert_eq!(errors[0].message, sentence::NOT_YET_GROUND);
-    assert!(placed_at(&errors[0], &text).starts_with("[card.line.l9]"));
 }
 
 #[test]

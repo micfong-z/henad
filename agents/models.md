@@ -159,9 +159,11 @@ with the share of the removed cells that are Dead within 0.01 of 0.5, and the ha
 `two_runs_at_one_seed_write_identical_statistics` runs the SIR starter twice at seed 5 and a tick of
 half a day. The rates SIR also joins every grid-sheet gate of `sheet_grid.rs` through
 `starters()`, five grid sheets in all. Keep these files.
-`src/tests/sheet_agents.rs` gates the agent sheet starters on a `TestDeviceRequest::baseline()`
-device: `every_agent_sheet_lowers_checks_and_compiles` (no warning, no graph diagnostic, 100 ticks
-and a stats read), `the_lowered_agent_sheets_bind_at_most_8_storage_buffers` (each pass's `Demand`),
+`src/tests/sheet_agents.rs` gates the agent sheet starters (the random walk, boids, bounded
+confidence and the ants, whose tick pass binds exactly 8 storage buffers) on a
+`TestDeviceRequest::baseline()` device: `every_agent_sheet_lowers_checks_and_compiles` (no warning,
+no graph diagnostic, 100 ticks and a stats read),
+`the_lowered_agent_sheets_bind_at_most_8_storage_buffers` (each pass's `Demand`),
 `every_agent_sheet_entry_conforms` (the testing kit, then at `max_count` either no shortfall or only
 `SheetFile::shortfalls`' words with no forbidden word), and
 `a_capped_fold_fault_names_the_author_line` (the boids with a planted move to the origin, so the
@@ -172,9 +174,12 @@ planted rule error outside it: the random walk's mean squared step over a tick w
 errors of `4 * 2^2` (the planted error moves once outside the Repeat), the boids' speeds within 3
 and 15 after each of 300 ticks with 20000 birds and their polarisation after the last above 0 and
 at most 0.95 (the planted error steers by the average velocity, near 1, and a run on the device is
-not repeatable at one seed, so no lower edge holds), and bounded confidence's one
+not repeatable at one seed, so no lower edge holds), bounded confidence's one
 opinion group (runs of 0.01 bins each holding 1% of the people) after 100 ticks (the planted error
-steers by the average, no group). Keep these files.
+steers by the average, no group), and the ants' deliveries, at most 1000 by tick 2000 and at least
+500 by tick 3000 at the defaults (`the_ants_sheet_delivers_food_in_band`: round 1's file delivers
+nothing by tick 2000 at seed 2, so the lower edge sits at tick 3000; the planted error picks the
+least To food as the Food way). Keep these files.
 
 ## Adding a new model
 

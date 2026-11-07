@@ -445,6 +445,7 @@ kind = "always"
 kind = "set"
 property = "reward_held"
 value = 0
+note = "This model forms its trail later than the ant model among Henad's examples: an ant lays as much on a diagonal step, lays nothing on its own cell, and picks among equal cells at random. Once a trail forms, deliveries rise at about the same rate."
 
 [card.line.l16.condition]
 kind = "always"

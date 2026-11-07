@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::card::CardLowering;
 use super::ids::{GROUP_LOOK, Owner, SheetKey, line_number};
-use super::look::{Fold, accumulator, guard_by_count, port_of, summary_accumulator};
+use super::look::{Fold, FoldKind, accumulator, guard_by_count, port_of, summary_accumulator};
 use super::value::Operand;
 use super::{Site, text};
 use crate::ids::NodeId;
@@ -247,7 +247,7 @@ impl<'a> CardLowering<'_, 'a> {
         self.folds.push(Fold {
             node,
             reads: HashMap::new(),
-            agents: true,
+            kind: FoldKind::Agents,
         });
         let within = match (filtered, distance) {
             (true, Some(distance)) => {
@@ -428,7 +428,7 @@ impl<'a> CardLowering<'_, 'a> {
         let fold = self
             .folds
             .last()
-            .filter(|fold| fold.agents)
+            .filter(|fold| fold.kind == FoldKind::Agents)
             .ok_or_else(|| format!("{} stands outside a look at agents", relation.as_str()))?;
         let node = fold.node;
         let site = site.inside(node);

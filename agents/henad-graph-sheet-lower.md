@@ -6,13 +6,19 @@ wording table, relations, checker and `SheetFile`. `sheet/lower/` is private, an
 `LineMap` and the `FaultNames` of the looks at agents.
 
 The `Builder` (`lower/mod.rs`) lowers over one kind of thing, `check::Thing`: the cells, or the one
-kind of agent (D43, the checker's `ONE_AGENT_KIND` refuses a second). `properties()`,
-`property(id)`, `thing_id()` (`cells` or the kind's id, as a card's `every` names it),
-`property_path()` (`cells` or `agents`, the first segment of a sheet-owned node's slot path),
-`thing_words()`, `domain()` and `property_place(index)` read it, so the starts, the cards, the
-colours, the measures and the buttons lower over either. Pass ids follow it: `start_<thing>`,
-`tick_<card>` (`tick_<thing>` with no card), `colours`, `measures`, `button_<button>`,
-`restart_<button>`. `node_mut` rewrites a written node's configuration, for a fold's accumulators.
+kind of agent (D43, the checker's `ONE_AGENT_KIND` refuses a second), and for a sheet of agents on a
+ground with properties also the ground (`on_ground` runs a lowering with `thing` set to
+`Thing::Ground`). `properties()`, `property(id)`, `thing_id()` (`cells`, the kind's id as a card's
+`every` names it, or `ground`), `property_path()` (`cells`, `agents` or `ground`, the first segment
+of a sheet-owned node's slot path), `thing_words()`, `domain()` (cells for the ground) and
+`property_place(index)` read it, so the starts, the cards, the colours, the measures and the buttons
+lower over any of them. Over the ground `read` is a `field.get` and `write` a `field.set` through
+`ground_access` (the field and layer of `ground_layers`). `lane_type` is the lane's type, the
+Heading a `vec2i` when `cell_mover` holds (a card moves agents to places). Pass ids follow it:
+`start_<thing>`, `tick_<card>` (`tick_<thing>` with no card), `colours` (`colours_ground`),
+`measures` (`measures_ground`), `button_<button>`, `restart_<button>` (`restart_<button>_ground` for
+the ground). The `[[stat]]` tables keep the measures' order across the two measure passes
+(`stat_measures`). `node_mut` rewrites a written node's configuration, for a fold's accumulators.
 `dropped` holds the properties with no lane.
 
 **The lowering of grid sheets** (S7, S10). `lower::lower(&document, &report)` builds a
@@ -105,13 +111,13 @@ Cards (`card.rs`): lines lower in display order, a skipped line (`SheetReport::i
 holds its dependents) left out (D39, D84). Looks (`look.rs`): a Count over cells is `grid.count`
 (one per counted state, added in `u32`) when its test is `their` States property `is`, `is_not`,
 `one_of` or `not_one_of` states (`is_not` counts the other states, exact at walls) and it has no
-`only`, and otherwise a `grid.fold` (`moore_row_major` or `von_neumann`, `include_center` for the 3
-by 3 block, `boundary = "domain"`) with a `count` accumulator, `their` as `lane.get_at` of its
-`cell`, and a `region.put` whose `when` is the test, `only` joined in by `logic.and`. A Look around
-over cells is one such fold with `count` and an accumulator `summary_<id>` per summary (`f32` `sum`
-for total and average, `max`, `min`, `bool` `or` for any and `and` for all; a Count summary reads
-`count`), each `region.put` under the `only` test, and its parts kept by line id and part for `{
-result, part }` chips (`count` and each summary id). An average divides by `count` through
+`only`, and otherwise a `count` accumulator `<prefix>_count` of a shared fold over the cells around
+(`fuse.rs`, below), `their` as `lane.get_at` of its `cell`, and a `region.put` whose `when` is the
+test, `only` and the fold's guard joined in by `logic.and`. A Look around over cells takes
+`<prefix>_count` and an accumulator `<prefix>_summary_<id>` per summary (`f32` `sum` for total and
+average, `max`, `min`, `bool` `or` for any and `and` for all; a Count summary reads the count), each
+`region.put` under the `only` test, and its parts kept by line id and part for `{ result, part }`
+chips (`count` and each summary id). An average divides by `count` through
 `conv.to_f32`, and an average, largest or smallest of no neighbour is 0 through a `logic.select` on
 `count > 0`. A Look around in a slot is an error, since it gives several values. Draws (`draw.rs`):
 a chance is one `rand.chance`, and with `tries` it holds with `1 - (1 - p)^n` (P), through
@@ -198,27 +204,26 @@ places the checker's error at `[card.line.l2]` with no pass or node, then a node
 `an_unknown_node_is_placed_on_the_sheet` plants node `n900000` and places it, a pass of no card and
 a bare warning at `[sheet]`.
 
-**The lowering of agent sheets** (S17). A sheet of agents first refuses, each at its table, `edges =
-"walls"` (`NOT_YET_AGENT_WALLS` at `[world]`, row H), a ground with properties or blocked states
-(`NOT_YET_GROUND`) and a count of events (`NOT_YET_RECORD` at the measure). `world.rs` writes
-`[agents]` from the kind (`count`, `max_count`, the world's width and height in `f32`), Position as
-the `vec2f` lane with `role = "position"`, an Arrow and a Heading as `vec2f`, and the Heading
-dropped (no lane, in `dropped`) when nothing reads it: no `my`, `my_new` or `their` chip of it in
-any line, phrase or formula (`formula::references`), no measure of it, and no colour rule by heading
-or of it. A read of a dropped property is an error. A Heading holds the last move that was not 0,
-the round 1 hand-lowered files' form, and starts at none, (0, 0).
+**The lowering of agent sheets** (S17). A sheet of agents first refuses `edges = "walls"` when a
+card moves agents by an arrow (`NOT_YET_AGENT_WALLS` at `[world]`, row H), and the first Move by in
+display order when the ground blocks some states (`NOT_YET_BLOCKED_MOVE_BY` at its line). Agents
+that move to places walk the cells and stop at walls and blocked cells on their own. `world.rs`
+writes `[agents]` from the kind (`count`, `max_count`, the world's width and height in `f32`),
+Position as the `vec2f` lane with `role = "position"`, an Arrow and a Heading as `vec2f`, and the
+Heading dropped (no lane, in `dropped`) when nothing reads it: no `my`, `my_new` or `their` chip of
+it in any line, phrase or formula (`formula::references`), no measure of it, and no colour rule by
+heading or of it. A read of a dropped property is an error. A Heading holds the last move that was
+not 0, the round 1 hand-lowered files' form, and starts at none, (0, 0).
 
 Starts (`start.rs`): Position `anywhere` is `ctx.world`, `vec.split` and two `rand.float` keyed
 `starts_as.x` and `starts_as.y`, then `vec.make`. An Arrow starts as a random direction, its angle a
 `rand.float` to 2 pi keyed `starts_as.value`, its length a number, a parameter or a random number
-keyed `starts_as.value.length`. `on_ground` and `painted` read `NOT_YET_GROUND`.
+keyed `starts_as.value.length`. `on_ground` and `painted` lower as the ground section says. A start
+ends in `Builder::write`, a `lane.set` or over the ground a `field.set`.
 
-Cards (`card.rs`, the card whose `every` is the kind): on a card of agents the interim refusals are
-`NOT_YET_RECORD`, `NOT_YET_LEAVE`, `NOT_YET_PICK_CELL`, `NOT_YET_LOOK_AT_CELL`,
-`NOT_YET_MOVE_TO` (a place comes only from a Pick a cell or a look at a cell, both refused),
-`NOT_YET_GROUND` for a Count or Look around
-over the cells around and a chip naming a place's property, and `NOT_YET_REPEAT_CHANGE` for a
-Become, Set, Keep between, When or Repeat inside a Repeat. A property changed two ways is refused at
+Cards (`card.rs`, the card whose `every` is the kind): on a card of agents the interim refusal is
+`NOT_YET_REPEAT_CHANGE` for a Keep between, When, Repeat, Leave, Record or Move to inside a
+Repeat. A property changed two ways is refused at
 the second line, naming the first in display order: Steer below a Set (`set_already`), Set below a
 Steer (`steered_already`), Move to below Move by (`moved_by_already`) and Move by below Move to
 (`moved_to_already`), round 1 section 6. That error takes the place of the line's own interim
@@ -262,15 +267,20 @@ the Heading: `logic.select(vec.length(sum) > 0, sum, heading)`. `my_new X` is th
 `lane.set`. A Random direction, as a line or phrase, is a `rand.float` to 2 pi keyed by its site and
 `vec.from_angle`.
 
-Repeat (`repeat.rs`, Move by and Steer lines inside): one `region.repeat` owned by the
-Repeat line, `count` a whole number literal or a Whole number parameter from 0 (`u32`), `max` that
-number or the parameter's maximum (an error past `MAX_REPEAT_ITERATIONS` naming the parameter), and
-a `sum` accumulator `change_<property>` for each property a Move by or Steer inside it changes
-(found by a scan of the lines inside that run). Each total is one change of its property owned by
-the Repeat line, added when the Repeat lowers, and each line inside writes its term as a
-`region.put` under its condition (`put_in_repeat`). Lines inside a Repeat take its region through
-`line_site`. A Become, Set, Keep between, When or Repeat inside a Repeat is refused
-(`NOT_YET_REPEAT_CHANGE`).
+Repeat (`repeat.rs`, Move by, Steer, Become and Set lines inside, answer 11a: `sum` and `or`
+accumulators only): one `region.repeat` owned by the Repeat line, `count` a whole number literal or
+a Whole number parameter from 0 (`u32`), `max` that number or the parameter's maximum (an error past
+`MAX_REPEAT_ITERATIONS` naming the parameter), a `sum` accumulator `change_<property>` for each
+property a Move by or Steer inside it changes, and a `bool` `or` accumulator `<line>_applies` per
+Become or Set inside, in line id order (found by a scan of the lines inside that run). Each total is
+one change of its property owned by the Repeat line, added when the Repeat lowers, and each line
+inside writes its term as a `region.put` under its condition (`put_in_repeat`). A Become or Set
+writes its condition, lowered inside the region, as a `region.put` of its `or` accumulator
+(`any_time`), and its change reads the total: it applies when it held at any time. A Set's value is
+lowered outside the region, once per tick, and a value that reads a line inside the Repeat is
+refused (`SET_IN_REPEAT`, `reads_inside` over chips, phrases and formulas). Lines inside a Repeat
+take its region through `line_site`. A Keep between, When, Repeat, Leave, Record or Move to inside a
+Repeat is refused (`NOT_YET_REPEAT_CHANGE`).
 
 Agent lowering tests sit in `src/tests/sheet_agents.rs`, on the host:
 `every_agent_sheet_lowers_checks_and_compiles_on_the_host` (the three agent starters and
@@ -288,5 +298,91 @@ look at the cells around, `the_shortfalls_of_a_sheet_name_its_looks_in_the_model
 `a_pass_cost_past_the_limit_names_its_line_in_the_model_words` (the random walk with a Steps per
 tick maximum of 65536: one V22 error, placed at the Repeat line in `line_costs_too_much`'s words
 with no note and no forbidden word, and another finding's words kept), and the fold as a node the
-sheet owns. henad-models'
-device gates are in `agents/models.md`.
+sheet owns. The refusal test holds walls, Move to below Move by, Set below Steer, a Record in a
+Repeat, a look in a Repeat and a second kind. henad-models' device gates are in `agents/models.md`.
+
+**Folds over the cells around** (`fuse.rs`, S20, F1). The Counts that need a fold, Look arounds and
+picks of one card over one neighbourhood family share a `grid.fold` the sheet owns, in group
+`GROUP_CELL_FOLD` at path `card.<card>`: the 8 cells around and the 3 by 3 block take
+`moore_row_major`, the 4 cells around `von_neumann`. `enter_cells(site, line, needed)` joins the
+newest fold of the family with room for `needed` accumulators (at most `MAX_ACCUMULATORS`, 16) that
+is not open around the look and was opened below the last line the look reads (`last_line_read`: the
+lines its result chips and formulas name at any depth, and for a `my_new` chip every line above it
+naming that property; `CellFold::opened_at` is the opener's display index), or writes a new one. A
+look that reads an earlier look over the same family therefore takes a second fold, and every fold
+reads only folds opened before it. It then pushes a `Fold` for `their`, and returns a `CellLook`:
+the fold, the accumulator prefix (the line id for a line, `<line>_p<k>` for the `k`th look in a
+line's phrases) and `within`. A Moore fold includes the cell itself when any line or phrase of the
+card looks at a 3 by 3 block through a fold (`folds_block`: a Look around, or a Count that
+`counted_states` leaves to a fold), and a look at the 8 cells around then takes `within`, one shared
+`cmp.ne(offset, (0, 0))` per fold. `finish_cell_folds` writes each fold's `acc` sorted by line
+number, look and place, so a reorder of looks that share one fold keeps the code. Past 16
+accumulators, or past a read of an earlier look, the lowering order decides which fold a look joins.
+Draws in a body read the fold's `k`, so fusion changes the iteration word of a draw inside a look.
+On a card of agents the fold has `at` = my cell's `xy` and `boundary = "bounded"` with walls
+(`domain`, the torus, otherwise), its `Fold` reads the ground (`FoldKind`: `Cells`, `Ground`,
+`Agents`), and its open test (`fold_open`) is written once per fold. No grid starter holds a fold,
+so S20 left their codes unchanged.
+
+**The ground** (`ground.rs`, S20). `declare` writes a `[[counter]]` per event and the fields: a
+States property is a static field of its category, layer its id; a Number property that takes marks,
+fades or is set by a button joins the field of its marks rule and share kept per tick (the first
+such property's id, each property a layer, `max` for keep the largest, `Sum` at 2^-16 for add up,
+D49), with `finish = "fade_<field>"` when it fades; any other Number property is a static field of
+its own; another type is an error. `fades` holds each fade function, built in `finish` from the
+sheet's ids (`fn.input`, `math.mul` by the number or Number parameter, `fn.output`, path
+`ground.<property>.kept_per_tick`), so the line map covers function nodes too. The ground's passes
+run over the cells: `start_ground` (a value, or `painted`: the base state then a `logic.select` per
+shape in order, each shape one `math.expr` over the cell's column and row and `ctx.grid`, a cell
+shape the cell at `floor(center * size)`, an ellipse or rectangle in a frame turned by `angle`
+degrees from the x axis towards smaller rows with sides `size * grid / 2`), `colours_ground`
+(`by_state` through the category's palette, or with `shade_state` and `shades` a palette
+`shades_<property>` of the states then `SHADE_BANDS` (6) blends per shade, the largest shade's band
+from `log10(max(v, 1e-30)) / decades + 1` or `v` on a linear scale, through a `cat.switch`; `shaded`
+a Number property linearly), `measures_ground` and Set everywhere. `on_ground` places an agent at
+`floor(center * size) + 0.5` of a cell shape painting its state, drawn by `rand.float` keyed
+`starts_as.cell` among several; a state the base or a larger shape paints is `ON_GROUND_CELLS`.
+
+On a card of agents `Builder::my_cell` is one `space.cell_of` of my position per pass
+(`GROUP_GROUND`, path `agents.<position>`). A place is `Operand::Place(PlaceValue)`: `xy` (`vec2i`),
+the `amount` a pick ranked by, and `open` when known; it takes `vec2i` wherever a value is wanted.
+Here is my cell, ahead `xy + heading` (wrapped through `space.wrap` of the `vec2f` in a world that
+wraps, open only with a heading, `AHEAD_NEEDS_CELLS` without `cell_mover`), and `at` a place slot.
+`place_open` is `space.cell_index`'s `valid` and no blocked state at its cell, `place_property` a
+`field.get` there, and a result chip's `amount` or `open` part and `property` read a place line's
+result. A Choose of places selects `xy` and, when every row has one, `amount` (`choose_place`); a
+Depending on of places is a `cat.switch` per part. Pick a cell (`pick.rs`): ranked, three `carry`
+accumulators `<prefix>_best`, `<prefix>_xy`, `<prefix>_ties` (inits 0, my `xy`, 0); a considered
+cell (the guard, `open_only`'s open test, `only`) replaces the best when it is the first or ranks
+higher, and a tie replaces it when `rng.reservoir` over a `rand.bits` of the new tie count holds;
+the amount is the best behind `ties > 0`. Random: `<prefix>_xy` and `<prefix>_seen`, kept with a
+chance of one over the count. Move to is a change of Position (`ChangeKind::MoveTo` holding the
+`PlaceValue`), `write_moves` joining each row's condition with `place_open` of its place (the
+`[ground] blocked` open test of moves), selecting `xy` from the bottom row up over my cell and the
+position the cell's centre where some row applies, then the Heading the `vec2i` of `space.delta`
+from my cell to the new one when it is not 0. Leave collects a `LeaveMark`; after the changes
+`write_leaves` writes one `field.deposit` at my cell per field whose Leaves cannot both apply (layer
+and amount through `logic.select` chains, owned by the sheet at `card.<card>.<field>`), else one per
+Leave, its amount 0 where the condition fails. Record is a `counter.add` of `conv.to_u32` of its
+condition, and an event count a `stat.counter` in the agents' measures. Buttons (`buttons.rs`): a
+button starts again or changes each kind of thing, and changes one kind, so Start again of the ants
+beside Set everywhere of the trails is one action with `runs = ["start_ant"]` and a
+`button_<button>` pass over the cells. Start again of some ant and some ground properties reruns
+`restart_<button>` and `restart_<button>_ground`; a States property of the ground is never set.
+`convert.rs` and `SheetFile::place_graph_diagnostic` read `ground.<property>` paths.
+
+Tests in `src/tests/sheet_ground.rs`: `the_ants_sheet_lowers_checks_and_runs_on_the_host` (starts at
+the nest, the painted ground, 20 ticks on open cell centres),
+`the_ants_card_lowers_to_one_fused_fold_per_neighbourhood` (one fold, eight accumulators, one merged
+deposit, one counter, the tick pass's node count, `ANTS_TICK_NODES`, 110),
+`seventeen_accumulators_split_into_two_folds`,
+`a_block_and_the_8_cells_around_share_a_fold_with_a_guard` (and the values sheet's two folds),
+`a_ground_property_that_adds_up_lowers_to_a_sum_and_runs` (100 ticks on the device),
+`a_become_inside_a_repeat_applies_when_any_time_holds` (and `SET_IN_REPEAT`),
+`each_ground_refusal_gives_one_located_error`,
+`a_count_of_the_ground_around_joins_the_fold_of_the_picks`,
+`a_look_that_reads_an_earlier_look_opens_its_own_fold` (two folds, checks and runs on the host),
+`a_pick_that_reads_an_earlier_pick_opens_its_own_fold`,
+`a_button_that_starts_ants_and_ground_again_reruns_two_passes` and
+`a_move_to_a_blocked_cell_leaves_the_agent_where_it_is` (20 host ticks, and
+`NOT_YET_BLOCKED_MOVE_BY`).

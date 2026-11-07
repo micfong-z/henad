@@ -1,5 +1,6 @@
-//! Starts of the cells or agents: the init pass `start_cells` or `start_<kind>`, and the init passes a button that
-//! starts some properties again reruns.
+//! Starts of the cells, agents or ground: the init pass `start_cells`, `start_<kind>` or `start_ground`, and the init
+//! passes a button that starts some properties again reruns. A painted ground and a start on the ground lower as
+//! [`super::ground`] describes.
 //!
 //! An agent's Position starts anywhere at random, at a uniform point of the world. An Arrow starts as a random
 //! direction, its length a number, a parameter or a random number between two values. "All Dead" and a number write
@@ -10,7 +11,7 @@
 
 use super::ids::{GROUP_PART, Owner, SheetKey};
 use super::value::Operand;
-use super::{Builder, Site, keys, text};
+use super::{Builder, Site, keys};
 use crate::document::{Pass, PassEnabled, PassStage};
 use crate::sheet::check::Place;
 use crate::sheet::document::{
@@ -74,7 +75,8 @@ fn start_property(builder: &mut Builder<'_>, pass: usize, index: usize, button: 
     }
 }
 
-/// Writes the nodes of start `start` of `property` at `site`, ending in its `lane.set`.
+/// Writes the nodes of start `start` of `property` at `site`, ending in its `lane.set`, or its `field.set` for a
+/// property of the ground.
 fn start_value(
     builder: &mut Builder<'_>,
     site: &Site,
@@ -82,7 +84,7 @@ fn start_value(
     start: &StartsAs,
     button: Option<&str>,
 ) -> Result<(), String> {
-    let lane_type = super::world::lane_type(property);
+    let lane_type = builder.lane_type(property);
     let document = builder.document;
     let key = keys::owner_key(start.key, &document.sheet.id, &property.id);
     let draw_key = |path: &str| {
@@ -142,8 +144,9 @@ fn start_value(
             }
         },
         StartRule::ByChance => by_chance(builder, site, property, start, draw_key("starts_as.row"), owner, place)?,
-        StartRule::Painted | StartRule::OnGround if builder.is_agents() => {
-            return Err(crate::sheet::sentence::NOT_YET_GROUND.to_owned());
+        StartRule::Painted if builder.is_ground() => super::ground::painted(builder, site, property, start)?,
+        StartRule::OnGround if builder.is_agents() && property.property_type == PropertyType::Position => {
+            super::ground::on_ground(builder, site, start, draw_key("starts_as.cell"), owner, place)?
         }
         StartRule::Painted | StartRule::Anywhere | StartRule::OnGround => {
             return Err(format!(
@@ -152,13 +155,7 @@ fn start_value(
             ));
         }
     };
-    builder.emit(
-        site,
-        "lane.set",
-        vec![("lane", text(&property.id))],
-        vec![("value".to_owned(), value)],
-    );
-    Ok(())
+    builder.write(site, &property.id, value)
 }
 
 /// Returns the state of a start by chance of `property` at `site`: one draw with key `draw` per cell, and the state of
@@ -174,7 +171,7 @@ fn by_chance(
     owner: String,
     place: Place,
 ) -> Result<InputValue, String> {
-    let lane_type = super::world::lane_type(property);
+    let lane_type = builder.lane_type(property);
     let state = |id: &str| {
         InputValue::Literal(Literal::Category(crate::value::MemberName {
             owner: property.id.clone(),

@@ -20,16 +20,46 @@ use crate::value::{ConfigValue, InputValue, Literal, PortRef};
 const MEASURE_PASS: &str = "measures";
 
 /// Writes the stats pass and a `[[stat]]` for every measure.
+///
+/// A sheet of agents on a ground with properties lowers the measures of the agents and its events here, and the
+/// measures of the ground in a second pass `measures_ground` over the ground's cells. The `[[stat]]` tables keep the
+/// measures' order.
 pub(super) fn lower(builder: &mut Builder<'_>) {
     let measures = &builder.document.measures;
-    if measures.is_empty() {
+    let ground = builder.is_ground();
+    let has_ground = builder.is_agents() && !builder.ground_layers.is_empty();
+    let mine: Vec<usize> = (0..measures.len())
+        .filter(|&index| {
+            let over_ground =
+                measures[index].over.as_deref() == Some("ground") && measures[index].rule != MeasureRule::EventCount;
+            if ground {
+                over_ground
+            } else {
+                !(has_ground && over_ground)
+            }
+        })
+        .collect();
+    if mine.is_empty() {
         return;
     }
-    let pass = builder.add_pass(Pass::new(MEASURE_PASS, PassStage::Stats, Some(builder.domain())));
+    let id = if ground {
+        format!("{MEASURE_PASS}_ground")
+    } else {
+        MEASURE_PASS.to_owned()
+    };
+    let pass = builder.add_pass(Pass::new(&id, PassStage::Stats, Some(builder.domain())));
     let mut counts: Vec<(String, NodeId)> = Vec::new();
-    for (index, measure) in measures.iter().enumerate() {
+    for index in mine {
+        let measure = &measures[index];
         match measure_source(builder, pass, index, measure, &mut counts) {
-            Ok(from) => builder.graph.stats.push(Stat::new(&measure.name, from, measure.color)),
+            Ok(from) => {
+                let place = builder.stat_measures.iter().filter(|&&known| known < index).count();
+                builder.stat_measures.insert(place, index);
+                builder
+                    .graph
+                    .stats
+                    .insert(place, Stat::new(&measure.name, from, measure.color));
+            }
             Err(message) => builder.problem(format!("measure '{}': {message}", measure.id), Place::Measure(index)),
         }
     }
@@ -122,6 +152,14 @@ fn measure_source(
         MeasureRule::Spread => {
             let read = measure_value(builder, &site, pass, measure)?;
             spread(builder, &site, &read)
+        }
+        MeasureRule::EventCount if builder.is_agents() => {
+            let event = measure.event.as_deref().ok_or("an event count names no event")?;
+            let node = builder.emit(&site, "stat.counter", vec![("counter", text(event))], Vec::new());
+            Ok(PortRef {
+                node,
+                port: Some("total".to_owned()),
+            })
         }
         MeasureRule::EventCount => Err("a grid records no events to count".to_owned()),
     }

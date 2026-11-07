@@ -11,7 +11,7 @@ use henad_explore::testing::{CheckSettings, TestDeviceRequest, assert_set_confor
 use henad_graph::sheet::{SheetFile, starters};
 
 use super::graph_ants_parity::graph_buffer;
-use super::graph_grid_parity::{build_gpu, step};
+use super::graph_grid_parity::{build_gpu, snapshot, stat, step};
 
 /// Hand-lowered round 1 random walk.
 const HAND_WALK: &str = include_str!("../../tests/fixtures/lowered/round1/random_walk.toml");
@@ -19,6 +19,8 @@ const HAND_WALK: &str = include_str!("../../tests/fixtures/lowered/round1/random
 const HAND_BOIDS: &str = include_str!("../../tests/fixtures/lowered/round1/boids.toml");
 /// Hand-lowered round 1 bounded confidence.
 const HAND_OPINIONS: &str = include_str!("../../tests/fixtures/lowered/round1/bounded_confidence.toml");
+/// Hand-lowered round 1 ants.
+const HAND_ANTS: &str = include_str!("../../tests/fixtures/lowered/round1/ants.toml");
 
 /// Seeds every band runs at.
 const SEEDS: [u64; 3] = [1, 2, 3];
@@ -90,7 +92,10 @@ fn every_agent_sheet_lowers_checks_and_compiles() {
         return;
     };
     let names: Vec<&str> = agent_sheets().iter().map(|(name, _)| *name).collect();
-    assert_eq!(names, ["random_walk.toml", "boids.toml", "bounded_confidence.toml"]);
+    assert_eq!(
+        names,
+        ["random_walk.toml", "boids.toml", "bounded_confidence.toml", "ants.toml"]
+    );
     for (name, text) in agent_sheets() {
         let file = ModelFile::parse(text).unwrap_or_else(|error| panic!("{name}: {error}"));
         assert!(file.warnings().is_empty(), "{name}: {:?}", file.warnings());
@@ -120,6 +125,12 @@ fn the_lowered_agent_sheets_bind_at_most_8_storage_buffers() {
                 pass.label,
                 pass.storage
             );
+        }
+        // The ants' tick pass sits at the limit: three lanes and the Heading, the trails and their deposits, the
+        // ground and the counters.
+        if name == "ants.toml" {
+            let tick = demand.passes.iter().find(|pass| pass.label == "ants_tick_ant_tick");
+            assert_eq!(tick.map(|pass| pass.storage), Some(8));
         }
     }
 }
@@ -426,5 +437,53 @@ fn the_bounded_confidence_sheet_forms_its_opinion_groups_in_band() {
             1,
             "the planted error at seed {seed}"
         );
+    }
+}
+
+/// Returns the deliveries of the ants `text` at `seed` after 2000 and after 3000 ticks, read from its statistic
+/// `label`.
+fn deliveries(ctx: &GpuContext, text: &str, label: &str, seed: u64) -> (f64, f64) {
+    let entry = entry_of(text);
+    let mut state = build_gpu(&entry, &params_of(&entry, &[]), Some(seed), ctx);
+    let mut found = [0.0; 2];
+    for (slot, submissions) in found.iter_mut().zip([40, 20]) {
+        for _ in 0..submissions {
+            step(ctx, &mut *state, 50);
+        }
+        snapshot(ctx, &mut *state);
+        *slot = stat(&state.stats(), label);
+    }
+    found.into()
+}
+
+/// Band: by tick 2000 the ants deliver at most 1000 times, and by tick 3000 at least 500 times, on each seed, for the
+/// sheet and the hand-lowered file. Both forage at their defaults, 2000 ants from the nest, and both first need a
+/// trail. Round 1's hand-lowered ants deliver nothing by tick 2000 on one of the seeds, so no lower edge at tick 2000
+/// catches an error that stops deliveries, and the band adds one at tick 3000.
+///
+/// Procedure: the Deliveries statistic after ticks 2000 and 3000 at the defaults on seeds 1 to 3. The planted error
+/// picks the neighbouring cell with the least To food as the Food way, so no ant follows the food trail, and
+/// deliveries by tick 3000 stay far below 500.
+#[test]
+fn the_ants_sheet_delivers_food_in_band() {
+    let Some(ctx) = device("the_ants_sheet_delivers_food_in_band") else {
+        return;
+    };
+    let in_band = |(by_2000, by_3000): (f64, f64)| by_2000 <= 1000.0 && by_3000 >= 500.0;
+    let planted = edited(
+        sheet("ants.toml"),
+        "pick = \"most\"\nranked_by = \"to_food\"",
+        "pick = \"least\"\nranked_by = \"to_food\"",
+    );
+    for seed in SEEDS {
+        let found = deliveries(&ctx, sheet("ants.toml"), "Deliveries", seed);
+        assert!(in_band(found), "the sheet at seed {seed} delivers {found:?}");
+        let found = deliveries(&ctx, HAND_ANTS, "Deliveries", seed);
+        assert!(
+            in_band(found),
+            "the hand-lowered file at seed {seed} delivers {found:?}"
+        );
+        let found = deliveries(&ctx, &planted, "Deliveries", seed);
+        assert!(!in_band(found), "the planted error at seed {seed} delivers {found:?}");
     }
 }

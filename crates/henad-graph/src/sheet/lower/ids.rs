@@ -32,6 +32,10 @@ pub(super) const GROUP_CHANGE: u32 = 2;
 pub(super) const GROUP_MEASURE: u32 = 3;
 /// Group of the nodes a card's looks at agents share: the largest distance, the index's cell size and each fold.
 pub(super) const GROUP_LOOK: u32 = 4;
+/// Group of the nodes a card's folds over the cells around share: each fold, its guard and its open test.
+pub(super) const GROUP_CELL_FOLD: u32 = 5;
+/// Group of the nodes a pass over agents shares for the ground: the cell of my position.
+pub(super) const GROUP_GROUND: u32 = 6;
 
 /// Owner of a node while the lowering writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]

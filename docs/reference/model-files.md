@@ -334,10 +334,17 @@ Its infection line reads "Become Infected from Susceptible, at rate Infection ra
 A sheet whose `[world]` is `made_of = "agents"` holds one kind of agent, its `count` at the start and its `max_count`, the most a run can hold.
 Its Position starts anywhere at random, an Arrow as a random direction, and its Heading follows the direction of its last move.
 Its card can look at the agents within a distance, count them or sum up what it sees, then steer a property, keep a value between two limits, and move by an arrow, and a Repeat adds up its moves and steers.
-The world wraps at its edges.
+A Become or Set inside a Repeat applies when its condition holds at any time round.
+
+The agents can walk on a ground of cells, one per unit of the world.
+A ground property holds states painted at the start, or a number that agents mark with Leave, keeping the largest mark or adding the marks up, and that fades by its share kept per tick.
+A card can pick the open cell around an agent with the most or least of a ground property, or one at random, look at the cell here or ahead, read a property of a place, move to a place, leave a mark and record an event that a measure counts.
+Cells in a blocked state of the ground are not open, and an agent whose move to a place finds that place not open stays where it is.
+The looks and picks of a card over one neighbourhood share one walk of the cells around.
+Agents that move to places can live in a world with walls, and other worlds wrap at their edges.
 
 `crates/henad-graph/sheets/random_walk.toml` is a random walk as a sheet.
-`boids.toml` and `bounded_confidence.toml` beside it are flocking and opinion dynamics.
+`boids.toml` and `bounded_confidence.toml` beside it are flocking and opinion dynamics, and `ants.toml` is ant foraging over a painted ground with two trails.
 
 ``` toml title="random_walk.toml"
 --8<-- "crates/henad-graph/sheets/random_walk.toml"
@@ -347,7 +354,7 @@ The looks at agents of one card share one walk of the agents around each agent, 
 A look past the most agents one agent can visit stops the run with a message that names the look's line, such as "line 1, Flockmates".
 A program asks `SheetFile::shortfalls` whether a population fits the work one run may take, and a model that does not fit is named the same way.
 
-This version refuses a second kind of agent, walls around agents, the ground, Pick a cell, Move to, Leave and Record, each at its table.
+This version refuses a second kind of agent, walls around agents that move by an arrow, a blocked ground under agents that move by an arrow, the cell ahead of agents that move by an arrow, a start on a ground state painted larger than one cell, and Keep between, When, Repeat, Leave, Record and Move to inside a Repeat, each at its table.
 A card changes a property by Set or by Steer, and moves by an arrow or to a place.
 A line that changes a property the other way is refused with a message naming the line that came first.
 

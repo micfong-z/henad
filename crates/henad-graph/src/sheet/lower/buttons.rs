@@ -1,10 +1,12 @@
 //! Buttons: an `[[action]]` per button, its id and label the button's.
 //!
 //! A Start again step reruns the start of its properties: the init pass of the starts when it names every property
-//! that has a start, and otherwise a disabled init pass `restart_<button>` of the properties it names. A rerun keys its
-//! draws on the press count, so each press draws a new layout. Set everywhere and Run once steps write the action pass
-//! `button_<button>`. That pass runs on every cell or agent when the button is pressed. A button holds steps of one of
-//! the two forms.
+//! that has a start, and otherwise a disabled init pass `restart_<button>` of the properties it names, or
+//! `restart_<button>_ground` of the ground properties it names. A rerun keys its draws on the press count, so each
+//! press draws a new layout. Set everywhere and Run once steps write the action pass `button_<button>`. That pass
+//! runs on every cell or agent when the button is pressed, or on every cell of the ground for a Set everywhere of a
+//! ground property. A button starts again or changes each kind of thing, and changes one kind of thing, so the ants'
+//! Reset colony starts the ants again and clears the trails.
 //! An action's reruns and its action pass have no order that a button's steps could set.
 
 use super::ids::{GROUP_PART, Owner, SheetKey};
@@ -13,19 +15,43 @@ use super::value::Operand;
 use super::{Builder, Site, card};
 use crate::document::{Action, Pass, PassStage};
 use crate::sheet::check::Place;
-use crate::sheet::document::{ButtonStepRule, CardRuns, SheetButton, SheetChip, SheetLiteral, SheetValue};
+use crate::sheet::check::Thing;
+use crate::sheet::document::{
+    ButtonStep, ButtonStepRule, CardRuns, PropertyType, SheetButton, SheetChip, SheetLiteral, SheetValue,
+};
 use crate::value::Literal;
 
 /// Writes the action of every button, with its reruns and its action pass.
 pub(super) fn lower(builder: &mut Builder<'_>) {
     let document = builder.document;
     let mut run_by: Vec<(&str, &str)> = Vec::new();
+    let ground_ids: Vec<String> = builder.ground_layers.keys().cloned().collect();
     for (index, button) in document.buttons.iter().enumerate() {
         let place = Place::Button(index);
         let mut action = Action::new(&button.id, &button.name);
-        let restarts = button.does.iter().any(|step| step.rule == ButtonStepRule::StartAgain);
-        let acts = button.does.iter().any(|step| step.rule != ButtonStepRule::StartAgain);
-        if restarts && acts {
+        let on_ground = |step: &ButtonStep| match step.rule {
+            ButtonStepRule::StartAgain => {
+                step.thing.as_deref() == Some("ground") || step.properties.iter().any(|id| ground_ids.contains(id))
+            }
+            ButtonStepRule::SetEverywhere => step
+                .property
+                .as_deref()
+                .is_some_and(|id| ground_ids.iter().any(|known| known == id)),
+            ButtonStepRule::RunOnce => false,
+        };
+        let restarts = |ground: bool| {
+            button
+                .does
+                .iter()
+                .any(|step| step.rule == ButtonStepRule::StartAgain && on_ground(step) == ground)
+        };
+        let acts = |ground: bool| {
+            button
+                .does
+                .iter()
+                .any(|step| step.rule != ButtonStepRule::StartAgain && on_ground(step) == ground)
+        };
+        if (restarts(false) && acts(false)) || (restarts(true) && acts(true)) {
             builder.problem(
                 format!(
                     "button '{}' starts properties again and also changes them, and a button does one or the other",
@@ -35,51 +61,93 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
             );
             continue;
         }
-        if restarts {
-            action.runs = restart(builder, button);
-        } else if acts {
-            let mut pass = Pass::new(
-                &format!("button_{}", button.id),
-                PassStage::Action,
-                Some(builder.domain()),
+        if acts(false) && acts(true) {
+            builder.problem(
+                format!(
+                    "button '{}' changes {} and the ground, and a button changes one of them",
+                    button.id,
+                    builder.thing_words()
+                ),
+                place,
             );
-            pass.action = Some(button.id.clone());
-            let pass = builder.add_pass(pass);
-            for (step_index, step) in button.does.iter().enumerate() {
-                let outcome = match step.rule {
-                    ButtonStepRule::SetEverywhere => set_everywhere(builder, pass, index, step_index),
-                    ButtonStepRule::RunOnce => {
-                        let card_id = step.card.as_deref().unwrap_or("");
-                        match document
-                            .cards
-                            .iter()
-                            .position(|card| card.id == card_id && card.runs == CardRuns::Once)
-                        {
-                            Some(_) if run_by.iter().any(|(card, _)| *card == card_id) => Err(format!(
-                                "card '{card_id}' runs for button '{}' and button '{}', and a card runs for one",
-                                run_by
-                                    .iter()
-                                    .find(|(card, _)| *card == card_id)
-                                    .map_or("", |(_, other)| *other),
-                                button.id
-                            )),
-                            Some(card_index) => {
-                                run_by.push((card_id, button.id.as_str()));
-                                card::lower_card(builder, card_index, pass);
-                                Ok(())
-                            }
-                            None => Err(format!("'{card_id}' is no card that runs once")),
-                        }
-                    }
-                    ButtonStepRule::StartAgain => Ok(()),
-                };
-                if let Err(message) = outcome {
-                    builder.problem(format!("button '{}': {message}", button.id), place.clone());
-                }
-            }
+            continue;
+        }
+        let ground_steps: Vec<bool> = button.does.iter().map(on_ground).collect();
+        action.runs = restart(builder, button);
+        if restarts(true) {
+            let thing = builder.thing;
+            builder.thing = Thing::Ground;
+            action.runs.extend(restart(builder, button));
+            builder.thing = thing;
+        }
+        let ground = acts(true);
+        if acts(false) || ground {
+            write_action_pass(builder, index, ground, &ground_steps, &mut run_by);
         }
         builder.graph.actions.push(action);
     }
+}
+
+/// Writes the action pass `button_<button>` of the button at `index`: its Set everywhere and Run once steps over the
+/// ground when `ground` holds, and over the sheet's kind of thing otherwise. `ground_steps` says which steps are about
+/// the ground, and `run_by` holds the button that runs each card that runs once.
+fn write_action_pass<'a>(
+    builder: &mut Builder<'a>,
+    index: usize,
+    ground: bool,
+    ground_steps: &[bool],
+    run_by: &mut Vec<(&'a str, &'a str)>,
+) {
+    let document = builder.document;
+    let button = &document.buttons[index];
+    let place = Place::Button(index);
+    let thing = builder.thing;
+    if ground {
+        builder.thing = Thing::Ground;
+    }
+    let mut pass = Pass::new(
+        &format!("button_{}", button.id),
+        PassStage::Action,
+        Some(builder.domain()),
+    );
+    pass.action = Some(button.id.clone());
+    let pass = builder.add_pass(pass);
+    for (step_index, step) in button.does.iter().enumerate() {
+        if ground_steps[step_index] != ground {
+            continue;
+        }
+        let outcome = match step.rule {
+            ButtonStepRule::SetEverywhere => set_everywhere(builder, pass, index, step_index),
+            ButtonStepRule::RunOnce => {
+                let card_id = step.card.as_deref().unwrap_or("");
+                match document
+                    .cards
+                    .iter()
+                    .position(|card| card.id == card_id && card.runs == CardRuns::Once)
+                {
+                    Some(_) if run_by.iter().any(|(card, _)| *card == card_id) => Err(format!(
+                        "card '{card_id}' runs for button '{}' and button '{}', and a card runs for one",
+                        run_by
+                            .iter()
+                            .find(|(card, _)| *card == card_id)
+                            .map_or("", |(_, other)| *other),
+                        button.id
+                    )),
+                    Some(card_index) => {
+                        run_by.push((card_id, button.id.as_str()));
+                        card::lower_card(builder, card_index, pass);
+                        Ok(())
+                    }
+                    None => Err(format!("'{card_id}' is no card that runs once")),
+                }
+            }
+            ButtonStepRule::StartAgain => Ok(()),
+        };
+        if let Err(message) = outcome {
+            builder.problem(format!("button '{}': {message}", button.id), place.clone());
+        }
+    }
+    builder.thing = thing;
 }
 
 /// Returns the init passes button `button` reruns, writing a pass of its own when it starts some properties again.
@@ -87,8 +155,12 @@ fn restart(builder: &mut Builder<'_>, button: &SheetButton) -> Vec<String> {
     let cells = builder.properties();
     let mut indices: Vec<usize> = Vec::new();
     for step in &button.does {
+        if step.rule != ButtonStepRule::StartAgain {
+            continue;
+        }
         let named: Vec<usize> = match step.thing.as_deref() {
-            Some(_) => (0..cells.len()).collect(),
+            Some(thing) if thing == builder.thing_id() => (0..cells.len()).collect(),
+            Some(_) => Vec::new(),
             None => step
                 .properties
                 .iter()
@@ -108,7 +180,8 @@ fn restart(builder: &mut Builder<'_>, button: &SheetButton) -> Vec<String> {
     } else if indices == starting {
         vec![start::start_pass(builder)]
     } else {
-        let id = format!("restart_{}", button.id);
+        let suffix = if builder.is_ground() { "_ground" } else { "" };
+        let id = format!("restart_{}{suffix}", button.id);
         start::lower_restart(builder, &id, &button.id, &indices);
         vec![id]
     }
@@ -127,6 +200,11 @@ fn set_everywhere(
     let (_, property) = builder
         .property(property_id)
         .ok_or_else(|| format!("'{property_id}' is no property of {}", builder.thing_words()))?;
+    if builder.is_ground() && property.property_type == PropertyType::States {
+        return Err(format!(
+            "the ground's '{property_id}' keeps its painted states, so no button sets it"
+        ));
+    }
     let site = Site {
         pass,
         owner: Owner::Sheet(SheetKey {
@@ -146,6 +224,6 @@ fn set_everywhere(
             .ok_or("a Set everywhere holds no number")?,
         _ => return Err("a Set everywhere holds no value it can set".to_owned()),
     };
-    let value = builder.input_as(&site, &operand, &super::world::lane_type(property), true)?;
+    let value = builder.input_as(&site, &operand, &builder.lane_type(property), true)?;
     builder.write(&site, property_id, value)
 }

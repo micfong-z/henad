@@ -22,7 +22,7 @@ const SMALLEST_LENGTH: f32 = 0.000_001;
 impl<'a> CardLowering<'_, 'a> {
     /// Returns the condition of change line `id` at `site`: its own, `always` when it has none, joined with the When
     /// lines around it.
-    fn change_condition(&mut self, site: &Site, id: &str, line: &'a SheetLine) -> Result<Operand, String> {
+    pub(super) fn change_condition(&mut self, site: &Site, id: &str, line: &'a SheetLine) -> Result<Operand, String> {
         let own = if line.condition.is_blank() {
             Operand::Constant(Literal::Bool(true))
         } else {
@@ -84,7 +84,7 @@ impl<'a> CardLowering<'_, 'a> {
     /// holds it.
     pub(super) fn steer(&mut self, site: &Site, id: &'a str, line: &'a SheetLine) -> Result<(), String> {
         let (index, property) = self.property(line.property.as_deref())?;
-        let value_type = super::world::lane_type(property);
+        let value_type = self.builder.lane_type(property);
         let value = self.slot(&site.at("value"), &line.value)?;
         let strength = self.slot(&site.at("strength"), &line.strength)?;
         let towards = line.mode == Some(LineMode::Towards);
@@ -226,7 +226,10 @@ impl<'a> CardLowering<'_, 'a> {
                         )
                     };
                 }
-                ChangeKind::Become { .. } | ChangeKind::Set { .. } | ChangeKind::MoveBy { .. } => {}
+                ChangeKind::Become { .. }
+                | ChangeKind::Set { .. }
+                | ChangeKind::MoveBy { .. }
+                | ChangeKind::MoveTo { .. } => {}
             }
         }
         Ok(value)

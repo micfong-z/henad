@@ -21,14 +21,30 @@ pub(super) enum Operand {
     Param(String, ValueType),
     /// A state, whose property the value it meets fixes.
     State(String),
+    /// A place: a cell of the ground under agents.
+    Place(Box<PlaceValue>),
+}
+
+/// A cell of the ground under agents, as a line gives it.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct PlaceValue {
+    /// Column and row of the cell, a `vec2i`.
+    pub xy: Operand,
+    /// Amount the pick that found the cell ranked it by, `None` for a place no pick ranked.
+    pub amount: Option<Operand>,
+    /// Whether the cell is open, `None` when the cell's own test decides it.
+    pub open: Option<Operand>,
 }
 
 impl Operand {
     /// Returns the type of the operand, `None` for a typed number or a state, whose type comes from what they meet.
+    ///
+    /// A place has the type of its column and row, `vec2i`.
     pub(super) fn value_type(&self) -> Option<ValueType> {
         match self {
             Self::Link(_, value_type) | Self::Param(_, value_type) => Some(value_type.clone()),
             Self::Constant(literal) => Some(literal.value_type()),
+            Self::Place(_) => Some(ValueType::Vec2I),
             Self::Number(_) | Self::State(_) => None,
         }
     }
@@ -160,6 +176,7 @@ impl Builder<'_> {
         truncate: bool,
     ) -> Result<InputValue, String> {
         match operand {
+            Operand::Place(place) => self.input_as(site, &place.xy, target, truncate),
             Operand::Number(number) => number_literal(*number, target, truncate)
                 .map(InputValue::Literal)
                 .ok_or_else(|| format!("the number {number} cannot stand where a {target} is wanted")),
@@ -189,6 +206,8 @@ impl Builder<'_> {
                     (ValueType::U32 | ValueType::I32 | ValueType::Bool, ValueType::F32) => "conv.to_f32",
                     (ValueType::U32 | ValueType::F32, ValueType::I32) => "conv.to_i32",
                     (ValueType::I32 | ValueType::F32, ValueType::U32) => "conv.to_u32",
+                    (ValueType::Vec2I | ValueType::Vec2U, ValueType::Vec2F) => "conv.to_vec2f",
+                    (ValueType::Vec2F | ValueType::Vec2U, ValueType::Vec2I) => "conv.to_vec2i",
                     _ => {
                         return Err(format!(
                             "a value of type {value_type} stands where a {target} is wanted"

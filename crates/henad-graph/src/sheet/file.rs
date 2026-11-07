@@ -379,6 +379,13 @@ impl SheetFile {
                         .iter()
                         .position(|property| property.id == id)
                         .map(|index| Place::Property(Thing::Agents(0), index)),
+                    "ground" => document
+                        .ground
+                        .as_ref()?
+                        .properties
+                        .iter()
+                        .position(|property| property.id == id)
+                        .map(|index| Place::Property(Thing::Ground, index)),
                     "measure" => document
                         .measures
                         .iter()

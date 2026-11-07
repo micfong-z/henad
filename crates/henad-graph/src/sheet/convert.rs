@@ -37,7 +37,7 @@ const SHEET_FRAME_COLOR: &str = "gray";
 /// Highest copy number [`ConvertOptions::new`] tries before it takes the one past it.
 const MAX_COPY_NUMBER: u32 = 999;
 /// First segments of the slot path of a node the sheet owns for a property of its kind of thing.
-const PROPERTY_ROOTS: [&str; 2] = ["cells", "agents"];
+const PROPERTY_ROOTS: [&str; 3] = ["cells", "agents", "ground"];
 
 /// Id, name, source file and date of a conversion.
 #[derive(Debug, Clone, PartialEq, Eq)]

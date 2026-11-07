@@ -141,15 +141,16 @@ taking numbers already formatted (`rate_note`, `rate_for_each_note`, `worked_out
 `mean_stay_note`), which `sheet::rates` fills. The words the plan adds for its own decisions sit in
 one group (`RATE_IN_BUTTON_CARD`, `ONE_AGENT_KIND`, competing rates, the long tick,
 `chances_per_tick_note`), with the interim refusals (`NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHANGE`,
-`NOT_YET_GROUND`, `NOT_YET_PICK_CELL`, `NOT_YET_LOOK_AT_CELL`, `NOT_YET_MOVE_TO`, `NOT_YET_LEAVE`,
-`NOT_YET_RECORD`, `NOT_YET_AGENT_WALLS`), a property changed two ways (`set_already`,
-`steered_already`, `moved_by_already`, `moved_to_already`) and the words of a look at agents
-(`look_name`, "line 3, Flockmates") and of its cost (`look_costs_too_much`, `card_costs_too_much`,
-`start_costs_too_much`, counts written with thousands commas, and for a pass past its cost per
-element `line_costs_too_much`, `smaller_maximum`, `FEWER_TIMES` and `FEWER_LINES`). `plural` is
-crate-visible for `SheetFile::shortfalls`. Every editor milestone and the writer's comments draw
-their words from here and from no literal of their own. `FORBIDDEN_WORDS` lists the words sheet mode
-never shows. The conversion words sit under the node-graph exemption and are outside that test.
+`NOT_YET_AGENT_WALLS`, `NOT_YET_BLOCKED_MOVE_BY`), the errors of the ground and the places
+(`ON_GROUND_CELLS`, `AHEAD_NEEDS_CELLS`, `SET_IN_REPEAT`), a property changed two ways
+(`set_already`, `steered_already`, `moved_by_already`, `moved_to_already`) and the words of a look
+at agents (`look_name`, "line 3, Flockmates") and of its cost (`look_costs_too_much`,
+`card_costs_too_much`, `start_costs_too_much`, counts written with thousands commas, and for a pass
+past its cost per element `line_costs_too_much`, `smaller_maximum`, `FEWER_TIMES` and
+`FEWER_LINES`). `plural` is crate-visible for `SheetFile::shortfalls`. Every editor milestone and
+the writer's comments draw their words from here and from no literal of their own. `FORBIDDEN_WORDS`
+lists the words sheet mode never shows. The conversion words sit under the node-graph exemption and
+are outside that test.
 
 `Sentences::new(&document)` holds the sheet's names by id and writes `card_heading` ("Each tick,
 every cell", or "Lines of Clear: run once, every cell, when pressed" for a card that runs once,
@@ -184,10 +185,11 @@ packaging check refuses a path out of the crate: the grid sheets `game_of_life.t
 ("SIR epidemic", rates per day and one tick of 1 day, D5, which entered with the rates' lowering),
 `vote.toml` ("Majority vote") and `forest_fire.toml`, which entered with the chances' lowering, then
 the agent sheets `random_walk.toml`, `boids.toml` and `bounded_confidence.toml`, which entered with
-the agent lowering. A sheet enters `sheets/` and `starters()` only in the milestone whose lowering
-runs it, and a test looping over `starters()` passes at every merge. The app's New model dialog
-lists only the starters whose world it offers (`starter_choices`), the grid sheets today. Until then
-a sheet is test data in `src/tests/sheets/`: the ants until the ground lowers. `sir_chance.toml`,
+the agent lowering, and `ants.toml`, which entered with the ground and holds a note under its last
+line on its slower trail formation (answer 13a). A sheet enters `sheets/` and `starters()` only in
+the milestone whose lowering runs it, and a test looping over `starters()` passes at every merge.
+The app's New model dialog lists only the starters whose world it offers (`starter_choices`), the
+grid sheets today. Until then a sheet is test data in `src/tests/sheets/`. `sir_chance.toml`,
 `mobile_sir.toml` (chances once for each infected person nearby) and `sird.toml` (SIR with a Dead
 state, two competing rates of 0.05 per day out of Infected, its lines numbered in creation order)
 stay test data. `sir_chance.toml` and `sird.toml` have copies in henad-models'
@@ -310,7 +312,8 @@ test sheets' sentences, Game of Life's three exactly; the parts of its lines, bl
 and the empty "for each"; `for_each_words`; and no fixed entry holding a forbidden word. Writer
 tests sit in `src/tests/sheet_writer.rs`: `every_sheet_is_a_fixed_point`,
 `the_rust_writer_agrees_with_check_py_apart_from_comments` against `src/tests/golden/` (the
-reference writer's text for the four author-format examples with comment lines removed;
+reference writer's text for the four author-format examples with comment lines removed, each line's
+note dropped first since the ants starter holds one the example lacks;
 `golden/README.md` holds the procedure, the script's SHA-256 and the rules in full),
 `a_hand_edited_sheet_reads_back_to_its_canonical_text`,
 `unusual_values_read_back_to_the_same_document`, `a_number_that_is_not_finite_is_refused`,
@@ -335,7 +338,7 @@ the factor of a rate per week, every other form of rate, a rate in an any of dra
 notes of the final wording table (`rate_notes_match_the_spec_examples`,
 `worked_out_rate_notes_match_the_spec_examples`), the two conversion commands and their refusals,
 and the D14 warning. Reader tests sit in `src/tests/sheet_document.rs`, over eleven sheets: the
-seven starters, and four test sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and
+eight starters, and three test sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and
 `ants.toml` are the author format's examples, and `random_walk.toml`, `bounded_confidence.toml` and
 `sir_chance.toml` (round 1's SIR with chances per tick, sheet id `sir_chance`) were written from
 round 1's models, as `vote.toml` and `forest_fire.toml` were. `mobile_sir.toml` holds a chance once

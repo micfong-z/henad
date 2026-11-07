@@ -242,7 +242,7 @@ fn the_copy_keeps_the_purpose_and_each_meaning_as_notes() {
 }
 
 /// First segments of the paths of the parts of a sheet that a frame of a converted copy can name.
-const PART_ROOTS: [&str; 6] = ["cells", "agents", "card", "measure", "button", "color"];
+const PART_ROOTS: [&str; 7] = ["cells", "agents", "ground", "card", "measure", "button", "color"];
 
 #[test]
 fn every_sheet_starter_converts_and_checks_clean() {

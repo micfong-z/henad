@@ -1466,30 +1466,27 @@ pub const ONE_AGENT_KIND: &str = "One kind of agent per model in this version.";
 /// Error on a Repeat line.
 pub const NOT_YET_REPEAT: &str = "Repeat is not supported yet.";
 
-/// Error on a Become, Set, Keep between, When or Repeat line inside a Repeat.
+/// Error on a Keep between, When, Repeat, Leave, Record or Move to line inside a Repeat.
 pub const NOT_YET_REPEAT_CHANGE: &str =
-    "Become, Set, Keep between, When and Repeat inside a Repeat are not supported yet.";
+    "Keep between, When, Repeat, Leave, Record and Move to inside a Repeat are not supported yet.";
 
-/// Error on the ground under agents, a look at the cells around an agent and a start on the ground.
-pub const NOT_YET_GROUND: &str = "The ground is not supported yet.";
+/// Error on a world of agents with walls at its edges whose agents move by an arrow.
+pub const NOT_YET_AGENT_WALLS: &str = "Walls around agents that move by an arrow are not supported yet.";
 
-/// Error on a Pick a cell line.
-pub const NOT_YET_PICK_CELL: &str = "Pick a cell is not supported yet.";
+/// Error on a Move by line in a sheet whose ground blocks some states.
+pub const NOT_YET_BLOCKED_MOVE_BY: &str = "Blocked ground under agents that move by an arrow is not supported yet.";
 
-/// Error on a line that looks at the cell here or ahead.
-pub const NOT_YET_LOOK_AT_CELL: &str = "Looking at the cell here or ahead is not supported yet.";
+// Errors on the ground and the places agents move to
 
-/// Error on a Move to line.
-pub const NOT_YET_MOVE_TO: &str = "Move to is not supported yet.";
+/// Error on a start on the ground in a state that the ground does not paint on single cells.
+pub const ON_GROUND_CELLS: &str = "Agents can start only on a state the ground paints on single cells.";
 
-/// Error on a Leave line.
-pub const NOT_YET_LEAVE: &str = "Leave is not supported yet.";
+/// Error on a look at the cell ahead in a sheet whose agents do not move to cells.
+pub const AHEAD_NEEDS_CELLS: &str = "The cell ahead needs agents that move to cells.";
 
-/// Error on a Record line and a count of events over agents.
-pub const NOT_YET_RECORD: &str = "Record is not supported yet.";
-
-/// Error on a world of agents with walls at its edges.
-pub const NOT_YET_AGENT_WALLS: &str = "Walls around agents in open space are not supported yet.";
+/// Error on a Set inside a Repeat whose value reads a line inside that Repeat.
+pub const SET_IN_REPEAT: &str =
+    "A Set inside a Repeat sets one value every time, so its value cannot read a line inside the Repeat.";
 
 // Errors on a change of a property in a second way, and the words of a look at agents that costs too much
 

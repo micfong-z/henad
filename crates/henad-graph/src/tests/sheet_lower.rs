@@ -899,7 +899,12 @@ fn exercise(text: &str) -> bool {
     let outcome = catch_unwind(AssertUnwindSafe(|| match SheetFile::parse(text) {
         Ok(file) => {
             let document = file.lowered().document();
-            let nodes: usize = document.passes.iter().map(|pass| pass.body.nodes.len()).sum();
+            let nodes: usize = document.passes.iter().map(|pass| pass.body.nodes.len()).sum::<usize>()
+                + document
+                    .functions
+                    .iter()
+                    .map(|function| function.body.nodes.len())
+                    .sum::<usize>();
             assert_eq!(nodes, file.line_map().len());
             true
         }

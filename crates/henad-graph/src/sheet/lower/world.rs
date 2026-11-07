@@ -2,8 +2,9 @@
 //! the parameters.
 //!
 //! An agent's Position is the `vec2f` lane the spatial index reads, and an Arrow or Heading a `vec2f` lane. The
-//! Heading has no lane when nothing reads it. A sheet whose tick has a length declares it first among the parameters,
-//! as the hidden parameter `tick_length` that names the tick's unit and that a sweep can vary.
+//! Heading of agents that move to places is a `vec2i` lane, a step between cells, and has no lane when nothing reads
+//! it, a look at the cell ahead included. A sheet whose tick has a length declares it first among the parameters, as
+//! the hidden parameter `tick_length` that names the tick's unit and that a sweep can vary.
 
 use henad_core::authoring::primitives::space::Boundary;
 use henad_core::metadata::TimeScale;
@@ -14,8 +15,8 @@ use super::rates::TICK_LENGTH;
 use crate::document::{AgentsWorld, Category, GridWorld, Lane, LaneRole, LaneStorage, Variant, World};
 use crate::sheet::check::{Place, formula, formula_chip};
 use crate::sheet::document::{
-    ColorRuleKind, Edges, MadeOf, ParameterFormat, ParameterType, PropertyType, SheetChip, SheetDocument, SheetLine,
-    SheetParameter, SheetProperty, SheetTime, SheetValue,
+    CellWhich, ColorRuleKind, Edges, LineKind, MadeOf, ParameterFormat, ParameterType, PropertyType, SheetChip,
+    SheetDocument, SheetLine, SheetParameter, SheetProperty, SheetTime, SheetValue,
 };
 use crate::sheet::sentence::ONE_TICK_IS;
 use crate::types::ValueType;
@@ -62,7 +63,18 @@ fn is_read(document: &SheetDocument, id: &str, kind: &str) -> bool {
             || rule.property.as_deref() == Some(id)
             || rule.shades.iter().any(|shade| shade.property == id)
     });
+    let heading_ahead = document.agents.iter().any(|agent| {
+        agent
+            .properties
+            .iter()
+            .any(|property| property.id == id && property.property_type == PropertyType::Heading)
+    }) && document
+        .cards
+        .iter()
+        .flat_map(|card| card.line_tables.values())
+        .any(looks_ahead);
     colored
+        || heading_ahead
         || document
             .cards
             .iter()
@@ -75,6 +87,16 @@ fn is_read(document: &SheetDocument, id: &str, kind: &str) -> bool {
                     .value()
                     .is_some_and(|value| value_reads(document, value, id))
         })
+}
+
+/// Returns whether `line`, or a phrase in one of its slots at any depth, looks at the cell ahead. The cell ahead reads
+/// the Heading.
+fn looks_ahead(line: &SheetLine) -> bool {
+    let own = line.kind == LineKind::LookAtCell && line.which == Some(CellWhich::Ahead);
+    own || line.slot_values().any(|value| match value {
+        SheetValue::Phrase(phrase) => looks_ahead(phrase),
+        _ => false,
+    })
 }
 
 /// Returns whether `line`, a phrase in it or its formula reads property `id`.
@@ -164,20 +186,12 @@ pub(super) fn declare(builder: &mut Builder<'_>) {
                 continue;
             }
         }
-        let mut lane = Lane::new(&property.id, builder.domain(), lane_type(property));
+        let mut lane = Lane::new(&property.id, builder.domain(), builder.lane_type(property));
         if property.property_type == PropertyType::Position {
             lane.role = Some(LaneRole::Position);
         }
         if property.property_type == PropertyType::States {
-            let variants = property
-                .states
-                .iter()
-                .map(|state| Variant {
-                    label: state.name.clone(),
-                    ..Variant::new(&state.id, state.color)
-                })
-                .collect();
-            builder.graph.categories.push(Category::new(&property.id, variants));
+            builder.graph.categories.push(category(property));
             // A category holds at most 256 variants, and one byte holds each.
             lane.storage = Some(LaneStorage::U8);
             lane.initial = property.states.first().map(|state| {
@@ -213,6 +227,20 @@ pub(super) fn declare(builder: &mut Builder<'_>) {
             ),
         }
     }
+}
+
+/// Returns the category of the States property `property`: a variant per state, named by the state's id and labelled
+/// with its name.
+pub(super) fn category(property: &SheetProperty) -> Category {
+    let variants = property
+        .states
+        .iter()
+        .map(|state| Variant {
+            label: state.name.clone(),
+            ..Variant::new(&state.id, state.color)
+        })
+        .collect();
+    Category::new(&property.id, variants)
 }
 
 /// Returns the descriptor of `parameter`, `None` for a value its type cannot hold.

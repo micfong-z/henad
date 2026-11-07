@@ -25,7 +25,6 @@ use crate::sheet::{ParsedSheet, SheetFileError, TablePlaces, starters};
 /// Every sheet the tests read, by file name: the starters of [`starters`], then the test sheets.
 pub(super) fn sheets() -> Vec<(&'static str, &'static str)> {
     let test_sheets = [
-        ("ants.toml", include_str!("sheets/ants.toml")),
         ("sir_chance.toml", include_str!("sheets/sir_chance.toml")),
         ("mobile_sir.toml", include_str!("sheets/mobile_sir.toml")),
         ("sird.toml", include_str!("sheets/sird.toml")),
@@ -239,7 +238,8 @@ fn starters_returns_the_grid_sheets_then_the_agent_sheets() {
             "forest_fire.toml",
             "random_walk.toml",
             "boids.toml",
-            "bounded_confidence.toml"
+            "bounded_confidence.toml",
+            "ants.toml"
         ]
     );
     for (index, starter) in starters().iter().enumerate() {

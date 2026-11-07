@@ -1,5 +1,6 @@
 //! Colours of the cells or agents: none when they take the colours of their first States property, and otherwise the
-//! view pass `colours`. The engine draws the first States property without a view pass.
+//! view pass `colours`. The engine draws the first States property without a view pass. The ground's colours lower as
+//! [`super::ground`] describes.
 //!
 //! An agent coloured by its heading takes one of the eight compass colours of the palette `by_heading` through
 //! `space.heading_octant`.
@@ -47,6 +48,10 @@ const HEADING_PALETTE: (&str, [[u8; 4]; 8]) = (
 
 /// Writes the view pass of the colour rule of the sheet's kind of thing, when the rule needs one.
 pub(super) fn lower(builder: &mut Builder<'_>) {
+    if builder.is_ground() {
+        super::ground::colours(builder);
+        return;
+    }
     let thing = builder.thing_id();
     let Some(rule) = builder.document.colors.get(thing) else {
         return;
@@ -119,7 +124,7 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
         return;
     }
     let colored = builder
-        .input_as(&site, &read, &super::world::lane_type(property), false)
+        .input_as(&site, &read, &builder.lane_type(property), false)
         .map(|index_input| {
             builder.emit(
                 &site,
@@ -133,9 +138,14 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
     }
 }
 
-/// Adds the view pass of the colours and returns the site of its nodes.
-fn color_site(builder: &mut Builder<'_>) -> Site {
-    let pass = builder.add_pass(Pass::new(COLOR_PASS, PassStage::View, Some(builder.domain())));
+/// Adds the view pass of the colours, `colours` or `colours_ground` for the ground, and returns the site of its nodes.
+pub(super) fn color_site(builder: &mut Builder<'_>) -> Site {
+    let id = if builder.is_ground() {
+        format!("{COLOR_PASS}_ground")
+    } else {
+        COLOR_PASS.to_owned()
+    };
+    let pass = builder.add_pass(Pass::new(&id, PassStage::View, Some(builder.domain())));
     Site {
         pass,
         owner: Owner::Sheet(SheetKey {
@@ -190,7 +200,12 @@ fn by_heading(builder: &mut Builder<'_>) -> Result<(), String> {
 /// # Errors
 ///
 /// Returns the message for a palette id that a property's category takes, or a value with no number.
-fn shade(builder: &mut Builder<'_>, site: &Site, read: &super::value::Operand, property: &str) -> Result<(), String> {
+pub(super) fn shade(
+    builder: &mut Builder<'_>,
+    site: &Site,
+    read: &super::value::Operand,
+    property: &str,
+) -> Result<(), String> {
     let palette = format!("shaded_{property}");
     if builder.graph.categories.iter().any(|category| category.id == palette) {
         return Err(format!(

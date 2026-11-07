@@ -21,6 +21,7 @@ grep -v '^#' scratch/<name>.toml > golden/<name>.toml
 `--write` replaces the file with its canonical text.
 `grep -v '^#'` removes every line that starts with `#`, which in a canonical text are the generated comments alone.
 At `cccb332` the four sheets already equalled `check.py`'s output apart from their comments.
+The ants starter later took a note under its last line on its slower trail formation, which the format's example lacks, so the test drops every line's note before it writes the four sheets.
 
 ## The rules the files follow
 
