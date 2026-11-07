@@ -261,8 +261,8 @@ pub struct AgentRun {
     pub seed: Option<u64>,
     /// Number of presses of any action so far, the press being run included. Zero before the first press.
     pub presses: u32,
-    /// Steps done when the hook runs: zero at construction, the engine's tick at a press, and for the stat values the
-    /// steps done when the reduce leaf was recorded.
+    /// Steps done when the hook runs: zero at construction and at a live edit of a parameter, the engine's tick at a
+    /// press, and for the stat values the steps done when the reduce leaf was recorded.
     pub tick: u64,
     /// Whether the block is the counting block of a step pass. The last step of each batch binds it, every other
     /// block holds false, and [`Self::new`] leaves it false.

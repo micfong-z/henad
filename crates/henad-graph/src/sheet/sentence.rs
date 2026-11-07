@@ -1900,6 +1900,8 @@ pub fn changed_by(lines: &[usize]) -> String {
 pub const SHEET_EMPTY: &str = "Every cell has the properties listed here. Add the first one to start.";
 
 /// Notice that a change to the sheet after the first tick starts the world again.
+///
+/// The Parameters tab shows it as the tooltip of a slider whose tried value rebuilds the preview at tick 0.
 pub const RESTART_NOTICE: &str = "Changes restart the world from tick 0.";
 
 // The property form

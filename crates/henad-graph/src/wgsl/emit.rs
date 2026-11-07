@@ -301,7 +301,7 @@ pub(crate) fn literal(value: HostValue) -> Option<String> {
 }
 
 /// Returns the slots `instruction` fills.
-fn defined(instruction: &Instruction) -> Vec<usize> {
+pub(crate) fn defined(instruction: &Instruction) -> Vec<usize> {
     let mut slots = vec![instruction.out];
     match &instruction.operation {
         Operation::Transition { fired, .. } => slots.extend(fired.iter().copied()),

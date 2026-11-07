@@ -7,13 +7,19 @@ use crate::icons::material_design_icons::{
 };
 use crate::state::AppState;
 use crate::ui::banner;
+use crate::ui::editor::EditorModel;
+use crate::ui::editor::graph::world::param_with;
+use crate::ui::editor::preview::{SIZE_PARAMS, model_value};
 use crate::ui::sweep::layout::{add_button, icon_button};
 use henad_compute::cpu::sim_thread::SimCommand;
+use henad_compute::entry::ModelEntry;
 use henad_core::action::{ActionDescriptor, Schedule, Scheduled};
 use henad_core::authoring::primitives::rng::mix_seed;
 use henad_core::explore::value::format_value;
 use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
-use web_time::{SystemTime, UNIX_EPOCH};
+use henad_graph::edit::EditCommand;
+use henad_graph::sheet::sentence::{KEEP, KEEP_TOOLTIP, RESET, RESTART_NOTICE, keep_name, reset_name, trying_value};
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Line shown under the Seed field while its text is not a seed.
 pub const INVALID_SEED: &str = "Seed must be an integer from 0 to 18446744073709551615.";
@@ -21,10 +27,17 @@ pub const INVALID_SEED: &str = "Seed must be an integer from 0 to 18446744073709
 /// Line the panel shows instead of its rows while no model is selected.
 const NO_MODEL_SELECTED: &str = "No model selected.";
 
+/// Line the panel shows instead of its sliders while every parameter of the model is hidden.
+const NO_PARAMETERS: &str = "This model has no parameters.";
+
 /// Space between the Seed field's frame and its text, egui's default for a text field.
 const SEED_FIELD_MARGIN: egui::Margin = egui::Margin::symmetric(4, 2);
 
 pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
+    if app.params_drive_preview() {
+        preview_params_ui(ui, app);
+        return;
+    }
     // With nothing selected, a seed or a schedule would apply to no build.
     let Some(entry) = app.selected_entry() else {
         ui.label(NO_MODEL_SELECTED);
@@ -40,7 +53,7 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     // A hidden parameter, such as a tick length, gets no slider. A sweep still varies it.
     if descriptors.iter().all(ParamDescriptor::is_hidden) {
-        ui.label("This model has no parameters.");
+        ui.label(NO_PARAMETERS);
         actions_ui(ui, app);
         notice(ui, app, &descriptors, panel_width);
         return;
@@ -77,45 +90,8 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
         let Some(val) = app.param_values.get_mut(i) else {
             continue;
         };
-
-        match (desc.kind(), val) {
-            (ParamKind::F32 { min, max, step, .. }, ParamValue::F32(v)) => {
-                let before = *v;
-                let mut slider = f32_slider(v, *min, *max, *step).text(text);
-                if desc.format() == ParamFormat::Percent {
-                    slider = as_percent(slider, *step);
-                }
-                with_hint(ui.add(slider), hint);
-                if *v != before {
-                    param_changed.push((i, ParamValue::F32(*v)));
-                }
-            }
-            (ParamKind::U32 { min, max, .. }, ParamValue::U32(v)) => {
-                let mut v_i32 = *v as i32;
-                let slider = egui::Slider::new(&mut v_i32, *min as i32..=*max as i32).text(text);
-                if with_hint(ui.add(slider), hint).changed() {
-                    *v = v_i32 as u32;
-                    param_changed.push((i, ParamValue::U32(*v)));
-                }
-            }
-            (ParamKind::Bool { .. }, ParamValue::Bool(v)) => {
-                if with_hint(ui.checkbox(v, text), hint).changed() {
-                    param_changed.push((i, ParamValue::Bool(*v)));
-                }
-            }
-            (ParamKind::Choice { options, .. }, ParamValue::Choice(v)) => {
-                let combo = egui::ComboBox::from_label(text)
-                    .selected_text(options.get(*v).unwrap_or("?"))
-                    .show_ui(ui, |ui| {
-                        for (j, opt) in options.iter().enumerate() {
-                            if ui.selectable_value(v, j, opt).changed() {
-                                param_changed.push((i, ParamValue::Choice(*v)));
-                            }
-                        }
-                    });
-                with_hint(combo.response, hint);
-            }
-            _ => {}
+        if value_widget(ui, desc, val, text, hint) {
+            param_changed.push((i, val.clone()));
         }
     }
 
@@ -138,6 +114,257 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     actions_ui(ui, app);
     notice(ui, app, &descriptors, panel_width);
+}
+
+/// Draws the widget of parameter `desc` over `value`, labelled `text` and described by `hint`, and returns whether the
+/// user changed the value. A value of another kind than `desc` declares gets no widget.
+fn value_widget(
+    ui: &mut egui::Ui,
+    desc: &ParamDescriptor,
+    value: &mut ParamValue,
+    text: egui::RichText,
+    hint: Option<&str>,
+) -> bool {
+    match (desc.kind(), value) {
+        (ParamKind::F32 { min, max, step, .. }, ParamValue::F32(v)) => {
+            let before = *v;
+            let mut slider = f32_slider(v, *min, *max, *step).text(text);
+            if desc.format() == ParamFormat::Percent {
+                slider = as_percent(slider, *step);
+            }
+            with_hint(ui.add(slider), hint);
+            *v != before
+        }
+        (ParamKind::U32 { min, max, .. }, ParamValue::U32(v)) => {
+            let mut v_i32 = *v as i32;
+            let slider = egui::Slider::new(&mut v_i32, *min as i32..=*max as i32).text(text);
+            let changed = with_hint(ui.add(slider), hint).changed();
+            if changed {
+                *v = v_i32 as u32;
+            }
+            changed
+        }
+        (ParamKind::Bool { .. }, ParamValue::Bool(v)) => with_hint(ui.checkbox(v, text), hint).changed(),
+        (ParamKind::Choice { options, .. }, ParamValue::Choice(v)) => {
+            let mut changed = false;
+            let combo = egui::ComboBox::from_label(text)
+                .selected_text(options.get(*v).unwrap_or("?"))
+                .show_ui(ui, |ui| {
+                    for (j, opt) in options.iter().enumerate() {
+                        changed |= ui.selectable_value(v, j, opt).changed();
+                    }
+                });
+            with_hint(combo.response, hint);
+            changed
+        }
+        _ => false,
+    }
+}
+
+/// Choice the user made for one parameter of the preview.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum TrialChoice {
+    /// Moved the slider to this value.
+    Try(ParamValue),
+    /// Pressed Reset.
+    Reset,
+    /// Pressed Keep.
+    Keep,
+}
+
+/// Draws the parameters of the Editor's preview, a change of each tried in the preview, then the buttons of its
+/// actions (D54, D88).
+///
+/// A size is left out, since the preview sets its own, and so is a hidden parameter. A tried value shows the value the
+/// model keeps under its slider, with Reset, and with Keep while the Editor holds the document the preview runs. The
+/// Seed field and the schedule are left out. Both belong to the next build of the selected model.
+fn preview_params_ui(ui: &mut egui::Ui, app: &mut AppState) {
+    let Some(entry) = app.loaded_entry().cloned() else {
+        return;
+    };
+    let descriptors = entry.param_descriptors();
+    let shown: Vec<usize> = descriptors
+        .iter()
+        .enumerate()
+        .filter(|(_, descriptor)| !descriptor.is_hidden() && !SIZE_PARAMS.contains(&descriptor.id()))
+        .map(|(index, _)| index)
+        .collect();
+    if shown.is_empty() {
+        ui.label(NO_PARAMETERS);
+    }
+    let can_keep = holds_previewed_document(app, &entry);
+    let mut chosen = None;
+    for index in shown {
+        let descriptor = &descriptors[index];
+        let keeps = model_value(&app.editor.model, descriptor);
+        let tried = app
+            .editor
+            .preview
+            .tried(descriptor.id())
+            .map(|tried| tried.value.clone());
+        let mut value = tried
+            .clone()
+            .unwrap_or_else(|| app.loaded_values.get(index).cloned().unwrap_or_else(|| keeps.clone()));
+        let hint = (!descriptor.is_live()).then_some(RESTART_NOTICE);
+        if value_widget(ui, descriptor, &mut value, param_text(ui, descriptor, false), hint) {
+            chosen = Some((index, TrialChoice::Try(value)));
+        }
+        if let Some(tried) = &tried
+            && let Some(choice) = trial_row(ui, descriptor, tried, &keeps, can_keep)
+        {
+            chosen = Some((index, choice));
+        }
+    }
+    if let Some((index, choice)) = chosen {
+        apply_trial(app, &entry, index, choice);
+    }
+
+    let actions = entry.action_descriptors();
+    if !actions.is_empty() {
+        ui.add_space(8.0);
+        ui.separator();
+        if let Some(index) = action_buttons(ui, actions, app.has_simulation()) {
+            app.send_command(SimCommand::Act(index));
+            app.editor.preview.acted = true;
+        }
+    }
+}
+
+/// Returns whether the Editor holds the document the preview of `entry` runs: the sheet whose preview it is, or a
+/// graph with the entry's id.
+fn holds_previewed_document(app: &AppState, entry: &ModelEntry) -> bool {
+    match &app.editor.model {
+        EditorModel::Sheet(_) => app.previews_editor_sheet(),
+        EditorModel::Graph(graph) => graph.document().target.id == entry.id(),
+        EditorModel::Empty | EditorModel::Rule(_) => false,
+    }
+}
+
+/// Draws the note under the slider of `descriptor` while the preview tries `tried` and the model keeps `keeps`, with
+/// Reset and, when `can_keep` holds, Keep, and returns the button pressed.
+fn trial_row(
+    ui: &mut egui::Ui,
+    descriptor: &ParamDescriptor,
+    tried: &ParamValue,
+    keeps: &ParamValue,
+    can_keep: bool,
+) -> Option<TrialChoice> {
+    let kept = display_value(descriptor, keeps);
+    let mut chosen = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.weak(trying_value(&kept));
+        let reset = add_button(
+            ui,
+            true,
+            egui::Button::new(RESET),
+            &reset_name(descriptor.label(), &kept),
+        );
+        if reset.clicked() {
+            chosen = Some(TrialChoice::Reset);
+        }
+        if can_keep {
+            let name = keep_name(&display_value(descriptor, tried), descriptor.label());
+            let keep = add_button(ui, true, egui::Button::new(KEEP), &name).on_hover_text(KEEP_TOOLTIP);
+            if keep.clicked() {
+                chosen = Some(TrialChoice::Keep);
+            }
+        }
+    });
+    chosen
+}
+
+/// Applies `choice` to parameter `index` of `entry`, the preview's entry, and sends the value the preview then runs
+/// with.
+///
+/// A live parameter reaches the running preview at once. Any other one rebuilds the preview at tick 0 after the
+/// preview's debounce, with every tried value. Keep makes the tried value the one the Editor's document keeps, as one
+/// edit, and needs neither, since the preview already runs with it.
+pub(crate) fn apply_trial(app: &mut AppState, entry: &ModelEntry, index: usize, choice: TrialChoice) {
+    let Some(descriptor) = entry.param_descriptors().get(index) else {
+        return;
+    };
+    let keeps = model_value(&app.editor.model, descriptor);
+    let value = match choice {
+        TrialChoice::Try(value) => {
+            app.editor.preview.try_value(descriptor.id(), value.clone(), keeps);
+            value
+        }
+        TrialChoice::Reset => {
+            app.editor.preview.end_trial(descriptor.id());
+            keeps
+        }
+        TrialChoice::Keep => {
+            if let Some(tried) = app
+                .editor
+                .preview
+                .tried(descriptor.id())
+                .map(|tried| tried.value.clone())
+                && keep_value(&mut app.editor.model, descriptor, &tried)
+            {
+                app.editor.preview.end_trial(descriptor.id());
+            }
+            return;
+        }
+    };
+    if descriptor.is_live() {
+        app.send_preview_param(index, value);
+    } else {
+        let builds = app.builds();
+        app.editor.preview.rebuild_after(Instant::now(), builds);
+    }
+}
+
+/// Makes `value` the value that `model` keeps for the parameter `descriptor` describes, widening its range to hold it,
+/// as one edit of the sheet or the graph. Returns whether the edit was made.
+fn keep_value(model: &mut EditorModel, descriptor: &ParamDescriptor, value: &ParamValue) -> bool {
+    match model {
+        EditorModel::Sheet(sheet) => {
+            let Some(number) = sheet_number(value) else {
+                return false;
+            };
+            sheet.keep_value(descriptor.id(), number).is_ok()
+        }
+        EditorModel::Graph(graph) => {
+            let Some(param) = graph
+                .document()
+                .params
+                .iter()
+                .find(|param| param.id() == descriptor.id())
+                .cloned()
+            else {
+                return false;
+            };
+            let Some(kind) = kind_keeping(param.kind(), value) else {
+                return false;
+            };
+            let kept = param_with(&param, param.label(), kind);
+            graph.edit(vec![EditCommand::SetParam(kept)], None)
+        }
+        EditorModel::Empty | EditorModel::Rule(_) => false,
+    }
+}
+
+/// Returns `kind` with `value` as its default, its range widened to hold it, or `None` for a value of another kind.
+fn kind_keeping(kind: &ParamKind, value: &ParamValue) -> Option<ParamKind> {
+    Some(match (kind, value) {
+        (ParamKind::F32 { min, max, step, .. }, ParamValue::F32(number)) => ParamKind::F32 {
+            min: min.min(*number),
+            max: max.max(*number),
+            default: *number,
+            step: *step,
+        },
+        (ParamKind::U32 { min, max, .. }, ParamValue::U32(number)) => ParamKind::U32 {
+            min: (*min).min(*number),
+            max: (*max).max(*number),
+            default: *number,
+        },
+        (ParamKind::Bool { .. }, ParamValue::Bool(flag)) => ParamKind::Bool { default: *flag },
+        (ParamKind::Choice { options, .. }, ParamValue::Choice(choice)) => ParamKind::Choice {
+            options: options.clone(),
+            default: *choice,
+        },
+        _ => return None,
+    })
 }
 
 /// Draws the Seed field and its dice button, with an error line while [`parse_seed`] rejects the field's text.
@@ -232,14 +459,24 @@ fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
     }
 
     let loaded = app.selection_is_loaded();
-    let mut pressed = None;
 
     ui.add_space(8.0);
     ui.separator();
+    if let Some(index) = action_buttons(ui, &actions, loaded) {
+        app.send_command(SimCommand::Act(index));
+        app.mark_opened_run_modified();
+    }
+
+    schedule_ui(ui, app, &actions);
+}
+
+/// Draws a button per action of `actions`, enabled while `enabled` holds, and returns the index of the one pressed.
+fn action_buttons(ui: &mut egui::Ui, actions: &[ActionDescriptor], enabled: bool) -> Option<usize> {
+    let mut pressed = None;
     ui.horizontal_wrapped(|ui| {
         for (i, action) in actions.iter().enumerate() {
             if ui
-                .add_enabled(loaded, egui::Button::new(action.label()))
+                .add_enabled(enabled, egui::Button::new(action.label()))
                 .on_disabled_hover_text(format!(
                     "Press {MDI_RESTART}\u{a0}Build to run this model, then {}",
                     action.label().to_lowercase()
@@ -250,16 +487,7 @@ fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
             }
         }
     });
-
-    if let Some(index) = pressed {
-        app.send_command(SimCommand::Act(index));
-        app.mark_opened_run_modified();
-        if app.preview().is_some() {
-            app.editor.preview.acted = true;
-        }
-    }
-
-    schedule_ui(ui, app, &actions);
+    pressed
 }
 
 /// Draws the actions each build runs at their ticks, with a row to add an action.
@@ -398,6 +626,17 @@ fn f32_slider(value: &mut f32, min: f32, max: f32, step: Option<f32>) -> egui::S
 /// `f32` below it.
 fn decimal_value(value: f32) -> f64 {
     value.to_string().parse().unwrap_or(f64::from(value))
+}
+
+/// Returns `value` as the number a sheet parameter holds, `None` for a kind a sheet parameter cannot hold.
+///
+/// A float is widened through [`decimal_value`], so a kept or shown 0.3 stays 0.3.
+pub(crate) fn sheet_number(value: &ParamValue) -> Option<f64> {
+    match value {
+        ParamValue::F32(number) => Some(decimal_value(*number)),
+        ParamValue::U32(number) => Some(f64::from(*number)),
+        _ => None,
+    }
 }
 
 /// Returns `value` as the Parameters panel shows it, a fraction as a percentage.

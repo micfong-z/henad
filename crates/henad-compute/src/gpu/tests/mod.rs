@@ -7,6 +7,7 @@ mod agent_spec;
 mod compose;
 mod fire_counts;
 mod grid_spec;
+mod live_params;
 mod parity;
 #[cfg(feature = "runtime-wgsl")]
 mod runtime_grid;

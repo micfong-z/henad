@@ -28,6 +28,24 @@ whose builds and demand share it and which boxes the engine itself, as a grid ru
 same, through `register_gpu_agent_model`, `ModelEntry::from_agent_spec` and `GpuAgentState<M>`.
 Behind `runtime-wgsl`, `EntryDeclarations` (`entry/declarations.rs`, with `new`) is public, as are
 `ModelEntry::from_gpu_grid_spec` and `from_gpu_agent_spec`, which forward to those two.
+**Live parameters on the GPU** (L1). `from_grid_spec` and `from_agent_spec` pass each declared
+parameter's `is_live` to the engine through the crate-private `with_live_params(Vec<bool>)`, and a
+model type's engine (`GpuGridState`, `GpuAgentState`) gets none, so every parameter of a
+registered GPU model stays reload-only. `SimState::set_param` rejects a reload-only index and an
+index past the parameters. For a live one the grid engine stores the value and writes the uniform
+block of every step pass (its counting block too), the display and the reduce pass again through
+`pass_params_bytes`, in `uniform_ctx`, the `GridPassCtx` of the build (tick 0, the build's press),
+so the bytes equal a fresh build's at the new value. The agent engine computes every block but the
+actions' first through `run_params_bytes` at `AgentRun::new(seed, 0, 0)` (`uniform_blocks`), and
+rejects the edit, keeping the old value and the run, when one fails. Each built pass keeps its pass
+id, its uniform and its counting uniform for this (`BuiltPass`, `EncodedPass`, which keeps its
+invocations too). An action's block is written at each press from the current `params`, and the
+reruns and the stats read them. The writes go through `queue.write_buffer` between submissions, so
+the next step reads them, and the tick and the buffers stay. A live parameter therefore feeds
+nothing but those blocks, the reruns and the stat values. henad-graph marks the rest reload-only.
+`gpu/tests/live_params.rs` holds `a_live_edit_keeps_the_run_and_later_steps_read_the_new_value`
+(both engines, the counting step included), `an_engine_without_live_parameters_rejects_every_edit`
+and `a_value_whose_blocks_fail_is_rejected_and_the_run_keeps_its_value`.
 `EntryDeclarations.time` (`None` from `new` and in every `register_*`) becomes
 `ModelMetadata.time`, which `ModelEntry::metadata` exposes. A graph with a `tick_unit` sets it.
 henad-compute instantiates no model outside its own tests.
@@ -87,9 +105,9 @@ types an unsuffixed literal falls back to.
   `write_buffer`, then runs the passes in order, each rewriting its uniform first. A rerun's
   `Err` goes to `ctx.faults` as a refused fault, and no pass runs. `pass_params_bytes(GridPassId,
   GridPassCtx, params)` writes every uniform block, and a pass gets a uniform only when its shader
-  binds `params`. `GridPassCtx.tick` is the steps done: 0 at construction, the engine's tick at
-  a press, and the tick the reduce pass was recorded at (`stats_tick`) for `GridHooks::stats(counts,
-  ctx, params)`, which a graph's stats read through the host. `counters` is the length of the
+  binds `params`. `GridPassCtx.tick` is the steps done: 0 at construction and at a live edit, the
+  engine's tick at a press, and the tick the reduce pass was recorded at (`stats_tick`) for
+  `GridHooks::stats(counts, ctx, params)`, which a graph's stats read through the host. `counters` is the length of the
   reduce shader's `counters` array and of the readback, `stats.len().max(1)` from `new`, and a
   graph sets its tally count. `sums` (0 from `new`) is the float lanes the reduce shader sums: it
   then binds `partials` and writes one total per lane per cell workgroup, the engine folds them

@@ -16,7 +16,8 @@ use henad_core::metadata::TimeUnit;
 use henad_graph::limits::MAX_GRID_SIDE;
 use henad_graph::sheet::document::{
     ButtonStepRule, CardRuns, ColorRuleKind, Edges, LineKind, MadeOf, PropertyType, SheetChip, SheetDocument,
-    SheetLine, SheetLiteral, SheetProperty, SheetTime, SheetValue, Slot, StartRule, StartsAs, StartsAsRow,
+    SheetLine, SheetLiteral, SheetParameter, SheetProperty, SheetTime, SheetValue, Slot, StartRule, StartsAs,
+    StartsAsRow,
 };
 use henad_graph::sheet::edit::{
     STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem, suggested_state_color,
@@ -33,9 +34,9 @@ use henad_graph::sheet::sentence::{
     SentenceChip, SheetSection, StartsField, TICK_LENGTH_NAME, TICK_UNIT_NAME, TOO_FEW_STATES, TYPE_A_CHANCE,
     TYPE_ONE_NUMBER, USE_A_PARAMETER, WALLS, WALLS_SENTENCE, WIDTH_NAME, WITH_CHANCE, WRAP_AROUND, WRAP_SENTENCE,
     WRAP_TOOLTIP, add_row_name, changed_by, edit_property_heading, literal_words, property_name_taken,
-    read_typed_number, remove_row_name, remove_state_name, run_once, starts_all, starts_field_name, starts_high_place,
-    starts_low_place, starts_otherwise_name, starts_place, starts_row_place, state_color_name, state_name_field,
-    tick_unit_choice, world_side_out_of_range,
+    read_typed_number, remove_row_name, remove_state_name, run_once, sheet_trying_value, starts_all, starts_field_name,
+    starts_high_place, starts_low_place, starts_otherwise_name, starts_place, starts_row_place, state_color_name,
+    state_name_field, tick_unit_choice, world_side_out_of_range,
 };
 use henad_graph::value::Color;
 
@@ -47,6 +48,15 @@ use super::widgets::{
 };
 use crate::ui::kv_grid;
 use crate::ui::sweep::layout::{add_button, destructive_button, filled_button};
+
+/// A value the world tries for a parameter of the sheet while the model keeps its own (D88).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetTrial {
+    /// Id of the parameter.
+    pub parameter: String,
+    /// Value the world tries.
+    pub value: f64,
+}
 
 /// Kind of thing whose properties the Cells section lists.
 const CELLS: &str = "cells";
@@ -229,8 +239,8 @@ impl Pending {
 /// edits made in it.
 ///
 /// `past_start` is whether the preview has passed tick 0 or a button was pressed in it. A changed Starts as then says
-/// "Start again to see it".
-pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool) {
+/// "Start again to see it". `trials` holds the values the world tries, each shown under its parameter.
+pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials: &[SheetTrial]) {
     let stale: Vec<String> = sheet
         .document()
         .cells
@@ -254,7 +264,7 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool) {
                     SheetSection::Purpose => purpose(ui, document),
                     SheetSection::World => world(ui, document, pane.widgets, &mut pending),
                     SheetSection::Cells => cells(ui, document, pane, &stale, &mut pending),
-                    SheetSection::Parameters => parameters(ui, document),
+                    SheetSection::Parameters => parameters(ui, document, trials),
                     SheetSection::Measures => measures(ui, document),
                     SheetSection::Colours => colours(ui, document),
                     SheetSection::Buttons => buttons(ui, document),
@@ -1386,22 +1396,46 @@ fn changing_lines(document: &SheetDocument, property_id: &str) -> Vec<usize> {
     numbers
 }
 
-/// Draws each parameter's name and value, with its unit.
-fn parameters(ui: &mut Ui, document: &SheetDocument) {
-    if document.parameters.is_empty() {
-        return;
-    }
-    kv_grid(ui, "henad_sheet_parameters").show(ui, |ui, rows| {
-        for parameter in &document.parameters {
-            ui.label(&parameter.name);
-            let value = format_number(parameter.default).unwrap_or_default();
-            match &parameter.unit {
-                Some(unit) => ui.label(format!("{value} {unit}")),
-                None => ui.label(value),
-            };
-            rows.end_row(ui);
+/// Draws each parameter's name and value, with its unit, and under a parameter in `trials` the value the world tries.
+///
+/// The rows sit in one grid until a tried parameter. The trying line then spans the pane, and the next rows start a
+/// new grid. Every grid takes the same minimum first-column width, so the values stay aligned. The line wraps at the
+/// visible right edge of the pane. The pane's content can be wider than the pane, as with a wide Cells table, and a
+/// line wrapped at the content's edge would be clipped.
+fn parameters(ui: &mut Ui, document: &SheetDocument, trials: &[SheetTrial]) {
+    let tried = |parameter: &SheetParameter| trials.iter().find(|trial| trial.parameter == parameter.id);
+    let mut rest = document.parameters.as_slice();
+    let mut segment = 0;
+    while !rest.is_empty() {
+        let end = rest
+            .iter()
+            .position(|parameter| tried(parameter).is_some())
+            .map_or(rest.len(), |index| index + 1);
+        let (shown, tail) = rest.split_at(end);
+        kv_grid(ui, &format!("henad_sheet_parameters_{segment}")).show(ui, |ui, rows| {
+            for parameter in shown {
+                ui.label(&parameter.name);
+                let value = format_number(parameter.default).unwrap_or_default();
+                match &parameter.unit {
+                    Some(unit) => ui.label(format!("{value} {unit}")),
+                    None => ui.label(value),
+                };
+                rows.end_row(ui);
+            }
+        });
+        if let Some(parameter) = shown.last()
+            && let Some(trial) = tried(parameter)
+        {
+            let kept = format_number(parameter.default).unwrap_or_default();
+            let tried = format_number(trial.value).unwrap_or_default();
+            ui.scope(|ui| {
+                ui.set_max_width((ui.clip_rect().right() - ui.cursor().left()).max(0.0));
+                ui.add(egui::Label::new(RichText::new(sheet_trying_value(&tried, &kept)).weak()).wrap());
+            });
         }
-    });
+        rest = tail;
+        segment += 1;
+    }
 }
 
 /// Draws each measure's name.

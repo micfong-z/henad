@@ -23,7 +23,7 @@ use egui::{CentralPanel, Frame, Margin, Panel, ScrollArea};
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_graph::sheet::check::{SheetReport, check};
 use henad_graph::sheet::document::{MadeOf, SheetDocument, StartsAs};
-use henad_graph::sheet::edit::{SheetBuilder, SheetEditError};
+use henad_graph::sheet::edit::{SheetBuilder, SheetEdit, SheetEditError};
 use henad_graph::sheet::sentence::RESTART_NOTICE;
 use henad_graph::sheet::{ParsedSheet, SheetFile};
 
@@ -232,6 +232,40 @@ impl SheetEditor {
             .clone()
     }
 
+    /// Makes `value` the value parameter `parameter` keeps, widening its range to hold it, as one edit of the sheet.
+    ///
+    /// The preview keeps its key. It already runs with the value.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason the edit was refused, such as a parameter the sheet does not hold. The sheet is then
+    /// unchanged.
+    pub fn keep_value(&mut self, parameter: &str, value: f64) -> Result<(), SheetEditError> {
+        let Some(kept) = self
+            .document()
+            .parameters
+            .iter()
+            .find(|known| known.id == parameter)
+            .cloned()
+        else {
+            return Err(SheetEditError::Missing(format!("no parameter has the id {parameter}")));
+        };
+        let edit = SheetEdit::SetParameter {
+            parameter: kept.id,
+            min: kept.min.min(value),
+            max: kept.max.max(value),
+            default: value,
+            step: kept.step,
+            unit: kept.unit,
+            means: kept.means,
+        };
+        let mut builder = self.builder.clone();
+        builder.apply(edit)?;
+        self.builder = builder;
+        self.refresh();
+        Ok(())
+    }
+
     /// Returns `diagnostic`, a problem of the graph the sheet lowers to, placed in the sheet: at the line of its node,
     /// at the table of its pass, or at `[sheet]`. A sheet that does not lower returns it as it is.
     pub fn place(&self, diagnostic: CodeDiagnostic) -> CodeDiagnostic {
@@ -245,8 +279,8 @@ impl SheetEditor {
 /// Draws the sheet editor: the Sheet pane on the left and the Card pane beside it, each scrolling on its own.
 ///
 /// Each pane is a group named by its heading. `past_start` is whether the preview has passed tick 0 or a button was
-/// pressed in it.
-pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, past_start: bool) {
+/// pressed in it, and `trials` holds the values the world tries for the sheet's parameters.
+pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, past_start: bool, trials: &[sheet_pane::SheetTrial]) {
     let width = ui.available_width();
     Panel::left("henad_sheet_pane")
         .resizable(true)
@@ -259,7 +293,7 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, past_start: bool) {
             ScrollArea::vertical()
                 .id_salt("henad_sheet_pane_scroll")
                 .auto_shrink([false; 2])
-                .show(ui, |ui| sheet_pane::sheet_pane(ui, sheet, past_start));
+                .show(ui, |ui| sheet_pane::sheet_pane(ui, sheet, past_start, trials));
             pane_group(ui, SHEET_PANE);
         });
     CentralPanel::no_frame().show(ui, |ui| {

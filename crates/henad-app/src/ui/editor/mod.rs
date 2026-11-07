@@ -40,6 +40,7 @@ use crate::icons::material_design_icons::{
 use crate::state::{AppState, PreviewRun, too_large_message};
 use crate::ui::dock::Tab;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
+use crate::ui::params::sheet_number;
 use crate::ui::sweep::layout::add_button;
 use preview::{PREVIEW_WAITS, PreviewState};
 
@@ -405,6 +406,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
         .map(|entry| entry.source().clone());
     let rebuild_pending = app.pending_rebuild.is_some();
     let past_start = app.sheet_preview_past_start();
+    let trials = sheet_trials(app);
     let panel = &mut app.editor;
     panel.settle_outcome(loaded.as_ref(), rebuild_pending);
     let empty = panel.model.is_empty();
@@ -462,7 +464,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     };
     CentralPanel::no_frame().show(ui, |ui| match &mut panel.model {
         EditorModel::Graph(graph) => graph::graph_ui(ui, graph),
-        EditorModel::Sheet(sheet) => sheet::sheet_ui(ui, sheet, past_start),
+        EditorModel::Sheet(sheet) => sheet::sheet_ui(ui, sheet, past_start, &trials),
         EditorModel::Rule(text) => {
             code_view::code_view(ui, text, &marked, scroll_to, reset);
         }
@@ -486,6 +488,25 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     if let Some(request) = request {
         apply_request(ui.ctx(), app, request);
     }
+}
+
+/// Returns each value the preview of the Editor's sheet tries, as the Sheet pane shows it beside its parameter. Empty
+/// while no preview of the sheet runs.
+fn sheet_trials(app: &AppState) -> Vec<sheet::sheet_pane::SheetTrial> {
+    if !app.previews_editor_sheet() {
+        return Vec::new();
+    }
+    app.editor
+        .preview
+        .tried_values()
+        .iter()
+        .filter_map(|tried| {
+            Some(sheet::sheet_pane::SheetTrial {
+                parameter: tried.id.clone(),
+                value: sheet_number(&tried.value)?,
+            })
+        })
+        .collect()
 }
 
 /// Draws the header buttons, each setting `request` when pressed.

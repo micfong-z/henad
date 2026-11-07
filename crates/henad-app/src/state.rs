@@ -487,6 +487,32 @@ impl AppState {
         self.previews_editor_sheet() && self.preview_selection == self.selected_model
     }
 
+    /// Returns whether the Parameters tab draws the preview's parameters and sends a change to it: a preview runs or
+    /// builds, and the selection has not changed since it loaded (D54).
+    ///
+    /// The selected model's values, seed and schedule stay as they are. Once another model is selected, the tab draws
+    /// that model's parameters for the next build, as Build builds it.
+    pub fn params_drive_preview(&self) -> bool {
+        self.preview.is_some() && self.loaded.is_some() && self.preview_selection == self.selected_model
+    }
+
+    /// Sends a live edit of parameter `index` to the preview, and records `value` as a value the preview runs with.
+    ///
+    /// Returns whether the edit was sent. It is sent only while a preview runs or builds.
+    pub fn send_preview_param(&mut self, index: usize, value: ParamValue) -> bool {
+        if self.preview.is_none() || !self.has_simulation() {
+            return false;
+        }
+        self.send_command(SimCommand::SetParam {
+            index,
+            value: value.clone(),
+        });
+        if let Some(slot) = self.loaded_values.get_mut(index) {
+            *slot = value;
+        }
+        true
+    }
+
     /// Number of builds started so far that were no preview. A preview that waits compares it, and gives way to a
     /// build started after its edit.
     pub fn builds(&self) -> u64 {

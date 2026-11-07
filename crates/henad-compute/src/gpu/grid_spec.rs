@@ -162,8 +162,8 @@ pub struct GridPassCtx {
     pub seed: Option<u64>,
     /// Latest press, the press being run in an action, and the press before the first, with a count of zero, otherwise.
     pub press: GridPress,
-    /// Steps done when the hook runs: zero at construction, and for the stat values the steps done when the reduce
-    /// pass was recorded.
+    /// Steps done when the hook runs: zero at construction and at a live edit of a parameter, and for the stat values
+    /// the steps done when the reduce pass was recorded.
     pub tick: u64,
     /// Whether the block is the counting block of a step pass. The last step of each batch binds it, and every other
     /// block holds false.

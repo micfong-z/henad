@@ -67,11 +67,17 @@ impl BufferSides {
 
 struct EncodedPass {
     label: String,
+    /// Pass of the spec this pass was built from. Its uniform block is written for this pass.
+    id: AgentPassId,
     pipeline: wgpu::ComputePipeline,
     binds: Sides<wgpu::BindGroup>,
     groups: (u32, u32),
-    /// Uniform of the pass, kept so an action can reseed it before a press. Unused for a pass that is not an action.
+    /// Invocations the pass runs. Its uniform block reads them.
+    invocations: u32,
+    /// Uniform of the pass, kept so an action can reseed it before a press and a live edit can write any other again.
     uniform: wgpu::Buffer,
+    /// Counting block of a step pass, `None` where [`Self::counting`] is.
+    counting_uniform: Option<wgpu::Buffer>,
     /// Bind groups of the counting block of a step pass, `None` for a spec with no fire counters and for every pass
     /// that is no step.
     counting: Option<Sides<wgpu::BindGroup>>,
@@ -153,8 +159,11 @@ pub(crate) struct GpuAgentEngine {
     action_invocations: Vec<u32>,
     /// Seed of the next action press, advanced per press so that pressing twice draws twice.
     action_seed: u32,
-    /// Parameter values, kept to rewrite the action uniforms on each press.
+    /// Parameter values, kept to rewrite the action uniforms on each press, and edited by a live
+    /// [`SimState::set_param`].
     params: Vec<ParamValue>,
+    /// Whether each parameter is live, in the order of [`Self::params`]. A parameter past its end is reload-only.
+    live: Vec<bool>,
     /// Pass that writes the colour buffer before each snapshot, when the spec declares one.
     color: Option<EncodedPass>,
     /// Seed of the run, `None` for the model's default seed.
@@ -447,6 +456,7 @@ impl GpuAgentEngine {
             action_invocations,
             action_seed,
             params: params.to_vec(),
+            live: Vec::new(),
             agents,
             color,
             seed,
@@ -458,6 +468,53 @@ impl GpuAgentEngine {
             faults: ctx.faults.clone(),
             faulted: false,
         }
+    }
+
+    /// Returns the engine with each parameter live where `live` holds at its index.
+    ///
+    /// A live parameter must feed nothing but the uniform blocks, the reruns and the stat values: no size, count or
+    /// geometry. A parameter past the end of `live` stays reload-only, as every parameter of an engine built without
+    /// this call does.
+    pub(crate) fn with_live_params(mut self, live: Vec<bool>) -> Self {
+        self.live = live;
+        self
+    }
+
+    /// Returns the uniform blocks of every pass but the actions written from `params`, as the build wrote them, each
+    /// with its buffer. An action's block is written at each press.
+    ///
+    /// # Errors
+    ///
+    /// Returns the message of a block the hooks cannot write at `params`.
+    fn uniform_blocks(&self, params: &[ParamValue]) -> Result<Vec<(&wgpu::Buffer, Vec<u8>)>, String> {
+        let run = AgentRun::new(self.seed, 0, 0);
+        let passes = self
+            .steps
+            .iter()
+            .chain(self.display.as_ref().map(|(pass, _)| pass))
+            .chain(self.color.as_ref())
+            .chain([&self.reduce_pass]);
+        let mut blocks = Vec::new();
+        for pass in passes {
+            let ctx = PassCtx {
+                geom: &self.geom,
+                invocations: pass.invocations,
+                groups_x: pass.groups.0,
+                seed: 0,
+            };
+            blocks.push((
+                &pass.uniform,
+                self.spec.hooks.run_params_bytes(pass.id, ctx, run, params)?,
+            ));
+            if let Some(uniform) = &pass.counting_uniform {
+                let block = self
+                    .spec
+                    .hooks
+                    .run_params_bytes(pass.id, ctx, run.with_counting(true), params)?;
+                blocks.push((uniform, block));
+            }
+        }
+        Ok(blocks)
     }
 
     /// Submits `steps` steps, at most [`MAX_STEPS_PER_SUBMISSION`] per command buffer, as the runner does. Nothing
@@ -642,10 +699,13 @@ impl PassBuilder<'_> {
         let pipeline = compute_pipeline(self.device, &label, &shader.source, &layout);
         EncodedPass {
             label,
+            id,
             pipeline,
             binds,
             groups,
+            invocations,
             uniform,
+            counting_uniform,
             counting,
         }
     }
@@ -730,9 +790,24 @@ impl SimState for GpuAgentEngine {
         true
     }
 
-    /// Rejects every live edit. Its entry declares every parameter reload-only.
-    fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
-        false
+    /// Sets a live parameter and writes the uniform block of every pass but the actions again before the next step.
+    ///
+    /// Rejects a reload-only parameter, an index past the parameters, and a value at which the hooks cannot write a
+    /// block. A rejected edit leaves the run as it was.
+    fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
+        if !self.live.get(index).copied().unwrap_or(false) || index >= self.params.len() {
+            return false;
+        }
+        let mut params = self.params.clone();
+        params[index] = value.clone();
+        let Ok(blocks) = self.uniform_blocks(&params) else {
+            return false;
+        };
+        for (uniform, block) in blocks {
+            self.queue.write_buffer(uniform, 0, &block);
+        }
+        self.params = params;
+        true
     }
 
     fn population(&self) -> u64 {

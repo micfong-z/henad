@@ -38,7 +38,8 @@ use super::fault_names::FaultNames;
 use super::probes::{self, Probes};
 use super::uniform::WgslType;
 use super::{
-    GeneratedShader, ShaderRole, WORKGROUP_SIZE, any_instruction, compose, oversized, place, uniform::UniformBlock,
+    GeneratedShader, ShaderRole, WORKGROUP_SIZE, any_instruction, compose, live, oversized, own_params, place,
+    uniform::UniformBlock,
 };
 use crate::check::CheckReport;
 use crate::document::{Domain, GraphDocument, Lane, Pass, PassEnabled, PassStage, World};
@@ -545,7 +546,7 @@ impl AgentProgram {
             f32_param("world_width", "World Width", world.width, 1.0, 10_000.0, Some(50.0)).on_reload(),
             f32_param("world_height", "World Height", world.height, 1.0, 10_000.0, Some(50.0)).on_reload(),
         ];
-        params.extend(document.params.iter().cloned().map(ParamDescriptor::on_reload));
+        params.extend(own_params(&document.params, &live::reload_only(&evaluator)));
         let target = &document.target;
         let name = if target.name.is_empty() {
             &document.name

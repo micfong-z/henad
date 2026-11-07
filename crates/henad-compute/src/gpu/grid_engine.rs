@@ -61,10 +61,14 @@ impl SideBinds {
 /// A built pass, with one bind group for each side holding the current state.
 struct BuiltPass {
     label: String,
+    /// Pass of the spec this pass was built from. Its uniform block is written for this pass.
+    id: GridPassId,
     pipeline: wgpu::ComputePipeline,
     binds: SideBinds,
-    /// Uniform block bound as `params`, kept so a press can rewrite an action's.
+    /// Uniform block bound as `params`, kept so a press can rewrite an action's and a live edit any other.
     uniform: Option<wgpu::Buffer>,
+    /// Counting block of a step pass, `None` where [`Self::counting`] is.
+    counting_uniform: Option<wgpu::Buffer>,
     /// Bind groups of the counting block of a step pass, `None` for a spec with no fire counters and for every pass
     /// that is no step or binds no `params`.
     counting: Option<SideBinds>,
@@ -146,9 +150,14 @@ pub(crate) struct GpuGridEngine {
     action_stream: u64,
     /// Seed of the run, which a rerun and an action's uniform block read.
     seed: Option<u64>,
-    /// Parameter values, kept to rewrite the action uniforms on each press. Never edited, since a GPU grid model
-    /// declares every parameter reload-only.
+    /// Parameter values, kept to rewrite the action uniforms on each press, and edited by a live
+    /// [`SimState::set_param`].
     params: Vec<ParamValue>,
+    /// Whether each parameter is live, in the order of [`Self::params`]. A parameter past its end is reload-only.
+    live: Vec<bool>,
+    /// Context of the build's uniform blocks for the step, display and reduce passes. A live edit writes the blocks
+    /// again in this context.
+    uniform_ctx: GridPassCtx,
 
     /// `true` when the `a` side of every buffer holds the current (latest) state.
     current_is_a: bool,
@@ -388,9 +397,11 @@ impl GpuGridEngine {
             let pipeline = compute_pipeline(device, &label, &shader.source, &layout);
             BuiltPass {
                 label,
+                id: uniform_of,
                 pipeline,
                 binds,
                 uniform: uniform.clone(),
+                counting_uniform: counting_uniform.clone(),
                 counting,
             }
         };
@@ -460,10 +471,44 @@ impl GpuGridEngine {
             action_stream: henad_core::action::action_seed(seed),
             seed,
             params: params.to_vec(),
+            live: Vec::new(),
+            uniform_ctx: pass_ctx,
             current_is_a: true,
             stats_tick: 0,
             counted_tick: 0,
             spec,
+        }
+    }
+
+    /// Returns the engine with each parameter live where `live` holds at its index.
+    ///
+    /// A live parameter must feed nothing but the uniform blocks, the reruns and the stat values. A parameter past
+    /// the end of `live` stays reload-only, as every parameter of an engine built without this call does.
+    pub(crate) fn with_live_params(mut self, live: Vec<bool>) -> Self {
+        self.live = live;
+        self
+    }
+
+    /// Writes the uniform blocks of the step, display and reduce passes again from [`Self::params`], in the context
+    /// they were written in at build. An action's block is written at each press.
+    fn rewrite_uniforms(&self) {
+        let passes = self.steps.iter().chain([&self.display_pass, &self.reduce]);
+        for pass in passes {
+            if let Some(uniform) = &pass.uniform {
+                let bytes = self
+                    .spec
+                    .hooks
+                    .pass_params_bytes(pass.id, self.uniform_ctx, &self.params);
+                self.queue.write_buffer(uniform, 0, &bytes);
+            }
+            if let Some(uniform) = &pass.counting_uniform {
+                let ctx = GridPassCtx {
+                    counting: true,
+                    ..self.uniform_ctx
+                };
+                let bytes = self.spec.hooks.pass_params_bytes(pass.id, ctx, &self.params);
+                self.queue.write_buffer(uniform, 0, &bytes);
+            }
         }
     }
 
@@ -551,8 +596,18 @@ impl SimState for GpuGridEngine {
         true
     }
 
-    fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
-        false
+    /// Sets a live parameter and writes the uniform blocks of the step, display and reduce passes again before the next
+    /// step. Rejects a reload-only parameter and an index past the parameters.
+    fn set_param(&mut self, index: usize, value: &ParamValue) -> bool {
+        if !self.live.get(index).copied().unwrap_or(false) {
+            return false;
+        }
+        let Some(slot) = self.params.get_mut(index) else {
+            return false;
+        };
+        *slot = value.clone();
+        self.rewrite_uniforms();
+        true
     }
 
     fn population(&self) -> u64 {

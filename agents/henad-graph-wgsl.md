@@ -38,7 +38,8 @@ checked file of many grid counts can expand that far.
 `uniform_bytes` its block's size, and the reduce pass's `workgroup_bytes` four a tally, which
 `Demand::shortfalls` holds to the device), and `GridProgram::entry`
 the `ModelEntry` (`grid_width` and `grid_height` 1 to 16384 at the `[grid]` defaults, then the
-file's parameters, all reload, its stats, actions and palette). `hooks.rs` holds `GraphHooks`.
+file's parameters, each live or reload-only as `wgsl/live.rs` marks it, its stats, actions and
+palette). `hooks.rs` holds `GraphHooks`.
 `seed_buffers` runs `HostEvaluator::init`, and a fault panics, which the build's scope reports.
 `rerun` evaluates each action pass's block first, so a fault refuses the press, then reruns the
 init passes of `runs` on fresh lanes. A tick pass in an action's `runs` is refused, since a press
@@ -99,6 +100,27 @@ still zeroes the block. The field update runs one invocation per slot `layer * c
 word the slot, and the update writes the field at the slot. Its slot check wraps the update in a
 block, as a grid step's bounds check does. A rerun that writes
 some layers of a field is refused at compile, since a field uploads whole.
+
+**Live and reload-only parameters** (`wgsl/live.rs`, L1, D53, D88). `GridProgram::entry` and
+`AgentProgram::entry` mark each of the graph's own parameters through `own_params(params,
+&live::reload_only(&evaluator))`: reload-only (`on_reload`) where the host reads it at build, live
+otherwise. The sizes in front (`grid_width`, `grid_height`, `num_agents`, `world_width`,
+`world_height`) stay reload-only. `reload_only` reads the evaluator's document: the tick length of
+its `time`, a parameter an init pass reads (`Program::params`) or runs by (`PassEnabled::Param`),
+and one the reach or the cell size of a radius fold reads (`reach_params`, the slots its `radius`
+and `cell_size` are computed from through the prelude and the element, regions flattened, found by
+`emit::defined` and `operands` until nothing new is found). The neighbour index and the work
+budget follow a fold's reach, both fixed at build. Every other parameter reaches the shaders only
+through the uniform blocks, where the host evaluates the prelude (`math.powi`'s table included,
+since `FieldSource::Table` recomputes the powers from its base at each write) or the reruns and the
+stats, which read the engine's values. A live one is set on the running engine without a rebuild
+(`agents/henad-compute.md`). The flags change no shader and stay out of the schema hash. Tests:
+`each_sheet_starter_marks_what_its_build_reads_reload_only` and `the_sir_starters_rates_are_live`
+(`tests/live_params.rs`), henad-models'
+`a_live_rate_edit_keeps_the_tick_and_the_cells_and_later_ticks_follow_it_on_the_device`
+(`sheet_grid.rs`: 64 by 64, 10 ticks at 0.3, an edit to 2.0, then 30 ticks equal to the host at
+the new rate and apart from a run that kept 0.3), and the testing kit's `ApplyModes`, which every
+sheet entry passes.
 
 **Fault names** (`wgsl/fault_names.rs`, D47). `FaultNames` is a table from a node id, as the file
 writes it, to the words that name it in the document the graph was lowered from, such as "line 3,

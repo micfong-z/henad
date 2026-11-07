@@ -77,6 +77,13 @@ builds run in (`SweepOptions::in_build_pool`, `Executor::with_build_pool`), and 
 build in their lane pools either way. A pause never changes a result. A run's trajectory depends
 on its seed and schedule alone.
 
+`SimCommand::SetParam` reaches either loop between two pumps, and the state's `set_param` decides.
+A live edit on a GPU engine writes its uniform blocks with `queue.write_buffer` before the next
+batch is encoded, so the tick and the buffers stay and every later step reads the value (L1). A
+reload-only edit is rejected and logged, and the host rebuilds for it. The app's Parameters tab
+does so for the Editor's preview (`agents/henad-app.md`). A sweep sets every value at build and
+never sends an edit, so its runs are unchanged.
+
 A GPU engine with a fire range counts the last step of each `encode_steps` call, and the runner
 needs no change for it. The runner cuts a batch into chunks of at most `MAX_STEPS_PER_SUBMISSION`
 and at each tick an action is due, so each chunk's last step counts, and a snapshot's passes follow

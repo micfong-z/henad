@@ -626,7 +626,9 @@ impl Simulation {
     /// Returns [`SetupError::Param`] for an unknown id or a value the descriptor rejects, [`SetupError::ReloadOnly`]
     /// for a parameter that takes effect only when the model is built, and [`SetupError::Fault`] when the model panics
     /// or the device reports an error. Once an earlier call returned a fault, a value the descriptor accepts gets
-    /// [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
+    /// [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost. Note that a GPU agent model whose
+    /// hooks cannot write a uniform block at the new value also returns [`SetupError::ReloadOnly`], with the run
+    /// unchanged.
     ///
     /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
     /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused

@@ -35,6 +35,7 @@ pub(crate) mod agents;
 pub(crate) mod emit;
 mod fault_names;
 mod hooks;
+mod live;
 pub(crate) mod probes;
 pub(crate) mod uniform;
 
@@ -517,7 +518,7 @@ impl GridProgram {
             )
             .on_reload(),
         ];
-        params.extend(document.params.iter().cloned().map(ParamDescriptor::on_reload));
+        params.extend(own_params(&document.params, &live::reload_only(&evaluator)));
         let target = &document.target;
         let name = if target.name.is_empty() {
             &document.name
@@ -632,6 +633,23 @@ impl GridProgram {
         declarations.palette = parts.palette.clone().map(Cow::Owned);
         ModelEntry::from_gpu_grid_spec(declarations, parts.source.clone(), spec)
     }
+}
+
+/// Returns `params`, the graph's own parameters, each marked reload-only where `reload` holds at its position and live
+/// otherwise.
+pub(crate) fn own_params(params: &[ParamDescriptor], reload: &[bool]) -> Vec<ParamDescriptor> {
+    params
+        .iter()
+        .enumerate()
+        .map(|(position, descriptor)| {
+            let descriptor = descriptor.clone();
+            if reload.get(position).copied().unwrap_or(true) {
+                descriptor.on_reload()
+            } else {
+                descriptor
+            }
+        })
+        .collect()
 }
 
 /// Shaders and the buffer plan of one graph.

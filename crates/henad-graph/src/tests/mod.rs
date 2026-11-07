@@ -15,6 +15,7 @@ mod gpu_repeat;
 mod host;
 mod known_answers;
 mod library_lock;
+mod live_params;
 mod mutation;
 mod probes;
 mod regions;

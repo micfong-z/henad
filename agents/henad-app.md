@@ -143,6 +143,35 @@ later run. `src/tests/runaway.rs` holds
 of `support.rs`, whose first build waits on a `Gate` and whose first run's steps a `StepHold`
 holds, on the step's thread or on every worker of its pool. Keep them. A test that builds calls
 `AppState::wait_for_build` before it reads the runner.
+**The Parameters tab's preview mode** (D54, D88, L1). `params_ui` draws `preview_params_ui` instead
+of its rows while `AppState::params_drive_preview` holds: a preview runs or builds and the selection
+is still the one `load_preview` recorded. The selected model's `param_values`, seed and schedule
+stay as they are, and once another model is selected the tab draws that model for the next build.
+The mode draws the loaded entry's parameters but the hidden ones and `preview::SIZE_PARAMS` (the
+sizes in front of a graph's own), each slider at its tried value or `loaded_values`, through the
+shared `value_widget`, then the entry's actions (`action_buttons`, enabled while a run exists,
+pressed into the preview) and no Seed row, schedule or notice. A move is a
+`TrialChoice::Try` for `apply_trial`: `Preview::try_value` records a `TriedValue` (id, value and
+the value the model keeps, `preview::model_value`: the sheet parameter's value or the graph's
+default, typed as the descriptor) and drops it when the two are equal. A live parameter then goes
+to the running preview through `AppState::send_preview_param` (`SetParam`, `loaded_values`
+updated, no rebuild, the tick going on), and a reload-only one calls `Preview::rebuild_after`,
+which rebuilds the preview at tick 0 after `DEBOUNCE` with its key kept, carrying every tried value
+(`with_tried` in `build_preview`, which Build's replay of a sheet's preview takes too). A
+reload-only slider's tooltip is `RESTART_NOTICE`. Under a tried value `trial_row` shows
+`trying_value` ("Trying this value. The model keeps 0.3.") with Reset (named `reset_name`) and,
+while the Editor holds the previewed document (`holds_previewed_document`), Keep (named
+`keep_name`, `KEEP_TOOLTIP`). Reset ends the trial and sends or rebuilds at the kept value. Keep
+makes the tried value the document's: `SheetEditor::keep_value` (one `SheetEdit::SetParameter`,
+range widened, the preview's key kept) or one `EditCommand::SetParam` on a graph, which rebuilds
+its preview at that value. `preview::poll_at` ends a trial whose kept value changed, as a sheet
+edit of the value does, and the Editor's loads reset the `Preview` and its trials. The Sheet pane
+shows each trial under its parameter (`henad-app-sheet.md`). `src/tests/preview_params.rs` holds
+`a_params_tab_change_rebuilds_the_preview_with_the_value_and_keeps_it_across_an_edit`,
+`a_live_parameter_reaches_the_running_preview_and_the_tick_keeps_counting`,
+`the_preview_mode_leaves_the_selected_model_alone`, `reset_and_keep_end_a_trial`,
+`keep_widens_the_range_to_hold_the_value` and
+`a_tried_value_shows_its_note_reset_keep_and_the_sheets_line`.
 `seed_pending` and `schedule_pending` compare each with its loaded copy, and the Reload needed
 notice counts both. A `None` seed is the model's default, the constant `henad-cli` uses without
 `--seed`. The engines take `seed.map_or(CONST, mix_seed)`, and the field keeps `None` as a state

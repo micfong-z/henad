@@ -328,21 +328,26 @@ impl ModelEntry {
     }
 
     /// Returns the entry of a GPU grid model with `declarations` and `source`, whose builds and demand share `spec`.
+    ///
+    /// Each parameter that `declarations` declares live is live in every build.
     pub(crate) fn from_grid_spec(declarations: EntryDeclarations, source: ModelSource, spec: Arc<GpuGridSpec>) -> Self {
         let needs = GpuNeeds::with_storage_buffers(spec.max_storage_bindings());
         let build_spec = Arc::clone(&spec);
+        let live = live_params(&declarations);
         Self::new_gpu(
             declarations,
             source,
             needs,
             move |ctx, params, seed| -> Box<dyn GpuSimState> {
-                Box::new(GpuGridEngine::new(ctx, Arc::clone(&build_spec), params, seed))
+                Box::new(GpuGridEngine::new(ctx, Arc::clone(&build_spec), params, seed).with_live_params(live.clone()))
             },
             move |params, limits| spec.demand(params, limits),
         )
     }
 
     /// Returns the entry of a GPU agent model with `declarations` and `source`, whose builds and demand share `spec`.
+    ///
+    /// Each parameter that `declarations` declares live is live in every build.
     pub(crate) fn from_agent_spec(
         declarations: EntryDeclarations,
         source: ModelSource,
@@ -350,12 +355,13 @@ impl ModelEntry {
     ) -> Self {
         let needs = GpuNeeds::with_storage_buffers(spec.max_storage_bindings());
         let build_spec = Arc::clone(&spec);
+        let live = live_params(&declarations);
         Self::new_gpu(
             declarations,
             source,
             needs,
             move |ctx, params, seed| -> Box<dyn GpuSimState> {
-                Box::new(GpuAgentEngine::new(ctx, Arc::clone(&build_spec), params, seed))
+                Box::new(GpuAgentEngine::new(ctx, Arc::clone(&build_spec), params, seed).with_live_params(live.clone()))
             },
             move |params, limits| spec.demand(params, limits),
         )
@@ -367,6 +373,13 @@ impl ModelEntry {
     /// two list the same items in the same order. [`GpuGridSpec::structure`] fills [`EntryDeclarations::structure`].
     /// `source` is usually [`ModelSource::runtime`]. Each build runs inside [`catching_on`], and a panic or a device
     /// error returns a [`Fault`].
+    ///
+    /// A parameter that `declarations` declares live is set on the running state by `set_param`, which writes the
+    /// uniform block of every step, display and reduce pass again through [`GridHooks::pass_params_bytes`] before the
+    /// next step. Such a parameter must feed nothing but those blocks, the reruns and the stat values, never the grid's
+    /// size or its seeds. Declare any other one [`ParamDescriptor::on_reload`].
+    ///
+    /// [`GridHooks::pass_params_bytes`]: crate::gpu::GridHooks::pass_params_bytes
     #[cfg(feature = "runtime-wgsl")]
     #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
     pub fn from_gpu_grid_spec(declarations: EntryDeclarations, source: ModelSource, spec: Arc<GpuGridSpec>) -> Self {
@@ -380,6 +393,14 @@ impl ModelEntry {
     /// and [`GpuAgentSpec::topology_hint`] fills [`EntryDeclarations::topology_hint`]. `source` is usually
     /// [`ModelSource::runtime`]. Each build runs inside [`catching_on`], and a panic or a device error returns a
     /// [`Fault`].
+    ///
+    /// A parameter that `declarations` declares live is set on the running state by `set_param`, which writes the
+    /// uniform block of every pass but the actions again through [`AgentHooks::run_params_bytes`] before the next
+    /// step, and rejects a value at which a block fails. Such a parameter must feed nothing but those blocks, the
+    /// reruns and the stat values, never a size, a count, the geometry or the seeds. Declare any other one
+    /// [`ParamDescriptor::on_reload`].
+    ///
+    /// [`AgentHooks::run_params_bytes`]: crate::gpu::AgentHooks::run_params_bytes
     #[cfg(feature = "runtime-wgsl")]
     #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
     pub fn from_gpu_agent_spec(declarations: EntryDeclarations, source: ModelSource, spec: Arc<GpuAgentSpec>) -> Self {
@@ -428,6 +449,11 @@ impl ModelEntry {
             }),
         }
     }
+}
+
+/// Returns whether each parameter of `declarations` is live, in their order.
+fn live_params(declarations: &EntryDeclarations) -> Vec<bool> {
+    declarations.params.iter().map(ParamDescriptor::is_live).collect()
 }
 
 /// Returns the fault a GPU model raises when it receives no device.

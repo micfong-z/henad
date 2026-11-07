@@ -97,6 +97,15 @@ kind runs `SetPropertyType` and starts afresh the same way, and otherwise remove
 
 The read-only sections: the parameters in a `kv_grid` (value and unit), the measures,
 `COLOR_CELLS_BY` X, and each button with what it does (`START_AGAIN`, `run_once("cell")`).
+`sheet_ui` and `sheet_pane` take the `SheetTrial`s (parameter id and tried value) that `editor_ui`
+reads through `sheet_trials` (`params::sheet_number`, which Keep uses too) while the sheet's
+preview runs. The parameters' grid ends after each tried parameter, a wrapped weak label across the
+pane reads `sheet_trying_value` ("The world is trying 0.5. The model keeps 0.3.", D88), and the
+next rows start a new grid. `kv_grid`'s half-width first column keeps the values aligned across
+the grids. The label wraps at the clip rectangle's right edge, since the pane's content can be
+wider than the pane (a wide Cells table).
+`SheetEditor::keep_value` runs one `SheetEdit::SetParameter` for the Parameters tab's Keep (range
+widened) and refreshes the sheet with its load number kept, so the preview starts nothing again.
 `starts_text` reads a `ByChance` start as `BY_CHANCE`, and a `Value` start by its `value` slot: a
 state chip as `starts_all` of the state's name ("All Tree"), a `RandomNumber` phrase as
 `A_RANDOM_NUMBER`, and anything else as `A_VALUE`. `starts.state` belongs to `OnGround` alone. A

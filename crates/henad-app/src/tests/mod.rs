@@ -9,6 +9,7 @@ mod graph_functions;
 mod graph_preview;
 mod graph_regions;
 mod install;
+mod preview_params;
 mod runaway;
 mod sheet_editor;
 mod sheet_pane;

@@ -248,7 +248,8 @@ and leaves the running preview alone. Once due, a build counted since the edit (
 drops the preview to `Idle`, `preview_can_load` false leaves it `Waiting` (`PREVIEW_WAITS`, "Preview
 waits for the running model."), and otherwise `build_preview` compiles `preview_program`, takes
 `preview_values` (defaults, `grid_width` and `grid_height` at most `PREVIEW_SIDE`, 256,
-`num_agents` at most `PREVIEW_AGENTS`, 16384, `PreviewRun::Grid` or `Agents`), refuses a
+`num_agents` at most `PREVIEW_AGENTS`, 16384, `PreviewRun::Grid` or `Agents`) with the Parameters
+tab's tried values in place (`with_tried`, `agents/henad-app.md`), refuses a
 shortfall or a `SetupError` as `Refused`, and calls `AppState::load_preview` with
 `EditorModel::preview_plays`: a graph's preview plays, and a sheet's waits at tick 0 for Play (D52).
 `AppState::preview` (`PreviewRun`, the size) marks a loaded preview, and `load` clears it.

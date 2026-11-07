@@ -883,3 +883,70 @@ fn every_grid_sheet_entry_conforms() {
     }
     assert_set_conforms(&models, &settings);
 }
+
+/// Returns the position of parameter `id` among the parameters of `entry`.
+fn param_index(entry: &ModelEntry, id: &str) -> usize {
+    entry
+        .param_descriptors()
+        .iter()
+        .position(|descriptor| descriptor.id() == id)
+        .unwrap_or_else(|| panic!("{}: no parameter {id}", entry.id()))
+}
+
+/// A live edit of the infection rate on a running SIR sheet keeps the tick and the cells, and every later tick steps
+/// on the device as the host steps at the new rate. The start's share and the tick length stay reload-only.
+#[test]
+fn a_live_rate_edit_keeps_the_tick_and_the_cells_and_later_ticks_follow_it_on_the_device() {
+    let Some(ctx) = device("a_live_rate_edit_keeps_the_tick_and_the_cells_and_later_ticks_follow_it_on_the_device")
+    else {
+        return;
+    };
+    let (side, seed, before, after) = (64, 5, 10u32, 30u32);
+    let text = sheet_text("sir.toml");
+    let file = sheet_file(&text);
+    let lowered = file.lowered();
+    let entry = entry_of(&text);
+    let rate = param_index(&entry, "infection_rate");
+    let mut params = device_params(&entry, side, &[("infection_rate", 0.3)]);
+    let buffers = lane_buffers(lowered);
+    let evaluator = HostEvaluator::new(lowered).unwrap_or_else(|error| panic!("{error}"));
+
+    let mut state = build_gpu(&entry, &params, Some(seed), &ctx);
+    let mut kept = build_gpu(&entry, &params, Some(seed), &ctx);
+    let mut lanes = evaluator
+        .init(host_world(side), &params[2..], Some(seed))
+        .unwrap_or_else(|error| panic!("{error}"));
+    for tick in 0..before {
+        step(&ctx, &mut *state, 1);
+        step(&ctx, &mut *kept, 1);
+        host_tick(&evaluator, &mut lanes, &params[2..], seed, tick);
+    }
+    let cells = device_words(&*state, &buffers);
+
+    params[rate] = ParamValue::F32(2.0);
+    assert!(state.set_param(rate, &params[rate]), "the infection rate is live");
+    for id in ["initial_infected", "tick_length", "grid_width"] {
+        let index = param_index(&entry, id);
+        assert!(!state.set_param(index, &params[index]), "{id} is reload-only");
+    }
+    assert_eq!(state.tick(), u64::from(before), "the edit keeps the tick");
+    assert!(device_words(&*state, &buffers) == cells, "the edit keeps the cells");
+
+    let mut parted = false;
+    for tick in before..before + after {
+        step(&ctx, &mut *state, 1);
+        step(&ctx, &mut *kept, 1);
+        host_tick(&evaluator, &mut lanes, &params[2..], seed, tick);
+        let words = device_words(&*state, &buffers);
+        assert!(
+            words == host_words(&lanes, lowered),
+            "the lanes differ from the host at the new rate at tick {}",
+            tick + 1
+        );
+        parted |= words != device_words(&*kept, &buffers);
+    }
+    assert!(
+        parted,
+        "the run at the new rate never parts from the run that kept the old rate"
+    );
+}

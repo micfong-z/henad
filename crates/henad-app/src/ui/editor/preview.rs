@@ -12,6 +12,10 @@
 //! The preview replaces the live simulation only when nothing is loaded, when the loaded run is at tick 0, or when the
 //! loaded run is a preview. Otherwise it waits for that run to end, and a Build started after the edit replaces the
 //! waiting preview. An edit that leaves the document invalid leaves the running preview alone.
+//!
+//! A *tried value* is a value of a parameter that the Parameters tab sets in the preview while the model keeps its own
+//! (D88). The preview runs with it and every rebuild of the preview keeps it, until the value the model keeps changes,
+//! Reset or Keep ends it, or the Editor loads another document.
 
 use std::time::Duration;
 
@@ -19,7 +23,8 @@ use henad_compute::entry::ModelEntry;
 use henad_compute::simulation::RunSetup;
 use henad_core::action::Schedule;
 use henad_core::diagnostic::CodeDiagnostic;
-use henad_core::params::ParamValue;
+use henad_core::explore::value::check_value;
+use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use web_time::Instant;
 
 use super::EditorModel;
@@ -36,6 +41,21 @@ pub const DEBOUNCE: Duration = Duration::from_millis(250);
 
 /// Text the Editor shows while the preview waits for another run.
 pub const PREVIEW_WAITS: &str = "Preview waits for the running model.";
+
+/// Ids of the parameters an entry puts in front of a graph's own: the size of its grid, or the number of its agents
+/// and the size of their world. The preview sets the sizes itself, and the Parameters tab tries none of them.
+pub const SIZE_PARAMS: [&str; 5] = ["grid_width", "grid_height", "num_agents", "world_width", "world_height"];
+
+/// A value the Parameters tab tries in the preview while the model keeps its own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TriedValue {
+    /// Id of the parameter.
+    pub id: String,
+    /// Value the preview runs with.
+    pub value: ParamValue,
+    /// Value the model kept when the value was tried. A change of the value the model keeps ends the trial.
+    pub keeps: ParamValue,
+}
 
 /// State of the preview, as the Editor shows it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -66,9 +86,55 @@ pub struct Preview {
     pub state: PreviewState,
     /// Whether a button of the model was pressed in the running preview since it was built.
     pub acted: bool,
+    /// Values the Parameters tab tries in the preview, at most one per parameter.
+    tried: Vec<TriedValue>,
 }
 
 impl Preview {
+    /// Returns the value tried for parameter `id`, `None` while the preview runs with the value the model keeps.
+    pub fn tried(&self, id: &str) -> Option<&TriedValue> {
+        self.tried.iter().find(|tried| tried.id == id)
+    }
+
+    /// Every value tried in the preview.
+    pub fn tried_values(&self) -> &[TriedValue] {
+        &self.tried
+    }
+
+    /// Tries `value` for parameter `id` while the model keeps `keeps`. A value equal to `keeps` ends the trial.
+    pub fn try_value(&mut self, id: &str, value: ParamValue, keeps: ParamValue) {
+        self.tried.retain(|tried| tried.id != id);
+        if value != keeps {
+            self.tried.push(TriedValue {
+                id: id.to_owned(),
+                value,
+                keeps,
+            });
+        }
+    }
+
+    /// Ends the trial of parameter `id`, and returns whether one ran.
+    pub fn end_trial(&mut self, id: &str) -> bool {
+        let before = self.tried.len();
+        self.tried.retain(|tried| tried.id != id);
+        self.tried.len() != before
+    }
+
+    /// Ends each trial whose parameter no longer keeps the value it kept when tried, as `keeps` returns it.
+    fn end_stale_trials(&mut self, keeps: impl Fn(&str) -> Option<ParamValue>) {
+        self.tried
+            .retain(|tried| keeps(&tried.id).as_ref() == Some(&tried.keeps));
+    }
+
+    /// Rebuilds the preview at tick 0 once [`DEBOUNCE`] has passed after `now`, keeping its key and its tried values.
+    ///
+    /// `builds` is the number of the app's builds now. A Build started before the time comes replaces the rebuild, as
+    /// it replaces a preview that waits after an edit.
+    pub fn rebuild_after(&mut self, now: Instant, builds: u64) {
+        self.due = Some(now + DEBOUNCE);
+        self.builds = builds;
+    }
+
     /// Shows `problem`, the fault of the preview's run, and drops any waiting preview.
     pub fn show_problem(&mut self, problem: CodeDiagnostic) {
         self.due = None;
@@ -96,6 +162,7 @@ pub fn poll_at(ctx: &egui::Context, app: &mut AppState, now: Instant) {
     if app.preview().is_some() && app.editor.model.preview_source().is_some_and(|source| source.empty) {
         app.offload_simulation();
     }
+    end_stale_trials(app);
     let builds = app.builds();
     let previewing = app.preview().is_some();
     let can_load = app.preview_can_load();
@@ -171,7 +238,8 @@ fn build_preview(app: &mut AppState) {
             return;
         }
     };
-    let (values, run) = preview_values(&entry);
+    let (mut values, run) = preview_values(&entry);
+    with_tried(&entry, &mut values, app.editor.preview.tried_values());
     let shortfalls = entry.shortfalls(&values, &app.runtime.granted);
     if !shortfalls.is_empty() {
         let problem = CodeDiagnostic::error(too_large_message(&shortfalls));
@@ -225,4 +293,76 @@ pub fn preview_values(entry: &ModelEntry) -> (Vec<ParamValue>, PreviewRun) {
         None => PreviewRun::Grid { width, height },
     };
     (values, run)
+}
+
+/// Puts each value of `tried` into `values`, the values of `entry`, in place of its parameter's value, where `entry`
+/// has that parameter and its descriptor accepts the value. A size is never tried.
+fn with_tried(entry: &ModelEntry, values: &mut [ParamValue], tried: &[TriedValue]) {
+    for (descriptor, value) in entry.param_descriptors().iter().zip(values.iter_mut()) {
+        if SIZE_PARAMS.contains(&descriptor.id()) {
+            continue;
+        }
+        if let Some(tried) = tried.iter().find(|tried| tried.id == descriptor.id())
+            && check_value(descriptor.kind(), &tried.value).is_ok()
+        {
+            value.clone_from(&tried.value);
+        }
+    }
+}
+
+/// Returns the value that `model`, the Editor's document, keeps for the parameter `descriptor` describes: the value of
+/// the sheet's parameter or the default of the graph's, as `descriptor` types it. The default of `descriptor` stands
+/// for a parameter the document does not hold.
+pub fn model_value(model: &EditorModel, descriptor: &ParamDescriptor) -> ParamValue {
+    let fallback = descriptor.kind().default_value();
+    match model {
+        EditorModel::Sheet(sheet) => sheet
+            .document()
+            .parameters
+            .iter()
+            .find(|parameter| parameter.id == descriptor.id())
+            .and_then(|parameter| typed(descriptor.kind(), parameter.default))
+            .unwrap_or(fallback),
+        EditorModel::Graph(graph) => graph
+            .document()
+            .params
+            .iter()
+            .find(|param| param.id() == descriptor.id())
+            .map_or(fallback, |param| param.kind().default_value()),
+        EditorModel::Empty | EditorModel::Rule(_) => fallback,
+    }
+}
+
+/// Returns `number` as a value of `kind`, as the sheet's lowering narrows a parameter's value, or `None` for a kind no
+/// sheet parameter lowers to or a number the kind cannot hold.
+fn typed(kind: &ParamKind, number: f64) -> Option<ParamValue> {
+    match kind {
+        ParamKind::F32 { .. } => {
+            let narrowed = number as f32;
+            narrowed.is_finite().then_some(ParamValue::F32(narrowed))
+        }
+        ParamKind::U32 { .. } => (number.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&number))
+            .then_some(ParamValue::U32(number as u32)),
+        _ => None,
+    }
+}
+
+/// Ends each trial of the preview whose parameter the Editor's document now keeps at another value, as an edit of
+/// that value on the sheet does.
+fn end_stale_trials(app: &mut AppState) {
+    if app.editor.preview.tried.is_empty() {
+        return;
+    }
+    let Some(entry) = app.preview().and(app.loaded_entry()).cloned() else {
+        return;
+    };
+    let panel = &mut app.editor;
+    let model = &panel.model;
+    panel.preview.end_stale_trials(|id| {
+        entry
+            .param_descriptors()
+            .iter()
+            .find(|descriptor| descriptor.id() == id)
+            .map(|descriptor| model_value(model, descriptor))
+    });
 }
