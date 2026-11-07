@@ -1,10 +1,11 @@
 //! Tests of the WGSL compiler of agents graphs that need no device: the budgets and memory limits its spec reports,
-//! the replay flag, and the refusals of what the engines cannot run.
+//! the replay flag, the forms of counters and deposits, and the refusals of what the engines cannot run.
 
 use henad_compute::gpu::wgpu;
 use henad_core::params::ParamValue;
 
 use crate::GraphFile;
+use crate::wgsl::emit::FIRST_COUNTER;
 use crate::wgsl::{AgentProgram, GridProgram, ShaderRole};
 
 /// Returns a node `id` of kind `op` with the further lines `lines`.
@@ -349,4 +350,128 @@ fn expansions_count_toward_the_inlined_limit_and_no_text_limit_refuses_them() {
         "{:#?}",
         report.diagnostics
     );
+}
+
+/// Returns the text of every shader of every agent starter and agents fixture, each named by its file and label.
+fn agents_shader_texts() -> Vec<(String, String)> {
+    let files = crate::starters::agent_starters()
+        .iter()
+        .map(|starter| (starter.file_name.to_owned(), starter.text.to_owned()))
+        .chain(super::corpus::fixtures());
+    let mut texts = Vec::new();
+    for (name, text) in files {
+        let file = GraphFile::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        if !matches!(file.document().world, crate::document::World::Agents(_)) {
+            continue;
+        }
+        let program = AgentProgram::compile(&file).unwrap_or_else(|problems| panic!("{name}: {problems:#?}"));
+        for shader in program.shaders() {
+            texts.push((format!("{name} {}", shader.label()), shader.text().to_owned()));
+        }
+    }
+    texts
+}
+
+/// A deposit issues its `atomicMax` only inside the test that its value is above 0, so a zero, a negative and a NaN
+/// issue none, in every agent starter and agents fixture.
+#[test]
+fn a_deposit_issues_no_atomic_unless_its_value_is_above_zero() {
+    let mut deposits = 0;
+    for (name, text) in agents_shader_texts() {
+        let lines: Vec<&str> = text.lines().collect();
+        for (number, line) in lines.iter().enumerate() {
+            if !line.contains("atomicMax(&accum_") {
+                continue;
+            }
+            deposits += 1;
+            let guard = number.checked_sub(1).map_or("", |previous| lines[previous]);
+            assert!(
+                guard.trim_start().starts_with("if (henad_deposit_n") && guard.contains(" > 0.0f && "),
+                "{name}: line {} deposits outside the test of its value\n{text}",
+                number + 1
+            );
+            assert!(
+                !line.contains("select("),
+                "{name}: line {} selects its value\n{text}",
+                number + 1
+            );
+        }
+    }
+    assert!(deposits > 0, "the ants deposit pheromone");
+}
+
+/// Returns a file whose tick pass adds each agent's `amount` to the counter `a` twice and to `b` once.
+fn two_counters() -> GraphFile {
+    let declarations = "\n[[lane]]\nid = \"amount\"\ndomain = \"agents\"\ntype = \"u32\"\n\n\
+                        [[counter]]\nid = \"a\"\n\n[[counter]]\nid = \"b\"\n";
+    let mut passes =
+        String::from("\n[[pass]]\nid = \"count\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"agents\"\n");
+    passes.push_str(&node(1, "lane.get", "config.lane = \"amount\"\n"));
+    for (id, counter) in [(2, "a"), (3, "a"), (4, "b")] {
+        passes.push_str(&node(
+            id,
+            "counter.add",
+            &format!("config.counter = \"{counter}\"\nin.amount = \"n1\"\n"),
+        ));
+    }
+    agents_file("node_two_counters", declarations, &passes)
+}
+
+/// Each counter a step adds to is tallied in workgroup memory, with a zero amount skipped, and flushed with one global
+/// atomic per workgroup after a barrier at the top level of `main`. The step reports the tallies' workgroup bytes.
+#[test]
+fn each_counter_flushes_once_per_workgroup_after_a_top_level_barrier() {
+    let program = AgentProgram::compile(&two_counters()).unwrap_or_else(|problems| panic!("{problems:#?}"));
+    let step = program
+        .shaders()
+        .iter()
+        .find(|shader| shader.passes().iter().any(|pass| pass == "count"))
+        .expect("the step shader");
+    let text = step.text();
+    assert!(
+        text.contains("var<workgroup> henad_counter_tally: array<atomic<u32>, 2>;"),
+        "{text}"
+    );
+    for word in [FIRST_COUNTER, FIRST_COUNTER + 1] {
+        let flush = format!("atomicAdd(&counters[{word}u], ");
+        assert_eq!(text.matches(&flush).count(), 1, "{flush}\n{text}");
+    }
+    assert_eq!(text.matches("atomicAdd(&henad_counter_tally[").count(), 3, "{text}");
+    for n in 2..=4 {
+        let skip = format!("if (henad_amount_n{n} != 0u) {{");
+        assert_eq!(text.matches(&skip).count(), 1, "{skip}\n{text}");
+    }
+    let main = &text[text.find("fn main(").expect("a main")..];
+    // A barrier at the top level of `main` sits inside its one open brace.
+    let mut depth = 0i32;
+    let mut barriers = Vec::new();
+    for line in main.lines() {
+        if line.contains("workgroupBarrier()") {
+            barriers.push(depth);
+        }
+        depth += i32::try_from(line.matches('{').count()).expect("a short line");
+        depth -= i32::try_from(line.matches('}').count()).expect("a short line");
+    }
+    assert_eq!(barriers, [1, 1], "{text}");
+    let spec = program.spec();
+    let pass = spec
+        .steps
+        .iter()
+        .find(|pass| pass.label.ends_with("count"))
+        .expect("the step's spec");
+    assert_eq!(pass.workgroup_bytes, 8, "two tallies of four bytes");
+
+    let ants = crate::starters::starter("ants.toml").expect("the ants starter");
+    let ants = AgentProgram::compile(&GraphFile::parse(ants.text).expect("the starter reads")).expect("it compiles");
+    let flushes: usize = ants
+        .shaders()
+        .iter()
+        .map(|shader| {
+            shader
+                .text()
+                .matches(&format!("atomicAdd(&counters[{FIRST_COUNTER}u], "))
+                .count()
+        })
+        .sum();
+    assert_eq!(flushes, 1, "the ants flush their deliveries once");
 }

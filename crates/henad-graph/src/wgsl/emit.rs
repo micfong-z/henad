@@ -199,6 +199,33 @@ impl Text {
         }));
     }
 
+    /// Returns the text with four more spaces before each non-empty line, and its ranges moved to match.
+    ///
+    /// A range that starts at the beginning of a line takes in the line's new indentation.
+    fn indented(self) -> Self {
+        let mut text = String::with_capacity(self.text.len());
+        let mut starts = Vec::new();
+        let mut offset = 0;
+        for line in self.text.split_inclusive('\n') {
+            if line != "\n" {
+                starts.push(offset);
+                text.push_str("    ");
+            }
+            text.push_str(line);
+            offset += line.len();
+        }
+        let shift = |position: usize| position + 4 * starts.partition_point(|&start| start < position);
+        let ranges = self
+            .ranges
+            .into_iter()
+            .map(|mut range| {
+                range.range = shift(range.range.start)..shift(range.range.end);
+                range
+            })
+            .collect();
+        Self { text, ranges }
+    }
+
     /// Appends `line` as a statement of `node` in `pass`.
     fn node_line(&mut self, pass: &str, node: NodeId, line: &str) {
         let start = self.text.len();
@@ -339,6 +366,9 @@ struct Emitter<'a> {
     reads_other: BTreeSet<usize>,
     /// Palettes the colour pass reads as packed RGBA words, by constant name.
     packed: BTreeMap<String, Vec<Color>>,
+    /// Slot in the workgroup array `henad_counter_tally` of each document counter some pass of the shader adds to, by
+    /// the counter's position among the document's counters.
+    counter_slots: BTreeMap<usize, usize>,
 }
 
 /// State of the emission of one pass's body.
@@ -402,6 +432,7 @@ pub(crate) fn emit(
         sum_lanes: Vec::new(),
         reads_other: BTreeSet::new(),
         packed: BTreeMap::new(),
+        counter_slots: BTreeMap::new(),
     };
     if input.agents.is_some() {
         emitter.agent_fields(role);
@@ -1325,26 +1356,39 @@ impl Emitter<'_> {
                 let label = self.accum_label(field);
                 self.deposited.insert(field);
                 let n = node.number();
-                // A deposit of zero, of a negative value or of a NaN adds 0, and the bits of every other value order as
-                // the value.
+                // A deposit of zero, of a negative value or of a NaN would add 0 and issues no atomic. The bits of every
+                // value above 0 order as the value.
                 lines.push_str(&format!(
                     "{indent}let henad_deposit_layer_n{n} = {layer};\n\
                      {indent}let henad_deposit_cell_n{n} = {at};\n\
                      {indent}let henad_deposit_n{n} = {value};\n\
-                     {indent}if (henad_deposit_cell_n{n} < params.henad_cells && henad_deposit_layer_n{n} < {layers}u) \
-                     {{\n\
+                     {indent}if (henad_deposit_n{n} > 0.0f && henad_deposit_cell_n{n} < params.henad_cells && \
+                     henad_deposit_layer_n{n} < {layers}u) {{\n\
                      {indent}    atomicMax(&{label}[henad_deposit_layer_n{n} * params.henad_cells + \
-                     henad_deposit_cell_n{n}], select(0u, bitcast<u32>(henad_deposit_n{n}), henad_deposit_n{n} > \
-                     0.0f));\n\
+                     henad_deposit_cell_n{n}], bitcast<u32>(henad_deposit_n{n}));\n\
                      {indent}}}\n"
                 ));
             }
             Operation::CounterAdd { counter, amount } => {
+                if !matches!(self.role, Role::Step { .. }) || self.input.agents.is_none() {
+                    // The flush of the workgroup's tallies sits in the step template of an agents world alone.
+                    self.refuse(
+                        &pass_id,
+                        Some(node),
+                        "counts an event outside a tick pass of an agents world",
+                    );
+                    return;
+                }
                 let amount = self.slot(block, *amount, node);
                 self.uses.counters = true;
+                let next = self.counter_slots.len();
+                let slot = *self.counter_slots.entry(*counter).or_insert(next);
+                let n = node.number();
                 lines.push_str(&format!(
-                    "{indent}atomicAdd(&counters[{}u], {amount});\n",
-                    FIRST_COUNTER + counter
+                    "{indent}let henad_amount_n{n} = {amount};\n\
+                     {indent}if (henad_amount_n{n} != 0u) {{\n\
+                     {indent}    atomicAdd(&henad_counter_tally[{slot}u], henad_amount_n{n});\n\
+                     {indent}}}\n"
                 ));
             }
             Operation::CounterTotal { .. } | Operation::Midpoint { .. } => {
@@ -2227,6 +2271,12 @@ impl Emitter<'_> {
                 "var<workgroup> henad_partial: array<atomic<u32>, {tallies}>;\n\n"
             ));
         }
+        let counted = self.counter_slots.len();
+        if counted > 0 {
+            text.text.push_str(&format!(
+                "var<workgroup> henad_counter_tally: array<atomic<u32>, {counted}>;\n\n"
+            ));
+        }
         let tick_line = if self.reads_tick {
             format!("    let henad_tick = atomicLoad(&counters[{TICK_WORD}u]);\n")
         } else {
@@ -2278,6 +2328,14 @@ impl Emitter<'_> {
                     "    if ({invocation} == 0u) {{\n        atomicAdd(&counters[{TICK_WORD}u], 1u);\n    }}\n"
                 ));
             }
+            if counted > 0 {
+                // A barrier needs uniform control flow, so it sits at the top level of `main`, and no step returns
+                // early.
+                text.text.push_str(&format!(
+                    "    if (henad_lid.x < {counted}u) {{\n        atomicStore(&henad_counter_tally[henad_lid.x], \
+                     0u);\n    }}\n    workgroupBarrier();\n"
+                ));
+            }
             match self.role {
                 Role::Reduce => {
                     if tallies > 0 {
@@ -2324,23 +2382,39 @@ impl Emitter<'_> {
                     let label = field.label();
                     let accum = field.accum_label();
                     text.text.push_str(&format!(
-                        "    if (henad_slot >= params.henad_cells * {}u) {{\n        return;\n    }}\n    let \
-                         henad_index = henad_slot % params.henad_cells;\n",
+                        "    if (henad_slot < params.henad_cells * {}u) {{\n",
                         field.layers
                     ));
-                    text.text.push_str(&format!(
+                    let mut inner = Text::default();
+                    inner.push("    let henad_index = henad_slot % params.henad_cells;\n");
+                    inner.text.push_str(&format!(
                         "    let henad_deposit = bitcast<f32>(atomicLoad(&{accum}[henad_slot]));\n    \
                          atomicStore(&{accum}[henad_slot], 0u);\n    let henad_merged = max({label}[henad_slot], \
                          henad_deposit);\n"
                     ));
                     if body.text.is_empty() {
-                        text.text
+                        inner
+                            .text
                             .push_str(&format!("    {label}[henad_slot] = henad_merged;\n"));
                     } else {
-                        text.append(body);
+                        inner.append(body);
                     }
+                    text.append(inner.indented());
+                    text.push("    }\n");
                 }
                 _ => text.append(body),
+            }
+            if counted > 0 {
+                // Each counter takes one global atomic per workgroup, from the invocation of its slot.
+                text.push("    workgroupBarrier();\n");
+                for (&counter, &slot) in &self.counter_slots {
+                    text.text.push_str(&format!(
+                        "    if (henad_lid.x == {slot}u) {{\n        let henad_tally_{slot} = \
+                         atomicLoad(&henad_counter_tally[{slot}u]);\n        if (henad_tally_{slot} != 0u) {{\n            \
+                         atomicAdd(&counters[{word}u], henad_tally_{slot});\n        }}\n    }}\n",
+                        word = FIRST_COUNTER + counter
+                    ));
+                }
             }
             text.push("}\n");
         }
@@ -2353,7 +2427,7 @@ impl Emitter<'_> {
                 };
                 tallies as u64 * 4 + sums
             }
-            _ => 0,
+            _ => counted as u64 * 4,
         };
         Emitted {
             text: text.text,
@@ -2512,16 +2586,18 @@ impl Emitter<'_> {
                         "    if (henad_id.x == 0u && henad_id.y == 0u) {\n        henad_tick_out[0] = henad_tick + 1u;\n    }\n",
                     );
                 }
-                text.push(
-                    "    if (henad_id.x >= params.henad_width || henad_id.y >= params.henad_height) {\n        return;\n    }\n",
-                );
-                text.push(cell_line);
+                // The bounds check guards a block. An early return would leave the end of `main` in non-uniform
+                // control flow.
+                text.push("    if (henad_id.x < params.henad_width && henad_id.y < params.henad_height) {\n");
+                let mut inner = Text::default();
+                inner.push(cell_line);
                 if self.uses.own_cell {
-                    text.push("    let henad_own_cell = henad_id.xy;\n");
+                    inner.push("    let henad_own_cell = henad_id.xy;\n");
                 }
-                text.push("    let henad_index = henad_id.y * params.henad_width + henad_id.x;\n");
-                text.append(body);
-                text.push("}\n");
+                inner.push("    let henad_index = henad_id.y * params.henad_width + henad_id.x;\n");
+                inner.append(body);
+                text.append(inner.indented());
+                text.push("    }\n}\n");
             }
             Role::Display => {
                 text.push("fn main(@builtin(global_invocation_id) henad_id: vec3<u32>) {\n");
@@ -2555,14 +2631,14 @@ impl Emitter<'_> {
                 }
                 text.push(&tick_line);
                 text.push("    if (henad_id.x < params.henad_width && henad_id.y < params.henad_height) {\n");
-                if self.uses.neighbors {
-                    text.push("    henad_cell = henad_id.xy;\n");
-                }
+                let mut inner = Text::default();
+                inner.push(cell_line);
                 if self.uses.own_cell {
-                    text.push("    let henad_own_cell = henad_id.xy;\n");
+                    inner.push("    let henad_own_cell = henad_id.xy;\n");
                 }
-                text.push("    let henad_index = henad_id.y * params.henad_width + henad_id.x;\n");
-                text.append(body);
+                inner.push("    let henad_index = henad_id.y * params.henad_width + henad_id.x;\n");
+                inner.append(body);
+                text.append(inner.indented());
                 text.push("    }\n    workgroupBarrier();\n");
                 text.text.push_str(&format!("    for (var henad_c = henad_local; henad_c < {counters}u; henad_c = henad_c + {}u) {{\n        let henad_count = atomicLoad(&henad_partial[henad_c]);\n        if (henad_count > 0u) {{\n            atomicAdd(&counters[henad_c], henad_count);\n        }}\n    }}\n", WORKGROUP_SIZE * WORKGROUP_SIZE));
                 if lanes > 0 {
@@ -2635,9 +2711,23 @@ fn inside(xy: &str, signed: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{literal, value_name};
+    use super::{Text, literal, value_name};
     use crate::host::value::HostValue;
     use crate::ids::NodeId;
+
+    /// An indented text keeps its blank lines bare, and each range still covers its own line, indentation included.
+    #[test]
+    fn indented_text_moves_its_ranges_with_its_lines() {
+        let node = NodeId::new(3).expect("an id");
+        let mut text = Text::default();
+        text.push("    {\n\n");
+        text.node_line("step", node, "        let a = 1u;\n");
+        text.push("    }\n");
+        let text = text.indented();
+        assert_eq!(text.text, "        {\n\n            let a = 1u;\n        }\n");
+        assert_eq!(text.ranges.len(), 1);
+        assert_eq!(&text.text[text.ranges[0].range.clone()], "            let a = 1u;\n");
+    }
 
     /// A dotted port, an accumulator whose name holds an underscore, and a segment ending in one each take a name of
     /// their own.

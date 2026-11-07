@@ -58,6 +58,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - henad-app and henad-cli turn on henad-explore's `model-files`.
 - Engine stamp (`ENGINE_BUILD`, dirty flag and source hash) covers henad-graph.
 - henad-cli reads `--model-file` and `--spec` before it acquires the GPU device, which is sized to the files' models too.
+- henad-graph agents graphs: `counter.add` tallied in workgroup memory, one global `atomicAdd` per counter per workgroup, zero amounts skipped; a step's tallies counted in its `workgroup_bytes`; `field.deposit` of 0, a negative or a NaN issues no atomic; no step returns early (grid steps and field updates guard their bounds in a block). Results unchanged.
 - henad-graph: a port segment holds no `__`; known-answer cases over `u64` or `f64` are `CaseScope::Host` (five lock lines).
 - Breaking: sweep resume, search resume and merge refuse model code that changed when either side is runtime code (new variants `ResumeError::CodeChanged`, `MergeError::CodeChanged`; add match arms); compiled against compiled still warns. `ResumeScan::read` takes the model's `ModelSource` (pass `entry.source()`).
 - Breaking: `RecordedBuild` is `#[non_exhaustive]`, with `origin` and `code_hash` (build through `From<&BuildInfo>`, `From<&ModelSource>` or `engine()`); `ManifestModel` gains `code` (`None` for compiled models); `ModelSource` compares its origin and code; `same_build` with a runtime build on either side holds only for runtime code of one hash.

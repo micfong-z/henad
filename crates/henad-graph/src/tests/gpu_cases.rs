@@ -6,6 +6,8 @@
 //! such as a threshold's probability, stays a literal, and the host computes the value the shader reads, as it does in
 //! a model. A case of a view kind colours its output from the palette `ramp`. A case whose pass runs in the init stage
 //! runs on the host alone, since a model's init passes never run on the device.
+//!
+//! A counter that a million agents add to, over thousands of workgroups, is held to the host's total too.
 
 use henad_core::authoring::primitives::space::Boundary;
 
@@ -856,5 +858,125 @@ fn every_known_answer_of_both_scopes_holds_on_the_device() {
     assert!(
         without_device_case.is_empty(),
         "these kinds have a WGSL form outside init passes and no case that ran on the device: {without_device_case:?}"
+    );
+}
+
+/// Number of agents of [`a_counter_over_many_workgroups_equals_the_host_total`], 3907 workgroups of 256.
+const MANY_AGENTS: u32 = 1_000_000;
+
+/// Returns the amount agent `index` adds in [`a_counter_over_many_workgroups_equals_the_host_total`]: 0 for an even
+/// index, and for an odd one a hash large enough that the total wraps past 2^32 many times.
+fn counted_amount(index: u32) -> u32 {
+    if index.is_multiple_of(2) {
+        0
+    } else {
+        index.wrapping_mul(0x9e37_79b9) | 1
+    }
+}
+
+/// A counter that every agent of a million adds to, half of them 0, ends at the host's total after one step on the
+/// device, each workgroup's tally flushed with one global atomic.
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "the skip is information for a reader of the test output"
+)]
+fn a_counter_over_many_workgroups_equals_the_host_total() {
+    let Some(device) = test_device() else {
+        eprintln!("skipping a_counter_over_many_workgroups_equals_the_host_total: no adapter");
+        return;
+    };
+    let mut text = super::case_files::agents_header(MANY_AGENTS, 100, 100);
+    text.push_str(
+        "\n[[lane]]\nid = \"case_position\"\ndomain = \"agents\"\ntype = \"vec2f\"\nrole = \"position\"\n\n\
+         [[lane]]\nid = \"amount\"\ndomain = \"agents\"\ntype = \"u32\"\n\n[[counter]]\nid = \"events\"\n\n\
+         [[pass]]\nid = \"count\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"agents\"\n\n\
+         [[pass.node]]\nid = \"n1\"\nop = \"lane.get\"\nconfig.lane = \"amount\"\n\n\
+         [[pass.node]]\nid = \"n2\"\nop = \"counter.add\"\nconfig.counter = \"events\"\nin.amount = \"n1\"\n",
+    );
+    let file = GraphFile::parse(&text).expect("the file reads");
+    let report = file.check();
+    assert!(!report.has_errors(), "{:#?}", report.diagnostics);
+    let (evaluator, _, compiled) =
+        crate::wgsl::agents::compile_parts(&file).unwrap_or_else(|problems| panic!("{problems:#?}"));
+    let document = evaluator.document();
+    let shader = compiled
+        .shaders
+        .iter()
+        .find(|shader| shader.passes().iter().any(|pass| pass == "count"))
+        .expect("the step shader");
+    let world = HostWorld::Agents {
+        count: MANY_AGENTS,
+        width: 100.0,
+        height: 100.0,
+    };
+    let (grid_width, grid_height, _) = world.domain_grid();
+    let mut lanes = HostLanes::new(document, world).expect("the lanes");
+    let column = lanes.column_mut("amount").expect("the lane");
+    for index in 0..MANY_AGENTS {
+        assert!(column.set(index as usize, HostValue::U32(counted_amount(index))));
+    }
+    let geometry = Geometry {
+        num_agents: MANY_AGENTS,
+        extent: Extent { w: 100.0, h: 100.0 },
+        width: grid_width,
+        height: grid_height,
+        n_cells: grid_width * grid_height,
+        display: (grid_width, grid_height),
+        index: None,
+    };
+    let words: Vec<Vec<u32>> = compiled
+        .sources
+        .iter()
+        .map(|source| AgentGraphHooks::words(source, &lanes, &geometry))
+        .collect();
+    let labels: Vec<String> = compiled.buffers.iter().map(|buffer| buffer.label.to_string()).collect();
+
+    let mut stream = 0;
+    evaluator
+        .run_pass("count", &mut lanes, &[], &RunContext::tick(None, 0), &mut stream)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let host_total = lanes.counter("events").expect("the counter");
+    let written_total = (0..MANY_AGENTS).fold(0u32, |total, index| total.wrapping_add(counted_amount(index)));
+    assert_eq!(host_total, written_total, "the host adds every amount, wrapping");
+
+    let groups = (MANY_AGENTS.div_ceil(256), 1);
+    let params = evaluator.param_values(&[]);
+    let uniform = shader
+        .uniform()
+        .bytes(
+            &evaluator,
+            world,
+            &params,
+            &RunContext::tick(None, 0),
+            &Dispatch {
+                groups_x: groups.0,
+                hash: None,
+                texture: [grid_width, grid_height],
+            },
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+    let named: Vec<(&str, Vec<u32>)> = vec![("counters", vec![0u32; compiled.plan.counter_words.max(1)])];
+    let result = run_shader(
+        &device,
+        shader,
+        &ShaderRun {
+            width: grid_width,
+            height: grid_height,
+            buffers: &words,
+            labels: &labels,
+            uniform: &uniform,
+            agents: Some(AgentShape {
+                groups,
+                texture: (grid_width, grid_height),
+                named: &named,
+            }),
+        },
+    );
+    assert_eq!(
+        result.named[0][FIRST_COUNTER],
+        host_total,
+        "the counter on the device\n{}",
+        shader.text()
     );
 }

@@ -112,6 +112,15 @@ is about not undoing them.
   block past `max_uniform_buffer_binding_size` builds too and fails only at `create_bind_group`,
   with no place in the file. `Demand::shortfalls` refuses both before a build from the sizes a
   `GridPassSpec` declares, so a generated pass sets `uniform_bytes` and `workgroup_bytes`.
+- **A workgroup barrier needs uniform control flow, and naga does not check it.** WGSL requires
+  every invocation of a workgroup to reach each `workgroupBarrier()`, and a barrier after an early
+  `return` of the invocations past the last element breaks that. naga's validation in
+  `compose_wgsl` accepted such a step of henad-graph's WGSL compiler, so no build refuses one and
+  its result on a device is undefined. No step of the compiler returns early: a grid step's bounds
+  check and an agents field update's slot check wrap the body in a block, and the counter tallies'
+  barriers sit at the top level of `main` (`agents/henad-graph-wgsl.md`). henad-graph's
+  `no_step_returns_early` and `each_counter_flushes_once_per_workgroup_after_a_top_level_barrier`
+  hold the text.
 - **Uniform layouts and a model's binding slots are generated.** The `build.rs` of henad-compute,
   henad-models and henad-app runs henad-build's `ShaderBuild` over that crate's shaders, and
   `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as

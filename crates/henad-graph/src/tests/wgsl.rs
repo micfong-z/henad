@@ -1,11 +1,12 @@
-//! The WGSL compiler: every starter compiles, the names and the range table, and the forms of regions.
+//! The WGSL compiler: every starter compiles, no step returns early, the names and the range table, and the forms of
+//! regions.
 
 use henad_compute::gpu::wgpu;
 use henad_core::params::ParamValue;
 
 use crate::GraphFile;
 use crate::starters::starters;
-use crate::wgsl::GridProgram;
+use crate::wgsl::{GridProgram, ShaderRole};
 
 #[test]
 fn every_starter_compiles() {
@@ -44,6 +45,50 @@ fn every_agents_graph_compiles() {
             }
         }
     }
+}
+
+/// No shader of a starter or a fixture but the display returns early, grid or agents, steps, actions, colour passes
+/// and field updates included, so a workgroup barrier at the end of `main` sits in uniform control flow.
+#[test]
+fn no_step_returns_early() {
+    let files = starters()
+        .iter()
+        .chain(crate::starters::agent_starters())
+        .map(|starter| (starter.file_name.to_owned(), starter.text.to_owned()))
+        .chain(super::corpus::fixtures());
+    let mut roles = std::collections::BTreeSet::new();
+    for (name, text) in files {
+        let file = GraphFile::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let shaders = if matches!(file.document().world, crate::document::World::Agents(_)) {
+            crate::wgsl::AgentProgram::compile(&file)
+                .unwrap_or_else(|problems| panic!("{name}: {problems:#?}"))
+                .shaders()
+                .to_vec()
+        } else {
+            GridProgram::compile(&file)
+                .unwrap_or_else(|problems| panic!("{name}: {problems:#?}"))
+                .shaders()
+                .to_vec()
+        };
+        for shader in shaders.iter().filter(|shader| *shader.role() != ShaderRole::Display) {
+            roles.insert(match shader.role() {
+                ShaderRole::Step => "step",
+                ShaderRole::Display => "display",
+                ShaderRole::Reduce => "reduce",
+                ShaderRole::Action(_) => "action",
+                ShaderRole::Color => "color",
+                ShaderRole::Merge(_) => "merge",
+            });
+            let text = shader.text();
+            let main = &text[text.find("fn main(").expect("a main")..];
+            assert!(!main.contains("return"), "{name} {}: \n{text}", shader.label());
+        }
+    }
+    assert_eq!(
+        roles.into_iter().collect::<Vec<_>>(),
+        ["action", "color", "merge", "reduce", "step"],
+        "every role but the display"
+    );
 }
 
 /// Every node of a pass names the text it wrote, and a byte of a line of the step names the node that wrote it.
