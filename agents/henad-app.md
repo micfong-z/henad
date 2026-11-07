@@ -34,12 +34,13 @@ henad-models and the binary's env_logger are optional behind the default
 eframe app name "Henad" names the native storage folder, which left 0.2.0's `Henad-Engine` behind,
 and a browser keeps eframe's one key per origin. `ui/` has one file per panel or window
 (`menu_bar.rs`, `model.rs`, `params.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
-`charts.rs`, `performance.rs`, `system.rs`, `fault.rs`, `rebuild.rs`, `about.rs`). The Export tab
-and the Editor live in directories, `export/` and `editor/`. The Export tab's `mod.rs` draws the
-tab and writes the stat series and final state, `image.rs` captures the viewport and
-`metadata.rs` builds the run details. `files/` holds the file dialogs: `save.rs` hands bytes to a
-save dialog (several files go into one picked folder on native and download one by one in a
-browser), and `open.rs` reads picked files, or takes a picked folder on native. Each outcome
+`charts.rs`, `performance.rs`, `system.rs`, `fault.rs`, `rebuild.rs`, `about.rs`), and
+`time_axis.rs` holds the time axis the Charts tab, the Results tab's Series view and Playback
+share. The Export tab and the Editor live in directories, `export/` and `editor/`. The Export
+tab's `mod.rs` draws the tab and writes the stat series and final state, `image.rs` captures the
+viewport and `metadata.rs` builds the run details. `files/` holds the file dialogs: `save.rs` hands
+bytes to a save dialog (several files go into one picked folder on native and download one by one in
+a browser), and `open.rs` reads picked files, or takes a picked folder on native. Each outcome
 carries a `SaveTarget` or `OpenTarget`, and `AppState::poll_saves` and `poll_opens` route it to
 the panel that asked. `dock.rs` holds the tab definitions, the default layout and the dispatch to
 each panel. Sweep and Results stack behind Viewport. `Tab::Editor` is the last variant, since
@@ -144,10 +145,23 @@ of its own, shown as the "Default" hint and never as a number. `params.rs` draws
 above the sliders, its dice (`draw_seed`, the clock mixed through `mix_seed`), and the
 scheduled-actions list under the action buttons. `parse_seed` reads an empty field as `None` and
 a decimal `u64` as `Some`. Anything else shows `INVALID_SEED` and disables Build. Picking another
-model clears the schedule. Its entries index the previous model's actions. `playback.rs` draws
-the Run to tick row. `AppState::run_to` rebuilds first for a tick behind the current one, then
-sends `SimCommand::RunTo` and sets `run_to_target`. Run is disabled while another model is
-selected, while the sim plays, and for a tick behind the current one while Build is disabled.
+model clears the schedule. Its entries index the previous model's actions. `params.rs` skips a
+hidden parameter (`ParamDescriptor::is_hidden`, a model's tick length), and shows "This model has
+no parameters." when every parameter is hidden. The graph editor's world panel skips it too and
+counts only the shown ones. The Sweep tab keeps a row per parameter, hidden ones included, so a
+sweep varies a tick length (`a_hidden_tick_length_stays_a_sweep_factor`). The time axis:
+`AppState::loaded_time` returns a `time_axis::RunTime`, the unit of the loaded entry's
+`ModelMetadata::time` and the tick length among `loaded_values`, `None` for a model with no time
+scale. `time_axis::counter_text` is Playback's tick counter beside Play and Step ("Tick 24", or
+"Tick 24 (12 days)", singular at exactly one unit), `axis_label` the x label ("Tick", or the unit
+capitalised, "Day"), and `plot_x` a sample's x, `TimeScale::time_at` of its tick, which equals
+the `time` column of `--export-stats`. The Charts tab plots every stat at `plot_x`, includes 0 in
+the y range, and draws a series of one sample as `Points` of radius 3, since a `Line` of one point
+draws nothing. `tests/time_axis.rs` holds the app-level tests over henad-models'
+`sir_rates.toml` fixture (`support::sir_rates`). `playback.rs` draws the Run to tick row.
+`AppState::run_to` rebuilds first for a tick behind the current one, then sends
+`SimCommand::RunTo` and sets `run_to_target`. Run is disabled while another model is selected,
+while the sim plays, and for a tick behind the current one while Build is disabled.
 A playing loop runs ahead of the snapshot's tick, and a target between the two would pause past
 it. The progress line reads the target, Cancel sends `Pause`, and `HenadApp::logic` clears the
 target once a snapshot reaches it. A snapshot past the target makes `logic` call `run_to` again,

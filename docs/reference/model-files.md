@@ -118,6 +118,7 @@ It is an `f32` with a `min` above 0 and `hidden = true`, and a file sets `tick_u
 A month is 30.44 days and a year 365.25 days.
 `--export-stats` and a sweep's `series.csv` write a `time` column after `tick`, the tick times the run's tick length, and `--params --json` names the unit under `time`.
 A tick length is a parameter like any other in the code identity and the schema, and a sweep over it, such as `--vary tick_length=0.25:1:0.25`, compares one model at several tick lengths.
+The app leaves a hidden parameter out of its Parameters tab and offers it in the Sweep tab, and its tick counter and plots read in the unit of one tick.
 Neither key changes the code of a file that leaves both out.
 
 ### `[step]`

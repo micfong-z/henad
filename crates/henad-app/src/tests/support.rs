@@ -1,4 +1,5 @@
-//! Models and helpers the app's tests share: replaced model code, held builds and steps, and the widgets of a frame.
+//! Models and helpers the app's tests share: replaced model code, a model with a time scale, held builds and steps,
+//! and the widgets of a frame.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -15,6 +16,7 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::provenance::ModelCode;
 use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{EdgeView, GridView, PointView, StatDescriptor, StatEntry, StatValue};
+use henad_explore::model_file::ModelFile;
 
 use crate::state::AppState;
 
@@ -64,6 +66,18 @@ impl GridModel for EditedSir {
 /// Returns the entry of [`EditedSir`], registered under SIR's id.
 pub fn edited_sir() -> ModelEntry {
     register_grid_model::<EditedSir>()
+}
+
+/// Returns the entry of henad-models' fixture `sir_rates.toml`, SIR with rates on a GPU grid, whose hidden
+/// `tick_length` parameter holds the length of one tick in days.
+pub fn sir_rates() -> ModelEntry {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../henad-models/tests/fixtures/lowered/rates/sir_rates.toml");
+    let text = std::fs::read_to_string(&path).expect("the fixture reads");
+    ModelFile::parse(&text)
+        .expect("the fixture reads as a model file")
+        .entry()
+        .expect("the fixture builds an entry")
 }
 
 /// Returns a set holding `entry` alone.

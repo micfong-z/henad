@@ -163,6 +163,7 @@ nav = [
             { "#76, 2026-11-07" = "developing/agent-record/20261107-76-add-up-merge.md" },
             { "#77, 2026-11-07" = "developing/agent-record/20261107-77-time-scale.md" },
             { "#78, 2026-11-07" = "developing/agent-record/20261107-78-sheet-writer.md" },
+            { "#79, 2026-11-07" = "developing/agent-record/20261107-79-time-axis.md" },
         ] },
     ] },
 ]

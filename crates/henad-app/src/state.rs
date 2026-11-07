@@ -29,6 +29,7 @@ use crate::ui::files::{OpenOutcome, OpenTarget, SaveOutcome, SaveResult, SaveTar
 use crate::ui::params::{INVALID_SEED, parse_seed};
 use crate::ui::results::ResultsPanel;
 use crate::ui::sweep::SweepPanel;
+use crate::ui::time_axis::RunTime;
 use henad_compute::runtime_info::RuntimeInfo;
 
 use henad_compute::gpu::GpuContext;
@@ -870,6 +871,18 @@ impl AppState {
     /// entry.
     pub fn loaded_entry(&self) -> Option<&ModelEntry> {
         self.loaded.as_ref()
+    }
+
+    /// Returns the unit and tick length of the loaded run, `None` with no model loaded or for a model with no time
+    /// scale.
+    pub fn loaded_time(&self) -> Option<RunTime> {
+        let entry = self.loaded.as_ref()?;
+        let time = entry.metadata().time.as_ref()?;
+        let tick_length = time.tick_length_in(entry.param_descriptors(), &self.loaded_values)?;
+        Some(RunTime {
+            unit: time.unit,
+            tick_length,
+        })
     }
 
     /// Id of the model the live simulation was built from.

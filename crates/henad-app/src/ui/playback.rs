@@ -4,6 +4,7 @@ use crate::icons::material_design_icons::{
 };
 use crate::state::{AppState, BUILDING_MODEL, DID_NOT_STOP};
 use crate::ui::results::table::INEXACT_REPLAY;
+use crate::ui::time_axis::counter_text;
 use crate::ui::{add_progress_bar, mcs};
 
 pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
@@ -35,6 +36,10 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
         {
             thread.step_once();
             app.run_to_target = None;
+        }
+
+        if let Some(counter) = tick_counter(app) {
+            ui.label(counter);
         }
     });
 
@@ -80,6 +85,14 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
     stopping_line(ui, app);
     opened_run_line(ui, app);
     preview_line(ui, app);
+}
+
+/// Returns the text of the tick counter beside Play and Step, `None` before the loaded model's first snapshot.
+///
+/// The counter reads "Tick 24", or "Tick 24 (12 days)" for a model with a time scale.
+pub(crate) fn tick_counter(app: &AppState) -> Option<String> {
+    let snapshot = app.snapshot.as_ref()?;
+    Some(counter_text(snapshot.tick, app.loaded_time()))
 }
 
 /// Hover text of the preview line while the Editor holds the previewed graph.

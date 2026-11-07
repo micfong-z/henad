@@ -68,6 +68,13 @@ in order of run id, and the runs table's order. `summary.csv` pools in `runs.csv
 resume can leave out of run-id order, and the last digits can then differ. The other views cache
 on `ResultsStore::revision`, and the Series view on the drawn configs' counts of runs and held
 series plus `ResultsStore::replaced_count`, the runs a resumed sweep's rerun replaced.
+For a model with a time scale, `ResultsStore` keeps the entry's `TimeScale` (from the entry at
+construction and in `model_changed`, `None` for a folder whose model this device lacks), and
+`config_time` reads a config's tick length from its value column. `time_unit` and `config_time`
+are both `None` when the value columns hold no tick length, as in a folder written before the
+model declared a time scale, so such a folder reads in ticks. The Series view puts each band and
+run line at `time_axis::plot_x` of the config's own tick length, labels the x axis with
+`time_axis::axis_label`, and drops its cache when `time_unit` changes.
 `series.rs` draws a `FilledArea` band and a centre line per config, `response.rs` caches each
 line as a `PlottedLine` and draws its whiskers as one `Whiskers` item with the line's id, so the
 legend hides both, and `heatmap.rs` draws the grid. `plot.rs` holds the palette, `decimate` (the

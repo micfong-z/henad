@@ -96,6 +96,8 @@ Footprint (GPU only)
 This tab shows the parameters of the selected model, and you can change them using the sliders or text boxes.
 A parameter that is either on or off shows as a checkbox, and one with a fixed set of options shows as a dropdown.
 Some parameters, such as chances, are shown as percentages, and you can type a value with or without the `%` sign.
+A model file can hide a parameter, such as the length of one tick in a model with a [time scale](../reference/model-files.md#time-scale).
+A hidden parameter gets no slider here, and the <span class="ui" markdown>:material-flask-outline: Sweep</span> tab still varies it.
 
 <figure markdown="span">
   ![The Parameters panel for Ant Foraging on the GPU](../assets/app/params.png){ width="370" }
@@ -196,6 +198,10 @@ Picking the running model again brings back the parameters, seed and scheduled a
 
 <span class="ui" markdown>:material-skip-next:</span>
 : Advance one tick while paused.
+
+**Tick 24**
+: The tick the simulation has reached.
+  For a model with a [time scale](../reference/model-files.md#time-scale), the counter adds the time, as in **Tick 24 (12 days)** for a tick of half a day.
 
 **Run to tick** and <span class="ui" markdown>:material-fast-forward: Run</span>
 : Step as fast as possible to a tick, then pause.
@@ -348,7 +354,10 @@ There are three types of statistics available:
 <figcaption>The charts panel shows the historical data for each stat.</figcaption>
 </figure>
 
-Every stat contributes a line to one time series, plotted against tick.
+Every stat contributes a line to one time series, plotted against tick on an axis labelled **Tick**.
+For a model with a [time scale](../reference/model-files.md#time-scale), the axis reads in its unit, such as **Day**, and each sample sits at its tick times the length of one tick.
+The left axis always includes 0.
+A stat with one sample so far, as at tick 0, shows as a dot.
 Each non-scalar stat is also plotted for the latest snapshot: an arrow from the origin for a vector, with a circle at its current magnitude, and a bar chart for a histogram.
 
 The charts are powered by [egui_plot](https://github.com/emilk/egui_plot).
@@ -809,6 +818,7 @@ The first five configurations are drawn at the start, and at most ten are drawn 
 | Median, 10–90% | Median | The 10th to the 90th percentile         |
 
 Failed runs are left out, and a run that stopped early adds nothing past its last tick.
+For a model with a [time scale](../reference/model-files.md#time-scale), the x axis reads in its unit, and the runs of each configuration sit at the times their own tick length gives, as the `time` column of `series.csv` does.
 Tick **Show runs** to draw every replicate as a thin line, and click a line to select its run.
 
 The app holds up to 256 MiB of series, or 64 MiB in a browser, and keeps the runs past that without their series.

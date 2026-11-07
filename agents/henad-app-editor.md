@@ -100,7 +100,7 @@ requests, then the open canvas syncs. This order is the guard of trap 8 of recor
 #62: a removal while a wire is in flight panics egui-snarl. `edit` runs commands on a clone, so a
 refused command changes nothing, and its message (capitalised, with a full stop) is `status`, a
 `GraphStatus` whose `warning` draws it in the theme's warn colour. A copy's "Copied N nodes." is a
-note (`GraphStatus::note`) in the text colour.
+note (`GraphStatus::note`) in the text colour. `world.rs` leaves a hidden parameter out.
 `refresh` checks again, rebuilds `issues` and reopens the first pass when the open one is gone.
 The *code revision* counts changes of `GraphFile::code`'s hash, which `refresh` compares, so a
 `Move` or Arrange changes the revision and not the code revision. `preview_key` and the `program`

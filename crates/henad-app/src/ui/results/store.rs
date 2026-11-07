@@ -26,6 +26,7 @@ use henad_core::explore::search::SearchSpec;
 use henad_core::explore::spec::{ACTION_COLUMN_PREFIX, ActionSpec, SweepSpec};
 use henad_core::explore::summary::{ReplicateSummary, RunningMoments};
 use henad_core::explore::value::{format_value, parse_value};
+use henad_core::metadata::{TimeScale, TimeUnit};
 use henad_core::params::ParamDescriptor;
 use henad_core::provenance::CodeOrigin;
 use henad_explore::output::manifest::{BuildRole, Manifest, RecordedBuild};
@@ -36,6 +37,7 @@ use henad_explore::search_run::{SearchPlan, SearchUpdate};
 use crate::state::lookup_message;
 use crate::ui::sweep::draft::describe_error;
 use crate::ui::sweep::session::SessionExecution;
+use crate::ui::time_axis::RunTime;
 
 /// Level id of a config on an axis whose column the config lacks.
 const NO_LEVEL_ID: usize = usize::MAX;
@@ -643,6 +645,8 @@ pub struct ResultsStore {
     search: Option<SearchLog>,
     /// Parameters of the model, empty when this device lacks it.
     descriptors: Vec<ParamDescriptor>,
+    /// Time scale of the model, `None` for a model with no time scale or when this device lacks it.
+    time: Option<TimeScale>,
     /// Label of each action the sweep fires, by the name that its spec assigns to the action.
     /// Empty when this device lacks the model.
     action_labels: BTreeMap<String, String>,
@@ -693,6 +697,7 @@ impl ResultsStore {
             recorded_spec: None,
             search: None,
             descriptors: entry.param_descriptors().to_vec(),
+            time: entry.metadata().time.clone(),
             value_columns,
             stat_columns: Vec::new(),
             reducer_columns: Vec::new(),
@@ -809,6 +814,7 @@ impl ResultsStore {
             descriptors: entry
                 .map(|entry| entry.param_descriptors().to_vec())
                 .unwrap_or_default(),
+            time: entry.and_then(|entry| entry.metadata().time.clone()),
             action_labels: entry.map_or_else(BTreeMap::new, |entry| action_labels(&set.spec().actions, entry)),
             value_columns: set.value_columns().to_vec(),
             stat_columns: set.stat_columns().to_vec(),
@@ -1275,6 +1281,31 @@ impl ResultsStore {
         Some(parts.join(", "))
     }
 
+    /// Unit of the model's time scale, `None` for a model with no time scale or when this device lacks it.
+    ///
+    /// Note that the unit is `None` too when the value columns hold no tick length, as in a folder written before the
+    /// model declared a time scale. The runs of such a folder draw at their ticks.
+    pub fn time_unit(&self) -> Option<TimeUnit> {
+        self.time
+            .as_ref()
+            .filter(|time| self.value_columns.iter().any(|column| *column == time.tick_length))
+            .map(|time| time.unit)
+    }
+
+    /// Returns the unit and tick length that the runs of config `config_id` ran with, `None` for a model with no time
+    /// scale, a config the store does not hold, or a tick length missing from the config's values.
+    ///
+    /// The time at a tick of such a run is the value that its series' `time` column holds.
+    pub fn config_time(&self, config_id: u64) -> Option<RunTime> {
+        let time = self.time.as_ref()?;
+        let column = self.value_columns.iter().position(|name| *name == time.tick_length)?;
+        let text = self.configs.get(&config_id)?.texts.get(column)?;
+        Some(RunTime {
+            unit: time.unit,
+            tick_length: text.parse().ok()?,
+        })
+    }
+
     /// Returns the value column that `target` sets, `None` for a parameter or action missing from the columns.
     fn target_column(&self, target: &FactorTarget) -> Option<usize> {
         let name = match target {
@@ -1541,6 +1572,9 @@ impl ResultsStore {
         self.replays_exactly =
             self.recorded.replays_exactly && entry.is_none_or(|entry| entry.metadata().replays_exactly);
         self.code_matches = self.recorded.code_matches(entry);
+        self.time = entry
+            .filter(|entry| entry.id() == self.model_id)
+            .and_then(|entry| entry.metadata().time.clone());
         if let Some(mut recorded) = self.recorded_spec.take() {
             self.descriptors = entry
                 .map(|entry| entry.param_descriptors().to_vec())
@@ -3660,5 +3694,20 @@ mod tests {
                 "run {run_id}"
             );
         }
+    }
+
+    /// A store whose value columns hold no tick length reads in ticks, as the bands and run lines then draw at ticks.
+    #[test]
+    fn a_store_without_a_tick_length_column_reads_in_ticks() {
+        let entry = crate::tests::support::sir_rates();
+        let plan = Arc::new(SweepSpec::new(entry.id()).plan(&entry.schema()).expect("a valid spec"));
+        let mut store = ResultsStore::for_sweep(plan, &entry, None, usize::MAX);
+        assert_eq!(store.time_unit(), Some(henad_core::metadata::TimeUnit::Day));
+        assert!(store.config_time(0).is_some());
+
+        // A folder written before the model declared a time scale records no tick length among its values.
+        store.value_columns.retain(|column| column != "tick_length");
+        assert_eq!((store.time_unit(), store.config_time(0)), (None, None));
+        assert_eq!(crate::ui::time_axis::axis_label(store.time_unit()), "Tick");
     }
 }

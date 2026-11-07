@@ -38,7 +38,8 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     seed_row(ui, app);
 
-    if descriptors.is_empty() {
+    // A hidden parameter, such as a tick length, gets no slider. A sweep still varies it.
+    if descriptors.iter().all(ParamDescriptor::is_hidden) {
         ui.label("This model has no parameters.");
         actions_ui(ui, app);
         notice(ui, app, &descriptors, panel_width);
@@ -61,6 +62,9 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
         format!("This parameter has been changed but not applied. Press {MDI_RESTART}\u{a0}Build to apply.");
 
     for (i, desc) in descriptors.iter().enumerate() {
+        if desc.is_hidden() {
+            continue;
+        }
         let hint = if desc.is_live() {
             None
         } else if pending[i] {

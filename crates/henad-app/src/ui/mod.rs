@@ -20,6 +20,7 @@ pub mod results;
 pub mod stats;
 pub mod sweep;
 pub mod system;
+pub mod time_axis;
 pub mod viewport;
 
 pub fn banner(ui: &mut egui::Ui, icon: &str, color: egui::Color32, title: &str, detail: &str) {

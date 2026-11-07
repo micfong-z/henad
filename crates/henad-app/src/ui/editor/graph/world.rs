@@ -29,7 +29,8 @@ pub fn world_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphReques
     let document = graph.document();
     ui.strong("World");
     world_table_ui(ui, graph, requests);
-    CollapsingHeader::new(format!("Parameters ({})", document.params.len()))
+    let shown_params = document.params.iter().filter(|param| !param.is_hidden()).count();
+    CollapsingHeader::new(format!("Parameters ({shown_params})"))
         .id_salt("henad_graph_params")
         .default_open(true)
         .show(ui, |ui| params_ui(ui, graph, requests));
@@ -151,8 +152,9 @@ pub(crate) fn param_with(descriptor: &ParamDescriptor, label: &str, kind: ParamK
 /// Draws each parameter's id, label and range, and the form that adds one.
 ///
 /// The range and the default show the parameter of the edits that wait for the primary button, as the world table does.
+/// A hidden parameter, such as a tick length, is left out.
 fn params_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequest>) {
-    for param in &graph.document().params {
+    for param in graph.document().params.iter().filter(|param| !param.is_hidden()) {
         let id = Id::new("henad_graph_param").with(param.id());
         CollapsingHeader::new(param.label()).id_salt(id).show(ui, |ui| {
             ui.horizontal(|ui| {

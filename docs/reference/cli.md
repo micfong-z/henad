@@ -62,6 +62,7 @@ The flags that run a sweep have [their own table](#sweep-flags).
 `--set` accepts a number for a `u32` or `f32` parameter, `true` or `false` for a `bool`, and an option's name or index for a `choice`, as in `--set network=Geometric`.
 A parameter that `--params` marks `format=percent` still accepts a fraction, and `--set virus_spread_chance=0.1` sets it to 10%.
 A parameter that `--params` marks `hidden`, such as a model file's tick length, is reached by `--set`, `--vary` and a spec file as any other parameter is.
+The app leaves such a parameter off its Parameters tab, and its Sweep tab still varies it.
 
 Both export formats are shared with the app (see [:material-application-export: Export tab](../guide/app.md#export-tab) for details).
 

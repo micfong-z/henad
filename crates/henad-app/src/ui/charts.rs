@@ -1,8 +1,11 @@
 //! Time series over the recorded `StatsHistory`, plus per-snapshot vector and histogram plots.
 
+use egui_plot::PlotResponse;
+use henad_core::view::{StatValue, StatsHistory};
+
 use crate::state::AppState;
 use crate::ui::show_plot;
-use henad_core::view::StatValue;
+use crate::ui::time_axis::{RunTime, axis_label, plot_x};
 
 pub fn charts_ui(ui: &mut egui::Ui, app: &mut AppState) {
     history_controls(ui, app);
@@ -45,27 +48,7 @@ fn stats_chart(ui: &mut egui::Ui, app: &AppState) {
         return;
     }
 
-    let plot = egui_plot::Plot::new("stats_plot")
-        .height(200.0)
-        .show_axes(true)
-        .legend(egui_plot::Legend::default());
-    show_plot(ui, plot, |plot_ui| {
-        let filled = history.len();
-
-        for (col, desc) in history.descriptors().iter().enumerate() {
-            let [r, g, b, _] = desc.color();
-            let color = egui::Color32::from_rgb(r, g, b);
-
-            let points: Vec<[f64; 2]> = (0..filled)
-                .filter_map(|j| {
-                    let (value, tick) = history.get(col, j)?;
-                    Some([(tick) as f64, value])
-                })
-                .collect();
-
-            plot_ui.line(egui_plot::Line::new(desc.label(), points).color(color).width(1.5));
-        }
-    });
+    stats_plot(ui, history, app.loaded_time());
 
     // The latest snapshot's vector and histogram stats get a plot each.
     if let Some(snap) = &app.snapshot {
@@ -81,6 +64,48 @@ fn stats_chart(ui: &mut egui::Ui, app: &AppState) {
             }
         }
     }
+}
+
+/// Radius in points of the dot that a series of one sample draws.
+const SINGLE_SAMPLE_RADIUS: f32 = 3.0;
+
+/// Draws every stat of `history` over time, the x axis in ticks or, for a run with a time scale, in its unit.
+///
+/// The y range holds 0. A series of one sample, as at tick 0, draws as a dot in its colour, since a line through one
+/// point draws nothing.
+fn stats_plot(ui: &mut egui::Ui, history: &StatsHistory, time: Option<RunTime>) -> PlotResponse<()> {
+    let plot = egui_plot::Plot::new("stats_plot")
+        .height(200.0)
+        .show_axes(true)
+        .x_axis_label(axis_label(time.map(|time| time.unit)))
+        .include_y(0.0)
+        .legend(egui_plot::Legend::default());
+    show_plot(ui, plot, |plot_ui| {
+        for (column, descriptor) in history.descriptors().iter().enumerate() {
+            let [r, g, b, _] = descriptor.color();
+            let color = egui::Color32::from_rgb(r, g, b);
+            let points = stat_points(history, column, time);
+            if points.len() == 1 {
+                plot_ui.points(
+                    egui_plot::Points::new(descriptor.label(), points)
+                        .color(color)
+                        .radius(SINGLE_SAMPLE_RADIUS),
+                );
+            } else {
+                plot_ui.line(egui_plot::Line::new(descriptor.label(), points).color(color).width(1.5));
+            }
+        }
+    })
+}
+
+/// Returns the points of stat column `column` of `history`, each sample at [`plot_x`] of its tick.
+fn stat_points(history: &StatsHistory, column: usize, time: Option<RunTime>) -> Vec<[f64; 2]> {
+    (0..history.len())
+        .filter_map(|position| {
+            let (value, tick) = history.get(column, position)?;
+            Some([plot_x(tick, time), value])
+        })
+        .collect()
 }
 
 fn vector_arrow_chart(ui: &mut egui::Ui, label: &str, x: f64, y: f64, color: [u8; 4]) {
@@ -152,4 +177,119 @@ fn histogram_chart(ui: &mut egui::Ui, label: &str, edges: &[f64], counts: &[u64]
 
         plot_ui.bar_chart(egui_plot::BarChart::new(label, bars).color(bar_color));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Pos2, Rect, Shape, vec2};
+    use henad_core::metadata::TimeUnit;
+    use henad_core::view::{StatDescriptor, StatEntry, StatValue, StatsHistory};
+
+    use super::{stat_points, stats_plot};
+    use crate::ui::time_axis::RunTime;
+
+    const HALF_DAY: RunTime = RunTime {
+        unit: TimeUnit::Day,
+        tick_length: 0.5,
+    };
+
+    /// Returns a history of one stat, Infected, holding `samples`, each a tick and its value.
+    fn history(samples: &[(u64, f64)]) -> StatsHistory {
+        let color = [255, 0, 0, 255];
+        let mut history = StatsHistory::new(vec![StatDescriptor::new("Infected", color)], None);
+        for &(tick, value) in samples {
+            history.push_entries(&[StatEntry::new("Infected", StatValue::Scalar(value), color)], tick);
+        }
+        history
+    }
+
+    /// Plot drawn for one frame: its texts, the number of circles it painted, and the lowest y it shows.
+    struct DrawnPlot {
+        texts: Vec<String>,
+        circles: usize,
+        lowest_y: f64,
+    }
+
+    /// Adds the text of every text shape in `shape` to `texts` and counts its circles into `circles`.
+    fn collect(shape: &Shape, texts: &mut Vec<String>, circles: &mut usize) {
+        match shape {
+            Shape::Text(text) => texts.push(text.galley.text().to_owned()),
+            Shape::Circle(_) => *circles += 1,
+            Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect(shape, texts, circles);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Draws the stats plot of `history` for one frame.
+    fn draw(history: &StatsHistory, time: Option<RunTime>) -> DrawnPlot {
+        let context = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+            ..egui::RawInput::default()
+        };
+        let mut lowest_y = f64::NAN;
+        let output = context.run_ui(input, |ui| {
+            lowest_y = stats_plot(ui, history, time).transform.bounds().min()[1];
+        });
+        let (mut texts, mut circles) = (Vec::new(), 0);
+        for clipped in &output.shapes {
+            collect(&clipped.shape, &mut texts, &mut circles);
+        }
+        output.drop_without_applying_deltas();
+        DrawnPlot {
+            texts,
+            circles,
+            lowest_y,
+        }
+    }
+
+    #[test]
+    fn a_timed_run_plots_each_sample_at_its_tick_times_the_tick_length() {
+        let history = history(&[(0, 120.0), (10, 150.0), (20, 180.0)]);
+        assert_eq!(
+            stat_points(&history, 0, None),
+            [[0.0, 120.0], [10.0, 150.0], [20.0, 180.0]]
+        );
+        assert_eq!(
+            stat_points(&history, 0, Some(HALF_DAY)),
+            [[0.0, 120.0], [5.0, 150.0], [10.0, 180.0]]
+        );
+    }
+
+    #[test]
+    fn the_axis_reads_in_ticks_or_the_unit_and_the_range_holds_zero() {
+        // The samples start after tick 0. The only "0" left is then the label on the left axis.
+        let history = history(&[(10, 120.0), (20, 150.0), (30, 180.0)]);
+        let untimed = draw(&history, None);
+        assert!(untimed.texts.iter().any(|text| text == "Tick"), "{:?}", untimed.texts);
+        assert!(!untimed.texts.iter().any(|text| text == "Day"), "{:?}", untimed.texts);
+        assert!(untimed.lowest_y <= 0.0, "the range starts at {}", untimed.lowest_y);
+        assert!(
+            untimed.texts.iter().any(|text| text == "0"),
+            "the left axis labels 0: {:?}",
+            untimed.texts
+        );
+
+        let timed = draw(&history, Some(HALF_DAY));
+        assert!(timed.texts.iter().any(|text| text == "Day"), "{:?}", timed.texts);
+        assert!(!timed.texts.iter().any(|text| text == "Tick"), "{:?}", timed.texts);
+        assert!(timed.lowest_y <= 0.0, "the range starts at {}", timed.lowest_y);
+        assert!(
+            timed.texts.iter().any(|text| text == "0"),
+            "the left axis labels 0: {:?}",
+            timed.texts
+        );
+    }
+
+    #[test]
+    fn a_series_of_one_sample_draws_as_a_dot() {
+        let one = draw(&history(&[(0, 94.0)]), None).circles;
+        let two = draw(&history(&[(0, 94.0), (1, 96.0)]), None).circles;
+        // The legend paints the same circles for both, so the dot is the one more.
+        assert_eq!(one, two + 1, "{one} circles with one sample, {two} with two");
+    }
 }
