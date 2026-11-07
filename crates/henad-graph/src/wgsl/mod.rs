@@ -13,7 +13,10 @@
 //! *Names.* Every value is a `let` named `n<id>_<port>`, with each `.` of a dotted port written `__`, so a line of a
 //! shader names its node. [`GeneratedShader::ranges`] holds the byte range of the text each node wrote, for a line that
 //! holds several. A lane binds as `lane_<id>_cells`, and as `lane_<id>_cells_in` and `lane_<id>_cells_out` in the tick
-//! pass that writes a *dual* lane, one another element reads. Names the template owns start with `henad_`.
+//! pass that writes a *dual* lane, one another element reads. Past the budget of
+//! [`MAX_STORAGE_BINDINGS`](crate::limits::MAX_STORAGE_BINDINGS) storage buffers, lanes share a packed buffer
+//! `lanes_<domain>_<k>` of `u32` words, read and written through `bitcast` at each lane's segment, as [`LaneBuffer`]
+//! describes. Names the template owns start with `henad_`.
 //!
 //! *Uniform block.* A pass's prelude, the values the same for every element, runs on the host when the model is built,
 //! and the shader reads the values in the uniform block `params`, with the grid's size, each draw's key word and the
@@ -36,11 +39,13 @@ pub(crate) mod emit;
 mod fault_names;
 mod hooks;
 mod live;
+pub(crate) mod pack;
 pub(crate) mod probes;
 pub(crate) mod uniform;
 
 pub use agents::AgentProgram;
 pub use fault_names::FaultNames;
+pub use pack::LaneBuffer;
 pub use probes::Probes;
 
 use std::borrow::Cow;
@@ -75,6 +80,7 @@ use crate::ids::NodeId;
 
 use emit::{EmitInput, Emitted, LanePlan, Role};
 use hooks::{ActionPlan, GraphHooks, PassUniform, StatSource};
+use pack::{LaneEntry, LaneLayout};
 use uniform::{UniformBlock, WgslType};
 
 /// Side `N` of the `@workgroup_size(N, N)` of every generated grid shader.
@@ -282,6 +288,7 @@ struct GridParts {
     actions: Vec<ActionDescriptor>,
     palette: Option<Vec<[u8; 4]>>,
     buffers: Vec<GridBufferSpec>,
+    layout: LaneLayout,
     shaders: Vec<GeneratedShader>,
     hooks: Arc<GraphHooks>,
     counters: usize,
@@ -411,16 +418,15 @@ impl GridProgram {
         let evaluator = Arc::new(evaluator);
         let Compiled {
             shaders,
-            lanes,
+            layout,
             tick_buffer,
-            dual,
             fire_counters,
         } = compiled;
 
-        let mut buffers: Vec<GridBufferSpec> = lanes
+        let mut buffers: Vec<GridBufferSpec> = layout
+            .groups
             .iter()
-            .enumerate()
-            .map(|(position, lane)| GridBufferSpec::new(format!("lane_{}_cells", lane.id), dual.contains(&position)))
+            .map(|group| GridBufferSpec::new(group.label.clone(), group.dual))
             .collect();
         if tick_buffer {
             buffers.push(GridBufferSpec::new("henad_tick", true));
@@ -460,6 +466,7 @@ impl GridProgram {
             width: grid.width.clamp(1, MAX_GRID_SIDE),
             height: grid.height.clamp(1, MAX_GRID_SIDE),
             boundary: grid.boundary,
+            lane_buffers: layout.groups.iter().map(|group| group.lanes.clone()).collect(),
             tick_buffer,
             uniforms,
             stats,
@@ -550,6 +557,7 @@ impl GridProgram {
                     .collect(),
                 palette: display_palette(document),
                 buffers,
+                layout,
                 shaders,
                 hooks,
                 counters,
@@ -568,6 +576,19 @@ impl GridProgram {
     /// Every shader, step passes first, then the display and reduce passes, then each action's passes.
     pub fn shaders(&self) -> &[GeneratedShader] {
         &self.parts.shaders
+    }
+
+    /// Returns the buffer and segment that hold the lane `id` on the device, `None` for a lane the graph lacks.
+    pub fn lane_buffer(&self, id: &str) -> Option<LaneBuffer> {
+        let position = self
+            .parts
+            .hooks
+            .evaluator
+            .document()
+            .lanes
+            .iter()
+            .position(|lane| lane.id == id)?;
+        self.parts.layout.place(position)
     }
 
     /// Returns the spec the GPU grid engine runs.
@@ -655,10 +676,9 @@ pub(crate) fn own_params(params: &[ParamDescriptor], reload: &[bool]) -> Vec<Par
 /// Shaders and the buffer plan of one graph.
 pub(crate) struct Compiled {
     pub shaders: Vec<GeneratedShader>,
-    pub lanes: Vec<LanePlan>,
+    /// Lane buffers and the place of each lane in them.
+    pub layout: LaneLayout,
     pub tick_buffer: bool,
-    /// Positions of the dual lanes.
-    pub dual: Vec<usize>,
     /// Words of `counters` that hold the probes' counts, after the reduce tallies.
     pub fire_counters: Range<usize>,
 }
@@ -788,38 +808,32 @@ pub(crate) fn compile_shaders(
     } else {
         ticks.len()
     };
-    let buffer_count = lanes.len() + usize::from(tick_buffer);
-    let step_sides = |step: usize| {
-        let mut rows = vec![SideRow::new(BufferSide::Current, BufferSide::Current); buffer_count];
-        for &(lane, writer) in &dual {
-            rows[lane] = match step.cmp(&writer) {
-                std::cmp::Ordering::Less => SideRow::new(BufferSide::Current, BufferSide::Current),
-                std::cmp::Ordering::Equal => SideRow::new(BufferSide::Current, BufferSide::Next),
-                std::cmp::Ordering::Greater => SideRow::new(BufferSide::Next, BufferSide::Next),
-            };
-        }
-        if tick_buffer && step + 1 == step_count {
-            rows[lanes.len()] = SideRow::new(BufferSide::Current, BufferSide::Next);
-        }
-        SideTable::new(rows)
-    };
     // The probes' counts follow the reduce tallies, at least one word, in `counters`.
     let reduce_tallies = runs(PassStage::Stats)
         .filter_map(program)
         .map(|program| program.tallies)
         .sum::<usize>()
         .max(1);
-    let input = EmitInput {
-        document,
-        report,
-        evaluator,
-        lanes: &lanes,
-        tick_buffer,
-        outer_iteration,
-        agents: None,
-        probes: &probe_slots,
-        fire_base: reduce_tallies,
-    };
+    let reruns = rerun_writers(document, evaluator);
+    let cells = u64::from(grid_cells(document));
+    let entries: Vec<LaneEntry<'_>> = document
+        .lanes
+        .iter()
+        .enumerate()
+        .map(|(position, lane)| LaneEntry {
+            label: lanes[position].label.clone(),
+            value_type: &lane.value_type,
+            domain: lane.domain,
+            writer: dual
+                .iter()
+                .find(|(known, _)| *known == position)
+                .map(|(_, writer)| *writer),
+            held: true,
+            packable: lanes[position].wgsl.is_some(),
+            reruns: reruns[position].clone(),
+            largest_count: cells,
+        })
+        .collect();
     let cost_of = |positions: &[usize]| {
         positions
             .iter()
@@ -827,140 +841,219 @@ pub(crate) fn compile_shaders(
             .map(|pass| pass.cost)
             .fold(0u64, u64::saturating_add)
     };
-    let mut plans: Vec<ShaderPlan> = Vec::new();
-    if ticks.is_empty() && tick_buffer {
-        plans.push(ShaderPlan {
-            role: ShaderRole::Step,
-            label: "advance_tick".to_owned(),
-            positions: Vec::new(),
-            emit_role: Role::Step { writes_tick: true },
-            sides: step_sides(0),
-            pass_id: GridPassId::Step(0),
-            cost: 1,
-        });
-    }
-    for (step, &position) in ticks.iter().enumerate() {
-        plans.push(ShaderPlan {
-            role: ShaderRole::Step,
-            label: document.passes[position].id.clone(),
-            positions: vec![position],
-            emit_role: Role::Step {
-                writes_tick: tick_buffer && step + 1 == step_count,
-            },
-            sides: step_sides(step),
-            pass_id: GridPassId::Step(step),
-            cost: cost_of(&[position]),
-        });
-    }
     let views: Vec<usize> = runs(PassStage::View).collect();
-    let views_cost = cost_of(&views).max(1);
-    plans.push(ShaderPlan {
-        role: ShaderRole::Display,
-        label: "display".to_owned(),
-        positions: views,
-        emit_role: Role::Display,
-        sides: SideTable::in_place(buffer_count),
-        pass_id: GridPassId::Display,
-        cost: views_cost,
-    });
     let stats: Vec<usize> = runs(PassStage::Stats).collect();
-    let stats_cost = cost_of(&stats).max(1);
-    plans.push(ShaderPlan {
-        role: ShaderRole::Reduce,
-        label: "reduce".to_owned(),
-        positions: stats,
-        emit_role: Role::Reduce,
-        sides: SideTable::in_place(buffer_count),
-        pass_id: GridPassId::Reduce,
-        cost: stats_cost,
-    });
-    for (action_index, action) in document.actions.iter().enumerate() {
-        let passes = runs(PassStage::Action)
-            .filter(|&position| document.passes[position].action.as_deref() == Some(action.id.as_str()));
-        for (pass_index, position) in passes.enumerate() {
+    let emit_all = |layout: &LaneLayout| -> Result<Vec<GeneratedShader>, Vec<CodeDiagnostic>> {
+        let buffer_count = layout.groups.len() + usize::from(tick_buffer);
+        let step_sides = |step: usize| {
+            let mut rows = vec![SideRow::new(BufferSide::Current, BufferSide::Current); buffer_count];
+            for &(lane, writer) in &dual {
+                let Some(place) = layout.place(lane) else {
+                    continue;
+                };
+                rows[place.buffer()] = match step.cmp(&writer) {
+                    std::cmp::Ordering::Less => SideRow::new(BufferSide::Current, BufferSide::Current),
+                    std::cmp::Ordering::Equal => SideRow::new(BufferSide::Current, BufferSide::Next),
+                    std::cmp::Ordering::Greater => SideRow::new(BufferSide::Next, BufferSide::Next),
+                };
+            }
+            if tick_buffer && step + 1 == step_count {
+                rows[layout.groups.len()] = SideRow::new(BufferSide::Current, BufferSide::Next);
+            }
+            SideTable::new(rows)
+        };
+        let input = EmitInput {
+            document,
+            report,
+            evaluator,
+            lanes: &lanes,
+            layout,
+            tick_buffer,
+            outer_iteration,
+            agents: None,
+            probes: &probe_slots,
+            fire_base: reduce_tallies,
+        };
+        let mut plans: Vec<ShaderPlan> = Vec::new();
+        if ticks.is_empty() && tick_buffer {
             plans.push(ShaderPlan {
-                role: ShaderRole::Action(action.id.clone()),
+                role: ShaderRole::Step,
+                label: "advance_tick".to_owned(),
+                positions: Vec::new(),
+                emit_role: Role::Step { writes_tick: true },
+                sides: step_sides(0),
+                pass_id: GridPassId::Step(0),
+                cost: 1,
+            });
+        }
+        for (step, &position) in ticks.iter().enumerate() {
+            plans.push(ShaderPlan {
+                role: ShaderRole::Step,
                 label: document.passes[position].id.clone(),
                 positions: vec![position],
-                emit_role: Role::Action,
-                sides: SideTable::in_place(buffer_count),
-                pass_id: GridPassId::Action {
-                    action: action_index,
-                    pass: pass_index,
+                emit_role: Role::Step {
+                    writes_tick: tick_buffer && step + 1 == step_count,
                 },
+                sides: step_sides(step),
+                pass_id: GridPassId::Step(step),
                 cost: cost_of(&[position]),
             });
         }
-    }
-    let mut shaders = Vec::with_capacity(plans.len());
-    for ShaderPlan {
-        role,
-        label,
-        positions,
-        emit_role,
-        sides,
-        pass_id,
-        cost,
-    } in plans
-    {
-        let emitted = match emit::emit(&input, emit_role, &positions, &sides) {
-            Ok(emitted) => emitted,
-            Err(found) => {
-                problems.extend(found);
-                continue;
-            }
-        };
-        let Emitted {
-            text,
-            ranges,
-            bindings,
-            uniform,
-            counters,
-            sum_lanes,
-            workgroup_bytes,
-        } = emitted;
-        if text.len() > MAX_FILE_BYTES {
-            problems.push(oversized(&label, text.len(), &ranges));
-            continue;
-        }
-        let composed = match compose(&label, &text, &ranges) {
-            Ok(composed) => composed,
-            Err(found) => {
-                problems.extend(found);
-                continue;
-            }
-        };
-        shaders.push(GeneratedShader {
-            role,
-            passes: positions
-                .iter()
-                .map(|&position| document.passes[position].id.clone())
-                .collect(),
-            label,
-            text,
-            composed,
-            ranges,
-            bindings,
-            uniform,
-            sides,
-            cost,
-            counters,
-            grid_sum_lanes: sum_lanes,
-            pass_id,
-            workgroup_bytes,
-            agent: None,
+        plans.push(ShaderPlan {
+            role: ShaderRole::Display,
+            label: "display".to_owned(),
+            positions: views.clone(),
+            emit_role: Role::Display,
+            sides: SideTable::in_place(buffer_count),
+            pass_id: GridPassId::Display,
+            cost: cost_of(&views).max(1),
         });
-    }
+        plans.push(ShaderPlan {
+            role: ShaderRole::Reduce,
+            label: "reduce".to_owned(),
+            positions: stats.clone(),
+            emit_role: Role::Reduce,
+            sides: SideTable::in_place(buffer_count),
+            pass_id: GridPassId::Reduce,
+            cost: cost_of(&stats).max(1),
+        });
+        for (action_index, action) in document.actions.iter().enumerate() {
+            let passes = runs(PassStage::Action)
+                .filter(|&position| document.passes[position].action.as_deref() == Some(action.id.as_str()));
+            for (pass_index, position) in passes.enumerate() {
+                plans.push(ShaderPlan {
+                    role: ShaderRole::Action(action.id.clone()),
+                    label: document.passes[position].id.clone(),
+                    positions: vec![position],
+                    emit_role: Role::Action,
+                    sides: SideTable::in_place(buffer_count),
+                    pass_id: GridPassId::Action {
+                        action: action_index,
+                        pass: pass_index,
+                    },
+                    cost: cost_of(&[position]),
+                });
+            }
+        }
+        let mut problems = Vec::new();
+        let mut shaders = Vec::with_capacity(plans.len());
+        for ShaderPlan {
+            role,
+            label,
+            positions,
+            emit_role,
+            sides,
+            pass_id,
+            cost,
+        } in plans
+        {
+            let emitted = match emit::emit(&input, emit_role, &positions, &sides) {
+                Ok(emitted) => emitted,
+                Err(found) => {
+                    problems.extend(found);
+                    continue;
+                }
+            };
+            let Emitted {
+                text,
+                ranges,
+                bindings,
+                uniform,
+                counters,
+                sum_lanes,
+                workgroup_bytes,
+            } = emitted;
+            if text.len() > MAX_FILE_BYTES {
+                problems.push(oversized(&label, text.len(), &ranges));
+                continue;
+            }
+            let composed = match compose(&label, &text, &ranges) {
+                Ok(composed) => composed,
+                Err(found) => {
+                    problems.extend(found);
+                    continue;
+                }
+            };
+            shaders.push(GeneratedShader {
+                role,
+                passes: positions
+                    .iter()
+                    .map(|&position| document.passes[position].id.clone())
+                    .collect(),
+                label,
+                text,
+                composed,
+                ranges,
+                bindings,
+                uniform,
+                sides,
+                cost,
+                counters,
+                grid_sum_lanes: sum_lanes,
+                pass_id,
+                workgroup_bytes,
+                agent: None,
+            });
+        }
+        if problems.is_empty() {
+            Ok(shaders)
+        } else {
+            Err(problems)
+        }
+    };
     if !problems.is_empty() {
+        if let Err(found) = emit_all(&LaneLayout::unpacked(&entries)) {
+            problems.extend(found);
+        }
         return Err(problems);
     }
+    let (layout, shaders) = pack::choose(&entries, emit_all, |shaders: &Vec<GeneratedShader>| {
+        shaders.iter().map(|shader| shader.bindings.as_slice()).collect()
+    })?;
     Ok(Compiled {
         shaders,
-        lanes,
+        layout,
         tick_buffer,
-        dual: dual.into_iter().map(|(lane, _)| lane).collect(),
         fire_counters: reduce_tallies..reduce_tallies + probes.len(),
     })
+}
+
+/// Returns, for each lane of `document` by position, the positions of the actions whose reruns write it, in order.
+pub(crate) fn rerun_writers(document: &GraphDocument, evaluator: &HostEvaluator) -> Vec<Vec<usize>> {
+    let mut writers = vec![Vec::new(); document.lanes.len()];
+    for (action_index, action) in document.actions.iter().enumerate() {
+        for run in &action.runs {
+            let Some(position) = document
+                .passes
+                .iter()
+                .position(|pass| pass.id == *run && pass.stage == PassStage::Init)
+            else {
+                continue;
+            };
+            let Some(Ok(program)) = evaluator.program_at(position) else {
+                continue;
+            };
+            for &lane in &program.written {
+                if let Some(actions) = writers.get_mut(lane)
+                    && actions.last() != Some(&action_index)
+                {
+                    actions.push(action_index);
+                }
+            }
+        }
+    }
+    writers
+}
+
+/// Returns the cells of the default grid of `document`, 1 for a document of agents.
+fn grid_cells(document: &GraphDocument) -> u32 {
+    match document.world {
+        World::Grid(grid) => grid
+            .width
+            .clamp(1, MAX_GRID_SIDE)
+            .saturating_mul(grid.height.clamp(1, MAX_GRID_SIDE)),
+        World::Agents(_) => 1,
+    }
 }
 
 /// Returns `problem` placed on the table of its node in `file`, or on its pass's table, when it names them and has no

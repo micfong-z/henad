@@ -11,7 +11,8 @@ use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 use henad_graph::GraphFile;
 use henad_graph::host::{HostEvaluator, HostLanes, HostWorld, RunContext};
 
-use super::graph_grid_parity::{build_gpu, graph_cells, snapshot, stat, step};
+use super::graph_grid_parity::{build_gpu, snapshot, stat, step};
+use super::lanes::GraphLanes;
 
 /// Returns the text of `tests/fixtures/graphs/repeat_trials.toml`.
 fn trials_text() -> String {
@@ -44,6 +45,7 @@ fn repeated_trials_hit_at_the_closed_form_rate() {
     let entry = ModelFile::parse(&trials_text())
         .and_then(|file| file.entry())
         .unwrap_or_else(|error| panic!("repeat_trials.toml: {error}"));
+    let lanes = GraphLanes::of_text(&trials_text());
     let side = 512u32;
     let cells = f64::from(side * side);
     let cases = [
@@ -65,7 +67,7 @@ fn repeated_trials_hit_at_the_closed_form_rate() {
             step(&ctx, &mut *state, 1);
             snapshot(&ctx, &mut *state);
             let hits = stat(&state.stats(), "Hits");
-            let current = graph_cells(&*state);
+            let current = lanes.read(&*state, "outcome");
             assert_eq!(
                 hits,
                 current.iter().map(|&cell| f64::from(cell)).sum::<f64>(),
@@ -102,6 +104,7 @@ fn repeated_trials_on_the_device_equal_the_host() {
     let entry = ModelFile::parse(&text)
         .and_then(|model_file| model_file.entry())
         .unwrap_or_else(|error| panic!("repeat_trials.toml: {error}"));
+    let device_lanes = GraphLanes::of(&file);
     let (width, height) = (61u32, 37u32);
     let own = [ParamValue::U32(3), ParamValue::F32(0.2)];
     for seed in [Some(2), None] {
@@ -126,7 +129,7 @@ fn repeated_trials_on_the_device_equal_the_host() {
                 .unwrap_or_else(|error| panic!("{error}"));
             let host = lanes.column("outcome").expect("the lane").words();
             assert!(
-                graph_cells(&*state) == host,
+                device_lanes.read(&*state, "outcome") == host,
                 "the cells differ at tick {tick}, seed {seed:?}"
             );
         }

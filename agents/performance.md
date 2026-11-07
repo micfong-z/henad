@@ -52,6 +52,14 @@ Read before touching a kernel, a chunk driver, the spatial hash or the scatter g
   Re-run the bench rather than reasoning about it. The sparse arm (`Banded`) is what a field layer
   takes: measured 2.3x to 12.3x over the dense ones wherever there are more cells than deposits,
   and behind them at one deposit per cell even on one worker.
+- **A graph model's lanes pack only past the binding budget of 8, and each lane stays a contiguous
+  segment.** henad-graph gives every lane its own buffer while each shader binds at most 8 storage
+  buffers, the WebGPU default, and past that packs lanes of one domain into a `u32` buffer, each
+  lane a segment of its own (`agents/henad-graph-wgsl.md`, "Lane buffers and packing"). Neighbouring
+  invocations then still read neighbouring words, so a packed read coalesces as an unpacked one
+  does. The cost is one uniform multiply per access and the `bitcast`. Never interleave the lanes
+  of a packed buffer per element: one agent's words together would split every warp's reads across
+  strides.
 - Data layout is Struct-of-Arrays throughout (`pos_x: Vec<f32>`, `pos_y: Vec<f32>`, ... rather
   than `Vec<Agent>`) specifically for cache locality and rayon-friendliness — preserve this when
   adding fields to a model's state. `agent_lanes!` emits one `Vec<T>` per lane with named field

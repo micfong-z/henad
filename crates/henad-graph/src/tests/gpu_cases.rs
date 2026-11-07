@@ -14,7 +14,7 @@ use henad_core::authoring::primitives::space::Boundary;
 
 use super::case_files::{node_case_file, pass_case_file};
 use super::known_answers::{input_literal, meets};
-use super::support::{AgentShape, ShaderRun, TestDevice, run_shader, test_device};
+use super::support::{AgentShape, ShaderRun, TestDevice, lane_buffers, lane_words, run_shader, test_device};
 use crate::GraphFile;
 use crate::catalogue::{CaseForm, CaseScope, CaseValue, NodeCase, NodeDef, PassCase, definitions};
 use crate::document::{Domain, GraphDocument, Lane, PassStage, World};
@@ -35,21 +35,6 @@ use henad_core::spatial_hash::SpatialHash;
 /// Returns the id `n<number>`.
 fn id(number: u32) -> NodeId {
     NodeId::new(number).expect("a node id")
-}
-
-/// Returns the buffers and labels of `lanes`, then the tick buffer holding `tick` when `compiled` has one.
-fn buffers(compiled: &Compiled, lanes: &HostLanes, tick: u32) -> (Vec<Vec<u32>>, Vec<String>) {
-    let mut words: Vec<Vec<u32>> = lanes.columns().iter().map(|column| column.words().to_vec()).collect();
-    let mut labels: Vec<String> = lanes
-        .columns()
-        .iter()
-        .map(|column| format!("lane_{}_cells", column.id()))
-        .collect();
-    if compiled.tick_buffer {
-        words.push(vec![tick]);
-        labels.push("henad_tick".to_owned());
-    }
-    (words, labels)
 }
 
 /// Returns the shader that runs the pass `case`.
@@ -155,7 +140,7 @@ fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase
     let uniform = shader
         .uniform_bytes(&evaluator, world, &params, &context)
         .unwrap_or_else(|error| panic!("{what}: {error}"));
-    let (words, labels) = buffers(&compiled, &lanes, 0);
+    let (words, labels) = lane_buffers(&compiled, &lanes, 0);
     // A reduce shader that sums floats writes one partial per lane per workgroup of 16 by 16 cells.
     let groups = (case.width.div_ceil(16), case.height.div_ceil(16));
     let sum_lanes = shader.grid_sum_lanes();
@@ -185,7 +170,7 @@ fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase
             .iter()
             .position(|known| known.id == *lane)
             .expect("a lane of the case");
-        let column = lanes.columns()[lane_position].with_words(result.buffers[lane_position].clone());
+        let column = lanes.columns()[lane_position].with_words(lane_words(&compiled, &result.buffers, lane_position));
         for (index, value) in expected.iter().enumerate() {
             let found = column.get(index).expect("an element");
             assert!(
@@ -470,7 +455,11 @@ fn run_agent_pass_case(
                 .iter()
                 .position(|known| known.id == *id)
                 .expect("a lane of the case");
-            (&lanes.columns()[lane], result.buffers[lane].clone())
+            let place = compiled.layout.place(lane).expect("a lane on the device");
+            (
+                &lanes.columns()[lane],
+                place.segment(&result.buffers[place.buffer()]).to_vec(),
+            )
         };
         let column = column.with_words(found);
         for (index, value) in expected.iter().enumerate() {
@@ -769,7 +758,7 @@ fn run_node_case(device: &TestDevice, def: &NodeDef, name: &str, case: &NodeCase
     let uniform = shader
         .uniform_bytes(&evaluator, world, &params, &run_context)
         .unwrap_or_else(|error| panic!("{what}: {error}"));
-    let (words, labels) = buffers(&compiled, &lanes, context.tick);
+    let (words, labels) = lane_buffers(&compiled, &lanes, context.tick);
     let result = run_shader(
         device,
         shader,
@@ -793,7 +782,7 @@ fn run_node_case(device: &TestDevice, def: &NodeDef, name: &str, case: &NodeCase
                 .position(|known| known.id == format!("out_{k}"))
                 .expect("an output lane");
             lanes.columns()[lane]
-                .with_words(result.buffers[lane].clone())
+                .with_words(lane_words(&compiled, &result.buffers, lane))
                 .get(element)
         };
         let found = found.unwrap_or_else(|| panic!("{what}: no value of `{port}`"));

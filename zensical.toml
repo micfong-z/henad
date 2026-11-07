@@ -179,6 +179,7 @@ nav = [
             { "#92, 2026-11-07" = "developing/agent-record/20261107-92-ground-picks-and-fused-folds.md" },
             { "#93, 2026-11-07" = "developing/agent-record/20261107-93-sheet-editing-part-1.md" },
             { "#94, 2026-11-07" = "developing/agent-record/20261107-94-preview-parameters.md" },
+            { "#95, 2026-11-07" = "developing/agent-record/20261107-95-lane-packing.md" },
         ] },
     ] },
 ]

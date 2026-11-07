@@ -189,3 +189,45 @@ written as two `cat.transition` rows, every tick for 50 ticks and after 64 steps
 `a_probe_over_agents_counts_as_the_host_does` and the refusals. henad-models' `graph_probes.rs`
 holds every starter probed on its `bool` outputs within 8 storage bindings and the SIR starter
 stepping as it does with no probe.
+
+**Lane buffers and packing** (`wgsl/pack.rs`, row K, D50). `LaneLayout` places each lane of a
+compiled graph in a lane buffer, one `LaneGroup` each, and the lane buffers come first among the
+spec's buffers, before the tick buffer of a grid and the fields, deposits and colours of agents. A
+grid's `GridBufferSpec`s, `GraphHooks::lane_buffers` (its `buffer_lens`, seed and rerun uploads),
+the agents' `AgentBufferSpec`s, `BufferSource::Lanes` and the position buffer all come from it.
+`pack::choose` emits every shader with each lane in its own buffer, and only when some shader binds
+more than `limits::MAX_STORAGE_BINDINGS` (8, the WebGPU default, never the device's limit) storage
+buffers does it emit again with the plain lanes packed (`Packing::Plain`), then with the dual lanes
+too (`Packing::PlainAndDual`). The same file therefore compiles to the same shaders whatever device
+it builds on. A model still past 8 after packing compiles as it is, and a device with fewer
+bindings refuses it at build as before. `LaneLayout::packed` groups the `packable` lanes (every
+lane a shader holds but the drawable position lane and the merged lanes) by `PackKey`: the domain,
+the writer step of a dual lane (so the lanes of one buffer pair share their side rows at every
+step) and the actions whose reruns write the lane (`rerun_writers`, since a rerun uploads a buffer
+whole from fresh host lanes). A group closes at `MAX_PACKED_BUFFER_BYTES` (128 MiB, the default
+`max_storage_buffer_binding_size`) at the domain's largest count, `max_count` agents or the cells
+of the default world (`grid_cells`, `world_cells`), and a group of one lane keeps its own buffer.
+A packed buffer is labelled `lanes_<domain>_<k>` (`_in`/`_out` when dual) and holds `u32` words,
+each lane a segment of `count` elements at `offset * count` words, its elements in order so
+neighbouring invocations read neighbouring words. The emitter's `load`, `load_other` and `store`
+go through `packed_word`: `<offset>u * <count> + (<index>)`, `2u * (<index>)` for a `vec2`, with
+`count` `params.henad_agents`, `params.henad_cells` or `params.henad_width * params.henad_height`
+(`count_of`, which adds `henad_agents` to a display block that lacks it), reads through
+`bitcast<f32>` or `bitcast<i32>`, a `vec2` from two words, writes through `bitcast<u32>`, and
+`load_other` bounds the index by the count in place of `arrayLength`. `bound_lanes` binds each
+lane buffer a shader uses once, read-write when any of its lanes is written. Below the budget
+nothing changes, and every existing starter's shaders are as before.
+`GridProgram::lane_buffer(id)` and `AgentProgram::lane_buffer(id)` return the public `LaneBuffer`:
+its buffer's position, its words per element, `is_packed`, `segment_range` and `segment(words)`,
+the lane's words from the whole buffer read back. henad-models' tests read a graph's lanes
+through `tests/lanes.rs` (`GraphLanes::of`, `of_text`, `of_starter`, `read`), and `planted_entry`
+plants a lane by id into its segment, never by buffer index. henad-graph's `gpu_cases.rs` and
+`gpu_repeat.rs` build and read a case's lane buffers through `support::lane_buffers` and
+`support::lane_words`, both over `compiled.layout`, and `sheet_agents.rs` reads a lane through
+`AgentProgram::lane_buffer`. Tests: `tests/packing.rs` (the ants and boids starters with one more
+Number property and `sheets/three_strains.toml` with one more, each past 8 unpacked, within 8
+packed and built on `baseline_test_device`; the same texts on two compiles and a build on both
+devices; the ants with a Number, a Whole number and an Arrow more (an `i32` and a `vec2<f32>`
+lane packed at non-zero offsets) and the three strains with one more, each equal to its unpacked
+twin after 20 ticks and a press of Reset colony, through the thread-local `pack::UNPACKED`
+switch), and the layout's unit tests in `pack.rs`.

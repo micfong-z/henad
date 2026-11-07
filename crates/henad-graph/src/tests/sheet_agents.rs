@@ -67,9 +67,13 @@ fn placed_at<'a>(diagnostic: &henad_core::diagnostic::CodeDiagnostic, text: &'a 
 
 /// Returns the entry of `file`, compiled with its fault names.
 fn entry_of(file: &SheetFile) -> ModelEntry {
+    program_of(file).entry()
+}
+
+/// Returns the program of `file`, a sheet of agents, compiled for the GPU.
+fn program_of(file: &SheetFile) -> AgentProgram {
     AgentProgram::compile_with_fault_names(file.lowered(), file.fault_names())
         .unwrap_or_else(|problems| panic!("{problems:#?}"))
-        .entry()
 }
 
 /// Returns the parameters of `entry` at their defaults, with each of `set` in place of its default.
@@ -363,7 +367,9 @@ fn for_each_of_zero_with_chance_1_is_0_on_host_and_device() {
         FaultSink::new(),
     );
     let file = lowered(&healthy);
-    let entry = entry_of(&file);
+    let program = program_of(&file);
+    let hit = program.lane_buffer("hit").expect("the hit lane");
+    let entry = program.entry();
     let params = params_of(
         &entry,
         &[
@@ -376,15 +382,9 @@ fn for_each_of_zero_with_chance_1_is_0_on_host_and_device() {
     let Ok(ModelState::Gpu(mut state)) = entry.build(&params, Some(7), Some(&ctx)) else {
         panic!("the mobile sheet builds on the device");
     };
-    let henad_core::metadata::Structure::GpuAgents { buffers, .. } = &entry.metadata().structure else {
-        panic!("a GPU agent model");
-    };
-    let hit = buffers
-        .iter()
-        .position(|buffer| buffer.label == "lane_hit_agents")
-        .expect("the hit lane");
     henad_compute::gpu::stepping::run_steps(&mut *state, &ctx, 3).expect("three ticks run");
-    let words = state.read_buffer(hit).expect("the hit lane reads back");
+    let words = state.read_buffer(hit.buffer()).expect("the hit lane reads back");
+    let words = hit.segment(&words);
     assert_eq!(words.len(), 500);
     assert!(words.iter().all(|&word| word == 0), "on the device");
     // With every person infected, a chance of 1 for each of 499 holds for everyone.
@@ -394,8 +394,8 @@ fn for_each_of_zero_with_chance_1_is_0_on_host_and_device() {
         panic!("the mobile sheet builds on the device");
     };
     henad_compute::gpu::stepping::run_steps(&mut *state, &ctx, 1).expect("a tick runs");
-    let words = state.read_buffer(hit).expect("the hit lane reads back");
-    assert!(words.iter().all(|&word| word == 1));
+    let words = state.read_buffer(hit.buffer()).expect("the hit lane reads back");
+    assert!(hit.segment(&words).iter().all(|&word| word == 1));
 }
 
 /// Returns the boids with the line table `table` added as line `l9` of the card that runs each tick.

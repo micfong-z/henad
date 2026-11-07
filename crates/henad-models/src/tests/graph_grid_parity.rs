@@ -12,6 +12,7 @@ use henad_explore::model_file::ModelFile;
 use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
 use super::graph_corpus::vote::Vote;
+use super::lanes::GraphLanes;
 use crate::gpu_game_of_life::words_per_row;
 
 /// Returns the entry the model file of the starter `file_name` builds.
@@ -84,14 +85,10 @@ fn stock_life_cells(state: &dyn GpuSimState, width: u32, height: u32) -> Vec<u32
         .collect()
 }
 
-/// Returns the cells of a graph's first lane.
-pub(super) fn graph_cells(state: &dyn GpuSimState) -> Vec<u32> {
-    state.read_buffer(0).expect("the first lane")
-}
-
 /// Holds the graph and the stock Game of Life equal in cells and in the Alive count.
 fn assert_life_equal(
     ctx: &GpuContext,
+    lanes: &GraphLanes,
     graph: &mut dyn GpuSimState,
     stock: &mut dyn GpuSimState,
     size: (u32, u32),
@@ -99,7 +96,7 @@ fn assert_life_equal(
 ) {
     let (width, height) = size;
     let cells = stock_life_cells(stock, width, height);
-    assert!(graph_cells(graph) == cells, "the cells differ {at}");
+    assert!(lanes.read(graph, "state") == cells, "the cells differ {at}");
     snapshot(ctx, graph);
     snapshot(ctx, stock);
     let alive = stat(&stock.stats(), "Alive");
@@ -121,6 +118,7 @@ fn the_game_of_life_graph_equals_gpu_game_of_life_every_tick() {
         return;
     };
     let graph_entry = starter_entry("game_of_life.toml");
+    let lanes = GraphLanes::of_starter("game_of_life.toml");
     let models = crate::example_models();
     let stock_entry = models.get("gpu_game_of_life").expect("the stock model");
     for ((width, height), density, seed) in [((37, 23), 0.3, Some(3)), ((128, 96), 0.42, None)] {
@@ -135,6 +133,7 @@ fn the_game_of_life_graph_equals_gpu_game_of_life_every_tick() {
             assert_eq!(graph.tick(), tick);
             assert_life_equal(
                 &ctx,
+                &lanes,
                 &mut *graph,
                 &mut *stock,
                 (width, height),
@@ -147,6 +146,7 @@ fn the_game_of_life_graph_equals_gpu_game_of_life_every_tick() {
         step(&ctx, &mut *stock, 64);
         assert_life_equal(
             &ctx,
+            &lanes,
             &mut *graph,
             &mut *stock,
             (width, height),
@@ -164,6 +164,7 @@ fn the_game_of_life_graph_actions_equal_gpu_game_of_life_press_by_press() {
         return;
     };
     let graph_entry = starter_entry("game_of_life.toml");
+    let lanes = GraphLanes::of_starter("game_of_life.toml");
     let models = crate::example_models();
     let stock_entry = models.get("gpu_game_of_life").expect("the stock model");
     let (width, height) = (45u32, 30u32);
@@ -177,14 +178,15 @@ fn the_game_of_life_graph_actions_equal_gpu_game_of_life_press_by_press() {
             press(&ctx, &mut *graph, action);
             press(&ctx, &mut *stock, action);
             let at = format!("after press {} (action {action}) at seed {seed:?}", k + 1);
-            assert_life_equal(&ctx, &mut *graph, &mut *stock, (width, height), &at);
+            assert_life_equal(&ctx, &lanes, &mut *graph, &mut *stock, (width, height), &at);
             if action == 0 {
-                randomised.push(graph_cells(&*graph));
+                randomised.push(lanes.read(&*graph, "state"));
             }
             step(&ctx, &mut *graph, 3);
             step(&ctx, &mut *stock, 3);
             assert_life_equal(
                 &ctx,
+                &lanes,
                 &mut *graph,
                 &mut *stock,
                 (width, height),
@@ -207,6 +209,7 @@ fn the_vote_graph_equals_vote_every_tick() {
         return;
     };
     let graph_entry = starter_entry("vote.toml");
+    let lanes = GraphLanes::of_starter("vote.toml");
     for ((width, height), density, seed) in [((41, 29), 0.5, Some(5)), ((96, 64), 0.37, None)] {
         let params = [
             ParamValue::U32(width),
@@ -221,7 +224,7 @@ fn the_vote_graph_equals_vote_every_tick() {
                 .grid_view()
                 .map(|view| view.cells.iter().map(|&cell| u32::from(cell)).collect())
                 .unwrap_or_default();
-            assert!(graph_cells(&*graph) == cells, "the cells differ {at}");
+            assert!(lanes.read(&*graph, "vote") == cells, "the cells differ {at}");
             snapshot(&ctx, &mut *graph);
             assert_eq!(stat(&graph.stats(), "Ones"), stat(&cpu.stats(), "Ones"), "Ones {at}");
             step(&ctx, &mut *graph, 1);

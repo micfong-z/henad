@@ -28,6 +28,13 @@ is about not undoing them.
   `every_gpu_entry_needs_the_bindings_its_widest_pass_binds` pins each entry's `GpuNeeds` to its
   demand. Note wgpu on Metal shares one argument table across storage + uniform + vertex, so a
   check counting only storage buffers can pass locally and fail there.
+- **A generated graph shader packs lanes against a fixed budget, never the device's limit.**
+  henad-graph's compiler packs a graph's lanes into shared buffers only when a shader would bind
+  more than `limits::MAX_STORAGE_BINDINGS` (8) storage buffers, whatever the device offers, and
+  one file compiles to the same WGSL on every machine. A packed buffer is held to
+  `MAX_PACKED_BUFFER_BYTES` (128 MiB) at the domain's largest count the file sets, for the same
+  reason. Packing to the device's own limit would make the shaders, and the text a fault quotes,
+  differ between a laptop and a browser (`agents/henad-graph-wgsl.md`, "Lane buffers and packing").
 - **`Limits::default()` is not the hardware, and its _size_ limits are what bound a run.** The
   baseline caps one storage binding at 128 MiB, one buffer at 256 MiB and a texture side at 8192,
   where an M4 Pro offers 4 GiB, 14.3 GB and 16384. `limits.rs::raise` takes all three to whatever

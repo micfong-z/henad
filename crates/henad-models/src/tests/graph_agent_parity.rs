@@ -24,9 +24,10 @@ use henad_core::view::StatValue;
 use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 use henad_graph::GraphFile;
 
-use super::graph_ants_parity::{graph_buffer, params_for, planted_entry};
+use super::graph_ants_parity::{params_for, planted_entry};
 use super::graph_grid_parity::{build_gpu, snapshot, starter_entry, step};
-use super::graph_sir_parity::fixture_entry;
+use super::graph_sir_parity::{fixture_entry, fixture_text};
+use super::lanes::GraphLanes;
 use crate::boids::BoidsModel;
 use crate::gpu_boids::GpuBoids;
 
@@ -65,11 +66,19 @@ fn starter_text(file_name: &str) -> String {
         .to_owned()
 }
 
-/// Returns the entries of the two boids graphs, each with its name.
-fn boids_graphs() -> [(&'static str, ModelEntry); 2] {
+/// Returns the entries of the two boids graphs, each with its name and the places of its lanes.
+fn boids_graphs() -> [(&'static str, ModelEntry, GraphLanes); 2] {
     [
-        ("gpu_boids.toml", fixture_entry("gpu_boids.toml")),
-        ("boids.toml", starter_entry("boids.toml")),
+        (
+            "gpu_boids.toml",
+            fixture_entry("gpu_boids.toml"),
+            GraphLanes::of_text(&fixture_text("gpu_boids.toml")),
+        ),
+        (
+            "boids.toml",
+            starter_entry("boids.toml"),
+            GraphLanes::of_starter("boids.toml"),
+        ),
     ]
 }
 
@@ -105,15 +114,15 @@ fn the_boids_graphs_seed_like_gpu_boids_and_step() {
     };
     let models = crate::example_models();
     let stock_entry = models.get("gpu_boids").expect("the stock model");
-    for (name, entry) in boids_graphs() {
+    for (name, entry, lanes) in boids_graphs() {
         for seed in [None, Some(7)] {
             let params = boids_params(2_000, 400.0);
             let mut graph = build_gpu(&entry, &params, seed, &ctx);
             let stock = build_gpu(stock_entry, &params, seed, &ctx);
-            for buffer in 0..2 {
+            for (buffer, lane) in ["pos", "vel"].into_iter().enumerate() {
                 assert!(
-                    graph.read_buffer(buffer) == stock.read_buffer(buffer),
-                    "{name}: buffer {buffer} differs from gpu_boids at tick 0, seed {seed:?}"
+                    Some(lanes.read(&*graph, lane)) == stock.read_buffer(buffer),
+                    "{name}: the lane {lane} differs from gpu_boids at tick 0, seed {seed:?}"
                 );
             }
             step(&ctx, &mut *graph, 3);
@@ -134,7 +143,7 @@ fn the_boids_graphs_track_gpu_boids_in_their_statistics() {
     };
     let models = crate::example_models();
     let stock_entry = models.get("gpu_boids").expect("the stock model");
-    for (name, entry) in boids_graphs() {
+    for (name, entry, _) in boids_graphs() {
         for seed in [Some(7), Some(11)] {
             let params = boids_params(2_000, 200.0);
             let mut graph = build_gpu(&entry, &params, seed, &ctx);
@@ -167,14 +176,14 @@ fn the_boids_graphs_keep_the_stock_ports_invariants() {
         log::warn!("skipping the_boids_graphs_keep_the_stock_ports_invariants: no adapter");
         return;
     };
-    for (name, entry) in boids_graphs() {
+    for (name, entry, lanes) in boids_graphs() {
         for (num_agents, world, steps) in [(4_000, 800.0f32, 60), (300_037, 4_000.0, 5)] {
             let params = boids_params(num_agents, world);
             let mut graph = build_gpu(&entry, &params, None, &ctx);
             step(&ctx, &mut *graph, steps);
             let values = stat_values(&ctx, &mut *graph);
-            let (pos_x, pos_y) = split(&graph.read_buffer(0).expect("the position lane"));
-            let (vel_x, vel_y) = split(&graph.read_buffer(1).expect("the velocity lane"));
+            let (pos_x, pos_y) = split(&lanes.read(&*graph, "pos"));
+            let (vel_x, vel_y) = split(&lanes.read(&*graph, "vel"));
             assert_eq!(pos_x.len(), num_agents as usize, "{name}");
             for (i, (&x, &y)) in pos_x.iter().zip(&pos_y).enumerate() {
                 assert!(
@@ -441,7 +450,7 @@ fn the_boids_graphs_walk_past_the_cap_only_where_the_budget_refuses_them() {
         let extent = Extent { w: side, h: side };
         let walk = largest_walk(&pos, extent, visual_range, visual_range / 3.0);
         let row = format!("{num_agents} boids, visual range {visual_range}, world {side}");
-        for ((name, entry), refused) in graphs.iter().zip(refused) {
+        for ((name, entry, _), refused) in graphs.iter().zip(refused) {
             let demand = entry.demand(&params, &limits).expect("a GPU entry has a demand");
             let submission = demand.submission_work();
             eprintln!("{row}, {name}: the longest walk visits {walk} agents, and a submission is charged {submission}");
@@ -585,15 +594,16 @@ fn graph_boids(ctx: &GpuContext, file: &GraphFile, agents: Agents) -> Vec<Boid> 
     let entry = planted_entry(
         file,
         vec![
-            ("lane_pos_agents", interleaved(|agent| [agent.0, agent.1])),
-            ("lane_vel_agents", interleaved(|agent| [agent.2, agent.3])),
+            ("pos", interleaved(|agent| [agent.0, agent.1])),
+            ("vel", interleaved(|agent| [agent.2, agent.3])),
         ],
     );
     let params = params_for(&entry, &gate_values(agents.len()));
     let mut state = build_gpu(&entry, &params, None, ctx);
     step(ctx, &mut *state, 1);
-    let (pos_x, pos_y) = split(&graph_buffer(&entry, &*state, "lane_pos_agents"));
-    let (vel_x, vel_y) = split(&graph_buffer(&entry, &*state, "lane_vel_agents"));
+    let lanes = GraphLanes::of(file);
+    let (pos_x, pos_y) = split(&lanes.read(&*state, "pos"));
+    let (vel_x, vel_y) = split(&lanes.read(&*state, "vel"));
     (0..agents.len())
         .map(|i| (pos_x[i], pos_y[i], vel_x[i], vel_y[i]))
         .collect()
@@ -697,13 +707,13 @@ fn the_boids_graphs_keep_speed_and_position_in_bounds() {
         log::warn!("skipping the_boids_graphs_keep_speed_and_position_in_bounds: no adapter");
         return;
     };
-    for (name, entry) in boids_graphs() {
+    for (name, entry, lanes) in boids_graphs() {
         let params = params_for(&entry, &gate_values(500));
         let mut state = build_gpu(&entry, &params, None, &ctx);
         for tick in 0..50 {
             step(&ctx, &mut *state, 1);
-            let (pos_x, pos_y) = split(&state.read_buffer(0).expect("the position lane"));
-            let (vel_x, vel_y) = split(&state.read_buffer(1).expect("the velocity lane"));
+            let (pos_x, pos_y) = split(&lanes.read(&*state, "pos"));
+            let (vel_x, vel_y) = split(&lanes.read(&*state, "vel"));
             for i in 0..500 {
                 let speed = vel_x[i].hypot(vel_y[i]);
                 assert!(

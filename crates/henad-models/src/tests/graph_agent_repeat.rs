@@ -16,6 +16,7 @@ use henad_graph::document::PassStage;
 use henad_graph::host::{HostEvaluator, HostWorld, RunContext};
 
 use super::graph_grid_parity::{build_gpu, starter_entry, step};
+use super::lanes::GraphLanes;
 
 /// Number of agents of every test graph.
 const AGENTS: u32 = 300;
@@ -630,17 +631,12 @@ fn on_device(ctx: &GpuContext, text: &str, seed: Option<u64>, ticks: u32) -> Vec
 
 /// Returns the lanes of `file` that `state` holds, by lane id, the position lane left out.
 fn lanes_of(file: &GraphFile, state: &dyn GpuSimState) -> Vec<(String, Vec<u32>)> {
+    let lanes = GraphLanes::of(file);
     file.document()
         .lanes
         .iter()
-        .enumerate()
         .skip(1)
-        .map(|(position, lane)| {
-            (
-                lane.id.clone(),
-                state.read_buffer(position).expect("a lane of the state"),
-            )
-        })
+        .map(|lane| (lane.id.clone(), lanes.read(state, &lane.id)))
         .collect()
 }
 
@@ -971,22 +967,23 @@ fn the_random_walk_replays_and_steps_its_closed_form() {
         return;
     };
     let entry = starter_entry("random_walk.toml");
+    let lanes = GraphLanes::of_starter("random_walk.toml");
     let (step_size, side) = (2.0f32, 1_000.0f32);
     let params = walk_params(&entry, 4);
     let mut first = build_gpu(&entry, &params, Some(5), &ctx);
     let mut second = build_gpu(&entry, &params, Some(5), &ctx);
     step(&ctx, &mut *first, 3);
     step(&ctx, &mut *second, 3);
-    for buffer in 0..2 {
+    for lane in ["pos", "last"] {
         assert!(
-            first.read_buffer(buffer) == second.read_buffer(buffer),
-            "lane {buffer} replays"
+            lanes.read(&*first, lane) == lanes.read(&*second, lane),
+            "the lane {lane} replays"
         );
     }
-    let before = pairs(&first.read_buffer(0).expect("the positions"));
+    let before = pairs(&lanes.read(&*first, "pos"));
     step(&ctx, &mut *first, 1);
-    let after = pairs(&first.read_buffer(0).expect("the positions"));
-    let last = pairs(&first.read_buffer(1).expect("the last steps"));
+    let after = pairs(&lanes.read(&*first, "pos"));
+    let last = pairs(&lanes.read(&*first, "last"));
     for (i, &(x, y)) in last.iter().enumerate() {
         let length = x.hypot(y);
         assert!(
@@ -1013,15 +1010,11 @@ fn the_random_walk_replays_and_steps_its_closed_form() {
     );
     let params = walk_params(&entry, 0);
     let mut still = build_gpu(&entry, &params, Some(5), &ctx);
-    let start = still.read_buffer(0);
+    let start = lanes.read(&*still, "pos");
     step(&ctx, &mut *still, 2);
-    assert!(still.read_buffer(0) == start, "zero steps a tick move nothing");
+    assert!(lanes.read(&*still, "pos") == start, "zero steps a tick move nothing");
     assert!(
-        still
-            .read_buffer(1)
-            .expect("the last steps")
-            .iter()
-            .all(|&word| word == 0),
+        lanes.read(&*still, "last").iter().all(|&word| word == 0),
         "zero steps a tick leave the last step at its initial value"
     );
 }

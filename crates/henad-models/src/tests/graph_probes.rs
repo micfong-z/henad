@@ -11,7 +11,8 @@ use henad_graph::types::ValueType;
 use henad_graph::value::PortRef;
 use henad_graph::wgsl::{AgentProgram, GridProgram, Probes};
 
-use super::graph_grid_parity::{build_gpu, graph_cells, snapshot, starter_entry, step};
+use super::graph_grid_parity::{build_gpu, snapshot, starter_entry, step};
+use super::lanes::GraphLanes;
 
 /// Kinds that normalisation expands into copies, whose outputs no compiled pass computes under their own names.
 const EXPANDED: [&str; 2] = ["math.expr", "fn.call"];
@@ -108,6 +109,7 @@ fn a_probed_starter_steps_as_the_unprobed_one() {
         .unwrap_or_else(|problems| panic!("{problems:#?}"))
         .entry();
     let plain = starter_entry("sir.toml");
+    let lanes = GraphLanes::of_starter("sir.toml");
     let defaults: Vec<ParamValue> = plain
         .param_descriptors()
         .iter()
@@ -116,21 +118,27 @@ fn a_probed_starter_steps_as_the_unprobed_one() {
     let mut probed_state = build_gpu(&probed, &defaults, Some(5), &ctx);
     let mut plain_state = build_gpu(&plain, &defaults, Some(5), &ctx);
     for tick in 0..40 {
-        assert_same(&ctx, &mut *probed_state, &mut *plain_state, tick);
+        assert_same(&ctx, &lanes, &mut *probed_state, &mut *plain_state, tick);
         step(&ctx, &mut *probed_state, 1);
         step(&ctx, &mut *plain_state, 1);
     }
     step(&ctx, &mut *probed_state, 64);
     step(&ctx, &mut *plain_state, 64);
-    assert_same(&ctx, &mut *probed_state, &mut *plain_state, 104);
+    assert_same(&ctx, &lanes, &mut *probed_state, &mut *plain_state, 104);
     assert_eq!(probed_state.fire_counts().counts.len(), probes.len());
     assert!(plain_state.fire_counts().is_empty());
 }
 
 /// Holds the two states equal in cells and stats at `tick`.
-fn assert_same(ctx: &GpuContext, probed: &mut dyn GpuSimState, plain: &mut dyn GpuSimState, tick: u64) {
+fn assert_same(
+    ctx: &GpuContext,
+    lanes: &GraphLanes,
+    probed: &mut dyn GpuSimState,
+    plain: &mut dyn GpuSimState,
+    tick: u64,
+) {
     assert!(
-        graph_cells(probed) == graph_cells(plain),
+        lanes.read(probed, "health") == lanes.read(plain, "health"),
         "the cells differ at tick {tick}"
     );
     snapshot(ctx, probed);

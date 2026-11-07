@@ -86,3 +86,15 @@ pub const MAX_DESCRIPTION_BYTES: usize = 4096;
 pub const MAX_GRID_SIDE: u32 = 16384;
 /// Number of agents of a population.
 pub const MAX_AGENTS: u32 = 10_000_000;
+
+// Bindings
+/// Number of storage buffers one generated shader binds before the compiler packs lanes, the WebGPU default of
+/// `max_storage_buffers_per_shader_stage`.
+///
+/// Note that the budget never reads the device's limit.
+pub const MAX_STORAGE_BINDINGS: u32 = 8;
+/// Size in bytes of the largest buffer of packed lanes at the largest count of its domain, the WebGPU default of
+/// `max_storage_buffer_binding_size`.
+///
+/// The largest count of agents is the world's `max_count`, and of cells the cells of the world's default size.
+pub const MAX_PACKED_BUFFER_BYTES: u64 = 128 << 20;

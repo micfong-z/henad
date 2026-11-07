@@ -14,6 +14,7 @@ use henad_graph::document::{PassStage, World};
 use henad_graph::host::{HostEvaluator, HostWorld, RunContext};
 
 use super::graph_grid_parity::{build_gpu, step};
+use super::lanes::GraphLanes;
 
 /// Returns every agents file of the corpus with its name: the agent starters, then the agents fixtures.
 fn agent_corpus() -> Vec<(String, GraphFile)> {
@@ -120,6 +121,7 @@ fn a_repeat_over_agents_steps_on_the_device_as_on_the_host() {
     let starter = henad_graph::starters::starter("random_walk.toml").expect("the random walk");
     let file = GraphFile::parse(starter.text).expect("the random walk reads");
     let entry = entry_of("random_walk.toml", &file);
+    let device_lanes = GraphLanes::of(&file);
     let evaluator = HostEvaluator::new(&file).expect("the random walk compiles on the host");
     let tick = file
         .document()
@@ -146,8 +148,8 @@ fn a_repeat_over_agents_steps_on_the_device_as_on_the_host() {
         };
         let mut lanes = evaluator.init(world, &own, seed).expect("the init runs");
         for ticks in 0..3u32 {
-            for (position, column) in lanes.columns().iter().enumerate() {
-                let device = state.read_buffer(position).expect("a lane of the state");
+            for column in lanes.columns() {
+                let device = device_lanes.read(&*state, column.id());
                 assert_eq!(device.len(), column.words().len(), "{}", column.id());
                 let sides = [300.0f32, 200.0];
                 for (k, (&found, &expected)) in device.iter().zip(column.words()).enumerate() {

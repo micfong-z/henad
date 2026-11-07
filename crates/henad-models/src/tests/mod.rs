@@ -16,6 +16,7 @@ mod graph_probes;
 mod graph_repeat;
 mod graph_sir_parity;
 mod graph_sum_fields;
+mod lanes;
 mod lowered_fixtures;
 mod registry;
 mod runtime_parity;

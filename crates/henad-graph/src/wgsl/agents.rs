@@ -35,6 +35,7 @@ use henad_core::view::StatDescriptor;
 use super::agent_hooks::{AgentGraphHooks, BufferSource, ReducePass, StatSlot, WalkCharge};
 use super::emit::{self, AGENT_COLORS, AgentPlan, EmitInput, Emitted, FIRST_COUNTER, FieldPlan, LanePlan, Role};
 use super::fault_names::FaultNames;
+use super::pack::{self, LaneBuffer, LaneEntry, LaneLayout};
 use super::probes::{self, Probes};
 use super::uniform::WgslType;
 use super::{
@@ -82,6 +83,7 @@ struct AgentParts {
     stats: Vec<StatDescriptor>,
     actions: Vec<ActionDescriptor>,
     buffers: Vec<AgentBufferSpec>,
+    layout: LaneLayout,
     pos_buffer: usize,
     color_buffer: usize,
     shaders: Vec<GeneratedShader>,
@@ -121,7 +123,8 @@ struct ShaderPlan {
     /// Document positions of the passes it runs.
     positions: Vec<usize>,
     emit_role: Role,
-    sides: SideTable,
+    /// Position among the steps of the step it runs as, `None` for a shader whose buffers stay in place.
+    sides: Option<usize>,
     pass: AgentPassId,
     domain: EngineDomain,
     cost: u64,
@@ -324,6 +327,7 @@ impl AgentProgram {
         let CompiledAgents {
             shaders,
             plan,
+            layout,
             buffers,
             sources,
             index,
@@ -331,7 +335,10 @@ impl AgentProgram {
             fire_counters,
         } = compiled;
         let document = evaluator.document();
-        let pos_buffer = plan.position_lane.unwrap_or_default();
+        let pos_buffer = plan
+            .position_lane
+            .and_then(|lane| layout.place(lane))
+            .map_or(0, |place| place.buffer());
         let color_buffer = buffers
             .iter()
             .position(|buffer| buffer.label == AGENT_COLORS)
@@ -581,6 +588,7 @@ impl AgentProgram {
                     .map(|action| ActionDescriptor::owned(action.id.clone(), action.label.clone()))
                     .collect(),
                 buffers,
+                layout,
                 pos_buffer,
                 color_buffer,
                 shaders,
@@ -607,6 +615,19 @@ impl AgentProgram {
     /// action's pass.
     pub fn shaders(&self) -> &[GeneratedShader] {
         &self.parts.shaders
+    }
+
+    /// Returns the buffer and segment that hold the lane `id` on the device, `None` for a lane the graph lacks.
+    pub fn lane_buffer(&self, id: &str) -> Option<LaneBuffer> {
+        let position = self
+            .parts
+            .hooks
+            .evaluator
+            .document()
+            .lanes
+            .iter()
+            .position(|lane| lane.id == id)?;
+        self.parts.layout.place(position)
     }
 
     /// Whether two builds on one seed step through identical states.
@@ -723,6 +744,21 @@ impl AgentProgram {
     }
 }
 
+/// Returns the cells of the default world of `document`, one cell per world unit, 1 for a grid.
+fn world_cells(document: &GraphDocument) -> u32 {
+    match document.world {
+        World::Agents(world) => {
+            let extent = henad_core::authoring::model::field::Extent {
+                w: world.width,
+                h: world.height,
+            };
+            let (width, height) = extent.cells();
+            width.saturating_mul(height)
+        }
+        World::Grid(_) => 1,
+    }
+}
+
 /// Returns the host evaluator of `file`, a checked graph of agents, with a lane and a pass for each field update, the
 /// check of its normalised document, and its shaders, each step counting the fires of its probes in `probes`.
 ///
@@ -757,6 +793,8 @@ pub(crate) fn compile_parts(
 pub(crate) struct CompiledAgents {
     pub shaders: Vec<GeneratedShader>,
     pub plan: AgentPlan,
+    /// Lane buffers and the place of each lane in them.
+    pub layout: LaneLayout,
     pub buffers: Vec<AgentBufferSpec>,
     /// What each buffer holds, in the order of `buffers`.
     pub sources: Vec<BufferSource>,
@@ -920,39 +958,35 @@ pub(crate) fn compile_agent_shaders(
         })
         .collect();
 
-    // Buffers: the document's lanes at their own positions, then each field, each field's deposits, the colours and
-    // the tick.
-    let mut buffers: Vec<AgentBufferSpec> = Vec::new();
-    let mut sources: Vec<BufferSource> = Vec::new();
-    for (position, lane) in document.lanes.iter().enumerate() {
-        let is_dual = dual.iter().any(|(known, _)| *known == position);
-        buffers.push(AgentBufferSpec::new(
-            lanes[position].label.clone(),
-            is_dual,
-            Some(position) == position_lane,
-        ));
-        sources.push(BufferSource::Lane {
-            column: position,
+    let reruns = super::rerun_writers(augmented, evaluator);
+    let cells = u64::from(world_cells(augmented));
+    let largest_agents = match augmented.world {
+        World::Agents(world) => u64::from(world.max_count.clamp(1, crate::limits::MAX_AGENTS)),
+        World::Grid(_) => 1,
+    };
+    let entries: Vec<LaneEntry<'_>> = augmented
+        .lanes
+        .iter()
+        .enumerate()
+        .map(|(position, lane)| LaneEntry {
+            label: lanes[position].label.clone(),
+            value_type: &lane.value_type,
             domain: lane.domain,
-            words: crate::host::value::words_per_value(&lane.value_type).unwrap_or(1),
-        });
-    }
-    for field in &fields {
-        buffers.push(AgentBufferSpec::new(field.label(), false, false));
-        sources.push(BufferSource::Field {
-            first: field.first,
-            layers: field.layers as usize,
-        });
-    }
-    for field in fields.iter().filter(|field| field.dynamic) {
-        buffers.push(AgentBufferSpec::new(field.accum_label(), false, false));
-        sources.push(BufferSource::Cleared {
-            per_cell: field.layers as usize,
-        });
-    }
-    buffers.push(AgentBufferSpec::new(AGENT_COLORS, false, true));
-    sources.push(BufferSource::Colors);
-    let buffer_count = buffers.len();
+            writer: dual
+                .iter()
+                .find(|(known, _)| *known == position)
+                .map(|(_, writer)| *writer),
+            held: position < doc_lanes,
+            packable: position < doc_lanes && Some(position) != position_lane && lanes[position].wgsl.is_some(),
+            reruns: reruns.get(position).cloned().unwrap_or_default(),
+            largest_count: match lane.domain {
+                Domain::Agents => largest_agents,
+                Domain::Cells => cells,
+            },
+        })
+        .collect();
+    // Buffers after the lane buffers: each field, each field's deposits, then the colours.
+    let other_buffers = fields.len() + fields.iter().filter(|field| field.dynamic).count() + 1;
 
     let update_positions: Vec<(usize, usize)> = updates
         .iter()
@@ -964,10 +998,17 @@ pub(crate) fn compile_agent_shaders(
         .filter(|(_, field)| field.dynamic)
         .map(|(index, _)| index)
         .collect();
-    let step_sides = |step: usize| {
+    let step_sides = |layout: &LaneLayout, step: Option<usize>| {
+        let buffer_count = layout.groups.len() + other_buffers;
+        let Some(step) = step else {
+            return SideTable::in_place(buffer_count);
+        };
         let mut rows = vec![SideRow::new(BufferSide::Current, BufferSide::Current); buffer_count];
         for &(lane, writer) in &dual {
-            rows[lane] = match step.cmp(&writer) {
+            let Some(place) = layout.place(lane) else {
+                continue;
+            };
+            rows[place.buffer()] = match step.cmp(&writer) {
                 std::cmp::Ordering::Less => SideRow::new(BufferSide::Current, BufferSide::Current),
                 std::cmp::Ordering::Equal => SideRow::new(BufferSide::Current, BufferSide::Next),
                 std::cmp::Ordering::Greater => SideRow::new(BufferSide::Next, BufferSide::Next),
@@ -990,7 +1031,7 @@ pub(crate) fn compile_agent_shaders(
             label: augmented.passes[position].id.clone(),
             positions: vec![position],
             emit_role: Role::Step { writes_tick: false },
-            sides: step_sides(step),
+            sides: Some(step),
             pass: AgentPassId::Step(step),
             domain: engine_domain(augmented.passes[position].domain),
             cost: cost_of(&[position]),
@@ -1010,7 +1051,7 @@ pub(crate) fn compile_agent_shaders(
             label: format!("update_{}", fields[field].id),
             positions: position.into_iter().collect(),
             emit_role: Role::Merge(field),
-            sides: step_sides(step),
+            sides: Some(step),
             pass: AgentPassId::Step(step),
             domain: EngineDomain::Cells(fields[field].layers.max(1)),
             cost,
@@ -1025,7 +1066,7 @@ pub(crate) fn compile_agent_shaders(
             label: "advance_tick".to_owned(),
             positions: Vec::new(),
             emit_role: Role::Step { writes_tick: true },
-            sides: step_sides(step),
+            sides: Some(step),
             pass: AgentPassId::Step(step),
             domain: EngineDomain::Agents,
             cost: 1,
@@ -1040,7 +1081,7 @@ pub(crate) fn compile_agent_shaders(
         label: "color".to_owned(),
         positions: agent_views.clone(),
         emit_role: Role::Color,
-        sides: SideTable::in_place(buffer_count),
+        sides: None,
         pass: AgentPassId::Color,
         domain: EngineDomain::Agents,
         cost: cost_of(&agent_views).max(1),
@@ -1051,7 +1092,7 @@ pub(crate) fn compile_agent_shaders(
             label: "display".to_owned(),
             positions: cell_views.clone(),
             emit_role: Role::Display,
-            sides: SideTable::in_place(buffer_count),
+            sides: None,
             pass: AgentPassId::Display,
             domain: EngineDomain::Cells(1),
             cost: cost_of(&cell_views).max(1),
@@ -1069,7 +1110,7 @@ pub(crate) fn compile_agent_shaders(
         label: "reduce".to_owned(),
         positions: stats.clone(),
         emit_role: Role::Reduce,
-        sides: SideTable::in_place(buffer_count),
+        sides: None,
         pass: AgentPassId::Reduce,
         domain: match (over_agents, over_cells) {
             (true, true) => EngineDomain::AgentsOrCells,
@@ -1105,7 +1146,7 @@ pub(crate) fn compile_agent_shaders(
             ),
             positions: passes.clone(),
             emit_role: Role::Action,
-            sides: SideTable::in_place(buffer_count),
+            sides: None,
             pass: AgentPassId::Action(action_index),
             domain,
             cost: cost_of(&passes).max(1),
@@ -1147,8 +1188,6 @@ pub(crate) fn compile_agent_shaders(
     if !problems.is_empty() {
         return Err(problems);
     }
-    let mut shaders = Vec::with_capacity(plans.len());
-    let mut tallies = 0;
     let mut first_plan = plan.clone();
     // The reduce leaf's tallies size the counters, which every shader declares, so the leaf is written first.
     let reduce_tallies = plans
@@ -1166,90 +1205,124 @@ pub(crate) fn compile_agent_shaders(
     let fire_base = FIRST_COUNTER + counters + reduce_tallies;
     let fire_counters = fire_base..fire_base + probes.len();
     first_plan.counter_words = fire_counters.end;
-    let input = EmitInput {
-        document: augmented,
-        report,
-        evaluator,
-        lanes: &lanes,
-        tick_buffer,
-        outer_iteration: None,
-        agents: Some(&first_plan),
-        probes: &probe_slots,
-        fire_base,
-    };
-    for ShaderPlan {
-        role,
-        label,
-        positions,
-        emit_role,
-        sides,
-        pass,
-        domain,
-        cost,
-    } in plans
-    {
-        let emitted = match emit::emit(&input, emit_role, &positions, &sides) {
-            Ok(emitted) => emitted,
-            Err(found) => {
-                problems.extend(found);
-                continue;
-            }
+    let emit_all = |layout: &LaneLayout| -> Result<(Vec<GeneratedShader>, usize), Vec<CodeDiagnostic>> {
+        let input = EmitInput {
+            document: augmented,
+            report,
+            evaluator,
+            lanes: &lanes,
+            layout,
+            tick_buffer,
+            outer_iteration: None,
+            agents: Some(&first_plan),
+            probes: &probe_slots,
+            fire_base,
         };
-        let Emitted {
-            text,
-            ranges,
-            bindings,
-            uniform,
-            counters: shader_tallies,
-            sum_lanes,
-            workgroup_bytes,
-        } = emitted;
-        if role == ShaderRole::Reduce {
-            tallies = shader_tallies;
-        }
-        if text.len() > MAX_FILE_BYTES {
-            problems.push(oversized(&label, text.len(), &ranges));
-            continue;
-        }
-        let composed = match compose(&label, &text, &ranges) {
-            Ok(composed) => composed,
-            Err(found) => {
-                problems.extend(found);
-                continue;
-            }
-        };
-        shaders.push(GeneratedShader {
-            role,
-            passes: positions
-                .iter()
-                .map(|&position| augmented.passes[position].id.clone())
-                .collect(),
-            label,
-            text,
-            composed,
-            ranges,
-            bindings,
-            uniform,
-            sides,
-            cost,
-            counters: shader_tallies,
-            grid_sum_lanes: Vec::new(),
-            pass_id: henad_compute::gpu::GridPassId::Display,
-            workgroup_bytes,
-            agent: Some(AgentShader {
-                pass,
-                domain,
-                workgroup_bytes,
+        let mut problems = Vec::new();
+        let mut shaders = Vec::with_capacity(plans.len());
+        let mut tallies = 0;
+        for plan in &plans {
+            let sides = step_sides(layout, plan.sides);
+            let emitted = match emit::emit(&input, plan.emit_role, &plan.positions, &sides) {
+                Ok(emitted) => emitted,
+                Err(found) => {
+                    problems.extend(found);
+                    continue;
+                }
+            };
+            let Emitted {
+                text,
+                ranges,
+                bindings,
+                uniform,
+                counters: shader_tallies,
                 sum_lanes,
-            }),
+                workgroup_bytes,
+            } = emitted;
+            if plan.role == ShaderRole::Reduce {
+                tallies = shader_tallies;
+            }
+            if text.len() > MAX_FILE_BYTES {
+                problems.push(oversized(&plan.label, text.len(), &ranges));
+                continue;
+            }
+            let composed = match compose(&plan.label, &text, &ranges) {
+                Ok(composed) => composed,
+                Err(found) => {
+                    problems.extend(found);
+                    continue;
+                }
+            };
+            shaders.push(GeneratedShader {
+                role: plan.role.clone(),
+                passes: plan
+                    .positions
+                    .iter()
+                    .map(|&position| augmented.passes[position].id.clone())
+                    .collect(),
+                label: plan.label.clone(),
+                text,
+                composed,
+                ranges,
+                bindings,
+                uniform,
+                sides,
+                cost: plan.cost,
+                counters: shader_tallies,
+                grid_sum_lanes: Vec::new(),
+                pass_id: henad_compute::gpu::GridPassId::Display,
+                workgroup_bytes,
+                agent: Some(AgentShader {
+                    pass: plan.pass,
+                    domain: plan.domain,
+                    workgroup_bytes,
+                    sum_lanes,
+                }),
+            });
+        }
+        if problems.is_empty() {
+            Ok((shaders, tallies))
+        } else {
+            Err(problems)
+        }
+    };
+    let (layout, (shaders, tallies)) = pack::choose(&entries, emit_all, |(shaders, _)| {
+        shaders.iter().map(|shader| shader.bindings.as_slice()).collect()
+    })?;
+
+    // Buffers: the lane buffers, then each field, each field's deposits and the colours.
+    let mut buffers: Vec<AgentBufferSpec> = Vec::new();
+    let mut sources: Vec<BufferSource> = Vec::new();
+    for group in &layout.groups {
+        buffers.push(AgentBufferSpec::new(
+            group.label.clone(),
+            group.dual,
+            position_lane.is_some_and(|lane| group.lanes.contains(&lane)),
+        ));
+        sources.push(BufferSource::Lanes {
+            columns: group.lanes.iter().copied().zip(group.words.iter().copied()).collect(),
+            domain: group.domain,
         });
     }
-    if !problems.is_empty() {
-        return Err(problems);
+    for field in &first_plan.fields {
+        buffers.push(AgentBufferSpec::new(field.label(), false, false));
+        sources.push(BufferSource::Field {
+            first: field.first,
+            layers: field.layers as usize,
+        });
     }
+    for field in first_plan.fields.iter().filter(|field| field.dynamic) {
+        buffers.push(AgentBufferSpec::new(field.accum_label(), false, false));
+        sources.push(BufferSource::Cleared {
+            per_cell: field.layers as usize,
+        });
+    }
+    buffers.push(AgentBufferSpec::new(AGENT_COLORS, false, true));
+    sources.push(BufferSource::Colors);
     Ok(CompiledAgents {
         shaders,
         plan: first_plan,
+        layout,
         buffers,
         sources,
         index,

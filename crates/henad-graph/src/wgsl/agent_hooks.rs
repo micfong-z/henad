@@ -21,11 +21,11 @@ use crate::host::{HostEvaluator, HostLanes, HostWorld, RunContext, run};
 /// What one buffer of an agents world holds.
 #[derive(Debug, Clone)]
 pub(crate) enum BufferSource {
-    /// The lane at this column of the host lanes, over `domain`, `words` words per element.
-    Lane {
-        column: usize,
+    /// The lanes at these columns of the host lanes, each with its words per element, over `domain`, one segment
+    /// after another.
+    Lanes {
+        columns: Vec<(usize, usize)>,
         domain: Domain,
-        words: usize,
     },
     /// A field's layers, from this column of the host lanes on.
     Field { first: usize, layers: usize },
@@ -180,11 +180,11 @@ impl AgentGraphHooks {
     /// Returns the words of buffer `source` for `lanes`, the init's result over `geom`.
     pub(crate) fn words(source: &BufferSource, lanes: &HostLanes, geom: &Geometry) -> Vec<u32> {
         match source {
-            BufferSource::Lane { column, .. } => lanes
-                .columns()
-                .get(*column)
-                .map(|column| column.words().to_vec())
-                .unwrap_or_default(),
+            BufferSource::Lanes { columns, .. } => columns
+                .iter()
+                .filter_map(|(column, _)| lanes.columns().get(*column))
+                .flat_map(|column| column.words().iter().copied())
+                .collect(),
             BufferSource::Field { first, layers } => {
                 let first = first.saturating_sub(lanes.columns().len());
                 lanes
@@ -218,8 +218,8 @@ impl henad_compute::gpu::AgentHooks for AgentGraphHooks {
         self.buffers
             .iter()
             .map(|source| match source {
-                BufferSource::Lane { domain, words, .. } => {
-                    words
+                BufferSource::Lanes { columns, domain } => {
+                    columns.iter().map(|(_, words)| words).sum::<usize>()
                         * match domain {
                             Domain::Agents => agents,
                             Domain::Cells => cells,
@@ -378,7 +378,7 @@ impl henad_compute::gpu::AgentHooks for AgentGraphHooks {
             .iter()
             .enumerate()
             .filter(|(_, source)| match source {
-                BufferSource::Lane { column, .. } => written.contains(column),
+                BufferSource::Lanes { columns, .. } => columns.iter().any(|(column, _)| written.contains(column)),
                 BufferSource::Field { first, layers } => (*first..first + layers).any(|layer| written.contains(&layer)),
                 _ => false,
             })

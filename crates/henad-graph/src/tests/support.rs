@@ -6,7 +6,8 @@ use henad_compute::gpu::wgpu;
 use henad_compute::gpu::{BufferSide, ShaderBinding};
 use henad_core::authoring::model::binding::{BindingKind, named_buffer_target};
 
-use crate::wgsl::GeneratedShader;
+use crate::host::HostLanes;
+use crate::wgsl::{Compiled, GeneratedShader};
 
 /// Set in CI to turn "no GPU here" from a skip into a failure.
 const REQUIRE_GPU: &str = "HENAD_REQUIRE_GPU";
@@ -17,12 +18,69 @@ pub(super) struct TestDevice {
     pub queue: wgpu::Queue,
 }
 
+/// Returns the words and labels of each lane buffer of `compiled`, built from `lanes`, then the tick buffer holding
+/// `tick` when `compiled` has one.
+///
+/// A packed buffer holds the segments of its lanes one after another, as the engine uploads it.
+pub(super) fn lane_buffers(compiled: &Compiled, lanes: &HostLanes, tick: u32) -> (Vec<Vec<u32>>, Vec<String>) {
+    let mut words: Vec<Vec<u32>> = compiled
+        .layout
+        .groups
+        .iter()
+        .map(|group| {
+            group
+                .lanes
+                .iter()
+                .flat_map(|&lane| lanes.columns()[lane].words().iter().copied())
+                .collect()
+        })
+        .collect();
+    let mut labels: Vec<String> = compiled.layout.groups.iter().map(|group| group.label.clone()).collect();
+    if compiled.tick_buffer {
+        words.push(vec![tick]);
+        labels.push("henad_tick".to_owned());
+    }
+    (words, labels)
+}
+
+/// Returns the words of the lane at `position` from `buffers`, the buffers that a run of one of the shaders of
+/// `compiled` left.
+///
+/// # Panics
+///
+/// Panics if no buffer holds the lane.
+pub(super) fn lane_words(compiled: &Compiled, buffers: &[Vec<u32>], position: usize) -> Vec<u32> {
+    let place = compiled.layout.place(position).expect("a lane on the device");
+    place.segment(&buffers[place.buffer()]).to_vec()
+}
+
 /// Returns a headless device, or `None` when this machine has none and `HENAD_REQUIRE_GPU` is unset.
 ///
 /// # Panics
 ///
 /// Panics if `HENAD_REQUIRE_GPU` is set and no device could be acquired.
 pub(super) fn test_device() -> Option<TestDevice> {
+    // A case of a radius fold binds its output lanes, the index and the counters, past the baseline's 8 storage
+    // buffers, as a model raises the device for its widest pass.
+    device_with(|available| wgpu::Limits {
+        max_storage_buffers_per_shader_stage: available.max_storage_buffers_per_shader_stage.min(16),
+        ..wgpu::Limits::default()
+    })
+}
+
+/// Returns a headless device with the WebGPU default limits, or `None` when this machine has none and
+/// `HENAD_REQUIRE_GPU` is unset.
+///
+/// # Panics
+///
+/// Panics if `HENAD_REQUIRE_GPU` is set and no device could be acquired.
+pub(super) fn baseline_test_device() -> Option<TestDevice> {
+    device_with(|_| wgpu::Limits::default())
+}
+
+/// Returns a headless device with the limits `limits` returns from the adapter's, or `None` when this machine has none
+/// and `HENAD_REQUIRE_GPU` is unset.
+fn device_with(limits: impl FnOnce(&wgpu::Limits) -> wgpu::Limits) -> Option<TestDevice> {
     let required = std::env::var_os(REQUIRE_GPU).is_some_and(|value| !value.is_empty() && value != "0");
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()));
@@ -33,12 +91,7 @@ pub(super) fn test_device() -> Option<TestDevice> {
             return None;
         }
     };
-    // A case of a radius fold binds its output lanes, the index and the counters, past the baseline's 8 storage
-    // buffers, as a model raises the device for its widest pass.
-    let required_limits = wgpu::Limits {
-        max_storage_buffers_per_shader_stage: adapter.limits().max_storage_buffers_per_shader_stage.min(16),
-        ..wgpu::Limits::default()
-    };
+    let required_limits = limits(&adapter.limits());
     match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("henad_graph_tests"),
         required_limits,

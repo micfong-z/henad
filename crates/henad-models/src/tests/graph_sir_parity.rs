@@ -12,18 +12,23 @@ use henad_core::params::ParamValue;
 use henad_explore::model_file::ModelFile;
 use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
-use super::graph_grid_parity::{build_gpu, graph_cells, press, snapshot, starter_entry, stat, step};
+use super::graph_grid_parity::{build_gpu, press, snapshot, starter_entry, stat, step};
+use super::lanes::GraphLanes;
 
 /// Labels of the SIR stats, in the order both models declare them.
 const LABELS: [&str; 3] = ["Susceptible", "Infected", "Recovered"];
 
-/// Returns the entry the fixture `tests/fixtures/graphs/<file_name>` builds.
-pub(super) fn fixture_entry(file_name: &str) -> ModelEntry {
+/// Returns the text of the fixture `tests/fixtures/graphs/<file_name>`.
+pub(super) fn fixture_text(file_name: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/graphs")
         .join(file_name);
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    ModelFile::parse(&text)
+    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// Returns the entry the fixture `tests/fixtures/graphs/<file_name>` builds.
+pub(super) fn fixture_entry(file_name: &str) -> ModelEntry {
+    ModelFile::parse(&fixture_text(file_name))
         .and_then(|file| file.entry())
         .unwrap_or_else(|error| panic!("{file_name}: {error}"))
 }
@@ -45,11 +50,18 @@ fn words(state: &dyn GpuSimState, index: usize) -> Vec<u32> {
 }
 
 /// Holds `graph` and `stock` equal in cells and in each SIR count, and in their `rng` buffers when `rng` holds.
-fn assert_sir_equal(ctx: &GpuContext, graph: &mut dyn GpuSimState, stock: &mut dyn GpuSimState, rng: bool, at: &str) {
+fn assert_sir_equal(
+    ctx: &GpuContext,
+    lanes: &GraphLanes,
+    graph: &mut dyn GpuSimState,
+    stock: &mut dyn GpuSimState,
+    rng: bool,
+    at: &str,
+) {
     let cells = words(stock, 0);
-    assert!(graph_cells(graph) == cells, "the cells differ {at}");
+    assert!(lanes.read(graph, "health") == cells, "the cells differ {at}");
     if rng {
-        assert!(words(graph, 1) == words(stock, 1), "the rng words differ {at}");
+        assert!(lanes.read(graph, "rng") == words(stock, 1), "the rng words differ {at}");
     }
     snapshot(ctx, graph);
     snapshot(ctx, stock);
@@ -72,6 +84,7 @@ fn the_exact_sir_graph_equals_gpu_sir_every_tick() {
         return;
     };
     let graph_entry = fixture_entry("gpu_sir_exact.toml");
+    let lanes = GraphLanes::of_text(&fixture_text("gpu_sir_exact.toml"));
     let models = crate::example_models();
     let stock_entry = models.get("gpu_sir").expect("the stock model");
     let runs = [
@@ -87,22 +100,22 @@ fn the_exact_sir_graph_equals_gpu_sir_every_tick() {
         for tick in 0..=100u64 {
             assert_eq!(graph.tick(), tick);
             let at = format!("at tick {tick} of {size}");
-            assert_sir_equal(&ctx, &mut *graph, &mut *stock, true, &at);
+            assert_sir_equal(&ctx, &lanes, &mut *graph, &mut *stock, true, &at);
             step(&ctx, &mut *graph, 1);
             step(&ctx, &mut *stock, 1);
         }
         step(&ctx, &mut *graph, 64);
         step(&ctx, &mut *stock, 64);
         let at = format!("after a batch of 64 steps of {size}");
-        assert_sir_equal(&ctx, &mut *graph, &mut *stock, true, &at);
+        assert_sir_equal(&ctx, &lanes, &mut *graph, &mut *stock, true, &at);
         for k in 1..=3 {
             press(&ctx, &mut *graph, 0);
             press(&ctx, &mut *stock, 0);
             let at = format!("after press {k} of {size}");
-            assert_sir_equal(&ctx, &mut *graph, &mut *stock, true, &at);
+            assert_sir_equal(&ctx, &lanes, &mut *graph, &mut *stock, true, &at);
             step(&ctx, &mut *graph, 5);
             step(&ctx, &mut *stock, 5);
-            assert_sir_equal(&ctx, &mut *graph, &mut *stock, true, &format!("5 steps {at}"));
+            assert_sir_equal(&ctx, &lanes, &mut *graph, &mut *stock, true, &format!("5 steps {at}"));
         }
     }
 }
@@ -117,6 +130,7 @@ fn the_sir_graph_equals_gpu_sir_at_tick_0_and_under_the_rate_gates() {
         return;
     };
     let graph_entry = starter_entry("sir.toml");
+    let lanes = GraphLanes::of_starter("sir.toml");
     let models = crate::example_models();
     let stock_entry = models.get("gpu_sir").expect("the stock model");
     let (width, height) = (45u32, 30u32);
@@ -126,6 +140,7 @@ fn the_sir_graph_equals_gpu_sir_at_tick_0_and_under_the_rate_gates() {
         let mut stock = build_gpu(stock_entry, &params, seed, &ctx);
         assert_sir_equal(
             &ctx,
+            &lanes,
             &mut *graph,
             &mut *stock,
             false,
@@ -140,11 +155,18 @@ fn the_sir_graph_equals_gpu_sir_at_tick_0_and_under_the_rate_gates() {
             let gate = format!("infection {infection_rate}, recovery {recovery_rate}, seed {seed:?}");
             for tick in 0..=40u64 {
                 let at = format!("at tick {tick} under {gate}");
-                assert_sir_equal(&ctx, &mut *graph, &mut *stock, false, &at);
+                assert_sir_equal(&ctx, &lanes, &mut *graph, &mut *stock, false, &at);
                 if tick % 10 == 5 {
                     press(&ctx, &mut *graph, 0);
                     press(&ctx, &mut *stock, 0);
-                    assert_sir_equal(&ctx, &mut *graph, &mut *stock, false, &format!("after a press {at}"));
+                    assert_sir_equal(
+                        &ctx,
+                        &lanes,
+                        &mut *graph,
+                        &mut *stock,
+                        false,
+                        &format!("after a press {at}"),
+                    );
                 }
                 step(&ctx, &mut *graph, 1);
                 step(&ctx, &mut *stock, 1);
@@ -199,14 +221,15 @@ fn the_sir_graph_meets_the_sir_bands() {
         return;
     };
     let entry = starter_entry("sir.toml");
+    let lanes = GraphLanes::of_starter("sir.toml");
     let side = SIDE as u32;
     let params = sir_params(side, side, BETA as f32, GAMMA as f32, INITIAL_INFECTED as f32);
     for seed in [BAND_SEED, BAND_SEED ^ 1] {
         let mut state = build_gpu(&entry, &params, Some(seed), &ctx);
-        let mut before = graph_cells(&*state);
+        let mut before = lanes.read(&*state, "health");
         for tick in 0..5 {
             step(&ctx, &mut *state, 1);
-            let after = graph_cells(&*state);
+            let after = lanes.read(&*state, "health");
             for (index, (&was, &now)) in before.iter().zip(&after).enumerate() {
                 assert!(
                     matches!((was, now), (S, S | I) | (I, I | R) | (R, R)),

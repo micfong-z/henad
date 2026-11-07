@@ -17,6 +17,7 @@ mod known_answers;
 mod library_lock;
 mod live_params;
 mod mutation;
+mod packing;
 mod probes;
 mod regions;
 mod sheet_agents;

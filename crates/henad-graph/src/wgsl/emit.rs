@@ -16,6 +16,7 @@ use henad_core::authoring::primitives::space::Boundary;
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::params::ParamKind;
 
+use super::pack::{LaneGroup, LaneLayout};
 use super::probes::ProbeSlot;
 use super::uniform::{FieldShape, FieldSource, UniformBlock, WgslType};
 use super::{NodeRange, WORKGROUP_SIZE};
@@ -152,6 +153,8 @@ pub(crate) struct EmitInput<'a> {
     pub report: &'a CheckReport,
     pub evaluator: &'a HostEvaluator,
     pub lanes: &'a [LanePlan],
+    /// Lane buffers, and the buffer and segment of each lane.
+    pub layout: &'a LaneLayout,
     /// Whether the buffers hold the one-word tick buffer, after the lanes.
     pub tick_buffer: bool,
     /// Iteration word of a region around the top of every pass, for a test that probes a draw inside one.
@@ -526,16 +529,87 @@ impl Emitter<'_> {
         );
     }
 
+    /// Returns whether a pass of the shader writes a lane of `group`.
+    fn group_written(&self, group: &LaneGroup) -> bool {
+        group.lanes.iter().any(|lane| self.writes.contains(lane))
+    }
+
+    /// Returns one lane of each lane buffer some pass of the shader reads or writes, in buffer order, with the type of
+    /// the buffer's elements.
+    fn bound_lanes(&self) -> Vec<(usize, &'static str)> {
+        let mut buffers: BTreeMap<usize, (usize, &'static str)> = BTreeMap::new();
+        for &lane in self.reads.union(&self.writes) {
+            let Some(plan) = self.input.lanes.get(lane) else {
+                continue;
+            };
+            let (Some(wgsl), None, Some(group)) = (plan.wgsl, plan.merged, self.input.layout.group_of(lane)) else {
+                continue;
+            };
+            let Some(place) = self.input.layout.place(lane) else {
+                continue;
+            };
+            let element = if group.is_packed() { "u32" } else { wgsl.stored() };
+            buffers.entry(place.buffer()).or_insert((lane, element));
+        }
+        buffers.into_values().collect()
+    }
+
     /// Returns the binding name a lane's reads use, and the one its writes use.
+    ///
+    /// A lane shares the names of its lane buffer with every lane the buffer holds.
     fn lane_bindings(&self, lane: usize) -> (String, String) {
-        let base = self.input.lanes[lane].label.clone();
-        let row = self.sides.rows().get(lane).copied();
-        let writes = self.writes.contains(&lane);
-        if writes && row.is_some_and(|row| row.write == BufferSide::Next) {
+        let Some(place) = self.input.layout.place(lane) else {
+            let base = self.input.lanes[lane].label.clone();
+            return (base.clone(), base);
+        };
+        let group = &self.input.layout.groups[place.buffer()];
+        let base = group.label.clone();
+        let row = self.sides.rows().get(place.buffer()).copied();
+        if self.group_written(group) && row.is_some_and(|row| row.write == BufferSide::Next) {
             (format!("{base}_in"), format!("{base}_out"))
         } else {
             (base.clone(), base)
         }
+    }
+
+    /// Returns the expression of the number of elements of `domain`.
+    fn count_of(&mut self, domain: Domain) -> String {
+        if self.input.agents.is_none() {
+            return "(params.henad_width * params.henad_height)".to_owned();
+        }
+        match domain {
+            Domain::Agents => {
+                self.field(
+                    "henad_agents",
+                    FieldShape::Value(WgslType::U32),
+                    FieldSource::Count(Domain::Agents),
+                );
+                "params.henad_agents".to_owned()
+            }
+            Domain::Cells => "params.henad_cells".to_owned(),
+        }
+    }
+
+    /// Returns the expression of the first word of element `index` of `lane` in its packed buffer, `None` for a lane
+    /// with a buffer of its own.
+    fn packed_word(&mut self, lane: usize, index: &str) -> Option<String> {
+        let group = self.input.layout.group_of(lane)?;
+        if !group.is_packed() {
+            return None;
+        }
+        let place = self.input.layout.place(lane)?;
+        let domain = group.domain;
+        let offset = place.offset();
+        let element = match place.words() {
+            1 => format!("({index})"),
+            words => format!("{words}u * ({index})"),
+        };
+        Some(if offset == 0 {
+            element
+        } else {
+            let count = self.count_of(domain);
+            format!("{offset}u * {count} + {element}")
+        })
     }
 
     /// Returns the expression that loads `lane` at the element `index`.
@@ -545,7 +619,25 @@ impl Emitter<'_> {
         }
         self.reads.insert(lane);
         let (read, _) = self.lane_bindings(lane);
-        match self.input.lanes[lane].wgsl {
+        let wgsl = self.input.lanes[lane].wgsl;
+        if let Some(word) = self.packed_word(lane, index) {
+            let scalar = |at: String| match wgsl {
+                Some(WgslType::Bool) => format!("({read}[{at}] != 0u)"),
+                Some(WgslType::I32 | WgslType::Vec2I) => format!("bitcast<i32>({read}[{at}])"),
+                Some(WgslType::F32 | WgslType::Vec2F) => format!("bitcast<f32>({read}[{at}])"),
+                _ => format!("{read}[{at}]"),
+            };
+            return match wgsl {
+                Some(vector) if vector.is_vector() => format!(
+                    "{}({}, {})",
+                    vector.name(),
+                    scalar(word.clone()),
+                    scalar(format!("{word} + 1u"))
+                ),
+                _ => scalar(word),
+            };
+        }
+        match wgsl {
             Some(WgslType::Bool) => format!("({read}[{index}] != 0u)"),
             _ => format!("{read}[{index}]"),
         }
@@ -560,7 +652,35 @@ impl Emitter<'_> {
         let zero = self.input.lanes[lane]
             .wgsl
             .map_or_else(|| "0u".to_owned(), WgslType::zero);
-        format!("select({zero}, {load}, {index} < arrayLength(&{read}))")
+        let bound = match self.input.layout.group_of(lane) {
+            Some(group) if group.is_packed() => {
+                let domain = group.domain;
+                self.count_of(domain)
+            }
+            _ => format!("arrayLength(&{read})"),
+        };
+        format!("select({zero}, {load}, {index} < {bound})")
+    }
+
+    /// Returns the lines that store `value`, of the lane's type, into `lane` at the element `index`.
+    fn store(&mut self, lane: usize, index: &str, value: &str, indent: &str) -> String {
+        let (_, write) = self.lane_bindings(lane);
+        let wgsl = self.input.lanes[lane].wgsl;
+        let Some(word) = self.packed_word(lane, index) else {
+            return format!("{indent}{write}[{index}] = {value};\n");
+        };
+        let bits = |value: String| match wgsl {
+            Some(WgslType::I32 | WgslType::F32 | WgslType::Vec2I | WgslType::Vec2F) => format!("bitcast<u32>({value})"),
+            _ => value,
+        };
+        match wgsl {
+            Some(vector) if vector.is_vector() => format!(
+                "{indent}{write}[{word}] = {};\n{indent}{write}[{word} + 1u] = {};\n",
+                bits(format!("{value}.x")),
+                bits(format!("{value}.y"))
+            ),
+            _ => format!("{indent}{write}[{word}] = {};\n", bits(value.to_owned())),
+        }
     }
 
     /// Returns the body of one pass, in a block of its own.
@@ -704,8 +824,8 @@ impl Emitter<'_> {
                 inner.push(&format!("{indent}{label}[henad_slot] = {value};\n"));
                 continue;
             }
-            let (_, write) = self.lane_bindings(lane);
-            inner.push(&format!("{indent}{write}[henad_index] = {value};\n"));
+            let line = self.store(lane, "henad_index", &value, indent);
+            inner.push(&line);
         }
         for line in std::mem::take(&mut block.deferred) {
             inner.push(&format!("{indent}{line}\n"));
@@ -2219,20 +2339,13 @@ impl Emitter<'_> {
             declarations.push_str(&format!("@group(0) @binding({}) {wgsl};\n", bindings.len()));
             bindings.push(ShaderBinding::new(name.to_owned(), kind));
         };
-        let lanes: BTreeSet<usize> = self.reads.union(&self.writes).copied().collect();
-        for lane in lanes {
-            let Some(plan_lane) = self.input.lanes.get(lane) else {
-                continue;
-            };
-            let Some(wgsl) = plan_lane.wgsl else {
-                continue;
-            };
-            if plan_lane.merged.is_some() {
-                continue;
-            }
-            let element = wgsl.stored();
+        for (lane, element) in self.bound_lanes() {
             let (read, write) = self.lane_bindings(lane);
-            let writes = self.writes.contains(&lane);
+            let writes = self
+                .input
+                .layout
+                .group_of(lane)
+                .is_some_and(|group| self.group_written(group));
             if read == write {
                 let access = if writes { "read_write" } else { "read" };
                 bind(
@@ -2573,14 +2686,13 @@ impl Emitter<'_> {
             declarations.push_str(&format!("@group(0) @binding({}) {wgsl};\n", bindings.len()));
             bindings.push(ShaderBinding::new(name.to_owned(), kind));
         };
-        let lanes: BTreeSet<usize> = self.reads.union(&self.writes).copied().collect();
-        for lane in lanes {
-            let Some(wgsl) = self.input.lanes[lane].wgsl else {
-                continue;
-            };
-            let element = wgsl.stored();
+        for (lane, element) in self.bound_lanes() {
             let (read, write) = self.lane_bindings(lane);
-            let writes = self.writes.contains(&lane);
+            let writes = self
+                .input
+                .layout
+                .group_of(lane)
+                .is_some_and(|group| self.group_written(group));
             if read == write {
                 let access = if writes { "read_write" } else { "read" };
                 bind(

@@ -52,6 +52,8 @@ pub(crate) struct GraphHooks {
     pub width: u32,
     pub height: u32,
     pub boundary: Boundary,
+    /// Positions of the lanes each lane buffer holds, in buffer order and segment order.
+    pub lane_buffers: Vec<Vec<usize>>,
     /// Whether a one-word tick buffer follows the lanes.
     pub tick_buffer: bool,
     pub uniforms: Vec<PassUniform>,
@@ -111,6 +113,20 @@ impl GraphHooks {
             .collect()
     }
 
+    /// Returns the words of each lane buffer from `lanes`, the segments of its lanes one after another.
+    fn lane_words(&self, lanes: &HostLanes) -> Vec<Vec<u32>> {
+        self.lane_buffers
+            .iter()
+            .map(|positions| {
+                positions
+                    .iter()
+                    .filter_map(|&lane| lanes.columns().get(lane))
+                    .flat_map(|column| column.words().iter().copied())
+                    .collect()
+            })
+            .collect()
+    }
+
     pub(crate) fn block_bytes(
         &self,
         id: GridPassId,
@@ -146,12 +162,16 @@ impl GridHooks for GraphHooks {
 
     fn buffer_lens(&self, width: u32, height: u32) -> Vec<usize> {
         let cells = (width as usize) * (height as usize);
+        let lanes = &self.evaluator.document().lanes;
         let mut lens: Vec<usize> = self
-            .evaluator
-            .document()
-            .lanes
+            .lane_buffers
             .iter()
-            .map(|lane| cells * crate::host::value::words_per_value(&lane.value_type).unwrap_or(1))
+            .map(|positions| {
+                positions
+                    .iter()
+                    .map(|&lane| cells * crate::host::value::words_per_value(&lanes[lane].value_type).unwrap_or(1))
+                    .sum()
+            })
             .collect();
         if self.tick_buffer {
             lens.push(1);
@@ -175,7 +195,7 @@ impl GridHooks for GraphHooks {
             .evaluator
             .init(self.world(width, height), own, seed)
             .unwrap_or_else(|error| panic!("{}: {error}", self.evaluator.document().id));
-        let mut buffers: Vec<Vec<u32>> = lanes.columns().iter().map(|column| column.words().to_vec()).collect();
+        let mut buffers: Vec<Vec<u32>> = self.lane_words(&lanes);
         if self.tick_buffer {
             buffers.push(vec![0]);
         }
@@ -223,9 +243,12 @@ impl GridHooks for GraphHooks {
             .evaluator
             .rerun(&plan.id, ctx.press.count, &mut lanes, own, ctx.seed, stream)
             .map_err(|error| error.to_string())?;
-        Ok(written
+        // A rerun writes every lane of a buffer or none, since lanes pack only with lanes the same actions rerun.
+        Ok(self
+            .lane_words(&lanes)
             .into_iter()
-            .filter_map(|lane| Some((lane, lanes.columns().get(lane)?.words().to_vec())))
+            .enumerate()
+            .filter(|(buffer, _)| self.lane_buffers[*buffer].iter().any(|lane| written.contains(lane)))
             .collect())
     }
 

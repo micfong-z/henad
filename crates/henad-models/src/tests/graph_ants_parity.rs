@@ -22,10 +22,11 @@ use henad_core::params::ParamValue;
 use henad_core::view::{StatEntry, StatValue};
 use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 use henad_graph::GraphFile;
-use henad_graph::wgsl::AgentProgram;
+use henad_graph::wgsl::{AgentProgram, LaneBuffer};
 
 use super::graph_grid_parity::{build_gpu, press, snapshot, starter_entry, stat, step};
-use super::graph_sir_parity::fixture_entry;
+use super::graph_sir_parity::{fixture_entry, fixture_text};
+use super::lanes::GraphLanes;
 use crate::ants::AntsModel;
 use crate::ants::field::{LOW_PHEROMONE, OBSTACLE, TO_FOOD, TO_HOME};
 
@@ -266,11 +267,12 @@ fn stat_values(ctx: &GpuContext, state: &mut dyn GpuSimState) -> Vec<f64> {
         .collect()
 }
 
-/// Asserts that the ants graph `graph`, built from `entry`, holds the lanes and field layers of the stock `gpu_ants`
-/// state `stock`: positions, the three fields the stock packs in `state`, the sites and, when `with_rng`, the `rng`
-/// lane. `reward` is the reward parameter, the value the stock's reward bit stands for.
+/// Asserts that the ants graph `graph`, built from `entry` with its lanes placed as `lanes`, holds the lanes and field
+/// layers of the stock `gpu_ants` state `stock`: positions, the three fields the stock packs in `state`, the sites and,
+/// when `with_rng`, the `rng` lane. `reward` is the reward parameter, the value the stock's reward bit stands for.
 fn assert_lanes_equal(
     entry: &ModelEntry,
+    lanes: &GraphLanes,
     graph: &dyn GpuSimState,
     stock: &dyn GpuSimState,
     reward: f32,
@@ -279,17 +281,14 @@ fn assert_lanes_equal(
 ) {
     let packed = stock_buffer(stock, STOCK_STATE);
     let expected: [(&str, Vec<u32>); 6] = [
-        ("lane_pos_agents", stock_buffer(stock, STOCK_POS)),
+        ("pos", stock_buffer(stock, STOCK_POS)),
+        ("last_step", packed.iter().map(|word| word & LAST_STEP_MASK).collect()),
         (
-            "lane_last_step_agents",
-            packed.iter().map(|word| word & LAST_STEP_MASK).collect(),
-        ),
-        (
-            "lane_cargo_agents",
+            "cargo",
             packed.iter().map(|word| u32::from(word & HAS_FOOD_BIT != 0)).collect(),
         ),
         (
-            "lane_reward_held_agents",
+            "reward_held",
             packed
                 .iter()
                 .map(|word| {
@@ -305,7 +304,12 @@ fn assert_lanes_equal(
         ("field_sites_cells", stock_buffer(stock, STOCK_SITES)),
     ];
     for (label, words) in expected {
-        let found = graph_buffer(entry, graph, label);
+        // A field has a buffer of its own, and a lane may share one.
+        let found = if label.starts_with("field_") {
+            graph_buffer(entry, graph, label)
+        } else {
+            lanes.read(graph, label)
+        };
         if let Some(first) = found.iter().zip(&words).position(|(a, b)| a != b) {
             panic!(
                 "{what}: {label} word {first} is {:#x} and gpu_ants holds {:#x} ({} words differ)",
@@ -318,7 +322,7 @@ fn assert_lanes_equal(
     }
     if with_rng {
         assert!(
-            graph_buffer(entry, graph, "lane_rng_agents") == stock_buffer(stock, STOCK_RNG),
+            lanes.read(graph, "rng") == stock_buffer(stock, STOCK_RNG),
             "{what}: the rng lane differs from gpu_ants"
         );
     }
@@ -337,6 +341,7 @@ fn the_exact_ants_graph_equals_gpu_ants_every_tick() {
     let models = crate::example_models();
     let stock_entry = models.get("gpu_ants").expect("the stock model");
     let entry = fixture_entry("gpu_ants.toml");
+    let lanes = GraphLanes::of_text(&fixture_text("gpu_ants.toml"));
     let colors = buffer_index(&entry, "agent_colors");
     for (agents, world, seed, ticks, press_at) in [
         (2_000, 200.0, None, 1_540, Some(1_500)),
@@ -361,7 +366,7 @@ fn the_exact_ants_graph_equals_gpu_ants_every_tick() {
                 press(&ctx, &mut *stock, 0);
             }
             let what = format!("{agents} ants in {world}, seed {seed:?}, tick {tick}");
-            assert_lanes_equal(&entry, &*graph, &*stock, reward, true, &what);
+            assert_lanes_equal(&entry, &lanes, &*graph, &*stock, reward, true, &what);
             let (found, expected) = (stat_values(&ctx, &mut *graph), stat_values(&ctx, &mut *stock));
             assert_eq!(found, expected, "{what}: the statistics");
             assert!(
@@ -389,6 +394,7 @@ fn the_ants_starter_starts_as_gpu_ants_on_the_device() {
     let models = crate::example_models();
     let stock_entry = models.get("gpu_ants").expect("the stock model");
     let entry = starter_entry("ants.toml");
+    let lanes = GraphLanes::of_starter("ants.toml");
     for (agents, world) in [(2_000, 200.0), (777, 96.0)] {
         for seed in [None, Some(7)] {
             let params = ants_params(&entry, agents, world);
@@ -398,7 +404,7 @@ fn the_ants_starter_starts_as_gpu_ants_on_the_device() {
                 unreachable!("the reward is an f32");
             };
             let what = format!("{agents} ants in {world}, seed {seed:?}");
-            assert_lanes_equal(&entry, &*graph, &*stock, reward, false, &what);
+            assert_lanes_equal(&entry, &lanes, &*graph, &*stock, reward, false, &what);
         }
     }
 }
@@ -499,8 +505,9 @@ fn cpu_gate(seed: Option<u64>) -> GateResult {
 /// forwards to the graph's own.
 struct PlantedHooks {
     inner: Box<dyn AgentHooks>,
-    /// Buffers to replace, each as its position and its words.
-    planted: Vec<(usize, Vec<u32>)>,
+    /// Buffers to replace, each as its position, the lane's segment when it plants one lane of the buffer, and its
+    /// words.
+    planted: Vec<(usize, Option<LaneBuffer>, Vec<u32>)>,
 }
 
 impl AgentHooks for PlantedHooks {
@@ -514,8 +521,15 @@ impl AgentHooks for PlantedHooks {
 
     fn seed_buffers(&self, geom: &Geometry, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u8>> {
         let mut buffers = self.inner.seed_buffers(geom, params, seed);
-        for (index, words) in &self.planted {
-            buffers[*index] = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        for (index, segment, words) in &self.planted {
+            let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+            match segment {
+                Some(segment) => {
+                    let range = segment.segment_range(buffers[*index].len() / 4);
+                    buffers[*index][range.start * 4..range.end * 4].copy_from_slice(&bytes);
+                }
+                None => buffers[*index] = bytes,
+            }
         }
         buffers
     }
@@ -578,20 +592,23 @@ impl AgentHooks for PlantedHooks {
 }
 
 /// Returns the entry of `file`, a graph of agents, whose build uploads the words of `planted` in place of the seeded
-/// buffers they name by label.
+/// lanes they name by id, or of the seeded buffers they name by label.
 pub(super) fn planted_entry(file: &GraphFile, planted: Vec<(&str, Vec<u32>)>) -> ModelEntry {
     let program = AgentProgram::compile(file).unwrap_or_else(|problems| panic!("{problems:#?}"));
     let plain = program.entry();
     let mut spec = program.spec();
     let planted = planted
         .into_iter()
-        .map(|(label, words)| {
+        .map(|(name, words)| {
+            if let Some(segment) = program.lane_buffer(name) {
+                return (segment.buffer(), Some(segment), words);
+            }
             let position = spec
                 .buffers
                 .iter()
-                .position(|buffer| buffer.label == label)
-                .unwrap_or_else(|| panic!("no buffer {label}"));
-            (position, words)
+                .position(|buffer| buffer.label == name)
+                .unwrap_or_else(|| panic!("no lane or buffer {name}"));
+            (position, None, words)
         })
         .collect();
     // A second spec of the same program lends its hooks, which share the program's compiled parts.
@@ -621,13 +638,10 @@ fn planted_gate_entry() -> ModelEntry {
     planted_entry(
         &file,
         vec![
-            (
-                "lane_pos_agents",
-                lane(|agent| vec![agent.0.to_bits(), agent.1.to_bits()]),
-            ),
-            ("lane_last_step_agents", lane(|agent| vec![u32::from(agent.2)])),
-            ("lane_cargo_agents", lane(|agent| vec![u32::from(agent.3)])),
-            ("lane_reward_held_agents", lane(|agent| vec![agent.4.to_bits()])),
+            ("pos", lane(|agent| vec![agent.0.to_bits(), agent.1.to_bits()])),
+            ("last_step", lane(|agent| vec![u32::from(agent.2)])),
+            ("cargo", lane(|agent| vec![u32::from(agent.3)])),
+            ("reward_held", lane(|agent| vec![agent.4.to_bits()])),
             (
                 "field_pheromone_cells",
                 gate_field(TO_FOOD)
@@ -659,13 +673,9 @@ fn graph_gate(ctx: &GpuContext, entry: &ModelEntry, seed: Option<u64>) -> GateRe
     );
     let mut state = build_gpu(entry, &params, seed, ctx);
     step(ctx, &mut *state, GATE_TICKS);
-    let read = |label: &str| graph_buffer(entry, &*state, label);
-    let (pos, last_step, cargo, reward) = (
-        read("lane_pos_agents"),
-        read("lane_last_step_agents"),
-        read("lane_cargo_agents"),
-        read("lane_reward_held_agents"),
-    );
+    let lanes = GraphLanes::of_starter("ants.toml");
+    let read = |id: &str| lanes.read(&*state, id);
+    let (pos, last_step, cargo, reward) = (read("pos"), read("last_step"), read("cargo"), read("reward_held"));
     let agents = (0..GATE_AGENTS.len())
         .map(|i| {
             (
@@ -677,7 +687,10 @@ fn graph_gate(ctx: &GpuContext, entry: &ModelEntry, seed: Option<u64>) -> GateRe
             )
         })
         .collect();
-    let field: Vec<f32> = read("field_pheromone_cells").into_iter().map(f32::from_bits).collect();
+    let field: Vec<f32> = graph_buffer(entry, &*state, "field_pheromone_cells")
+        .into_iter()
+        .map(f32::from_bits)
+        .collect();
     let cells = (GATE_SIDE * GATE_SIDE) as usize;
     (agents, field[..cells].to_vec(), field[cells..].to_vec())
 }
@@ -752,12 +765,13 @@ fn cells_without_an_ant_decay_by_exactly_the_evaporation_rate_on_the_device() {
         return;
     };
     let entry = starter_entry("ants.toml");
+    let lanes = GraphLanes::of_starter("ants.toml");
     let mut state = check_state(&ctx, &entry);
     step(&ctx, &mut *state, 10);
     let mut trail = 0usize;
     for tick in 0..40 {
         let before = graph_buffer(&entry, &*state, "field_pheromone_cells");
-        let ants = occupied(&graph_buffer(&entry, &*state, "lane_pos_agents"), CHECK_SIDE);
+        let ants = occupied(&lanes.read(&*state, "pos"), CHECK_SIDE);
         step(&ctx, &mut *state, 1);
         let after = graph_buffer(&entry, &*state, "field_pheromone_cells");
         let mut checked = 0usize;
@@ -793,6 +807,7 @@ fn the_ants_starter_meets_the_consistency_checks_on_the_device() {
         return;
     };
     let entry = starter_entry("ants.toml");
+    let lanes = GraphLanes::of_starter("ants.toml");
     let mut state = check_state(&ctx, &entry);
     let sites = graph_buffer(&entry, &*state, "field_sites_cells");
     let obstacle = u32::from(OBSTACLE);
@@ -802,8 +817,8 @@ fn the_ants_starter_meets_the_consistency_checks_on_the_device() {
     let mut previous = deliveries(&state.stats());
     for tick in 0..40 {
         step(&ctx, &mut *state, 1);
-        let pos = graph_buffer(&entry, &*state, "lane_pos_agents");
-        let cargo = graph_buffer(&entry, &*state, "lane_cargo_agents");
+        let pos = lanes.read(&*state, "pos");
+        let cargo = lanes.read(&*state, "cargo");
         for (i, xy) in pos.chunks_exact(2).enumerate() {
             let (x, y) = (f32::from_bits(xy[0]), f32::from_bits(xy[1]));
             let side = CHECK_SIDE as f32;

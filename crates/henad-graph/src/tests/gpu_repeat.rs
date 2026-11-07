@@ -9,7 +9,7 @@ use henad_core::authoring::primitives::rng::random_float;
 use henad_core::params::ParamValue;
 
 use super::host::{CARRIED, GRID, NESTED_DRAW, TWO_DRAWS, WORLD, chained};
-use super::support::{ShaderRun, TestDevice, run_shader, test_device};
+use super::support::{ShaderRun, TestDevice, lane_buffers, lane_words, run_shader, test_device};
 use super::wgsl::{LANE_SEED_BODY, POWI_BODY, repeat_nodes};
 use crate::GraphFile;
 use crate::draw::{PHASE_TICK, draw_bits, key_word};
@@ -53,16 +53,7 @@ fn on_device(device: &TestDevice, nodes: &str, seed: Option<u64>, tick: u32) -> 
         unreachable!("the tests' world is a grid");
     };
     let lanes = HostLanes::new(document, WORLD).expect("the lanes");
-    let mut buffers: Vec<Vec<u32>> = lanes.columns().iter().map(|column| column.words().to_vec()).collect();
-    let mut labels: Vec<String> = lanes
-        .columns()
-        .iter()
-        .map(|column| format!("lane_{}_cells", column.id()))
-        .collect();
-    if compiled.tick_buffer {
-        buffers.push(vec![tick]);
-        labels.push("henad_tick".to_owned());
-    }
+    let (buffers, labels) = lane_buffers(&compiled, &lanes, tick);
     let params = evaluator.param_values(&[]);
     let uniform = shader
         .uniform_bytes(&evaluator, WORLD, &params, &RunContext::tick(seed, tick))
@@ -79,7 +70,9 @@ fn on_device(device: &TestDevice, nodes: &str, seed: Option<u64>, tick: u32) -> 
             agents: None,
         },
     );
-    result.buffers[..lanes.columns().len()].to_vec()
+    (0..lanes.columns().len())
+        .map(|position| lane_words(&compiled, &result.buffers, position))
+        .collect()
 }
 
 /// Returns the lanes after one run of the pass `step` of `nodes` on the host at `tick`, one word per element.
@@ -499,16 +492,7 @@ fn a_repeat_runs_in_stats_view_and_action_passes_on_the_device() {
             .iter()
             .find(|shader| shader.passes().iter().any(|known| known == pass))
             .unwrap_or_else(|| panic!("no shader runs `{pass}`"));
-        let mut buffers: Vec<Vec<u32>> = start.columns().iter().map(|column| column.words().to_vec()).collect();
-        let mut labels: Vec<String> = start
-            .columns()
-            .iter()
-            .map(|column| format!("lane_{}_cells", column.id()))
-            .collect();
-        if compiled.tick_buffer {
-            buffers.push(vec![context.tick]);
-            labels.push("henad_tick".to_owned());
-        }
+        let (buffers, labels) = lane_buffers(&compiled, &start, context.tick);
         let uniform = shader
             .uniform_bytes(&evaluator, WORLD, &params, context)
             .unwrap_or_else(|error| panic!("{error}"));
@@ -598,7 +582,11 @@ fn a_repeat_runs_in_stats_view_and_action_passes_on_the_device() {
         .iter()
         .position(|lane| lane.id == "x")
         .expect("the lane x");
-    assert_eq!(result.buffers[position], lanes.columns()[position].words(), "x");
+    assert_eq!(
+        lane_words(&compiled, &result.buffers, position),
+        lanes.columns()[position].words(),
+        "x"
+    );
     let expected: Vec<u32> = cells
         .enumerate()
         .map(|(element, x)| (0..x.min(8)).fold(element as u32, |prev, k| prev.wrapping_mul(3).wrapping_add(k)))
