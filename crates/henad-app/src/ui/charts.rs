@@ -2,6 +2,7 @@
 
 use egui_plot::PlotResponse;
 use henad_core::view::{StatValue, StatsHistory};
+use henad_graph::sheet::sentence::PLOT_EMPTY;
 
 use crate::state::AppState;
 use crate::ui::show_plot;
@@ -40,6 +41,17 @@ fn history_controls(ui: &mut egui::Ui, app: &mut AppState) {
 }
 
 fn stats_chart(ui: &mut egui::Ui, app: &AppState) {
+    // A sheet with no measure plots nothing, and the tab says how to plot one.
+    if app.runs_editor_sheet()
+        && app
+            .editor
+            .model
+            .sheet()
+            .is_some_and(|sheet| sheet.document().measures.is_empty())
+    {
+        ui.weak(PLOT_EMPTY);
+        return;
+    }
     let Some(history) = &app.stats_history else {
         return;
     };

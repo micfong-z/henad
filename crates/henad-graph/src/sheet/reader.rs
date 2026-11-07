@@ -596,6 +596,12 @@ struct ColorTable {
     scale: Option<Spanned<String>>,
     #[serde(default)]
     decades: Option<u32>,
+    #[serde(default)]
+    hue: Option<Spanned<String>>,
+    #[serde(default)]
+    darkest: Option<Spanned<f64>>,
+    #[serde(default)]
+    lightest: Option<Spanned<f64>>,
 }
 
 /// An element of a colour rule's `shades` list.
@@ -1097,6 +1103,9 @@ impl ColorTable {
         }
         rule.scale = named_option(self.scale.as_ref())?;
         rule.decades = self.decades;
+        rule.hue = named_option(self.hue.as_ref())?;
+        rule.darkest = self.darkest.as_ref().map(finite).transpose()?;
+        rule.lightest = self.lightest.as_ref().map(finite).transpose()?;
         Ok(rule)
     }
 }

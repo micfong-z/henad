@@ -53,7 +53,10 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   and not in `ui/mcs.rs`. New states take them in the neutral order of `STATE_COLORS`. A colour
   that is not in the palette, as in a starter, is named by the nearest one. "+ Add property" is
   the primary action, blue 700, while the sheet holds no property. A refused number field shows
-  its message in the theme's error colour under its row.
+  its message in the theme's error colour under its row. A parameter's Unit is free text with
+  "per second" to "per year" offered under the field, never a select (D89). A Number property's
+  shading shows a swatch of its hue from MCS step 900 to step 200 (`ShadeHue::ends`, data colours
+  of the sheet like the state palette). The sheet toolbar's Undo and Redo show their icon and word.
 - **The words rule of sheet mode.** The Editor tab in sheet mode and the text a sheet puts in the
   world tabs (names, measures, buttons, the tick counter) never show a word of
   `henad_graph::sheet::sentence::FORBIDDEN_WORDS` ("node", "seed", "compile" and the rest). The

@@ -979,11 +979,13 @@ fn each_lines_help_button_opens_its_own_popover() {
     assert_ne!(two_tick_cards, text, "the Clear card was found");
     harness.open_sheet(&two_tick_cards);
     let nodes = harness.settle();
-    let buttons: Vec<egui::Pos2> = nodes
+    let mut buttons: Vec<egui::Pos2> = nodes
         .iter()
         .filter(|node| node.role == egui::accesskit::Role::Button && node.label == "Help: lines")
         .filter_map(|node| node.bounds.map(|bounds| bounds.center()))
         .collect();
+    // The lower button first. Its popover opens below it and leaves the upper button free to press.
+    buttons.sort_by(|a, b| b.y.total_cmp(&a.y));
     assert_eq!(buttons.len(), 2, "each card that runs every tick has a Lines help");
     let lines_help = |harness: &mut Harness| -> Vec<egui::Rect> {
         harness

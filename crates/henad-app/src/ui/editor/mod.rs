@@ -410,6 +410,8 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let panel = &mut app.editor;
     panel.settle_outcome(loaded.as_ref(), rebuild_pending);
     let empty = panel.model.is_empty();
+    // The New model dialog takes the keys of Undo and Redo while it is open.
+    let keys = panel.new_model.is_none();
 
     Panel::top("henad_editor_header")
         .resizable(false)
@@ -464,7 +466,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     };
     CentralPanel::no_frame().show(ui, |ui| match &mut panel.model {
         EditorModel::Graph(graph) => graph::graph_ui(ui, graph),
-        EditorModel::Sheet(sheet) => sheet::sheet_ui(ui, sheet, past_start, &trials),
+        EditorModel::Sheet(sheet) => sheet::sheet_ui(ui, sheet, past_start, &trials, keys),
         EditorModel::Rule(text) => {
             code_view::code_view(ui, text, &marked, scroll_to, reset);
         }

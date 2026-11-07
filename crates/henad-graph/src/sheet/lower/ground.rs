@@ -544,11 +544,12 @@ pub(super) fn on_ground(
 }
 
 /// Writes the view pass of the ground's colours: the colours of a States property of the ground, the cells in its
-/// shade state shaded by the largest of its shades, or a Number property shaded over 0 to 1.
+/// shade state shaded by the largest of its shades, or a Number property shaded as [`colours::shade`] does.
 pub(super) fn colours(builder: &mut Builder<'_>) {
-    let Some(rule) = builder.document.colors.get("ground") else {
+    let Some(rule) = builder.document.colors.get("ground").cloned() else {
         return;
     };
+    let rule = &rule;
     let place = Place::Color("ground".to_owned());
     let outcome = match rule.rule {
         ColorRuleKind::ByState => by_state(builder, rule),
@@ -558,7 +559,7 @@ pub(super) fn colours(builder: &mut Builder<'_>) {
                     let site = colours::color_site(builder);
                     builder
                         .read(site.pass, &property.id)
-                        .and_then(|read| colours::shade(builder, &site, &read, &property.id))
+                        .and_then(|read| colours::shade(builder, &site, &read, &property.id, rule))
                 }
                 _ => Err("the colour rule shades no Number property of the ground".to_owned()),
             }

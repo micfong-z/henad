@@ -1,5 +1,6 @@
 //! Models and helpers the app's tests share: replaced model code, a model with a time scale, held builds and steps,
-//! the widgets of a frame, and a harness that draws the sheet editor and reads its accessible nodes.
+//! the widgets of a frame, a harness that draws the sheet editor and reads its accessible nodes, and the alignment of
+//! a sheet rebuilt in the editor with the starter it rebuilds.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -18,9 +19,11 @@ use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{EdgeView, GridView, PointView, StatDescriptor, StatEntry, StatValue};
 use henad_explore::model_file::ModelFile;
 
+use henad_graph::sheet::document::{CardRuns, SheetDocument};
 use henad_graph::sheet::sentence::FORBIDDEN_WORDS;
 
 use crate::state::AppState;
+use crate::ui::about::about_modal;
 use crate::ui::editor::sheet::new_model::new_model_modal;
 use crate::ui::editor::{editor_ui, open_text};
 use crate::ui::menu_bar::file_menu;
@@ -415,8 +418,8 @@ impl SimState for Held {
 
 // The sheet editor in a frame
 
-/// An egui context that draws the File menu, the Editor tab and the New model dialog over an app, driven by synthetic
-/// input.
+/// An egui context that draws the File menu, the Editor tab, the New model dialog and the About modal over an app,
+/// driven by synthetic input.
 pub struct Harness {
     /// Context the frames run in, with AccessKit on.
     pub context: egui::Context,
@@ -426,6 +429,8 @@ pub struct Harness {
     pub time: f64,
     /// Whether the window holds the system's keyboard focus, as an app driven through its inspection port may not.
     pub window_focused: bool,
+    /// Size of the screen in points. A tall screen keeps every section of a long sheet in view.
+    pub screen: egui::Vec2,
 }
 
 /// Returns the top of `node` on the screen.
@@ -456,6 +461,7 @@ impl Harness {
             app: AppState::headless(henad_models::example_models(), true)?,
             time: 0.0,
             window_focused: true,
+            screen: egui::vec2(1600.0, 1000.0),
         };
         harness.context.enable_accesskit();
         Some(harness)
@@ -465,7 +471,7 @@ impl Harness {
     pub fn frame(&mut self, events: Vec<egui::Event>) -> Vec<Node> {
         self.time += 0.016;
         let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.screen)),
             time: Some(self.time),
             events,
             focused: self.window_focused,
@@ -476,6 +482,7 @@ impl Harness {
             egui::MenuBar::new().ui(ui, |ui| file_menu(ui, app));
             editor_ui(ui, app);
             new_model_modal(ui.ctx(), app);
+            about_modal(ui.ctx(), app);
         });
         output.textures_delta.clear();
         let update = output.platform_output.accesskit_update.expect("an AccessKit update");
@@ -614,4 +621,78 @@ pub fn forbidden_words(texts: &[String]) -> Vec<(String, String)> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+// Rebuilt starters
+
+/// Returns `starter` with the parts the sheet editor does not build yet taken out: every card line, every card that
+/// runs each tick, and the number of the next line.
+///
+/// The editor adds a card that runs each tick with its first line. The number of the next line returns to 1, as in a
+/// blank model.
+pub fn without_card_lines(starter: &SheetDocument) -> SheetDocument {
+    let mut stripped = starter.clone();
+    stripped.cards.retain(|card| card.runs != CardRuns::EachTick);
+    for card in &mut stripped.cards {
+        card.lines.clear();
+        card.line_tables.clear();
+    }
+    stripped.sheet.next_line = 1;
+    stripped
+}
+
+/// Returns `rebuilt`, a sheet built in the editor, aligned with `starter`, the starter it rebuilds, on what says
+/// nothing about the editor.
+///
+/// Each drawing line takes the key of the starter's line of the same id, and each start the key of the starter's
+/// property of the same id, when both draw. A parameter takes the step and the meaning of the starter's parameter of
+/// the same id. No control sets either. A state or a measure takes the starter's colour when the palette names the two
+/// colours alike, since a starter's colour can lie outside the palette the editor offers. No id is copied.
+pub fn align_with_starter(rebuilt: &SheetDocument, starter: &SheetDocument) -> SheetDocument {
+    use crate::ui::editor::sheet::widgets::color_name;
+
+    let mut aligned = rebuilt.clone();
+    for card in &mut aligned.cards {
+        for (id, line) in &mut card.line_tables {
+            if line.key.is_some()
+                && let Some((_, theirs)) = starter.line(id)
+                && theirs.key.is_some()
+            {
+                line.key = theirs.key;
+            }
+        }
+    }
+    let their_properties = starter.cells.as_deref().unwrap_or_default();
+    for property in aligned.cells.iter_mut().flatten() {
+        let Some(theirs) = their_properties.iter().find(|known| known.id == property.id) else {
+            continue;
+        };
+        if let (Some(start), Some(their_start)) = (&mut property.starts_as, &theirs.starts_as)
+            && start.key.is_some()
+            && their_start.key.is_some()
+        {
+            start.key = their_start.key;
+        }
+        for state in &mut property.states {
+            if let Some(their_state) = theirs.states.iter().find(|known| known.id == state.id)
+                && color_name(state.color) == color_name(their_state.color)
+            {
+                state.color = their_state.color;
+            }
+        }
+    }
+    for parameter in &mut aligned.parameters {
+        if let Some(theirs) = starter.parameters.iter().find(|known| known.id == parameter.id) {
+            parameter.step = theirs.step;
+            parameter.means.clone_from(&theirs.means);
+        }
+    }
+    for measure in &mut aligned.measures {
+        if let Some(theirs) = starter.measures.iter().find(|known| known.id == measure.id)
+            && color_name(measure.color) == color_name(theirs.color)
+        {
+            measure.color = theirs.color;
+        }
+    }
+    aligned
 }

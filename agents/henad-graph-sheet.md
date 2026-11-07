@@ -121,7 +121,9 @@ comment becomes a space. Comments: `Sentences::card_heading` above each `[[card]
 `Sentences::line(id, &relations.otherwise_numbers(id))` above each line table. `format_number` is
 the number rule: integer within 2^53 (`-0` as `0`), otherwise the shortest round-trip digits from
 `{:e}` laid out by hand, plain for 10^-4 <= |x| < 10^16, else `1e-5` style; `None` for NaN and the
-infinities. Every committed sheet is the writer's output.
+infinities. Every committed sheet is the writer's output. A colour rule's `hue` (`ShadeHue`, the
+seven MCS hues stored `gray` to `purple`, `ends` their steps 900 and 200), `darkest` and `lightest`
+(finite numbers) shade a Number property and are written after `decades`.
 
 **The wording table.** `sheet::sentence` holds every word the sheet editor shows, from the final
 editor's wording table: constants for fixed text and functions for templates, each named for what it

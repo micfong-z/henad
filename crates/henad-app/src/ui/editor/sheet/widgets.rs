@@ -217,11 +217,146 @@ pub fn commit_field(
     width: f32,
     commit: impl FnOnce(&str) -> Option<String>,
 ) -> Response {
+    commit_edit(
+        ui,
+        id,
+        name,
+        current,
+        |text| TextEdit::singleline(text).desired_width(width),
+        commit,
+    )
+}
+
+/// Adds a field of several lines named `name` that shows `current`, with the grey `hint` while it is empty, and commits
+/// what is typed on losing focus.
+///
+/// Enter starts a new line. `commit` takes the typed text as [`commit_field`] does.
+pub fn commit_area(
+    ui: &mut Ui,
+    id: Id,
+    name: &str,
+    current: &str,
+    hint: &str,
+    commit: impl FnOnce(&str) -> Option<String>,
+) -> Response {
+    commit_edit(
+        ui,
+        id,
+        name,
+        current,
+        |text| {
+            TextEdit::multiline(text)
+                .hint_text(hint)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY)
+        },
+        commit,
+    )
+}
+
+/// Adds a field named `name` that shows `current`, with the grey `hint` while it is empty, and offers `suggestions`
+/// under it while it holds the focus. A click on a suggestion commits it.
+///
+/// `commit` takes the typed text, or the suggestion chosen, as [`commit_field`] does.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the field, its words and its suggestions each take a part"
+)]
+pub fn suggestion_field(
+    ui: &mut Ui,
+    id: Id,
+    name: &str,
+    current: &str,
+    hint: &str,
+    width: f32,
+    suggestions: &[String],
+    mut commit: impl FnMut(&str) -> Option<String>,
+) -> Response {
+    let response = commit_edit(
+        ui,
+        id,
+        name,
+        current,
+        |text| TextEdit::singleline(text).hint_text(hint).desired_width(width),
+        &mut commit,
+    );
+    let popup_id = id.with("henad_suggestions");
+    let open_id = popup_id.with("open");
+    let rect_id = popup_id.with("rect");
+    let mut open = response.gained_focus() || ui.data(|data| data.get_temp(open_id)).unwrap_or(false);
+    // Enter, Tab or Escape closes the suggestions. A press closes them unless it lands on the field or on them.
+    let pointer_used =
+        ui.input(|input| input.pointer.any_pressed() || input.pointer.any_down() || input.pointer.any_released());
+    if response.lost_focus() && !pointer_used {
+        open = false;
+    }
+    let pressed = ui.input(|input| {
+        input
+            .pointer
+            .any_pressed()
+            .then(|| input.pointer.interact_pos())
+            .flatten()
+    });
+    if let Some(position) = pressed {
+        let shown: Option<Rect> = ui.data(|data| data.get_temp(rect_id));
+        if !response.rect.contains(position) && !shown.is_some_and(|rect| rect.contains(position)) {
+            open = false;
+        }
+    }
+    let popup = Popup::from_response(&response)
+        .id(popup_id)
+        .open(open)
+        .close_behavior(PopupCloseBehavior::IgnoreClicks)
+        .show(|ui| {
+            let mut chosen = None;
+            for suggestion in suggestions {
+                if ui.add(Button::new(suggestion).frame(false)).clicked() {
+                    chosen = Some(suggestion.clone());
+                }
+            }
+            chosen
+        });
+    let chosen = popup.as_ref().and_then(|popup| popup.inner.clone());
+    if let Some(popup) = &popup {
+        let rect = popup.response.rect;
+        ui.data_mut(|data| data.insert_temp(rect_id, rect));
+    }
+    if chosen.is_some() {
+        open = false;
+    }
+    ui.data_mut(|data| data.insert_temp(open_id, open));
+    if let Some(suggestion) = chosen {
+        forget_field(ui, id);
+        if let Some(message) = commit(&suggestion) {
+            ui.data_mut(|data| {
+                data.insert_temp(
+                    draft_id(id),
+                    FieldDraft {
+                        text: suggestion,
+                        message: Some(message),
+                    },
+                );
+            });
+        }
+    }
+    response
+}
+
+/// Adds the text field that `edit` makes over the text, named `name`, showing `current`, and commits what is typed on
+/// losing focus through `commit`, as [`commit_field`] does.
+fn commit_edit(
+    ui: &mut Ui,
+    id: Id,
+    name: &str,
+    current: &str,
+    edit: impl for<'t> FnOnce(&'t mut String) -> TextEdit<'t>,
+    commit: impl FnOnce(&str) -> Option<String>,
+) -> Response {
     let draft: Option<FieldDraft> = ui.data(|data| data.get_temp(draft_id(id)));
     let mut text = draft
         .as_ref()
         .map_or_else(|| current.to_owned(), |draft| draft.text.clone());
-    let response = ui.add(TextEdit::singleline(&mut text).id(id).desired_width(width));
+    let response = ui.add(edit(&mut text).id(id));
     set_name(ui, response.id, name);
     let message = draft.and_then(|draft| draft.message);
     if response.lost_focus() {

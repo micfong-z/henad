@@ -612,6 +612,12 @@ pub struct ColorRule {
     pub scale: Option<ShadeScale>,
     /// Number of powers of ten a [`ShadeScale::Log`] shading spans.
     pub decades: Option<u32>,
+    /// Hue a [`ColorRuleKind::Shaded`] number is drawn in, from its dark end to its light end.
+    pub hue: Option<ShadeHue>,
+    /// Value a [`ColorRuleKind::Shaded`] number is drawn darkest at, 0 when left out.
+    pub darkest: Option<f64>,
+    /// Value a [`ColorRuleKind::Shaded`] number is drawn lightest at, 1 when left out.
+    pub lightest: Option<f64>,
 }
 
 impl ColorRule {
@@ -624,6 +630,44 @@ impl ColorRule {
             shades: Vec::new(),
             scale: None,
             decades: None,
+            hue: None,
+            darkest: None,
+            lightest: None,
+        }
+    }
+}
+
+/// Value of a colour rule's `hue` key: a hue of the Micfong Colour System (MCS) that a number is shaded in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ShadeHue {
+    /// Gray, `gray`.
+    Gray,
+    /// Red, `red`.
+    Red,
+    /// Orange, `orange`.
+    Orange,
+    /// Yellow, `yellow`.
+    Yellow,
+    /// Green, `green`.
+    Green,
+    /// Blue, `blue`.
+    Blue,
+    /// Purple, `purple`.
+    Purple,
+}
+
+impl ShadeHue {
+    /// Returns the colours of the hue's dark end and light end, its MCS steps 900 and 200.
+    pub fn ends(self) -> [Color; 2] {
+        match self {
+            Self::Gray => [[0x21, 0x21, 0x21, 0xFF], [0xE0, 0xE0, 0xE0, 0xFF]],
+            Self::Red => [[0x36, 0x0E, 0x12, 0xFF], [0xFA, 0xB2, 0xB9, 0xFF]],
+            Self::Orange => [[0x3A, 0x19, 0x04, 0xFF], [0xF9, 0xBC, 0x98, 0xFF]],
+            Self::Yellow => [[0x35, 0x24, 0x03, 0xFF], [0xFF, 0xE3, 0x8D, 0xFF]],
+            Self::Green => [[0x03, 0x30, 0x15, 0xFF], [0x96, 0xE2, 0x9E, 0xFF]],
+            Self::Blue => [[0x01, 0x24, 0x4D, 0xFF], [0x8F, 0xC7, 0xFF, 0xFF]],
+            Self::Purple => [[0x29, 0x13, 0x53, 0xFF], [0xC2, 0x9E, 0xFF, 0xFF]],
         }
     }
 }
@@ -1359,6 +1403,15 @@ stored_names!(MeasureRule, "measure rule" {
 });
 stored_names!(ColorRuleKind, "colour rule" { ByState => "by_state", ByHeading => "by_heading", Shaded => "shaded" });
 stored_names!(ShadeScale, "shade scale" { Linear => "linear", Log => "log" });
+stored_names!(ShadeHue, "shade hue" {
+    Gray => "gray",
+    Red => "red",
+    Orange => "orange",
+    Yellow => "yellow",
+    Green => "green",
+    Blue => "blue",
+    Purple => "purple",
+});
 stored_names!(ButtonStepRule, "button step" {
     StartAgain => "start_again",
     SetEverywhere => "set_everywhere",

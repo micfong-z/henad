@@ -2152,12 +2152,20 @@ pub fn sheet_trying_value(tried: &str, kept: &str) -> String {
 /// Button that adds a parameter on the sheet.
 pub const ADD_PARAMETER: &str = "+ Add parameter";
 
+/// Returns the suggestions for a parameter's unit, "per second" to "per year".
+pub fn unit_suggestions() -> Vec<String> {
+    TimeUnit::ALL.iter().map(|unit| unit_suggestion(*unit)).collect()
+}
+
 // Measures
 
 /// Returns the label of the box that plots the number of cells in `state`, such as "Plot Alive".
 pub fn plot_state(state: &str) -> String {
     format!("Plot {state}")
 }
+
+/// Label of the box beside a state that plots the number of cells in it.
+pub const PLOT: &str = "Plot";
 
 /// Button that opens the measure form.
 pub const ADD_MEASURE: &str = "+ Add measure";
@@ -2176,6 +2184,30 @@ pub fn count_measure(property: &str, state: &str) -> String {
 
 /// Kind of a measure that averages a number property.
 pub const AVERAGE_MEASURE: &str = "Average of a number";
+
+/// Words before the property of a measure that counts the cells in a state.
+pub const COUNT_MEASURE_LEAD: &str = "Number of cells whose";
+
+/// Word between the property and the state of a measure that counts the cells in a state.
+pub const COUNT_MEASURE_IS: &str = "is";
+
+/// Words before the property of a measure that averages a number property.
+pub const AVERAGE_MEASURE_LEAD: &str = "Average of";
+
+/// Accessible name of the property of a new measure.
+pub const MEASURE_PROPERTY_NAME: &str = "Measure property";
+
+/// Accessible name of the state of a new measure.
+pub const MEASURE_STATE_NAME: &str = "Measure state";
+
+/// Words of the property select of a new measure before a property is chosen.
+pub const MEASURE_PROPERTY_EMPTY: &str = "property";
+
+/// Words of the state select of a new measure before a state is chosen.
+pub const MEASURE_STATE_EMPTY: &str = "state";
+
+/// Words of the property select of a new average before a number property is chosen.
+pub const MEASURE_NUMBER_PROPERTY_EMPTY: &str = "number property";
 
 /// Returns the words of a measure that averages `property`, such as "Average of Food".
 pub fn average_measure(property: &str) -> String {
@@ -2215,6 +2247,15 @@ pub const SHADE: &str = "Shade";
 /// Shades of a Number property, in the order the select shows them.
 pub const SHADE_COLORS: [&str; 7] = ["Grey", "Red", "Orange", "Yellow", "Green", "Blue", "Purple"];
 
+/// Word before the value a Number property is drawn darkest at.
+pub const SHADE_FROM: &str = "from";
+
+/// Words between the value drawn darkest and the value drawn lightest.
+pub const SHADE_DARK_TO: &str = "(dark) to";
+
+/// Word after the value drawn lightest.
+pub const SHADE_LIGHT: &str = "(light)";
+
 /// Returns the range of a shade, such as "from 0 (dark) to 10 (light)".
 pub fn shade_range(darkest: &str, lightest: &str) -> String {
     format!("from {darkest} (dark) to {lightest} (light)")
@@ -2225,6 +2266,9 @@ pub const DARKEST_NAME: &str = "Darkest at value";
 
 /// Accessible name of the value drawn lightest.
 pub const LIGHTEST_NAME: &str = "Lightest at value";
+
+/// Message on a value drawn darkest that equals the value drawn lightest.
+pub const SHADE_ENDS_EQUAL: &str = "Darkest and lightest need different values.";
 
 // Buttons on the sheet
 
@@ -2237,6 +2281,12 @@ pub const BUTTON_NAME_PLACEHOLDER: &str = "Such as Clear";
 /// Accessible name of a button's name.
 pub const BUTTON_NAME_FIELD: &str = "Button name";
 
+/// Heading of the button form for a new button.
+pub const NEW_BUTTON: &str = "New button";
+
+/// Label of the button that opens the button form for a button.
+pub const EDIT: &str = "Edit";
+
 /// Label of what a button does.
 pub const BUTTON_DOES: &str = "Does";
 
@@ -2248,6 +2298,12 @@ pub const EVERY_PROPERTY: &str = "every property";
 
 /// Accessible name of the property [`START_AGAIN`] redraws.
 pub const START_AGAIN_FOR: &str = "Start again for";
+
+/// Returns what a button does that starts `target` again, such as "Start again: Status" or "Start again: every
+/// property".
+pub fn start_again_for(target: &str) -> String {
+    format!("{START_AGAIN}: {target}")
+}
 
 /// Returns what a button does that runs its own lines once over `thing`, such as "Run once, every cell".
 pub fn run_once(thing: &str) -> String {
@@ -2377,11 +2433,20 @@ pub fn model_name_button(name: &str) -> String {
 /// Accessible name of the field that renames the model.
 pub const MODEL_NAME_FIELD: &str = "Model name";
 
+/// Tooltip of the button that shows the model's name.
+pub const RENAME_MODEL_TOOLTIP: &str = "Rename model";
+
 /// Button that undoes the last edit.
 pub const UNDO: &str = "Undo";
 
+/// Tooltip of [`UNDO`].
+pub const UNDO_TOOLTIP: &str = "Undo last edit";
+
 /// Button that redoes the last undone edit.
 pub const REDO: &str = "Redo";
+
+/// Tooltip of [`REDO`].
+pub const REDO_TOOLTIP: &str = "Redo last undone edit";
 
 /// Toggle that draws the card as a diagram.
 pub const DIAGRAM: &str = "Diagram";

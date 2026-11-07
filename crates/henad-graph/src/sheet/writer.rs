@@ -386,7 +386,7 @@ impl Writer<'_> {
             .map(|measure| self.measure(measure))
             .collect::<Result<_, _>>()?;
         top.tables("measure", measures);
-        let colors = self.colors();
+        let colors = self.colors()?;
         if !colors.is_empty() {
             top.entry("color", Some(Entry::Map(colors)));
         }
@@ -498,7 +498,11 @@ impl Writer<'_> {
 
     /// Returns the colour rule of each kind of thing, the cells, then each agent kind, then the ground, then any other
     /// id in lexical order.
-    fn colors(&self) -> Vec<(String, Record)> {
+    ///
+    /// # Errors
+    ///
+    /// Returns the key of a shading's end that holds a number that is not finite.
+    fn colors(&self) -> Result<Vec<(String, Record)>, SheetWriteError> {
         let document = self.document;
         let things: Vec<&str> = std::iter::once("cells")
             .chain(document.agents.iter().map(|kind| kind.id.as_str()))
@@ -510,7 +514,7 @@ impl Writer<'_> {
             (place.is_none(), place, (*id).clone())
         });
         ids.into_iter()
-            .map(|id| (id.clone(), color_rule(&document.colors[id])))
+            .map(|id| Ok((id.clone(), color_rule(&document.colors[id])?)))
             .collect()
     }
 
@@ -842,7 +846,11 @@ fn shape(shape: &PaintedShape) -> Result<Record, SheetWriteError> {
 }
 
 /// Returns the record of a colour rule.
-fn color_rule(rule: &ColorRule) -> Record {
+///
+/// # Errors
+///
+/// Returns the key of a shading's end that holds a number that is not finite.
+fn color_rule(rule: &ColorRule) -> Result<Record, SheetWriteError> {
     let mut table = Record::default();
     table.string("rule", rule.rule.as_str());
     table.optional_string("property", rule.property.as_deref());
@@ -865,5 +873,12 @@ fn color_rule(rule: &ColorRule) -> Record {
     if let Some(decades) = rule.decades {
         table.inline("decades", decades.to_string());
     }
-    table
+    table.optional_string("hue", rule.hue.map(|hue| hue.as_str()));
+    if let Some(darkest) = rule.darkest {
+        table.inline("darkest", number("darkest", darkest)?);
+    }
+    if let Some(lightest) = rule.lightest {
+        table.inline("lightest", number("lightest", lightest)?);
+    }
+    Ok(table)
 }

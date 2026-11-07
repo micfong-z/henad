@@ -19,11 +19,11 @@ use henad_graph::sheet::check::{SheetDiagnostic, SheetReport};
 use henad_graph::sheet::document::{CardRuns, SheetCard, SheetDocument, SheetProperty};
 use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
-    ALWAYS, ALWAYS_TOOLTIP, ANY_STATE_ID, BLANK_MODEL_CARD, BLANK_TEXT, ChipKind, FOR_EACH_BLANK_WORDS, FROM_TOOLTIP,
-    FROM_WORD, LAW, LineSelect, SentenceChip, SentencePart, Sentences, UNIT_PLACEHOLDER, always_name, card_header,
-    for_each_optional_name, for_each_optional_tooltip, line_count, line_list_name, line_name, line_prefix,
-    otherwise_tooltip, otherwise_words, result_below_tooltip, result_inside_tooltip, sentence_text, uses_result_below,
-    uses_result_inside,
+    ALWAYS, ALWAYS_TOOLTIP, ANY_STATE_ID, BLANK_MODEL_CARD, BLANK_TEXT, BUTTON_CARD_EMPTY, ChipKind,
+    FOR_EACH_BLANK_WORDS, FROM_TOOLTIP, FROM_WORD, LAW, LineSelect, SentenceChip, SentencePart, Sentences,
+    UNIT_PLACEHOLDER, always_name, card_header, for_each_optional_name, for_each_optional_tooltip, line_count,
+    line_list_name, line_name, line_prefix, otherwise_tooltip, otherwise_words, result_below_tooltip,
+    result_inside_tooltip, sentence_text, uses_result_below, uses_result_inside,
 };
 
 use super::accessible_group;
@@ -94,8 +94,8 @@ fn card_ui(
             });
     }
     ui.add_space(4.0);
-    if each_tick && lines.is_empty() {
-        ui.weak(BLANK_MODEL_CARD);
+    if lines.is_empty() {
+        ui.weak(if each_tick { BLANK_MODEL_CARD } else { BUTTON_CARD_EMPTY });
     }
     let list_name = line_list_name(button_of(document, card));
     let list = ui.scope(|ui| {

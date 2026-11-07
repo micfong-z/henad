@@ -30,16 +30,20 @@ otherwise, step 1 for a Whole number with none), then the passes in stack order:
 (`start.rs`), `tick_<card>` or `tick_cells` with no card (`card.rs`, a grid runs exactly one tick
 pass, so a second card that runs each tick over the cells is an error), `colours` (`colours.rs`, no
 pass when the rule is `by_state` on the first States property, `view.color` through the category for
-another, `view.ramp` over 0 to 1 into the palette `shaded_<property>` for `shaded`, and an error for
-`scale = "log"` or `decades`, since only a linear shading lowers), `measures` (`measures.rs`: one
-`stat.count_by` per property shared by its counts, `stat.mean`, `stat.sum`, a spread as two means
-and `f64` arithmetic, each `[[stat]]` labelled with the measure's name, D13), and per button an
-`[[action]]` (`buttons.rs`). A grid sheet with no cells property lowers to the world alone, with the
-checker's `SHEET_EMPTY` warning, and its graph's check reports the missing lane. A `[time]` table
-lowers in `world.rs` to the first `[[param]]`, `tick_length` (`rates::TICK_LENGTH`, reserved in the
-item namespace), an `f32` labelled "One tick is (days)" with the sheet's length as its default, a
-hundredth of it as `min` and `step` and 30 times it as `max`, `hidden`, and `GraphDocument.time`
-naming it with the tick's unit (D4), whether or not a line reads it.
+another, `view.ramp` from `darkest` (0 when left out) to `lightest` (1) into the palette
+`shaded_<property>` for `shaded`, eight colours from the dark end of `hue` to its light end
+(`hue_colors` over `ShadeHue::ends`) or a blue to orange scale with no hue, the palette reversed and
+the ends swapped when `darkest` is the higher value, because `view.ramp` takes band 0 whenever
+`high <= low`, equal ends an error, and an error for `scale = "log"` or `decades`, since only a
+linear shading lowers), `measures` (`measures.rs`: one `stat.count_by` per property shared by its
+counts, `stat.mean`, `stat.sum`, a spread as two means and `f64` arithmetic, each `[[stat]]`
+labelled with the measure's name, D13), and per button an `[[action]]` (`buttons.rs`). A grid sheet
+with no cells property lowers to the world alone, with the checker's `SHEET_EMPTY` warning, and its
+graph's check reports the missing lane. A `[time]` table lowers in `world.rs` to the first
+`[[param]]`, `tick_length` (`rates::TICK_LENGTH`, reserved in the item namespace), an `f32` labelled
+"One tick is (days)" with the sheet's length as its default, a hundredth of it as `min` and `step`
+and 30 times it as `max`, `hidden`, and `GraphDocument.time` naming it with the tick's unit (D4),
+whether or not a line reads it.
 
 Rates (`rates.rs`, T4, T5): a rate phrase or Rate line is `1 - e^(-h)` drawn by one `rand.chance`,
 `h = r * f * tick_length`, where `f` is the literal `tick unit days / rate unit days` when it is not

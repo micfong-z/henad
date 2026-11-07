@@ -5,21 +5,24 @@
 //! An agent coloured by its heading takes one of the eight compass colours of the palette `by_heading` through
 //! `space.heading_octant`.
 //! A cell coloured by the states of another property reads that property through `view.color` and its category. A
-//! cell shaded by a number takes a band of the palette `shaded_<property>` over 0 to 1 through `view.ramp`. Only a
-//! linear shading lowers, so a rule with a log scale or a number of decades is refused.
+//! cell shaded by a number takes a band of the palette `shaded_<property>` through `view.ramp`, from the rule's
+//! darkest value (0 when left out) to its lightest value (1 when left out). The palette runs from the dark end of the
+//! rule's hue to its light end, or through a blue to orange scale for a rule with no hue. A rule darkest at the higher
+//! value reverses the palette and passes the lower value to `view.ramp` as its low end. Only a linear shading lowers,
+//! so a rule with a log scale or a number of decades is refused.
 
 use super::ids::{GROUP_PART, Owner, SheetKey};
 use super::{Builder, Site, text};
 use crate::document::{Palette, Pass, PassStage};
 use crate::sheet::check::Place;
-use crate::sheet::document::{ColorRuleKind, PropertyType, ShadeScale};
+use crate::sheet::document::{ColorRule, ColorRuleKind, PropertyType, ShadeHue, ShadeScale};
 use crate::types::ValueType;
 use crate::value::{InputValue, Literal, PortRef};
 
 /// Id of the view pass of the cells' colours.
 const COLOR_PASS: &str = "colours";
 
-/// Colours of the palette of a shaded number, from its low end to its high end.
+/// Colours of the palette of a shaded number with no hue, from its low end to its high end.
 const SHADE_COLORS: [[u8; 4]; 8] = [
     [0, 92, 230, 255],
     [40, 120, 235, 255],
@@ -118,7 +121,8 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
         }
     };
     if shaded {
-        if let Err(message) = shade(builder, &site, &read, &property.id) {
+        let rule = rule.clone();
+        if let Err(message) = shade(builder, &site, &read, &property.id, &rule) {
             builder.problem(message, place);
         }
         return;
@@ -195,16 +199,19 @@ fn by_heading(builder: &mut Builder<'_>) -> Result<(), String> {
     Ok(())
 }
 
-/// Writes the shading of the number `read`, the read of property `property`, at `site`.
+/// Writes the shading of the number `read`, the read of property `property`, at `site`, in the hue and over the range
+/// of `rule`.
 ///
 /// # Errors
 ///
-/// Returns the message for a palette id that a property's category takes, or a value with no number.
+/// Returns the message for a palette id that a property's category takes, a range whose two ends are equal, or a value
+/// with no number.
 pub(super) fn shade(
     builder: &mut Builder<'_>,
     site: &Site,
     read: &super::value::Operand,
     property: &str,
+    rule: &ColorRule,
 ) -> Result<(), String> {
     let palette = format!("shaded_{property}");
     if builder.graph.categories.iter().any(|category| category.id == palette) {
@@ -212,10 +219,24 @@ pub(super) fn shade(
             "the palette of the shading would take the id '{palette}' of a property"
         ));
     }
-    builder
-        .graph
-        .palettes
-        .push(Palette::new(&palette, SHADE_COLORS.to_vec()));
+    let darkest = rule.darkest.unwrap_or(0.0);
+    let lightest = rule.lightest.unwrap_or(1.0);
+    if darkest == lightest {
+        return Err(format!(
+            "the shading is darkest and lightest at the same value {}, and its two ends need different values",
+            crate::sheet::format_number(darkest).unwrap_or_default()
+        ));
+    }
+    let mut colors = rule.hue.map_or_else(|| SHADE_COLORS.to_vec(), hue_colors);
+    // `view.ramp` takes its first band for every value when `high` is not above `low`. A rule darkest at the higher
+    // value therefore ramps from `lightest` to `darkest` over the reversed palette.
+    let (low, high) = if darkest > lightest {
+        colors.reverse();
+        (lightest, darkest)
+    } else {
+        (darkest, lightest)
+    };
+    builder.graph.palettes.push(Palette::new(&palette, colors));
     let value = builder.input_as(site, read, &ValueType::F32, false)?;
     let node = builder.emit(
         site,
@@ -223,8 +244,8 @@ pub(super) fn shade(
         vec![("palette", text(&palette))],
         vec![
             ("value".to_owned(), value),
-            ("low".to_owned(), InputValue::Literal(Literal::F32(0.0))),
-            ("high".to_owned(), InputValue::Literal(Literal::F32(1.0))),
+            ("low".to_owned(), InputValue::Literal(Literal::F32(low as f32))),
+            ("high".to_owned(), InputValue::Literal(Literal::F32(high as f32))),
         ],
     );
     builder.emit(
@@ -234,4 +255,24 @@ pub(super) fn shade(
         vec![("index".to_owned(), InputValue::Link(PortRef { node, port: None }))],
     );
     Ok(())
+}
+
+/// Number of colours in the palette of a shaded number.
+const SHADE_STEPS: usize = 8;
+
+/// Returns the palette of a number shaded in `hue`: [`SHADE_STEPS`] colours evenly spaced from the hue's dark end to
+/// its light end.
+pub(super) fn hue_colors(hue: ShadeHue) -> Vec<[u8; 4]> {
+    let [dark, light] = hue.ends();
+    (0..SHADE_STEPS)
+        .map(|step| {
+            let share = step as f32 / (SHADE_STEPS - 1) as f32;
+            let mut color = [0xFF; 4];
+            for (channel, (low, high)) in color.iter_mut().zip(dark.iter().zip(light)).take(3) {
+                // The channels lie in 0 to 255, and so does every value between two of them.
+                *channel = (f32::from(*low) + (f32::from(high) - f32::from(*low)) * share).round() as u8;
+            }
+            color
+        })
+        .collect()
 }

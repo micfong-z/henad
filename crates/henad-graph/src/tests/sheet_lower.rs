@@ -1252,6 +1252,88 @@ fn a_shaded_number_ramps_into_its_palette() {
 }
 
 #[test]
+fn a_hued_shading_ramps_from_its_darkest_to_its_lightest_value() {
+    use crate::sheet::document::ShadeHue;
+    use crate::value::{InputValue, Literal};
+
+    let shaded = edited(
+        &life_with(life(), ""),
+        "[color.cells]\nrule = \"by_state\"\nproperty = \"status\"",
+        "[color.cells]\nrule = \"shaded\"\nproperty = \"level\"\nhue = \"blue\"\ndarkest = 2\nlightest = 10",
+    );
+    let parsed = crate::sheet::ParsedSheet::parse(&shaded).expect("the sheet reads");
+    let rule = &parsed.document().colors["cells"];
+    assert_eq!(
+        (rule.hue, rule.darkest, rule.lightest),
+        (Some(ShadeHue::Blue), Some(2.0), Some(10.0))
+    );
+    assert_eq!(
+        parsed.document().to_text().expect("the sheet writes"),
+        shaded,
+        "the keys write back as read"
+    );
+    let file = lowered(&shaded);
+    let document = file.lowered().document();
+    let palette = document
+        .palettes
+        .iter()
+        .find(|palette| palette.id == "shaded_level")
+        .expect("the palette");
+    let [dark, light] = ShadeHue::Blue.ends();
+    assert_eq!(palette.colors.len(), 8);
+    assert_eq!(palette.colors.first(), Some(&dark), "the low end is the hue's step 900");
+    assert_eq!(
+        palette.colors.last(),
+        Some(&light),
+        "the high end is the hue's step 200"
+    );
+    let ramp = document
+        .passes
+        .iter()
+        .flat_map(|pass| &pass.body.nodes)
+        .find(|node| node.op == "view.ramp")
+        .expect("a view.ramp");
+    let input = |port: &str| ramp.inputs.get(port).cloned();
+    assert_eq!(input("low"), Some(InputValue::Literal(Literal::F32(2.0))));
+    assert_eq!(input("high"), Some(InputValue::Literal(Literal::F32(10.0))));
+    assert!(GridProgram::compile(file.lowered()).is_ok());
+
+    // A rule darkest at the higher value ramps over the reversed palette, from the lower value up.
+    let reversed = edited(&shaded, "darkest = 2\nlightest = 10", "darkest = 10\nlightest = 2");
+    let file = lowered(&reversed);
+    let document = file.lowered().document();
+    let palette = document
+        .palettes
+        .iter()
+        .find(|palette| palette.id == "shaded_level")
+        .expect("the palette");
+    assert_eq!(
+        palette.colors.first(),
+        Some(&light),
+        "the low end is the hue's step 200"
+    );
+    assert_eq!(palette.colors.last(), Some(&dark), "the high end is the hue's step 900");
+    let ramp = document
+        .passes
+        .iter()
+        .flat_map(|pass| &pass.body.nodes)
+        .find(|node| node.op == "view.ramp")
+        .expect("a view.ramp");
+    let input = |port: &str| ramp.inputs.get(port).cloned();
+    assert_eq!(input("low"), Some(InputValue::Literal(Literal::F32(2.0))));
+    assert_eq!(input("high"), Some(InputValue::Literal(Literal::F32(10.0))));
+    assert!(GridProgram::compile(file.lowered()).is_ok());
+
+    // Two equal ends leave no range to shade over.
+    let flat = edited(&shaded, "lightest = 10", "lightest = 2");
+    let errors = refusals(&flat);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].message.contains("same value 2"), "{}", errors[0].message);
+    assert!(placed_at(&errors[0], &flat).starts_with("[color.cells]"));
+    assert!(crate::sheet::ParsedSheet::parse(&edited(&shaded, "hue = \"blue\"", "hue = \"teal\"")).is_err());
+}
+
+#[test]
 fn a_shading_on_a_log_scale_is_refused() {
     let shaded = edited(
         &life_with(life(), ""),

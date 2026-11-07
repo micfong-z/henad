@@ -10,6 +10,10 @@
 //! Play. Every edit of the Sheet pane runs [`SheetEdit`](henad_graph::sheet::edit::SheetEdit) commands. Until the
 //! preview passes tick 0 or a button is pressed, an edit draws the start again at tick 0. After that, a changed
 //! Starts as waits for Start again, and any other edit starts the world again from tick 0 with a notice.
+//!
+//! The *toolbar* above the panes holds the model's name and Undo and Redo. A click on the name turns it into a field.
+//! Undo keeps the canonical text of the sheet before each edit, and an undo or a redo reads that text back as one
+//! more edit of the world.
 
 pub mod card_pane;
 pub mod help;
@@ -19,15 +23,20 @@ pub mod widgets;
 
 use std::sync::atomic::Ordering;
 
-use egui::{CentralPanel, Frame, Margin, Panel, ScrollArea};
+use egui::{Button, CentralPanel, Frame, Key, KeyboardShortcut, Margin, Modifiers, Panel, ScrollArea, TextEdit};
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_graph::sheet::check::{SheetReport, check};
 use henad_graph::sheet::document::{MadeOf, SheetDocument, StartsAs};
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit, SheetEditError};
-use henad_graph::sheet::sentence::RESTART_NOTICE;
+use henad_graph::sheet::sentence::{
+    MODEL_NAME_FIELD, REDO, REDO_TOOLTIP, RENAME_MODEL_TOOLTIP, RESTART_NOTICE, UNDO, UNDO_TOOLTIP, model_name_button,
+};
 use henad_graph::sheet::{ParsedSheet, SheetFile};
 
+use super::graph::history::History;
 use super::graph::{CompiledProgram, GraphProgram, LOADS};
+use crate::icons::material_design_icons::{MDI_REDO, MDI_UNDO};
+use crate::ui::sweep::layout::add_button;
 
 /// Heading of the pane that lists what the model holds.
 pub const SHEET_PANE: &str = "Sheet";
@@ -61,6 +70,10 @@ pub struct SheetEditor {
     notice: Option<&'static str>,
     /// State of the Sheet pane's forms, fields and dialogs.
     pane: sheet_pane::PaneState,
+    /// Canonical texts of the sheet before each edit, and after each undo, for Undo and Redo.
+    history: History,
+    /// Text of the model name's field while it is open, `None` while the name shows as a button.
+    renaming: Option<String>,
 }
 
 /// Prints the sheet's id, the load and whether the sheet lowers.
@@ -91,6 +104,8 @@ impl SheetEditor {
             built_starts: None,
             notice: None,
             pane: sheet_pane::PaneState::new(load),
+            history: History::default(),
+            renaming: None,
         };
         editor.refresh();
         editor
@@ -119,12 +134,12 @@ impl SheetEditor {
     }
 
     /// Runs `edit`, one edit of the sheet made of one or more commands, on a copy of the sheet, and keeps the copy
-    /// when every command is accepted.
+    /// when every command is accepted. A kept edit is one step of Undo.
     ///
     /// `past_start` is whether the preview has passed tick 0 or a button was pressed in it, and `starts_only` whether
-    /// the edit changes how properties start and nothing else. Every edit starts the preview again from tick 0, except
-    /// a start changed past the start. That edit waits for Start again. A restart past the start shows
-    /// [`RESTART_NOTICE`].
+    /// the edit leaves the running world alone apart from how properties start, as a new start, a new name or a new
+    /// purpose does. Every edit starts the preview again from tick 0, except an edit that changes only starts past the
+    /// start. That edit waits for Start again. A restart past the start shows [`RESTART_NOTICE`].
     ///
     /// # Errors
     ///
@@ -140,14 +155,70 @@ impl SheetEditor {
         if builder.document() == self.builder.document() {
             return Ok(());
         }
+        self.history.record(self.text.clone(), None);
         self.builder = builder;
+        self.settle(past_start, starts_only);
+        Ok(())
+    }
+
+    /// Writes the sheet's text again after an edit, and starts the preview again unless `past_start` and
+    /// `starts_only` both hold, as [`Self::edit`] says.
+    fn settle(&mut self, past_start: bool, starts_only: bool) {
         self.refresh();
         let restart = !(past_start && starts_only);
         if restart {
             self.load = LOADS.fetch_add(1, Ordering::Relaxed);
         }
         self.notice = (past_start && restart && !self.has_errors() && !self.shows_nothing()).then_some(RESTART_NOTICE);
-        Ok(())
+    }
+
+    /// Undoes the last edit, and returns whether one was undone. The preview follows as after an edit, `past_start`
+    /// saying whether it has left its start.
+    pub fn undo(&mut self, past_start: bool) -> bool {
+        match self.history.undo(self.text.clone()) {
+            Some(text) => self.restore(&text, past_start),
+            None => false,
+        }
+    }
+
+    /// Redoes the last edit undone, and returns whether one was redone. The preview follows as after an edit,
+    /// `past_start` saying whether it has left its start.
+    pub fn redo(&mut self, past_start: bool) -> bool {
+        match self.history.redo(self.text.clone()) {
+            Some(text) => self.restore(&text, past_start),
+            None => false,
+        }
+    }
+
+    /// Returns whether Undo has an edit to undo.
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    /// Returns whether Redo has an edit to redo.
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    /// Replaces the sheet with the one `text` holds, a text of the history, closes the pane's forms and returns
+    /// whether the text read. Past the start, an edit of starts, the name or the purpose alone leaves the running world
+    /// alone, as after [`Self::edit`].
+    fn restore(&mut self, text: &str, past_start: bool) -> bool {
+        let Ok(parsed) = ParsedSheet::parse(text) else {
+            return false;
+        };
+        let document = parsed.into_document();
+        let starts_only = without_starts_or_words(self.document()) == without_starts_or_words(&document);
+        self.builder = SheetBuilder::new(document);
+        self.pane.close_forms();
+        self.renaming = None;
+        self.settle(past_start, starts_only);
+        true
+    }
+
+    /// Returns whether a form of the Sheet pane holds a dialog open. An open dialog takes the keys of Undo and Redo.
+    pub fn dialog_open(&self) -> bool {
+        self.pane.dialog_open()
     }
 
     /// Records the start of each property as the preview was just built with it.
@@ -232,7 +303,8 @@ impl SheetEditor {
             .clone()
     }
 
-    /// Makes `value` the value parameter `parameter` keeps, widening its range to hold it, as one edit of the sheet.
+    /// Makes `value` the value parameter `parameter` keeps, widening its range to hold it, as one edit of the sheet
+    /// and one step of Undo.
     ///
     /// The preview keeps its key. It already runs with the value.
     ///
@@ -261,6 +333,7 @@ impl SheetEditor {
         };
         let mut builder = self.builder.clone();
         builder.apply(edit)?;
+        self.history.record(self.text.clone(), None);
         self.builder = builder;
         self.refresh();
         Ok(())
@@ -276,11 +349,40 @@ impl SheetEditor {
     }
 }
 
-/// Draws the sheet editor: the Sheet pane on the left and the Card pane beside it, each scrolling on its own.
+/// Draws the sheet editor: the toolbar, then the Sheet pane on the left and the Card pane beside it, each scrolling on
+/// its own.
 ///
 /// Each pane is a group named by its heading. `past_start` is whether the preview has passed tick 0 or a button was
-/// pressed in it, and `trials` holds the values the world tries for the sheet's parameters.
-pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, past_start: bool, trials: &[sheet_pane::SheetTrial]) {
+/// pressed in it, and `trials` holds the values the world tries for the sheet's parameters. `keys` is whether the New
+/// model dialog is closed. Undo and Redo then take their keys while no modal of the app is open and no text field
+/// holds the focus.
+pub fn sheet_ui(
+    ui: &mut egui::Ui,
+    sheet: &mut SheetEditor,
+    past_start: bool,
+    trials: &[sheet_pane::SheetTrial],
+    keys: bool,
+) {
+    // egui reports the top modal layer of the previous frame. Every modal stays open past the frame that opens it.
+    let modal_open = ui.ctx().memory(|memory| memory.top_modal_layer().is_some());
+    if keys && !modal_open && !sheet.dialog_open() && !ui.ctx().text_edit_focused() {
+        let (undo, redo) = ui.ctx().input_mut(|input| {
+            let redo = input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z))
+                || input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Y));
+            let undo = input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Z));
+            (undo, redo)
+        });
+        if redo {
+            sheet.redo(past_start);
+        }
+        if undo {
+            sheet.undo(past_start);
+        }
+    }
+    Panel::top("henad_sheet_toolbar")
+        .resizable(false)
+        .frame(Frame::NONE.inner_margin(Margin::symmetric(8, 4)))
+        .show(ui, |ui| ui.horizontal(|ui| toolbar_ui(ui, sheet, past_start)));
     let width = ui.available_width();
     Panel::left("henad_sheet_pane")
         .resizable(true)
@@ -306,6 +408,64 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, past_start: bool, tr
             pane_group(ui, CARD_PANE);
         });
     });
+}
+
+/// Draws the toolbar: the model's name, a button that turns into a field named "Model name", then Undo and Redo.
+///
+/// In the field, Enter or a click elsewhere keeps the name and Escape puts the old name back. An empty name keeps the
+/// old one.
+fn toolbar_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, past_start: bool) {
+    let name = sheet.document().sheet.name.clone();
+    if let Some(text) = &mut sheet.renaming {
+        let field = ui.add(TextEdit::singleline(text).desired_width(200.0));
+        widgets::set_name(ui, field.id, MODEL_NAME_FIELD);
+        if !field.lost_focus() && !ui.memory(|memory| memory.has_focus(field.id)) {
+            field.request_focus();
+        }
+        if field.lost_focus() {
+            let kept = text.trim().to_owned();
+            sheet.renaming = None;
+            let canceled = ui.input(|input| input.key_pressed(Key::Escape));
+            if !canceled && !kept.is_empty() && kept != name {
+                let rename = SheetEdit::SetSheetName { name: kept };
+                // A name the sheet refuses keeps the old one.
+                sheet
+                    .edit(past_start, true, |builder| builder.apply(rename).map(drop))
+                    .unwrap_or_default();
+            }
+        }
+    } else {
+        let button = add_button(ui, true, Button::new(&name).frame(false), &model_name_button(&name))
+            .on_hover_text(RENAME_MODEL_TOOLTIP);
+        if button.clicked() {
+            sheet.renaming = Some(name);
+        }
+    }
+    ui.separator();
+    let undo =
+        add_button(ui, sheet.can_undo(), Button::new(format!("{MDI_UNDO} {UNDO}")), UNDO).on_hover_text(UNDO_TOOLTIP);
+    if undo.clicked() {
+        sheet.undo(past_start);
+    }
+    let redo =
+        add_button(ui, sheet.can_redo(), Button::new(format!("{MDI_REDO} {REDO}")), REDO).on_hover_text(REDO_TOOLTIP);
+    if redo.clicked() {
+        sheet.redo(past_start);
+    }
+}
+
+/// Returns `document` with no name, no purpose and no property of the cells holding a start.
+///
+/// Two sheets equal apart from these differ only in what leaves the running world alone, as [`SheetEditor::edit`]
+/// treats a new start, a new name or a new purpose.
+fn without_starts_or_words(document: &SheetDocument) -> SheetDocument {
+    let mut document = document.clone();
+    document.sheet.name.clear();
+    document.sheet.purpose = None;
+    for property in document.cells.iter_mut().flatten() {
+        property.starts_as = None;
+    }
+    document
 }
 
 /// Returns the start of each property of the cells of `document`, by id.
