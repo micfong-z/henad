@@ -2417,6 +2417,84 @@ pub fn convert_text(name: &str) -> [String; 2] {
 /// Primary action of the conversion dialog.
 pub const CONVERT: &str = "Convert";
 
+/// Returns the name of copy `number` of the model `name`, counted from 1: "Game of Life (expert)" for the first copy
+/// and "Game of Life (expert 2)" for the second.
+pub fn expert_copy_number_name(name: &str, number: u32) -> String {
+    if number <= 1 {
+        expert_copy_name(name)
+    } else {
+        format!("{name} (expert {number})")
+    }
+}
+
+/// Returns the description of a copy converted from the model `name`.
+pub fn converted_description(name: &str) -> String {
+    format!("Converted from the author model {name}. Edit it as a node graph.")
+}
+
+/// Returns the words a copy shows when its source `name` no longer matches the record of the conversion.
+pub fn original_changed(name: &str) -> String {
+    format!("{name} has changed since this conversion.")
+}
+
+/// Returns the title of the frame around the nodes of one line in a converted copy, such as "Line 2: Become Alive
+/// from Dead, when Alive neighbours is 3", where `prefix` is the line prefix.
+pub fn line_frame_title(prefix: &str, sentence: &str) -> String {
+    format!("{prefix}: {sentence}")
+}
+
+/// Returns the prefix of several lines in a frame title: "Lines 2 and 3", or "Clear lines 1 and 2" on the card of
+/// the button `button`.
+pub fn lines_prefix(button: Option<&str>, numbers: &[usize]) -> String {
+    match button {
+        Some(button) => format!("{button} lines {}", number_list(numbers)),
+        None => format!("Lines {}", number_list(numbers)),
+    }
+}
+
+/// Returns the words of the nodes that work out the new value of `property` from several changes, such as "the new
+/// Status (the first change that applies wins)".
+pub fn new_value_words(property: &str) -> String {
+    format!("the new {property} (the first change that applies wins)")
+}
+
+/// Returns the words of a neighbour's property read inside a look, such as "their Status".
+pub fn their_property_words(property: &str) -> String {
+    format!("their {property}")
+}
+
+/// Returns the title of a frame around the nodes of a part of the sheet in a converted copy, such as "Sheet, measure:
+/// Alive", where `words` names the part.
+pub fn sheet_frame_title(words: &str) -> String {
+    format!("Sheet, {words}")
+}
+
+/// Returns the words of the start of `property`, such as "Status starts as".
+pub fn starts_frame_words(property: &str) -> String {
+    format!("{property} starts as")
+}
+
+/// Returns the words of the measures named `names`: "measure: Alive", or "measures: Alive and Dead".
+pub fn measure_frame_words(names: &[String]) -> String {
+    match names {
+        [name] => format!("measure: {name}"),
+        names => format!("measures: {}", word_list(names)),
+    }
+}
+
+/// Returns the words of the button named `name`, such as "button Clear".
+pub fn button_frame_words(name: &str) -> String {
+    format!("button {name}")
+}
+
+/// Returns the words of the colour rule of each `thing` over `property`, such as "colour each cell by Status".
+pub fn color_frame_words(thing: &str, property: &str) -> String {
+    format!("colour each {thing} by {property}")
+}
+
+/// Words of a part of the sheet that no other words name, in the title of its frame in a converted copy.
+pub const SHEET_PART_WORDS: &str = "shared nodes";
+
 // Lists
 
 /// Returns line numbers as a list ending in "and": "2", "2 and 5", "2, 3 and 4".

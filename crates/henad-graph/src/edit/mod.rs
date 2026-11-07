@@ -31,7 +31,7 @@ use crate::ids::{NodeId, is_port_segment};
 use crate::keys::KeyStream;
 use crate::node::{Accumulator, Node, NodeBody};
 use crate::types::ValueType;
-use crate::value::{ConfigValue, InputValue, Literal, PortRef};
+use crate::value::{Color, ConfigValue, InputValue, Literal, PortRef};
 
 /// A pass or a function, whose nodes form one body.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -265,6 +265,15 @@ pub enum EditCommand {
         from: String,
         /// New name.
         to: String,
+    },
+    /// Sets the colour of a variant in its category's palette.
+    SetVariantColor {
+        /// Id of the category.
+        category: String,
+        /// Name of the variant.
+        name: String,
+        /// New colour.
+        color: Color,
     },
     /// Removes a variant that nothing names.
     RemoveVariant {

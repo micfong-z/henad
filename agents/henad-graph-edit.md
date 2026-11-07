@@ -6,7 +6,8 @@ through these commands (`agents/henad-app-editor.md`).
 **Edit commands** (`edit/`). `GraphBuilder` holds a `GraphDocument` and an `EditorRegion` and runs
 `EditCommand`s: `AddNode`, `RemoveNode`, `Connect`, `Disconnect`, `SetLiteral`, `BindParam`,
 `SetConfig`, `SetRegion`, `Move`, `Frame`, `Paste`, and the declaration edits (add a category or
-palette, add, rename and remove a lane, variant, parameter, statistic, action or pass, and
+palette, add, rename and remove a lane, variant, parameter, statistic, action or pass,
+`SetVariantColor` (the colour of a named variant, which enters the code), and
 `MovePass` within its stage), and three edits in place for the Editor's forms: `SetPassEnabled` (a
 parameter it binds must exist), `SetParam` (the descriptor with the same id, in its place in the
 schema) and `SetWorld` (the same topology), and the region edits below. `apply` runs on a copy, so a
@@ -29,7 +30,11 @@ literals, `action`, `runs` and the canvas scope `pass.<id>`. A remove with refer
 `EditError::Referenced` with each place. `copy(scope, nodes)` returns a whole graph file
 (declarations, one pass or function of the copied nodes, their placement, no stats, empty `runs`).
 `Paste` mints ids and keys, keeps wires inside the copy, drops the rest and drops a binding of a
-parameter the target lacks. Category rename and remove and palette edits are not written yet.
+parameter the target lacks. The copied text also holds each frame of the canvas that holds a copied
+node (`EditorRegion::frames_holding`, every key kept, members cut to the copied nodes), and `Paste`
+adds a frame of its own on the target canvas for each, around the pasted ids
+(`copy_carries_frame_membership`). Category rename and remove and the edits of a `[[palette]]`
+are not written yet.
 
 **Function edits** (`edit/functions.rs`). `AddFunction` (no ports, empty body), `RenameFunction`
 (every call's `config.function`, the canvas scope, the `[editor] function.<id>` entry),
@@ -43,8 +48,11 @@ region outside the selection, a `fn.input`/`fn.output`, or a node a `[[stat]]` r
 read from outside (a named outer output, or an inner output of a region around the selection) is
 an input typed by the checker, each output a node outside reads is an output, nodes keep their ids
 and placement, top nodes leave their region, and a `fn.call` with a fresh key takes their place in
-the shared region. Its draws then take the call's key on top of their own, so they draw other
-numbers. `Ungroup { scope, node }` copies the called body with fresh ids where the call sat, maps
+the shared region. `EditorRegion::move_frame_members` carries the frames: each frame of the canvas
+holding a moved node keeps its other members and takes the call, and a copy on `function.<id>`,
+every other key kept, holds the moved nodes (`make_function_keeps_frame_members`). The moved
+draws then take the call's key on top of their own, so they draw other numbers.
+`Ungroup { scope, node }` copies the called body with fresh ids where the call sat, maps
 `fn.input` to the call's inputs and the call's readers (and a `[[stat]]` reading a node output)
 to the `fn.output` values, and gives each counter draw `compose_key(call key, key)`, so the copy
 draws what the call drew. A call inside the body takes the composed key as its own key, and the
@@ -88,7 +96,18 @@ its function's declared outputs, so `AddFunctionPort` of a second output runs it
 of the function in every body. A `fn.output` node or its `port` changes no call's outputs.
 
 **The editor region** keeps a `toml::Table`, never refuses a value and never fails a read.
-`frames()` reads every `[[editor.frame]]` as a `FrameLayout` for the Editor's canvas. Its
+`frames()` reads every `[[editor.frame]]` as a `FrameLayout` for the Editor's canvas, its `lines`
+read from `line` (one string) or `lines` (an array), the origins a converted copy records: line ids
+or sheet part paths. `push_frame` writes `line` for one origin and `lines` for several, and
+`add_frame` is `push_frame` with none. `notes()` reads every `[[editor.note]]` as a `NoteLayout`
+(`scope` and `title` empty and `pos` `None` when absent), and `add_note` writes `scope`, `pos` and
+`title` only when set. `model_origin()` reads the top-level `origin` table as a `ModelOrigin` (kind,
+model, name, file, hash, code, copy code, converted date, all strings, `None` when one is missing),
+and `set_model_origin` replaces it. `set_node_label` writes a label with no position.
+`node_layout` returns such an entry at `[0, 0]`, and `node_pos` returns `None` for it, so every
+"is it placed" question (the app's `place_unplaced`, the paste corner, `BodyCanvas::moved`,
+MakeFunction's `placed_bounds`) asks `node_pos`. The conversion that writes these is in
+`agents/henad-graph-sheet-convert.md`. The region's
 writer orders the keys and rounds `pos` to whole points, and `to_text` is a fixed point for any
 table, which `a_strange_editor_region_stays_readable_and_a_fixed_point` holds. The writer leaves
 out a value nested deeper than `MAX_INLINE_DEPTH` (64) arrays and inline tables, since the `toml`

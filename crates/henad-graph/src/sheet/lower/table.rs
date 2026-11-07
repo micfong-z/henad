@@ -35,6 +35,8 @@ pub struct NodeOrigin {
 pub struct LineMap {
     /// Origin of each node, by id.
     origins: BTreeMap<NodeId, NodeOrigin>,
+    /// Node whose output is the result of each line that works out a value, by line id.
+    results: BTreeMap<String, NodeId>,
 }
 
 /// Prints the number of nodes in place of their origins.
@@ -50,6 +52,19 @@ impl LineMap {
     /// Records `origin` for node `id`.
     pub(super) fn insert(&mut self, id: NodeId, origin: NodeOrigin) {
         self.origins.insert(id, origin);
+    }
+
+    /// Records node `id` as the node whose output is the result of line `line_id`.
+    pub(super) fn insert_result(&mut self, line_id: String, id: NodeId) {
+        self.results.insert(line_id, id);
+    }
+
+    /// Returns the node whose output is the result of line `line_id`, `None` for a line that works out no value or
+    /// whose value lowers to no node, such as a constant.
+    ///
+    /// The result of a Look around line is its fold, whose outputs are the line's parts.
+    pub fn result_node(&self, line_id: &str) -> Option<NodeId> {
+        self.results.get(line_id).copied()
     }
 
     /// Returns the origin of node `id`, `None` for a node the lowering did not write.

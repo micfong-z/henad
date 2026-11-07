@@ -1129,8 +1129,7 @@ impl GraphEditor {
                     .chain(document.functions.iter().map(|function| &function.body));
                 let corner = bodies
                     .flat_map(|body| body.nodes.iter())
-                    .filter_map(|node| editor.node_layout(node.id))
-                    .map(|layout| layout.pos)
+                    .filter_map(|node| editor.node_pos(node.id))
                     .reduce(|left, right| [left[0].min(right[0]), left[1].min(right[1])])?;
                 Some([at[0] - corner[0], at[1] - corner[1]])
             })
@@ -1421,12 +1420,7 @@ fn place_unplaced(builder: &mut GraphBuilder) {
     let mut moves = Vec::new();
     for body in bodies {
         let editor = builder.editor();
-        let placed: Vec<[f64; 2]> = body
-            .nodes
-            .iter()
-            .filter_map(|node| editor.node_layout(node.id))
-            .map(|layout| layout.pos)
-            .collect();
+        let placed: Vec<[f64; 2]> = body.nodes.iter().filter_map(|node| editor.node_pos(node.id)).collect();
         if placed.len() == body.nodes.len() {
             continue;
         }
@@ -1440,11 +1434,12 @@ fn place_unplaced(builder: &mut GraphBuilder) {
                 [right + arrange::NODE_SIZE[0] + arrange::COLUMN_GAP, 0.0]
             });
         for (key, pos) in arrange::arrange(body, document.library, origin, &BTreeMap::new()) {
-            let layout = editor.node_layout(key.node);
             let placed = if key.output_half {
-                layout.is_some_and(|layout| layout.output_pos.is_some())
+                editor
+                    .node_layout(key.node)
+                    .is_some_and(|layout| layout.output_pos.is_some())
             } else {
-                layout.is_some()
+                editor.node_pos(key.node).is_some()
             };
             if !placed && (!key.output_half || placed_none) {
                 moves.push(place_command(key, pos));

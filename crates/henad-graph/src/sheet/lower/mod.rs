@@ -202,6 +202,8 @@ struct Builder<'a> {
     dropped: HashSet<String>,
     /// Name in the author's words of each fold whose fault a run reports, by temporary id.
     fault_names: Vec<(NodeId, String)>,
+    /// Node whose output is the result of each line lowered so far, as a temporary id, with the line's id.
+    results: Vec<(NodeId, String)>,
 }
 
 impl<'a> Builder<'a> {
@@ -224,6 +226,7 @@ impl<'a> Builder<'a> {
             },
             dropped: HashSet::new(),
             fault_names: Vec::new(),
+            results: Vec::new(),
         }
     }
 
@@ -332,6 +335,11 @@ impl<'a> Builder<'a> {
             path: site.path.clone(),
         });
         id
+    }
+
+    /// Records the temporary node `node` as the node whose output is the result of line `line_id`.
+    fn record_result(&mut self, node: NodeId, line_id: &str) {
+        self.results.push((node, line_id.to_owned()));
     }
 
     /// Records a draw with key `key`, owned by `owner` in words, at `place`.
@@ -461,6 +469,9 @@ impl<'a> Builder<'a> {
         let mut fault_names = FaultNames::default();
         for (node, name) in self.fault_names {
             fault_names.insert(renumber(node), name);
+        }
+        for (node, line) in self.results {
+            map.insert_result(line, renumber(node));
         }
         Ok(Lowered {
             document: self.graph,

@@ -38,7 +38,7 @@ pub(super) fn sheets() -> Vec<(&'static str, &'static str)> {
 }
 
 /// Returns the sheet `file_name` of [`sheets`].
-pub(super) fn sheet_text(file_name: &str) -> &'static str {
+pub(crate) fn sheet_text(file_name: &str) -> &'static str {
     sheets()
         .into_iter()
         .find(|(name, _)| *name == file_name)

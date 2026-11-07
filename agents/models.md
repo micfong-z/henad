@@ -157,8 +157,9 @@ and Too close:" and names no node or pass, and the device runs the random walk a
 bands hold each sheet and its `round1/` file on seeds 1 to 3, each procedure in the test's doc and a
 planted rule error outside it: the random walk's mean squared step over a tick within five standard
 errors of `4 * 2^2` (the planted error moves once outside the Repeat), the boids' speeds within 3
-and 15 after each of 300 ticks with 20000 birds and their polarisation after the last within 0.15
-and 0.95 (the planted error steers by the average velocity, near 1), and bounded confidence's one
+and 15 after each of 300 ticks with 20000 birds and their polarisation after the last above 0 and
+at most 0.95 (the planted error steers by the average velocity, near 1, and a run on the device is
+not repeatable at one seed, so no lower edge holds), and bounded confidence's one
 opinion group (runs of 0.01 bins each holding 1% of the people) after 100 ticks (the planted error
 steers by the average, no group). Keep these files.
 

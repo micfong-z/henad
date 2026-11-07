@@ -155,8 +155,10 @@ its widest drawn node, a region's input half then moved right to the column befo
 (`the_input_half_of_a_region_sits_in_the_column_before_its_body`): a link to an inner output leaves
 the input half, a link to an accumulator the output half, and every node inside a region reads the
 input half and feeds the output half, so a body sits between its halves. `place_unplaced` places an
-output half only in a body placed from scratch. It runs at load, on every edit's draft before the
-snapshot (`edit`, `add_node`, `wrap`, `add_function_port`) and after `restore`. Otherwise a node an
+output half only in a body placed from scratch, and counts a node as placed by
+`EditorRegion::node_pos`, so a converted copy's labelled nodes with no `pos` are arranged too. It
+runs at load, on every edit's draft before the snapshot (`edit`, `add_node`, `wrap`,
+`add_function_port`) and after `restore`. Otherwise a node an
 edit leaves unplaced, such as a new function port's node or an import from a file with no node
 placement, reaches `BodyCanvas::moved` as a move, an edit of its own that clears redo after each
 undo.

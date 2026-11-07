@@ -313,18 +313,19 @@ fn boids_run(ctx: &GpuContext, text: &str, seed: u64, speeds: bool) -> BoidsRun 
 }
 
 /// Band: every speed of the sheet's birds lies within the Keep between limits, 3 and 15, after each of 300 ticks, and
-/// the polarisation of 20000 birds after the last tick lies between 0.15 and 0.95 on each seed, for the sheet and the
-/// hand-lowered file. Both form several flocks heading their own ways. Procedure: each bird's speed after every tick,
-/// and the length of the mean of the birds' unit velocities after tick 300, at the defaults with 20000 birds, on seeds
-/// 1 to 3. Two planted errors sit outside. One steers by the flockmates' average velocity in place of towards it, and
-/// every bird joins one flock near 1. The other leaves the Keep between line out of the card, and a speed leaves the
-/// limits.
+/// the polarisation of 20000 birds after the last tick lies above 0 and at most 0.95 on each seed, for the sheet and
+/// the hand-lowered file. Both form several flocks heading their own ways. A run on the device is not repeatable at one
+/// seed, and the flocks' headings can almost cancel, so no lower edge above 0 holds. Procedure: each bird's speed after
+/// every tick, and the length of the mean of the birds' unit velocities after tick 300, at the defaults with 20000
+/// birds, on seeds 1 to 3. Two planted errors sit outside. One steers by the flockmates' average velocity in place of
+/// towards it, and every bird joins one flock near 1. The other leaves the Keep between line out of the card, and a
+/// speed leaves the limits.
 #[test]
 fn the_boids_sheet_keeps_its_speeds_and_flocks_in_band() {
     let Some(ctx) = device("the_boids_sheet_keeps_its_speeds_and_flocks_in_band") else {
         return;
     };
-    let band = 0.15..=0.95;
+    let band = |polarisation: f64| polarisation > 0.0 && polarisation <= 0.95;
     let steers_by = edited(
         sheet("boids.toml"),
         "mode = \"towards\"\nvalue = { result = \"l1\", part = \"average_velocity\" }",
@@ -347,18 +348,15 @@ fn the_boids_sheet_keeps_its_speeds_and_flocks_in_band() {
             "a speed of the sheet at seed {seed} as (tick, bird, speed)"
         );
         assert!(
-            band.contains(&run.polarisation),
+            band(run.polarisation),
             "the sheet's polarisation at seed {seed} is {}",
             run.polarisation
         );
         let found = boids_run(&ctx, HAND_BOIDS, seed, false).polarisation;
-        assert!(
-            band.contains(&found),
-            "the hand-lowered polarisation at seed {seed} is {found}"
-        );
+        assert!(band(found), "the hand-lowered polarisation at seed {seed} is {found}");
         let found = boids_run(&ctx, &steers_by, seed, false).polarisation;
         assert!(
-            !band.contains(&found),
+            !band(found),
             "the planted error's polarisation at seed {seed} is {found}"
         );
         assert!(

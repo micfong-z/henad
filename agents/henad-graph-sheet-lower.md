@@ -41,8 +41,9 @@ emission order. No id depends on another line's display place. Past `MAX_NODES_P
 refused at its table, past `MAX_SHEET_NODES` the sheet. `LineMap` (`table.rs`) maps every written
 node id to its `NodeOrigin` (owner `Line(id)` or `Sheet`, and a path such as `condition.right.2`,
 `cells.status.starts_as`, `measure.alive` or `card.cell_tick.status`), never by division, since
-normalisation copies take ids past the file's last. A line's paths follow the slot path grammar of
-`sheet::edit` (`parse_path` in `edit/lines.rs`), so one path names one slot for the lowering, the
+normalisation copies take ids past the file's last. `LineMap::result_node` names the node whose
+output is a result line's value (a Look around's fold). A line's paths follow the slot path grammar
+of `sheet::edit` (`parse_path` in `edit/lines.rs`), so one path names one slot for the lowering, the
 diagnostics and the editor: indices count from 0 (`items.0`, `row.0.condition`, `summaries.0.value`,
 `button.<id>.does.0` for a sheet node too), a summary is named by its index and never by its id, and
 past the slot a path may name an item of a listed right side (`right.1`). The nodes of a line that

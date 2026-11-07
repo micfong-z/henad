@@ -455,6 +455,13 @@ impl GraphBuilder {
         function.body.nodes = moved;
         self.document.functions.push(function);
         self.editor.set_node_pos(call, bounds[0]);
+        let wrapped: Vec<NodeId> = wrapped.into_iter().collect();
+        self.editor.move_frame_members(
+            &scope.canvas(),
+            &wrapped,
+            &Scope::Function(id.to_owned()).canvas(),
+            call,
+        );
         Ok(made)
     }
 
@@ -545,8 +552,8 @@ impl GraphBuilder {
     fn placed_bounds(&self, nodes: &BTreeSet<NodeId>) -> [[f64; 2]; 2] {
         nodes
             .iter()
-            .filter_map(|node| self.editor.node_layout(*node))
-            .map(|layout| [layout.pos, layout.pos])
+            .filter_map(|node| self.editor.node_pos(*node))
+            .map(|pos| [pos, pos])
             .reduce(|left, right| {
                 [
                     [left[0][0].min(right[0][0]), left[0][1].min(right[0][1])],

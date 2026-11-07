@@ -11,6 +11,19 @@ use crate::ids::NodeId;
 use crate::node::{Node, NodeBody};
 use crate::value::{ConfigValue, InputValue};
 
+/// Returns the member ids of the frame table `frame` that `renamed` maps, each renamed.
+fn renamed_members(frame: &toml::Table, renamed: &BTreeMap<NodeId, NodeId>) -> Vec<toml::Value> {
+    frame
+        .get("members")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|member| member.as_str()?.parse::<NodeId>().ok())
+        .filter_map(|member| renamed.get(&member))
+        .map(|member| toml::Value::String(member.to_string()))
+        .collect()
+}
+
 /// Returns `nodes` with every wire to a node outside them dropped, and every region outside them cleared.
 fn detached(nodes: Vec<Node>) -> Vec<Node> {
     let kept: Vec<NodeId> = nodes.iter().map(|node| node.id).collect();
@@ -31,8 +44,9 @@ impl GraphBuilder {
     /// Returns the model-file text of the nodes `nodes` of `scope`, which [`super::EditCommand::Paste`] reads.
     ///
     /// The text is a whole graph file: the declarations of the document, one pass or function of the copied body's
-    /// kind holding the nodes, and their placement. A wire from a node outside the copy is dropped, and so is a region
-    /// outside it.
+    /// kind holding the nodes, their placement, and each frame that holds one of them with only those members. A wire
+    /// from a node outside the copy is dropped, and so is a region outside it. A paste adds a frame on its canvas for
+    /// each frame of the text, every key kept, around the pasted nodes.
     ///
     /// # Errors
     ///
@@ -90,10 +104,35 @@ impl GraphBuilder {
             }
             editor.table_mut().insert("node".to_owned(), toml::Value::Table(kept));
         }
+        for frame in self.editor.frames_holding(&scope.canvas(), nodes) {
+            editor.push_frame_table(frame);
+        }
         let mut text = crate::writer::semantic_text(&document);
         text.push('\n');
         text.push_str(&editor.to_text());
         Ok(text)
+    }
+
+    /// Adds a frame on the canvas of `scope` for each frame of the pasted `file`, every key kept, around the pasted
+    /// copies of its members that `renamed` maps.
+    fn paste_frames(&mut self, scope: &Scope, file: &GraphFile, renamed: &BTreeMap<NodeId, NodeId>) {
+        let Some(frames) = file
+            .editor()
+            .and_then(|editor| editor.table().get("frame"))
+            .and_then(toml::Value::as_array)
+        else {
+            return;
+        };
+        for frame in frames.iter().filter_map(toml::Value::as_table) {
+            let members = renamed_members(frame, renamed);
+            if members.is_empty() {
+                continue;
+            }
+            let mut pasted = frame.clone();
+            pasted.insert("scope".to_owned(), toml::Value::String(scope.canvas()));
+            pasted.insert("members".to_owned(), toml::Value::Array(members));
+            self.editor.push_frame_table(pasted);
+        }
     }
 
     /// Pastes the nodes of `text` into `scope`, moved by `offset`, and returns their new ids.
@@ -174,6 +213,7 @@ impl GraphBuilder {
             .collect();
         let made: Vec<NodeId> = pasted.iter().map(|node| node.id).collect();
         self.body_mut(scope)?.nodes.extend(pasted);
+        self.paste_frames(scope, &file, &renamed);
         if let Scope::Pass(pass) = scope
             && let Some(pass) = self.document.passes.iter_mut().find(|known| known.id == *pass)
         {

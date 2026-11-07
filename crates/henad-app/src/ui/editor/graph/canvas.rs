@@ -321,8 +321,8 @@ impl BodyCanvas {
                 output_half_position(key.node, body, editor)
             } else {
                 editor
-                    .node_layout(key.node)
-                    .map_or(fallback, |layout| pos2(layout.pos[0] as f32, layout.pos[1] as f32))
+                    .node_pos(key.node)
+                    .map_or(fallback, |pos| pos2(pos[0] as f32, pos[1] as f32))
             };
             let existing = self.canvas_nodes(key.output_half).get(&key.node).copied();
             let pin_node = if let Some(pin_node) = existing {
@@ -532,7 +532,7 @@ impl BodyCanvas {
             let Some(info) = self.snarl.get_node_info(*pin_node) else {
                 continue;
             };
-            let placed = editor.node_layout(*id).map(|layout| layout.pos);
+            let placed = editor.node_pos(*id);
             let pos = [f64::from(info.pos.x), f64::from(info.pos.y)];
             let differs =
                 placed.is_none_or(|placed| (placed[0] - pos[0]).abs() > 0.01 || (placed[1] - pos[1]).abs() > 0.01);

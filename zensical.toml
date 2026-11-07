@@ -172,6 +172,7 @@ nav = [
             { "#85, 2026-11-07" = "developing/agent-record/20261107-85-grid-sheets-on-the-device.md" },
             { "#86, 2026-11-07" = "developing/agent-record/20261107-86-sheets-in-the-app.md" },
             { "#87, 2026-11-07" = "developing/agent-record/20261107-87-agent-sheets.md" },
+            { "#88, 2026-11-07" = "developing/agent-record/20261107-88-conversion.md" },
         ] },
     ] },
 ]

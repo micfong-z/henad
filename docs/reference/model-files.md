@@ -340,6 +340,23 @@ The sheet's name, its ids, the names of its states and parameters, its parameter
 A comment, a note, the `purpose` and the name of a result line stay outside it, and so does a new order of two lines that cannot change the result.
 A [resume](cli.md#resuming) of a sheet's sweep is refused when the code differs, as for any model file.
 
+### A sheet converted to a graph model
+
+A program converts a sheet to a graph model with `henad::graph::sheet::convert`.
+The conversion runs one way and leaves the sheet as it is.
+It returns a new file of kind `graph` holding the graph the sheet lowers to, under the sheet's id with `_expert` added and its name with " (expert)" added, numbered when a model already uses them.
+Every node keeps its id and the key of its draws, so the graph model runs tick for tick like the sheet at one seed.
+
+The converted graph model has its own code.
+Its id, name and description enter its semantic text, so its code differs from the sheet's before any edit, and a sweep of it is a sweep of another model.
+The `origin` record of its `[editor]` region names the sheet: `code` is the sheet's code, and `copy_code` the graph model's own code at conversion.
+`kind`, `model`, `name` and `file` name the sheet and its file, `hash` is the FNV-1a hash of the sheet's canonical text, and `converted` the date.
+Like the rest of the region, the record stays outside the code.
+
+Each `[[editor.frame]]` of the converted file holds the nodes of one line, the nodes several lines share, or the nodes of a part of the sheet such as a start or a measure.
+Its `line` key, or its `lines` key for nodes several lines share, records the line ids, or the parts of the sheet, the nodes came from.
+A sheet with an error, or with a line that does not run yet, does not convert.
+
 ### Limits of a sheet
 
 | Limit | Value |

@@ -20,5 +20,6 @@ mod lowered_fixtures;
 mod registry;
 mod runtime_parity;
 mod sheet_agents;
+mod sheet_convert;
 mod sheet_grid;
 mod simulation;

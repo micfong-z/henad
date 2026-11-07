@@ -32,6 +32,8 @@ describes: `mod.rs` holds `SheetBuilder`, `SheetEdit`, `LineField`, `SheetItem`,
 `suggested_state_color`; `names.rs` `automatic_name` and the rule that keeps names up to date;
 `references.rs` every place an id is named; `lines.rs` slot paths, phrase depth and the outline
 moves.
+`sheet/convert.rs` and `sheet/changes.rs` are private, the conversion to a node graph copy that
+`agents/henad-graph-sheet-convert.md` describes.
 `sheet/limits.rs` holds the sheet's limits apart from `crate::limits`, so `library.lock` stays as it
 is: `MAX_SHEET_BYTES` (1 MiB), `MAX_NESTING` (24), `MAX_LINES_PER_CARD` (256), `MAX_NODES_PER_LINE`
 and `MAX_SHEET_NODES` (999 each, for the lowering's `n(1000k + j)` ids), `MAX_SHEET_ID_BYTES` (48,

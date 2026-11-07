@@ -68,6 +68,7 @@ characters, and a file that grows past that splits by subsystem, as henad-app's 
 | henad-graph's sheets: the author document, its reader, writer, wording, checker and limits | `agents/henad-graph-sheet.md` |
 | henad-graph's sheet lowering: grid and agent sheets, ids, keys, the line table, refusals | `agents/henad-graph-sheet-lower.md` |
 | henad-graph's sheet edit commands | `agents/henad-graph-sheet-edit.md` |
+| henad-graph's conversion of a sheet to a node graph copy, and its changes | `agents/henad-graph-sheet-convert.md` |
 | henad-app: options, state, builds, teardown, install, export | `agents/henad-app.md` |
 | henad-app's Editor tab | `agents/henad-app-editor.md` |
 | henad-app's sheet editor: the Sheet and Card panes, the New model dialog | `agents/henad-app-sheet.md` |

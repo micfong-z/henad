@@ -266,6 +266,7 @@ impl<'a> CardLowering<'_, 'a> {
             accumulators.push(accumulator(&summary_accumulator(&summary.id), value_type, combine));
         }
         let fold = self.open_fold(site, line.around, accumulators)?;
+        self.builder.record_result(fold, id);
         self.folds.push(Fold {
             node: fold,
             reads: HashMap::new(),

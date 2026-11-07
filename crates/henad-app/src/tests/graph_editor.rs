@@ -395,10 +395,39 @@ fn a_graph_without_placement_opens_arranged() {
     for pass in &graph.document().passes {
         for node in &pass.body.nodes {
             assert!(
-                graph.builder().editor().node_layout(node.id).is_some(),
+                graph.builder().editor().node_pos(node.id).is_some(),
                 "{} has no place",
                 node.id
             );
+        }
+    }
+    assert!(!graph.history().can_undo(), "opening makes no undo step");
+}
+
+#[test]
+fn a_converted_copy_opens_arranged_with_its_labels() {
+    let text = henad_graph::sheet::starters()[0].text;
+    let sheet = henad_graph::sheet::SheetFile::parse(text).expect("the Game of Life sheet lowers");
+    let options = henad_graph::sheet::ConvertOptions::new(sheet.document(), "2026-11-07", |_, _| false);
+    let copy = henad_graph::sheet::convert(&sheet, &options).expect("the sheet converts");
+    let labelled = copy.editor().expect("the copy has an editor region");
+    let graph = GraphEditor::new(&copy);
+    let editor = graph.builder().editor();
+    for pass in &graph.document().passes {
+        let mut seen: Vec<[f64; 2]> = Vec::new();
+        for node in &pass.body.nodes {
+            let pos = editor
+                .node_pos(node.id)
+                .unwrap_or_else(|| panic!("{} of {} has no place", node.id, pass.id));
+            assert!(
+                !seen.contains(&pos),
+                "{} of {} shares the place {pos:?} with another node",
+                node.id,
+                pass.id
+            );
+            seen.push(pos);
+            let label = |editor: &henad_graph::editor::EditorRegion| editor.node_layout(node.id)?.label;
+            assert_eq!(label(editor), label(labelled), "{} keeps its label", node.id);
         }
     }
     assert!(!graph.history().can_undo(), "opening makes no undo step");

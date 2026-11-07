@@ -25,8 +25,10 @@
 //! [`sentence`] in a comment above it, and reading that text returns the same document. [`SheetFile::parse`] reads,
 //! checks and lowers a sheet to the graph it runs as, whose code identity is the sheet's, and [`LineMap`] names the
 //! line or part of the sheet each node of that graph comes from. [`SheetFile::place_graph_diagnostic`] places a finding
-//! about that graph at the table of the sheet its node comes from. [`starters`] returns the sheets a new model begins
-//! from, and [`edit`] holds the commands every edit of the sheet editor runs.
+//! about that graph at the table of the sheet its node comes from. [`convert`] copies that graph to a node graph file
+//! of its own, with frames naming the line each node came from, and [`changes_since_conversion`] lists what an edit of
+//! the copy changed. [`starters`] returns the sheets a new model begins from, and [`edit`] holds the commands every
+//! edit of the sheet editor runs.
 //!
 //! ```
 //! use henad_graph::sheet::ParsedSheet;
@@ -58,7 +60,9 @@ use std::fmt;
 
 use henad_core::diagnostic::CodeDiagnostic;
 
+mod changes;
 pub mod check;
+mod convert;
 pub mod document;
 pub mod edit;
 mod file;
@@ -70,6 +74,8 @@ pub mod sentence;
 mod starters;
 mod writer;
 
+pub use changes::{ChangeGroup, ChangesError, changes_since_conversion};
+pub use convert::{ConvertError, ConvertOptions, ConvertRefusal, convert};
 pub use file::SheetFile;
 pub use lower::table::{LineMap, NodeOrigin, NodeOwner};
 pub use reader::{ParsedSheet, SheetPlaces, TablePlaces};

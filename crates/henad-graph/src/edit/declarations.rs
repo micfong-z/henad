@@ -205,6 +205,11 @@ impl GraphBuilder {
                 Ok(())
             }
             EditCommand::RenameVariant { category, from, to } => self.rename_variant(&category, &from, &to),
+            EditCommand::SetVariantColor { category, name, color } => {
+                let position = self.variant_position(&category, &name)?;
+                self.category_mut(&category)?.variants[position].color = color;
+                Ok(())
+            }
             EditCommand::RemoveVariant { category, name } => {
                 let position = self.variant_position(&category, &name)?;
                 self.name_bare_counter_links(&category);

@@ -324,6 +324,7 @@ impl<'a> CardLowering<'_, 'a> {
     /// and every summary by its id.
     pub(super) fn look_around_agents(&mut self, site: &Site, id: &'a str, line: &'a SheetLine) -> Result<(), String> {
         let (node, within) = self.enter_look(site, id)?;
+        self.builder.record_result(node, id);
         let body = self.look_agents_body(site, id, line, node, &within);
         self.folds.pop();
         let types = body?;

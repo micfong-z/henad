@@ -434,6 +434,9 @@ impl<'a> CardLowering<'_, 'a> {
                     }
                     _ => self.phrase(&site, line)?,
                 };
+                if let Operand::Link(port, _) = &result {
+                    self.builder.record_result(port.node, id);
+                }
                 self.results.insert(id, result);
             }
             LineKind::LookAround if line.around == Some(Around::AgentsWithin) => {
