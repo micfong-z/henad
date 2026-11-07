@@ -25,6 +25,7 @@ pub(crate) mod sheet_document;
 mod sheet_edit;
 mod sheet_lower;
 mod sheet_mutation;
+mod sheet_rates;
 mod sheet_sentence;
 mod sheet_writer;
 mod sum_fields;

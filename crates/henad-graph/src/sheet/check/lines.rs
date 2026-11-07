@@ -1,10 +1,12 @@
-//! Cards, lines and the values in their slots: references, types, blanks, scopes and the refusals of rates and of
-//! chances outside 0 to 1.
+//! Cards, lines and the values in their slots: references, types, blanks, scopes, the refusals of rates and of
+//! chances outside 0 to 1, and the warning on a rate read in another unit than its parameter's.
 //!
 //! The slots of a line are checked in the order its sentence reads them, so the first blank or unusable value of a
 //! line words its skip note, as the card shows it.
 
 use std::collections::{HashMap, HashSet};
+
+use henad_core::metadata::TimeUnit;
 
 use super::{Checker, Place};
 use super::{declarations, formula};
@@ -12,6 +14,7 @@ use crate::sheet::document::{
     Around, CardRuns, CellWhich, CompareTest, LineKind, LineMode, MadeOf, PickRule, PropertyType, SheetChip, SheetLine,
     SheetLiteral, SheetValue, Slot, SummaryKind,
 };
+use crate::sheet::edit::unit_in_text;
 use crate::sheet::limits::MAX_NESTING;
 use crate::sheet::sentence::{
     self, ANY_STATE_ID, Blank, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, LineSelect, NOT_RUN_TICK, RATE_BELOW_ZERO,
@@ -562,8 +565,9 @@ impl<'a> Checker<'a> {
                 }
                 self.slot(&line.rate, &inner, Want::Blank(Blank::Rate), number, None, state);
                 self.draw_range(&line.rate, context, Draw::Rate);
-                if line.rate_unit.is_none() {
-                    state_skip(self, context, state, Want::Select(LineSelect::UnitOfTime));
+                match line.rate_unit {
+                    None => state_skip(self, context, state, Want::Select(LineSelect::UnitOfTime)),
+                    Some(unit) => self.rate_unit(&line.rate, unit, context),
                 }
                 if !line.tries.is_blank() {
                     self.slot(&line.tries, &inner, Want::Blank(Blank::Count), number, None, state);
@@ -1265,6 +1269,26 @@ impl<'a> Checker<'a> {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+impl Checker<'_> {
+    /// Warns when the rate in `slot` is a parameter whose Unit names another unit of time than `unit`, the line's
+    /// unit. The line's unit governs the run.
+    fn rate_unit(&mut self, slot: &Slot, unit: TimeUnit, context: &Context<'_>) {
+        let Some(SheetValue::Chip(SheetChip::Param(id))) = slot.value() else {
+            return;
+        };
+        let Some(parameter) = self.parameters.get(id.as_str()) else {
+            return;
+        };
+        let Some(own) = parameter.unit.as_deref().and_then(unit_in_text) else {
+            return;
+        };
+        if own != unit {
+            let message = sentence::unit_mismatch(&parameter.name, own, unit);
+            self.warning(message, &context.place);
         }
     }
 }

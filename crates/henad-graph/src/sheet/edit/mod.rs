@@ -21,7 +21,8 @@
 //!   [`automatic_name`] gives it.
 //! - **Rates.** A new rate takes the unit of one tick, marked as taken from the tick. A parameter put into a rate whose
 //!   unit is empty or marked gives the rate its own unit and clears the mark. A unit chosen by hand clears the mark
-//!   too, and gives a parameter with no unit that the rate reads the same unit.
+//!   too, and gives a parameter with no unit that the rate reads the same unit. [`SheetEdit::ChangeToRate`] and
+//!   [`SheetEdit::ChangeToChance`] turn a typed chance into a rate and back, keeping the chance per tick.
 //!
 //! ```
 //! use henad_graph::sheet::ParsedSheet;
@@ -62,10 +63,11 @@ use super::check::{RESERVED_IDS, RESERVED_PARAMETER_IDS, RESERVED_PREFIX, holds_
 use super::document::{
     AgentKind, Around, ButtonStep, ButtonStepRule, CardRuns, CellWhich, ColorRule, ColorRuleKind, CompareTest, Edges,
     LineKind, LineMode, LookSummary, MadeOf, MeasureRule, ParameterType, PickRule, PropertyType, SheetButton,
-    SheetCard, SheetChip, SheetDocument, SheetEvent, SheetLine, SheetMeasure, SheetParameter, SheetProperty,
-    SheetState, SheetTime, SheetValue, Slot, StartRule, StartsAs,
+    SheetCard, SheetChip, SheetDocument, SheetEvent, SheetLine, SheetLiteral, SheetMeasure, SheetParameter,
+    SheetProperty, SheetState, SheetTime, SheetValue, Slot, StartRule, StartsAs,
 };
 use super::limits::{MAX_LINES_PER_CARD, MAX_NESTING, MAX_SHEET_ID_BYTES};
+use super::rates::{chance_from_rate, rate_from_chance, shortest_f32, tick_in};
 use super::sentence::{ANY_STATE_ID, ConditionItem, rate_unit_word, unit_suggestion};
 use crate::ids::is_id;
 use crate::keys::KeyStream;
@@ -563,6 +565,26 @@ pub enum SheetEdit {
         /// Id of the line.
         line: String,
     },
+    /// Turns the chance of a line into the rate that gives the same chance per tick, `-ln(1 - p) / dt` per the tick's
+    /// unit.
+    ///
+    /// The line is a chance line or a change whose condition is a chance, and the chance is a typed number below 1.
+    /// The rate takes the tick's unit, marked as taken from the tick, keeps the line's "for each" and its key, and is
+    /// written as the shortest number that reads back as the same `f32`. The sheet's tick needs a length.
+    ChangeToRate {
+        /// Id of the line.
+        line: String,
+    },
+    /// Turns the rate of a line into the chance per tick it gives, `1 - e^(-r dt)` with `dt` one tick in the rate's
+    /// unit.
+    ///
+    /// The line is a rate line or a change whose condition is a rate, and the rate is a typed number with a unit. The
+    /// chance keeps the line's "for each" and its key, and is written as the shortest number that reads back as the
+    /// same `f32`. The sheet's tick needs a length.
+    ChangeToChance {
+        /// Id of the line.
+        line: String,
+    },
 }
 
 /// Reason a sheet edit is refused. A refused edit changes nothing.
@@ -986,6 +1008,8 @@ impl Draft {
                 lines::move_line(&mut self.document.cards[card], &line, direction)?;
             }
             SheetEdit::DeleteLine { line } => self.delete_line(&line)?,
+            SheetEdit::ChangeToRate { line } => self.change_draw(&line, LineKind::Rate)?,
+            SheetEdit::ChangeToChance { line } => self.change_draw(&line, LineKind::Chance)?,
             SheetEdit::DrawNewNumbers { line } => {
                 let target = self.line(&line)?;
                 if !holds_draw(target) {
@@ -2150,6 +2174,75 @@ impl Draft {
         };
         *slot = Slot::Blank;
         holder.tries = Slot::Filled(count);
+        Ok(())
+    }
+
+    /// Turns the chance of line `line_id` into a rate for `into` [`LineKind::Rate`], or its rate into a chance for
+    /// `into` [`LineKind::Chance`], keeping its chance per tick.
+    fn change_draw(&mut self, line_id: &str, into: LineKind) -> Result<(), SheetEditError> {
+        let time = self
+            .document
+            .time
+            .ok_or_else(|| SheetEditError::Invalid("the sheet sets no length of one tick".to_owned()))?;
+        let from = if into == LineKind::Rate {
+            LineKind::Chance
+        } else {
+            LineKind::Rate
+        };
+        let line = self.line_mut(line_id)?;
+        let holder = if line.kind == from {
+            line
+        } else {
+            match &mut line.condition {
+                Slot::Filled(SheetValue::Phrase(phrase)) if phrase.kind == from => phrase.as_mut(),
+                _ => {
+                    return Err(SheetEditError::Invalid(format!(
+                        "line '{line_id}' holds no {}",
+                        from.as_str()
+                    )));
+                }
+            }
+        };
+        let slot = if from == LineKind::Rate {
+            &holder.rate
+        } else {
+            &holder.chance
+        };
+        let typed = match slot.value() {
+            Some(SheetValue::Literal(literal @ (SheetLiteral::Number(_) | SheetLiteral::Percent(_)))) => {
+                literal.number()
+            }
+            _ => None,
+        };
+        let typed = typed.ok_or_else(|| {
+            SheetEditError::Invalid(format!("the {} of line '{line_id}' is no typed number", from.as_str()))
+        })?;
+        let converted = if into == LineKind::Rate {
+            if !(0.0..1.0).contains(&typed) {
+                return Err(SheetEditError::Invalid(format!(
+                    "a chance of {typed} gives no rate, which needs a chance from 0 to below 1"
+                )));
+            }
+            rate_from_chance(typed, time.tick_length)
+        } else {
+            let unit = holder
+                .rate_unit
+                .ok_or_else(|| SheetEditError::Invalid(format!("the rate of line '{line_id}' has no unit")))?;
+            chance_from_rate(typed, tick_in(time, unit))
+        };
+        let converted = Slot::Filled(SheetValue::Literal(SheetLiteral::Number(shortest_f32(converted))));
+        holder.kind = into;
+        if into == LineKind::Rate {
+            holder.rate = converted;
+            holder.chance = Slot::Blank;
+            holder.rate_unit = Some(time.tick_unit);
+            holder.rate_unit_from_tick = true;
+        } else {
+            holder.chance = converted;
+            holder.rate = Slot::Blank;
+            holder.rate_unit = None;
+            holder.rate_unit_from_tick = false;
+        }
         Ok(())
     }
 

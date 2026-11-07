@@ -22,4 +22,5 @@ mod runtime_parity;
 mod sheet_agents;
 mod sheet_convert;
 mod sheet_grid;
+mod sheet_rates;
 mod simulation;

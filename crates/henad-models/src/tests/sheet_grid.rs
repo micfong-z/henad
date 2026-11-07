@@ -31,7 +31,7 @@ use henad_graph::wgsl::GridProgram;
 use super::graph_grid_parity::{build_gpu, press, snapshot, stat, step};
 
 /// Returns the text of `tests/fixtures/<path>`.
-fn fixture_text(path: &str) -> String {
+pub(super) fn fixture_text(path: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(path);
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
@@ -67,7 +67,7 @@ fn hand_lowered(name: &str) -> GraphFile {
 }
 
 /// Returns the entry the model file of `text` builds.
-fn entry_of(text: &str) -> ModelEntry {
+pub(super) fn entry_of(text: &str) -> ModelEntry {
     ModelFile::parse(text)
         .and_then(|file| file.entry())
         .unwrap_or_else(|error| panic!("{error}"))
@@ -77,7 +77,7 @@ fn entry_of(text: &str) -> ModelEntry {
 /// default unless `overrides` names it.
 ///
 /// Panics if an id of `overrides` names no parameter of `entry`.
-fn device_params(entry: &ModelEntry, side: u32, overrides: &[(&str, f32)]) -> Vec<ParamValue> {
+pub(super) fn device_params(entry: &ModelEntry, side: u32, overrides: &[(&str, f32)]) -> Vec<ParamValue> {
     for (id, _) in overrides {
         assert!(
             entry
@@ -311,7 +311,7 @@ fn cells_in(words: &[u32], side: u32, category: u32) -> Vec<(u32, u32)> {
 }
 
 /// Returns a baseline device, or `None` with a warning naming the test `name` when there is no adapter.
-fn device(name: &str) -> Option<GpuContext> {
+pub(super) fn device(name: &str) -> Option<GpuContext> {
     let ctx = headless_test_device(&TestDeviceRequest::baseline());
     if ctx.is_none() {
         log::warn!("skipping {name}: no adapter");
@@ -460,8 +460,8 @@ fn every_grid_sheet_steps_alike_on_the_host_and_the_device() {
     let sheets = grid_sheets();
     assert_eq!(
         sheets.len(),
-        4,
-        "Game of Life, Vote, the forest fire and the chance SIR"
+        5,
+        "Game of Life, the rates SIR, Vote, the forest fire and the chance SIR"
     );
     for (name, text) in &sheets {
         let file = sheet_file(text);

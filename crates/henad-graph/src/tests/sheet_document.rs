@@ -25,10 +25,10 @@ use crate::sheet::{ParsedSheet, SheetFileError, TablePlaces, starters};
 /// Every sheet the tests read, by file name: the starters of [`starters`], then the test sheets.
 pub(super) fn sheets() -> Vec<(&'static str, &'static str)> {
     let test_sheets = [
-        ("sir.toml", include_str!("sheets/sir.toml")),
         ("ants.toml", include_str!("sheets/ants.toml")),
         ("sir_chance.toml", include_str!("sheets/sir_chance.toml")),
         ("mobile_sir.toml", include_str!("sheets/mobile_sir.toml")),
+        ("sird.toml", include_str!("sheets/sird.toml")),
     ];
     starters()
         .iter()
@@ -234,6 +234,7 @@ fn starters_returns_the_grid_sheets_then_the_agent_sheets() {
         names,
         [
             "game_of_life.toml",
+            "sir.toml",
             "vote.toml",
             "forest_fire.toml",
             "random_walk.toml",
@@ -243,7 +244,7 @@ fn starters_returns_the_grid_sheets_then_the_agent_sheets() {
     );
     for (index, starter) in starters().iter().enumerate() {
         let document = read(starter.text).into_document();
-        let made_of = if index < 3 { MadeOf::Cells } else { MadeOf::Agents };
+        let made_of = if index < 4 { MadeOf::Cells } else { MadeOf::Agents };
         assert_eq!(document.world.made_of, made_of, "{}", starter.file_name);
     }
     assert_eq!(read(sheet_text("vote.toml")).document().sheet.name, "Majority vote");

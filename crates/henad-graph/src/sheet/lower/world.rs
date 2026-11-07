@@ -2,18 +2,22 @@
 //! the parameters.
 //!
 //! An agent's Position is the `vec2f` lane the spatial index reads, and an Arrow or Heading a `vec2f` lane. The
-//! Heading has no lane when nothing reads it.
+//! Heading has no lane when nothing reads it. A sheet whose tick has a length declares it first among the parameters,
+//! as the hidden parameter `tick_length` that names the tick's unit and that a sweep can vary.
 
 use henad_core::authoring::primitives::space::Boundary;
+use henad_core::metadata::TimeScale;
 use henad_core::params::{ParamDescriptor, ParamKind};
 
 use super::Builder;
+use super::rates::TICK_LENGTH;
 use crate::document::{AgentsWorld, Category, GridWorld, Lane, LaneRole, LaneStorage, Variant, World};
 use crate::sheet::check::{Place, formula, formula_chip};
 use crate::sheet::document::{
     ColorRuleKind, Edges, MadeOf, ParameterFormat, ParameterType, PropertyType, SheetChip, SheetDocument, SheetLine,
-    SheetParameter, SheetProperty, SheetValue,
+    SheetParameter, SheetProperty, SheetTime, SheetValue,
 };
+use crate::sheet::sentence::ONE_TICK_IS;
 use crate::types::ValueType;
 use crate::value::{Literal, MemberName};
 
@@ -108,7 +112,33 @@ pub(super) fn parameter_type(parameter: &SheetParameter) -> ValueType {
     }
 }
 
-/// Declares a category per States property and a lane per property, then the parameters.
+/// Returns the hidden parameter that holds the length of one tick of `time`, in the tick's unit.
+///
+/// Its default is the sheet's length, its minimum a hundredth of it and its maximum 30 times it. A sweep can then halve
+/// the tick several times or lengthen it.
+fn tick_length(time: SheetTime) -> Option<ParamDescriptor> {
+    let length = time.tick_length as f32;
+    if !(length.is_finite() && length > 0.0) {
+        return None;
+    }
+    let min = length / 100.0;
+    let max = length * 30.0;
+    (min > 0.0 && max.is_finite()).then(|| {
+        ParamDescriptor::new(
+            TICK_LENGTH,
+            format!("{ONE_TICK_IS} ({})", time.tick_unit.plural()),
+            ParamKind::F32 {
+                min,
+                max,
+                default: length,
+                step: Some(min),
+            },
+        )
+        .hidden()
+    })
+}
+
+/// Declares a category per States property and a lane per property, then the length of one tick and the parameters.
 pub(super) fn declare(builder: &mut Builder<'_>) {
     let agents = builder.is_agents();
     let kind = builder.thing_id();
@@ -158,6 +188,18 @@ pub(super) fn declare(builder: &mut Builder<'_>) {
             });
         }
         builder.graph.lanes.push(lane);
+    }
+    if let Some(time) = builder.document.time {
+        match tick_length(time) {
+            Some(descriptor) => {
+                builder.graph.params.push(descriptor);
+                builder.graph.time = Some(TimeScale::new(time.tick_unit, TICK_LENGTH));
+            }
+            None => builder.problem(
+                format!("one tick of {} cannot be a parameter's value", time.tick_length),
+                Place::Time,
+            ),
+        }
     }
     for (index, parameter) in builder.document.parameters.iter().enumerate() {
         match descriptor(parameter) {

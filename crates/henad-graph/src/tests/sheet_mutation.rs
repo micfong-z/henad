@@ -4,6 +4,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use henad_core::diagnostic::DiagnosticSeverity;
+use henad_core::explore::fingerprint::fnv1a64;
 
 use super::sheet_document::{mutate, sheets};
 use crate::sheet::check::SheetDiagnostic;
@@ -570,9 +571,10 @@ fn exercise(text: &str) -> bool {
 
 #[test]
 fn the_sheet_checker_never_panics_on_the_mutation_corpus() {
-    let mut rng = 0x6368_6563_6b00_0005u64;
     let (mut cases, mut read) = (0usize, 0usize);
-    for (_, text) in sheets() {
+    for (name, text) in sheets() {
+        // Each sheet draws its own edits, so a sheet added to the corpus leaves the others' edits as they were.
+        let mut rng = 0x6368_6563_6b00_0005u64 ^ fnv1a64(name.as_bytes());
         for edit in 0..400 {
             let mut edited = mutate(text, &mut rng);
             if edit % 3 == 0 {

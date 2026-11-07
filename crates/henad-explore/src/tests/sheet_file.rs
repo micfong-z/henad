@@ -95,15 +95,14 @@ fn a_sheet_error_comes_back_placed_at_its_line() {
     let text = edited(
         &text,
         "# Lines of Clear",
-        "[card.line.l5]\nkind = \"rate\"\nname = \"Spark\"\nkey = 12\nrate = 0.5\nrate_unit = \"day\"\n\n\
-         # Lines of Clear",
+        "[card.line.l5]\nkind = \"repeat\"\ntimes = 2\n\n# Lines of Clear",
     );
-    let error = ModelFile::parse(&text).expect_err("a rate read and lowered");
+    let error = ModelFile::parse(&text).expect_err("a Repeat read and lowered");
     let ModelFileError::Sheet(diagnostics) = &error else {
         panic!("{error:?}");
     };
     assert_eq!(diagnostics.len(), 1, "{error}");
-    assert_eq!(diagnostics[0].message, henad_graph::sheet::sentence::NOT_YET_RATE);
+    assert_eq!(diagnostics[0].message, henad_graph::sheet::sentence::NOT_YET_REPEAT);
     assert_eq!(diagnostics[0].line, Some(line_of(&text, "[card.line.l5]")), "{error}");
     assert!(names_no_graph(&diagnostics[0]), "{error}");
 

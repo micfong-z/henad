@@ -118,7 +118,7 @@ impl<'a> CardLowering<'_, 'a> {
 
     /// Returns the most a count `tries` can be when it counts the cells around: a Count, or the `count` part or a Count
     /// summary of a Look around. `None` for any other value.
-    fn count_bound(&self, tries: Option<&SheetValue>) -> Option<u32> {
+    pub(super) fn count_bound(&self, tries: Option<&SheetValue>) -> Option<u32> {
         let (counting, part) = match tries? {
             SheetValue::Chip(SheetChip::Result {
                 line,

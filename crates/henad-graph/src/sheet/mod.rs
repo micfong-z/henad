@@ -28,8 +28,8 @@
 //! line or part of the sheet each node of that graph comes from. [`SheetFile::place_graph_diagnostic`] places a finding
 //! about that graph at the table of the sheet its node comes from. [`convert`] copies that graph to a node graph file
 //! of its own, with frames naming the line each node came from, and [`changes_since_conversion`] lists what an edit of
-//! the copy changed. [`starters`] returns the sheets a new model begins from, and [`edit`] holds the commands every
-//! edit of the sheet editor runs.
+//! the copy changed. [`starters`] returns the sheets a new model begins from, [`edit`] holds the commands every edit
+//! of the sheet editor runs, and [`rates`] the chance per tick a rate gives and the note that states it.
 //!
 //! ```
 //! use henad_graph::sheet::ParsedSheet;
@@ -69,6 +69,7 @@ pub mod edit;
 mod file;
 pub mod limits;
 mod lower;
+pub mod rates;
 mod reader;
 pub mod relations;
 pub mod sentence;

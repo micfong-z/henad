@@ -11,7 +11,8 @@
 //!   chip and a draw contribute nothing.
 //! - A change reads *otherwise* when a higher change collides with it. The higher lines are its partners.
 //! - A *competing group* is two or more Become lines of one property from one named state, each drawing a rate and no
-//!   chance in its own condition. Its lines compete for the cells in that state and read "or" against each other
+//!   chance in its own condition and none of them inside a Repeat. The rate stands as the condition or as an item of
+//!   an all of, nested all of included. Its lines compete for the cells in that state and read "or" against each other
 //!   instead of "otherwise".
 //!
 //! The sheet checker and the writer's comments take these relations from here.
@@ -160,14 +161,14 @@ impl<'a> CardRelations<'a> {
         if change_key(line).is_none() {
             return Vec::new();
         }
-        let group = competing_key(line);
+        let group = self.group_key(line_id);
         self.order[..index]
             .iter()
             .copied()
             .filter(|higher| {
                 self.line(higher).is_some_and(|other| {
                     change_key(other) == change_key(line)
-                        && !(group.is_some() && competing_key(other) == group)
+                        && !(group.is_some() && self.group_key(higher) == group)
                         && self.can_both_apply(higher, line_id)
                 })
             })
@@ -187,7 +188,7 @@ impl<'a> CardRelations<'a> {
     pub fn competing_groups(&self) -> Vec<Vec<&'a str>> {
         let mut groups: Vec<((&str, &str), Vec<&'a str>)> = Vec::new();
         for &id in &self.order {
-            let Some(key) = self.line(id).and_then(|line| competing_key(line)) else {
+            let Some(key) = self.group_key(id) else {
                 continue;
             };
             match groups.iter_mut().find(|(other, _)| *other == key) {
@@ -200,6 +201,21 @@ impl<'a> CardRelations<'a> {
             .filter(|(_, lines)| lines.len() > 1)
             .map(|(_, lines)| lines)
             .collect()
+    }
+
+    /// Returns the property and the start state of the competing group that line `line_id` can join, `None` for a line
+    /// that joins no group.
+    ///
+    /// A line inside a Repeat joins no group and draws alone each time the Repeat runs it.
+    fn group_key(&self, line_id: &str) -> Option<(&'a str, &'a str)> {
+        let mut parent = self.parent(line_id);
+        while let Some(id) = parent {
+            if self.line(id).is_some_and(|block| block.kind == LineKind::Repeat) {
+                return None;
+            }
+            parent = self.parent(id);
+        }
+        competing_key(self.line(line_id)?)
     }
 
     /// Returns every test of one value that line `line_id` needs to apply: its own condition, the conditions of the
@@ -394,31 +410,35 @@ fn competing_key(line: &SheetLine) -> Option<(&str, &str)> {
     let property = line.property.as_deref()?;
     let state = line.start_state.as_deref().filter(|state| *state != ANY_STATE_ID)?;
     let mut draws = Draws::default();
-    draws.count(&line.condition);
-    (draws.rates == 1 && draws.chances == 0).then_some((property, state))
+    draws.count(line.condition.value(), true);
+    (draws.rates == 1 && draws.loose_rates == 0 && draws.chances == 0).then_some((property, state))
 }
 
 /// Numbers of rate and chance draws a condition holds, those inside an all of, an any of or a none of included.
 #[derive(Default)]
 struct Draws {
-    /// Rate phrases.
+    /// Rate phrases that stand as the condition or as an item of an all of.
     rates: usize,
+    /// Rate phrases inside an any of or a none of. These hold no share of a competing group.
+    loose_rates: usize,
     /// Chance phrases.
     chances: usize,
 }
 
 impl Draws {
-    /// Counts the draws of the condition in `slot`.
-    fn count(&mut self, slot: &Slot) {
-        let Some(SheetValue::Phrase(phrase)) = slot.value() else {
+    /// Counts the draws of the condition `value`, where `joined` says whether every enclosing phrase is an all of.
+    fn count(&mut self, value: Option<&SheetValue>, joined: bool) {
+        let Some(SheetValue::Phrase(phrase)) = value else {
             return;
         };
         match phrase.kind {
-            LineKind::Rate => self.rates += 1,
+            LineKind::Rate if joined => self.rates += 1,
+            LineKind::Rate => self.loose_rates += 1,
             LineKind::Chance => self.chances += 1,
             LineKind::AllOf | LineKind::AnyOf | LineKind::NoneOf => {
+                let joined = joined && phrase.kind == LineKind::AllOf;
                 for item in &phrase.items {
-                    self.count(&Slot::Filled(item.clone()));
+                    self.count(Some(item), joined);
                 }
             }
             _ => {}

@@ -567,7 +567,6 @@ fn every_wording_table_entry_equals_the_final_words() {
             "One kind of agent per model in this version.",
             fixed(sentence::ONE_AGENT_KIND),
         ),
-        ("Rates are not supported yet.", fixed(sentence::NOT_YET_RATE)),
         ("Repeat is not supported yet.", fixed(sentence::NOT_YET_REPEAT)),
         (
             "Become, Set, Keep between, When and Repeat inside a Repeat are not supported yet.",
@@ -1536,7 +1535,6 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
         sentence::FOR_EACH_BLANK_WORDS,
         sentence::FROM_WORD,
         sentence::RATE_IN_BUTTON_CARD,
-        sentence::NOT_YET_RATE,
         sentence::NOT_YET_REPEAT,
         sentence::NOT_YET_REPEAT_CHANGE,
         sentence::NOT_YET_GROUND,

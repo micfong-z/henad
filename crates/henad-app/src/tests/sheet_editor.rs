@@ -657,7 +657,7 @@ fn new_model_opens_a_dialog_and_create_opens_the_chosen_sheet() {
     );
     let dialog = harness.app.editor.new_model.clone().expect("the dialog is open");
     let names: Vec<&str> = dialog.choices().iter().map(|choice| choice.name.as_str()).collect();
-    assert_eq!(names, ["Game of Life", "Majority vote", "Forest fire"]);
+    assert_eq!(names, ["Game of Life", "SIR epidemic", "Majority vote", "Forest fire"]);
     let mut radios: Vec<&Node> = nodes
         .iter()
         .filter(|node| node.role == egui::accesskit::Role::RadioButton)

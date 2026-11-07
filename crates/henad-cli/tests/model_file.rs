@@ -481,6 +481,54 @@ fn a_tick_length_writes_the_time_column_in_stats_and_series() {
     }
 }
 
+/// Returns the path of the SIR sheet starter, whose rates are per day and whose tick is 1 day.
+fn sir_sheet() -> String {
+    argument(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../henad-graph/sheets/sir.toml"))
+}
+
+#[test]
+fn a_sheet_with_rates_sweeps_its_tick_length_with_a_time_column() {
+    if !has_device() {
+        return;
+    }
+    let model_file = sir_sheet();
+    let text = stdout(&run_ok(&["--model-file", &model_file, "--params"]));
+    assert!(
+        text.lines()
+            .any(|line| line.contains(" hidden ") && line.contains("id=tick_length kind=f32 default=1 min=0.01 max=30")),
+        "{text}"
+    );
+    let scratch = Scratch::new("sheet-time");
+    let dir = scratch.path("sweep");
+    let out = argument(&dir);
+    run_ok(&[
+        "--model-file",
+        &model_file,
+        "--set",
+        "grid_width=16",
+        "--set",
+        "grid_height=16",
+        "--vary",
+        "tick_length=0.25:1:0.25",
+        "--steps",
+        "4",
+        "--stats-every",
+        "2",
+        "--out",
+        &out,
+    ]);
+    let series = std::fs::read_to_string(dir.join("series.csv")).expect("the series are written");
+    let header = "run_id,tick,time,Susceptible";
+    let runs = column(&series, header, "run_id");
+    let ticks = column(&series, header, "tick");
+    let times = column(&series, header, "time");
+    let lengths = [0.25, 0.5, 0.75, 1.0];
+    for ((run, tick), time) in runs.iter().zip(&ticks).zip(&times) {
+        assert_eq!(*time, tick * lengths[*run as usize], "{series}");
+    }
+    assert_eq!(times.last(), Some(&4.0));
+}
+
 #[test]
 fn a_model_file_error_points_at_its_line() {
     let scratch = Scratch::new("error");

@@ -1,8 +1,8 @@
 //! Cards: the tick pass of the card that runs each tick, and the lines of a card a button runs once.
 //!
 //! Lines lower in display order, each into its own block of node ids. A Count and a Look around over the cells lower
-//! as [`super::look`] describes, a chance and a random number as [`super::draw`] does, and a Calculate to one
-//! expression node ([`super::calculate`]). A Yes or no line is the comparisons and logic nodes it names, a Choose a
+//! as [`super::look`] describes, a chance and a random number as [`super::draw`] does, a rate and a competing group as
+//! [`super::rates`] does, and a Calculate to one expression node ([`super::calculate`]). A Yes or no line is the comparisons and logic nodes it names, a Choose a
 //! `logic.select` chain from its last row up, and a Depending on a `cat.switch` over my state. A When line's condition
 //! is joined by `logic.and` into the condition of every change inside it. The changes of each property lower after the
 //! card's lines, as the [module](super) describes. On a card of agents, a look at agents within a distance lowers as
@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 use super::agents::AgentLooks;
 use super::ids::{GROUP_CHANGE, Owner, SheetKey, line_number};
 use super::look::Fold;
+use super::rates::Group;
 use super::repeat::RepeatBlock;
 use super::value::{Operand, common_type, shared_type};
 use super::{Builder, Site, text};
@@ -82,6 +83,7 @@ pub(super) fn lower_card(builder: &mut Builder<'_>, card_index: usize, pass: usi
         empty: HashMap::new(),
         looks: None,
         repeats: HashMap::new(),
+        groups: Vec::new(),
     };
     lowering.run();
 }
@@ -105,7 +107,6 @@ enum Refusal {
 fn refusal(line: &SheetLine, agents: bool) -> Option<Refusal> {
     let own = if agents {
         match line.kind {
-            LineKind::Rate => Some(Refusal::NotYet(sentence::NOT_YET_RATE)),
             LineKind::Record => Some(Refusal::NotYet(sentence::NOT_YET_RECORD)),
             LineKind::Leave => Some(Refusal::NotYet(sentence::NOT_YET_LEAVE)),
             LineKind::PickCell => Some(Refusal::NotYet(sentence::NOT_YET_PICK_CELL)),
@@ -118,7 +119,6 @@ fn refusal(line: &SheetLine, agents: bool) -> Option<Refusal> {
         }
     } else {
         match line.kind {
-            LineKind::Rate => Some(Refusal::NotYet(sentence::NOT_YET_RATE)),
             LineKind::Repeat => Some(Refusal::NotYet(sentence::NOT_YET_REPEAT)),
             LineKind::Record => Some(Refusal::Record),
             kind @ (LineKind::PickCell
@@ -292,6 +292,8 @@ pub(super) struct CardLowering<'b, 'a> {
     pub(super) looks: Option<AgentLooks<'a>>,
     /// Each Repeat line lowered so far, by line id.
     pub(super) repeats: HashMap<&'a str, RepeatBlock>,
+    /// Competing groups of the card whose lines run, each of two lines or more.
+    pub(super) groups: Vec<Group<'a>>,
 }
 
 impl<'a> CardLowering<'_, 'a> {
@@ -355,6 +357,20 @@ impl<'a> CardLowering<'_, 'a> {
         if refused {
             return;
         }
+        let report = self.builder.report;
+        self.groups = self
+            .relations
+            .competing_groups()
+            .into_iter()
+            .map(|lines| {
+                lines
+                    .into_iter()
+                    .filter(|id| !report.is_skipped(id))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|lines| lines.len() > 1)
+            .map(Group::new)
+            .collect();
         for id in order {
             if self.builder.report.is_skipped(id) {
                 continue;
@@ -423,6 +439,7 @@ impl<'a> CardLowering<'_, 'a> {
             | LineKind::AnyOf
             | LineKind::NoneOf
             | LineKind::Chance
+            | LineKind::Rate
             | LineKind::RandomNumber
             | LineKind::Calculate
             | LineKind::Choose
@@ -466,9 +483,15 @@ impl<'a> CardLowering<'_, 'a> {
                     Some(state) => Some(state.to_owned()),
                     None => return Err("a Become needs the state it changes from".to_owned()),
                 };
-                let own = self.slot(&site.at("condition"), &line.condition)?;
-                let condition = self.inherit(&site, id, own)?;
-                self.add_change(index, id, ChangeKind::Become { from, to }, condition)?;
+                if let Some(group) = self.group_of(id) {
+                    let placeholder = self.group_line(group, &site, id, line)?;
+                    self.add_change(index, id, ChangeKind::Become { from, to }, placeholder)?;
+                    self.finish_group(group)?;
+                } else {
+                    let own = self.slot(&site.at("condition"), &line.condition)?;
+                    let condition = self.inherit(&site, id, own)?;
+                    self.add_change(index, id, ChangeKind::Become { from, to }, condition)?;
+                }
             }
             LineKind::Set => {
                 let (index, _) = self.property(line.property.as_deref())?;
@@ -613,6 +636,7 @@ impl<'a> CardLowering<'_, 'a> {
             }
             LineKind::Count => self.count(site, line),
             LineKind::Chance => self.chance(site, line),
+            LineKind::Rate => self.rate(site, line),
             LineKind::RandomDirection => self.random_direction(site, line),
             LineKind::RandomNumber => self.random_number(site, line),
             LineKind::Calculate => self.calculate(site, line),

@@ -29,8 +29,34 @@ another, `view.ramp` over 0 to 1 into the palette `shaded_<property>` for `shade
 `stat.count_by` per property shared by its counts, `stat.mean`, `stat.sum`, a spread as two means
 and `f64` arithmetic, each `[[stat]]` labelled with the measure's name, D13), and per button an
 `[[action]]` (`buttons.rs`). A grid sheet with no cells property lowers to the world alone, with the
-checker's `SHEET_EMPTY` warning, and its graph's check reports the missing lane. The `[time]` table
-is not lowered until rates lower (S21).
+checker's `SHEET_EMPTY` warning, and its graph's check reports the missing lane. A `[time]` table
+lowers in `world.rs` to the first `[[param]]`, `tick_length` (`rates::TICK_LENGTH`, reserved in the
+item namespace), an `f32` labelled "One tick is (days)" with the sheet's length as its default, a
+hundredth of it as `min` and `step` and 30 times it as `max`, `hidden`, and `GraphDocument.time`
+naming it with the tick's unit (D4), whether or not a line reads it.
+
+Rates (`rates.rs`, T4, T5): a rate phrase or Rate line is `1 - e^(-h)` drawn by one `rand.chance`,
+`h = r * f * tick_length`, where `f` is the literal `tick unit days / rate unit days` when it is not
+1 (`math.mul` before the tick length), so a rate of parameters is a prelude value the host computes
+once per build. A "for each" over a grid count (`count_bound`) with a rate the same for every
+element is `1 - powi(e^(-h), n)` with `max_exponent` 8, 4 or 9. Any other count, agents included, is
+`1 - select(n <= 0, 1, exp(-h * n))` in `f32`, P's guard, since `exp(0)` is not exactly 1 on every
+device. A competing group is `CardRelations::competing_groups` less its skipped lines, two or more
+left (`CardLowering::groups`, set before the lines lower). Each Become of a group lowers at its turn
+through `group_line`: its condition with the rate read as yes (`gate`, the rate found as the
+condition or in an all of, and the When lines around it joined by `inherit`), and its hazard `a = r
+* f`, times `n` for a "for each", through `select(gate, a, 0)` when the gate is not always yes. Its
+change takes a placeholder condition, so it keeps its place in the row order. After the group's
+last line, `finish_group` writes at the highest line's rate site the running sums of the hazards,
+`t = 1 - select(S <= 0, 1, e^(-S * tick_length))` (the guard of a rate for each, so a cell with no
+exposure never leaves), `max(S, 1e-30)` and one `rand.float` up to 1 keyed by the highest line, and
+at each line's rate site its threshold, `t * sum_j / max(S, 1e-30)` and `t` for the last line,
+`cmp.lt(u, threshold)` joined with its gate, which replaces the placeholder. The transition takes
+the first row that holds, so each line takes its share whatever the row order, and a line between
+the group's lines keeps its "otherwise" as the card shows it. The other lines' keys stay unused
+while they are grouped. A line inside a Repeat joins no group (`CardRelations::group_key`) and
+draws alone. A rate with no `[time]` never lowers: the checker skips it. The rate tests sit in
+`src/tests/sheet_rates.rs`, which `agents/henad-graph-sheet.md` lists.
 
 Nodes are written with temporary ids into `Draft`s at a `Site` (pass, owner, slot path, region), and
 `Builder::finish` numbers them (`ids.rs`, R4 and D44): line `l<k>` owns `n(1000k + j)`, `j` in the
@@ -122,16 +148,16 @@ read, and the checker places it below every change of X. Values (`value.rs`, `Op
 `u32`, a typed number takes the type it meets when that type holds it exactly (`common_type`), else
 both sides go to `f32` through `conv.*`; a percent is its number divided by 100 (D110); a state chip
 takes the category of the value it meets. Interim refusals (D38), one located error per line at its
-line table in the author's words, whatever the line's skip: on a cells card `NOT_YET_RATE` and
-`NOT_YET_REPEAT`, for the line's kind or a phrase in any slot. The refusals of chances, looks,
-Calculate, Choose, Depending on, Random number and the world of agents were lifted with their
-lowering, and their words removed from `sheet::sentence`. Record on a cells card is an error (D66),
+line table in the author's words, whatever the line's skip: on a cells card `NOT_YET_REPEAT`, for
+the line's kind or a phrase in any slot. The refusals of chances, looks, Calculate, Choose,
+Depending on, Random number, rates and the world of agents were lifted with their lowering, and
+their words removed from `sheet::sentence`. Record on a cells card is an error (D66),
 and so is an agents-only line kind or a look at agents within a distance.
 
 Grid lowering tests sit in `src/tests/sheet_lower.rs`, on the host evaluator:
-`every_grid_sheet_lowers_checks_and_compiles` (the three starters and `sir_chance.toml`: no warning,
-no graph diagnostic, `GridProgram`, an entry, canonical text), the vote's block count and rows,
-`lowering_is_deterministic`, `lowered_ids_sit_in_their_line_blocks`,
+`every_grid_sheet_lowers_checks_and_compiles` (the four grid starters and `sir_chance.toml`: no
+warning, no graph diagnostic, `GridProgram`, an entry, canonical text), the vote's block count and
+rows, `lowering_is_deterministic`, `lowered_ids_sit_in_their_line_blocks`,
 `the_line_map_covers_every_written_node`,
 `every_line_map_path_of_a_line_reads_as_an_edit_command_slot_path` (every starter, agents included),
 `two_draws_with_one_key_are_an_error_naming_both` (two starts), the derived key, the percent, the
@@ -143,7 +169,7 @@ it), `the_life_sheet_blinker_has_period_2` and
 `a_rebuild_at_one_seed_replays_the_same_start`,
 `a_start_again_button_draws_a_new_layout_each_press`,
 `a_skipped_line_and_its_dependents_are_left_out`, `each_interim_refusal_gives_one_located_error`
-(rate and Repeat), `each_lifted_refusal_now_lowers_checks_and_compiles` (S7's seven refused lines),
+(Repeat), `each_lifted_refusal_now_lowers_checks_and_compiles` (S7's seven refused lines),
 the second tick card, the empty grid, `the_largest_grid_sheet_lowers_under_half_the_node_limit` (a
 card of `MAX_LINES_PER_CARD` count and Become lines over four properties),
 `the_kinds_sheet_runs_its_lines_on_the_host` (the test sheet `src/tests/sheets/kinds.toml`,
@@ -188,7 +214,7 @@ Starts (`start.rs`): Position `anywhere` is `ctx.world`, `vec.split` and two `ra
 keyed `starts_as.value.length`. `on_ground` and `painted` read `NOT_YET_GROUND`.
 
 Cards (`card.rs`, the card whose `every` is the kind): on a card of agents the interim refusals are
-`NOT_YET_RATE`, `NOT_YET_RECORD`, `NOT_YET_LEAVE`, `NOT_YET_PICK_CELL`, `NOT_YET_LOOK_AT_CELL`,
+`NOT_YET_RECORD`, `NOT_YET_LEAVE`, `NOT_YET_PICK_CELL`, `NOT_YET_LOOK_AT_CELL`,
 `NOT_YET_MOVE_TO` (a place comes only from a Pick a cell or a look at a cell, both refused),
 `NOT_YET_GROUND` for a Count or Look around
 over the cells around and a chip naming a place's property, and `NOT_YET_REPEAT_CHANGE` for a

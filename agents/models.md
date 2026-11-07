@@ -146,6 +146,19 @@ the hand-lowered file's mean, the variance of one run the larger of the variance
 eight runs and the binomial `p (1 - p) / cells`. Behind each band a planted rule error (the
 "from" state dropped from the forest fire's lightning line, which then strikes empty cells too,
 and from the SIR's recovery line) moves at least one mean outside. Keep these files.
+`src/tests/sheet_rates.rs` holds the rate gates (T11) on the same device, its helpers
+(`device`, `device_params`, `entry_of`, `fixture_text`) taken from `sheet_grid.rs`. The SIR starter
+`sir.toml` (rates per day) at beta 0.3 and gamma 0.1 on 256 by 256 cells for 80 days, seeds 1 to 3,
+at ticks of 1, 0.5, 0.25 and 0.125 days against 0.0625: the largest gap in infected share, sampled
+at the start of each day, falls with each halving to at most 0.8 of the one before, and the chance
+SIR at its one-day chances per tick, read with the same ticks per day, fails that rule, so the test
+tells the two apart. `tests/fixtures/sheets/sird.toml`, a copy of henad-graph's test sheet (gamma =
+mu = 0.05 per day as competing rates), at a tick of 7 days on 512 by 512 cells, seeds 1 to 3, ends
+with the share of the removed cells that are Dead within 0.01 of 0.5, and the hand-lowered
+`lowered/rates/sird_higher_wins.toml` within 0.01 of its predicted 0.4134 as the planted contrast.
+`two_runs_at_one_seed_write_identical_statistics` runs the SIR starter twice at seed 5 and a tick of
+half a day. The rates SIR also joins every grid-sheet gate of `sheet_grid.rs` through
+`starters()`, five grid sheets in all. Keep these files.
 `src/tests/sheet_agents.rs` gates the agent sheet starters on a `TestDeviceRequest::baseline()`
 device: `every_agent_sheet_lowers_checks_and_compiles` (no warning, no graph diagnostic, 100 ticks
 and a stats read), `the_lowered_agent_sheets_bind_at_most_8_storage_buffers` (each pass's `Demand`),

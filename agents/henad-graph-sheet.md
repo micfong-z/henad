@@ -34,6 +34,24 @@ describes: `mod.rs` holds `SheetBuilder`, `SheetEdit`, `LineField`, `SheetItem`,
 moves.
 `sheet/convert.rs` and `sheet/changes.rs` are private, the conversion to a node graph copy that
 `agents/henad-graph-sheet-convert.md` describes.
+`sheet/rates.rs` is public (`sheet::rates`): `chance_from_rate`, `rate_from_chance`, `tick_in` (one
+tick in a unit, through `TimeUnit::days`), `chance_per_tick`, `mean_stay`, `parameter_defaults`,
+`chance_words` (the number rule of the final wording table: three significant figures, more until
+the chance prints differently from `r dt n`), `LONG_TICK_CHANCE` (0.5, D2), `largest_count_chance`
+(`LargestCount` with `is_long` and `words`, "up to 0.909 with 8"; a fixed rate with a "for each" of
+a Count over the cells around, or a Calculate of a fixed number times such a Count), and
+`rate_note(document, line_id, values)`, a `RateNote` (`text`, `mean_stay`, `long_tick`) filled from
+the wording table's templates with the values passed (the defaults, or a run's, D62). The rate is
+the line, its condition or an item of an all of in it. A fixed rate gives `rate_note` or
+`rate_for_each_note`, a Calculate of a fixed number times a Count with no "for each" gives
+`worked_out_rate_note` (D106, the formula read through `check::formula::parse`), any other
+worked-out rate `growing_rate_note` with the Calculate's words. Δt prints in the rate's unit with
+three figures ("0.25 days"). The highest line of a competing group takes `competing_note` and the
+others none, and a group with a "for each", a worked-out rate, two units, or a line whose rate is
+not its whole condition or that a block holds has no note. A line with no `[time]` has none. The
+mean stay is a Become from a named state at a fixed rate with no "for each", its rate the whole
+condition and no block around it (`rate_alone`). A worked-out note names an unnamed Count by
+`edit::automatic_name`. `pub(super) shortest_f32` is the conversion commands' number.
 `sheet/limits.rs` holds the sheet's limits apart from `crate::limits`, so `library.lock` stays as it
 is: `MAX_SHEET_BYTES` (1 MiB), `MAX_NESTING` (24), `MAX_LINES_PER_CARD` (256), `MAX_NODES_PER_LINE`
 and `MAX_SHEET_NODES` (999 each, for the lowering's `n(1000k + j)` ids), `MAX_SHEET_ID_BYTES` (48,
@@ -120,9 +138,9 @@ and the `starts_*_place` functions, the Parameters, Measures, Colours and Button
 conversion. Rows the wording table marks "Not built" are left out. The rate notes are templates
 taking numbers already formatted (`rate_note`, `rate_for_each_note`, `worked_out_rate_note`,
 `growing_rate_note`, `chance_for_each_note`, `growing_chance_note`, `competing_note`,
-`mean_stay_note`). The words the plan adds for its own decisions sit in one group
-(`RATE_IN_BUTTON_CARD`, `ONE_AGENT_KIND`, competing rates, the long tick, `chances_per_tick_note`),
-with the interim refusals (`NOT_YET_RATE`, `NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHANGE`,
+`mean_stay_note`), which `sheet::rates` fills. The words the plan adds for its own decisions sit in
+one group (`RATE_IN_BUTTON_CARD`, `ONE_AGENT_KIND`, competing rates, the long tick,
+`chances_per_tick_note`), with the interim refusals (`NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHANGE`,
 `NOT_YET_GROUND`, `NOT_YET_PICK_CELL`, `NOT_YET_LOOK_AT_CELL`, `NOT_YET_MOVE_TO`, `NOT_YET_LEAVE`,
 `NOT_YET_RECORD`, `NOT_YET_AGENT_WALLS`), a property changed two ways (`set_already`,
 `steered_already`, `moved_by_already`, `moved_to_already`) and the words of a look at agents
@@ -130,8 +148,8 @@ with the interim refusals (`NOT_YET_RATE`, `NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHA
 `start_costs_too_much`, counts written with thousands commas, and for a pass past its cost per
 element `line_costs_too_much`, `smaller_maximum`, `FEWER_TIMES` and `FEWER_LINES`). `plural` is
 crate-visible for `SheetFile::shortfalls`. Every editor milestone and the writer's comments draw
-their words from here and from no literal of their own. `FORBIDDEN_WORDS` lists the words sheet mode never shows. The
-conversion words sit under the node-graph exemption and are outside that test.
+their words from here and from no literal of their own. `FORBIDDEN_WORDS` lists the words sheet mode
+never shows. The conversion words sit under the node-graph exemption and are outside that test.
 
 `Sentences::new(&document)` holds the sheet's names by id and writes `card_heading` ("Each tick,
 every cell", or "Lines of Clear: run once, every cell, when pressed" for a card that runs once,
@@ -162,17 +180,19 @@ reaches a line table. Places are offsets into the text with line ends made `\n`,
 
 **Starters.** `sheet::starters()` returns the sheet starters as `crate::starters::Starter` values
 (file name and text), embedded with `include_str!` from the crate's `sheets/` directory, since the
-packaging check refuses a path out of the crate: the grid sheets `game_of_life.toml`, `vote.toml`
-("Majority vote") and `forest_fire.toml`, which entered with the chances' lowering, then the agent
-sheets `random_walk.toml`, `boids.toml` and `bounded_confidence.toml`, which entered with the agent
-lowering. A sheet enters `sheets/` and `starters()` only in the milestone whose lowering runs it,
-and a test looping over `starters()` passes at every merge. The app's New model dialog lists only
-the starters whose world it offers (`starter_choices`), the grid sheets today. Until then a sheet is
-test data in `src/tests/sheets/`: the ants until the ground lowers, SIR with rates once rates lower.
-`sir_chance.toml` and `mobile_sir.toml` (chances once for each infected person nearby) stay test
-data. `sir_chance.toml` has a copy in henad-models' `tests/fixtures/sheets/` for the device gates.
-No test holds the two equal, and an edit to this one is copied there. The graph starters stay graph
-files in `starters/`.
+packaging check refuses a path out of the crate: the grid sheets `game_of_life.toml`, `sir.toml`
+("SIR epidemic", rates per day and one tick of 1 day, D5, which entered with the rates' lowering),
+`vote.toml` ("Majority vote") and `forest_fire.toml`, which entered with the chances' lowering, then
+the agent sheets `random_walk.toml`, `boids.toml` and `bounded_confidence.toml`, which entered with
+the agent lowering. A sheet enters `sheets/` and `starters()` only in the milestone whose lowering
+runs it, and a test looping over `starters()` passes at every merge. The app's New model dialog
+lists only the starters whose world it offers (`starter_choices`), the grid sheets today. Until then
+a sheet is test data in `src/tests/sheets/`: the ants until the ground lowers. `sir_chance.toml`,
+`mobile_sir.toml` (chances once for each infected person nearby) and `sird.toml` (SIR with a Dead
+state, two competing rates of 0.05 per day out of Infected, its lines numbered in creation order)
+stay test data. `sir_chance.toml` and `sird.toml` have copies in henad-models'
+`tests/fixtures/sheets/` for the device gates. No test holds the copies equal, and an edit to one is
+copied to the other. The graph starters stay graph files in `starters/`.
 
 **Relations.** `CardRelations::new(&document, &card)` holds a card's display order (a block's lines
 after the block line, an id listed twice or inside its own block taken once at its first place, an
@@ -189,8 +209,10 @@ whole values, +-0.5 otherwise), the midpoints, and the ends +-2, with a 1e-9 all
 a States property, a Count result, or a Look around's `count` part or Count summary.
 `otherwise_of(line)` returns the higher colliding lines in display order, `otherwise_numbers` their
 numbers. `competing_groups()` returns two or more Become lines of one property from one named start
-state (not `any_state`), each condition holding exactly one rate and no chance, an all of, any of or
-none of searched, and `otherwise_of` leaves a partner in the line's own group out (decision D1's
+state (not `any_state`), each condition holding exactly one rate and no chance. The rate stands as
+the condition or as an item of an all of, nested all of included. A rate inside an any of or a none
+of keeps the line out of every group, since no share of a hazard is defined there, and a chance
+anywhere does too, as does a Repeat around the line (`group_key`). `otherwise_of` leaves a partner in the line's own group out (decision D1's
 "or").
 
 **The checker.** `check::check(&document)` returns diagnostics with no span in a stable order (the
@@ -230,7 +252,9 @@ result of a skipped line above reads `not_run_result_unfinished`, a rate with no
 Repeat among its blocks at any depth, reads `not_run_when_unfinished` with the direct parent's
 number, or else the nearest skipped Repeat's. A result without a name reads as its sentence in a
 note. Outside the cards a blank or unusable value is an error. A value's type walk through results
-stops past `MAX_NESTING`.
+stops past `MAX_NESTING`. A rate whose `rate` is a parameter whose Unit names another unit
+(`edit::unit_in_text`) than the line's `rate_unit` warns `unit_mismatch` at the line and keeps
+running in the line's unit (D14).
 
 **Sheet files.** `SheetFile::parse(text)` reads (the reader's errors), checks (the checker's errors
 as `SheetFileError::Invalid`, every one placed), lowers (the lowering's problems, also `Invalid`,
@@ -296,13 +320,23 @@ two, through a line diff in the test) and `every_readable_mutation_writes_text_t
 the reader's mutation corpus. Checker tests sit in `src/tests/sheet_mutation.rs` (the 25 cases of
 the author format's mutation run, one test each on a committed sheet edited in the test, each
 asserting error, warning or skip and its table; the rate in a run-once card; D75's ranges;
-`the_sheet_checker_never_panics_on_the_mutation_corpus`) and `src/tests/sheet_check.rs`
+`the_sheet_checker_never_panics_on_the_mutation_corpus`, whose edits each sheet draws from its own
+seed, so a sheet added to the corpus leaves the others' edits alone) and `src/tests/sheet_check.rs`
 (`every_sheet_checks_clean`, file order, the otherwise rule with exclusive and overlapping tests,
 the starters, the forest fire, the ants' Set lines, competing groups, skipped lines and blocks, the
 When scope, `every_skip_note_equals_its_wording_table_entry`, reserved ids, the second agent kind,
-the empty grid sheet). Reader tests sit in `src/tests/sheet_document.rs`, over ten sheets: the six
-starters, and four test sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and `ants.toml` are
-the author format's examples, and `random_walk.toml`, `bounded_confidence.toml` and
+the empty grid sheet). Rate tests sit in `src/tests/sheet_rates.rs`: the known chances (0.2592,
+0.9093 with 8, a rate per week in days, the competing 0.5034 and its half, the number rule), the
+uniform block of the SIR tick shader (no `exp`, 1 - e^(-0.1) with e^(-0.1) one f32 step from the
+true value, the `math.powi` table within 3 steps, since its powers are f32 `powi` of the base), the
+competing thresholds at a tick of 7 days, a group with a worked-out rate splitting on the host, the
+rates SIR conserving its cells at half a day, `a_tick_length_override_keeps_the_code_and_the_keys`,
+the factor of a rate per week, every other form of rate, a rate in an any of drawing alone, the
+notes of the final wording table (`rate_notes_match_the_spec_examples`,
+`worked_out_rate_notes_match_the_spec_examples`), the two conversion commands and their refusals,
+and the D14 warning. Reader tests sit in `src/tests/sheet_document.rs`, over eleven sheets: the
+seven starters, and four test sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and
+`ants.toml` are the author format's examples, and `random_walk.toml`, `bounded_confidence.toml` and
 `sir_chance.toml` (round 1's SIR with chances per tick, sheet id `sir_chance`) were written from
 round 1's models, as `vote.toml` and `forest_fire.toml` were. `mobile_sir.toml` holds a chance once
 for each infected person within reach, in a world 1 cell wide so every person reaches every other.

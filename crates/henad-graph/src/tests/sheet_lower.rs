@@ -29,7 +29,7 @@ fn life() -> &'static str {
 
 /// Text of the Majority vote starter.
 fn vote() -> &'static str {
-    starters()[1].text
+    sheet_text("vote.toml")
 }
 
 /// Returns `text` with `old` replaced by `new` once, where `text` must hold `old`.
@@ -97,7 +97,13 @@ fn every_grid_sheet_lowers_checks_and_compiles() {
     let names: Vec<&str> = grid_sheets().iter().map(|(name, _)| *name).collect();
     assert_eq!(
         names,
-        ["game_of_life.toml", "vote.toml", "forest_fire.toml", "sir_chance.toml"]
+        [
+            "game_of_life.toml",
+            "sir.toml",
+            "vote.toml",
+            "forest_fire.toml",
+            "sir_chance.toml"
+        ]
     );
     for (file_name, text) in grid_sheets() {
         let file = lowered(text);
@@ -629,12 +635,6 @@ fn each_lifted_refusal_now_lowers_checks_and_compiles() {
 
 #[test]
 fn each_interim_refusal_gives_one_located_error() {
-    let rate =
-        life_with_line("[card.line.l5]\nkind = \"rate\"\nname = \"Spark\"\nkey = 12\nrate = 0.5\nrate_unit = \"day\"");
-    let errors = refusals(&rate);
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert_eq!(errors[0].message, sentence::NOT_YET_RATE);
-    assert!(placed_at(&errors[0], &rate).starts_with("[card.line.l5]"));
     let repeat = edited(life(), "lines = [\"l1\", \"l2\", \"l3\"]", "lines = [\"l1\", \"l5\"]");
     let repeat = edited(&repeat, "next_line = 5", "next_line = 6");
     let repeat = edited(

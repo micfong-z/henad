@@ -1463,9 +1463,6 @@ pub const ONE_AGENT_KIND: &str = "One kind of agent per model in this version.";
 
 // Errors on the lines and worlds a sheet can hold that this version cannot run yet
 
-/// Error on a line that holds a rate.
-pub const NOT_YET_RATE: &str = "Rates are not supported yet.";
-
 /// Error on a Repeat line.
 pub const NOT_YET_REPEAT: &str = "Repeat is not supported yet.";
 

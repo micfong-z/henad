@@ -1017,7 +1017,7 @@ It is closed in the default layout, and opens to the right of the <span class="u
 ### Sheets
 
 A *sheet* describes a model in sentences.
-Press <span class="ui" markdown>:material-file-document-plus-outline: New model</span> in the Editor, the Model tab or the File menu, choose a starter under **Start from** (Game of Life, Majority vote or Forest fire), type a name, and press **Create**.
+Press <span class="ui" markdown>:material-file-document-plus-outline: New model</span> in the Editor, the Model tab or the File menu, choose a starter under **Start from** (Game of Life, SIR epidemic, Majority vote or Forest fire), type a name, and press **Create**.
 The **Name** field follows the starter's name until you type in it.
 
 The sheet opens in two panes.

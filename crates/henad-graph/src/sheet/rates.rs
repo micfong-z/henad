@@ -1,0 +1,507 @@
+//! Rates and chances per tick: the conversions between a rate and a chance, and the note that states the chance a
+//! rate line gives in one tick.
+//!
+//! A *rate* `r` per unit of time holds within one tick of length `dt`, counted in the rate's unit, with the chance
+//! `1 - e^(-r dt)`. A rate for each of a count `n` holds with `1 - e^(-r dt n)`, and a *competing group* of rates out
+//! of one state leaves it with the chance of the sum of their rates, each line taking the share its rate gives it.
+//! These are the chances the lowering draws against.
+//!
+//! A note prints a chance by the sheet's number rule: three significant figures, and more until the chance prints
+//! differently from `r dt n` when the two differ. A note then never shows a chance equal to its rate. The numbers come
+//! from the parameter values passed in, the defaults while no run is loaded.
+//!
+//! ```
+//! use henad_graph::sheet::rates::{chance_from_rate, rate_from_chance};
+//!
+//! let chance = chance_from_rate(0.1, 1.0);
+//! assert!((chance - 0.095_162_58).abs() < 1e-8);
+//! assert!((rate_from_chance(chance, 1.0) - 0.1).abs() < 1e-12);
+//! ```
+
+use std::collections::BTreeMap;
+
+use henad_core::metadata::TimeUnit;
+
+use super::check::formula::{self, FormulaTree};
+use super::check::formula_chip;
+use super::document::{LineKind, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetTime, SheetValue};
+use super::relations::CardRelations;
+use super::sentence::{self, ANY_STATE_ID, Sentences};
+use super::writer::format_number;
+
+/// Chance per tick at the largest count above which a tick is long for its rate.
+pub const LONG_TICK_CHANCE: f64 = 0.5;
+
+/// Returns the chance that a rate `rate` holds within a tick `tick` long, both in one unit of time: `1 - e^(-rate tick)`.
+pub fn chance_from_rate(rate: f64, tick: f64) -> f64 {
+    -(-rate * tick).exp_m1()
+}
+
+/// Returns the rate whose chance within a tick `tick` long is `chance`: `-ln(1 - chance) / tick`.
+///
+/// A chance of 1 gives an infinite rate, and a chance above 1 or a tick of 0 gives a number that is not finite.
+pub fn rate_from_chance(chance: f64, tick: f64) -> f64 {
+    -(-chance).ln_1p() / tick
+}
+
+/// Returns the length of one tick of `time` counted in `unit`, such as 0.25 for a tick of 6 hours in days.
+pub fn tick_in(time: SheetTime, unit: TimeUnit) -> f64 {
+    time.tick_length * time.tick_unit.days() / unit.days()
+}
+
+/// Returns the chance per tick of `time` that a rate `rate` per `unit` holds for each of `count`:
+/// `1 - e^(-rate dt count)`.
+pub fn chance_per_tick(rate: f64, unit: TimeUnit, time: SheetTime, count: f64) -> f64 {
+    chance_from_rate(rate * count, tick_in(time, unit))
+}
+
+/// Returns how long, on average, a rate `rate` takes to hold when it is drawn once in each tick `tick` long.
+///
+/// Both are in one unit of time, and so is the result, `tick / (1 - e^(-rate tick))`. It approaches `1 / rate` as the
+/// tick shrinks.
+pub fn mean_stay(rate: f64, tick: f64) -> f64 {
+    tick / chance_from_rate(rate, tick)
+}
+
+/// Returns the default of every parameter of `document`, by id, the values a note reads while no run is loaded.
+pub fn parameter_defaults(document: &SheetDocument) -> BTreeMap<String, f64> {
+    document
+        .parameters
+        .iter()
+        .map(|parameter| (parameter.id.clone(), parameter.default))
+        .collect()
+}
+
+/// Returns `value` rounded to `digits` significant figures, written by the sheet's number rule.
+fn significant(value: f64, digits: usize) -> String {
+    let rounded: f64 = format!("{value:.*e}", digits.saturating_sub(1))
+        .parse()
+        .unwrap_or(value);
+    format_number(rounded).unwrap_or_default()
+}
+
+/// Returns `chance` as a note prints it: three significant figures, and more until it prints differently from
+/// `linear`, the rate times the tick times the count, when the two differ.
+pub fn chance_words(chance: f64, linear: f64) -> String {
+    for digits in 3..=17 {
+        let words = significant(chance, digits);
+        if chance == linear || words != significant(linear, digits) {
+            return words;
+        }
+    }
+    significant(chance, 17)
+}
+
+/// Returns a length of time `value` long in `unit`, with three significant figures: "1 day", "0.25 days".
+fn time_words(value: f64, unit: TimeUnit) -> String {
+    let number = significant(value, 3);
+    let unit = if number == "1" {
+        sentence::rate_unit_word(unit)
+    } else {
+        unit.plural()
+    };
+    format!("{number} {unit}")
+}
+
+/// Chance per tick of a rate line at the largest count its "for each" can reach.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct LargestCount {
+    /// Chance per tick at the largest count.
+    pub chance: f64,
+    /// Largest count: 8, 4 or 9 cells around.
+    pub count: u32,
+}
+
+impl LargestCount {
+    /// Returns whether the tick is long for the rate: the chance is above [`LONG_TICK_CHANCE`].
+    pub fn is_long(&self) -> bool {
+        self.chance > LONG_TICK_CHANCE
+    }
+
+    /// Returns the words of the chance, such as "up to 0.909 with 8".
+    pub fn words(&self) -> String {
+        sentence::long_tick_chance(&significant(self.chance, 3), self.count)
+    }
+}
+
+/// The note under a rate line, or under the highest line of a competing group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RateNote {
+    /// Text of the note, such as "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. A rate is
+    /// not a chance. Henad turns it into one as 1 − e^(−0.1 × 1 day)."
+    pub text: String,
+    /// How long a cell stays in the state it leaves, the note's description, for a line that leaves a named state at a
+    /// fixed rate with no "for each", the rate its whole condition and no block around it.
+    pub mean_stay: Option<String>,
+    /// Chance at the largest count, such as "up to 0.909 with 8", on a tick long for the rate. The editor shows it
+    /// with [`sentence::LONG_TICK`].
+    pub long_tick: Option<String>,
+}
+
+/// Returns the rate phrase of `line`: the line itself, its condition, or an item of an all of in its condition.
+fn rate_phrase(line: &SheetLine) -> Option<&SheetLine> {
+    if line.kind == LineKind::Rate {
+        return Some(line);
+    }
+    joined_rate(line.condition.value()?)
+}
+
+/// Returns the rate phrase that `value` is, or that an item of it holds when it is an all of.
+fn joined_rate(value: &SheetValue) -> Option<&SheetLine> {
+    match value {
+        SheetValue::Phrase(phrase) if phrase.kind == LineKind::Rate => Some(phrase),
+        SheetValue::Phrase(phrase) if phrase.kind == LineKind::AllOf => phrase.items.iter().find_map(joined_rate),
+        _ => None,
+    }
+}
+
+/// Returns whether the rate of line `line_id` is the whole of what the line needs: its condition is the rate phrase
+/// alone, and no block holds the line.
+///
+/// A mean stay holds only for such a line. Otherwise the cells for which the rest of the condition fails stay longer.
+fn rate_alone(relations: &CardRelations<'_>, line_id: &str, line: &SheetLine) -> bool {
+    relations.parent(line_id).is_none()
+        && matches!(line.condition.value(), Some(SheetValue::Phrase(phrase)) if phrase.kind == LineKind::Rate)
+}
+
+/// Returns the number a value stands for when it is a typed number or a parameter, read from `values`.
+fn fixed_number(value: Option<&SheetValue>, values: &BTreeMap<String, f64>) -> Option<f64> {
+    match value? {
+        SheetValue::Literal(literal @ (SheetLiteral::Number(_) | SheetLiteral::Percent(_))) => literal.number(),
+        SheetValue::Chip(SheetChip::Param(id)) => values.get(id).copied(),
+        _ => None,
+    }
+}
+
+/// Returns the Calculate line or phrase that a rate's value names, `None` for any other value.
+fn calculation<'d>(document: &'d SheetDocument, value: Option<&'d SheetValue>) -> Option<&'d SheetLine> {
+    let line = match value? {
+        SheetValue::Phrase(phrase) => phrase.as_ref(),
+        SheetValue::Chip(SheetChip::Result {
+            line,
+            part: None,
+            property: None,
+        }) => document.line(line)?.1,
+        _ => return None,
+    };
+    (line.kind == LineKind::Calculate).then_some(line)
+}
+
+/// A Calculate of a fixed number times a count, in either order.
+struct Product<'d> {
+    /// The fixed number, a typed number or a parameter's value.
+    fixed: f64,
+    /// The Count line it multiplies.
+    count: &'d SheetLine,
+}
+
+/// Returns `calculation` as a fixed number times a count above it, `None` for any other formula.
+fn product<'d>(
+    document: &'d SheetDocument,
+    calculation: &SheetLine,
+    values: &BTreeMap<String, f64>,
+) -> Option<Product<'d>> {
+    let tree = formula::parse(calculation.formula.as_deref()?).ok()?;
+    let FormulaTree::Binary('*', left, right) = tree else {
+        return None;
+    };
+    let fixed = |side: &FormulaTree<'_>| match side {
+        FormulaTree::Number(text) => text.parse::<f64>().ok(),
+        FormulaTree::Reference(reference) => match formula_chip(reference, document) {
+            SheetChip::Param(id) => values.get(&id).copied(),
+            _ => None,
+        },
+        _ => None,
+    };
+    let count = |side: &FormulaTree<'_>| match side {
+        FormulaTree::Reference(reference) => match formula_chip(reference, document) {
+            SheetChip::Result {
+                line,
+                part: None,
+                property: None,
+            } => document
+                .line(&line)
+                .map(|(_, line)| line)
+                .filter(|line| line.kind == LineKind::Count),
+            _ => None,
+        },
+        _ => None,
+    };
+    let (fixed, count) = match (fixed(&left), count(&right)) {
+        (Some(fixed), Some(count)) => (fixed, count),
+        _ => (fixed(&right)?, count(&left)?),
+    };
+    Some(Product { fixed, count })
+}
+
+/// Returns the most a count line `count` can be when it counts the cells around, `None` otherwise.
+fn count_bound(count: &SheetLine) -> Option<u32> {
+    match count.around? {
+        super::document::Around::Cells8 => Some(8),
+        super::document::Around::Cells4 => Some(4),
+        super::document::Around::Block3x3 => Some(9),
+        super::document::Around::AgentsWithin => None,
+    }
+}
+
+/// Returns the Count line that the "for each" of the rate phrase `phrase` names, `None` for any other count.
+fn tries_count<'d>(document: &'d SheetDocument, phrase: &SheetLine) -> Option<&'d SheetLine> {
+    match phrase.tries.value()? {
+        SheetValue::Chip(SheetChip::Result {
+            line,
+            part: None,
+            property: None,
+        }) => document
+            .line(line)
+            .map(|(_, line)| line)
+            .filter(|line| line.kind == LineKind::Count),
+        _ => None,
+    }
+}
+
+/// Returns the name of the state `state` of the property `property`, the id when the sheet holds none.
+fn state_name(document: &SheetDocument, property: Option<&str>, state: &str) -> String {
+    document
+        .cells
+        .iter()
+        .flatten()
+        .chain(document.agents.iter().flat_map(|kind| &kind.properties))
+        .filter(|found| Some(found.id.as_str()) == property)
+        .flat_map(|found| &found.states)
+        .find(|found| found.id == state)
+        .map_or_else(|| state.to_owned(), |found| found.name.clone())
+}
+
+/// Returns the state line `line` changes from, by name, `None` for a line from any state or with none chosen.
+fn old_state(document: &SheetDocument, line: &SheetLine) -> Option<String> {
+    line.start_state
+        .as_deref()
+        .filter(|state| *state != ANY_STATE_ID)
+        .map(|state| state_name(document, line.property.as_deref(), state))
+}
+
+/// Returns the subject of the note on line `line_id`: what happens when its rate holds.
+fn subject(document: &SheetDocument, relations: &CardRelations<'_>, line_id: &str, line: &SheetLine) -> String {
+    match line.kind {
+        LineKind::Become => {
+            let new = line
+                .new_state
+                .as_deref()
+                .map(|state| state_name(document, line.property.as_deref(), state));
+            sentence::become_subject(old_state(document, line).as_deref(), new.as_deref())
+        }
+        LineKind::Set => sentence::SET_SUBJECT.to_owned(),
+        LineKind::When => sentence::when_subject(relations.number(line_id).unwrap_or(0)),
+        _ => {
+            let name = line
+                .name
+                .clone()
+                .or_else(|| super::edit::automatic_name(document, line))
+                .unwrap_or_default();
+            sentence::result_subject(&name)
+        }
+    }
+}
+
+/// Returns the chance per tick at the largest count of the rate line `line_id`, read with the parameter values
+/// `values`, `None` for a line with no rate or no count of the cells around.
+///
+/// A count reaches its largest value through the line's "for each" with a fixed rate, or through a Calculate of a
+/// fixed number times the count with no "for each".
+pub fn largest_count_chance(
+    document: &SheetDocument,
+    line_id: &str,
+    values: &BTreeMap<String, f64>,
+) -> Option<LargestCount> {
+    let (_, line) = document.line(line_id)?;
+    let phrase = rate_phrase(line)?;
+    let dt = tick_in(document.time?, phrase.rate_unit?);
+    let (rate, count) = match fixed_number(phrase.rate.value(), values) {
+        Some(rate) => (rate, tries_count(document, phrase)?),
+        None if phrase.tries.is_blank() => {
+            let product = product(document, calculation(document, phrase.rate.value())?, values)?;
+            (product.fixed, product.count)
+        }
+        None => return None,
+    };
+    let count = count_bound(count)?;
+    Some(LargestCount {
+        chance: chance_from_rate(rate * f64::from(count), dt),
+        count,
+    })
+}
+
+/// Returns the note under the rate line `line_id`, read with the parameter values `values`, or `None` for a line with
+/// no note.
+///
+/// A line with no rate, a rate with no unit, and a sheet whose tick has no length have no note. The highest line of a
+/// competing group takes the group's note and the group's other lines none. A group has a note only when each of its
+/// lines holds a fixed rate in one unit with no "for each" as its whole condition, outside any block.
+pub fn rate_note(document: &SheetDocument, line_id: &str, values: &BTreeMap<String, f64>) -> Option<RateNote> {
+    let (card_index, line) = document.line(line_id)?;
+    let time = document.time?;
+    let relations = CardRelations::new(document, &document.cards[card_index]);
+    if let Some(group) = relations
+        .competing_groups()
+        .into_iter()
+        .find(|group| group.contains(&line_id))
+    {
+        return if group.first() == Some(&line_id) {
+            group_note(document, &relations, time, &group, values)
+        } else {
+            None
+        };
+    }
+    let phrase = rate_phrase(line)?;
+    let unit = phrase.rate_unit?;
+    let dt = tick_in(time, unit);
+    let tick = time_words(dt, unit);
+    let subject = subject(document, &relations, line_id, line);
+    let sentences = Sentences::new(document);
+    let count = (!phrase.tries.is_blank()).then(|| sentences.slot(&phrase.tries, None));
+    let at = |rate: f64, n: f64| chance_words(chance_from_rate(rate * n, dt), rate * n * dt);
+    let long_tick = largest_count_chance(document, line_id, values)
+        .filter(LargestCount::is_long)
+        .map(|largest| largest.words());
+    if let Some(rate) = fixed_number(phrase.rate.value(), values) {
+        let rate_words = format_number(rate)?;
+        let (text, mean_stay) = match &count {
+            None => {
+                let text = sentence::rate_note(&tick, &subject, &at(rate, 1.0), &rate_words);
+                let stay = old_state(document, line)
+                    .filter(|_| line.kind == LineKind::Become && rate > 0.0 && rate_alone(&relations, line_id, line));
+                let stay = stay.map(|state| {
+                    sentence::mean_stay_note(
+                        &state,
+                        &time_words(mean_stay(rate, dt), unit),
+                        &rate_words,
+                        &time_words(1.0 / rate, unit),
+                    )
+                });
+                (text, stay)
+            }
+            Some(count) => (
+                sentence::rate_for_each_note(&tick, &subject, count, &at(rate, 1.0), &at(rate, 2.0), &rate_words),
+                None,
+            ),
+        };
+        return Some(RateNote {
+            text,
+            mean_stay,
+            long_tick,
+        });
+    }
+    let calculated = calculation(document, phrase.rate.value());
+    let rate_words = calculated.map_or_else(
+        || sentences.slot(&phrase.rate, None),
+        |calculated| sentences.result_words(calculated),
+    );
+    let product = calculated
+        .filter(|_| count.is_none())
+        .and_then(|calculated| product(document, calculated, values));
+    let text = match product {
+        Some(product) => {
+            let count_name = product
+                .count
+                .name
+                .clone()
+                .or_else(|| super::edit::automatic_name(document, product.count))
+                .unwrap_or_default();
+            sentence::worked_out_rate_note(
+                &tick,
+                &subject,
+                &count_name,
+                &at(product.fixed, 1.0),
+                &at(product.fixed, 2.0),
+                &rate_words,
+            )
+        }
+        None => sentence::growing_rate_note(&tick, &subject, &rate_words, count.as_deref()),
+    };
+    Some(RateNote {
+        text,
+        mean_stay: None,
+        long_tick,
+    })
+}
+
+/// Returns the note of the competing group `group`, its line ids in display order, under its highest line.
+fn group_note(
+    document: &SheetDocument,
+    relations: &CardRelations<'_>,
+    time: SheetTime,
+    group: &[&str],
+    values: &BTreeMap<String, f64>,
+) -> Option<RateNote> {
+    let mut unit = None;
+    let mut rates = Vec::with_capacity(group.len());
+    for id in group {
+        let (_, line) = document.line(id)?;
+        let phrase = rate_phrase(line)?;
+        if !rate_alone(relations, id, line)
+            || !phrase.tries.is_blank()
+            || unit.is_some_and(|unit| Some(unit) != phrase.rate_unit)
+        {
+            return None;
+        }
+        unit = phrase.rate_unit;
+        let rate = fixed_number(phrase.rate.value(), values)?;
+        let new_state = line
+            .new_state
+            .as_deref()
+            .map(|state| state_name(document, line.property.as_deref(), state))?;
+        rates.push((new_state, rate));
+    }
+    let unit = unit?;
+    let (_, first) = document.line(group.first()?)?;
+    let state = old_state(document, first)?;
+    let dt = tick_in(time, unit);
+    let total: f64 = rates.iter().map(|(_, rate)| rate).sum();
+    let leaves = chance_from_rate(total, dt);
+    let shares: Vec<(String, String)> = rates
+        .iter()
+        .map(|(new_state, rate)| {
+            let share = if total > 0.0 { leaves * rate / total } else { 0.0 };
+            (new_state.clone(), chance_words(share, rate * dt))
+        })
+        .collect();
+    let share_words: Vec<(&str, &str)> = shares
+        .iter()
+        .map(|(new_state, share)| (new_state.as_str(), share.as_str()))
+        .collect();
+    let rate_words: Vec<String> = rates
+        .iter()
+        .map(|(_, rate)| format_number(*rate))
+        .collect::<Option<_>>()?;
+    let rate_refs: Vec<&str> = rate_words.iter().map(String::as_str).collect();
+    let tick = time_words(dt, unit);
+    let text = sentence::competing_note(
+        &tick,
+        &state,
+        &chance_words(leaves, total * dt),
+        &share_words,
+        &rate_refs,
+    );
+    let mean_stay = (total > 0.0).then(|| {
+        sentence::mean_stay_note(
+            &state,
+            &time_words(mean_stay(total, dt), unit),
+            &format!("({})", rate_refs.join(" + ")),
+            &time_words(1.0 / total, unit),
+        )
+    });
+    Some(RateNote {
+        text,
+        mean_stay,
+        long_tick: None,
+    })
+}
+
+/// Returns the shortest decimal number that reads back as the same `f32` as `value`, the number a lowered sheet
+/// computes with.
+pub(super) fn shortest_f32(value: f64) -> f64 {
+    let narrowed = value as f32;
+    narrowed.to_string().parse().unwrap_or(value)
+}

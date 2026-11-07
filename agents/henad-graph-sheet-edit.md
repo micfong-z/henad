@@ -22,8 +22,8 @@ button, card, agent kind); `SetStartsAs` (one edit for a Starts as commit, the o
 `SetColorRule`; and the line commands `AddLine` (a `Box<SheetLine>` template at the end of a card or
 a When or Repeat), `SetSlot` and `SetField` (a `LineField`) at a slot path, `ChooseCondition` (a
 `ConditionItem`), `UseOneSide`, `UseCountForEach`, `MoveConditionInto`, `RenameResult`, `SetNote`,
-`MoveLine`, `DeleteLine` and `DrawNewNumbers`. "Remove this When" is `DeleteLine` on the When, and
-"Add for each" is `SetSlot` of `tries`.
+`MoveLine`, `DeleteLine`, `DrawNewNumbers`, `ChangeToRate` and `ChangeToChance`. "Remove this When"
+is `DeleteLine` on the When, and "Add for each" is `SetSlot` of `tries`.
 
 Ids: `mint_id(name, space, is_taken)` lower-cases the name, turns each run of other characters than
 `a-z0-9` into one `_`, puts `x` before a leading digit (and mints `x` for a name with no letter or
@@ -88,6 +88,14 @@ clears the mark, and with no `[time]` sets one tick to 1 of that unit. `unit_in_
 as the final editor's `paramPerUnit` does: case aside, spaces after "per", a plural "s", a word
 boundary at both ends. `LineField::RateUnit` by hand clears the mark, sets one tick when `[time]` is
 absent, and gives a parameter with no unit in the rate's `rate` slot `unit_suggestion` of the unit.
+`ChangeToRate` and `ChangeToChance` (T9) turn the chance of a Chance line or of a change's condition
+into a rate and back, keeping the chance per tick through `sheet::rates` (`rate_from_chance` with
+the tick's length, `chance_from_rate` with `tick_in` of the rate's unit). Each refuses a sheet with
+no `[time]`, a value that is no typed number (a parameter or a result), a chance outside 0 to below
+1 and a rate with no unit. The rate takes the tick's unit, marked, the chance clears the unit and
+the mark, both keep `tries` and the line's key, and the number is written as the shortest decimal
+that reads back as the same `f32` (`rates::shortest_f32`), so 1 - e^(-0.1) turns into 0.1 per day
+and back into the same chance.
 
 Names (`names.rs`, D85): `automatic_name(document, line)` follows the wording table's result names
 (Count, Total or average as a cells Look around with one total or average summary, chance and rate

@@ -35,6 +35,7 @@ mod keys;
 mod look;
 mod measures;
 mod motion;
+mod rates;
 mod repeat;
 mod start;
 pub(super) mod table;

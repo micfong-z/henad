@@ -87,6 +87,22 @@ The first `--vary` changes slowest, like the outer of two nested loops.
 With `--zip`, the values pair up by position, and config `i` takes value `i` of every parameter.
 Every `--vary` then needs the same number of values.
 
+### Varying the tick length
+
+A model whose ticks stand for a length of time has a hidden parameter `tick_length`, the length of one tick in its unit of time.
+`--params` lists it, and a sweep varies it like any other parameter.
+The SIR sheet in Henad's repository states its changes as rates per day, so its epidemic should look the same in days at any tick that is short enough:
+
+``` bash
+cargo run --release -p henad-cli -- --model-file crates/henad-graph/sheets/sir.toml \
+  --vary tick_length=1,0.5,0.25,0.125 --reps 3 --steps 640 --out sir-ticks
+```
+
+`series.csv` holds a `time` column after `tick`, the tick times the run's tick length, so the four tick lengths compare day by day.
+A curve that still moves when the tick halves says the tick is long for the model's rates.
+At the sheet's rates the gap to the shortest tick roughly halves with each halving, and a tick of a quarter day is close to it.
+A model of chances per tick does not follow the tick length: its curve keeps its shape in ticks and squeezes in days.
+
 ### Sampling the ranges
 
 The number of combinations grows fast.

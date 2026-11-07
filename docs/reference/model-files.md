@@ -300,6 +300,35 @@ The other tables follow in this order: `[world]`, `[time]`, the properties of ea
 Each line of a card is a `[card.line.<id>]` table, its id `l` and a number unique in the file.
 Every table refuses a key it does not know, at the key's line.
 
+### Time and rates
+
+The `[time]` table sets how long one tick is, a `tick_length` above 0 and a `tick_unit` from `"second"` to `"year"`.
+A sheet with a `[time]` table lowers to a graph whose first parameter is the hidden `tick_length`, in the tick's unit, as [Time scale](#time-scale) describes.
+Its default is the sheet's length, its `min` a hundredth of it and its `max` 30 times it.
+A sweep varies it like any other parameter, and every tick length runs the same code with the same keys.
+
+A rate, `kind = "rate"`, holds a `rate`, its `rate_unit` and an optional `tries`, the count it is taken for each of.
+It stands as a line of its own, as the condition of a change or a When, or inside an all of, an any of or a none of.
+A rate `r` per unit holds within one tick with the chance 1 − e^(−r Δt), where Δt is one tick counted in the rate's unit, and for each of a count `n` with the chance 1 − e^(−r Δt n).
+A rate in another unit than the tick's is multiplied by the ratio of the two units, so a rate per week in a model of days is divided by 7.
+A value that reads only parameters and typed numbers is the same for every cell, and the host computes it once per build.
+A rate for each of the cells around reads e^(−r Δt k) for each count `k` from a table the host computes, and the device computes no exponential.
+A rate worked out for each cell, or for each of a count of agents, takes one exponential per element.
+
+Two or more Become lines that leave one state of one property at a rate each, the rate standing as the condition or as an item of an all of, compete.
+A cell leaves with the chance of the sum of their rates, and each line takes the share its rate gives it, whatever the order of the lines.
+The share of the cells each line takes then follows the ratio of the rates at any tick length.
+The group draws one number with the key of its highest line, and the other lines keep their keys for when they leave it.
+A rate beside a chance from the same state keeps "otherwise", and the higher line wins.
+A cell with a sum of rates of 0, such as one with no infected neighbour when every rate is for each infected neighbour, never leaves.
+
+A rate does not run while the sheet has no `[time]` table, and its line reads "Not run yet: set how long one tick is, under World on the sheet".
+A rate read from a parameter whose Unit names another unit, such as a Unit of "per day" on a line per week, keeps the line's unit, with a warning at the line.
+A button's card takes no rate.
+
+`crates/henad-graph/sheets/sir.toml` in Henad's repository is the SIR epidemic with rates per day and one tick of 1 day.
+Its infection line reads "Become Infected from Susceptible, at rate Infection rate per day for each infected neighbour".
+
 ### A sheet of agents
 
 A sheet whose `[world]` is `made_of = "agents"` holds one kind of agent, its `count` at the start and its `max_count`, the most a run can hold.
