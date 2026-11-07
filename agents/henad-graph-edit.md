@@ -13,7 +13,14 @@ schema) and `SetWorld` (the same topology), and the region edits below. `apply` 
 refused command changes nothing. Commands check structure only (ids, grammars, the body a node is
 in, region cycles) and leave meaning to the checker. A new node takes `max(highest + 1, next_id)`
 and writes `next_id` (an `[editor]` region is made if absent), and a kind with a `key` config gets a
-random key distinct from the file's (`with_key_seed` fixes the stream for tests). A stream draw
+random key distinct from the file's (`with_key_seed` fixes the stream for tests). The keys come from
+the public `keys::KeyStream` (`keys.rs`), an `xorshift64` stream seeded from entropy
+(`from_entropy`, a `RandomState` hash of a counter, so two streams differ where the hasher keys are
+fixed) or from a seed (`seeded`, through `mix_seed`). `next_key` returns the high 32 bits of the
+next state and `next_key_not_in` skips the keys a closure calls taken. The graph builder and the
+sheet builder (`agents/henad-graph-sheet-edit.md`) are its two callers, and
+`a_seeded_key_stream_gives_its_known_first_keys` holds the first three keys of seed 1, so a rebuild
+test can name its keys. A stream draw
 joins its pass's `draw_order`. `RemoveNode` drops wires from the node and its placement, moves a
 region's members to the region around it, and is refused while a `[[stat]]` reads it. A rename
 rewrites every reference: `config.lane`, category literals, `dead`/`alive`, rule `from`/`to`,

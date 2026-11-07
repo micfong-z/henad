@@ -1316,7 +1316,7 @@ fn governing_property(left: &SheetValue) -> Option<&str> {
 }
 
 /// Returns whether a line of `kind` works out a result. The same kinds stand in a slot as a phrase.
-pub(super) fn is_result_kind(kind: LineKind) -> bool {
+pub(crate) fn is_result_kind(kind: LineKind) -> bool {
     matches!(
         kind,
         LineKind::Count
@@ -1360,7 +1360,7 @@ fn formula_chip(reference: &str, document: &crate::sheet::document::SheetDocumen
 }
 
 /// Returns whether `line`, a phrase or a value inside it draws random numbers.
-pub(super) fn holds_draw(line: &SheetLine) -> bool {
+pub(crate) fn holds_draw(line: &SheetLine) -> bool {
     matches!(
         line.kind,
         LineKind::Chance | LineKind::Rate | LineKind::RandomNumber | LineKind::RandomDirection | LineKind::PickCell

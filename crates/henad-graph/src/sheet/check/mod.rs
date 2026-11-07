@@ -14,6 +14,9 @@ mod declarations;
 mod formula;
 mod lines;
 
+pub(crate) use declarations::{RESERVED_IDS, RESERVED_PARAMETER_IDS, RESERVED_PREFIX};
+pub(crate) use lines::{holds_draw, is_result_kind};
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Range;
 

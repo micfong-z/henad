@@ -1,8 +1,6 @@
-//! Copy and paste of nodes as model-file text, and the entropy new keys start from.
+//! Copy and paste of nodes as model-file text.
 
 use std::collections::BTreeMap;
-use std::hash::{BuildHasher as _, Hasher as _};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{EditError, GraphBuilder, Scope};
 use crate::catalogue::{Effect, lookup};
@@ -12,16 +10,6 @@ use crate::file::GraphFile;
 use crate::ids::NodeId;
 use crate::node::{Node, NodeBody};
 use crate::value::{ConfigValue, InputValue};
-
-/// Number of builders made so far, which keeps two builders apart on a target whose hasher keys are fixed.
-static BUILDERS: AtomicU64 = AtomicU64::new(0);
-
-/// Returns a nonzero word for the start of a key stream, different for every call.
-pub(super) fn entropy() -> u64 {
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u64(BUILDERS.fetch_add(1, Ordering::Relaxed));
-    henad_core::authoring::primitives::rng::mix_seed(hasher.finish())
-}
 
 /// Returns `nodes` with every wire to a node outside them dropped, and every region outside them cleared.
 fn detached(nodes: Vec<Node>) -> Vec<Node> {

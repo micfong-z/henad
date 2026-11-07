@@ -20,6 +20,7 @@ mod probes;
 mod regions;
 mod sheet_check;
 mod sheet_document;
+mod sheet_edit;
 mod sheet_lower;
 mod sheet_mutation;
 mod sheet_sentence;

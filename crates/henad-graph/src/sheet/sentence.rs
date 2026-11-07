@@ -2499,6 +2499,11 @@ impl<'a> Sentences<'a> {
         }
     }
 
+    /// Returns the words of the result line or phrase `line` after its name, such as "Alive neighbours is 3".
+    pub fn result_words(&self, line: &SheetLine) -> String {
+        self.phrase(line, false)
+    }
+
     /// Returns the words of a change line with its condition, with the first letter in upper case.
     fn change(&self, line: &SheetLine) -> String {
         let property = self.property_name(line.property.as_deref());

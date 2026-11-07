@@ -9,7 +9,9 @@ Modules. `document.rs` holds `GraphDocument`, every table before `[editor]`, as 
 public fields. `node.rs` holds `Node`, `NodeBody` (`node`, `region_members`, `region_path`,
 `duplicate_ids`), `Accumulator` and `Combine`. `value.rs` holds `Literal`, `InputValue`,
 `ConfigValue`, `PortRef` and `MemberName`. `types.rs` holds `ValueType` and `Rate`, and `ids.rs`
-holds `NodeId` and the grammars `is_id` and `is_port_segment`. `limits.rs` holds the limits of
+holds `NodeId` and the grammars `is_id` and `is_port_segment`. `keys.rs` holds `KeyStream`, the
+stream of draw keys the graph and sheet builders share (`agents/henad-graph-edit.md`).
+`limits.rs` holds the limits of
 `ir-spec.md` section 13 as the plan changes them. `model_text.rs` holds what every kind of model
 file shares (`ModelHeader`, `HeaderProblem`, `read_header`, `LineEnds`, `toml_string`, `ParamTable`,
 `write_param`), and henad-explore's `model_file.rs` reads them from here. It also holds the

@@ -25,7 +25,7 @@
 //! [`sentence`] in a comment above it, and reading that text returns the same document. [`SheetFile::parse`] reads,
 //! checks and lowers a sheet to the graph it runs as, whose code identity is the sheet's, and [`LineMap`] names the
 //! line or part of the sheet each node of that graph comes from. [`starters`] returns the sheets a new model begins
-//! from.
+//! from, and [`edit`] holds the commands every edit of the sheet editor runs.
 //!
 //! ```
 //! use henad_graph::sheet::ParsedSheet;
@@ -59,6 +59,7 @@ use henad_core::diagnostic::CodeDiagnostic;
 
 pub mod check;
 pub mod document;
+pub mod edit;
 mod file;
 pub mod limits;
 mod lower;

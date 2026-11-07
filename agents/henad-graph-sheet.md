@@ -22,7 +22,12 @@ for the lowering's errors; `declarations.rs` the tables outside the cards; `line
 lines and values; `formula.rs` the Calculate formula parser. `sheet/file.rs` is private, and `sheet`
 re-exports `SheetFile`. `sheet/lower/` is private, and `sheet` re-exports `LineMap`, `NodeOrigin`
 and `NodeOwner` from `lower/table.rs`. `SheetLine::slot_values` (crate-private, `document.rs`)
-returns every value in a line's slots, for the checker and the lowering.
+returns every value in a line's slots, for the checker and the lowering. `sheet/edit/` is public
+(`sheet::edit`), the edit commands that `agents/henad-graph-sheet-edit.md` describes: `mod.rs` holds
+`SheetBuilder`, `SheetEdit`, `LineField`, `SheetItem`, `MoveDirection`, `SheetEditError`, `IdSpace`,
+`mint_id`, `STATE_COLORS`, `MEASURE_COLORS` and `suggested_state_color`; `names.rs` `automatic_name`
+and the rule that keeps names up to date; `references.rs` every place an id is named; `lines.rs`
+slot paths, phrase depth and the outline moves.
 `sheet/limits.rs` holds the sheet's limits apart from `crate::limits`, so `library.lock` stays as it
 is: `MAX_SHEET_BYTES` (1 MiB), `MAX_NESTING` (24), `MAX_LINES_PER_CARD` (256), `MAX_NODES_PER_LINE`
 and `MAX_SHEET_NODES` (999 each, for the lowering's `n(1000k + j)` ids), `MAX_SHEET_ID_BYTES` (48,

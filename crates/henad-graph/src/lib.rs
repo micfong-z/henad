@@ -48,6 +48,7 @@ mod expr;
 pub mod file;
 pub mod host;
 pub mod ids;
+pub mod keys;
 pub mod limits;
 pub mod model_text;
 pub mod node;

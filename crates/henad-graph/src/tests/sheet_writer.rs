@@ -412,7 +412,7 @@ fn trimmed(lines: &[String]) -> Vec<String> {
 
 /// Checks that `old` turns into `new` through exactly `expected`, each hunk's removed and added lines, blank lines at
 /// a hunk's ends aside.
-fn assert_hunks(old: &str, new: &str, expected: &[(&[&str], &[&str])]) {
+pub(super) fn assert_hunks(old: &str, new: &str, expected: &[(&[&str], &[&str])]) {
     let found = hunks(old, new);
     let found: Vec<(Vec<String>, Vec<String>)> = found
         .iter()

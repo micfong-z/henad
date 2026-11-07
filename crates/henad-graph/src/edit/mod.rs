@@ -28,6 +28,7 @@ use crate::document::{
 use crate::editor::EditorRegion;
 use crate::file::{GraphFile, GraphFileError};
 use crate::ids::{NodeId, is_port_segment};
+use crate::keys::KeyStream;
 use crate::node::{Accumulator, Node, NodeBody};
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, Literal, PortRef};
@@ -461,8 +462,8 @@ impl std::error::Error for EditError {}
 pub struct GraphBuilder {
     document: GraphDocument,
     editor: EditorRegion,
-    /// State of the `xorshift64` stream new keys come from, never 0.
-    key_state: u64,
+    /// Stream new keys come from.
+    keys: KeyStream,
 }
 
 /// Prints the graph's id and the number of passes.
@@ -491,13 +492,13 @@ impl GraphBuilder {
         Self {
             document,
             editor: editor.cloned().unwrap_or_default(),
-            key_state: clipboard::entropy(),
+            keys: KeyStream::from_entropy(),
         }
     }
 
     /// Returns the builder with its keys drawn from `seed`, so a test mints the same keys every run.
     pub fn with_key_seed(mut self, seed: u64) -> Self {
-        self.key_state = henad_core::authoring::primitives::rng::mix_seed(seed);
+        self.keys = KeyStream::seeded(seed);
         self
     }
 
@@ -805,13 +806,7 @@ impl GraphBuilder {
             .all_nodes()
             .filter_map(|node| node.config.get("key").and_then(ConfigValue::as_integer))
             .collect();
-        loop {
-            self.key_state = henad_core::authoring::primitives::rng::xorshift64(self.key_state);
-            let key = (self.key_state >> 32) as u32;
-            if !taken.contains(&i64::from(key)) {
-                return key;
-            }
-        }
+        self.keys.next_key_not_in(|key| taken.contains(&i64::from(key)))
     }
 
     /// Adds a node of kind `op` to `scope`.

@@ -15,7 +15,7 @@ use crate::sheet::limits::MAX_SHEET_ID_BYTES;
 use crate::sheet::sentence::{ANY_STATE_ID, Blank, ONE_AGENT_KIND, SHEET_EMPTY};
 
 /// Ids a sheet item cannot take: the words of a formula, the parts of a result and the chips of mine.
-const RESERVED_IDS: [&str; 9] = [
+pub(crate) const RESERVED_IDS: [&str; 9] = [
     "my",
     "my_new",
     "length",
@@ -28,7 +28,7 @@ const RESERVED_IDS: [&str; 9] = [
 ];
 
 /// Parameter ids the lowered model holds of its own: the world's parameters and the length of one tick.
-const RESERVED_PARAMETER_IDS: [&str; 6] = [
+pub(crate) const RESERVED_PARAMETER_IDS: [&str; 6] = [
     "grid_width",
     "grid_height",
     "num_agents",
@@ -38,7 +38,7 @@ const RESERVED_PARAMETER_IDS: [&str; 6] = [
 ];
 
 /// Prefix of the ids the lowered model holds of its own.
-const RESERVED_PREFIX: &str = "henad_";
+pub(crate) const RESERVED_PREFIX: &str = "henad_";
 
 /// Checks every table outside the cards.
 pub(super) fn check(checker: &mut Checker<'_>) {

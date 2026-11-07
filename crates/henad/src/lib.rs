@@ -286,13 +286,16 @@ pub mod rules {
 /// [`GridProgram`](graph::wgsl::GridProgram) compiles a graph on a grid to WGSL and builds its entry, and
 /// [`AgentProgram`](graph::wgsl::AgentProgram) does the same for a graph of agents. A [`ModelFile`](rules::ModelFile)
 /// of kind `graph` holds a [`GraphFile`](graph::GraphFile). [`ParsedSheet`](graph::sheet::ParsedSheet) reads a model
-/// file of kind `sheet`, the author document a researcher builds without nodes.
+/// file of kind `sheet`, the author document a researcher builds without nodes, and
+/// [`SheetBuilder`](graph::sheet::edit::SheetBuilder) runs its edit commands. Both builders mint draw keys from a
+/// [`KeyStream`](graph::keys::KeyStream).
 #[cfg(feature = "model-files")]
 #[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
 pub mod graph {
     pub use henad_graph::{
         CODE_FORMAT, FORMAT, FORMAT_VERSION, GraphFile, GraphFileError, KIND_GRAPH, LIBRARY, catalogue, check,
-        document, draw, edit, editor, file, host, ids, limits, model_text, node, sheet, starters, types, value, wgsl,
+        document, draw, edit, editor, file, host, ids, keys, limits, model_text, node, sheet, starters, types, value,
+        wgsl,
     };
 }
 
