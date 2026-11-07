@@ -20,22 +20,21 @@ use henad_graph::sheet::document::{
     LineKind, MadeOf, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, StartRule,
     StartsAs,
 };
-use henad_graph::sheet::sentence::{A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE, FORBIDDEN_WORDS};
+use henad_graph::sheet::sentence::{A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE};
 use henad_graph::sheet::{ParsedSheet, starters};
 use web_time::Instant;
 
 use crate::state::{AppState, PreviewRun};
-use crate::tests::support::step_past;
+use crate::tests::support::{Harness, Node, forbidden_words, step_past, tick_zero_stat, top, wait_for_snapshot};
 use crate::ui::dock::Tab;
 use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState, poll_at};
 use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::card_pane::{CardLine, LineNote, NoteColor, card_lines};
-use crate::ui::editor::sheet::new_model::{new_model_modal, starter_choices};
+use crate::ui::editor::sheet::new_model::starter_choices;
 use crate::ui::editor::sheet::sheet_pane::starts_text;
 use crate::ui::editor::{
-    ApplyOutcome, EditorModel, apply, edit_model, editor_ui, new_grid_rule, open_text, preview_running_text, save_name,
+    ApplyOutcome, EditorModel, apply, edit_model, new_grid_rule, open_text, preview_running_text, save_name,
 };
-use crate::ui::menu_bar::file_menu;
 use crate::ui::playback::{press_build, tick_counter};
 use crate::ui::results::store::{ResultsSource, ResultsStore};
 use crate::ui::results::{open_folder, open_in_editor, poll};
@@ -307,33 +306,6 @@ fn a_sheet_whose_text_does_not_read_opens_in_the_code_view_with_its_problem() {
     assert_eq!(app.editor.outcome, None);
 }
 
-/// Returns the value of the stat `label` in the loaded run's snapshot at tick 0, or panics after ten seconds.
-fn tick_zero_stat(app: &mut AppState, label: &str) -> f64 {
-    app.wait_for_build();
-    let snapshot = wait_for_snapshot(app, |tick| tick == 0);
-    snapshot
-        .stats
-        .iter()
-        .find(|entry| entry.label() == label)
-        .map(|entry| entry.value().scalar())
-        .expect("the stat is published")
-}
-
-/// Takes the loaded run's snapshots until one whose tick passes `accept`, keeps it as the app's snapshot and returns
-/// it, or panics after ten seconds.
-fn wait_for_snapshot(app: &mut AppState, accept: impl Fn(u64) -> bool) -> &henad_compute::snapshot::Snapshot {
-    let thread = app.sim_thread.as_mut().expect("a model is loaded");
-    for _ in 0..1000 {
-        if let Some(snapshot) = thread.take_snapshot()
-            && accept(snapshot.tick)
-        {
-            return app.snapshot.insert(snapshot);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("no snapshot of the loaded model passed the test");
-}
-
 #[test]
 fn a_sheet_preview_waits_at_tick_zero_until_play() {
     let Some(mut app) = app() else {
@@ -484,152 +456,12 @@ fn the_cells_table_reads_each_start_in_the_wording_table_words() {
     assert_eq!(starts_text(cover(&mut document)), A_VALUE);
 }
 
-/// An egui context that draws the File menu, the Editor tab and the New model dialog over an app, driven by synthetic
-/// input.
-struct Harness {
-    context: egui::Context,
-    app: AppState,
-    time: f64,
-}
-
-/// Returns the top of `node` on the screen.
-fn top(node: &Node) -> f32 {
-    node.bounds.map_or(0.0, |rect| rect.top())
-}
-
-/// One accessible node of a frame.
-#[derive(Debug, Clone)]
-struct Node {
-    label: String,
-    value: String,
-    description: String,
-    role: egui::accesskit::Role,
-    bounds: Option<egui::Rect>,
-}
-
-impl Harness {
-    /// Returns a harness over the example models, or `None` to skip on a machine without a device.
-    fn new() -> Option<Self> {
-        let harness = Self {
-            context: egui::Context::default(),
-            app: app()?,
-            time: 0.0,
-        };
-        harness.context.enable_accesskit();
-        Some(harness)
-    }
-
-    /// Runs one frame with `events`, and returns its accessible nodes.
-    fn frame(&mut self, events: Vec<egui::Event>) -> Vec<Node> {
-        self.time += 0.016;
-        let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))),
-            time: Some(self.time),
-            events,
-            ..egui::RawInput::default()
-        };
-        let app = &mut self.app;
-        let mut output = self.context.run_ui(input, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| file_menu(ui, app));
-            editor_ui(ui, app);
-            new_model_modal(ui.ctx(), app);
-        });
-        output.textures_delta.clear();
-        let update = output.platform_output.accesskit_update.expect("an AccessKit update");
-        update
-            .nodes
-            .iter()
-            .map(|(_, node)| Node {
-                // A submenu's button ends with its arrow.
-                label: node.label().unwrap_or_default().trim_end_matches(" ⏵").to_owned(),
-                value: node.value().unwrap_or_default().to_owned(),
-                description: node.description().unwrap_or_default().to_owned(),
-                role: node.role(),
-                bounds: node.bounds().map(|rect| {
-                    egui::Rect::from_min_max(
-                        egui::pos2(rect.x0 as f32, rect.y0 as f32),
-                        egui::pos2(rect.x1 as f32, rect.y1 as f32),
-                    )
-                }),
-            })
-            .collect()
-    }
-
-    /// Runs a few frames with no input, and returns the accessible nodes of the last.
-    fn settle(&mut self) -> Vec<Node> {
-        for _ in 0..3 {
-            self.frame(Vec::new());
-        }
-        self.frame(Vec::new())
-    }
-
-    /// Clicks the Name field of the New model dialog.
-    fn click_name_field(&mut self) {
-        let nodes = self.settle();
-        let field = nodes
-            .iter()
-            .find(|node| node.role == egui::accesskit::Role::TextInput)
-            .and_then(|node| node.bounds)
-            .expect("the Name field")
-            .center();
-        self.click_at(field);
-    }
-
-    /// Clicks the primary button at `position`.
-    fn click_at(&mut self, position: egui::Pos2) {
-        let button = |pressed| egui::Event::PointerButton {
-            pos: position,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
-        self.frame(vec![egui::Event::PointerMoved(position)]);
-        self.frame(vec![button(true)]);
-        self.frame(vec![button(false)]);
-    }
-
-    /// Returns the centre of the one node whose label ends with `label`.
-    fn find(&mut self, label: &str) -> egui::Pos2 {
-        let nodes = self.settle();
-        let found: Vec<&Node> = nodes
-            .iter()
-            .filter(|node| node.label.ends_with(label) && node.bounds.is_some())
-            .collect();
-        assert_eq!(found.len(), 1, "one widget reads {label}: {found:?}");
-        found[0].bounds.expect("bounds").center()
-    }
-
-    /// Clicks the one widget whose label ends with `label`.
-    fn click(&mut self, label: &str) {
-        let position = self.find(label);
-        self.click_at(position);
-    }
-
-    /// Presses `key` with `modifiers`.
-    fn press(&mut self, key: egui::Key, modifiers: egui::Modifiers) {
-        let event = |pressed| egui::Event::Key {
-            key,
-            physical_key: None,
-            pressed,
-            repeat: false,
-            modifiers,
-        };
-        self.frame(vec![event(true), event(false)]);
-    }
-
-    /// Returns the label and the value of every node of a settled frame. A label's text is its node's value.
-    fn labels(&mut self) -> Vec<String> {
-        self.settle()
-            .into_iter()
-            .flat_map(|node| [node.label, node.value])
-            .filter(|text| !text.is_empty())
-            .collect()
-    }
-}
-
 #[test]
 fn the_new_model_dialog_offers_every_grid_starter_and_no_agent_starter() {
-    let offered: Vec<&str> = starter_choices().iter().map(|choice| choice.file_name).collect();
+    let choices = starter_choices();
+    assert_eq!(choices[0].name, "Blank", "Blank comes first");
+    assert_eq!(choices[0].file_name, None);
+    let offered: Vec<&str> = choices.iter().filter_map(|choice| choice.file_name).collect();
     let mut agent_starters = 0;
     for starter in starters() {
         let document = ParsedSheet::parse(starter.text)
@@ -657,10 +489,15 @@ fn new_model_opens_a_dialog_and_create_opens_the_chosen_sheet() {
     );
     let dialog = harness.app.editor.new_model.clone().expect("the dialog is open");
     let names: Vec<&str> = dialog.choices().iter().map(|choice| choice.name.as_str()).collect();
-    assert_eq!(names, ["Game of Life", "SIR epidemic", "Majority vote", "Forest fire"]);
+    assert_eq!(
+        names,
+        ["Blank", "Game of Life", "SIR epidemic", "Majority vote", "Forest fire"]
+    );
+    // The world question under Blank holds radio buttons of its own.
     let mut radios: Vec<&Node> = nodes
         .iter()
         .filter(|node| node.role == egui::accesskit::Role::RadioButton)
+        .filter(|node| node.label != "Cells on a grid" && node.label != "Agents in open space")
         .collect();
     radios.sort_by(|a, b| top(a).total_cmp(&top(b)));
     let radios: Vec<&str> = radios.iter().map(|node| node.label.as_str()).collect();
@@ -685,8 +522,8 @@ fn new_model_opens_a_dialog_and_create_opens_the_chosen_sheet() {
     };
     assert_eq!(
         name(&nodes).as_deref(),
-        Some("Game of Life"),
-        "Name follows the starter"
+        Some("Untitled model"),
+        "Blank is named Untitled model"
     );
 
     harness.click("Majority vote");
@@ -854,52 +691,6 @@ fn life_with_an_error_at_line_two() -> String {
     let broken = text.replacen("start_state = \"dead\"\n", "start_state = \"zombie\"\n", 1);
     assert_ne!(broken, text, "the old state of line 2 was found");
     broken
-}
-
-/// Returns the words of `text`, split at every character that is not a letter or a digit.
-fn words(text: &str) -> impl Iterator<Item = &str> {
-    text.split(|c: char| !c.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-}
-
-/// Returns whether `text` belongs to a control that opens or creates a node graph, which the words rule exempts.
-fn opens_a_node_graph(text: &str) -> bool {
-    text.contains(crate::ui::editor::NEW_NODE_GRAPH)
-}
-
-/// Returns every forbidden word in `texts`, with the text that holds it.
-fn forbidden_words(texts: &[String]) -> Vec<(String, String)> {
-    texts
-        .iter()
-        .filter(|text| !opens_a_node_graph(text))
-        .flat_map(|text| {
-            words(text)
-                .filter(|word| {
-                    FORBIDDEN_WORDS
-                        .iter()
-                        .any(|forbidden| forbidden.eq_ignore_ascii_case(word))
-                })
-                .map(|word| (word.to_owned(), text.clone()))
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
-impl Harness {
-    /// Returns the label, the value and the description of every node of a settled frame.
-    fn accessible_texts(&mut self) -> Vec<String> {
-        self.settle()
-            .into_iter()
-            .flat_map(|node| [node.label, node.value, node.description])
-            .filter(|text| !text.is_empty())
-            .collect()
-    }
-
-    /// Opens the sheet `text` in the Editor and draws it.
-    fn open_sheet(&mut self, text: &str) {
-        open(&mut self.app, text);
-        self.settle();
-    }
 }
 
 #[test]

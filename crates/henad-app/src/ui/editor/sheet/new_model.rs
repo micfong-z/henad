@@ -1,15 +1,20 @@
-//! The New model dialog: a sheet model started from one of the sheet starters, under a name.
+//! The New model dialog: a sheet model started blank or from one of the sheet starters, under a name.
 //!
-//! "Start from" lists the grid starters [`henad_graph::sheet::starters`] returns, each with its one-line description.
-//! The Name field follows the chosen starter's name until the author types in it. Create opens the sheet in the Editor,
-//! and so does Enter in the Name field. Cancel, Escape and a click beside the dialog close it.
+//! "Start from" lists Blank, then the grid starters [`henad_graph::sheet::starters`] returns, each with its one-line
+//! description. Under Blank alone the dialog asks what the world is made of, and only cells on a grid can be chosen.
+//! The Name field follows the chosen starter's name, or "Untitled model" for Blank, until the author types in it.
+//! Create opens the sheet in the Editor, and so does Enter in the Name field. Cancel, Escape and a click beside the
+//! dialog close it.
+//!
+//! A blank model is a world of 100 by 100 cells that wraps around, with no property, no parameter and no card.
 
 use egui::{Context, Id, Key, Modal, RichText, TextEdit};
 use henad_graph::sheet::ParsedSheet;
-use henad_graph::sheet::document::MadeOf;
-use henad_graph::sheet::edit::{SheetBuilder, SheetEdit};
+use henad_graph::sheet::document::{Edges, MadeOf, SheetDocument, SheetHeader, SheetWorld};
+use henad_graph::sheet::edit::{IdSpace, SheetBuilder, SheetEdit, mint_id};
 use henad_graph::sheet::sentence::{
-    CANCEL, CREATE, NAME_LABEL, NEW_MODEL, START_FROM, STARTER_CHOICES, UNTITLED_MODEL,
+    AGENTS_IN_OPEN_SPACE, CANCEL, CELLS_ON_A_GRID, CREATE, NAME_LABEL, NEW_MODEL, START_FROM, STARTER_CHOICES,
+    UNTITLED_MODEL, WORLD_QUESTION,
 };
 
 use super::SheetEditor;
@@ -20,41 +25,55 @@ use crate::ui::sweep::layout::filled_button;
 /// Width in points of the dialog's content.
 const DIALOG_WIDTH: f32 = 420.0;
 
+/// Name of the first choice of the dialog, the model with nothing in it.
+const BLANK: &str = "Blank";
+
+/// Side in cells of a blank model's grid.
+const BLANK_SIDE: u32 = 100;
+
 /// One starter the dialog offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StarterChoice {
-    /// File name of the starter in [`henad_graph::sheet::starters`].
-    pub file_name: &'static str,
+    /// File name of the starter in [`henad_graph::sheet::starters`], `None` for Blank.
+    pub file_name: Option<&'static str>,
     /// Name of the model the starter holds.
     pub name: String,
     /// One-line description the dialog shows under the name, `None` for a starter the wording table lacks.
     pub description: Option<&'static str>,
 }
 
-/// Returns the starters the dialog offers, in the order [`henad_graph::sheet::starters`] returns them.
+/// Returns the starters the dialog offers: Blank, then the starters in the order [`henad_graph::sheet::starters`]
+/// returns them.
 ///
 /// Note that only the starters of a world made of cells are offered. The Editor has no sheet pane section for agents.
 pub fn starter_choices() -> Vec<StarterChoice> {
-    henad_graph::sheet::starters()
-        .iter()
-        .filter_map(|starter| {
-            let parsed = ParsedSheet::parse(starter.text).ok()?;
-            let document = parsed.document();
-            if document.world.made_of != MadeOf::Cells {
-                return None;
-            }
-            let name = document.sheet.name.clone();
-            let description = STARTER_CHOICES
-                .iter()
-                .find(|(choice, _)| *choice == name)
-                .map(|(_, description)| *description);
-            Some(StarterChoice {
-                file_name: starter.file_name,
-                name,
-                description,
-            })
+    let blank = StarterChoice {
+        file_name: None,
+        name: BLANK.to_owned(),
+        description: description_of(BLANK),
+    };
+    let starters = henad_graph::sheet::starters().iter().filter_map(|starter| {
+        let parsed = ParsedSheet::parse(starter.text).ok()?;
+        let document = parsed.document();
+        if document.world.made_of != MadeOf::Cells {
+            return None;
+        }
+        let name = document.sheet.name.clone();
+        Some(StarterChoice {
+            file_name: Some(starter.file_name),
+            description: description_of(&name),
+            name,
         })
-        .collect()
+    });
+    std::iter::once(blank).chain(starters).collect()
+}
+
+/// Returns the one-line description of the starter named `name`, `None` for a starter the wording table lacks.
+fn description_of(name: &str) -> Option<&'static str> {
+    STARTER_CHOICES
+        .iter()
+        .find(|(choice, _)| *choice == name)
+        .map(|(_, description)| *description)
 }
 
 /// State of the New model dialog while it is open.
@@ -72,14 +91,10 @@ pub struct NewModelDialog {
 
 impl Default for NewModelDialog {
     fn default() -> Self {
-        let choices = starter_choices();
-        let name = choices
-            .first()
-            .map_or_else(|| UNTITLED_MODEL.to_owned(), |choice| choice.name.clone());
         Self {
-            choices,
+            choices: starter_choices(),
             chosen: 0,
-            name,
+            name: UNTITLED_MODEL.to_owned(),
             name_typed: false,
         }
     }
@@ -99,7 +114,8 @@ impl NewModelDialog {
             self.name = self
                 .choices
                 .get(index)
-                .map_or_else(|| UNTITLED_MODEL.to_owned(), |choice| choice.name.clone());
+                .and_then(|choice| choice.file_name.map(|_| choice.name.clone()))
+                .unwrap_or_else(|| UNTITLED_MODEL.to_owned());
         }
     }
 }
@@ -129,9 +145,14 @@ pub fn new_model_modal(ctx: &Context, app: &mut AppState) {
         let mut chosen = dialog.chosen;
         for (index, choice) in dialog.choices.iter().enumerate() {
             ui.radio_value(&mut chosen, index, &choice.name);
-            if let Some(description) = choice.description {
-                ui.indent(choice.file_name, |ui| ui.weak(description));
-            }
+            ui.indent(("henad_new_model_choice", index), |ui| {
+                if let Some(description) = choice.description {
+                    ui.weak(description);
+                }
+                if choice.file_name.is_none() && dialog.chosen == index {
+                    world_question(ui);
+                }
+            });
         }
         if chosen != dialog.chosen {
             dialog.choose(chosen);
@@ -161,12 +182,42 @@ pub fn new_model_modal(ctx: &Context, app: &mut AppState) {
         let chosen = dialog.choices.get(dialog.chosen).map(|choice| choice.file_name);
         let name = dialog.name.trim().to_owned();
         app.editor.new_model = None;
-        if let Some(file_name) = chosen {
-            create_model(app, file_name, &name);
+        match chosen {
+            Some(Some(file_name)) => create_model(app, file_name, &name),
+            Some(None) => create_blank_model(app, &name),
+            None => {}
         }
     } else if closed || response.should_close() {
         app.editor.new_model = None;
     }
+}
+
+/// Draws the world question under Blank: a world of cells on a grid, chosen, and agents in open space, disabled.
+fn world_question(ui: &mut egui::Ui) {
+    ui.label(WORLD_QUESTION);
+    let mut cells = true;
+    ui.radio_value(&mut cells, true, CELLS_ON_A_GRID);
+    ui.add_enabled_ui(false, |ui| ui.radio_value(&mut cells, false, AGENTS_IN_OPEN_SPACE));
+}
+
+/// Returns a blank model named `name`: a world of 100 by 100 cells that wraps around, with nothing else.
+///
+/// The model's id is minted from its name, or is `untitled_model` for a name that mints no id.
+pub fn blank_model(name: &str) -> SheetDocument {
+    let id = mint_id(name, IdSpace::Card, |_| false).unwrap_or_else(|_| "untitled_model".to_owned());
+    SheetDocument::new(
+        SheetHeader::new(id, name, 1),
+        SheetWorld::new(MadeOf::Cells, BLANK_SIDE, BLANK_SIDE, Edges::Wrap),
+    )
+}
+
+/// Opens a blank model named `name` in the Editor, and brings the Editor to the front. An empty name takes
+/// [`UNTITLED_MODEL`].
+pub fn create_blank_model(app: &mut AppState, name: &str) {
+    let name = if name.is_empty() { UNTITLED_MODEL } else { name };
+    app.editor.load_sheet(SheetEditor::new(blank_model(name)), None);
+    app.editor.file_status = None;
+    app.focus_request = Some(Tab::Editor);
 }
 
 /// Opens the sheet starter whose file is named `file_name` in the Editor under the name `name`, and brings the Editor

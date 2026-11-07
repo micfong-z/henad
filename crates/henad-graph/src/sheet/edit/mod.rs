@@ -90,6 +90,25 @@ pub const STATE_COLORS: [Color; 12] = [
     [0x13, 0x13, 0x13, 0xFF],
 ];
 
+/// Colours of the palette a state's colour is chosen from, in the order of [`super::sentence::COLOR_NAMES`].
+///
+/// They are the colours of [`STATE_COLORS`] in another order: black, dark grey, grey, white, red, orange, yellow,
+/// brown, green, dark green, blue and purple.
+pub const PALETTE_COLORS: [Color; 12] = [
+    STATE_COLORS[11],
+    STATE_COLORS[0],
+    STATE_COLORS[5],
+    STATE_COLORS[8],
+    STATE_COLORS[10],
+    STATE_COLORS[2],
+    STATE_COLORS[4],
+    STATE_COLORS[7],
+    STATE_COLORS[9],
+    STATE_COLORS[6],
+    STATE_COLORS[1],
+    STATE_COLORS[3],
+];
+
 /// Colours a measure that counts no state takes in order: blue, red, green, purple, orange, yellow and grey.
 pub const MEASURE_COLORS: [Color; 7] = [
     [0x00, 0x7A, 0xF5, 0xFF],
@@ -331,6 +350,17 @@ pub enum SheetEdit {
         /// Name of the property.
         name: String,
         /// Type of the property's value.
+        property_type: PropertyType,
+    },
+    /// Gives a property another type. Every reference to the property and its states is cleared, and the property
+    /// loses its states and its start.
+    ///
+    /// A property that becomes a States property colours its kind of thing by state while the thing has no colour
+    /// rule. A type the property already has changes nothing.
+    SetPropertyType {
+        /// Id of the property.
+        property: String,
+        /// New type of the property's value.
         property_type: PropertyType,
     },
     /// Adds a state to a States property, with an id minted from its name, and returns the id.
@@ -843,6 +873,10 @@ impl Draft {
                 name,
                 property_type,
             } => return self.add_property(&thing, &name, property_type),
+            SheetEdit::SetPropertyType {
+                property,
+                property_type,
+            } => self.set_property_type(&property, property_type)?,
             SheetEdit::AddState { property, name, color } => return self.add_state(&property, &name, color),
             SheetEdit::AddParameter {
                 name,
@@ -1201,6 +1235,46 @@ impl Draft {
             self.document.colors.insert(thing.to_owned(), rule);
         }
         Ok(vec![id])
+    }
+
+    /// Gives the property `id` the type `property_type`, clearing every reference to it and to its states.
+    fn set_property_type(&mut self, id: &str, property_type: PropertyType) -> Result<(), SheetEditError> {
+        let property = self.property(id).ok_or_else(|| missing("property", id))?;
+        if property.property_type == property_type {
+            return Ok(());
+        }
+        // The states go first, so every chip of a state of the property is cleared with them.
+        let states: Vec<String> = property.states.iter().map(|state| state.id.clone()).collect();
+        for state in states {
+            change_references(
+                &mut self.document,
+                &Target::State {
+                    property: id.to_owned(),
+                    state,
+                },
+                Change::Clear,
+            );
+        }
+        change_references(&mut self.document, &Target::Property(id.to_owned()), Change::Clear);
+        // A colour rule over the property no longer fits its type.
+        self.document
+            .colors
+            .retain(|_, rule| rule.property.as_deref() != Some(id));
+        let thing = self.thing_of_property(id);
+        let property = self.property_mut(id)?;
+        property.property_type = property_type;
+        property.states.clear();
+        property.starts_as = None;
+        property.marks = None;
+        if property_type == PropertyType::States
+            && let Some(thing) = thing
+            && !self.document.colors.contains_key(&thing)
+        {
+            let mut rule = ColorRule::new(ColorRuleKind::ByState);
+            rule.property = Some(id.to_owned());
+            self.document.colors.insert(thing, rule);
+        }
+        Ok(())
     }
 
     /// Adds a state named `name` to the States property `property`.

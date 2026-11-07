@@ -28,6 +28,7 @@ use henad_core::provenance::{ModelCode, ModelSource};
 use henad_explore::model_file::ModelFile;
 use henad_graph::model_text::read_header;
 use henad_graph::sheet::document::SheetDocument;
+use henad_graph::sheet::sentence::{SHEET_EMPTY, WORLD_EMPTY};
 use henad_graph::sheet::{KIND_SHEET, ParsedSheet, SHEET_CODE_FORMAT};
 use henad_graph::starters::{Starter, agent_starters, starters};
 use henad_graph::{GraphFile, KIND_GRAPH};
@@ -83,6 +84,8 @@ pub struct PreviewSource {
     pub key: [u64; 3],
     /// Whether the model has errors. A model with errors leaves the running preview alone.
     pub has_errors: bool,
+    /// Whether the model shows nothing, as a sheet with no property. The running preview is then taken down.
+    pub empty: bool,
 }
 
 impl EditorModel {
@@ -155,10 +158,12 @@ impl EditorModel {
             Self::Graph(graph) => Some(PreviewSource {
                 key: graph.preview_key(),
                 has_errors: graph.has_errors(),
+                empty: false,
             }),
             Self::Sheet(sheet) => Some(PreviewSource {
                 key: sheet.preview_key(),
-                has_errors: sheet.has_errors(),
+                has_errors: sheet.has_errors() || sheet.shows_nothing(),
+                empty: sheet.shows_nothing(),
             }),
             Self::Empty | Self::Rule(_) => None,
         }
@@ -399,6 +404,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
         .filter(|_| app.preview().is_none())
         .map(|entry| entry.source().clone());
     let rebuild_pending = app.pending_rebuild.is_some();
+    let past_start = app.sheet_preview_past_start();
     let panel = &mut app.editor;
     panel.settle_outcome(loaded.as_ref(), rebuild_pending);
     let empty = panel.model.is_empty();
@@ -456,7 +462,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     };
     CentralPanel::no_frame().show(ui, |ui| match &mut panel.model {
         EditorModel::Graph(graph) => graph::graph_ui(ui, graph),
-        EditorModel::Sheet(sheet) => sheet::sheet_ui(ui, sheet),
+        EditorModel::Sheet(sheet) => sheet::sheet_ui(ui, sheet, past_start),
         EditorModel::Rule(text) => {
             code_view::code_view(ui, text, &marked, scroll_to, reset);
         }
@@ -660,12 +666,21 @@ fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel) {
     let Some(sheet) = panel.model.sheet() else {
         return;
     };
-    preview_ui(ui, &panel.preview.state, false);
+    if sheet.shows_nothing() {
+        ui.weak(WORLD_EMPTY);
+    } else {
+        preview_ui(ui, &panel.preview.state, false);
+    }
+    if let Some(notice) = sheet.notice() {
+        ui.label(format!("{MDI_INFORMATION} {notice}"));
+    }
     let report = &sheet.report().diagnostics;
     let mut known: Vec<&CodeDiagnostic> = report.iter().map(|diagnostic| &diagnostic.diagnostic).collect();
     // A problem of a line the card shows is drawn under the line, and the list keeps the others.
+    // The Cells section says how to start a sheet with no property.
     let mut live: Vec<&CodeDiagnostic> = report
         .iter()
+        .filter(|diagnostic| diagnostic.diagnostic.message != SHEET_EMPTY)
         .filter(|diagnostic| !sheet::card_pane::draws_diagnostic(sheet.document(), diagnostic))
         .map(|diagnostic| &diagnostic.diagnostic)
         .collect();

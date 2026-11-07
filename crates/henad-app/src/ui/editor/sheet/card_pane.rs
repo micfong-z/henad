@@ -12,22 +12,24 @@
 use egui::accesskit::Role;
 use egui::{
     Color32, CornerRadius, Frame, Label, Margin, Pos2, Rect, Response, RichText, Sense, Shape, Stroke, TextStyle, Ui,
-    Vec2, WidgetInfo, WidgetType, vec2,
+    WidgetInfo, WidgetType, vec2,
 };
 use henad_core::diagnostic::DiagnosticSeverity;
 use henad_graph::sheet::check::{SheetDiagnostic, SheetReport};
 use henad_graph::sheet::document::{CardRuns, SheetCard, SheetDocument, SheetProperty};
 use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
-    ALWAYS, ALWAYS_TOOLTIP, ANY_STATE_ID, BLANK_TEXT, ChipKind, FOR_EACH_BLANK_WORDS, FROM_TOOLTIP, FROM_WORD, LAW,
-    LineSelect, SentenceChip, SentencePart, Sentences, UNIT_PLACEHOLDER, always_name, for_each_optional_name,
-    for_each_optional_tooltip, line_count, line_list_name, line_name, line_prefix, otherwise_tooltip, otherwise_words,
-    result_below_tooltip, result_inside_tooltip, sentence_text, uses_result_below, uses_result_inside,
+    ALWAYS, ALWAYS_TOOLTIP, ANY_STATE_ID, BLANK_MODEL_CARD, BLANK_TEXT, ChipKind, FOR_EACH_BLANK_WORDS, FROM_TOOLTIP,
+    FROM_WORD, LAW, LineSelect, SentenceChip, SentencePart, Sentences, UNIT_PLACEHOLDER, always_name, card_header,
+    for_each_optional_name, for_each_optional_tooltip, line_count, line_list_name, line_name, line_prefix,
+    otherwise_tooltip, otherwise_words, result_below_tooltip, result_inside_tooltip, sentence_text, uses_result_below,
+    uses_result_inside,
 };
 
 use super::accessible_group;
 use super::help::{Help, help_button};
-use crate::icons::material_design_icons::{MDI_CHEVRON_DOWN, MDI_TUNE_VERTICAL};
+use super::widgets::{CHIP_PADDING, blank_shapes, blank_ui, chip_ui};
+use crate::icons::material_design_icons::MDI_CHEVRON_DOWN;
 use crate::ui::mcs;
 use crate::ui::sweep::layout::add_button;
 
@@ -37,15 +39,17 @@ const INDENT: f32 = 20.0;
 /// Width in points of the column of line numbers.
 const NUMBER_WIDTH: f32 = 22.0;
 
-/// Padding in points inside a chip, a blank or a select.
-const CHIP_PADDING: Vec2 = vec2(4.0, 1.0);
-
 /// Draws every card of `document`, in file order, with the notes of `report` under their lines.
 pub fn card_pane(ui: &mut Ui, document: &SheetDocument, report: &SheetReport) {
     let sentences = Sentences::new(document);
     let highlight_id = ui.id().with("henad_card_highlight");
     let highlight: Vec<String> = ui.data(|data| data.get_temp(highlight_id)).unwrap_or_default();
     let mut hovered: Vec<String> = Vec::new();
+    if document.cards.is_empty() {
+        // A blank model holds no card.
+        ui.label(RichText::new(card_header("cell")).strong());
+        ui.weak(BLANK_MODEL_CARD);
+    }
     for (index, card) in document.cards.iter().enumerate() {
         if index > 0 {
             ui.add_space(16.0);
@@ -90,6 +94,9 @@ fn card_ui(
             });
     }
     ui.add_space(4.0);
+    if each_tick && lines.is_empty() {
+        ui.weak(BLANK_MODEL_CARD);
+    }
     let list_name = line_list_name(button_of(document, card));
     let list = ui.scope(|ui| {
         for line in lines {
@@ -557,145 +564,6 @@ fn select_words(select: LineSelect, words: &str) -> &str {
         (true, LineSelect::UnitOfTime) => UNIT_PLACEHOLDER,
         (true, _) => BLANK_TEXT,
     }
-}
-
-/// Colours of a chip: its fill, its text and its grey lead word.
-struct ChipColors {
-    /// Fill of the chip.
-    fill: Color32,
-    /// Colour of the chip's name.
-    text: Color32,
-    /// Colour of the lead word and of the slider mark.
-    lead: Color32,
-}
-
-/// Returns the colours of a chip of `kind`, red for a result that its line cannot use.
-fn chip_colors(kind: &ChipKind, red: bool) -> ChipColors {
-    match (kind, red) {
-        (_, true) => ChipColors {
-            fill: mcs::RED_900,
-            text: mcs::RED_200,
-            lead: mcs::RED_300,
-        },
-        (ChipKind::Result(_), false) => ChipColors {
-            fill: mcs::BLUE_900,
-            text: mcs::BLUE_200,
-            lead: mcs::BLUE_300,
-        },
-        _ => ChipColors {
-            fill: mcs::GRAY_800,
-            text: mcs::GRAY_100,
-            lead: mcs::GRAY_400,
-        },
-    }
-}
-
-/// Adds the chip of `chip`, a button named by its visible text, and returns its response.
-///
-/// A result chip fills blue, or red when `red` holds. A parameter chip carries a slider mark, a state chip a swatch of
-/// the colour `swatch`, and a property chip its lead word ("my") in grey. Clicking a chip does nothing.
-fn chip_ui(ui: &mut Ui, chip: &SentenceChip, red: bool, swatch: Option<Color32>) -> Response {
-    let colors = chip_colors(&chip.kind, red);
-    let font = TextStyle::Body.resolve(ui.style());
-    let painter = ui.painter();
-    let mark = matches!(chip.kind, ChipKind::Parameter(_))
-        .then(|| painter.layout_no_wrap(format!("{MDI_TUNE_VERTICAL} "), font.clone(), colors.lead));
-    let lead =
-        (!chip.lead.is_empty()).then(|| painter.layout_no_wrap(format!("{} ", chip.lead), font.clone(), colors.lead));
-    let name = painter.layout_no_wrap(chip.name.clone(), font.clone(), colors.text);
-    let swatch_side = font.size * 0.75;
-    let swatch_width = if swatch.is_some() { swatch_side + 4.0 } else { 0.0 };
-    let width = CHIP_PADDING.x * 2.0
-        + swatch_width
-        + mark.as_ref().map_or(0.0, |galley| galley.size().x)
-        + lead.as_ref().map_or(0.0, |galley| galley.size().x)
-        + name.size().x;
-    let height = (name.size().y + CHIP_PADDING.y * 2.0).max(ui.spacing().interact_size.y - 2.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, chip.text()));
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        painter.rect_filled(rect, CornerRadius::ZERO, colors.fill);
-        if response.has_focus() || response.hovered() {
-            painter.rect_stroke(
-                rect,
-                CornerRadius::ZERO,
-                Stroke::new(1.0, colors.text),
-                egui::StrokeKind::Inside,
-            );
-        }
-        let mut x = rect.left() + CHIP_PADDING.x;
-        let centre_y = rect.center().y;
-        if let Some(color) = swatch {
-            let square = Rect::from_center_size(Pos2::new(x + swatch_side / 2.0, centre_y), Vec2::splat(swatch_side));
-            painter.rect_filled(square, CornerRadius::ZERO, color);
-            painter.rect_stroke(
-                square,
-                CornerRadius::ZERO,
-                Stroke::new(1.0, mcs::GRAY_600),
-                egui::StrokeKind::Inside,
-            );
-            x += swatch_width;
-        }
-        for galley in [mark, lead, Some(name)].into_iter().flatten() {
-            let size = galley.size();
-            painter.galley(Pos2::new(x, centre_y - size.y / 2.0), galley, colors.text);
-            x += size.x;
-        }
-    }
-    response
-}
-
-/// Adds a dashed blank showing `word`, named `name`, and returns its response with the index of its shapes.
-///
-/// A blank with `painted` false is laid out and named but not painted, and returns the index of an empty shape that
-/// the caller fills to paint it.
-fn blank_ui(ui: &mut Ui, word: &str, name: &str, painted: bool) -> (Option<egui::layers::ShapeIdx>, Response) {
-    let font = TextStyle::Body.resolve(ui.style());
-    let galley = ui.painter().layout_no_wrap(word.to_owned(), font, mcs::GRAY_400);
-    let size = galley.size() + CHIP_PADDING * 2.0;
-    let height = size.y.max(ui.spacing().interact_size.y - 2.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(size.x, height), Sense::click());
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
-    if painted {
-        if ui.is_rect_visible(rect) {
-            let shapes = blank_shapes(ui, rect, word);
-            ui.painter().extend(shapes);
-            if response.has_focus() {
-                ui.painter().rect_stroke(
-                    rect,
-                    CornerRadius::ZERO,
-                    Stroke::new(1.0, mcs::GRAY_200),
-                    egui::StrokeKind::Inside,
-                );
-            }
-        }
-        (None, response)
-    } else {
-        (Some(ui.painter().add(Shape::Noop)), response)
-    }
-}
-
-/// Returns the shapes of a dashed blank showing `word` in `rect`.
-fn blank_shapes(ui: &Ui, rect: Rect, word: &str) -> Vec<Shape> {
-    let font = TextStyle::Body.resolve(ui.style());
-    let galley = ui.painter().layout_no_wrap(word.to_owned(), font, mcs::GRAY_400);
-    let stroke = Stroke::new(1.0, mcs::GRAY_500);
-    let corners = [
-        rect.left_top(),
-        rect.right_top(),
-        rect.right_bottom(),
-        rect.left_bottom(),
-        rect.left_top(),
-    ];
-    let mut shapes = Shape::dashed_line(&corners, stroke, 3.0, 2.0);
-    let size = galley.size();
-    shapes.push(Shape::galley(
-        Pos2::new(rect.left() + CHIP_PADDING.x, rect.center().y - size.y / 2.0),
-        galley,
-        mcs::GRAY_400,
-    ));
-    shapes
 }
 
 /// Adds a select inside a line showing `words`, named `name`, read-only, and returns its response. An `empty` select

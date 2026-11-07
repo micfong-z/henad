@@ -45,6 +45,15 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   select a gray 700 outline. The law box fills with gray 900, and a highlighted line with blue
   950. A state's swatch is the state's own colour, a data colour from the sheet. The primary
   action is blue 700, never the prototype's orange.
+- **Swatches of the Sheet pane** (`ui/editor/sheet/widgets.rs`). A swatch is a square of the state's
+  own colour with a gray 600 outline, gray 100 while hovered or focused. "Choose a colour" offers
+  the twelve `henad_graph::sheet::edit::PALETTE_COLORS`, named by `COLOR_NAMES` (Black, Dark grey,
+  Grey, White, Red, Orange, Yellow, Brown, Green, Dark green, Blue and Purple). They are data
+  colours a state is drawn in, taken from the final editor's MCS entries, so they live in the sheet
+  and not in `ui/mcs.rs`. New states take them in the neutral order of `STATE_COLORS`. A colour
+  that is not in the palette, as in a starter, is named by the nearest one. "+ Add property" is
+  the primary action, blue 700, while the sheet holds no property. A refused number field shows
+  its message in the theme's error colour under its row.
 - **The words rule of sheet mode.** The Editor tab in sheet mode and the text a sheet puts in the
   world tabs (names, measures, buttons, the tick counter) never show a word of
   `henad_graph::sheet::sentence::FORBIDDEN_WORDS` ("node", "seed", "compile" and the rest). The

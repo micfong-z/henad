@@ -11,19 +11,24 @@ names, the line a path reaches, a block to add inside) and leaves meaning to the
 `SheetEditError` is `Missing`, `Invalid`, `Taken` (a name of the same kind, case aside, or an id)
 and `Reserved` (the id). Commands: the sheet's name and purpose, `SetWorld`, `SetTime`;
 `AddProperty` (the first States property of a kind of thing with no colour rule colours it by
-state), `AddState` (the next of `STATE_COLORS` after the property's states, the final editor's dark
-grey, blue, orange, purple and on), `AddParameter`, `SetParameter` (min, max, default, step, unit
-and means as one edit), `AddMeasure` (a count in a state takes the state's colour, else the next of
-`MEASURE_COLORS`), `AddEvent`, `AddButton` (start again over a kind of thing, or run once with a
-card of the button's id), `SetButtonSteps`, `AddCard` (`cell_tick` or `<agent kind>_tick`, before
-the cards that run once); `Rename`, `ChangeId`, `Recolor` (a measure drawn in its state's colour
-follows the state) and `Delete` over a `SheetItem` (property, state, parameter, measure, event,
-button, card, agent kind); `SetStartsAs` (one edit for a Starts as commit, the old key kept),
-`SetColorRule`; and the line commands `AddLine` (a `Box<SheetLine>` template at the end of a card or
-a When or Repeat), `SetSlot` and `SetField` (a `LineField`) at a slot path, `ChooseCondition` (a
-`ConditionItem`), `UseOneSide`, `UseCountForEach`, `MoveConditionInto`, `RenameResult`, `SetNote`,
-`MoveLine`, `DeleteLine`, `DrawNewNumbers`, `ChangeToRate` and `ChangeToChance`. "Remove this When"
-is `DeleteLine` on the When, and "Add for each" is `SetSlot` of `tries`.
+state), `SetPropertyType` (clears every reference to the property and its states as a delete does,
+drops a colour rule over it, empties its states, start and marks, keeps its place and id, and
+colours its thing by state again when it becomes a States property of a thing with no colour rule;
+the same type changes nothing), `AddState` (the next of `STATE_COLORS` after the property's states,
+the final editor's dark grey, blue, orange, purple and on, and `PALETTE_COLORS` holds the same
+twelve in the order of `sentence::COLOR_NAMES`), `AddParameter`, `SetParameter` (min, max, default,
+step, unit and means as one edit), `AddMeasure` (a count in a state takes the state's colour, else
+the next of `MEASURE_COLORS`), `AddEvent`, `AddButton` (start again over a kind of thing, or run
+once with a card of the button's id), `SetButtonSteps`, `AddCard` (`cell_tick` or
+`<agent kind>_tick`, before the cards that run once); `Rename`, `ChangeId`, `Recolor` (a measure
+drawn in its state's colour follows the state) and `Delete` over a `SheetItem` (property, state,
+parameter, measure, event, button, card, agent kind); `SetStartsAs` (one edit for a Starts as
+commit, the old key kept), `SetColorRule`; and the line commands `AddLine` (a `Box<SheetLine>`
+template at the end of a card or a When or Repeat), `SetSlot` and `SetField` (a `LineField`) at a
+slot path, `ChooseCondition` (a `ConditionItem`), `UseOneSide`, `UseCountForEach`,
+`MoveConditionInto`, `RenameResult`, `SetNote`, `MoveLine`, `DeleteLine`, `DrawNewNumbers`,
+`ChangeToRate` and `ChangeToChance`. "Remove this When" is `DeleteLine` on the When, and "Add for
+each" is `SetSlot` of `tries`.
 
 Ids: `mint_id(name, space, is_taken)` lower-cases the name, turns each run of other characters than
 `a-z0-9` into one `_`, puts `x` before a leading digit (and mints `x` for a name with no letter or
@@ -114,11 +119,12 @@ sheets (the waning line through `AddParameter`, `SetParameter`, `AddLine` with t
 `a_rename_changes_one_name_and_the_comments_that_show_it`,
 `change_id_rewrites_every_reference_and_nothing_else` (a parameter, a property, a button and its
 card, a state and a parameter in formulas, each the old text with the quoted id replaced),
-`a_deleted_line_number_is_never_minted_again`, `id_minting_follows_its_known_answers`,
-`every_starter_id_follows_the_minting_rule` (every committed sheet, ids minted in file order, cards
-from their kind or button, lines `l1` up in display order across cards and `next_line` one past),
-`a_seeded_key_stream_gives_its_known_first_keys`, the automatic names, the condition offers, the
-for-each and fold offers, deletes that leave skipped lines and no error, colours, rate units and
-marks, Starts as commits, new buttons and cards, and `every_edit_leaves_a_document_that_reads_back`
-(random command sequences on every sheet: the text reads back to the same document, the checker
-never panics, no two lines share a key).
+`a_deleted_line_number_is_never_minted_again`,
+`a_new_property_type_clears_every_reference_and_keeps_the_place`,
+`id_minting_follows_its_known_answers`, `every_starter_id_follows_the_minting_rule` (every committed
+sheet, ids minted in file order, cards from their kind or button, lines `l1` up in display order
+across cards and `next_line` one past), `a_seeded_key_stream_gives_its_known_first_keys`, the
+automatic names, the condition offers, the for-each and fold offers, deletes that leave skipped
+lines and no error, colours, rate units and marks, Starts as commits, new buttons and cards, and
+`every_edit_leaves_a_document_that_reads_back` (random command sequences on every sheet: the text
+reads back to the same document, the checker never panics, no two lines share a key).

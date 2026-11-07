@@ -930,6 +930,47 @@ pub const TYPE_ONE_NUMBER: &str = "Type one number, such as 3 or 0.25.";
 pub const LIST_IN_ONE_NUMBER: &str = "For a list such as 2, 3, choose is one of the numbers or is none of the numbers \
                                       first.";
 
+/// Returns the number typed as `text`, or `None` for text that is not one number.
+///
+/// A trailing "%" makes the number a percent, the number divided by 100. Spaces around the number and before the "%"
+/// are ignored.
+///
+/// ```
+/// use henad_graph::sheet::document::SheetLiteral;
+/// use henad_graph::sheet::sentence::read_typed_number;
+///
+/// assert_eq!(read_typed_number(" 0.3 "), Some(SheetLiteral::Number(0.3)));
+/// assert_eq!(read_typed_number("30%"), Some(SheetLiteral::Percent(30.0)));
+/// assert_eq!(read_typed_number("2, 3"), None);
+/// ```
+pub fn read_typed_number(text: &str) -> Option<SheetLiteral> {
+    let text = text.trim();
+    let (number, percent) = match text.strip_suffix('%') {
+        Some(number) => (number.trim_end(), true),
+        None => (text, false),
+    };
+    // Rust reads "inf" and "nan" as numbers, and a sheet holds finite numbers only.
+    let starts_well = number
+        .bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_digit() || matches!(byte, b'-' | b'+' | b'.'));
+    let value: f64 = number
+        .parse()
+        .ok()
+        .filter(|value: &f64| value.is_finite() && starts_well)?;
+    Some(if percent {
+        SheetLiteral::Percent(value)
+    } else {
+        SheetLiteral::Number(value)
+    })
+}
+
+/// Returns the message on a side of the world typed as anything but a whole number from 1 to `max` cells, such as
+/// "Type a size from 1 to 16384 cells.".
+pub fn world_side_out_of_range(max: u32) -> String {
+    format!("Type a size from 1 to {max} cells.")
+}
+
 /// Title of the colour palette.
 pub const CHOOSE_A_COLOR: &str = "Choose a colour";
 
@@ -3711,7 +3752,7 @@ fn is_line_id(id: &str) -> bool {
 }
 
 /// Returns the words of a literal: a number in the sheet's number form, a percent as typed ("30%"), "yes" or "no".
-fn literal_words(literal: SheetLiteral) -> String {
+pub fn literal_words(literal: SheetLiteral) -> String {
     let number = |value: f64| format_number(value).unwrap_or_else(|| value.to_string());
     match literal {
         SheetLiteral::Number(value) => number(value),

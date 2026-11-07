@@ -254,6 +254,9 @@ fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
     if let Some(index) = pressed {
         app.send_command(SimCommand::Act(index));
         app.mark_opened_run_modified();
+        if app.preview().is_some() {
+            app.editor.preview.acted = true;
+        }
     }
 
     schedule_ui(ui, app, &actions);

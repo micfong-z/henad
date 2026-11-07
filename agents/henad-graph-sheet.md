@@ -167,10 +167,13 @@ formula's operators as "plus", "minus", "times", "divided by" and "to the power 
 parentheses left out and a Calculate inside a slot in parentheses. Agent lines keep round 1's words
 in those conventions, "including me" for `include_me`, an all of inside a slot joined by "and" with
 its draws after commas. A state chip that another States property also names reads "Status Alive".
-`line_parts` returns the same sentence as `SentencePart`s, which `line` joins through
-`sentence_text`: words, a bold `ConditionWord`, `From`, a `Chip` (`ChipKind` and a grey `lead` such
-as "my"), a `Blank`, a `Select`, `Always`, `Otherwise` and the empty `ForEachBlank`, which reads as
-nothing. One builder (`Parts`) writes both forms, so the card and the writer never differ.
+`literal_words` is public for an editor field that shows a literal, and `read_typed_number` reads a
+typed number back (a trailing "%" makes a percent, "inf" and "nan" are refused), with
+`world_side_out_of_range` for a grid side that is no whole number from 1 to the limit. `line_parts`
+returns the same sentence as `SentencePart`s, which `line` joins through `sentence_text`: words, a
+bold `ConditionWord`, `From`, a `Chip` (`ChipKind` and a grey `lead` such as "my"), a `Blank`, a
+`Select`, `Always`, `Otherwise` and the empty `ForEachBlank`, which reads as nothing. One builder
+(`Parts`) writes both forms, so the card and the writer never differ.
 
 **Places.** `SheetPlaces::root` is a `TablePlaces` tree that follows the TOML structure: `table`
 (the header, an inline table's braces, or the first key naming an implicit table such as

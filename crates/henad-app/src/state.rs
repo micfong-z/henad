@@ -470,6 +470,15 @@ impl AppState {
         self.preview.is_some() && sheet_id.is_some() && self.loaded.as_ref().map(ModelEntry::id) == sheet_id
     }
 
+    /// Returns whether the preview of the Editor's sheet has left its start: it has passed tick 0, it runs, or a button
+    /// of the model was pressed in it.
+    ///
+    /// Until then a sheet edit draws the start again at tick 0. After that, an edit starts the world again from tick 0
+    /// with a notice, and a changed start waits for Start again.
+    pub fn sheet_preview_past_start(&self) -> bool {
+        self.previews_editor_sheet() && (self.editor.preview.acted || !self.run_at_start())
+    }
+
     /// Returns whether Playback's Build builds the preview of the Editor's sheet again at the same seed: the preview
     /// runs, and the selection has not changed since it loaded.
     ///

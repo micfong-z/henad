@@ -1723,3 +1723,27 @@ fn no_line_of_a_test_sheet_holds_two_adjacent_word_parts() {
         }
     }
 }
+
+#[test]
+fn a_typed_number_reads_as_its_known_answers() {
+    use crate::sheet::document::SheetLiteral;
+
+    let read = sentence::read_typed_number;
+    assert_eq!(read("3"), Some(SheetLiteral::Number(3.0)));
+    assert_eq!(read(" -0.25 "), Some(SheetLiteral::Number(-0.25)));
+    assert_eq!(read(".5"), Some(SheetLiteral::Number(0.5)));
+    assert_eq!(read("1e-3"), Some(SheetLiteral::Number(0.001)));
+    assert_eq!(read("30%"), Some(SheetLiteral::Percent(30.0)));
+    assert_eq!(read("2.5 %"), Some(SheetLiteral::Percent(2.5)));
+    for text in ["", "%", "abc", "2, 3", "inf", "-inf", "NaN", "1e400", "3 4", "30%%"] {
+        assert_eq!(read(text), None, "{text:?}");
+    }
+    // A percent shows as typed, and stands for its number divided by 100.
+    let percent = read("30%").expect("a percent");
+    assert_eq!(sentence::literal_words(percent), "30%");
+    assert_eq!(percent.number(), Some(0.3));
+    assert_eq!(
+        sentence::world_side_out_of_range(16384),
+        "Type a size from 1 to 16384 cells."
+    );
+}

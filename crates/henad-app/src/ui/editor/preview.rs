@@ -22,6 +22,7 @@ use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::params::ParamValue;
 use web_time::Instant;
 
+use super::EditorModel;
 use crate::state::{AppState, PreviewRun, setup_message, too_large_message};
 
 /// Largest side of a preview's grid in cells.
@@ -63,6 +64,8 @@ pub struct Preview {
     builds: u64,
     /// State the Editor shows.
     pub state: PreviewState,
+    /// Whether a button of the model was pressed in the running preview since it was built.
+    pub acted: bool,
 }
 
 impl Preview {
@@ -89,6 +92,10 @@ pub fn poll(ctx: &egui::Context, app: &mut AppState) {
 /// A valid edit since the last call sets the time to `now` plus [`DEBOUNCE`], and an invalid one drops a waiting
 /// preview. Called once per frame.
 pub fn poll_at(ctx: &egui::Context, app: &mut AppState, now: Instant) {
+    // A sheet with no property shows nothing, and the preview of what it held before goes.
+    if app.preview().is_some() && app.editor.model.preview_source().is_some_and(|source| source.empty) {
+        app.offload_simulation();
+    }
     let builds = app.builds();
     let previewing = app.preview().is_some();
     let can_load = app.preview_can_load();
@@ -176,6 +183,10 @@ fn build_preview(app: &mut AppState) {
         Ok(setup) => {
             // A browser builds inline, and a fault of the build replaces this state.
             app.editor.preview.state = PreviewState::Running(run);
+            app.editor.preview.acted = false;
+            if let EditorModel::Sheet(sheet) = &mut app.editor.model {
+                sheet.mark_built();
+            }
             app.load_preview(setup, run, plays);
         }
         Err(error) => {

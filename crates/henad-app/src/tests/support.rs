@@ -1,5 +1,5 @@
 //! Models and helpers the app's tests share: replaced model code, a model with a time scale, held builds and steps,
-//! and the widgets of a frame.
+//! the widgets of a frame, and a harness that draws the sheet editor and reads its accessible nodes.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -18,7 +18,12 @@ use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{EdgeView, GridView, PointView, StatDescriptor, StatEntry, StatValue};
 use henad_explore::model_file::ModelFile;
 
+use henad_graph::sheet::sentence::FORBIDDEN_WORDS;
+
 use crate::state::AppState;
+use crate::ui::editor::sheet::new_model::new_model_modal;
+use crate::ui::editor::{editor_ui, open_text};
+use crate::ui::menu_bar::file_menu;
 
 /// SIR as an edit leaves its declarations: an infection rate capped at 0.5 with another default, no recovery rate, a
 /// new vaccination rate, one stat fewer, and a new action ahead of the outbreak.
@@ -109,6 +114,33 @@ pub fn recoded(entry: &ModelEntry, text: &str, builds: &Arc<AtomicUsize>) -> Mod
                 },
             )
         })
+}
+
+/// Returns the value of the stat `label` in the loaded run's snapshot at tick 0, or panics after ten seconds.
+pub fn tick_zero_stat(app: &mut AppState, label: &str) -> f64 {
+    app.wait_for_build();
+    let snapshot = wait_for_snapshot(app, |tick| tick == 0);
+    snapshot
+        .stats
+        .iter()
+        .find(|entry| entry.label() == label)
+        .map(|entry| entry.value().scalar())
+        .expect("the stat is published")
+}
+
+/// Takes the loaded run's snapshots until one whose tick passes `accept`, keeps it as the app's snapshot and returns
+/// it, or panics after ten seconds.
+pub fn wait_for_snapshot(app: &mut AppState, accept: impl Fn(u64) -> bool) -> &henad_compute::snapshot::Snapshot {
+    let thread = app.sim_thread.as_mut().expect("a model is loaded");
+    for _ in 0..1000 {
+        if let Some(snapshot) = thread.take_snapshot()
+            && accept(snapshot.tick)
+        {
+            return app.snapshot.insert(snapshot);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("no snapshot of the loaded model passed the test");
 }
 
 /// Waits for a build that runs, steps the loaded model once and takes its snapshots until one is past `tick`, or
@@ -379,4 +411,207 @@ impl SimState for Held {
     fn parallel_jobs(&self) -> Option<usize> {
         self.inner.parallel_jobs()
     }
+}
+
+// The sheet editor in a frame
+
+/// An egui context that draws the File menu, the Editor tab and the New model dialog over an app, driven by synthetic
+/// input.
+pub struct Harness {
+    /// Context the frames run in, with AccessKit on.
+    pub context: egui::Context,
+    /// App the frames draw.
+    pub app: AppState,
+    /// Time of the last frame in seconds.
+    pub time: f64,
+    /// Whether the window holds the system's keyboard focus, as an app driven through its inspection port may not.
+    pub window_focused: bool,
+}
+
+/// Returns the top of `node` on the screen.
+pub fn top(node: &Node) -> f32 {
+    node.bounds.map_or(0.0, |rect| rect.top())
+}
+
+/// One accessible node of a frame.
+#[derive(Debug, Clone)]
+pub struct Node {
+    /// Accessible name.
+    pub label: String,
+    /// Value, which holds a label's text.
+    pub value: String,
+    /// Accessible description.
+    pub description: String,
+    /// Role.
+    pub role: egui::accesskit::Role,
+    /// Bounds on the screen.
+    pub bounds: Option<egui::Rect>,
+}
+
+impl Harness {
+    /// Returns a harness over the example models, or `None` to skip on a machine without a device.
+    pub fn new() -> Option<Self> {
+        let harness = Self {
+            context: egui::Context::default(),
+            app: AppState::headless(henad_models::example_models(), true)?,
+            time: 0.0,
+            window_focused: true,
+        };
+        harness.context.enable_accesskit();
+        Some(harness)
+    }
+
+    /// Runs one frame with `events`, and returns its accessible nodes.
+    pub fn frame(&mut self, events: Vec<egui::Event>) -> Vec<Node> {
+        self.time += 0.016;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))),
+            time: Some(self.time),
+            events,
+            focused: self.window_focused,
+            ..egui::RawInput::default()
+        };
+        let app = &mut self.app;
+        let mut output = self.context.run_ui(input, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| file_menu(ui, app));
+            editor_ui(ui, app);
+            new_model_modal(ui.ctx(), app);
+        });
+        output.textures_delta.clear();
+        let update = output.platform_output.accesskit_update.expect("an AccessKit update");
+        update
+            .nodes
+            .iter()
+            .map(|(_, node)| Node {
+                // A submenu's button ends with its arrow.
+                label: node.label().unwrap_or_default().trim_end_matches(" ⏵").to_owned(),
+                value: node.value().unwrap_or_default().to_owned(),
+                description: node.description().unwrap_or_default().to_owned(),
+                role: node.role(),
+                bounds: node.bounds().map(|rect| {
+                    egui::Rect::from_min_max(
+                        egui::pos2(rect.x0 as f32, rect.y0 as f32),
+                        egui::pos2(rect.x1 as f32, rect.y1 as f32),
+                    )
+                }),
+            })
+            .collect()
+    }
+
+    /// Runs a few frames with no input, and returns the accessible nodes of the last.
+    pub fn settle(&mut self) -> Vec<Node> {
+        for _ in 0..3 {
+            self.frame(Vec::new());
+        }
+        self.frame(Vec::new())
+    }
+
+    /// Clicks the Name field of the New model dialog.
+    pub fn click_name_field(&mut self) {
+        let nodes = self.settle();
+        let field = nodes
+            .iter()
+            .find(|node| node.role == egui::accesskit::Role::TextInput)
+            .and_then(|node| node.bounds)
+            .expect("the Name field")
+            .center();
+        self.click_at(field);
+    }
+
+    /// Clicks the primary button at `position`.
+    pub fn click_at(&mut self, position: egui::Pos2) {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        self.frame(vec![egui::Event::PointerMoved(position)]);
+        self.frame(vec![button(true)]);
+        self.frame(vec![button(false)]);
+    }
+
+    /// Returns the centre of the one node whose label ends with `label`.
+    pub fn find(&mut self, label: &str) -> egui::Pos2 {
+        let nodes = self.settle();
+        let found: Vec<&Node> = nodes
+            .iter()
+            .filter(|node| node.label.ends_with(label) && node.bounds.is_some())
+            .collect();
+        assert_eq!(found.len(), 1, "one widget reads {label}: {found:?}");
+        found[0].bounds.expect("bounds").center()
+    }
+
+    /// Clicks the one widget whose label ends with `label`.
+    pub fn click(&mut self, label: &str) {
+        let position = self.find(label);
+        self.click_at(position);
+    }
+
+    /// Presses `key` with `modifiers`.
+    pub fn press(&mut self, key: egui::Key, modifiers: egui::Modifiers) {
+        let event = |pressed| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers,
+        };
+        self.frame(vec![event(true), event(false)]);
+    }
+
+    /// Returns the label and the value of every node of a settled frame. A label's text is its node's value.
+    pub fn labels(&mut self) -> Vec<String> {
+        self.settle()
+            .into_iter()
+            .flat_map(|node| [node.label, node.value])
+            .filter(|text| !text.is_empty())
+            .collect()
+    }
+}
+
+impl Harness {
+    /// Returns the label, the value and the description of every node of a settled frame.
+    pub fn accessible_texts(&mut self) -> Vec<String> {
+        self.settle()
+            .into_iter()
+            .flat_map(|node| [node.label, node.value, node.description])
+            .filter(|text| !text.is_empty())
+            .collect()
+    }
+
+    /// Opens the sheet `text` in the Editor and draws it.
+    pub fn open_sheet(&mut self, text: &str) {
+        open_text(&mut self.app.editor, text.to_owned(), Some("opened.toml".to_owned()));
+        self.settle();
+    }
+}
+
+/// Returns the words of `text`, split at every character that is not a letter or a digit.
+pub fn words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+}
+
+/// Returns whether `text` belongs to a control that opens or creates a node graph, which the words rule exempts.
+pub fn opens_a_node_graph(text: &str) -> bool {
+    text.contains(crate::ui::editor::NEW_NODE_GRAPH)
+}
+
+/// Returns every forbidden word in `texts`, with the text that holds it.
+pub fn forbidden_words(texts: &[String]) -> Vec<(String, String)> {
+    texts
+        .iter()
+        .filter(|text| !opens_a_node_graph(text))
+        .flat_map(|text| {
+            words(text)
+                .filter(|word| {
+                    FORBIDDEN_WORDS
+                        .iter()
+                        .any(|forbidden| forbidden.eq_ignore_ascii_case(word))
+                })
+                .map(|word| (word.to_owned(), text.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }

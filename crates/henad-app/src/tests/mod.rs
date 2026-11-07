@@ -11,5 +11,6 @@ mod graph_regions;
 mod install;
 mod runaway;
 mod sheet_editor;
+mod sheet_pane;
 mod threads;
 mod time_axis;

@@ -1,4 +1,4 @@
-//! The sheet editor of the Editor tab: a sheet model shown as its sheet and its cards, read-only.
+//! The sheet editor of the Editor tab: a sheet model shown as its sheet and its cards.
 //!
 //! A *sheet* is a model file of `kind = "sheet"`, the author document of [`henad_graph::sheet`]. The *Sheet* pane
 //! lists what the model holds (its purpose, world, properties, parameters, measures, colours and buttons), and the
@@ -6,19 +6,25 @@
 //! Pacing, Parameters and Charts tabs.
 //!
 //! A sheet opens through the sheet reader alone, so a sheet with checker errors still opens here. Its preview builds
-//! only while the sheet reads, checks and lowers, and the preview waits paused at tick 0 until Play.
+//! only while the sheet reads, checks and lowers and holds a property, and the preview waits paused at tick 0 until
+//! Play. Every edit of the Sheet pane runs [`SheetEdit`](henad_graph::sheet::edit::SheetEdit) commands. Until the
+//! preview passes tick 0 or a button is pressed, an edit draws the start again at tick 0. After that, a changed
+//! Starts as waits for Start again, and any other edit starts the world again from tick 0 with a notice.
 
 pub mod card_pane;
 pub mod help;
 pub mod new_model;
 pub mod sheet_pane;
+pub mod widgets;
 
 use std::sync::atomic::Ordering;
 
 use egui::{CentralPanel, Frame, Margin, Panel, ScrollArea};
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_graph::sheet::check::{SheetReport, check};
-use henad_graph::sheet::document::SheetDocument;
+use henad_graph::sheet::document::{MadeOf, SheetDocument, StartsAs};
+use henad_graph::sheet::edit::{SheetBuilder, SheetEditError};
+use henad_graph::sheet::sentence::RESTART_NOTICE;
 use henad_graph::sheet::{ParsedSheet, SheetFile};
 
 use super::graph::{CompiledProgram, GraphProgram, LOADS};
@@ -37,25 +43,31 @@ const PANE_MIN_WIDTH: f32 = 160.0;
 
 /// A sheet model in the Editor.
 pub struct SheetEditor {
-    /// Document the sheet holds.
-    document: SheetDocument,
+    /// Document the sheet holds, with the keys its new draws take.
+    builder: SheetBuilder,
     /// Canonical text of the document. Save model writes it and Apply reads it.
     text: String,
     /// Report of the sheet's check, each problem placed in [`Self::text`].
     report: SheetReport,
     /// Sheet read, checked and lowered from [`Self::text`], or the problems that stop it lowering.
     file: Result<SheetFile, Vec<CodeDiagnostic>>,
-    /// Number of the load. It keys the preview.
+    /// Number of the load, or of the last edit that started the preview again. It keys the preview.
     load: u64,
     /// Program the preview runs, compiled on first use.
     program: Option<CompiledProgram>,
+    /// Start of each property of the cells when the preview was last built, `None` before the first build.
+    built_starts: Option<Vec<(String, Option<StartsAs>)>>,
+    /// Notice of the last edit, such as [`RESTART_NOTICE`], `None` while none shows.
+    notice: Option<&'static str>,
+    /// State of the Sheet pane's forms, fields and dialogs.
+    pane: sheet_pane::PaneState,
 }
 
 /// Prints the sheet's id, the load and whether the sheet lowers.
 impl std::fmt::Debug for SheetEditor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SheetEditor")
-            .field("id", &self.document.sheet.id)
+            .field("id", &self.document().sheet.id)
             .field("load", &self.load)
             .field("lowers", &self.file.is_ok())
             .finish_non_exhaustive()
@@ -68,31 +80,110 @@ impl SheetEditor {
     /// Note that a document whose canonical text does not write, as with a number that is not finite, keeps an empty
     /// text and the writer's error as the problem that stops it lowering. The sheet reader refuses such a number.
     pub fn new(document: SheetDocument) -> Self {
+        let load = LOADS.fetch_add(1, Ordering::Relaxed);
+        let mut editor = Self {
+            builder: SheetBuilder::new(document),
+            text: String::new(),
+            report: SheetReport::default(),
+            file: Err(Vec::new()),
+            load,
+            program: None,
+            built_starts: None,
+            notice: None,
+            pane: sheet_pane::PaneState::new(load),
+        };
+        editor.refresh();
+        editor
+    }
+
+    /// Writes the canonical text of the document again, with its report and its lowering, and drops the compiled
+    /// program.
+    fn refresh(&mut self) {
+        let document = self.builder.document();
         let (text, report, file) = match document.to_text() {
             Ok(text) => {
-                let report = ParsedSheet::parse(&text).map_or_else(|_| check(&document), |parsed| parsed.check());
+                let report = ParsedSheet::parse(&text).map_or_else(|_| check(document), |parsed| parsed.check());
                 let file = SheetFile::parse(&text).map_err(|error| error.diagnostics().to_vec());
                 (text, report, file)
             }
             Err(error) => (
                 String::new(),
-                check(&document),
+                check(document),
                 Err(vec![CodeDiagnostic::error(error.to_string())]),
             ),
         };
-        Self {
-            document,
-            text,
-            report,
-            file,
-            load: LOADS.fetch_add(1, Ordering::Relaxed),
-            program: None,
+        self.text = text;
+        self.report = report;
+        self.file = file;
+        self.program = None;
+    }
+
+    /// Runs `edit`, one edit of the sheet made of one or more commands, on a copy of the sheet, and keeps the copy
+    /// when every command is accepted.
+    ///
+    /// `past_start` is whether the preview has passed tick 0 or a button was pressed in it, and `starts_only` whether
+    /// the edit changes how properties start and nothing else. Every edit starts the preview again from tick 0, except
+    /// a start changed past the start. That edit waits for Start again. A restart past the start shows
+    /// [`RESTART_NOTICE`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason a command refused the edit. The sheet is then unchanged.
+    pub fn edit(
+        &mut self,
+        past_start: bool,
+        starts_only: bool,
+        edit: impl FnOnce(&mut SheetBuilder) -> Result<(), SheetEditError>,
+    ) -> Result<(), SheetEditError> {
+        let mut builder = self.builder.clone();
+        edit(&mut builder)?;
+        if builder.document() == self.builder.document() {
+            return Ok(());
         }
+        self.builder = builder;
+        self.refresh();
+        let restart = !(past_start && starts_only);
+        if restart {
+            self.load = LOADS.fetch_add(1, Ordering::Relaxed);
+        }
+        self.notice = (past_start && restart && !self.has_errors() && !self.shows_nothing()).then_some(RESTART_NOTICE);
+        Ok(())
+    }
+
+    /// Records the start of each property as the preview was just built with it.
+    pub fn mark_built(&mut self) {
+        self.built_starts = Some(starts_of(self.document()));
+    }
+
+    /// Returns whether property `property` starts otherwise than when the preview was last built.
+    pub fn start_changed(&self, property: &str) -> bool {
+        let Some(built) = &self.built_starts else {
+            return false;
+        };
+        let start = |starts: &[(String, Option<StartsAs>)]| {
+            starts
+                .iter()
+                .find(|(id, _)| id == property)
+                .map(|(_, start)| start.clone())
+        };
+        start(built) != start(&starts_of(self.document()))
+    }
+
+    /// Notice of the last edit, `None` while none shows.
+    pub fn notice(&self) -> Option<&'static str> {
+        self.notice
+    }
+
+    /// Returns whether the sheet is a world of cells with no property. Such a world shows nothing until a property is
+    /// added.
+    pub fn shows_nothing(&self) -> bool {
+        let document = self.document();
+        document.world.made_of == MadeOf::Cells && document.cells.as_ref().is_none_or(Vec::is_empty)
     }
 
     /// Document the sheet holds.
     pub fn document(&self) -> &SheetDocument {
-        &self.document
+        self.builder.document()
     }
 
     /// Canonical text of the sheet. Save model writes it and Apply reads it.
@@ -153,8 +244,9 @@ impl SheetEditor {
 
 /// Draws the sheet editor: the Sheet pane on the left and the Card pane beside it, each scrolling on its own.
 ///
-/// Each pane is a group named by its heading.
-pub fn sheet_ui(ui: &mut egui::Ui, sheet: &SheetEditor) {
+/// Each pane is a group named by its heading. `past_start` is whether the preview has passed tick 0 or a button was
+/// pressed in it.
+pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, past_start: bool) {
     let width = ui.available_width();
     Panel::left("henad_sheet_pane")
         .resizable(true)
@@ -167,7 +259,7 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &SheetEditor) {
             ScrollArea::vertical()
                 .id_salt("henad_sheet_pane_scroll")
                 .auto_shrink([false; 2])
-                .show(ui, |ui| sheet_pane::sheet_pane(ui, sheet.document()));
+                .show(ui, |ui| sheet_pane::sheet_pane(ui, sheet, past_start));
             pane_group(ui, SHEET_PANE);
         });
     CentralPanel::no_frame().show(ui, |ui| {
@@ -180,6 +272,16 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &SheetEditor) {
             pane_group(ui, CARD_PANE);
         });
     });
+}
+
+/// Returns the start of each property of the cells of `document`, by id.
+fn starts_of(document: &SheetDocument) -> Vec<(String, Option<StartsAs>)> {
+    document
+        .cells
+        .iter()
+        .flatten()
+        .map(|property| (property.id.clone(), property.starts_as.clone()))
+        .collect()
 }
 
 /// Gives the node of `ui` the role of a group named `name` with the bounds of what `ui` holds, as a pane of the sheet

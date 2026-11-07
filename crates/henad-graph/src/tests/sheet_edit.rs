@@ -24,6 +24,64 @@ use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{ConditionItem, Sentences};
 use crate::sheet::{ParsedSheet, starters};
 
+#[test]
+fn a_new_property_type_clears_every_reference_and_keeps_the_place() {
+    let mut builder = builder_of("game_of_life.toml");
+    run(
+        &mut builder,
+        SheetEdit::SetPropertyType {
+            property: "status".to_owned(),
+            property_type: PropertyType::Number,
+        },
+    );
+    let document = builder.document();
+    let status = &document.cells.as_ref().expect("cells")[0];
+    assert_eq!(status.id, "status", "the property keeps its place and its id");
+    assert_eq!(status.property_type, PropertyType::Number);
+    assert!(status.states.is_empty() && status.starts_as.is_none());
+    assert!(document.measures.is_empty(), "the count of Alive goes with the states");
+    assert!(
+        !document.colors.contains_key("cells"),
+        "a colour by state no longer fits a number"
+    );
+    // The Count line's "whose" test and each Become's new state named the property or its states.
+    let Some(SheetValue::Phrase(whose)) = line(&builder, "l1").whose.value() else {
+        panic!("the Count line keeps its test");
+    };
+    assert!(whose.left.is_blank() && whose.right.is_blank(), "{whose:?}");
+    assert_eq!(line(&builder, "l2").new_state, None);
+    assert_eq!(line(&builder, "l2").start_state, None);
+
+    // Back to States: the property colours the cells by state again, with no states until some are added.
+    run(
+        &mut builder,
+        SheetEdit::SetPropertyType {
+            property: "status".to_owned(),
+            property_type: PropertyType::States,
+        },
+    );
+    let rule = builder.document().colors.get("cells").expect("a colour rule");
+    assert_eq!(rule.property.as_deref(), Some("status"));
+    // The same type again changes nothing.
+    let before = builder.document().clone();
+    run(
+        &mut builder,
+        SheetEdit::SetPropertyType {
+            property: "status".to_owned(),
+            property_type: PropertyType::States,
+        },
+    );
+    assert!(builder.document() == &before);
+    assert!(
+        builder
+            .apply(SheetEdit::SetPropertyType {
+                property: "nothing".to_owned(),
+                property_type: PropertyType::Number,
+            })
+            .is_err()
+    );
+}
+
 /// Returns the sheet `file_name` of [`sheets`].
 fn sheet_text(file_name: &str) -> &'static str {
     sheets()
@@ -1551,7 +1609,11 @@ fn random_edit(rng: &mut u64, document: &SheetDocument) -> SheetEdit {
             item,
             color: STATE_COLORS[below(rng, STATE_COLORS.len())],
         },
-        9 | 10 => SheetEdit::Delete { item },
+        9 => SheetEdit::Delete { item },
+        10 => SheetEdit::SetPropertyType {
+            property: pick(rng, &properties).cloned().unwrap_or_default(),
+            property_type: [PropertyType::States, PropertyType::Number, PropertyType::WholeNumber][below(rng, 3)],
+        },
         11 | 12 => {
             let kinds = [
                 LineKind::Become,
