@@ -129,7 +129,7 @@ fn set_everywhere(
             group: GROUP_PART,
             index: step_index as u32,
         }),
-        path: format!("button.{}.does.{}", button.id, step_index + 1),
+        path: format!("button.{}.does.{step_index}", button.id),
         region: None,
     };
     let operand = match step.value.value() {

@@ -76,6 +76,50 @@ pub(super) fn common_type(first: &Operand, second: &Operand) -> Result<ValueType
     }
 }
 
+/// Returns the type the values `operands` share, `None` when no operand has a type of its own.
+///
+/// Values of one type share it. Numbers of several types share `f32`, and so do numbers of one type beside a typed
+/// number that type cannot hold exactly.
+///
+/// # Errors
+///
+/// Returns the message for values of kinds that cannot meet, such as a state beside a number.
+pub(super) fn shared_type(operands: &[&Operand]) -> Result<Option<ValueType>, String> {
+    let mut shared: Option<ValueType> = None;
+    for operand in operands {
+        let Some(found) = operand.value_type() else {
+            continue;
+        };
+        shared = Some(match shared {
+            None => found,
+            Some(known) if known == found => known,
+            Some(known) if is_number(&known) && is_number(&found) => ValueType::F32,
+            Some(known) => return Err(format!("a value of type {known} meets a value of type {found}")),
+        });
+    }
+    let Some(known) = shared else {
+        return Ok(None);
+    };
+    let typed_numbers: Vec<f64> = operands
+        .iter()
+        .filter_map(|operand| match operand {
+            Operand::Number(number) => Some(*number),
+            _ => None,
+        })
+        .collect();
+    if typed_numbers.is_empty() {
+        return Ok(Some(known));
+    }
+    if !is_number(&known) {
+        return Err(format!("a number meets a value of type {known}"));
+    }
+    if typed_numbers.iter().all(|number| holds(&known, *number)) {
+        Ok(Some(known))
+    } else {
+        Ok(Some(ValueType::F32))
+    }
+}
+
 /// Returns the literal of `number` in `value_type`, `None` when the type cannot hold it.
 ///
 /// With `truncate` a fraction is dropped toward zero, as a value written to a Whole number property is.

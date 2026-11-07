@@ -1,7 +1,7 @@
 //! The sheet reader over the starters and the test sheets, its refusals, its blanks and a mutation corpus.
 //!
-//! The starters in the crate's `sheets/` directory are round 1's Game of Life and Majority vote. The test sheets under
-//! `sheets/` here are round 1's SIR with rates, boids and ants from the author format's examples, and its forest fire,
+//! The starters in the crate's `sheets/` directory are round 1's Game of Life, Majority vote and forest fire. The test
+//! sheets under `sheets/` here are round 1's SIR with rates, boids and ants from the author format's examples, and its
 //! random walk, bounded confidence and SIR with chances written from round 1's models. Every sheet holds the stored
 //! forms of the final editor: every condition that always holds written `{ kind = "always" }`, every Become from any
 //! state written `start_state = "any_state"`, Game of Life's Clear a button that runs a card once, and the SIR buttons
@@ -27,7 +27,6 @@ pub(super) fn sheets() -> Vec<(&'static str, &'static str)> {
         ("sir.toml", include_str!("sheets/sir.toml")),
         ("boids.toml", include_str!("sheets/boids.toml")),
         ("ants.toml", include_str!("sheets/ants.toml")),
-        ("forest_fire.toml", include_str!("sheets/forest_fire.toml")),
         ("random_walk.toml", include_str!("sheets/random_walk.toml")),
         (
             "bounded_confidence.toml",
@@ -43,7 +42,7 @@ pub(super) fn sheets() -> Vec<(&'static str, &'static str)> {
 }
 
 /// Returns the sheet `file_name` of [`sheets`].
-fn sheet_text(file_name: &str) -> &'static str {
+pub(super) fn sheet_text(file_name: &str) -> &'static str {
     sheets()
         .into_iter()
         .find(|(name, _)| *name == file_name)
@@ -233,11 +232,9 @@ fn every_table_reads_its_values() {
 }
 
 #[test]
-fn starters_returns_game_of_life_and_vote() {
+fn starters_returns_game_of_life_vote_and_the_forest_fire() {
     let names: Vec<&str> = starters().iter().map(|starter| starter.file_name).collect();
-    assert_eq!(names, ["game_of_life.toml", "vote.toml"]);
-    // The forest fire waits as test data until its chances lower.
-    assert!(!names.contains(&"forest_fire.toml"));
+    assert_eq!(names, ["game_of_life.toml", "vote.toml", "forest_fire.toml"]);
     for starter in starters() {
         let document = read(starter.text).into_document();
         assert_eq!(document.world.made_of, MadeOf::Cells, "{}", starter.file_name);

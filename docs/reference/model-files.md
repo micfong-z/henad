@@ -326,6 +326,7 @@ A [resume](cli.md#resuming) of a sheet's sweep is refused when the code differs,
 | Lines of one card, the lines inside When and Repeat lines included | 256 |
 | Tables and lists nested inside one another | 24 deep |
 | Groups nested in one formula | 32 deep |
+| Operations nested in one formula | 16 deep |
 | An id | 48 bytes |
 | Nodes the lowering writes for one line | 999 |
 | Nodes the lowering writes for the sheet outside every line | 999 |

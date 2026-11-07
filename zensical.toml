@@ -168,6 +168,8 @@ nav = [
             { "#81, 2026-11-07" = "developing/agent-record/20261107-81-grid-lowering.md" },
             { "#82, 2026-11-07" = "developing/agent-record/20261107-82-sheet-edit-commands.md" },
             { "#83, 2026-11-07" = "developing/agent-record/20261107-83-sheets-in-model-files.md" },
+            { "#84, 2026-11-07" = "developing/agent-record/20261107-84-grid-line-kinds.md" },
+            { "#85, 2026-11-07" = "developing/agent-record/20261107-85-grid-sheets-on-the-device.md" },
         ] },
     ] },
 ]

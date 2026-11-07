@@ -1338,7 +1338,7 @@ pub(crate) fn is_result_kind(kind: LineKind) -> bool {
 }
 
 /// Returns the chip a reference in a formula names.
-fn formula_chip(reference: &str, document: &crate::sheet::document::SheetDocument) -> SheetChip {
+pub(in crate::sheet) fn formula_chip(reference: &str, document: &crate::sheet::document::SheetDocument) -> SheetChip {
     let (head, tail) = reference.split_once('.').unwrap_or((reference, ""));
     match head {
         "my" => return SheetChip::My(tail.to_owned()),

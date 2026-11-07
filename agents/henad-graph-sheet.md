@@ -19,21 +19,26 @@ re-exports `format_number`. `sheet/relations.rs` is public (`sheet::relations`),
 `sheet/check/` is public (`sheet::check`): `mod.rs` holds `check`, `SheetReport`, `SheetDiagnostic`,
 `ParsedSheet::check`, the private `Checker`, and `Place`, `Thing` and `span_of`, visible to `sheet`
 for the lowering's errors; `declarations.rs` the tables outside the cards; `lines.rs` the cards,
-lines and values; `formula.rs` the Calculate formula parser. `sheet/file.rs` is private, and `sheet`
-re-exports `SheetFile`. `sheet/lower/` is private, and `sheet` re-exports `LineMap`, `NodeOrigin`
-and `NodeOwner` from `lower/table.rs`. `SheetLine::slot_values` (crate-private, `document.rs`)
-returns every value in a line's slots, for the checker and the lowering. `sheet/edit/` is public
-(`sheet::edit`), the edit commands that `agents/henad-graph-sheet-edit.md` describes: `mod.rs` holds
-`SheetBuilder`, `SheetEdit`, `LineField`, `SheetItem`, `MoveDirection`, `SheetEditError`, `IdSpace`,
-`mint_id`, `STATE_COLORS`, `MEASURE_COLORS` and `suggested_state_color`; `names.rs` `automatic_name`
-and the rule that keeps names up to date; `references.rs` every place an id is named; `lines.rs`
-slot paths, phrase depth and the outline moves.
+lines and values; `formula.rs` the Calculate formula parser, visible to `sheet` with `formula_chip`
+for the lowering (`references` for the checker, `parse` returning a `FormulaTree`, built only by
+`parse`, so a long sum read for its references takes no stack to drop). `sheet/file.rs` is private,
+and `sheet` re-exports `SheetFile`. `sheet/lower/` is private, and `sheet` re-exports `LineMap`,
+`NodeOrigin` and `NodeOwner` from `lower/table.rs`. `SheetLine::slot_values` (crate-private,
+`document.rs`) returns every value in a line's slots, for the checker and the lowering.
+`sheet/edit/` is public (`sheet::edit`), the edit commands that `agents/henad-graph-sheet-edit.md`
+describes: `mod.rs` holds `SheetBuilder`, `SheetEdit`, `LineField`, `SheetItem`, `MoveDirection`,
+`SheetEditError`, `IdSpace`, `mint_id`, `STATE_COLORS`, `MEASURE_COLORS` and
+`suggested_state_color`; `names.rs` `automatic_name` and the rule that keeps names up to date;
+`references.rs` every place an id is named; `lines.rs` slot paths, phrase depth and the outline
+moves.
 `sheet/limits.rs` holds the sheet's limits apart from `crate::limits`, so `library.lock` stays as it
 is: `MAX_SHEET_BYTES` (1 MiB), `MAX_NESTING` (24), `MAX_LINES_PER_CARD` (256), `MAX_NODES_PER_LINE`
 and `MAX_SHEET_NODES` (999 each, for the lowering's `n(1000k + j)` ids), `MAX_SHEET_ID_BYTES` (48,
 so `tick_<card>` and `button_<button>` stay within the IR's 64-byte ids) and `MAX_FORMULA_NESTING`
 (32 groups of parentheses, calls and `^` right sides, checked as the formula parser descends, so a
-deep formula is an error instead of a stack overflow). The reader enforces the first three.
+deep formula is an error instead of a stack overflow) and `MAX_FORMULA_DEPTH` (16 operations nested
+in a formula the lowering writes, each operator, negation and call one level, since `math.expr`
+reads 64 levels and its text spends up to three per operation). The reader enforces the first three.
 
 **The document.** Tables follow the sheet's order: `sheet` (`SheetHeader`: version, id, name,
 purpose, next_line), `world` (`MadeOf`, width, height, `Edges`), `time` (`SheetTime` with
@@ -143,13 +148,14 @@ reaches a line table. Places are offsets into the text with line ends made `\n`,
 
 **Starters.** `sheet::starters()` returns the sheet starters as `crate::starters::Starter` values
 (file name and text), embedded with `include_str!` from the crate's `sheets/` directory, since the
-packaging check refuses a path out of the crate: `game_of_life.toml` and `vote.toml` ("Majority
-vote"). A sheet enters `sheets/` and `starters()` only in the milestone whose lowering runs it, so
-the New model dialog never lists a sheet that cannot run, and a test looping over `starters()`
-passes at every merge. Until then a sheet is test data in `src/tests/sheets/`: the forest fire until
-its chances lower, random walk, boids and bounded confidence until agents lower, ants after them,
-SIR with rates once rates lower. `sir_chance.toml` stays test data. The graph starters stay graph
-files in `starters/`.
+packaging check refuses a path out of the crate: `game_of_life.toml`, `vote.toml` ("Majority vote")
+and `forest_fire.toml`, which entered with the chances' lowering. A sheet enters `sheets/` and
+`starters()` only in the milestone whose lowering runs it, so the New model dialog never lists a
+sheet that cannot run, and a test looping over `starters()` passes at every merge. Until then a
+sheet is test data in `src/tests/sheets/`: random walk, boids and bounded confidence until agents
+lower, ants after them, SIR with rates once rates lower. `sir_chance.toml` stays test data, with
+a copy in henad-models' `tests/fixtures/sheets/` for the device gates. No test holds the two equal,
+and an edit to this one is copied there. The graph starters stay graph files in `starters/`.
 
 **Relations.** `CardRelations::new(&document, &card)` holds a card's display order (a block's lines
 after the block line, an id listed twice or inside its own block taken once at its first place, an
@@ -259,14 +265,27 @@ then emission order. No id depends on another line's display place. Past `MAX_NO
 is refused at its table, past `MAX_SHEET_NODES` the sheet. `LineMap` (`table.rs`) maps every
 written node id to its `NodeOrigin` (owner `Line(id)` or `Sheet`, and a path such as
 `condition.right.2`, `cells.status.starts_as`, `measure.alive` or `card.cell_tick.status`), never
-by division, since normalisation copies take ids past the file's last.
+by division, since normalisation copies take ids past the file's last. A line's paths follow the
+slot path grammar of `sheet::edit` (`parse_path` in `edit/lines.rs`), so one path names one slot
+for the lowering, the diagnostics and the editor: indices count from 0 (`items.0`,
+`row.0.condition`, `summaries.0.value`, `button.<id>.does.0` for a sheet node too), a summary is
+named by its index and never by its id, and past the slot a path may name an item of a listed right
+side (`right.1`). The nodes of a line that sit in no slot take `""` (the line itself), `when` (the
+join with a When around it), `change` (its share of a change chain), `formula` (a Calculate's
+expression) and `row.<index>` (a Choose row's select). A test holds the two together over the grid
+sheets and `values.toml`. These paths feed draw keys, so a change to the grammar changes code
+identity.
 
 Keys (`keys.rs`, R3, D12, D45): an owner's key is the stored one or the low 32 bits of
 `fnv1a64("<sheet id>/<owner id>")` (the checker warns), and each draw takes `compose_key(owner key,
 low 32 bits of fnv1a64(slot path))`, written straight on the draw, since the lowering writes no
 function. A start's paths are `starts_as.row` and `starts_as.value`, a restart pass's the same with
-`.<button>` added, since no two draws of a file share a key. `keys::clashes` is V18 after
-lowering: a key two owners take is an error naming both, at the second.
+`.<button>` added, since no two draws of a file share a key. A line's draw takes the key of the line
+that owns its site (a top-level or nested line, never the phrase's own `key`) and the site's path,
+`""` for a Chance or Random number line itself and `condition` for a chance in a change's condition.
+A When's condition lowers once and its operand joins every change inside, so its draw is written and
+keyed once. `keys::clashes` is V18 after lowering: a key two owners take is an error naming both, at
+the second.
 
 Starts: All [state], a number, yes or no or a parameter write the value (a fraction truncated into
 a Whole number), a `random_number` phrase is `rand.float(high - low) + low` on a Number property
@@ -281,18 +300,41 @@ error. Draws in a rerun key on the press count, so each press draws a new layout
 one seed replays the start (D73).
 
 Cards (`card.rs`): lines lower in display order, a skipped line (`SheetReport::is_skipped`, which
-holds its dependents) left out (D39, D84). A Count over cells is `grid.count` (one per counted
-state, added in `u32`) when its test is `their` States property `is`, `is_not`, `one_of` or
-`not_one_of` states (`is_not` counts the other states, exact at walls), and otherwise a `grid.fold`
-(`moore_row_major` or `von_neumann`, `include_center` for the 3 by 3 block, `boundary = "domain"`)
-with a `count` accumulator, `their` as `lane.get_at` of its `cell`, and a `region.put` whose `when`
-is the test. Compare tests: `cmp.*`, `one_of` an or of `cmp.eq`, `not_one_of` an and of `cmp.ne`,
-`within` as `abs(a - b) <= tolerance` in `f32`, `outside` an or of `cmp.lt` low and `cmp.gt` high
-(D82). All of, any of and none of fold with `logic.and`, `logic.or` and `logic.not`, a constant
-side folded away (`Builder::join`); `always` is the literal `true`. A When's condition, joined with
-the When around it, is joined by `logic.and` into each change inside. Becomes of one property are
-one `cat.transition` (rule id the line id, or `<line>_<state>` per state for `any_state`, the
-`from == to` row kept so a higher any-state line wins, at most `MAX_TRANSITION_RULES` rows), Sets a
+holds its dependents) left out (D39, D84). Looks (`look.rs`): a Count over cells is `grid.count`
+(one per counted state, added in `u32`) when its test is `their` States property `is`, `is_not`,
+`one_of` or `not_one_of` states (`is_not` counts the other states, exact at walls) and it has no
+`only`, and otherwise a `grid.fold` (`moore_row_major` or `von_neumann`, `include_center` for the 3
+by 3 block, `boundary = "domain"`) with a `count` accumulator, `their` as `lane.get_at` of its
+`cell`, and a `region.put` whose `when` is the test, `only` joined in by `logic.and`. A Look around
+over cells is one such fold with `count` and an accumulator `summary_<id>` per summary (`f32` `sum`
+for total and average, `max`, `min`, `bool` `or` for any and `and` for all; a Count summary reads
+`count`), each `region.put` under the `only` test, and its parts kept by line id and part for `{
+result, part }` chips (`count` and each summary id). An average divides by `count` through
+`conv.to_f32`, and an average, largest or smallest of no neighbour is 0 through a `logic.select` on
+`count > 0`. A Look around in a slot is an error, since it gives several values. Draws (`draw.rs`):
+a chance is one `rand.chance`, and with `tries` it holds with `1 - (1 - p)^n` (P), through
+`math.powi` with `max_exponent` 8, 4 or 9 when `p` is a number, percent or parameter and `n` is a
+grid Count or a grid Look around's `count` part or Count summary, and `math.pow` with `n` in `f32`
+otherwise. A Random number is `rand.float(high - low) + low` in `f32`. Calculate (`calculate.rs`):
+one `math.expr`, `out = <formula>` fully parenthesised, each distinct reference an `f32` input `v1`,
+`v2` in first-use order resolved through `formula_chip` and `chip`, numbers written by `f32`'s
+`Debug` (always a point or an exponent, so the expression reads `f32`, and a number past `f32` an
+error), `^` as `pow`, `smaller` and `larger` as `min` and `max`, and `length` and `direction` an
+error on a grid. Choose: a `logic.select` chain from the last row up over the `otherwise` value, a
+row whose condition is the constant yes ending the chain and a constant no left out, its paths
+`row.<index>.value`, `row.<index>.condition`, `row.<index>` for the row's select, and `otherwise`.
+Depending on: one `cat.switch` over the read of my property, `case.<state>` per state at
+`branches.<state>`. Their values share a type through `card::choice_type` over
+`value::shared_type` (one type, numbers of several types `f32`, a typed number the known type cannot
+hold `f32`, numbers with no type `f32`). A state chip there is an error: the checker passes no
+governing property for these slots, so a checked sheet holds none.
+Compare tests: `cmp.*`, `one_of` an or of `cmp.eq`, `not_one_of` an and of `cmp.ne`, `within` as
+`abs(a - b) <= tolerance` in `f32`, `outside` an or of `cmp.lt` low and `cmp.gt` high (D82). All of,
+any of and none of fold with `logic.and`, `logic.or` and `logic.not`, a constant side folded away
+(`Builder::join`); `always` is the literal `true`. A When's condition, joined with the When around
+it, is joined by `logic.and` into each change inside. Becomes of one property are one
+`cat.transition` (rule id the line id, or `<line>_<state>` per state for `any_state`, the `from ==
+to` row kept so a higher any-state line wins, at most `MAX_TRANSITION_RULES` rows), Sets a
 `logic.select` chain from the bottom row up over `my` X, each select owned by its line, and either
 written by one `lane.set` the sheet owns. Rows come in a stable topological sort: display order
 where `CardRelations::can_both_apply`, line id order otherwise, so a reorder that cannot change the
@@ -300,34 +342,53 @@ result leaves the text. `my_new X` writes X's changes when first read, and the c
 below every change of X. Values (`value.rs`, `Operand`): a count is `u32`, a typed number takes the
 type it meets when that type holds it exactly (`common_type`), else both sides go to `f32` through
 `conv.*`; a percent is its number divided by 100 (D110); a state chip takes the category of the
-value it meets. Interim refusals (D38), one located error per line at its line table in the
-author's words, whatever the line's skip: `NOT_YET_CHANCE`, `NOT_YET_RATE`,
-`NOT_YET_LOOK_AROUND`, `NOT_YET_CALCULATE`, `NOT_YET_CHOOSE`, `NOT_YET_DEPENDING_ON`,
-`NOT_YET_RANDOM_NUMBER` and `NOT_YET_REPEAT`, for the line's kind or a phrase in any slot. Record on
-a cells card is an error (D66), and so is an agents-only line kind.
+value it meets. Interim refusals (D38), one located error per line at its line table in the author's
+words, whatever the line's skip: `NOT_YET_RATE` and `NOT_YET_REPEAT`, for the line's kind or a
+phrase in any slot. The refusals of chances, looks, Calculate, Choose, Depending on and Random
+number were lifted with their lowering, and their words removed from `sheet::sentence`. Record on a
+cells card is an error (D66), and so is an agents-only line kind or a look at agents within a
+distance.
 
 Lowering tests sit in `src/tests/sheet_lower.rs`, on the host evaluator:
-`game_of_life_and_vote_lower_check_and_compile` (no warning, no graph diagnostic, `GridProgram`,
-an entry), the vote's block count and rows, `lowering_is_deterministic`,
-`lowered_ids_sit_in_their_line_blocks`, `the_line_map_covers_every_written_node`,
-`two_draws_with_one_key_are_an_error_naming_both` (two starts, since no line draws in S7), the
-derived key, the percent, the measure's label, one test per identity row of the author format for
-grids (a result rename, a reorder of independent lines, a note, `purpose` or comment keep the code;
-a parameter, state or model rename, a default, a colour, new numbers and a reorder of changes that
-can both apply change it), `the_life_sheet_blinker_has_period_2` and
+`every_grid_sheet_lowers_checks_and_compiles` (the three starters and `sir_chance.toml`: no warning,
+no graph diagnostic, `GridProgram`, an entry, canonical text), the vote's block count and rows,
+`lowering_is_deterministic`, `lowered_ids_sit_in_their_line_blocks`,
+`the_line_map_covers_every_written_node`,
+`every_line_map_path_of_a_line_reads_as_an_edit_command_slot_path`,
+`two_draws_with_one_key_are_an_error_naming_both` (two starts), the derived key, the percent, the
+measure's label, one test per identity row of the author format for grids (a result rename, a
+reorder of independent lines, a note, `purpose` or comment keep the code; a parameter, state or
+model rename, a default, a colour, new numbers and a reorder of changes that can both apply change
+it),
+`the_life_sheet_blinker_has_period_2` and
 `the_life_sheet_glider_moves_one_cell_diagonally_every_4_ticks` (32 by 32, lanes planted, D74),
 `a_rebuild_at_one_seed_replays_the_same_start`,
 `a_start_again_button_draws_a_new_layout_each_press`,
 `a_skipped_line_and_its_dependents_are_left_out`, `each_interim_refusal_gives_one_located_error`
-(and the agents world), the second tick card, the empty grid,
+(rate, Repeat and the agents world), `each_lifted_refusal_now_lowers_checks_and_compiles` (S7's
+seven refused lines), the second tick card, the empty grid,
 `the_largest_grid_sheet_lowers_under_half_the_node_limit` (a card of `MAX_LINES_PER_CARD` count and
 Become lines over four properties), `the_kinds_sheet_runs_its_lines_on_the_host` (the test sheet
-`src/tests/sheets/kinds.toml`, canonical, every line kind against a Rust reference over one tick),
-the parts on Game of Life with a random Number `level` and a States `mood` added (`life_with`):
-Set everywhere and a property set twice, Start again on some properties (`restart_randomise`,
-`level` left alone, presses replay), the random start's range and its refusal on a Whole number,
-average, total and spread against a Rust reference, `view.color` and `view.ramp`, the log scale
-refused, both node limits named, and `the_sheet_lowering_never_panics_on_the_mutation_corpus`.
+`src/tests/sheets/kinds.toml`, canonical, the counts, yes or no lines and changes against a Rust
+reference over one tick), the parts on Game of Life with a random Number `level` and a States `mood`
+added (`life_with`): Set everywhere and a property set twice, Start again on some properties
+(`restart_randomise`, `level` left alone, presses replay), the random start's range and its refusal
+on a Whole number, average, total and spread against a Rust reference, `view.color` and `view.ramp`,
+the log scale refused, both node limits named,
+`the_sheet_lowering_never_panics_on_the_mutation_corpus` (one in five edits of the sheets that lower
+still lowers), `the_chance_sir_sheet_conserves_its_cells_every_tick` (64 by 64, a New outbreak press
+through its action pass, 200 ticks), `once_for_each_follows_the_power_rule` (a 300 by 300 sheet
+whose Set draws once for each flagged neighbour, every cell flagged against `1 - 0.8^k` for k = 8, 4
+and 9 with `max_exponent` checked, none flagged for 0, every third row for 0.488, with `p` typed for
+`math.powi` and a Calculate for `math.pow`), the forest fire's spread row before its lightning row,
+new numbers on a chance and a renamed chance result against the code, a chance inside a When keyed
+by its own line, `the_values_sheet_runs_its_lines_on_the_host` (the test sheet
+`src/tests/sheets/values.toml`, canonical: three Look arounds covering every summary, two with
+`only` and one of them able to leave out every neighbour, a Count with `only`, a Calculate over
+their parts, a Choose, a Depending on, Sets and a Become, against a Rust reference over one tick),
+`the_values_sheet_honors_each_only_and_gives_0_for_a_summary_of_no_cell` (the Count's `only` and the
+average, largest and smallest of no cell, each met at least once), a formula of arrows or past the
+depth limit refused at its line, and a Random number line's range.
 `a_graph_diagnostic_is_placed_at_its_author_line` plants an unknown op on a node of line `l2` and
 places the checker's error at `[card.line.l2]` with no pass or node, then a node the sheet owns at
 `[[cells.property]]` and a pass alone at its card and button.
@@ -354,19 +415,20 @@ asserting error, warning or skip and its table; the rate in a run-once card; D75
 (`every_sheet_checks_clean`, file order, the otherwise rule with exclusive and overlapping tests,
 the starters, the forest fire, the ants' Set lines, competing groups, skipped lines and blocks, the
 When scope, `every_skip_note_equals_its_wording_table_entry`, reserved ids, the second agent kind,
-the empty grid sheet). Reader tests sit in `src/tests/sheet_document.rs`, over nine sheets: the two
-starters, and seven test sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and `ants.toml` are
-the author format's examples, and `forest_fire.toml`, `random_walk.toml`, `bounded_confidence.toml`
-and `sir_chance.toml` (round 1's SIR with chances per tick, sheet id `sir_chance`) were written from
-round 1's models, as `vote.toml` was. Every sheet holds `always` and `any_state` written in, Game of
-Life's Clear is a Run once card holding "Become Dead from any state, always", and both SIR sheets
-name their button `new_outbreak`, "New outbreak". The written sheets' keys were minted at random.
-Their text is the writer's canonical text, comments included. The bounded confidence colour rule is
-`shaded` over `opinion` with no colours, since the schema holds no ramp. The test helper `sheets()`
-lists the starters from `starters()`, then the test sheets, so every starter is among the sheets the
-tests read. `starters_returns_game_of_life_and_vote` holds the list, the forest fire's absence and
-each starter a grid sheet, and `the_sheets_written_from_round_1_read_their_values` a value of each
-written sheet. `every_sheet_reads` (places on every line table, the ants' chip in
+the empty grid sheet). Reader tests sit in `src/tests/sheet_document.rs`, over nine sheets: the
+three starters, and six test sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and `ants.toml`
+are the author format's examples, and `random_walk.toml`, `bounded_confidence.toml` and
+`sir_chance.toml` (round 1's SIR with chances per tick, sheet id `sir_chance`) were written from
+round 1's models, as `vote.toml` and `forest_fire.toml` were. Every sheet holds `always` and
+`any_state` written in, Game of Life's Clear is a Run once card holding "Become Dead from any state,
+always", and both SIR sheets name their button `new_outbreak`, "New outbreak". The written sheets'
+keys were minted at random. Their text is the writer's canonical text, comments included. The
+bounded confidence colour rule is `shaded` over `opinion` with no colours, since the schema holds no
+ramp. The test helper `sheets()` lists the starters from `starters()`, then the test sheets, so
+every starter is among the sheets the tests read.
+`starters_returns_game_of_life_vote_and_the_forest_fire` holds the list and each starter a grid
+sheet, and `the_sheets_written_from_round_1_read_their_values` a value of each written sheet.
+`every_sheet_reads` (places on every line table, the ants' chip in
 `[[card.line.l7.row.condition.items]]`, and a depth at most half the limit),
 `every_table_reads_its_values`, `a_sheet_with_an_unknown_key_is_refused_on_the_key` (also with
 `\r\n` line ends), `a_newer_sheet_version_is_refused_on_its_key`,

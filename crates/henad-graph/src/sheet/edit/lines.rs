@@ -13,7 +13,7 @@ use crate::sheet::document::{ChooseRow, LineKind, SheetCard, SheetLine, SheetVal
 
 /// One step of a slot path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum PathStep {
+pub(crate) enum PathStep {
     /// A slot by its key, such as `condition`.
     Slot(String),
     /// An item of an all of, any of or none of, by index.
@@ -28,7 +28,7 @@ pub(super) enum PathStep {
 
 /// A slot of a row of a Choose line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RowSlot {
+pub(crate) enum RowSlot {
     /// The row's value.
     Value,
     /// The row's condition.
@@ -40,7 +40,7 @@ pub(super) enum RowSlot {
 /// # Errors
 ///
 /// Returns [`SheetEditError::Invalid`] for an empty path, an unknown key or an index that is not a number.
-pub(super) fn parse_path(path: &str) -> Result<Vec<PathStep>, SheetEditError> {
+pub(crate) fn parse_path(path: &str) -> Result<Vec<PathStep>, SheetEditError> {
     let invalid = || SheetEditError::Invalid(format!("'{path}' is no slot path"));
     let index = |text: Option<&&str>| -> Option<usize> { text?.parse().ok() };
     let segments: Vec<&str> = path.split('.').collect();
@@ -142,7 +142,7 @@ pub(super) fn slot_mut<'a>(line: &'a mut SheetLine, name: &str) -> Option<&'a mu
 }
 
 /// Returns the value at `step` of `line`, `None` when the line holds none there.
-fn value_mut<'a>(line: &'a mut SheetLine, step: &PathStep) -> Option<&'a mut SheetValue> {
+pub(crate) fn value_mut<'a>(line: &'a mut SheetLine, step: &PathStep) -> Option<&'a mut SheetValue> {
     match step {
         PathStep::Slot(name) => match slot_mut(line, name)? {
             Slot::Filled(value) => Some(value),
@@ -175,7 +175,7 @@ fn value_mut<'a>(line: &'a mut SheetLine, step: &PathStep) -> Option<&'a mut She
 /// # Errors
 ///
 /// Returns [`SheetEditError::Missing`] when a step finds no phrase.
-pub(super) fn phrase_mut<'a>(line: &'a mut SheetLine, steps: &[PathStep]) -> Result<&'a mut SheetLine, SheetEditError> {
+pub(crate) fn phrase_mut<'a>(line: &'a mut SheetLine, steps: &[PathStep]) -> Result<&'a mut SheetLine, SheetEditError> {
     let mut current = line;
     for step in steps {
         current = match value_mut(current, step) {

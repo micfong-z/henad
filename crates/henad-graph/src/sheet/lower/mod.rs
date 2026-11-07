@@ -20,10 +20,13 @@
 //! past the node limits of [`crate::sheet::limits`].
 
 mod buttons;
+mod calculate;
 mod card;
 mod colours;
+mod draw;
 mod ids;
 mod keys;
+mod look;
 mod measures;
 mod start;
 pub(super) mod table;

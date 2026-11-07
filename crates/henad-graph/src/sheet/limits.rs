@@ -17,6 +17,12 @@ pub const MAX_NESTING: usize = 24;
 /// A formula is a plain string bounded only by [`MAX_SHEET_BYTES`], and parsing each group takes stack space.
 pub const MAX_FORMULA_NESTING: usize = 32;
 
+/// Depth of the operations nested in one formula that the lowering writes: each operator, negation and call counts
+/// one level above its values.
+///
+/// The lowering writes a formula as the text of one expression node, whose reader nests at most 64 levels.
+pub const MAX_FORMULA_DEPTH: usize = 16;
+
 /// Number of line tables of one card, the lines inside When and Repeat lines included.
 pub const MAX_LINES_PER_CARD: usize = 256;
 

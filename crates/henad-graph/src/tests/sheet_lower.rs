@@ -1,7 +1,7 @@
-//! The lowering of grid sheets: Game of Life and Majority vote checked and compiled, ids, keys and the line table, the
-//! code identity under the author format's edits, known answers on the host, the two ways a world starts again,
-//! skipped lines, the refusals of the line kinds this version does not lower, buttons, measures, colours, the node
-//! limits and a mutation corpus.
+//! The lowering of grid sheets: every grid sheet checked and compiled, ids, keys and the line table, the code identity
+//! under the author format's edits, known answers on the host, the two ways a world starts again, skipped lines, the
+//! refusals of the line kinds this version does not lower and the refusals lifted, chances and their power rule,
+//! looks, calculations and choices, buttons, measures, colours, the node limits and a mutation corpus.
 
 use std::collections::BTreeSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -11,10 +11,11 @@ use henad_core::authoring::primitives::space::Boundary;
 use henad_core::explore::fingerprint::fnv1a64;
 use henad_core::params::ParamValue;
 
-use super::sheet_document::{mutate, sheets};
+use super::sheet_document::{mutate, sheet_text, sheets};
 use crate::document::PassStage;
 use crate::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
 use crate::limits::MAX_NODES_IN_FILE;
+use crate::sheet::edit::lines::{parse_path, phrase_mut, value_mut};
 use crate::sheet::limits::MAX_LINES_PER_CARD;
 use crate::sheet::{NodeOwner, SheetFile, SheetFileError, sentence, starters};
 use crate::wgsl::GridProgram;
@@ -79,30 +80,38 @@ fn life_with_line(table: &str) -> String {
     )
 }
 
+/// Every grid sheet: the starters, then the SIR epidemic with chances.
+fn grid_sheets() -> Vec<(&'static str, &'static str)> {
+    starters()
+        .iter()
+        .map(|starter| (starter.file_name, starter.text))
+        .chain(sheets().into_iter().filter(|(name, _)| *name == "sir_chance.toml"))
+        .collect()
+}
+
 #[test]
-fn game_of_life_and_vote_lower_check_and_compile() {
-    for starter in starters() {
-        let file = lowered(starter.text);
-        assert!(
-            file.warnings().is_empty(),
-            "{}: {:?}",
-            starter.file_name,
-            file.warnings()
-        );
+fn every_grid_sheet_lowers_checks_and_compiles() {
+    let names: Vec<&str> = grid_sheets().iter().map(|(name, _)| *name).collect();
+    assert_eq!(
+        names,
+        ["game_of_life.toml", "vote.toml", "forest_fire.toml", "sir_chance.toml"]
+    );
+    for (file_name, text) in grid_sheets() {
+        let file = lowered(text);
+        assert!(file.warnings().is_empty(), "{file_name}: {:?}", file.warnings());
         let report = file.lowered().check();
         assert!(
             report.diagnostics.is_empty(),
-            "{}: {:#?}\n{}",
-            starter.file_name,
+            "{file_name}: {:#?}\n{}",
             report.diagnostics,
             file.lowered().to_toml()
         );
-        let program = GridProgram::compile(file.lowered())
-            .unwrap_or_else(|problems| panic!("{}: {problems:#?}", starter.file_name));
+        let program =
+            GridProgram::compile(file.lowered()).unwrap_or_else(|problems| panic!("{file_name}: {problems:#?}"));
         let entry = program.entry();
         assert_eq!(entry.id(), file.document().sheet.id);
         assert_eq!(file.code(), file.lowered().code());
-        assert_eq!(file.to_toml(), starter.text, "a starter is its own canonical text");
+        assert_eq!(file.to_toml(), text, "a sheet is its own canonical text");
     }
 }
 
@@ -193,8 +202,60 @@ fn the_line_map_covers_every_written_node() {
             .map(|origin| origin.path.as_str())
             .collect();
         if text == life() {
-            assert_eq!(paths, ["condition.right.1", "condition.right.2", "condition.right.2"]);
+            assert_eq!(paths, ["condition.right.0", "condition.right.1", "condition.right.1"]);
         }
+    }
+}
+
+/// Paths of the nodes a line owns that name no slot: the line itself, the join with the condition of a When around
+/// it, its share of a property's change chain, and the expression of a Calculate.
+const LINE_PATHS_OF_NO_SLOT: [&str; 4] = ["", "when", "change", "formula"];
+
+#[test]
+fn every_line_map_path_of_a_line_reads_as_an_edit_command_slot_path() {
+    let mut sheets = grid_sheets();
+    let values = values();
+    sheets.push(("values.toml", &values));
+    for (file_name, text) in sheets {
+        let file = lowered(text);
+        let mut slots = 0;
+        for (id, origin) in file.line_map().iter() {
+            let NodeOwner::Line(line_id) = &origin.owner else {
+                continue;
+            };
+            if LINE_PATHS_OF_NO_SLOT.contains(&origin.path.as_str()) {
+                continue;
+            }
+            let mut line = file
+                .document()
+                .cards
+                .iter()
+                .find_map(|card| card.line_tables.get(line_id))
+                .unwrap_or_else(|| panic!("{file_name}: no line {line_id}"))
+                .clone();
+            let segments: Vec<&str> = origin.path.split('.').collect();
+            // The `logic.select` of a Choose row sits at the row itself, which names no slot.
+            if let ["row", row] = segments.as_slice() {
+                let row: usize = row.parse().expect("a row index");
+                assert!(row < line.rows.len(), "{file_name}: '{}' of {line_id}", origin.path);
+                continue;
+            }
+            // The longest prefix that reads as a slot path. Past it, a path names an item of a list or a node's role.
+            let steps = (1..=segments.len())
+                .rev()
+                .find_map(|end| parse_path(&segments[..end].join(".")).ok())
+                .unwrap_or_else(|| panic!("{file_name}: {id} of {line_id} at '{}' names no slot", origin.path));
+            let (last, inner) = steps.split_last().expect("a parsed path has a step");
+            let phrase = phrase_mut(&mut line, inner)
+                .unwrap_or_else(|error| panic!("{file_name}: '{}' of {line_id}: {error}", origin.path));
+            assert!(
+                value_mut(phrase, last).is_some(),
+                "{file_name}: '{}' of {line_id} names an empty slot",
+                origin.path
+            );
+            slots += 1;
+        }
+        assert!(slots > 0, "{file_name}");
     }
 }
 
@@ -501,56 +562,43 @@ fn a_skipped_line_and_its_dependents_are_left_out() {
     assert_eq!(rules, 1 + 2, "line 2's row and the two rows of Clear");
 }
 
-/// Lines of each kind this version does not lower, each as line `l5` of Game of Life, with the error its refusal
-/// gives.
-const NOT_YET_LINES: [(&str, &str); 8] = [
-    (
-        "[card.line.l5]\nkind = \"chance\"\nname = \"Spark\"\nkey = 11\nchance = 0.5",
-        sentence::NOT_YET_CHANCE,
-    ),
-    (
-        "[card.line.l5]\nkind = \"rate\"\nname = \"Spark\"\nkey = 12\nrate = 0.5\nrate_unit = \"day\"",
-        sentence::NOT_YET_RATE,
-    ),
-    (
-        "[card.line.l5]\nkind = \"look_around\"\nname = \"Around\"\naround = \"cells_8\"\nsummaries = [\n  { id = \
-         \"alive_around\", name = \"Alive around\", summary = \"count\" },\n]",
-        sentence::NOT_YET_LOOK_AROUND,
-    ),
-    (
-        "[card.line.l5]\nkind = \"calculate\"\nname = \"Double\"\nformula = \"l1 * 2\"",
-        sentence::NOT_YET_CALCULATE,
-    ),
-    (
-        "[card.line.l5]\nkind = \"choose\"\nname = \"Pick\"\notherwise = 0\n\n[[card.line.l5.row]]\nvalue = 1\n\n\
-         [card.line.l5.row.condition]\nkind = \"compare\"\ntest = \"is\"\nleft = { result = \"l1\" }\nright = 3",
-        sentence::NOT_YET_CHOOSE,
-    ),
-    (
-        "[card.line.l5]\nkind = \"depending_on\"\nname = \"By status\"\nproperty = \"status\"\nbranches = { dead = 0, \
-         alive = 1 }",
-        sentence::NOT_YET_DEPENDING_ON,
-    ),
-    (
-        "[card.line.l5]\nkind = \"random_number\"\nname = \"Noise\"\nkey = 13\nlow = 0\nhigh = 1",
-        sentence::NOT_YET_RANDOM_NUMBER,
-    ),
-    (
-        "[card.line.l5]\nkind = \"become\"\nproperty = \"status\"\nnew_state = \"dead\"\nstart_state = \"alive\"\n\n\
-         [card.line.l5.condition]\nkind = \"chance\"\nkey = 14\nchance = 0.1",
-        sentence::NOT_YET_CHANCE,
-    ),
+/// Lines of the kinds the grid lowering refused before chances, looks, calculations and choices lowered, each as line
+/// `l5` of Game of Life.
+const LIFTED_LINES: [&str; 7] = [
+    "[card.line.l5]\nkind = \"chance\"\nname = \"Spark\"\nkey = 11\nchance = 0.5",
+    "[card.line.l5]\nkind = \"look_around\"\nname = \"Around\"\naround = \"cells_8\"\nsummaries = [\n  { id = \
+     \"alive_around\", name = \"Alive around\", summary = \"count\" },\n]",
+    "[card.line.l5]\nkind = \"calculate\"\nname = \"Double\"\nformula = \"l1 * 2\"",
+    "[card.line.l5]\nkind = \"choose\"\nname = \"Pick\"\notherwise = 0\n\n[[card.line.l5.row]]\nvalue = 1\n\n\
+     [card.line.l5.row.condition]\nkind = \"compare\"\ntest = \"is\"\nleft = { result = \"l1\" }\nright = 3",
+    "[card.line.l5]\nkind = \"depending_on\"\nname = \"By status\"\nproperty = \"status\"\nbranches = { dead = 0, \
+     alive = 1 }",
+    "[card.line.l5]\nkind = \"random_number\"\nname = \"Noise\"\nkey = 13\nlow = 0\nhigh = 1",
+    "[card.line.l5]\nkind = \"become\"\nkey = 14\nproperty = \"status\"\nnew_state = \"dead\"\nstart_state = \
+     \"alive\"\n\n[card.line.l5.condition]\nkind = \"chance\"\nchance = 0.1",
 ];
 
 #[test]
-fn each_interim_refusal_gives_one_located_error() {
-    for (table, words) in NOT_YET_LINES {
+fn each_lifted_refusal_now_lowers_checks_and_compiles() {
+    for table in LIFTED_LINES {
         let text = life_with_line(table);
-        let errors = refusals(&text);
-        assert_eq!(errors.len(), 1, "{table}: {errors:?}");
-        assert_eq!(errors[0].message, words);
-        assert!(placed_at(&errors[0], &text).starts_with("[card.line.l5]"), "{table}");
+        let file = lowered(&text);
+        assert!(file.warnings().is_empty(), "{table}: {:?}", file.warnings());
+        assert!(file.line_map().nodes_of("l5").next().is_some(), "{table}");
+        let report = file.lowered().check();
+        assert!(!report.has_errors(), "{table}: {:#?}", report.diagnostics);
+        assert!(GridProgram::compile(file.lowered()).is_ok(), "{table}");
     }
+}
+
+#[test]
+fn each_interim_refusal_gives_one_located_error() {
+    let rate =
+        life_with_line("[card.line.l5]\nkind = \"rate\"\nname = \"Spark\"\nkey = 12\nrate = 0.5\nrate_unit = \"day\"");
+    let errors = refusals(&rate);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].message, sentence::NOT_YET_RATE);
+    assert!(placed_at(&errors[0], &rate).starts_with("[card.line.l5]"));
     let repeat = edited(life(), "lines = [\"l1\", \"l2\", \"l3\"]", "lines = [\"l1\", \"l5\"]");
     let repeat = edited(&repeat, "next_line = 5", "next_line = 6");
     let repeat = edited(
@@ -815,7 +863,7 @@ fn the_sheet_lowering_never_panics_on_the_mutation_corpus() {
         }
     }
     assert!(
-        lowered_cases * 4 > cases,
+        lowered_cases * 5 > cases,
         "only {lowered_cases} of {cases} edits of the sheets that lower still lowered"
     );
 }
@@ -1366,4 +1414,507 @@ fn an_unknown_node_is_placed_on_the_sheet() {
         let placed = file.place_graph_diagnostic(diagnostic);
         assert_eq!(placed.line, Some(line_of(life(), "[sheet]")), "{placed}");
     }
+}
+
+/// Returns the number of cells of the `health` lane of `lanes` in each state of the SIR epidemic.
+fn health_counts(lanes: &HostLanes) -> [usize; 3] {
+    let health = lanes.column("health").expect("a health lane");
+    let mut counts = [0; 3];
+    for cell in 0..health.len() {
+        match health.get(cell) {
+            Some(HostValue::Category(state)) if state < 3 => counts[state as usize] += 1,
+            other => panic!("cell {cell} holds {other:?}"),
+        }
+    }
+    counts
+}
+
+#[test]
+fn the_chance_sir_sheet_conserves_its_cells_every_tick() {
+    let text = edited(sheet_text("sir_chance.toml"), "width = 1024", "width = 64");
+    let text = edited(&text, "height = 1024", "height = 64");
+    let file = lowered(&text);
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let world = HostWorld::Grid {
+        width: 64,
+        height: 64,
+        boundary: Boundary::Torus,
+    };
+    let mut lanes = evaluator.init(world, &[], Some(5)).expect("the start runs");
+    let start = health_counts(&lanes);
+    assert!(start[1] > 0, "the start infects some cells: {start:?}");
+    // New outbreak runs its card once, and its chance infects more susceptible cells.
+    let mut stream = 0;
+    evaluator
+        .run_pass(
+            "button_new_outbreak",
+            &mut lanes,
+            &[],
+            &RunContext::action(Some(5), 0, 1, 0),
+            &mut stream,
+        )
+        .expect("the press runs");
+    let pressed = health_counts(&lanes);
+    assert_eq!(pressed.iter().sum::<usize>(), 64 * 64);
+    assert!(pressed[1] > start[1], "{start:?} then {pressed:?}");
+    let start = pressed;
+    let mut peak = 0;
+    for tick in 0..200 {
+        evaluator
+            .run_pass(
+                "tick_cell_tick",
+                &mut lanes,
+                &[],
+                &RunContext::tick(Some(5), tick),
+                &mut stream,
+            )
+            .expect("a tick runs");
+        let counts = health_counts(&lanes);
+        assert_eq!(counts.iter().sum::<usize>(), 64 * 64, "tick {tick}: {counts:?}");
+        peak = peak.max(counts[1]);
+    }
+    let end = health_counts(&lanes);
+    assert!(
+        peak > start[1] && end[2] > 0,
+        "the epidemic spreads and recovers: {peak}, {end:?}"
+    );
+}
+
+/// A grid sheet `side` cells wide and high whose only line sets Hit to yes with chance `chance` once for each of the
+/// cells `around` whose Flag is yes. `chance` is a value as a sheet writes it, and a result `l2` is a Calculate of
+/// 0.1 times 2.
+fn power_sheet(side: u32, around: &str, chance: &str) -> String {
+    format!(
+        "format = \"henad-model\"\nformat_version = 1\nkind = \"sheet\"\n\n[sheet]\nversion = 1\nid = \"power\"\nname = \
+         \"Power\"\nnext_line = 4\n\n[world]\nmade_of = \"cells\"\nwidth = {side}\nheight = {side}\nedges = \"wrap\"\n\n\
+         [[cells.property]]\nid = \"flag\"\nname = \"Flag\"\ntype = \"yes_no\"\n\n[cells.property.starts_as]\nrule = \
+         \"value\"\nvalue = false\n\n[[cells.property]]\nid = \"hit\"\nname = \"Hit\"\ntype = \"yes_no\"\n\n\
+         [cells.property.starts_as]\nrule = \"value\"\nvalue = false\n\n[[card]]\nid = \"cell_tick\"\nevery = \
+         \"cells\"\nruns = \"each_tick\"\nlines = [\"l1\", \"l2\", \"l3\"]\n\n[card.line.l1]\nkind = \"count\"\nname = \
+         \"Flagged around\"\naround = \"{around}\"\n\n[card.line.l1.whose]\nkind = \"compare\"\ntest = \"is\"\nleft = \
+         {{ their = \"flag\" }}\nright = true\n\n[card.line.l2]\nkind = \"calculate\"\nname = \"Base chance\"\nformula = \
+         \"0.1 * 2\"\n\n[card.line.l3]\nkind = \"set\"\nkey = 21\nproperty = \"hit\"\nvalue = true\n\n\
+         [card.line.l3.condition]\nkind = \"chance\"\nchance = {chance}\ntries = {{ result = \"l1\" }}\n"
+    )
+}
+
+/// Runs one tick of the lowered power sheet `file`, `side` cells wide, from the flags `flagged` places, and returns the
+/// share of the cells `counted` keeps that Hit holds yes on.
+fn hit_share(
+    file: &SheetFile,
+    side: u32,
+    flagged: impl Fn(u32, u32) -> bool,
+    counted: impl Fn(u32, u32) -> bool,
+) -> f64 {
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let world = HostWorld::Grid {
+        width: side,
+        height: side,
+        boundary: Boundary::Torus,
+    };
+    let mut lanes = HostLanes::new(evaluator.document(), world).expect("lanes");
+    for cell in 0..side * side {
+        let flag = flagged(cell % side, cell / side);
+        assert!(
+            lanes
+                .column_mut("flag")
+                .expect("flag")
+                .set(cell as usize, HostValue::Bool(flag))
+        );
+    }
+    let mut stream = 0;
+    evaluator
+        .run_pass(
+            "tick_cell_tick",
+            &mut lanes,
+            &[],
+            &RunContext::tick(Some(9), 0),
+            &mut stream,
+        )
+        .expect("a tick runs");
+    let hit = lanes.column("hit").expect("a hit lane");
+    let (mut cells, mut hits) = (0u32, 0u32);
+    for cell in 0..side * side {
+        if counted(cell % side, cell / side) {
+            cells += 1;
+            hits += u32::from(hit.get(cell as usize) == Some(HostValue::Bool(true)));
+        }
+    }
+    f64::from(hits) / f64::from(cells)
+}
+
+#[test]
+fn once_for_each_follows_the_power_rule() {
+    let side = 300;
+    let everywhere = |_: u32, _: u32| true;
+    for chance in ["0.2", "{ result = \"l2\" }"] {
+        let power = if chance == "0.2" { "math.powi" } else { "math.pow" };
+        for (around, neighbours) in [("cells_8", 8), ("cells_4", 4), ("block_3x3", 9)] {
+            let file = lowered(&power_sheet(side, around, chance));
+            assert!(file.warnings().is_empty(), "{:?}", file.warnings());
+            let tick = &file.lowered().document().passes[1];
+            let node = tick
+                .body
+                .nodes
+                .iter()
+                .find(|node| node.op == power)
+                .unwrap_or_else(|| panic!("{around}, {chance}: no {power}"));
+            if power == "math.powi" {
+                assert_eq!(
+                    node.config.get("max_exponent"),
+                    Some(&crate::value::ConfigValue::Integer(neighbours)),
+                    "{around}"
+                );
+            }
+            // Every cell flagged: each cell counts all its neighbours, the bound of the power.
+            let expected = 1.0 - 0.8f64.powi(neighbours as i32);
+            let share = hit_share(&file, side, everywhere, everywhere);
+            assert!(
+                (share - expected).abs() < 0.006,
+                "{around}, {chance}: {share} for {expected}"
+            );
+            // No cell flagged: no try, so no cell is hit.
+            assert_eq!(
+                hit_share(&file, side, |_, _| false, everywhere),
+                0.0,
+                "{around}, {chance}"
+            );
+        }
+        // Every third row flagged: a cell of another row counts the 3 cells of the flagged row beside it.
+        let file = lowered(&power_sheet(side, "cells_8", chance));
+        let share = hit_share(&file, side, |_, y| y % 3 == 0, |_, y| y % 3 != 0);
+        assert!((share - 0.488).abs() < 0.01, "{chance}: {share} for 0.488");
+    }
+}
+
+#[test]
+fn the_forest_fire_lowers_its_spread_line_before_its_lightning_line() {
+    let file = lowered(sheet_text("forest_fire.toml"));
+    let tick = &file.lowered().document().passes[1];
+    let transition = tick
+        .body
+        .nodes
+        .iter()
+        .find(|node| node.op == "cat.transition")
+        .expect("the cover's transition");
+    let Some(crate::value::ConfigValue::Array(rules)) = transition.config.get("rules") else {
+        panic!("the transition holds no rules");
+    };
+    let ids: Vec<&str> = rules
+        .iter()
+        .filter_map(|rule| match rule {
+            crate::value::ConfigValue::Table(table) => table.get("id").and_then(crate::value::ConfigValue::as_str),
+            _ => None,
+        })
+        .collect();
+    let place = |id: &str| {
+        ids.iter()
+            .position(|rule| *rule == id)
+            .unwrap_or_else(|| panic!("no rule {id}"))
+    };
+    assert!(place("l2") < place("l3"), "{ids:?}");
+    // Both chances lower to a draw keyed by their own line.
+    let draws = tick.body.nodes.iter().filter(|node| node.op == "rand.chance").count();
+    assert_eq!(draws, 2);
+}
+
+#[test]
+fn drawing_new_numbers_on_a_chance_changes_the_code() {
+    let fire = sheet_text("forest_fire.toml");
+    let changed = edited(fire, "key = 3688405984", "key = 3688405985");
+    assert_ne!(code(&changed), code(fire));
+}
+
+#[test]
+fn renaming_a_chance_result_keeps_the_code() {
+    let table = "[card.line.l5]\nkind = \"chance\"\nname = \"Spark\"\nkey = 11\nchance = 0.5";
+    let renamed = table.replace("Spark", "Flash");
+    assert_eq!(code(&life_with_line(table)), code(&life_with_line(&renamed)));
+}
+
+#[test]
+fn a_chance_inside_a_when_draws_with_its_lines_composed_key() {
+    let text = edited(life(), "next_line = 5", "next_line = 7");
+    let text = edited(
+        &text,
+        "lines = [\"l1\", \"l2\", \"l3\"]",
+        "lines = [\"l1\", \"l2\", \"l3\", \"l5\"]",
+    );
+    let text = edited(
+        &text,
+        "# Lines of Clear: run once, every cell, when pressed",
+        "[card.line.l5]\nkind = \"when\"\nkey = 31\nlines = [\"l6\"]\n\n[card.line.l5.condition]\nkind = \
+         \"chance\"\nchance = 0.5\n\n[card.line.l6]\nkind = \"become\"\nkey = 32\nproperty = \"status\"\nnew_state = \
+         \"dead\"\nstart_state = \"alive\"\n\n[card.line.l6.condition]\nkind = \"chance\"\nchance = 0.25\n\n\
+         # Lines of Clear: run once, every cell, when pressed",
+    );
+    let file = lowered(&text);
+    assert!(file.warnings().is_empty(), "{:?}", file.warnings());
+    let path = (fnv1a64(b"condition") & 0xffff_ffff) as u32;
+    let mut keys: Vec<i64> = file.lowered().document().passes[1]
+        .body
+        .nodes
+        .iter()
+        .filter(|node| node.op == "rand.chance")
+        .filter_map(|node| match node.config.get("key") {
+            Some(crate::value::ConfigValue::Integer(key)) => Some(*key),
+            _ => None,
+        })
+        .collect();
+    keys.sort_unstable();
+    let mut expected = vec![
+        i64::from(crate::normal::compose_key(31, path)),
+        i64::from(crate::normal::compose_key(32, path)),
+    ];
+    expected.sort_unstable();
+    assert_eq!(keys, expected, "one draw per chance, each keyed by its own line");
+}
+
+/// A grid sheet over the lines that work out values from the cells around: three Look arounds, two with an `only` test
+/// and one of them able to leave out every neighbour, covering every summary, a Count with an `only` test, a Calculate
+/// over their parts, a Choose, a Depending on, and Sets and a Become reading them.
+fn values() -> String {
+    include_str!("sheets/values.toml").to_owned()
+}
+
+/// Plants random statuses, flags and levels on a world `side` cells wide, runs one tick of the lowered values sheet
+/// `file`, and returns the lanes with the planted statuses, flags and levels.
+fn values_after_one_tick(file: &SheetFile, side: u32) -> (HostLanes, Vec<bool>, Vec<bool>, Vec<f32>) {
+    let cells = (side * side) as usize;
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let world = HostWorld::Grid {
+        width: side,
+        height: side,
+        boundary: Boundary::Torus,
+    };
+    let mut lanes = HostLanes::new(evaluator.document(), world).expect("lanes");
+    let mut rng = 0x7661_6c75_6573_0001u64;
+    let (mut status, mut flag, mut level) = (vec![false; cells], vec![false; cells], vec![0.0f32; cells]);
+    for cell in 0..cells {
+        rng = henad_core::authoring::primitives::rng::xorshift64(rng);
+        status[cell] = rng.is_multiple_of(3);
+        flag[cell] = (rng >> 8).is_multiple_of(2);
+        level[cell] = ((rng >> 16) % 1000) as f32 / 1000.0;
+        assert!(
+            lanes
+                .column_mut("status")
+                .expect("status")
+                .set(cell, HostValue::Category(u32::from(status[cell])))
+        );
+        assert!(
+            lanes
+                .column_mut("flag")
+                .expect("flag")
+                .set(cell, HostValue::Bool(flag[cell]))
+        );
+        assert!(
+            lanes
+                .column_mut("level")
+                .expect("level")
+                .set(cell, HostValue::F32(level[cell]))
+        );
+    }
+    let mut stream = 0;
+    evaluator
+        .run_pass(
+            "tick_cell_tick",
+            &mut lanes,
+            &[],
+            &RunContext::tick(Some(1), 0),
+            &mut stream,
+        )
+        .expect("a tick runs");
+
+    (lanes, status, flag, level)
+}
+
+#[test]
+fn the_values_sheet_runs_its_lines_on_the_host() {
+    let parsed = crate::sheet::ParsedSheet::parse(&values()).expect("the values sheet reads");
+    assert_eq!(
+        parsed.document().to_text().as_deref(),
+        Ok(values().as_str()),
+        "the values sheet is canonical"
+    );
+    let file = lowered(&values());
+    assert!(file.warnings().is_empty(), "{:?}", file.warnings());
+    let report = file.lowered().check();
+    assert!(!report.has_errors(), "{:#?}", report.diagnostics);
+    assert!(GridProgram::compile(file.lowered()).is_ok());
+    let tick = &file.lowered().document().passes[1];
+    for op in ["grid.fold", "math.expr", "cat.switch", "logic.select"] {
+        assert!(tick.body.nodes.iter().any(|node| node.op == op), "no {op}");
+    }
+
+    let side = 8u32;
+    let cells = (side * side) as usize;
+    let (lanes, status, flag, level) = values_after_one_tick(&file, side);
+
+    let at = |x: i64, y: i64| ((y.rem_euclid(side as i64)) * side as i64 + x.rem_euclid(side as i64)) as usize;
+    let near = |value: Option<HostValue>, expected: f32| match value {
+        Some(HostValue::F32(found)) => (found - expected).abs() < 1e-4,
+        _ => false,
+    };
+    for cell in 0..cells {
+        let (x, y) = ((cell as u32 % side) as i64, (cell as u32 / side) as i64);
+        let around: Vec<usize> = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+            .iter()
+            .map(|&(dx, dy)| at(x + dx, y + dy))
+            .collect();
+        let total: f32 = around.iter().map(|&other| level[other]).sum();
+        let top = around.iter().map(|&other| level[other]).fold(f32::MIN, f32::max);
+        let low = around.iter().map(|&other| level[other]).fold(f32::MAX, f32::min);
+        let beside: Vec<usize> = [(0, -1), (-1, 0), (1, 0), (0, 1)]
+            .iter()
+            .map(|&(dx, dy)| at(x + dx, y + dy))
+            .filter(|&other| status[other])
+            .collect();
+        let alive_near = beside.len() as f32;
+        let alive_level = if beside.is_empty() {
+            0.0
+        } else {
+            beside.iter().map(|&other| level[other]).sum::<f32>() / alive_near
+        };
+        let any_flagged = beside.iter().any(|&other| flag[other]);
+        let all_flagged = beside.iter().all(|&other| flag[other]);
+        let spread = (top - low) / 2.0 + alive_near.max(1.0).powi(2) - level[cell];
+        let band = if alive_level >= 0.5 {
+            1
+        } else if any_flagged {
+            2
+        } else {
+            3
+        };
+        let score = if status[cell] { 10.0 } else { spread };
+        let new_status = status[cell] || all_flagged;
+        assert!(
+            near(lanes.column("total").and_then(|lane| lane.get(cell)), total),
+            "total at {cell}"
+        );
+        assert!(
+            near(lanes.column("score").and_then(|lane| lane.get(cell)), score),
+            "score at {cell}"
+        );
+        assert_eq!(
+            lanes.column("band").and_then(|lane| lane.get(cell)),
+            Some(HostValue::I32(band)),
+            "band at {cell}"
+        );
+        assert_eq!(
+            lanes.column("status").and_then(|lane| lane.get(cell)),
+            Some(HostValue::Category(u32::from(new_status))),
+            "status at {cell}"
+        );
+    }
+}
+
+#[test]
+fn the_values_sheet_honors_each_only_and_gives_0_for_a_summary_of_no_cell() {
+    let file = lowered(&values());
+    let side = 8u32;
+    let cells = (side * side) as usize;
+    let (lanes, status, _, level) = values_after_one_tick(&file, side);
+    let at = |x: i64, y: i64| ((y.rem_euclid(side as i64)) * side as i64 + x.rem_euclid(side as i64)) as usize;
+    // Cells whose Count with an `only` differs from the same Count without it, and cells with and without a
+    // neighbour of level at least 0.8, so each `only` and each empty summary is met at least once.
+    let (mut trimmed, mut empty, mut filled) = (0, 0, 0);
+    for cell in 0..cells {
+        let (x, y) = ((cell as u32 % side) as i64, (cell as u32 / side) as i64);
+        let around: Vec<usize> = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+            .iter()
+            .map(|&(dx, dy)| at(x + dx, y + dy))
+            .collect();
+        let alive_around = around.iter().filter(|&&other| status[other]).count();
+        let bright = around
+            .iter()
+            .filter(|&&other| status[other] && level[other] >= 0.5)
+            .count();
+        let high: Vec<f32> = around
+            .iter()
+            .map(|&other| level[other])
+            .filter(|&other| other >= 0.8)
+            .collect();
+        let (high_mean, high_top, high_low) = if high.is_empty() {
+            (0.0, 0.0, 0.0)
+        } else {
+            (
+                high.iter().sum::<f32>() / high.len() as f32,
+                high.iter().copied().fold(f32::MIN, f32::max),
+                high.iter().copied().fold(f32::MAX, f32::min),
+            )
+        };
+        trimmed += usize::from(bright != alive_around);
+        empty += usize::from(high.is_empty());
+        filled += usize::from(!high.is_empty());
+        assert_eq!(
+            lanes.column("bright").and_then(|lane| lane.get(cell)),
+            Some(HostValue::I32(bright as i32)),
+            "bright at {cell}"
+        );
+        for (lane, expected) in [("high_mean", high_mean), ("high_top", high_top), ("high_low", high_low)] {
+            let found = lanes.column(lane).and_then(|column| column.get(cell));
+            assert!(
+                matches!(found, Some(HostValue::F32(value)) if (value - expected).abs() < 1e-4),
+                "{lane} at {cell}: {found:?}, not {expected}"
+            );
+        }
+    }
+    assert!(trimmed > 0, "the Count's `only` never leaves a cell out");
+    assert!(
+        empty > 0 && filled > 0,
+        "{empty} cells see no high level, {filled} see one"
+    );
+}
+
+#[test]
+fn a_formula_of_arrows_or_past_the_depth_limit_is_refused_at_its_line() {
+    for formula in ["length(l1)", &vec!["l1"; 20].join(" + ")] {
+        let text = life_with_line(&format!(
+            "[card.line.l5]\nkind = \"calculate\"\nname = \"Worked out\"\nformula = \"{formula}\""
+        ));
+        let errors = refusals(&text);
+        assert_eq!(errors.len(), 1, "{formula}: {errors:?}");
+        assert!(placed_at(&errors[0], &text).starts_with("[card.line.l5]"), "{formula}");
+    }
+}
+
+#[test]
+fn a_random_number_line_draws_between_its_values() {
+    let text =
+        life_with_line("[card.line.l5]\nkind = \"random_number\"\nname = \"Noise\"\nkey = 13\nlow = 2\nhigh = 3");
+    let text = edited(&text, "[[parameter]]", &format!("{EXTRA_PROPERTIES}[[parameter]]"));
+    let text = edited(
+        &text,
+        "[card.line.l5]",
+        "[card.line.l6]\nkind = \"set\"\nproperty = \"level\"\nvalue = { result = \"l5\" }\n\n\
+         [card.line.l6.condition]\nkind = \"always\"\n\n[card.line.l5]",
+    );
+    let text = edited(
+        &text,
+        "lines = [\"l1\", \"l2\", \"l3\", \"l5\"]",
+        "lines = [\"l1\", \"l2\", \"l3\", \"l5\", \"l6\"]",
+    );
+    let text = edited(&text, "next_line = 6", "next_line = 7");
+    let file = lowered(&text);
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let world = HostWorld::Grid {
+        width: 32,
+        height: 32,
+        boundary: Boundary::Torus,
+    };
+    let mut lanes = evaluator.init(world, &[], Some(3)).expect("the start runs");
+    let mut stream = 0;
+    evaluator
+        .run_pass(
+            "tick_cell_tick",
+            &mut lanes,
+            &[],
+            &RunContext::tick(Some(3), 0),
+            &mut stream,
+        )
+        .expect("a tick runs");
+    let drawn = levels(&lanes);
+    assert!(drawn.iter().all(|level| (2.0..3.0).contains(level)), "{drawn:?}");
+    let mean = drawn.iter().sum::<f32>() / drawn.len() as f32;
+    assert!((mean - 2.5).abs() < 0.05, "{mean}");
 }

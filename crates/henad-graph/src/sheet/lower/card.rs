@@ -1,28 +1,29 @@
 //! Cards: the tick pass of the card that runs each tick, and the lines of a card a button runs once.
 //!
-//! Lines lower in display order, each into its own block of node ids. A Count over cells is a `grid.count` when it
-//! counts neighbours in some states of a States property, and a `grid.fold` with a `count` accumulator otherwise. A
-//! Yes or no line is the comparisons and logic nodes it names. A When line's condition is joined by `logic.and` into
-//! the condition of every change inside it. The changes of each property lower after the card's lines, as the
-//! [module](super) describes.
+//! Lines lower in display order, each into its own block of node ids. A Count and a Look around over the cells lower
+//! as [`super::look`] describes, a chance and a random number as [`super::draw`] does, and a Calculate to one
+//! expression node ([`super::calculate`]). A Yes or no line is the comparisons and logic nodes it names, a Choose a
+//! `logic.select` chain from its last row up, and a Depending on a `cat.switch` over my state. A When line's condition
+//! is joined by `logic.and` into the condition of every change inside it. The changes of each property lower after the
+//! card's lines, as the [module](super) describes.
 
 use std::collections::{BTreeMap, HashMap};
 
 use super::ids::{GROUP_CHANGE, Owner, SheetKey, line_number};
-use super::value::{Operand, common_type};
+use super::look::Fold;
+use super::value::{Operand, common_type, shared_type};
 use super::{Builder, Site, text};
 use crate::document::{Domain, Pass, PassStage};
-use crate::ids::NodeId;
 use crate::limits::MAX_TRANSITION_RULES;
 use crate::sheet::check::Place;
 use crate::sheet::document::{
-    Around, CardRuns, CompareTest, LineKind, PropertyType, SheetCard, SheetChip, SheetLine, SheetLiteral, SheetValue,
-    Slot,
+    Around, CardRuns, CompareTest, LineKind, PropertyType, SheetCard, SheetChip, SheetLine, SheetLiteral,
+    SheetProperty, SheetValue, Slot,
 };
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{self, ANY_STATE_ID};
 use crate::types::ValueType;
-use crate::value::{ConfigValue, InputValue, Literal, PortRef};
+use crate::value::{ConfigValue, Literal, PortRef};
 
 /// Writes the tick pass: the lines of the card that runs each tick over the cells, or no line when there is none.
 ///
@@ -67,6 +68,7 @@ pub(super) fn lower_card(builder: &mut Builder<'_>, card_index: usize, pass: usi
         pass,
         results: HashMap::new(),
         conditions: HashMap::new(),
+        parts: HashMap::new(),
         changes: BTreeMap::new(),
         done: HashMap::new(),
         folds: Vec::new(),
@@ -88,13 +90,7 @@ enum Refusal {
 /// Returns the first reason `line` cannot lower, its own kind first and then the phrases in its slots.
 fn refusal(line: &SheetLine) -> Option<Refusal> {
     let own = match line.kind {
-        LineKind::Chance => Some(Refusal::NotYet(sentence::NOT_YET_CHANCE)),
         LineKind::Rate => Some(Refusal::NotYet(sentence::NOT_YET_RATE)),
-        LineKind::LookAround => Some(Refusal::NotYet(sentence::NOT_YET_LOOK_AROUND)),
-        LineKind::Calculate => Some(Refusal::NotYet(sentence::NOT_YET_CALCULATE)),
-        LineKind::Choose => Some(Refusal::NotYet(sentence::NOT_YET_CHOOSE)),
-        LineKind::DependingOn => Some(Refusal::NotYet(sentence::NOT_YET_DEPENDING_ON)),
-        LineKind::RandomNumber => Some(Refusal::NotYet(sentence::NOT_YET_RANDOM_NUMBER)),
         LineKind::Repeat => Some(Refusal::NotYet(sentence::NOT_YET_REPEAT)),
         LineKind::Record => Some(Refusal::Record),
         kind @ (LineKind::PickCell
@@ -104,7 +100,9 @@ fn refusal(line: &SheetLine) -> Option<Refusal> {
         | LineKind::KeepBetween
         | LineKind::Move
         | LineKind::Leave) => Some(Refusal::Agents(kind)),
-        LineKind::Count if line.around == Some(Around::AgentsWithin) => Some(Refusal::Agents(LineKind::Count)),
+        kind @ (LineKind::Count | LineKind::LookAround) if line.around == Some(Around::AgentsWithin) => {
+            Some(Refusal::Agents(kind))
+        }
         _ => None,
     };
     own.or_else(|| line.slot_values().find_map(value_refusal))
@@ -117,6 +115,20 @@ fn value_refusal(value: &SheetValue) -> Option<Refusal> {
         SheetValue::List(items) => items.iter().find_map(value_refusal),
         SheetValue::Literal(_) | SheetValue::Chip(_) => None,
     }
+}
+
+/// Returns the type the values `operands` of a Choose or Depending on share: the type that holds each number, `f32`
+/// for numbers with no type, or the type of the yes or no or the property values.
+///
+/// # Errors
+///
+/// Returns the message for values of kinds that cannot meet, and for a state. The checker refuses a state in these
+/// slots, where no property governs it.
+fn choice_type(operands: &[&Operand]) -> Result<ValueType, String> {
+    if operands.iter().any(|operand| matches!(operand, Operand::State(_))) {
+        return Err("a state in a choice has no property to belong to".to_owned());
+    }
+    Ok(shared_type(operands)?.unwrap_or(ValueType::F32))
 }
 
 /// One change of a property: a Become or a Set line that runs.
@@ -149,37 +161,30 @@ enum ChangeKind {
     },
 }
 
-/// A Count's `grid.fold` that `their` chips read inside.
-#[derive(Debug)]
-struct Fold {
-    /// Temporary id of the fold.
-    node: NodeId,
-    /// Read of each property of the neighbour, by property id.
-    reads: HashMap<String, Operand>,
-}
-
 /// State of the lowering of one card.
-struct CardLowering<'b, 'a> {
+pub(super) struct CardLowering<'b, 'a> {
     /// The lowering.
-    builder: &'b mut Builder<'a>,
+    pub(super) builder: &'b mut Builder<'a>,
     /// Index of the card in the sheet's cards.
-    card_index: usize,
+    pub(super) card_index: usize,
     /// The card.
-    card: &'a SheetCard,
+    pub(super) card: &'a SheetCard,
     /// Relations between the card's lines.
-    relations: CardRelations<'a>,
+    pub(super) relations: CardRelations<'a>,
     /// Index of the pass the card writes.
-    pass: usize,
+    pub(super) pass: usize,
     /// Result of each line lowered so far, by line id.
     results: HashMap<&'a str, Operand>,
+    /// Each part of the result of a Look around line lowered so far, by line id and part.
+    pub(super) parts: HashMap<(&'a str, &'a str), Operand>,
     /// Condition of each When line lowered so far, the conditions of the When lines around it joined in, by line id.
     conditions: HashMap<&'a str, Operand>,
     /// Changes of each property, by the property's index among the cells properties, in display order.
     changes: BTreeMap<usize, Vec<Change<'a>>>,
     /// New value of each property whose changes are written, by the property's index.
     done: HashMap<usize, Operand>,
-    /// The Count folds around the value being lowered, innermost last.
-    folds: Vec<Fold>,
+    /// The folds over the neighbours around the value being lowered, innermost last.
+    pub(super) folds: Vec<Fold>,
 }
 
 impl<'a> CardLowering<'_, 'a> {
@@ -250,10 +255,20 @@ impl<'a> CardLowering<'_, 'a> {
     fn line(&mut self, id: &'a str, line: &'a SheetLine) -> Result<(), String> {
         let site = self.line_site(id)?;
         match line.kind {
-            LineKind::Count | LineKind::Compare | LineKind::AllOf | LineKind::AnyOf | LineKind::NoneOf => {
+            LineKind::Count
+            | LineKind::Compare
+            | LineKind::AllOf
+            | LineKind::AnyOf
+            | LineKind::NoneOf
+            | LineKind::Chance
+            | LineKind::RandomNumber
+            | LineKind::Calculate
+            | LineKind::Choose
+            | LineKind::DependingOn => {
                 let result = self.phrase(&site, line)?;
                 self.results.insert(id, result);
             }
+            LineKind::LookAround => self.look_around(&site, id, line)?,
             LineKind::When => {
                 let own = self.slot(&site.at("condition"), &line.condition)?;
                 let condition = self.inherit(&site, id, own)?;
@@ -290,7 +305,7 @@ impl<'a> CardLowering<'_, 'a> {
     }
 
     /// Returns the cells property `id` with its index.
-    fn property(&self, id: Option<&str>) -> Result<(usize, &'a crate::sheet::document::SheetProperty), String> {
+    pub(super) fn property(&self, id: Option<&str>) -> Result<(usize, &'a SheetProperty), String> {
         let id = id.ok_or_else(|| "the line names no property".to_owned())?;
         self.builder
             .property(id)
@@ -334,13 +349,13 @@ impl<'a> CardLowering<'_, 'a> {
     }
 
     /// Returns the operand of `slot` lowered at `site`.
-    fn slot(&mut self, site: &Site, slot: &'a Slot) -> Result<Operand, String> {
+    pub(super) fn slot(&mut self, site: &Site, slot: &'a Slot) -> Result<Operand, String> {
         let value = slot.value().ok_or_else(|| "a slot is blank".to_owned())?;
         self.value(site, value)
     }
 
     /// Returns the operand of `value` lowered at `site`.
-    fn value(&mut self, site: &Site, value: &'a SheetValue) -> Result<Operand, String> {
+    pub(super) fn value(&mut self, site: &Site, value: &'a SheetValue) -> Result<Operand, String> {
         match value {
             SheetValue::Literal(SheetLiteral::Bool(value)) => Ok(Operand::Constant(Literal::Bool(*value))),
             SheetValue::Literal(literal) => literal
@@ -354,7 +369,7 @@ impl<'a> CardLowering<'_, 'a> {
     }
 
     /// Returns the operand of `chip`.
-    fn chip(&mut self, site: &Site, chip: &'a SheetChip) -> Result<Operand, String> {
+    pub(super) fn chip(&mut self, site: &Site, chip: &SheetChip) -> Result<Operand, String> {
         match chip {
             SheetChip::Param(id) => self.builder.param(id),
             SheetChip::Result {
@@ -366,7 +381,16 @@ impl<'a> CardLowering<'_, 'a> {
                 .get(line.as_str())
                 .cloned()
                 .ok_or_else(|| format!("the result of line {line} did not lower")),
-            SheetChip::Result { line, .. } => Err(format!("line {line} has no parts or places to read")),
+            SheetChip::Result {
+                line,
+                part: Some(part),
+                property: None,
+            } => self
+                .parts
+                .get(&(line.as_str(), part.as_str()))
+                .cloned()
+                .ok_or_else(|| format!("line {line} has no part '{part}' to read")),
+            SheetChip::Result { line, .. } => Err(format!("line {line} names no place, so it has no properties")),
             SheetChip::My(property) => self.builder.read(self.pass, property),
             SheetChip::MyNew(property) => {
                 let (index, _) = self.property(Some(property))?;
@@ -379,37 +403,6 @@ impl<'a> CardLowering<'_, 'a> {
             SheetChip::Relation(relation) => Err(format!("{} relates agents", relation.as_str())),
             SheetChip::State(state) => Ok(Operand::State(state.clone())),
         }
-    }
-
-    /// Returns the read of the neighbour's `property` in the innermost Count fold.
-    fn their(&mut self, site: &Site, property: &str) -> Result<Operand, String> {
-        let fold = self
-            .folds
-            .last()
-            .ok_or_else(|| "their stands outside a Count".to_owned())?;
-        if let Some(read) = fold.reads.get(property) {
-            return Ok(read.clone());
-        }
-        let fold_node = fold.node;
-        let (_, found) = self.property(Some(property))?;
-        let value_type = super::world::lane_type(found);
-        let node = self.builder.emit(
-            &site.inside(fold_node),
-            "lane.get_at",
-            vec![("lane", text(property))],
-            vec![(
-                "at".to_owned(),
-                InputValue::Link(PortRef {
-                    node: fold_node,
-                    port: Some("cell".to_owned()),
-                }),
-            )],
-        );
-        let read = Operand::Link(PortRef { node, port: None }, value_type);
-        if let Some(fold) = self.folds.last_mut() {
-            fold.reads.insert(property.to_owned(), read.clone());
-        }
-        Ok(read)
     }
 
     /// Returns the result of a line or phrase of a kind that works out a value.
@@ -432,6 +425,14 @@ impl<'a> CardLowering<'_, 'a> {
                 }
             }
             LineKind::Count => self.count(site, line),
+            LineKind::Chance => self.chance(site, line),
+            LineKind::RandomNumber => self.random_number(site, line),
+            LineKind::Calculate => self.calculate(site, line),
+            LineKind::Choose => self.choose(site, line),
+            LineKind::DependingOn => self.depending_on(site, line),
+            LineKind::LookAround => {
+                Err("a Look around gives several values, so it stands on a line of its own".to_owned())
+            }
             other => Err(format!("a {} phrase has no lowering", other.as_str())),
         }
     }
@@ -440,7 +441,7 @@ impl<'a> CardLowering<'_, 'a> {
     fn logic(&mut self, site: &Site, line: &'a SheetLine, op: &str) -> Result<Operand, String> {
         let mut joined = Operand::Constant(Literal::Bool(op == "logic.and"));
         for (index, item) in line.items.iter().enumerate() {
-            let item_site = site.at(&format!("items.{}", index + 1));
+            let item_site = site.at(&format!("items.{index}"));
             let operand = self.value(&item_site, item)?;
             joined = self.builder.join(&item_site, op, &joined, &operand)?;
         }
@@ -472,7 +473,7 @@ impl<'a> CardLowering<'_, 'a> {
                 };
                 let mut joined = Operand::Constant(Literal::Bool(empty));
                 for (index, item) in items.into_iter().enumerate() {
-                    let item_site = site.at(&format!("right.{}", index + 1));
+                    let item_site = site.at(&format!("right.{index}"));
                     let right = self.value(&item_site, item)?;
                     let compared = self.order(&item_site, op, &left, &right)?;
                     joined = self.builder.join(&item_site, join, &joined, &compared)?;
@@ -526,129 +527,76 @@ impl<'a> CardLowering<'_, 'a> {
             .node_value(site, op, vec![("a", a), ("b", b)], ValueType::Bool))
     }
 
-    /// Returns the count of a Count line or phrase over the cells around.
-    fn count(&mut self, site: &Site, line: &'a SheetLine) -> Result<Operand, String> {
-        let around = line
-            .around
-            .ok_or_else(|| "a Count needs the cells it looks at".to_owned())?;
-        let (moore, include_center) = match around {
-            Around::Cells8 => (true, false),
-            Around::Cells4 => (false, false),
-            Around::Block3x3 => (true, true),
-            Around::AgentsWithin => return Err("agents within a distance are no cells".to_owned()),
-        };
-        let whose = line.whose.value().ok_or_else(|| "a Count needs a test".to_owned())?;
-        let site = site.at("whose");
-        if let Some((property, states)) = self.counted_states(whose) {
-            let mut total: Option<Operand> = None;
-            for state in states {
-                let node = self.builder.emit(
-                    &site,
-                    "grid.count",
-                    vec![
-                        ("lane", text(&property)),
-                        ("neighborhood", text(if moore { "moore" } else { "von_neumann" })),
-                        ("include_center", ConfigValue::Bool(include_center)),
-                    ],
-                    vec![
-                        (
-                            "value".to_owned(),
-                            InputValue::Literal(Literal::Category(crate::value::MemberName {
-                                owner: property.clone(),
-                                member: state,
-                            })),
-                        ),
-                        ("when".to_owned(), InputValue::Literal(Literal::Bool(true))),
-                    ],
-                );
-                let count = Operand::Link(PortRef { node, port: None }, ValueType::U32);
-                total = Some(match total {
-                    None => count,
-                    Some(sum) => {
-                        let a = self.builder.input_as(&site, &sum, &ValueType::U32, false)?;
-                        let b = self.builder.input_as(&site, &count, &ValueType::U32, false)?;
-                        self.builder
-                            .node_value(&site, "math.add", vec![("a", a), ("b", b)], ValueType::U32)
-                    }
-                });
-            }
-            return Ok(total.unwrap_or(Operand::Constant(Literal::U32(0))));
+    /// Returns the value of a Choose: the value of its first row whose condition holds, or its "otherwise" value.
+    ///
+    /// The rows lower to a `logic.select` chain from the last row up. A row whose condition always holds ends the
+    /// chain, and a row whose condition never holds is left out.
+    fn choose(&mut self, site: &Site, line: &'a SheetLine) -> Result<Operand, String> {
+        let mut rows = Vec::with_capacity(line.rows.len());
+        for (index, row) in line.rows.iter().enumerate() {
+            let row_site = site.at(&format!("row.{index}"));
+            let value = self.slot(&row_site.at("value"), &row.value)?;
+            let condition = self.slot(&row_site.at("condition"), &row.condition)?;
+            rows.push((row_site, value, condition));
         }
-        let accumulator = ConfigValue::Table(BTreeMap::from([
-            ("name".to_owned(), text("count")),
-            ("type".to_owned(), text("u32")),
-            ("combine".to_owned(), text("count")),
-        ]));
-        let fold = self.builder.emit(
-            &site,
-            "grid.fold",
-            vec![
-                ("order", text(if moore { "moore_row_major" } else { "von_neumann" })),
-                ("include_center", ConfigValue::Bool(include_center)),
-                ("boundary", text("domain")),
-                ("acc", ConfigValue::Array(vec![accumulator])),
-            ],
-            vec![("when".to_owned(), InputValue::Literal(Literal::Bool(true)))],
-        );
-        self.folds.push(Fold {
-            node: fold,
-            reads: HashMap::new(),
-        });
-        let inside = site.inside(fold);
-        let test = self.value(&inside, whose);
-        self.folds.pop();
-        let test = test?;
-        let when = self.builder.condition_input(&inside, &test)?;
-        self.builder.emit(
-            &inside,
-            "region.put",
-            vec![("acc", text("count"))],
-            vec![("when".to_owned(), when)],
-        );
-        Ok(Operand::Link(
-            PortRef {
-                node: fold,
-                port: Some("count".to_owned()),
-            },
-            ValueType::U32,
-        ))
+        let otherwise_site = site.at("otherwise");
+        let otherwise = self.slot(&otherwise_site, &line.otherwise)?;
+        let operands: Vec<&Operand> = rows.iter().map(|(_, value, _)| value).chain([&otherwise]).collect();
+        let value_type = choice_type(&operands)?;
+        let mut chosen = otherwise.clone();
+        for (row_site, value, condition) in rows.into_iter().rev() {
+            chosen = match condition {
+                Operand::Constant(Literal::Bool(true)) => value,
+                Operand::Constant(Literal::Bool(false)) => chosen,
+                condition => {
+                    let condition = self.builder.condition_input(&row_site, &condition)?;
+                    let if_true = self.builder.input_as(&row_site, &value, &value_type, false)?;
+                    let if_false = self.builder.input_as(&row_site, &chosen, &value_type, false)?;
+                    self.builder.node_value(
+                        &row_site,
+                        "logic.select",
+                        vec![("cond", condition), ("if_true", if_true), ("if_false", if_false)],
+                        value_type.clone(),
+                    )
+                }
+            };
+        }
+        Ok(chosen)
     }
 
-    /// Returns the States property and the states a Count's test `whose` counts, when it tests their States property
-    /// against states alone, `None` for any other test.
-    fn counted_states(&self, whose: &SheetValue) -> Option<(String, Vec<String>)> {
-        let SheetValue::Phrase(phrase) = whose else {
-            return None;
-        };
-        if phrase.kind != LineKind::Compare {
-            return None;
+    /// Returns the value of a Depending on: the value its branch for my state gives, through a `cat.switch`.
+    fn depending_on(&mut self, site: &Site, line: &'a SheetLine) -> Result<Operand, String> {
+        let (_, property) = self.property(line.property.as_deref())?;
+        if property.property_type != PropertyType::States {
+            return Err(format!("'{}' has no states to depend on", property.id));
         }
-        let Some(SheetValue::Chip(SheetChip::Their(property))) = phrase.left.value() else {
-            return None;
-        };
-        let (_, found) = self.builder.property(property)?;
-        if found.property_type != PropertyType::States {
-            return None;
+        let mut branches = Vec::with_capacity(property.states.len());
+        for state in &property.states {
+            let value = line
+                .branches
+                .get(&state.id)
+                .ok_or_else(|| format!("no value for the state '{}'", state.id))?;
+            let branch_site = site.at(&format!("branches.{}", state.id));
+            branches.push((state.id.as_str(), self.value(&branch_site, value)?));
         }
-        let state_of = |value: &SheetValue| match value {
-            SheetValue::Chip(SheetChip::State(state)) => Some(state.clone()),
-            _ => None,
-        };
-        let listed: Vec<String> = match phrase.right.value()? {
-            SheetValue::List(items) => items.iter().map(state_of).collect::<Option<_>>()?,
-            value => vec![state_of(value)?],
-        };
-        let states = match phrase.test? {
-            CompareTest::Is | CompareTest::OneOf => listed,
-            CompareTest::IsNot | CompareTest::NotOneOf => found
-                .states
-                .iter()
-                .map(|state| state.id.clone())
-                .filter(|state| !listed.contains(state))
-                .collect(),
-            _ => return None,
-        };
-        Some((property.clone(), states))
+        let operands: Vec<&Operand> = branches.iter().map(|(_, value)| value).collect();
+        let value_type = choice_type(&operands)?;
+        let category = ValueType::Category(property.id.clone());
+        let current = self.builder.read(self.pass, &property.id)?;
+        let mut inputs = vec![(
+            "select".to_owned(),
+            self.builder.input_as(site, &current, &category, false)?,
+        )];
+        for (state, value) in &branches {
+            inputs.push((
+                format!("case.{state}"),
+                self.builder.input_as(site, value, &value_type, false)?,
+            ));
+        }
+        let node = self
+            .builder
+            .emit(site, "cat.switch", vec![("category", text(&property.id))], inputs);
+        Ok(Operand::Link(PortRef { node, port: None }, value_type))
     }
 
     /// Writes the changes of the property at `index` and its new value, and returns that value.

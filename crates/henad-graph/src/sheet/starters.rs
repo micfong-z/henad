@@ -3,7 +3,7 @@
 use crate::starters::Starter;
 
 /// Sheet starters in the order an editor lists them.
-const SHEET_STARTERS: [Starter; 2] = [
+const SHEET_STARTERS: [Starter; 3] = [
     Starter {
         file_name: "game_of_life.toml",
         text: include_str!("../../sheets/game_of_life.toml"),
@@ -11,6 +11,10 @@ const SHEET_STARTERS: [Starter; 2] = [
     Starter {
         file_name: "vote.toml",
         text: include_str!("../../sheets/vote.toml"),
+    },
+    Starter {
+        file_name: "forest_fire.toml",
+        text: include_str!("../../sheets/forest_fire.toml"),
     },
 ];
 

@@ -1449,26 +1449,8 @@ pub const ONE_AGENT_KIND: &str = "One kind of agent per model in this version.";
 
 // Errors on the lines and worlds a sheet can hold that this version cannot run yet
 
-/// Error on a line that holds a chance.
-pub const NOT_YET_CHANCE: &str = "Chances are not supported yet.";
-
 /// Error on a line that holds a rate.
 pub const NOT_YET_RATE: &str = "Rates are not supported yet.";
-
-/// Error on a line that looks around.
-pub const NOT_YET_LOOK_AROUND: &str = "Look around is not supported yet.";
-
-/// Error on a line that works out a number from a formula.
-pub const NOT_YET_CALCULATE: &str = "Calculate is not supported yet.";
-
-/// Error on a line that chooses a value by rows.
-pub const NOT_YET_CHOOSE: &str = "Choose is not supported yet.";
-
-/// Error on a line that gives a value for each state of a property.
-pub const NOT_YET_DEPENDING_ON: &str = "Depending on is not supported yet.";
-
-/// Error on a line that draws a random number.
-pub const NOT_YET_RANDOM_NUMBER: &str = "Random numbers are not supported yet.";
 
 /// Error on a Repeat line.
 pub const NOT_YET_REPEAT: &str = "Repeat is not supported yet.";

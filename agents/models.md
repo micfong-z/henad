@@ -118,6 +118,34 @@ checks a file before it is committed, again after any edit. They sit apart from
 `src/tests/lowered_fixtures.rs` holds `every_lowered_fixture_reads`: the two directories hold
 exactly these eleven files, each with `kind = "graph"` in its header, read by `GraphFile::parse` and
 checked with no error. Keep these files.
+`src/tests/sheet_grid.rs` holds the grid sheets on the device: the grid sheets of
+`henad_graph::sheet::starters()` (filtered by the lowered world, so an agents sheet joining the
+starters stays out) and `tests/fixtures/sheets/sir_chance.toml`, a copy of henad-graph's test sheet
+`src/tests/sheets/sir_chance.toml` (round 1's SIR with chances per tick). Copy it again when the
+source changes. Entries come from `ModelFile::parse`. A test that needs given tick-0 lanes plants
+them through `planted_entry`, whose `PlantedHooks` wrap the lowered graph's `GridHooks` and replace
+the seeded words of the lanes it names, since no sheet start and no app tool paints cells (D74).
+The tests: the Game of Life sheet's blinker (period 2) and glider (moved by one cell on each axis
+after 4 ticks) on a 32 by 32 world; `a_start_again_button_draws_a_new_layout_each_press` (two
+presses of Randomise differ, replay in a second build, and equal the host's `rerun`) and
+`a_rebuild_replays_the_same_start`; `every_grid_sheet_steps_alike_on_the_host_and_the_device`
+(every lane every tick for 50 ticks at 64 by 64, two seeds, the forest fire at lightning 0.001 and
+growth 0.05 so every draw decides cells); the chance SIR's lanes and measures summing to the cells
+for 200 ticks across a New outbreak press; Game of Life and Vote, whose cards draw nothing, equal to
+their files in `lowered/round1/` in every lane every tick for 200 ticks at 64 by 64 from the tick-0
+lanes each sheet draws at seeds 1 to 4, on the host (every tick pass in document order) and on the
+device (both planted); and `every_grid_sheet_entry_conforms`, the testing kit over every grid sheet
+entry. The forest fire and the chance SIR draw with other keys than their hand-lowered files and
+meet bands instead (`the_forest_fire_and_the_chance_sir_sheets_sit_within_their_hand_lowered_bands`,
+whose doc holds the procedure). Measures of one run: the peak share of Burning or Infected, each
+state's share at the last tick, and the share of cells ever in that state (the burnt share). Each
+side runs at seeds 1 to 4 from its own start, the forest fire at 512 by 512 for 150 ticks at
+lightning 5e-5, the SIR at 512 by 512 for 60 ticks at infection and recovery chances 0.1. The
+sheet's mean over the seeds sits within five standard errors of the difference of the means about
+the hand-lowered file's mean, the variance of one run the larger of the variance pooled over the
+eight runs and the binomial `p (1 - p) / cells`. Behind each band a planted rule error (the
+"from" state dropped from the forest fire's lightning line, which then strikes empty cells too,
+and from the SIR's recovery line) moves at least one mean outside. Keep these files.
 
 ## Adding a new model
 

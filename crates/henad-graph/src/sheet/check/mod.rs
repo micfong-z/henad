@@ -11,7 +11,7 @@
 //! line table.
 
 mod declarations;
-mod formula;
+pub(super) mod formula;
 mod lines;
 
 pub(crate) use declarations::{RESERVED_IDS, RESERVED_PARAMETER_IDS, RESERVED_PREFIX};
@@ -26,6 +26,8 @@ use super::ParsedSheet;
 use super::document::{SheetCard, SheetDocument, SheetParameter, SheetProperty};
 use super::relations::CardRelations;
 use super::sentence::Sentences;
+
+pub(super) use self::lines::formula_chip;
 
 /// Result of checking a sheet.
 #[derive(Debug, Clone, Default)]

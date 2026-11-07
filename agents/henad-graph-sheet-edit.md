@@ -60,7 +60,9 @@ button runs. An agent kind is not deleted.
 
 Lines (`lines.rs`): a slot path is the author format's keys joined by dots (`condition.rate`,
 `whose.right`, `items.2`, `row.0.condition`, `branches.alive`, `summaries.0.value`), each step but
-the last into a phrase. `SetSlot` with a filled value at one past the last item or row appends, and
+the last into a phrase. The lowering's `LineMap` paths use the same grammar, and `lines` with
+`parse_path`, `PathStep`, `RowSlot`, `phrase_mut` and `value_mut` is crate-visible for the test that
+holds them together. `SetSlot` with a filled value at one past the last item or row appends, and
 a blank removes an item or a branch. A line whose tables would nest past `MAX_NESTING` (counted
 generously from the line table's depth of 4) is refused, and so is a card past `MAX_LINES_PER_CARD`.
 Moves follow the final editor's outline (`CHANGES-A.md` F4): the first line of a block moves up out

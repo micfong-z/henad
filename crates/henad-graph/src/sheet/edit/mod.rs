@@ -45,7 +45,7 @@
 //! assert!(written.contains("id = \"growth_rate\""));
 //! ```
 
-mod lines;
+pub(crate) mod lines;
 mod names;
 mod references;
 
