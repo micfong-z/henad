@@ -24,8 +24,10 @@ It opens in a panel of its own to the right of the <span class="ui" markdown>:ma
 - Press <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> in the <span class="ui" markdown>:material-cog-outline: Model</span> tab to open the Editor on the Life starter, Conway's Game of Life written as a grid rule.
 - Press <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab to open the Editor on the model file of the selected grid rule.
   The button appears only for a model applied from the Editor.
-- Press <span class="ui" markdown>:material-graph-outline: New graph model</span> in the Editor and pick an example to open it as a graph model: Game of Life, Vote or SIR Epidemic on a grid, or Boids Flocking, Ant Foraging or Random Walk of agents.
-- In the menu bar, <span class="ui" markdown>:material-file-outline: File</span> holds New grid rule, New graph model, Open model and Save model, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> toggles the Editor like any other tab.
+- Press <span class="ui" markdown>:material-file-document-plus-outline: New model</span> in the Editor or the Model tab to start a sheet, a model described in sentences, from Game of Life, Majority vote or Forest fire.
+  The [app guide](app.md#sheets) describes the sheet.
+- Press <span class="ui" markdown>:material-graph-outline: New node graph</span> in the Editor and pick an example to open it as a graph model: Game of Life, Vote or SIR Epidemic on a grid, or Boids Flocking, Ant Foraging or Random Walk of agents.
+- In the menu bar, <span class="ui" markdown>:material-file-outline: File</span> holds New model, New grid rule, New node graph, Open model and Save model, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> toggles the Editor like any other tab.
 
 New grid rule and Open model replace the Editor's text.
 Edit model replaces it too, but keeps the text, your edits since the last Apply included, while the selected rule runs the code the Editor applied last.

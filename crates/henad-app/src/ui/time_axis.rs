@@ -36,16 +36,21 @@ pub fn axis_label(unit: Option<TimeUnit>) -> String {
 
 /// Returns the text of the tick counter: "Tick 24", or "Tick 24 (12 days)" when `time` is set.
 pub fn counter_text(tick: u64, time: Option<RunTime>) -> String {
-    let Some(time) = time else {
-        return format!("Tick {tick}");
-    };
+    match time {
+        Some(time) => format!("Tick {tick} ({})", elapsed_text(tick, time)),
+        None => format!("Tick {tick}"),
+    }
+}
+
+/// Returns the time at `tick` with its unit, such as "12 days", or "1 day" at exactly one unit.
+pub fn elapsed_text(tick: u64, time: RunTime) -> String {
     let elapsed = time.at(tick);
     let unit = if elapsed == 1.0 {
         time.unit.as_str()
     } else {
         time.unit.plural()
     };
-    format!("Tick {tick} ({elapsed} {unit})")
+    format!("{elapsed} {unit}")
 }
 
 #[cfg(test)]

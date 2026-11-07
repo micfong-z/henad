@@ -167,7 +167,7 @@ fn a_preview_whose_build_fails_at_once_stays_paused_with_nothing_loaded() {
 
     // A browser builds inline, and the build's fault arrives before `load_preview` returns.
     app.inline_builds = true;
-    app.load_preview(setup, run);
+    app.load_preview(setup, run, true);
     assert!(
         matches!(app.editor.preview.state, PreviewState::Faulted(_)),
         "{:?}",

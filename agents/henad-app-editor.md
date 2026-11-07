@@ -1,23 +1,30 @@
 # henad-app: the Editor tab
 
 `ui/editor/` is the Editor tab, the in-app editor of one model file: a grid rule as text in the code
-view, or a graph model on the canvas of `ui/editor/graph/` (below). `mod.rs` holds `EditorPanel`
+view, a graph model on the canvas of `ui/editor/graph/` (below), or a sheet in the panes of
+`ui/editor/sheet/` (`agents/henad-app-sheet.md`). `mod.rs` holds `EditorPanel`
 (`AppState::editor`: the model under edit as `model: EditorModel`, the file name, the `ApplyOutcome`
 of the last Apply, the open and save status, and the `ModelSource` applied last) and `editor_ui`,
-which matches on the model: a header of New grid rule, New graph model (a menu of henad-graph's
-`starters()` then `agent_starters()`, labelled by each starter's model name), Open model, Save model
-and Apply, then the code view or the graph editor. `EditorModel` is `Empty` (the default),
-`Rule(String)` (a grid rule's text as typed, which may be empty or not read) or
-`Graph(Box<GraphEditor>)`, so a text and a graph are never held at once. Every site that differs by
-kind calls a method of the enum: `is_empty` (`Empty`, or a `Rule` whose text is empty, on which
-Save model and Apply are disabled), `file_text` (what Apply, Save model and `save_name` read),
-`holds_preview_model` (only `Graph`, read by `AppState::show_fault` and `preview_hover`),
-`preview_source` (a `PreviewSource` of the preview key and the error flag, `None` with no preview)
-and `preview_program`, plus `rule_text`, `graph` and `graph_mut` for the sites of one kind. `load`
-sets `Rule` and `load_graph` sets `Graph`. The `Empty` arm draws the code view over a fresh `String`
-each frame and becomes a `Rule` once typing leaves it non-empty. For a grid rule the list under the
-code holds the outcome and each `CodeDiagnostic` as a selectable `Label` reading `<line>:<column>
-<message>`, whose press moves the cursor there (`move_cursor_to`).
+which matches on the model: a header of New model (`NEW_MODEL_BUTTON`, which opens the New model
+dialog of `henad-app-sheet.md`), New grid rule, New node graph (`NEW_NODE_GRAPH`, its widget name
+too, a menu of henad-graph's `starters()` then `agent_starters()`, labelled by each starter's model
+name), Open model, Save model and Apply, then the code view, the graph editor or the sheet editor.
+The File menu holds New model, New grid rule, New node graph, Open model and Save model, and the
+Model tab New model beside New grid rule and Edit model (D71). `EMPTY_EDITOR` names New model, New
+node graph, New grid rule and Open model. `EditorModel` is `Empty` (the
+default), `Rule(String)` (a grid rule's text as typed, which may be empty or not read),
+`Graph(Box<GraphEditor>)` or `Sheet(Box<SheetEditor>)`, so two models are never held at once.
+Every site that differs by kind calls a method of the enum: `is_empty` (`Empty`, or a `Rule` whose
+text is empty, on which Save model and Apply are disabled), `file_text` (what Apply, Save model and
+`save_name` read), `holds_preview_model` (`Graph` and `Sheet`, read by `AppState::show_fault` and
+`preview_hover`), `preview_source` (a `PreviewSource` of the preview key and the error flag, `None`
+with no preview), `preview_program` and `place` (a sheet places a fault's problem in the sheet),
+plus `rule_text`, `graph`, `graph_mut` and `sheet` for the sites of one kind. `load` sets `Rule`,
+`load_graph` sets `Graph` and `load_sheet` sets `Sheet`. Open model goes through `open_text`, which
+dispatches on the header's `kind` (`henad-app-sheet.md`). The `Empty` arm draws the code view over
+a fresh `String` each frame and becomes a `Rule` once typing leaves it non-empty. For a grid rule
+the list under the code holds the outcome and each `CodeDiagnostic` as a selectable `Label`
+reading `<line>:<column> <message>`, whose press moves the cursor there (`move_cursor_to`).
 `code_view.rs` draws one `TextEdit::multiline(..).code_editor()` with a layouter
 that never wraps, in one `ScrollArea::both`, beside a gutter outside it. The gutter's numbers come
 from the galley's rows (`gutter_numbers`) and follow them up and down, and stay in place while a
@@ -74,9 +81,9 @@ Save model and `save_name` read, so Apply runs the same path as a grid rule (`Mo
 installs as a GPU grid entry, and a graph of agents as a GPU agents entry, at its own size, and a
 shortfall of `Demand::shortfalls` (the submission budget included) is `ApplyOutcome::Faulted`, as
 for a grid rule. Apply also replaces a running preview at any tick: `runs_source` never holds for a
-preview, and `install`'s `settle_loaded` leaves a preview alone. `receive_open` opens a file that
-`GraphFile::parse` reads on the canvas, and any other text in the code view, a graph that does not
-read included, where Apply places its problems. `new_graph_model(app, file_name)` opens a starter,
+preview, and `install`'s `settle_loaded` leaves a preview alone. `open_text` opens a file whose header reads
+`kind = "graph"` and that `GraphFile::parse` reads on the canvas, and a graph that does not read in
+the code view, where Apply places its problems. `new_graph_model(app, file_name)` opens a starter,
 and Edit model opens a runtime entry whose code is `henad-graph/1` (`editable_graph`, `can_edit`).
 `GraphEditor::new` places every body without placement through `arrange` (no undo step) and opens
 the first tick pass.
@@ -236,21 +243,22 @@ drops the preview to `Idle`, `preview_can_load` false leaves it `Waiting` (`PREV
 waits for the running model."), and otherwise `build_preview` compiles `preview_program`, takes
 `preview_values` (defaults, `grid_width` and `grid_height` at most `PREVIEW_SIDE`, 256,
 `num_agents` at most `PREVIEW_AGENTS`, 16384, `PreviewRun::Grid` or `Agents`), refuses a
-shortfall or a `SetupError` as `Refused`, and calls `AppState::load_preview`, which plays the run.
+shortfall or a `SetupError` as `Refused`, and calls `AppState::load_preview` with
+`EditorModel::preview_plays`: a graph's preview plays, and a sheet's waits at tick 0 for Play (D52).
 `AppState::preview` (`PreviewRun`, the size) marks a loaded preview, and `load` clears it.
-`load_preview` plays the run only when the preview is still loaded after `load_setup`: a build that
-fails inline (a browser, or a test with `AppState::inline_builds`) or whose thread does not start
-has already offloaded it. `EditorPanel::load` and `load_graph` reset `preview` to its default, so a
-state of the last document never shows over the next.
+`load_preview` plays the run only when asked and the preview is still loaded after `load_setup`: a
+build that fails inline (a browser, or a test with `AppState::inline_builds`) or whose thread does
+not start has already offloaded it. `EditorPanel::load`, `load_graph` and `load_sheet` reset
+`preview` to its default, so a state of the last document never shows over the next.
 `preview_can_load` holds with nothing loaded and no build, with a preview loaded, or with a built
 run at tick 0 and no Rebuild model modal. A preview is never the selection: `selection_is_loaded`
 and `code_pending` are false, `select_model` does not restore its values, the next build's fields
 stay, and `settle_outcome` sees no loaded source, so "Model applied." becomes "Press Build to run
-it." behind a preview. A code fault of a preview (any tick) goes to `Preview::show_fault`
-(`Faulted`) through `show_fault` while `holds_preview_model` holds, and the modal keeps the rest,
-the fault of a preview that outlived its graph included. Playback's `preview_line` names the
-preview and its size, with the hover `preview_hover`: `PREVIEW_APPLY`, or `PREVIEW_ORPHANED` once
-the Editor holds no graph.
+it." behind a preview. A code fault of a preview (any tick) goes to `Preview::show_problem`
+(`Faulted`, placed by `EditorModel::place`) through `show_fault` while `holds_preview_model` holds,
+and the modal keeps the rest, the fault of a preview that outlived its graph included. Playback's
+`preview_line` names the preview and its size, with the hover `preview_hover`: `PREVIEW_APPLY`, or
+`PREVIEW_ORPHANED` once the Editor holds no graph or sheet.
 
 `src/tests/graph_editor.rs` holds the state tests (starters, open by kind, Apply installs at full
 size, the Rebuild model modal past tick 0, refused edits, undo, coalescing, dropped wires, pass

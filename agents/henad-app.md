@@ -47,8 +47,9 @@ each panel. Sweep and Results stack behind Viewport. `Tab::Editor` is the last v
 egui keys a tab's stored state on the discriminant, and sits after Parameters in `Tab::ALL`, the
 View menu's order. The default layout leaves it closed, and `focus_tab` and `toggle_tab` open it
 through `open_tab`, in a leaf of its own split to the right of the Viewport's leaf, with the
-Viewport brought to the front of its stack. The menu bar's File menu holds New grid rule, New
-graph model, Open model and Save model.
+Viewport brought to the front of its stack. The menu bar's File menu holds New model, New grid
+rule, New node graph, Open model and Save model. `lib.rs` draws the New model dialog beside the
+fault and Rebuild model modals.
 `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer drawn over the grid layer,
 and `painted.rs` carries a paint callback's wgpu handles past `CallbackTrait`'s `Send + Sync`
 bound. `edge_layer.rs` (with `edges.wgsl`) draws a network's
@@ -84,8 +85,12 @@ returns Build's disabled reason, which Playback shows. It shows a `SetupError` t
 `loaded_seed` and `loaded_schedule`, starts the build and sends `SimCommand::SetSchedule` when the
 schedule is not empty. The loaded fields are the setup's from the start of the build.
 `load_preview` builds the Editor's preview through the same `load_setup` with a `PreviewRun`
-(`AppState::preview`), which leaves the next build's fields alone and plays the run, and `builds`
-counts the other builds (`henad-app-editor.md`).
+(`AppState::preview`), which leaves the next build's fields alone and plays the run when its
+`plays` flag asks (a graph's preview, never a sheet's), and `builds` counts the other builds
+(`henad-app-editor.md`). `runs_editor_sheet` holds while the run is the Editor's sheet, its preview
+(`previews_editor_sheet`, the loaded id the sheet's) or the source the Editor applied, and Playback
+then reads a tick in the sheet's words. Build replays the preview while the selection is the one
+`load_preview` recorded in `preview_selection` (`build_replays_preview`, `henad-app-sheet.md`).
 `state/build.rs` holds the build and the teardown, and `state/pool.rs` the `ModelPool`, a shared
 slot holding the pool the app's model code runs in (`None` for rayon's global pool) and its
 generation, and the `UiPool`. On native `start_build` runs a `BuildJob` on a thread named

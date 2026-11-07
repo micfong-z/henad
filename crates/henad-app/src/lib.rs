@@ -225,6 +225,7 @@ impl eframe::App for HenadApp {
         ui::menu_bar::menu_bar_panel(ui, &mut self.dock, &mut self.state);
         ui::fault::fault_modal(ui.ctx(), &mut self.state);
         ui::rebuild::rebuild_modal(ui.ctx(), &mut self.state);
+        ui::editor::sheet::new_model::new_model_modal(ui.ctx(), &mut self.state);
         ui::about::about_modal(ui.ctx(), &mut self.state);
 
         let mut dock_style = Style::from_egui(ui.style());

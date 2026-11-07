@@ -10,5 +10,6 @@ mod graph_preview;
 mod graph_regions;
 mod install;
 mod runaway;
+mod sheet_editor;
 mod threads;
 mod time_axis;

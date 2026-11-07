@@ -60,8 +60,9 @@ const WGSL_WIDTH: f32 = 420.0;
 /// Distance in canvas points a paste moves its nodes when the pointer is off the canvas.
 const PASTE_OFFSET: [f64; 2] = [40.0, 40.0];
 
-/// Number of documents loaded so far, which keeps the egui state of each document's canvases apart.
-static LOADS: AtomicU64 = AtomicU64::new(0);
+/// Number of graphs and sheets loaded so far. It keeps the egui state of each graph's canvases apart, and gives each
+/// document a preview key of its own.
+pub(crate) static LOADS: AtomicU64 = AtomicU64::new(0);
 
 /// Problems the checker found at one node.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

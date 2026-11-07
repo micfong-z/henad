@@ -3,8 +3,9 @@ use crate::icons::material_design_icons::{
     MDI_RESTART, MDI_SKIP_NEXT, MDI_TRAY_REMOVE,
 };
 use crate::state::{AppState, BUILDING_MODEL, DID_NOT_STOP};
+use crate::ui::editor::preview::rebuild_preview;
 use crate::ui::results::table::INEXACT_REPLAY;
-use crate::ui::time_axis::counter_text;
+use crate::ui::time_axis::{counter_text, elapsed_text};
 use crate::ui::{add_progress_bar, mcs};
 
 pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
@@ -43,8 +44,13 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
     });
 
+    // Build replays the start of the Editor's sheet while its preview runs and the selection is unchanged. The
+    // selected model's refusal is not Build's reason then.
+    let replays_sheet = app.build_replays_preview();
     let build_disabled_reason = if app.is_building() {
         Some(BUILD_RUNNING.to_owned())
+    } else if replays_sheet {
+        None
     } else {
         app.build_refusal()
     };
@@ -65,13 +71,14 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
             egui::Button::new(format!("{MDI_RESTART} Build")),
         );
         let build = match &build_disabled_reason {
+            None if replays_sheet => build.on_hover_text(BUILD_SHEET_TOOLTIP),
             None => {
                 build.on_hover_text("Build the selected model from given parameters, replacing any running simulation")
             }
             Some(reason) => build.on_disabled_hover_text(reason.as_str()),
         };
         if build.clicked() {
-            app.reset_simulation();
+            press_build(app);
         }
         if ui
             .add_enabled(has_thread, egui::Button::new(format!("{MDI_TRAY_REMOVE} Offload")))
@@ -87,12 +94,34 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
     preview_line(ui, app);
 }
 
+/// Tooltip of Build while it replays the start of the Editor's sheet.
+pub const BUILD_SHEET_TOOLTIP: &str = "Start world again from tick 0, as it started before";
+
+/// Builds the selected model, as Build does. While the preview of the Editor's sheet runs and the selection has not
+/// changed since it loaded, builds that preview again at the same seed. The world then starts as it started before.
+pub fn press_build(app: &mut AppState) {
+    if app.build_replays_preview() {
+        rebuild_preview(app);
+    } else {
+        app.reset_simulation();
+    }
+}
+
 /// Returns the text of the tick counter beside Play and Step, `None` before the loaded model's first snapshot.
 ///
-/// The counter reads "Tick 24", or "Tick 24 (12 days)" for a model with a time scale.
+/// The counter reads "Tick 24", or "Tick 24 (12 days)" for a model with a time scale. For the Editor's sheet it
+/// explains a tick in the sheet's words: "Tick 24 (a tick is one step of time)", or "Tick 24 (12 days)".
 pub(crate) fn tick_counter(app: &AppState) -> Option<String> {
     let snapshot = app.snapshot.as_ref()?;
-    Some(counter_text(snapshot.tick, app.loaded_time()))
+    let time = app.loaded_time();
+    if app.runs_editor_sheet() {
+        let elapsed = time.map(|time| elapsed_text(snapshot.tick, time));
+        return Some(henad_graph::sheet::sentence::tick_counter(
+            snapshot.tick,
+            elapsed.as_deref(),
+        ));
+    }
+    Some(counter_text(snapshot.tick, time))
 }
 
 /// Hover text of the preview line while the Editor holds the previewed graph.
@@ -101,7 +130,10 @@ pub const PREVIEW_APPLY: &str = "Press Apply in the Editor to run the model at i
 /// Hover text of the preview line once the Editor holds a grid rule or nothing.
 pub const PREVIEW_ORPHANED: &str = "Editor holds another model. Press Offload to stop preview.";
 
-/// Draws the line that names the Editor's preview while it runs.
+/// Line under the preview of the Editor's sheet while it waits at tick 0.
+pub const PREVIEW_WAITS_FOR_PLAY: &str = "Press Play to run the preview.";
+
+/// Draws the line that names the Editor's preview while it runs, and says how to start a sheet's preview that waits.
 fn preview_line(ui: &mut egui::Ui, app: &AppState) {
     let (Some(run), Some(entry)) = (app.preview(), app.loaded_entry()) else {
         return;
@@ -113,9 +145,13 @@ fn preview_line(ui: &mut egui::Ui, app: &AppState) {
         run.size_text()
     ))
     .on_hover_text(preview_hover(app));
+    let at_start = app.snapshot.as_ref().is_none_or(|snapshot| snapshot.tick == 0);
+    if app.previews_editor_sheet() && !app.sim_running && at_start {
+        ui.weak(format!("{MDI_INFORMATION} {PREVIEW_WAITS_FOR_PLAY}"));
+    }
 }
 
-/// Returns the hover text of the preview line. Apply runs the graph only while the Editor holds one.
+/// Returns the hover text of the preview line. Apply runs the graph or the sheet only while the Editor holds one.
 pub fn preview_hover(app: &AppState) -> &'static str {
     if app.editor.model.holds_preview_model() {
         PREVIEW_APPLY

@@ -69,6 +69,7 @@ characters, and a file that grows past that splits by subsystem, as henad-app's 
 | henad-graph's sheet edit commands | `agents/henad-graph-sheet-edit.md` |
 | henad-app: options, state, builds, teardown, install, export | `agents/henad-app.md` |
 | henad-app's Editor tab | `agents/henad-app-editor.md` |
+| henad-app's sheet editor: the Sheet and Card panes, the New model dialog | `agents/henad-app-sheet.md` |
 | henad-app's Sweep and Results tabs | `agents/henad-app-sweep.md` |
 | UI text, corners and colours | `agents/ui.md` |
 | henad-cli | `agents/henad-cli.md` |

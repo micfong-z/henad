@@ -23,7 +23,7 @@ In the menu bar, <span class="ui" markdown>:material-view-dashboard-outline: Vie
 Click <span class="ui" markdown>:material-restart: Reset layout</span> at the bottom to put everything back to the default layout, in case the workspace gets too messy.
 The default layout leaves the <span class="ui" markdown>:material-code-braces: Editor</span> closed.
 
-<span class="ui" markdown>:material-file-outline: File</span> holds <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, which fill the [Editor](#editor-tab) or save its text.
+<span class="ui" markdown>:material-file-outline: File</span> holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-graph-outline: New node graph</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, which fill the [Editor](#editor-tab) or save its model.
 
 <span class="ui" markdown>:material-information-outline: About</span> links to the source code and this documentation.
 Select <span class="ui" markdown>:material-information-outline: About Henad</span> to open a window with the app's version, commit, source hash, build type and licence, and the version of the crate that provides the models with its commit or the hash of its sources.
@@ -37,7 +37,7 @@ An app built on Henad shows its own name there, and adds a **Built on** row with
 | <span class="ui" markdown>:material-speedometer: Pacing</span>           | Speed control                           |
 | <span class="ui" markdown>:material-cog-outline: Model</span>            | Model selection and metadata            |
 | <span class="ui" markdown>:material-tune: Parameters</span>              | Model parameters, seed and actions      |
-| <span class="ui" markdown>:material-code-braces: Editor</span>          | Grid rules written as model files       |
+| <span class="ui" markdown>:material-code-braces: Editor</span>          | Sheets, grid rules and node graphs      |
 | <span class="ui" markdown>:material-flask-outline: Sweep</span>          | Parameter sweeps, searches and progress |
 | <span class="ui" markdown>:material-chart-box-outline: Results</span>    | Plots and runs of a sweep or search     |
 | <span class="ui" markdown>:material-table: Statistics</span>             | Latest value of each stat               |
@@ -60,7 +60,7 @@ The GPU model entries only appear when a suitable device is detected.
 
 See the [models reference](../reference/models.md) for more details on each model.
 
-Under the dropdown, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> opens the [Editor](#editor-tab) on a new grid rule, and <span class="ui" markdown>:material-code-braces: Edit model</span> opens it on the model file of a selected grid rule.
+Under the dropdown, <span class="ui" markdown>:material-file-document-plus-outline: New model</span> opens the New model dialog, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> opens the [Editor](#editor-tab) on a new grid rule, and <span class="ui" markdown>:material-code-braces: Edit model</span> opens it on the model file of a selected grid rule.
 
 ### Metadata
 
@@ -1006,8 +1006,28 @@ A banner at the top appears when there are potential compatibility issues with t
 
 ## :material-code-braces: Editor tab
 
-The <span class="ui" markdown>:material-code-braces: Editor</span> tab edits a grid rule, a GPU grid model written as a model file, and runs it without a restart.
-It is closed in the default layout, and opens to the right of the <span class="ui" markdown>:material-cube-outline: Viewport</span> when you press <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> or <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab, or select it in the View menu.
+The <span class="ui" markdown>:material-code-braces: Editor</span> tab holds one model file and runs its model without a restart: a sheet, a grid rule written as text, or a node graph.
+It is closed in the default layout, and opens to the right of the <span class="ui" markdown>:material-cube-outline: Viewport</span> when you press <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> or <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab, or select it in the View menu.
+
+### Sheets
+
+A *sheet* describes a model in sentences.
+Press <span class="ui" markdown>:material-file-document-plus-outline: New model</span> in the Editor, the Model tab or the File menu, choose a starter under **Start from** (Game of Life, Majority vote or Forest fire), type a name, and press **Create**.
+The **Name** field follows the starter's name until you type in it.
+
+The sheet opens in two panes.
+**Sheet** lists what every cell has and what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.
+**Card** lists the lines every cell follows each tick, numbered from 1, each as a sentence such as "Become Alive from Dead, when Alive neighbours is 3".
+The world stays in the Viewport, Playback, Pacing, Parameters and Charts tabs.
+
+A sheet starts at a small size in the Viewport, paused at tick 0 with the start drawn.
+Press Play in the Playback tab to run it, and <span class="ui" markdown>:material-restart: Build</span> to start it again from tick 0 as it started before.
+Once you select another model in the Model tab, Build builds that model instead.
+The tick counter says what a tick is: "Tick 4 (a tick is one step of time)".
+Press <span class="ui" markdown>:material-check: Apply</span> to install the model at its own size, and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the sheet as a model file.
+A sheet that holds a problem still opens, with the problem listed under the panes at its line.
+
+### Grid rules
 
 The code fills the tab, with its line numbers in a gutter beside it, and long lines scroll sideways rather than wrap.
 Above it, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> replace or save the text, and <span class="ui" markdown>:material-check: Apply</span> checks it and installs the rule.

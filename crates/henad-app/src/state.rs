@@ -101,6 +101,8 @@ pub struct AppState {
     loaded: Option<ModelEntry>,
     /// Preview of the Editor's graph model that the live simulation runs, `None` for any other run.
     preview: Option<PreviewRun>,
+    /// Id of the model selected when the preview loaded, `None` when no model was selected.
+    preview_selection: Option<String>,
     /// Number of builds started that were no preview.
     builds: u64,
     pub pending_reload: Vec<bool>,
@@ -325,6 +327,7 @@ impl AppState {
             param_values,
             loaded: None,
             preview: None,
+            preview_selection: None,
             builds: 0,
             seed: None,
             seed_text: String::new(),
@@ -425,13 +428,15 @@ impl AppState {
     /// Tears down the live simulation and builds `setup` as the Editor's preview `preview`, which neither the
     /// selection nor the next build's fields follow.
     ///
-    /// The preview plays from tick 0 once it is built. A build that fails goes to the Editor.
+    /// With `plays` the preview plays from tick 0 once it is built, and otherwise it waits at tick 0 for Play. A build
+    /// that fails goes to the Editor. The model selected now is recorded for [`Self::build_replays_preview`].
     ///
     /// Note that a build can fail before this returns: inline in a browser, or natively when the build thread does
     /// not start. The fault then offloads the preview, which stays paused with nothing loaded.
-    pub fn load_preview(&mut self, setup: RunSetup, preview: PreviewRun) {
+    pub fn load_preview(&mut self, setup: RunSetup, preview: PreviewRun, plays: bool) {
+        self.preview_selection.clone_from(&self.selected_model);
         self.load_setup(Some(setup), Some(preview));
-        if self.preview.is_some() && self.has_simulation() {
+        if plays && self.preview.is_some() && self.has_simulation() {
             self.sim_running = true;
             self.send_command(SimCommand::Play);
         }
@@ -440,6 +445,37 @@ impl AppState {
     /// Preview of the Editor's graph model that the live simulation runs or builds, `None` for any other run.
     pub fn preview(&self) -> Option<PreviewRun> {
         self.preview
+    }
+
+    /// Returns whether the live simulation runs the Editor's sheet: as its preview, or as the model the Editor
+    /// applied last. Playback reads a tick in the sheet's words then.
+    pub fn runs_editor_sheet(&self) -> bool {
+        self.previews_editor_sheet()
+            || (self.editor.model.sheet().is_some()
+                && self
+                    .loaded
+                    .as_ref()
+                    .is_some_and(|loaded| self.editor.is_applied(loaded.source())))
+    }
+
+    /// Returns whether the live simulation runs the preview of the Editor's sheet.
+    ///
+    /// A preview of another document is not the sheet's. It runs until the sheet's own preview replaces it.
+    pub fn previews_editor_sheet(&self) -> bool {
+        let sheet_id = self
+            .editor
+            .model
+            .sheet()
+            .map(|sheet| sheet.document().sheet.id.as_str());
+        self.preview.is_some() && sheet_id.is_some() && self.loaded.as_ref().map(ModelEntry::id) == sheet_id
+    }
+
+    /// Returns whether Playback's Build builds the preview of the Editor's sheet again at the same seed: the preview
+    /// runs, and the selection has not changed since it loaded.
+    ///
+    /// Once another model is selected, Build builds that model as it does behind any preview.
+    pub fn build_replays_preview(&self) -> bool {
+        self.previews_editor_sheet() && self.preview_selection == self.selected_model
     }
 
     /// Number of builds started so far that were no preview. A preview that waits compares it, and gives way to a

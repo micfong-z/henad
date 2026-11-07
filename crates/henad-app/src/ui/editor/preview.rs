@@ -1,5 +1,7 @@
-//! Live preview of the Editor's graph model: a run of the document at a small size, rebuilt from tick 0 after each
-//! valid edit.
+//! Live preview of the Editor's graph model or sheet: a run of the document at a small size, rebuilt from tick 0 after
+//! each valid edit.
+//!
+//! A graph's preview plays once it is built. A sheet's waits paused at tick 0, with its start drawn, until Play.
 //!
 //! A *preview* runs the document's compiled program with its parameters at their defaults, each side of a grid at the
 //! smaller of the model's own side and [`PREVIEW_SIDE`], and the agents of an agent model at the smaller of the model's
@@ -14,7 +16,6 @@
 use std::time::Duration;
 
 use henad_compute::entry::ModelEntry;
-use henad_compute::fault::Fault;
 use henad_compute::simulation::RunSetup;
 use henad_core::action::Schedule;
 use henad_core::diagnostic::CodeDiagnostic;
@@ -65,10 +66,10 @@ pub struct Preview {
 }
 
 impl Preview {
-    /// Shows `fault`, a fault of the preview's run, and drops any waiting preview.
-    pub fn show_fault(&mut self, fault: &Fault) {
+    /// Shows `problem`, the fault of the preview's run, and drops any waiting preview.
+    pub fn show_problem(&mut self, problem: CodeDiagnostic) {
         self.due = None;
-        self.state = PreviewState::Faulted(CodeDiagnostic::error(crate::ui::fault::detail(fault)));
+        self.state = PreviewState::Faulted(problem);
     }
 
     /// Returns whether a preview waits for its time or for the loaded run to end.
@@ -141,7 +142,15 @@ pub fn poll_at(ctx: &egui::Context, app: &mut AppState, now: Instant) {
     build_preview(app);
 }
 
-/// Compiles the Editor's graph, and builds it as the preview from tick 0, or shows why it cannot.
+/// Builds the Editor's sheet again as the preview from tick 0, at the same seed, so it starts as it started before.
+///
+/// Playback's Build calls it while the preview of a sheet runs. It waits paused at tick 0, as a new preview does.
+pub fn rebuild_preview(app: &mut AppState) {
+    app.editor.preview.due = None;
+    build_preview(app);
+}
+
+/// Compiles the Editor's graph or sheet, and builds it as the preview from tick 0, or shows why it cannot.
 fn build_preview(app: &mut AppState) {
     let Some(program) = app.editor.model.preview_program() else {
         return;
@@ -162,11 +171,12 @@ fn build_preview(app: &mut AppState) {
         app.editor.preview.state = PreviewState::Refused(vec![problem]);
         return;
     }
+    let plays = app.editor.model.preview_plays();
     match RunSetup::from_parts(&entry, &values, None, Schedule::default()) {
         Ok(setup) => {
             // A browser builds inline, and a fault of the build replaces this state.
             app.editor.preview.state = PreviewState::Running(run);
-            app.load_preview(setup, run);
+            app.load_preview(setup, run, plays);
         }
         Err(error) => {
             let problem = CodeDiagnostic::error(setup_message(&error));

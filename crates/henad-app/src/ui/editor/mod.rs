@@ -1,9 +1,9 @@
 //! The Editor tab: one model file, edited and applied to the running app.
 //!
-//! A *model file* holds a grid rule, a GPU grid model written as data with a WGSL step, or a graph model, as
-//! [`henad_explore::model_file`] describes them. The tab shows a grid rule as text in the code view, and a graph model
-//! on the canvas of [`graph`] with its passes and declarations beside it. Apply reads the file, compiles the model, and
-//! installs its entry through
+//! A *model file* holds a grid rule, a GPU grid model written as data with a WGSL step, a graph model, or a sheet, as
+//! [`henad_explore::model_file`] describes them. The tab shows a grid rule as text in the code view, a graph model on
+//! the canvas of [`graph`] with its passes and declarations beside it, and a sheet as its sheet and cards in [`sheet`].
+//! A file opens by the `kind` in its header. Apply reads the file, compiles the model, and installs its entry through
 //! [`AppState::install_models`]. A run of the rule past tick 0 then waits on the Rebuild model dialog, and a run at
 //! tick 0 is rebuilt at once. A text that is refused leaves the running model alone, and the diagnostics list under
 //! the code names each problem at its line and column. A press on a diagnostic moves the cursor to it.
@@ -17,6 +17,7 @@
 pub mod code_view;
 pub mod graph;
 pub mod preview;
+pub mod sheet;
 
 use egui::{Button, CentralPanel, Frame, Label, Margin, Panel, RichText, ScrollArea, Sense};
 use henad_compute::entry::{ModelEntry, ModelSet};
@@ -25,14 +26,16 @@ use henad_compute::gpu::runtime_grid::GridRule;
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::provenance::ModelSource;
 use henad_explore::model_file::ModelFile;
-use henad_graph::GraphFile;
+use henad_graph::model_text::read_header;
+use henad_graph::sheet::{KIND_SHEET, ParsedSheet};
 use henad_graph::starters::{Starter, agent_starters, starters};
+use henad_graph::{GraphFile, KIND_GRAPH};
 
 use crate::icons::material_design_icons::{
-    MDI_ALERT, MDI_CHECK, MDI_FILE_PLUS_OUTLINE, MDI_FOLDER_OPEN_OUTLINE, MDI_GRAPH_OUTLINE, MDI_INFORMATION,
-    MDI_PLAY_OUTLINE, MDI_TRAY_ARROW_DOWN,
+    MDI_ALERT, MDI_CHECK, MDI_FILE_DOCUMENT_PLUS_OUTLINE, MDI_FILE_PLUS_OUTLINE, MDI_FOLDER_OPEN_OUTLINE,
+    MDI_GRAPH_OUTLINE, MDI_INFORMATION, MDI_PLAY_OUTLINE, MDI_TRAY_ARROW_DOWN,
 };
-use crate::state::{AppState, too_large_message};
+use crate::state::{AppState, PreviewRun, too_large_message};
 use crate::ui::dock::Tab;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
 use crate::ui::sweep::layout::add_button;
@@ -43,7 +46,14 @@ pub const NO_COMPUTE: &str =
     "Grid rules and graph models cannot run on this device. They need a GPU with compute support.";
 
 /// Reason Apply and Save model are disabled while the Editor holds no model.
-pub const EMPTY_EDITOR: &str = "Editor is empty. Press New grid rule, New graph model or Open model to start.";
+pub const EMPTY_EDITOR: &str =
+    "Editor is empty. Press New model, New node graph, New grid rule or Open model to start.";
+
+/// Label of the button that opens the New model dialog.
+pub const NEW_MODEL_BUTTON: &str = henad_graph::sheet::sentence::NEW_MODEL;
+
+/// Label of the menu that opens a graph starter on the canvas.
+pub const NEW_NODE_GRAPH: &str = "New node graph";
 
 /// Name of a saved model file whose text does not read as a model file.
 const FALLBACK_FILE_NAME: &str = "model.toml";
@@ -61,6 +71,8 @@ pub enum EditorModel {
     Rule(String),
     /// Graph model under edit on the canvas.
     Graph(Box<graph::GraphEditor>),
+    /// Sheet model shown as its sheet and cards.
+    Sheet(Box<sheet::SheetEditor>),
 }
 
 /// Key and error state of the model a preview runs, from [`EditorModel::preview_source`].
@@ -78,46 +90,61 @@ impl EditorModel {
         match self {
             Self::Empty => true,
             Self::Rule(text) => text.is_empty(),
-            Self::Graph(_) => false,
+            Self::Graph(_) | Self::Sheet(_) => false,
         }
     }
 
-    /// Returns the text Apply and Save model read: a graph model's canonical text, the grid rule's text as typed, or
-    /// an empty text.
+    /// Returns the text Apply and Save model read: a graph model's or a sheet's canonical text, the grid rule's text as
+    /// typed, or an empty text.
     pub fn file_text(&self) -> String {
         match self {
             Self::Empty => String::new(),
             Self::Rule(text) => text.clone(),
             Self::Graph(graph) => graph.text(),
+            Self::Sheet(sheet) => sheet.text().to_owned(),
         }
     }
 
-    /// Text of the grid rule, `None` while the Editor holds a graph model or nothing.
+    /// Text of the grid rule, `None` while the Editor holds another model or nothing.
     pub fn rule_text(&self) -> Option<&str> {
         match self {
             Self::Rule(text) => Some(text),
-            Self::Empty | Self::Graph(_) => None,
+            Self::Empty | Self::Graph(_) | Self::Sheet(_) => None,
         }
     }
 
-    /// Graph model under edit, `None` while the Editor holds a grid rule's text or nothing.
+    /// Graph model under edit, `None` while the Editor holds another model or nothing.
     pub fn graph(&self) -> Option<&graph::GraphEditor> {
         match self {
             Self::Graph(graph) => Some(graph),
-            Self::Empty | Self::Rule(_) => None,
+            Self::Empty | Self::Rule(_) | Self::Sheet(_) => None,
         }
     }
 
-    /// Graph model under edit, mutable, `None` while the Editor holds a grid rule's text or nothing.
+    /// Graph model under edit, mutable, `None` while the Editor holds another model or nothing.
     pub fn graph_mut(&mut self) -> Option<&mut graph::GraphEditor> {
         match self {
             Self::Graph(graph) => Some(graph),
-            Self::Empty | Self::Rule(_) => None,
+            Self::Empty | Self::Rule(_) | Self::Sheet(_) => None,
         }
     }
 
-    /// Returns whether the model runs as a preview while it is edited. Only a graph model does.
+    /// Sheet in the Editor, `None` while the Editor holds another model or nothing.
+    pub fn sheet(&self) -> Option<&sheet::SheetEditor> {
+        match self {
+            Self::Sheet(sheet) => Some(sheet),
+            Self::Empty | Self::Rule(_) | Self::Graph(_) => None,
+        }
+    }
+
+    /// Returns whether the model runs as a preview while it is in the Editor: a graph model or a sheet.
     pub fn holds_preview_model(&self) -> bool {
+        matches!(self, Self::Graph(_) | Self::Sheet(_))
+    }
+
+    /// Returns whether the model's preview plays once it is built. A graph's preview does, and a sheet's waits at
+    /// tick 0 for Play.
+    pub fn preview_plays(&self) -> bool {
         matches!(self, Self::Graph(_))
     }
 
@@ -127,6 +154,10 @@ impl EditorModel {
             Self::Graph(graph) => Some(PreviewSource {
                 key: graph.preview_key(),
                 has_errors: graph.has_errors(),
+            }),
+            Self::Sheet(sheet) => Some(PreviewSource {
+                key: sheet.preview_key(),
+                has_errors: sheet.has_errors(),
             }),
             Self::Empty | Self::Rule(_) => None,
         }
@@ -139,7 +170,17 @@ impl EditorModel {
     pub fn preview_program(&mut self) -> Option<graph::CompiledProgram> {
         match self {
             Self::Graph(graph) => Some(graph.preview_program()),
+            Self::Sheet(sheet) => Some(sheet.program()),
             Self::Empty | Self::Rule(_) => None,
+        }
+    }
+
+    /// Returns `problem`, a problem of the model's run, placed in the model: a sheet places it at the line of its
+    /// node, at the table of its pass, or at `[sheet]`. Any other model returns it as it is.
+    pub fn place(&self, problem: CodeDiagnostic) -> CodeDiagnostic {
+        match self {
+            Self::Sheet(sheet) => sheet.place(problem),
+            Self::Empty | Self::Rule(_) | Self::Graph(_) => problem,
         }
     }
 }
@@ -147,7 +188,7 @@ impl EditorModel {
 /// State of the Editor tab: the model file being edited and the outcome of the last Apply.
 #[derive(Debug, Default)]
 pub struct EditorPanel {
-    /// Model under edit: nothing, a grid rule's text or a graph model.
+    /// Model under edit: nothing, a grid rule's text, a graph model or a sheet.
     pub model: EditorModel,
     /// Name of the file the text was opened from or saved to, `None` for a text that has no file.
     pub file_name: Option<String>,
@@ -165,8 +206,10 @@ pub struct EditorPanel {
     reset_history: bool,
     /// Whether the code view returns to the top left on its next frame, after another file's text replaced the text.
     reset_scroll: bool,
-    /// Live preview of the graph model.
+    /// Live preview of the graph model or the sheet.
     pub preview: preview::Preview,
+    /// New model dialog, `None` while it is closed.
+    pub new_model: Option<sheet::new_model::NewModelDialog>,
 }
 
 /// Outcome of a press on Apply.
@@ -183,6 +226,8 @@ pub enum ApplyOutcome {
     Unchanged,
     /// The text was refused, with every problem found.
     Refused(Vec<CodeDiagnostic>),
+    /// The opened file does not read as the kind its header names, with every problem found. Nothing was applied.
+    Unread(Vec<CodeDiagnostic>),
     /// The model was installed, and the device or the engine refused it when it was built, or the device cannot hold
     /// it at the values of the next build.
     Faulted(Vec<CodeDiagnostic>),
@@ -197,6 +242,7 @@ impl ApplyOutcome {
             Self::Installed => ("Model applied. Press Build to run it.", false),
             Self::Unchanged => ("Model code unchanged.", false),
             Self::Refused(_) => ("Model not applied. Fix the problems below.", true),
+            Self::Unread(_) => ("Model file has problems. Fix them, then press Apply.", true),
             Self::Faulted(_) => ("Model build failed. Fix the problem below.", true),
         }
     }
@@ -204,7 +250,7 @@ impl ApplyOutcome {
     /// Problems the outcome lists, empty for an outcome without any.
     pub fn diagnostics(&self) -> &[CodeDiagnostic] {
         match self {
-            Self::Refused(diagnostics) | Self::Faulted(diagnostics) => diagnostics,
+            Self::Refused(diagnostics) | Self::Unread(diagnostics) | Self::Faulted(diagnostics) => diagnostics,
             Self::Applied | Self::AwaitingRebuild | Self::Installed | Self::Unchanged => &[],
         }
     }
@@ -231,15 +277,18 @@ impl EditorPanel {
         !matches!(fault.kind, FaultKind::DeviceLost | FaultKind::Poll(_)) && !fault.is_out_of_memory()
     }
 
-    /// Shows `fault`, a fault of a run built from the applied code, as the outcome of the edit.
+    /// Shows `fault`, a fault of a run built from the applied code, as the outcome of the edit. A sheet places the
+    /// problem as [`EditorModel::place`] does.
     pub fn show_fault(&mut self, fault: &Fault) {
-        let problem = CodeDiagnostic::error(crate::ui::fault::detail(fault));
+        let problem = self.model.place(CodeDiagnostic::error(crate::ui::fault::detail(fault)));
         self.outcome = Some(ApplyOutcome::Faulted(vec![problem]));
     }
 
-    /// Shows `fault`, a fault of the preview's run, as the state of the preview.
+    /// Shows `fault`, a fault of the preview's run, as the state of the preview. A sheet places the problem as
+    /// [`EditorModel::place`] does.
     pub fn show_preview_fault(&mut self, fault: &Fault) {
-        self.preview.show_fault(fault);
+        let problem = self.model.place(CodeDiagnostic::error(crate::ui::fault::detail(fault)));
+        self.preview.show_problem(problem);
     }
 
     /// Replaces the text with `text`, from the file `file_name` or from no file.
@@ -262,6 +311,19 @@ impl EditorPanel {
     /// text.
     pub fn load_graph(&mut self, file: &GraphFile, file_name: Option<String>) {
         self.model = EditorModel::Graph(Box::new(graph::GraphEditor::new(file)));
+        self.file_name = file_name;
+        self.outcome = None;
+        self.applied = None;
+        self.scroll_to = None;
+        self.preview = preview::Preview::default();
+    }
+
+    /// Replaces the Editor's model with `sheet`, from the file `file_name` or from no file.
+    ///
+    /// The outcome of the last Apply and the state of the preview are cleared, as [`Self::load`] clears them for a
+    /// text.
+    pub fn load_sheet(&mut self, sheet: sheet::SheetEditor, file_name: Option<String>) {
+        self.model = EditorModel::Sheet(Box::new(sheet));
         self.file_name = file_name;
         self.outcome = None;
         self.applied = None;
@@ -300,6 +362,7 @@ impl EditorPanel {
 /// Request from the Editor, applied once the tab has drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditorRequest {
+    NewModel,
     NewGridRule,
     /// Opens the starter with this file name as a new graph model.
     NewGraphModel(&'static str),
@@ -356,6 +419,8 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 .show(ui, |ui| {
                     if panel.model.graph().is_some() {
                         graph_outcome_ui(ui, panel);
+                    } else if panel.model.sheet().is_some() {
+                        sheet_outcome_ui(ui, panel);
                     } else {
                         outcome_ui(ui, panel, &mut request);
                     }
@@ -380,6 +445,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     };
     CentralPanel::no_frame().show(ui, |ui| match &mut panel.model {
         EditorModel::Graph(graph) => graph::graph_ui(ui, graph),
+        EditorModel::Sheet(sheet) => sheet::sheet_ui(ui, sheet),
         EditorModel::Rule(text) => {
             code_view::code_view(ui, text, &marked, scroll_to, reset);
         }
@@ -405,8 +471,20 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     }
 }
 
-/// Draws New grid rule, Open model, Save model and Apply, each setting `request` when pressed.
+/// Draws the header buttons, each setting `request` when pressed.
+///
+/// The buttons are New model, New grid rule, New node graph, Open model, Save model and Apply.
 fn header_buttons(ui: &mut egui::Ui, compute: bool, empty: bool, request: &mut Option<EditorRequest>) {
+    let model = add_button(
+        ui,
+        true,
+        Button::new(format!("{MDI_FILE_DOCUMENT_PLUS_OUTLINE} {NEW_MODEL_BUTTON}")),
+        NEW_MODEL_BUTTON,
+    )
+    .on_hover_text("Start model from an example");
+    if model.clicked() {
+        *request = Some(EditorRequest::NewModel);
+    }
     let new = add_button(
         ui,
         true,
@@ -418,15 +496,15 @@ fn header_buttons(ui: &mut egui::Ui, compute: bool, empty: bool, request: &mut O
         *request = Some(EditorRequest::NewGridRule);
     }
     let graph = ui
-        .menu_button(format!("{MDI_GRAPH_OUTLINE} New graph model"), |ui| {
+        .menu_button(format!("{MDI_GRAPH_OUTLINE} {NEW_NODE_GRAPH}"), |ui| {
             if let Some(file_name) = starter_menu(ui) {
                 *request = Some(EditorRequest::NewGraphModel(file_name));
                 ui.close();
             }
         })
         .response;
-    graph.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "New graph model"));
-    graph.on_hover_text("Start graph model from an example");
+    graph.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, NEW_NODE_GRAPH));
+    graph.on_hover_text("Start node graph from an example");
     let open = add_button(
         ui,
         true,
@@ -493,7 +571,7 @@ fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
         return;
     };
     let live: Vec<CodeDiagnostic> = graph.diagnostics().cloned().collect();
-    preview_ui(ui, &panel.preview.state);
+    preview_ui(ui, &panel.preview.state, true);
     match &panel.outcome {
         Some(outcome) => {
             let (line, error) = outcome.summary();
@@ -564,8 +642,58 @@ fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
     }
 }
 
-/// Draws the state of the preview: its size while it runs, and the problems that stopped it.
-fn preview_ui(ui: &mut egui::Ui, state: &PreviewState) {
+/// Draws the state of the preview, the outcome of the last Apply of a sheet, and every problem of the sheet's check, or
+/// the problems that stop it lowering.
+fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel) {
+    let Some(sheet) = panel.model.sheet() else {
+        return;
+    };
+    preview_ui(ui, &panel.preview.state, false);
+    let mut live: Vec<&CodeDiagnostic> = sheet
+        .report()
+        .diagnostics
+        .iter()
+        .map(|diagnostic| &diagnostic.diagnostic)
+        .collect();
+    // The check's errors are among the problems that stop a sheet lowering. The lowering's own problems follow them.
+    for problem in sheet.lowering_problems() {
+        if !live.iter().any(|known| known.message == problem.message) {
+            live.push(problem);
+        }
+    }
+    match &panel.outcome {
+        Some(outcome) => {
+            let (line, error) = outcome.summary();
+            if error {
+                ui.colored_label(ui.visuals().error_fg_color, line);
+            } else {
+                ui.label(line);
+            }
+            for diagnostic in outcome
+                .diagnostics()
+                .iter()
+                .filter(|diagnostic| !live.iter().any(|known| known.message == diagnostic.message))
+            {
+                ui.colored_label(ui.visuals().error_fg_color, diagnostic_text(diagnostic));
+            }
+        }
+        None => {
+            ui.weak("Press Apply to check and install the model.");
+        }
+    }
+    for diagnostic in live {
+        let color = if diagnostic.severity == henad_core::diagnostic::DiagnosticSeverity::Error {
+            ui.visuals().error_fg_color
+        } else {
+            ui.visuals().warn_fg_color
+        };
+        ui.colored_label(color, diagnostic_text(diagnostic));
+    }
+}
+
+/// Draws the state of the preview: its size while it runs, and the problems that stopped it. `plays` is whether the
+/// preview plays once built, as a graph's does, rather than waiting at tick 0 for Play.
+fn preview_ui(ui: &mut egui::Ui, state: &PreviewState, plays: bool) {
     let (line, problems) = match state {
         PreviewState::Idle => return,
         PreviewState::Waiting => {
@@ -573,10 +701,7 @@ fn preview_ui(ui: &mut egui::Ui, state: &PreviewState) {
             return;
         }
         PreviewState::Running(run) => {
-            ui.label(format!(
-                "{MDI_PLAY_OUTLINE} Preview runs at {} from tick 0. Press Apply to run the model at its own size.",
-                run.size_text()
-            ));
+            ui.label(format!("{MDI_PLAY_OUTLINE} {}", preview_running_text(*run, plays)));
             return;
         }
         PreviewState::Refused(problems) => ("Preview not built. Fix the problems below.", problems.as_slice()),
@@ -585,6 +710,20 @@ fn preview_ui(ui: &mut egui::Ui, state: &PreviewState) {
     ui.colored_label(ui.visuals().error_fg_color, line);
     for problem in problems {
         ui.colored_label(ui.visuals().error_fg_color, diagnostic_text(problem));
+    }
+}
+
+/// Returns the line of a preview that runs or waits at the size of `run`. `plays` is whether the preview plays once
+/// built.
+///
+/// A graph's preview reads "Preview runs at 256 × 256 cells from tick 0. Press Apply to run the model at its own
+/// size." A sheet's preview waits at tick 0, and its line names Play.
+pub fn preview_running_text(run: PreviewRun, plays: bool) -> String {
+    let size = run.size_text();
+    if plays {
+        format!("Preview runs at {size} from tick 0. Press Apply to run the model at its own size.")
+    } else {
+        format!("Preview at {size} starts at tick 0. Press Play to run it, or Apply to run the model at its own size.")
     }
 }
 
@@ -641,6 +780,7 @@ pub fn diagnostic_text(diagnostic: &CodeDiagnostic) -> String {
 /// Applies `request`, once the tab has drawn.
 fn apply_request(ctx: &egui::Context, app: &mut AppState, request: EditorRequest) {
     match request {
+        EditorRequest::NewModel => sheet::new_model::open_new_model(app),
         EditorRequest::NewGridRule => new_grid_rule(app),
         EditorRequest::NewGraphModel(file_name) => new_graph_model(app, file_name),
         EditorRequest::OpenModel => open_model(app),
@@ -741,7 +881,7 @@ pub fn open_model(app: &AppState) {
 }
 
 /// Opens a dialog that saves the Editor's model: a grid rule's text as written, comments included, or a graph model's
-/// canonical text.
+/// or a sheet's canonical text.
 pub fn save_model(app: &mut AppState) {
     if app.editor.model.is_empty() {
         return;
@@ -753,9 +893,14 @@ pub fn save_model(app: &mut AppState) {
 
 /// Returns the file name a save of the Editor's text suggests: the name it was opened or saved under, then the model's
 /// id, then [`FALLBACK_FILE_NAME`].
+///
+/// A sheet suggests its id even while it holds errors.
 pub fn save_name(panel: &EditorPanel) -> String {
     if let Some(name) = &panel.file_name {
         return name.clone();
+    }
+    if let Some(sheet) = panel.model.sheet() {
+        return format!("{}.toml", sheet.document().sheet.id);
     }
     ModelFile::parse(&panel.model.file_text())
         .map_or_else(|_| FALLBACK_FILE_NAME.to_owned(), |file| format!("{}.toml", file.id()))
@@ -764,8 +909,7 @@ pub fn save_name(panel: &EditorPanel) -> String {
 /// Handles the result of an Open model dialog. The picked file replaces the Editor's model, and is applied only on
 /// Apply.
 ///
-/// A file that reads as a graph opens on the canvas. Any other text opens in the code view, a graph file that does
-/// not read included, where Apply names its problems at their lines.
+/// The `kind` in the file's header decides where it opens, as [`open_text`] says.
 pub fn receive_open(app: &mut AppState, result: OpenResult) {
     let file = match result {
         OpenResult::Files(files) => files.into_iter().next(),
@@ -781,13 +925,33 @@ pub fn receive_open(app: &mut AppState, result: OpenResult) {
     match String::from_utf8(bytes) {
         Ok(text) => {
             app.editor.file_status = Some(format!("Opened {name}"));
-            match GraphFile::parse(&text) {
-                Ok(file) => app.editor.load_graph(&file, Some(name)),
-                Err(_) => app.editor.load(text, Some(name)),
-            }
+            open_text(&mut app.editor, text, Some(name));
             app.focus_request = Some(Tab::Editor);
         }
         Err(_) => app.editor.file_status = Some(format!("Open failed: {name} is not UTF-8 text")),
+    }
+}
+
+/// Replaces the Editor's model with the model file `text`, from the file `file_name` or from no file, by the `kind` in
+/// its header.
+///
+/// A sheet that the sheet reader reads opens as its sheet and cards, checker errors included. A graph that reads opens
+/// on the canvas. Any other text opens in the code view, where Apply names its problems at their lines. A sheet that
+/// does not read opens there too, with the reader's problem listed under it.
+pub fn open_text(panel: &mut EditorPanel, text: String, file_name: Option<String>) {
+    match read_header(&text).as_deref() {
+        Some(KIND_SHEET) => match ParsedSheet::parse(&text) {
+            Ok(parsed) => panel.load_sheet(sheet::SheetEditor::new(parsed.into_document()), file_name),
+            Err(error) => {
+                panel.load(text, file_name);
+                panel.outcome = Some(ApplyOutcome::Unread(error.diagnostics().to_vec()));
+            }
+        },
+        Some(KIND_GRAPH) => match GraphFile::parse(&text) {
+            Ok(file) => panel.load_graph(&file, file_name),
+            Err(_) => panel.load(text, file_name),
+        },
+        _ => panel.load(text, file_name),
     }
 }
 
@@ -899,7 +1063,7 @@ mod tests {
 
     use henad_graph::GraphFile;
 
-    use super::{ApplyOutcome, EditorModel, diagnostic_text, graph};
+    use super::{ApplyOutcome, EditorModel, diagnostic_text, graph, sheet};
 
     #[test]
     fn a_diagnostic_reads_line_column_and_message() {
@@ -921,6 +1085,7 @@ mod tests {
             assert!(outcome.diagnostics().is_empty());
         }
         assert!(ApplyOutcome::Refused(Vec::new()).summary().1);
+        assert!(ApplyOutcome::Unread(Vec::new()).summary().1);
         assert!(ApplyOutcome::Faulted(Vec::new()).summary().1);
     }
 
@@ -951,6 +1116,16 @@ mod tests {
             Some(file.code())
         );
         let source = model.preview_source().expect("a graph previews");
+        assert!(!source.has_errors);
+        assert!(model.preview_program().is_some_and(|program| program.is_ok()));
+
+        let starter = henad_graph::sheet::starters().first().expect("a sheet starter");
+        let parsed = henad_graph::sheet::ParsedSheet::parse(starter.text).expect("the starter reads");
+        let mut model = EditorModel::Sheet(Box::new(sheet::SheetEditor::new(parsed.into_document())));
+        assert!(!model.is_empty() && model.holds_preview_model());
+        assert!(model.rule_text().is_none() && model.graph().is_none() && model.sheet().is_some());
+        assert_eq!(model.file_text(), starter.text, "the starter is canonical");
+        let source = model.preview_source().expect("a sheet previews");
         assert!(!source.has_errors);
         assert!(model.preview_program().is_some_and(|program| program.is_ok()));
     }
