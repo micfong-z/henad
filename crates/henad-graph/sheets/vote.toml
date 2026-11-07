@@ -87,7 +87,7 @@ test = "at_least"
 left = { result = "l1" }
 right = 5
 
-# Become A from any state, always
+# otherwise (when line 2 does not apply) become A from any state, always
 [card.line.l3]
 kind = "become"
 property = "opinion"

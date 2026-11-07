@@ -440,7 +440,7 @@ event = "delivery"
 [card.line.l15.condition]
 kind = "always"
 
-# Set Reward held to 0, always
+# otherwise (when lines 11 and 14 do not apply) set Reward held to 0, always
 [card.line.l16]
 kind = "set"
 property = "reward_held"

@@ -19,9 +19,11 @@
 //!
 //! [`ParsedSheet::parse`] reads a sheet into a [`document::SheetDocument`] and records the place of every table and
 //! key in [`SheetPlaces`]. The reader checks the header and the `[sheet] version` first and refuses an unknown key in
-//! every table. It does not check what the lines mean. [`document::SheetDocument::to_text`] writes the canonical text
-//! of a sheet, with the sentence of each line from [`sentence`] in a comment above it, and reading that text returns
-//! the same document. [`starters`] returns the sheets a new model begins from.
+//! every table. It does not check what the lines mean. [`check`] does: references, types, ids and the lines that
+//! cannot run yet, and [`relations`] holds the order of a card's lines and the "otherwise" rule.
+//! [`document::SheetDocument::to_text`] writes the canonical text of a sheet, with the sentence of each line from
+//! [`sentence`] in a comment above it, and reading that text returns the same document. [`starters`] returns the
+//! sheets a new model begins from.
 //!
 //! ```
 //! use henad_graph::sheet::ParsedSheet;
@@ -53,9 +55,11 @@ use std::fmt;
 
 use henad_core::diagnostic::CodeDiagnostic;
 
+pub mod check;
 pub mod document;
 pub mod limits;
 mod reader;
+pub mod relations;
 pub mod sentence;
 mod starters;
 mod writer;

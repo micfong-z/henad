@@ -218,6 +218,9 @@ mod named_only {
         henad::graph::sheet::document::SheetDocument,
         henad::graph::sheet::SheetWriteError,
         henad::graph::sheet::sentence::Sentences<'static>,
+        henad::graph::sheet::check::SheetReport,
+        henad::graph::sheet::check::SheetDiagnostic,
+        henad::graph::sheet::relations::CardRelations<'static>,
     );
 
     /// Returns whether every graph starter reads and checks without an error, for a host built with `model-files`.

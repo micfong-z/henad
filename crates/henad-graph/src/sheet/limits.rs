@@ -12,6 +12,11 @@ pub const MAX_SHEET_BYTES: usize = 1024 * 1024;
 /// file's tables are read.
 pub const MAX_NESTING: usize = 24;
 
+/// Depth of the groups nested in one formula: parentheses, function calls and the right side of `^`.
+///
+/// A formula is a plain string bounded only by [`MAX_SHEET_BYTES`], and parsing each group takes stack space.
+pub const MAX_FORMULA_NESTING: usize = 32;
+
 /// Number of line tables of one card, the lines inside When and Repeat lines included.
 pub const MAX_LINES_PER_CARD: usize = 256;
 

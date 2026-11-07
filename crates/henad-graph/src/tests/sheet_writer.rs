@@ -8,6 +8,7 @@ use henad_core::metadata::TimeUnit;
 
 use crate::sheet::document::{LineKind, ParameterType, SheetChip, SheetDocument, SheetLine, SheetParameter};
 use crate::sheet::document::{SheetValue, Slot};
+use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::Sentences;
 use crate::sheet::{ParsedSheet, SheetWriteError, format_number};
 
@@ -352,7 +353,8 @@ fn every_line_sentence_equals_its_comment() {
                 .and_then(|rest| rest.strip_suffix(']'))
                 .filter(|id| !id.contains('.'))
             {
-                let expected = sentences.line(id, &[]);
+                let relations = CardRelations::new(&document, &document.cards[card - 1]);
+                let expected = sentences.line(id, &relations.otherwise_numbers(id));
                 assert_eq!(comment, Some(expected.as_str()), "{file_name}: {id}");
                 checked += 1;
             }

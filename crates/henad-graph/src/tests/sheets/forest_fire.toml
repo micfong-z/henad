@@ -134,7 +134,7 @@ test = "at_least"
 left = { result = "l1" }
 right = 1
 
-# Become Burning from Tree, with chance Lightning chance
+# otherwise (when line 2 does not apply) become Burning from Tree, with chance Lightning chance
 [card.line.l3]
 kind = "become"
 key = 3688405984

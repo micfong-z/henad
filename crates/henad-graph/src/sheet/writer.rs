@@ -8,7 +8,8 @@
 //! standard sub-table. The form depends on the schema and the value's form alone.
 //!
 //! A *generated comment* sits above each card, holding its heading, and above each line table, holding the line's
-//! sentence from [`Sentences`]. A reader ignores comments, and a comment written by hand is dropped on the next save.
+//! sentence from [`Sentences`] with the "otherwise" words of [`CardRelations::otherwise_of`]. A reader ignores comments,
+//! and a comment written by hand is dropped on the next save.
 //!
 //! The *number rule*: a whole number within 2^53 is an integer (`3`, `1024`), and any other number is the shortest text
 //! that reads back to the same 64-bit float, in plain notation when 10^-4 <= |x| < 10^16 (`0.3`, `0.0005`) and as a
@@ -21,6 +22,7 @@ use super::document::{
     AgentKind, ButtonStep, ColorRule, LookSummary, PaintedShape, SheetButton, SheetCard, SheetChip, SheetDocument,
     SheetLine, SheetLiteral, SheetMeasure, SheetParameter, SheetProperty, SheetValue, Slot, StartsAs,
 };
+use super::relations::CardRelations;
 use super::sentence::Sentences;
 use crate::file::{FORMAT, FORMAT_VERSION};
 use crate::model_text::{color_hex, multiline_array, push_key, string_array, toml_string};
@@ -550,11 +552,12 @@ impl Writer<'_> {
         table.string("every", &card.every);
         table.string("runs", card.runs.as_str());
         table.inline("lines", string_array(&card.lines));
+        let relations = CardRelations::new(self.document, card);
         let lines = line_order(card.line_tables.keys())
             .into_iter()
             .map(|id| {
                 let mut record = self.line(&card.line_tables[id])?;
-                record.comment = Some(self.sentences.line(id, &[]));
+                record.comment = Some(self.sentences.line(id, &relations.otherwise_numbers(id)));
                 Ok((id.clone(), record))
             })
             .collect::<Result<Vec<_>, _>>()?;
