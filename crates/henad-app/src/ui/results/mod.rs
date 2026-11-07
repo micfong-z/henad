@@ -22,9 +22,10 @@ use henad_explore::result_set::ResultSet;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
 use henad_explore::sweep::SweepEnd;
 
-use crate::icons::material_design_icons::{MDI_FOLDER_OPEN_OUTLINE, MDI_PLAY};
+use crate::icons::material_design_icons::{MDI_FOLDER_OPEN_OUTLINE, MDI_PENCIL_OUTLINE, MDI_PLAY};
 use crate::state::{AppState, OpenAt};
 use crate::ui::dock::Tab;
+use crate::ui::editor;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget};
 use crate::ui::plural;
 use crate::ui::results::heatmap::HeatmapView;
@@ -38,6 +39,9 @@ use crate::ui::sweep::session::SweepSession;
 
 /// Number of configs that a new store selects for the Series view.
 const DEFAULT_SELECTED_CONFIGS: usize = 5;
+
+/// Label of the button that opens the model the results ran in the Editor.
+pub const OPEN_IN_EDITOR: &str = "Open in Editor";
 
 /// Status line shown while picked files wait to be read.
 const READING_RESULTS: &str = "Reading results";
@@ -85,6 +89,8 @@ pub enum ResultsRequest {
     CopyCommand(u64),
     /// Reads the series of the drawn configs' runs from the folder.
     LoadSeries,
+    /// Opens the model the results ran in the Editor: the recorded sheet, or the recorded code.
+    OpenInEditor,
 }
 
 /// Series read from a folder on a separate thread.
@@ -589,7 +595,7 @@ pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
     apply_request(ui.ctx(), app, request);
 }
 
-/// Draws the source of the results, Open results and Resume sweep, and the status line.
+/// Draws the source of the results, Open results, Resume sweep and Open in Editor, and the status line.
 fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRequest>) {
     let sweep_running = app.sweep.is_running();
     let running_noun = app.sweep.session.as_ref().map_or("sweep", SweepSession::noun);
@@ -634,6 +640,15 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
                 .on_disabled_hover_text(refusal.unwrap_or_default());
             if resume.clicked() {
                 *request = Some(ResultsRequest::ResumeSweep);
+            }
+        }
+        if let Some(store) = panel.store.as_ref().filter(|store| store.records_editable_code()) {
+            let noun = if store.is_search() { "search" } else { "sweep" };
+            let open = ui
+                .button(format!("{MDI_PENCIL_OUTLINE} {OPEN_IN_EDITOR}"))
+                .on_hover_text(format!("Open model this {noun} ran in Editor"));
+            if open.clicked() {
+                *request = Some(ResultsRequest::OpenInEditor);
             }
         }
     });
@@ -782,6 +797,21 @@ fn apply_request(ctx: &egui::Context, app: &mut AppState, request: Option<Result
             }
         }
         ResultsRequest::LoadSeries => load_series(app),
+        ResultsRequest::OpenInEditor => open_in_editor(app),
+    }
+}
+
+/// Opens the model the held results ran in the Editor, the sheet they recorded or else their code, and brings the
+/// Editor to the front.
+///
+/// A recorded text that does not read is reported on the status line.
+pub fn open_in_editor(app: &mut AppState) {
+    let Some(store) = &app.results.store else {
+        return;
+    };
+    match store.editable_model() {
+        Some(model) => editor::open_editable(app, model),
+        None => app.results.status = Some("Recorded model does not read".to_owned()),
     }
 }
 

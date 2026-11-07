@@ -233,14 +233,36 @@ impl fmt::Debug for ModelCode {
 /// Registration records the model's type path, with a [`CodeOrigin::Compiled`] origin. The registering crate's build
 /// is recorded once the entry joins a model set, and the accessors that read it return empty text or `None` until
 /// then. A model composed at run time records its [`ModelCode`] instead, and never a build.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A runtime model built from an author document, such as a sheet, also records the document's text as its author
+/// text ([`Self::with_author`]). The author text stays outside [`Self::code_hash`] and outside equality, so two
+/// sources whose author texts differ in a note alone compare equal. [`Self::same_author`] compares the author texts.
+#[derive(Debug, Clone)]
 pub struct ModelSource {
     type_path: Cow<'static, str>,
     build: Option<BuildInfo>,
     origin: CodeOrigin,
     /// Code of a runtime model, `None` for compiled code.
     code: Option<ModelCode>,
+    /// Text of the author document a runtime model was built from, `None` for a model built from its code alone.
+    author: Option<ModelCode>,
 }
+
+/// Compares the type path, the build, the origin and the code, and leaves the author text out.
+impl PartialEq for ModelSource {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            type_path,
+            build,
+            origin,
+            code,
+            author: _,
+        } = self;
+        *type_path == other.type_path && *build == other.build && *origin == other.origin && *code == other.code
+    }
+}
+
+impl Eq for ModelSource {}
 
 impl ModelSource {
     /// Returns a source that records `type_path`, compiled code and no build yet.
@@ -251,6 +273,7 @@ impl ModelSource {
             build: None,
             origin: CodeOrigin::Compiled,
             code: None,
+            author: None,
         }
     }
 
@@ -263,6 +286,17 @@ impl ModelSource {
             build: None,
             origin: CodeOrigin::Runtime,
             code: Some(code),
+            author: None,
+        }
+    }
+
+    /// Returns the source with `author` recorded as the text of the author document the model was built from.
+    ///
+    /// The author text enters neither [`Self::code_hash`] nor equality.
+    pub fn with_author(self, author: ModelCode) -> Self {
+        Self {
+            author: Some(author),
+            ..self
         }
     }
 
@@ -283,6 +317,18 @@ impl ModelSource {
     /// Code of a model composed at run time, `None` for compiled code.
     pub fn code(&self) -> Option<&ModelCode> {
         self.code.as_ref()
+    }
+
+    /// Text of the author document a runtime model was built from, `None` for a model built from its code alone.
+    pub fn author(&self) -> Option<&ModelCode> {
+        self.author.as_ref()
+    }
+
+    /// Returns whether `other` records the same author text, or none, as this source.
+    ///
+    /// Equality leaves the author text out. This is the comparison of the author texts alone.
+    pub fn same_author(&self, other: &Self) -> bool {
+        self.author == other.author
     }
 
     /// Hash that identifies the model's code: the [`ModelCode::hash`] of a runtime model, and the registering
@@ -434,5 +480,91 @@ mod tests {
             Some(0xAA),
             "compiled code is identified by its sources"
         );
+    }
+
+    #[test]
+    fn model_source_equality_ignores_the_author_text() {
+        let base = ModelSource::runtime("life", ModelCode::new("henad-graph/1", "graph"))
+            .with_author(ModelCode::new("henad-sheet/1", "sheet"));
+        let build = BuildInfo::__from_env("pkg", "1.0.0", Some("abc1234"), None, None, None, false);
+        // One source per field, each differing from `base` in that field alone. The destructuring and the literal below
+        // name every field, so a new field fails to compile here until it is placed. Its row in `differing` is added
+        // by hand.
+        let ModelSource {
+            type_path,
+            build: base_build,
+            origin,
+            code,
+            author,
+        } = base.clone();
+        let differing = [
+            (
+                "type_path",
+                ModelSource {
+                    type_path: "runtime:other".into(),
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "build",
+                ModelSource {
+                    build: Some(build),
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "origin",
+                ModelSource {
+                    origin: CodeOrigin::Compiled,
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "code",
+                ModelSource {
+                    code: Some(ModelCode::new("henad-graph/1", "other graph")),
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "author",
+                ModelSource {
+                    author: Some(ModelCode::new("henad-sheet/1", "sheet with a note")),
+                    ..base.clone()
+                },
+                false,
+            ),
+        ];
+        for (field, source, counts) in &differing {
+            assert_eq!(*source != base, *counts, "equality and the field {field}");
+        }
+        assert_eq!(
+            ModelSource {
+                type_path,
+                build: base_build,
+                origin,
+                code,
+                author,
+            },
+            base
+        );
+
+        let edited = &differing[4].1;
+        assert!(!edited.same_author(&base), "the author texts differ");
+        assert!(base.same_author(&base.clone()));
+        assert_eq!(
+            edited.code_hash(),
+            base.code_hash(),
+            "the author text stays outside the hash"
+        );
+        assert_eq!(base.author().map(ModelCode::text), Some("sheet"));
+        let without = ModelSource::runtime("life", ModelCode::new("henad-graph/1", "graph"));
+        assert_eq!(without.author(), None);
+        assert_eq!(without, base);
+        assert!(!without.same_author(&base));
     }
 }

@@ -357,6 +357,26 @@ Each `[[editor.frame]]` of the converted file holds the nodes of one line, the n
 Its `line` key, or its `lines` key for nodes several lines share, records the line ids, or the parts of the sheet, the nodes came from.
 A sheet with an error, or with a line that does not run yet, does not convert.
 
+### The sheet in a results folder
+
+A sweep of a sheet also records the sheet's canonical text in its manifest, as `model.author`, beside the lowered graph's `model.code`.
+
+``` json
+"author": {
+  "format": "henad-sheet/1",
+  "fnv1a64": "…",
+  "text": "format = \"henad-model\"\n…"
+}
+```
+
+The sheet's text stays outside the code, so a note or a comment edited between two sessions of one sweep keeps the folder resumable.
+The manifest then holds the sheet as the latest session ran it.
+A merge keeps the sheet text of the lowest shard.
+A replay runs the graph that `model.code` records and never reads the sheet, so a folder still replays when a later Henad reads the sheet differently.
+In the desktop app, <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> in the [Results tab](../guide/app.md#opening-results) opens the recorded sheet, and opens the recorded graph when the folder records no sheet.
+A program reads the text with `ResultSet::author`.
+A folder that a model file of another kind or a compiled model wrote leaves `model.author` out.
+
 ### Limits of a sheet
 
 | Limit | Value |

@@ -45,23 +45,27 @@ once the loaded model runs the applied source, and from `Applied` to `Installed`
 loaded, as after Cancel of a build or Offload. `load` commits the loaded entry when the build
 starts, and the outcome reads `Applied` from then on. New grid rule loads `life_starter()`, the
 canonical text of `GridRule::life()`, and Edit model, shown for a runtime entry whose code is in
-`GridRule::CODE_FORMAT` (`editable_text`), its canonical text. Open model and Save model go through
-`OpenTarget::Model` and `SaveTarget::Model`, a `.toml` file on native and a picked file or a
-download in a browser. Opening loads the text and applies nothing. `AppState::show_fault` gives a
-fault to the Editor (`EditorPanel::claims`) when it belongs to a run built from the applied source
-that has not passed tick 0, in place of the fault modal. A lost device, a failed poll and a device
-out of memory stay with the modal, since no edit of the code fixes them. `PendingBuild` keeps the
-entry it builds, and `finish_build` passes it to `show_fault`, so a fault the build thread returns
-reaches the Editor on the frame `poll_build` takes it. `show_fault_in_modal` passes the Editor over:
-a build thread that did not start or ended without a result, and on native a fault `report_fault`
-takes from a sink while a build runs. That fault comes from a detached run or from rendering. Apply
-returns before `poll_build`'s frame, and ends early only when the Editor claims a fault during the
-call, as it can for a browser's inline build. In a browser `catching_on` pushes no scopes, and the
-device reports a refused rule through the `FaultSink` a frame or more after the build. Without
-compute, Apply is disabled and the tab reads `NO_COMPUTE`. Apply builds no model the device cannot
-hold at the next build's values, and reports the sizes as `ApplyOutcome::Faulted`.
-`reset_simulation`, `open_run` and `open_setup` refuse it too, since the engine's own assert would
-end a browser's page. `src/tests/editor.rs` holds `new_grid_rule_starts_from_the_life_starter`,
+`GridRule::CODE_FORMAT`, its canonical text. Edit model and the Results tab's Open in Editor read
+through `editable_model(author, code)`, which returns an `EditableModel` (the sheet of a
+`henad-sheet/1` author text, else the graph or the grid rule of the code), and
+`EditorPanel::load_model` loads it from no file. `can_edit` is `editable_model(...).is_some()`. Open
+model and Save model go through `OpenTarget::Model` and `SaveTarget::Model`, a `.toml` file on
+native and a picked file or a download in a browser. Opening loads the text and applies nothing.
+`AppState::show_fault` gives a fault to the Editor (`EditorPanel::claims`) when it belongs to a run
+built from the applied source that has not passed tick 0, in place of the fault modal. A lost
+device, a failed poll and a device out of memory stay with the modal, since no edit of the code
+fixes them. `PendingBuild` keeps the entry it builds, and `finish_build` passes it to `show_fault`,
+so a fault the build thread returns reaches the Editor on the frame `poll_build` takes it.
+`show_fault_in_modal` passes the Editor over: a build thread that did not start or ended without a
+result, and on native a fault `report_fault` takes from a sink while a build runs. That fault comes
+from a detached run or from rendering. Apply returns before `poll_build`'s frame, and ends early
+only when the Editor claims a fault during the call, as it can for a browser's inline build. In a
+browser `catching_on` pushes no scopes, and the device reports a refused rule through the
+`FaultSink` a frame or more after the build. Without compute, Apply is disabled and the tab reads
+`NO_COMPUTE`. Apply builds no model the device cannot hold at the next build's values, and reports
+the sizes as `ApplyOutcome::Faulted`. `reset_simulation`, `open_run` and `open_setup` refuse it too,
+since the engine's own assert would end a browser's page. `src/tests/editor.rs` holds
+`new_grid_rule_starts_from_the_life_starter`,
 `applying_an_edit_installs_and_rebuilds_from_tick_zero`,
 `applying_beside_another_run_past_tick_zero_waits_for_build`,
 `applying_again_after_cancel_asks_to_rebuild_again`,
@@ -84,7 +88,7 @@ for a grid rule. Apply also replaces a running preview at any tick: `runs_source
 preview, and `install`'s `settle_loaded` leaves a preview alone. `open_text` opens a file whose header reads
 `kind = "graph"` and that `GraphFile::parse` reads on the canvas, and a graph that does not read in
 the code view, where Apply places its problems. `new_graph_model(app, file_name)` opens a starter,
-and Edit model opens a runtime entry whose code is `henad-graph/1` (`editable_graph`, `can_edit`).
+and Edit model opens a runtime entry whose code is `henad-graph/1` and records no sheet.
 `GraphEditor::new` places every body without placement through `arrange` (no undo step) and opens
 the first tick pass.
 

@@ -24,10 +24,11 @@ use henad_compute::entry::{ModelEntry, ModelSet};
 use henad_compute::fault::{Fault, FaultKind};
 use henad_compute::gpu::runtime_grid::GridRule;
 use henad_core::diagnostic::CodeDiagnostic;
-use henad_core::provenance::ModelSource;
+use henad_core::provenance::{ModelCode, ModelSource};
 use henad_explore::model_file::ModelFile;
 use henad_graph::model_text::read_header;
-use henad_graph::sheet::{KIND_SHEET, ParsedSheet};
+use henad_graph::sheet::document::SheetDocument;
+use henad_graph::sheet::{KIND_SHEET, ParsedSheet, SHEET_CODE_FORMAT};
 use henad_graph::starters::{Starter, agent_starters, starters};
 use henad_graph::{GraphFile, KIND_GRAPH};
 
@@ -316,6 +317,16 @@ impl EditorPanel {
         self.applied = None;
         self.scroll_to = None;
         self.preview = preview::Preview::default();
+    }
+
+    /// Replaces the Editor's model with `model`, from no file, and clears the file status line.
+    pub fn load_model(&mut self, model: EditableModel) {
+        match model {
+            EditableModel::Sheet(document) => self.load_sheet(sheet::SheetEditor::new(*document), None),
+            EditableModel::Graph(file) => self.load_graph(&file, None),
+            EditableModel::Rule(text) => self.load(text, None),
+        }
+        self.file_status = None;
     }
 
     /// Replaces the Editor's model with `sheet`, from the file `file_name` or from no file.
@@ -831,51 +842,64 @@ pub fn new_graph_model(app: &mut AppState, file_name: &str) {
     app.focus_request = Some(Tab::Editor);
 }
 
-/// Returns whether the Editor can open the code of `entry`: a grid rule or a graph model applied at run time.
-pub fn can_edit(entry: &ModelEntry) -> bool {
-    editable_text(entry).is_some() || editable_graph(entry).is_some()
+/// Model the Editor can open from a model's recorded code.
+#[derive(Debug)]
+pub enum EditableModel {
+    /// Sheet read from the author text of a model built from a sheet.
+    Sheet(Box<SheetDocument>),
+    /// Graph model read from its code.
+    Graph(Box<GraphFile>),
+    /// Model file text of a grid rule.
+    Rule(String),
 }
 
-/// Returns the graph `entry` runs, read from its code, or `None` for a model that is no graph applied at run time.
-pub fn editable_graph(entry: &ModelEntry) -> Option<GraphFile> {
-    entry
-        .source()
-        .code()
-        .filter(|code| code.format() == henad_graph::CODE_FORMAT)
-        .and_then(|code| GraphFile::from_code(code).ok())
-}
-
-/// Returns the model file text of `entry`, the canonical text of a grid rule applied at run time, or `None` for a
-/// model whose code the Editor cannot show.
-pub fn editable_text(entry: &ModelEntry) -> Option<&str> {
-    entry
-        .source()
-        .code()
-        .filter(|code| code.format() == GridRule::CODE_FORMAT)
-        .map(henad_core::provenance::ModelCode::text)
-}
-
-/// Replaces the Editor's text with the model file of the selected model, and brings the Editor to the front.
+/// Returns the model the Editor opens from `author`, a model's author text, and `code`, its code: the sheet that
+/// `author` holds, then the graph or the grid rule that `code` holds, or `None` for neither.
 ///
-/// The text stays, edits since included, when the selected model's code is the code the Editor applied last.
+/// An author text or a code that does not read counts as missing.
+pub fn editable_model(author: Option<&ModelCode>, code: Option<&ModelCode>) -> Option<EditableModel> {
+    let sheet = author
+        .filter(|author| author.format() == SHEET_CODE_FORMAT)
+        .and_then(|author| ParsedSheet::parse(author.text()).ok());
+    if let Some(parsed) = sheet {
+        return Some(EditableModel::Sheet(Box::new(parsed.into_document())));
+    }
+    let code = code?;
+    match code.format() {
+        henad_graph::CODE_FORMAT => GraphFile::from_code(code)
+            .ok()
+            .map(|file| EditableModel::Graph(Box::new(file))),
+        GridRule::CODE_FORMAT => Some(EditableModel::Rule(code.text().to_owned())),
+        _ => None,
+    }
+}
+
+/// Returns whether the Editor can open the code of `entry`: a grid rule, a graph model or a sheet applied at run time.
+pub fn can_edit(entry: &ModelEntry) -> bool {
+    editable_model(entry.source().author(), entry.source().code()).is_some()
+}
+
+/// Replaces the Editor's model with the selected model, its sheet when it was built from one, and brings the Editor
+/// to the front.
+///
+/// The model stays, edits since included, when the selected model's code is the code the Editor applied last.
 pub fn edit_model(app: &mut AppState) {
     let Some(entry) = app.selected_entry() else {
         return;
     };
     let applied = app.editor.is_applied(entry.source());
-    if let Some(text) = editable_text(entry).map(str::to_owned) {
-        if !applied {
-            app.editor.load(text, None);
-            app.editor.file_status = None;
-        }
-    } else if let Some(file) = editable_graph(entry) {
-        if !applied {
-            app.editor.load_graph(&file, None);
-            app.editor.file_status = None;
-        }
-    } else {
+    let Some(model) = editable_model(entry.source().author(), entry.source().code()) else {
         return;
+    };
+    if !applied {
+        app.editor.load_model(model);
     }
+    app.focus_request = Some(Tab::Editor);
+}
+
+/// Replaces the Editor's model with `model`, from no file, and brings the Editor to the front.
+pub fn open_editable(app: &mut AppState, model: EditableModel) {
+    app.editor.load_model(model);
     app.focus_request = Some(Tab::Editor);
 }
 
@@ -1013,8 +1037,21 @@ pub fn apply(app: &mut AppState) {
         |app: &AppState| app.preview().is_none() && app.loaded_entry().is_some_and(|loaded| loaded.source() == &source);
     let unchanged = runs_source(app) && app.models.get(&id).is_some_and(|held| held.source() == &source);
 
+    // A note edit of a sheet leaves the source equal. The set's entry takes the new author text without a rebuild,
+    // so a sweep started next records the sheet as it now reads.
+    let author_changed = app
+        .models
+        .get(&id)
+        .is_some_and(|held| !held.source().same_author(&source));
+
     app.editor.outcome = None;
     app.editor.applied = Some(source.clone());
+    if unchanged && author_changed {
+        let mut models = ModelSet::new(henad_core::build_info!());
+        if models.insert(entry.clone()).is_ok() {
+            app.install_models(&models);
+        }
+    }
     if !unchanged {
         let mut models = ModelSet::new(henad_core::build_info!());
         if let Err(error) = models.insert(entry) {

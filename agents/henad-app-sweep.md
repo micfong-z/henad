@@ -100,6 +100,16 @@ budgets its manifest records and automatic concurrency (`SessionExecution::recor
 folder is read again once that sweep ends. Resume is disabled while `ResultsStore::code_matches`
 fails (`code_refusal`), for a folder of other code than the app's entry where either code is
 runtime code (`Manifest::code_matches`). `henad-app --open DIR` opens a folder at start.
+Open in Editor (`OPEN_IN_EDITOR`, `ResultsRequest::OpenInEditor`) shows in the toolbar while
+`ResultsStore::records_editable_code` holds, a check of the recorded formats alone. A press reads
+`ResultsStore::editable_model`, the recorded sheet (`ResultSet::author`) or else the recorded
+graph or grid rule, through the Editor's `editable_model`, and `editor::open_editable` loads it
+from no file and brings the Editor to the front. `RecordedModel` keeps the author text and the
+code: a sweep run in the app keeps those of the entry it started with, and a folder those its
+manifest holds. A text that does not read sets the status line. The Model tab's Edit model takes
+the same path over the selected entry (`edit_model`), so a model built from a sheet opens as the
+sheet. `open_in_editor_opens_the_sheet_a_sweep_recorded_or_else_its_graph`
+(`src/tests/sheet_editor.rs`) holds both.
 `ui/sweep/search.rs` draws the Search section of Search mode: the method, the objective or the
 PSE axes, the budget, and each method's other settings in a nested Method settings section. An
 output picked there that the runs do not record joins the Outputs section, and Use range from

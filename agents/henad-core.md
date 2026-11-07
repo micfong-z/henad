@@ -37,7 +37,12 @@ A `ModelSource` also holds a `CodeOrigin` (`Compiled` or `Runtime`, non-exhausti
 no build, and its `ModelCode` holds a format, the canonical text and the FNV-1a hash of the tag
 `henad.model-code.1`, the format and the text (`model_code_hash_is_pinned`, keep it).
 `code_hash()` is that hash for runtime code and the registering crate's source hash for compiled
-code. Equality covers the origin and the code.
+code. `with_author` records the text of the author document a runtime model was built from (a
+sheet's canonical text), read by `author()`. The author text stays outside `code_hash()` and
+outside equality: `PartialEq` is written by hand over the type path, the build, the origin and the
+code, destructuring every field so a new field has to be placed (decision D51,
+`model_source_equality_ignores_the_author_text`, keep it). The app compares sources with `==`,
+and a note edit then reinstalls nothing. `same_author` compares the author texts alone.
 `diagnostic.rs` holds `CodeDiagnostic` (severity, message, file, byte span, line and character
 column counted from 1, notes, and the optional `pass` and `node` id a graph model's checker sets),
 `#[non_exhaustive]` and built through `error` or `warning` and the `with_` methods, with

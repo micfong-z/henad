@@ -839,3 +839,295 @@ fn two_codes_under_one_label_are_listed_apart() {
     let hashes: Vec<Option<u64>> = builds.iter().map(|build| build.code_hash).collect();
     assert_eq!(hashes, [Some(life.hash()), Some(edited.hash())]);
 }
+
+/// A model built from a sheet: its results folder records the sheet's canonical text beside the lowered graph's code,
+/// and the code alone decides a resume and a merge.
+#[cfg(feature = "model-files")]
+mod sheet_text {
+    use std::path::Path;
+
+    use henad_compute::entry::ModelEntry;
+    use henad_compute::gpu::GpuContext;
+    use henad_core::explore::design::DesignKind;
+    use henad_core::explore::factor::{FactorSpec, LevelSpec};
+    use henad_core::explore::fingerprint::schema_hash;
+    use henad_core::explore::plan::Shard;
+    use henad_core::explore::spec::{BlockSpec, SweepSpec};
+    use henad_graph::sheet::{SHEET_CODE_FORMAT, starters};
+
+    use crate::merge::merge;
+    use crate::model_file::ModelFile;
+    use crate::output::MANIFEST_FILE;
+    use crate::output::manifest::ManifestModelCode;
+    use crate::output::resume::ResumeError;
+    use crate::result_set::ResultSet;
+    use crate::sweep::{ExploreError, SweepOptions, SweepWarning};
+    use crate::tests::support::{
+        OutputTables, Recorder, ScratchDir, headless_device, manifest, sweep_options, sweep_with,
+    };
+
+    /// Returns the Game of Life sheet starter on a 16 by 16 grid.
+    fn life_sheet() -> String {
+        let text = starters()
+            .iter()
+            .find(|starter| starter.file_name == "game_of_life.toml")
+            .expect("the Game of Life sheet is a starter")
+            .text;
+        let small = text.replacen("width = 1024\nheight = 1024\n", "width = 16\nheight = 16\n", 1);
+        assert_ne!(small, text, "the grid size was found");
+        small
+    }
+
+    /// Returns `text` with `old` replaced by `new` once, where `text` must hold `old`.
+    fn edited(text: &str, old: &str, new: &str) -> String {
+        assert!(text.contains(old), "the text holds no {old:?}");
+        text.replacen(old, new, 1)
+    }
+
+    /// Returns the Game of Life sheet with a note on line 2. The note leaves the lowered graph alone.
+    fn noted_sheet() -> String {
+        edited(
+            &life_sheet(),
+            "start_state = \"dead\"\n",
+            "start_state = \"dead\"\nnote = \"Birth\"\n",
+        )
+    }
+
+    /// Returns the entry of the model file `text`, which must build.
+    fn entry_of(text: &str) -> ModelEntry {
+        ModelFile::parse(text)
+            .and_then(|file| file.entry())
+            .unwrap_or_else(|error| panic!("the model file does not build: {error}"))
+    }
+
+    /// Returns the canonical text of the sheet `text`.
+    fn canonical(text: &str) -> String {
+        ModelFile::parse(text).expect("the sheet reads").to_toml()
+    }
+
+    /// Returns a sweep of the sheet over Initial density for 2 steps, with `replicates` replicates.
+    fn sheet_spec(replicates: u64) -> SweepSpec {
+        let mut spec = SweepSpec::new("game_of_life");
+        spec.blocks = vec![BlockSpec {
+            design: DesignKind::Factorial,
+            factors: vec![FactorSpec::param(
+                "initial_density",
+                LevelSpec::Values(vec!["0.2".to_owned(), "0.4".to_owned()]),
+            )],
+            design_seed: None,
+        }];
+        spec.run.steps = 2;
+        spec.run.replicates = replicates;
+        spec
+    }
+
+    /// Sweeps `entry` on `gpu` into `dir` with `options`, reporting to `progress`.
+    fn sweep_into(
+        entry: &ModelEntry,
+        gpu: &GpuContext,
+        spec: &SweepSpec,
+        dir: &Path,
+        options: &SweepOptions,
+        progress: &mut Recorder,
+    ) -> Result<(), ExploreError> {
+        sweep_with(entry, Some(gpu), spec, dir, options, progress).map(|_| ())
+    }
+
+    /// Sweeps `first` with one replicate into a fresh directory, then resumes it with `second` and two replicates.
+    ///
+    /// Returns the warnings or the error of the resume, the directory, and whether the resume left the manifest as it
+    /// was.
+    fn resume_with(
+        gpu: &GpuContext,
+        first: &ModelEntry,
+        second: &ModelEntry,
+    ) -> (Result<Vec<SweepWarning>, ExploreError>, ScratchDir, bool) {
+        let scratch = ScratchDir::new("sheet-text");
+        sweep_into(
+            first,
+            gpu,
+            &sheet_spec(1),
+            scratch.path(),
+            &sweep_options(false),
+            &mut Recorder::default(),
+        )
+        .expect("the sweep runs");
+        let read = || std::fs::read(scratch.path().join(MANIFEST_FILE)).expect("the manifest reads");
+        let before = read();
+        let mut progress = Recorder::default();
+        let result = sweep_into(
+            second,
+            gpu,
+            &sheet_spec(2),
+            scratch.path(),
+            &sweep_options(true),
+            &mut progress,
+        )
+        .map(|()| progress.warnings);
+        let unchanged = read() == before;
+        (result, scratch, unchanged)
+    }
+
+    /// Number of runs the folder `dir` holds.
+    fn run_count(dir: &Path) -> usize {
+        ResultSet::open_dir(dir, 0).expect("the folder reads").runs().len()
+    }
+
+    #[test]
+    fn the_manifest_records_the_sheet_text() {
+        let Some(gpu) = headless_device() else {
+            return;
+        };
+        let text = life_sheet();
+        let entry = entry_of(&text);
+        let scratch = ScratchDir::new("sheet-manifest");
+        sweep_into(
+            &entry,
+            &gpu,
+            &sheet_spec(1),
+            scratch.path(),
+            &sweep_options(false),
+            &mut Recorder::default(),
+        )
+        .expect("the sweep runs");
+        let recorded = manifest(scratch.path()).model;
+        let author = recorded.author.as_ref().expect("the manifest records the sheet");
+        assert_eq!(author.format, SHEET_CODE_FORMAT);
+        assert_eq!(author.text, canonical(&text));
+        let code = recorded.code.as_ref().expect("the manifest records the code");
+        assert_eq!(code.format, henad_graph::CODE_FORMAT);
+        assert_eq!(code.to_code().hash(), entry.source().code_hash().expect("runtime code"));
+        assert_eq!(code.fnv1a64, format!("{:016x}", code.to_code().hash()));
+
+        let set = ResultSet::open_dir(scratch.path(), 0).expect("the folder reads");
+        assert_eq!(set.author().as_ref(), entry.source().author());
+        assert!(set.code_matches(entry.source()));
+    }
+
+    #[test]
+    fn a_note_edit_resumes_and_records_the_new_text() {
+        let Some(gpu) = headless_device() else {
+            return;
+        };
+        let (first, second) = (entry_of(&life_sheet()), entry_of(&noted_sheet()));
+        assert_eq!(first.source(), second.source(), "a note leaves the source equal");
+        let (result, scratch, _) = resume_with(&gpu, &first, &second);
+        assert_eq!(result.expect("a note edit resumes"), []);
+        assert_eq!(
+            run_count(scratch.path()),
+            4,
+            "the resume ran the second replicate of both configs"
+        );
+        let recorded = manifest(scratch.path());
+        assert_eq!(
+            recorded.model.author.map(|author| author.text),
+            Some(canonical(&noted_sheet())),
+            "the resume records the sheet it ran"
+        );
+    }
+
+    #[test]
+    fn a_lowered_ir_change_refuses_to_resume() {
+        let Some(gpu) = headless_device() else {
+            return;
+        };
+        // A colour enters the lowered graph's code and leaves the schema alone.
+        let recoloured = edited(&life_sheet(), "color = \"#00E676\" },", "color = \"#00C853\" },");
+        let (first, second) = (entry_of(&life_sheet()), entry_of(&recoloured));
+        assert_ne!(first.source(), second.source());
+        assert_eq!(schema_hash(&first.schema()), schema_hash(&second.schema()));
+        let (result, _scratch, unchanged) = resume_with(&gpu, &first, &second);
+        let refused = matches!(result, Err(ExploreError::Resume(ResumeError::CodeChanged { .. })));
+        assert!(refused, "expected the refusal of changed code, got {result:?}");
+        assert!(unchanged, "a refused resume leaves the manifest alone");
+    }
+
+    #[test]
+    fn a_merge_keeps_the_lowest_shards_sheet_text() {
+        let Some(gpu) = headless_device() else {
+            return;
+        };
+        let scratch = ScratchDir::new("sheet-merge");
+        let dirs = [scratch.path().join("shard-0"), scratch.path().join("shard-1")];
+        for (index, (dir, text)) in dirs.iter().zip([life_sheet(), noted_sheet()]).enumerate() {
+            let options = SweepOptions {
+                shard: Shard::new(index as u64, 2).expect("a valid shard"),
+                ..sweep_options(false)
+            };
+            sweep_into(
+                &entry_of(&text),
+                &gpu,
+                &sheet_spec(2),
+                dir,
+                &options,
+                &mut Recorder::default(),
+            )
+            .expect("the shard runs");
+        }
+        let merged = scratch.path().join("merged");
+        merge(&dirs, &merged, &mut Recorder::default()).expect("shards of one code merge");
+        let recorded = manifest(&merged).model;
+        assert_eq!(
+            recorded.author,
+            manifest(&dirs[0]).model.author,
+            "the merge keeps the lowest shard's sheet text"
+        );
+        assert_eq!(
+            recorded.author.map(|author| author.text),
+            Some(canonical(&life_sheet()))
+        );
+    }
+
+    #[test]
+    fn a_sheet_folder_replays_from_its_recorded_code_alone() {
+        let Some(gpu) = headless_device() else {
+            return;
+        };
+        let scratch = ScratchDir::new("sheet-replay");
+        let (sheet_dir, graph_dir) = (scratch.path().join("sheet"), scratch.path().join("graph"));
+        let spec = sheet_spec(2);
+        let sheet = entry_of(&life_sheet());
+        sweep_into(
+            &sheet,
+            &gpu,
+            &spec,
+            &sheet_dir,
+            &sweep_options(false),
+            &mut Recorder::default(),
+        )
+        .expect("the sweep runs");
+        let set = ResultSet::open_dir(&sheet_dir, usize::MAX).expect("the folder reads");
+        let code = set
+            .manifest()
+            .model
+            .code
+            .as_ref()
+            .map(ManifestModelCode::to_code)
+            .expect("the folder records the code");
+        // The recorded code is a graph file, read here with no sheet reader.
+        let graph = ModelFile::parse(code.text()).expect("the recorded code reads");
+        assert!(graph.graph().is_some() && graph.sheet().is_none());
+        let replayed = graph.entry().expect("the recorded code builds");
+        assert_eq!(replayed.source(), sheet.source());
+        assert_eq!(replayed.source().author(), None);
+        assert!(set.code_matches(replayed.source()) && set.schema_matches(replayed.schema()));
+        for row in set.runs() {
+            set.replay(replayed.schema(), row.outcome.run.run_id)
+                .expect("the run replays");
+        }
+        sweep_into(
+            &replayed,
+            &gpu,
+            &spec,
+            &graph_dir,
+            &sweep_options(false),
+            &mut Recorder::default(),
+        )
+        .expect("the sweep of the recorded code runs");
+        assert_eq!(
+            OutputTables::read(&graph_dir),
+            OutputTables::read(&sheet_dir),
+            "the recorded code runs as the sheet ran"
+        );
+    }
+}

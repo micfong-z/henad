@@ -119,7 +119,10 @@ fn apply_installs_the_graph_and_builds_it_at_its_own_size() {
     );
     assert!(crate::ui::editor::can_edit(&installed));
     assert_eq!(
-        crate::ui::editor::editable_graph(&installed).map(|file| file.code()),
+        match crate::ui::editor::editable_model(installed.source().author(), installed.source().code()) {
+            Some(crate::ui::editor::EditableModel::Graph(file)) => Some(file.code()),
+            _ => None,
+        },
         GraphFile::parse(&app.editor.model.file_text())
             .ok()
             .map(|file| file.code()),

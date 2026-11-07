@@ -23,7 +23,8 @@
 //! cannot run yet, and [`relations`] holds the order of a card's lines and the "otherwise" rule.
 //! [`document::SheetDocument::to_text`] writes the canonical text of a sheet, with the sentence of each line from
 //! [`sentence`] in a comment above it, and reading that text returns the same document. [`SheetFile::parse`] reads,
-//! checks and lowers a sheet to the graph it runs as, whose code identity is the sheet's, and [`LineMap`] names the
+//! checks and lowers a sheet to the graph it runs as, whose code identity is the sheet's, and whose entries record
+//! the sheet's canonical text as their author text in [`SHEET_CODE_FORMAT`]. [`LineMap`] names the
 //! line or part of the sheet each node of that graph comes from. [`SheetFile::place_graph_diagnostic`] places a finding
 //! about that graph at the table of the sheet its node comes from. [`convert`] copies that graph to a node graph file
 //! of its own, with frames naming the line each node came from, and [`changes_since_conversion`] lists what an edit of
@@ -87,6 +88,10 @@ pub const KIND_SHEET: &str = "sheet";
 
 /// Newest version of the author format this build reads, the `version` key of the `[sheet]` table.
 pub const SHEET_VERSION: u32 = 1;
+
+/// Format of a sheet's canonical text as a model's author text records it, in
+/// [`ModelSource::author`](henad_core::provenance::ModelSource::author) and in a results folder.
+pub const SHEET_CODE_FORMAT: &str = "henad-sheet/1";
 
 /// Reason a sheet cannot be read, checked or lowered.
 #[derive(Debug, Clone, PartialEq, Eq)]

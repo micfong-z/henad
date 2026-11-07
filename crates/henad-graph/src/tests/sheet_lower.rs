@@ -17,7 +17,9 @@ use crate::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
 use crate::limits::MAX_NODES_IN_FILE;
 use crate::sheet::edit::lines::{parse_path, phrase_mut, value_mut};
 use crate::sheet::limits::MAX_LINES_PER_CARD;
-use crate::sheet::{NodeOwner, SheetFile, SheetFileError, sentence, starters};
+use crate::sheet::{
+    KIND_SHEET, NodeOwner, SHEET_CODE_FORMAT, SHEET_VERSION, SheetFile, SheetFileError, sentence, starters,
+};
 use crate::wgsl::GridProgram;
 
 /// Text of the Game of Life starter.
@@ -373,6 +375,36 @@ fn editing_a_note_purpose_or_comment_keeps_the_code() {
         "# Each tick, every cell, by hand\n",
     );
     assert_eq!(code(&comment), code(life()));
+}
+
+#[test]
+fn a_lowered_sheet_records_its_canonical_text_outside_the_code() {
+    let noted = edited(
+        life(),
+        "start_state = \"dead\"\n",
+        "start_state = \"dead\"\nnote = \"Birth\"\n",
+    );
+    let (plain, noted) = (lowered(life()), lowered(&noted));
+    for file in [&plain, &noted] {
+        let author = file.lowered().author().expect("the lowered graph records the sheet");
+        assert_eq!((author.format(), author.text()), (SHEET_CODE_FORMAT, file.to_toml()));
+        let source = file.lowered().source();
+        assert_eq!(source.author(), Some(author));
+        assert_eq!(source.code(), Some(&file.code()));
+    }
+    assert_eq!(
+        plain.lowered().source(),
+        noted.lowered().source(),
+        "a note leaves the source equal"
+    );
+    assert!(!plain.lowered().source().same_author(&noted.lowered().source()));
+    assert!(noted.to_toml().contains("note = \"Birth\""));
+    // The graph's own text and a graph read from the code carry no author text.
+    assert!(!plain.lowered().to_toml().contains("henad-sheet"));
+    let replayed = crate::GraphFile::from_code(&plain.code()).expect("the recorded code reads");
+    assert_eq!(replayed.author(), None);
+    assert_eq!(replayed.source(), plain.lowered().source());
+    assert_eq!(SHEET_CODE_FORMAT, format!("henad-{KIND_SHEET}/{SHEET_VERSION}"));
 }
 
 #[test]

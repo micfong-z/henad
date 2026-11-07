@@ -21,9 +21,11 @@ use henad_core::explore::search::SearchSpecError;
 use henad_core::explore::spec::SweepSpec;
 
 use henad_core::explore::value::parse_value;
-use henad_core::provenance::ModelSource;
+use henad_core::provenance::{ModelCode, ModelSource};
 
-use crate::output::manifest::{BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, RecordedBuild};
+use crate::output::manifest::{
+    BuildRole, Manifest, ManifestError, ManifestMode, ManifestModelCode, ManifestStatus, RecordedBuild,
+};
 use crate::output::read::{ReadError, parse_one, record_ends};
 use crate::output::runs_csv::{ID_COLUMNS, NOTE_COLUMN, OUTCOME_COLUMNS};
 use crate::output::search_tables::{
@@ -364,6 +366,15 @@ impl ResultSet {
     /// [`Self::recorded_builds`] instead. [`Manifest::code_matches`] makes the same comparison.
     pub fn code_matches(&self, source: &ModelSource) -> bool {
         self.manifest.code_matches(source)
+    }
+
+    /// Returns the author text the manifest records, the canonical text of the sheet a model was built from, or `None`
+    /// for a model built from its code alone.
+    ///
+    /// The model's own code is the manifest's [`ManifestModel::code`](crate::output::manifest::ManifestModel::code),
+    /// and a replay runs that code with no author text.
+    pub fn author(&self) -> Option<ModelCode> {
+        self.manifest.model.author.as_ref().map(ManifestModelCode::to_code)
     }
 
     /// Plans the recorded spec against `schema`.

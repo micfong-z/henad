@@ -13,7 +13,7 @@ use super::document::{CardRuns, LineKind, MadeOf, SheetChip, SheetDocument, Shee
 use super::lower::{self, Problem};
 use super::relations::CardRelations;
 use super::sentence::{self, Sentences};
-use super::{LineMap, NodeOrigin, NodeOwner, ParsedSheet, SheetErrors, SheetFileError, SheetPlaces};
+use super::{LineMap, NodeOrigin, NodeOwner, ParsedSheet, SHEET_CODE_FORMAT, SheetErrors, SheetFileError, SheetPlaces};
 use crate::GraphFile;
 use crate::document::GraphDocument;
 use crate::ids::NodeId;
@@ -24,7 +24,8 @@ use crate::wgsl::FaultNames;
 ///
 /// The code identity of a sheet is the lowered graph's, [`GraphFile::code`]. The sheet's name, ids, state names,
 /// parameter labels and colours enter it through the graph. Notes, comments, `purpose` and the names of results stay
-/// outside it.
+/// outside it. The lowered graph records the sheet's canonical text as its [author text](GraphFile::author), in the
+/// format [`SHEET_CODE_FORMAT`], and so does the source of every entry built from it.
 ///
 /// ```
 /// use henad_graph::sheet::{SheetFile, starters};
@@ -32,6 +33,8 @@ use crate::wgsl::FaultNames;
 /// let file = SheetFile::parse(starters()[0].text).expect("the starter lowers");
 /// assert_eq!(file.lowered().document().name, "Game of Life");
 /// assert_eq!(file.code(), file.lowered().code());
+/// let author = file.lowered().source().author().cloned().expect("the source records the sheet");
+/// assert_eq!(author.text(), file.to_toml());
 /// ```
 #[derive(Clone)]
 pub struct SheetFile {
@@ -113,8 +116,8 @@ impl SheetFile {
         Ok(Self {
             warnings: warnings(&report),
             parsed,
+            lowered: graph.with_author(ModelCode::new(SHEET_CODE_FORMAT, canonical.clone())),
             canonical,
-            lowered: graph,
             line_map: lowered.map,
             fault_names: lowered.fault_names,
         })

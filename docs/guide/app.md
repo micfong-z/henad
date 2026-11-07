@@ -60,7 +60,7 @@ The GPU model entries only appear when a suitable device is detected.
 
 See the [models reference](../reference/models.md) for more details on each model.
 
-Under the dropdown, <span class="ui" markdown>:material-file-document-plus-outline: New model</span> opens the New model dialog, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> opens the [Editor](#editor-tab) on a new grid rule, and <span class="ui" markdown>:material-code-braces: Edit model</span> opens it on the model file of a selected grid rule.
+Under the dropdown, <span class="ui" markdown>:material-file-document-plus-outline: New model</span> opens the New model dialog, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> opens the [Editor](#editor-tab) on a new grid rule, and <span class="ui" markdown>:material-code-braces: Edit model</span> opens it on the sheet, node graph or grid rule the selected model was built from.
 
 ### Metadata
 
@@ -942,6 +942,11 @@ The button is disabled when the folder's runs came from runtime code other than 
 `henad-cli --resume` refuses such a folder as well.
 The progress shows in the <span class="ui" markdown>:material-flask-outline: Sweep</span> tab, and the folder is read again once the sweep ends.
 
+Results of a model built from a model file show <span class="ui" markdown>:material-pencil-outline: Open in Editor</span>.
+Press it to open the model the sweep ran in the Editor tab: the sheet the sweep recorded, or the node graph or grid rule it ran when it recorded no sheet.
+The model opens as it was when the sweep ran, even after the model in this app changed, and nothing is applied until you press Apply.
+A compiled model has no file to open, and its results show no button.
+
 ## :material-gauge: Performance tab
 
 <figure markdown="span">
@@ -1007,7 +1012,7 @@ A banner at the top appears when there are potential compatibility issues with t
 ## :material-code-braces: Editor tab
 
 The <span class="ui" markdown>:material-code-braces: Editor</span> tab holds one model file and runs its model without a restart: a sheet, a grid rule written as text, or a node graph.
-It is closed in the default layout, and opens to the right of the <span class="ui" markdown>:material-cube-outline: Viewport</span> when you press <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> or <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab, or select it in the View menu.
+It is closed in the default layout, and opens to the right of the <span class="ui" markdown>:material-cube-outline: Viewport</span> when you press <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> or <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab or <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> in the Results tab, or select it in the View menu.
 
 ### Sheets
 

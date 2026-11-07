@@ -163,6 +163,8 @@ pub struct GraphFile {
     places: Places,
     /// Map from [`Self::places`] back to [`Self::text`].
     line_ends: LineEnds,
+    /// Text of the author document the graph was lowered from, `None` for a graph read or built as a graph.
+    author: Option<ModelCode>,
 }
 
 /// Prints the graph's id and the byte length of the text.
@@ -234,6 +236,7 @@ impl GraphFile {
             text: text.to_owned(),
             places: file.places,
             line_ends,
+            author: None,
         })
     }
 
@@ -340,9 +343,30 @@ impl GraphFile {
     }
 
     /// Returns the source a model entry of the graph records: [`Self::code`], with the origin
-    /// [`CodeOrigin::Runtime`](henad_core::provenance::CodeOrigin::Runtime), under the target's id.
+    /// [`CodeOrigin::Runtime`](henad_core::provenance::CodeOrigin::Runtime), under the target's id, and with the
+    /// [author text](Self::author) of a graph lowered from a sheet.
     pub fn source(&self) -> ModelSource {
-        ModelSource::runtime(&self.document.target.id, self.code())
+        let source = ModelSource::runtime(&self.document.target.id, self.code());
+        match &self.author {
+            Some(author) => source.with_author(author.clone()),
+            None => source,
+        }
+    }
+
+    /// Text of the author document the graph was lowered from, such as a sheet's canonical text, and `None` for a
+    /// graph read or built as a graph.
+    ///
+    /// The author text enters neither [`Self::code`] nor [`Self::to_toml`].
+    pub fn author(&self) -> Option<&ModelCode> {
+        self.author.as_ref()
+    }
+
+    /// Returns the graph with `author` recorded as the text of the author document it was lowered from.
+    pub(crate) fn with_author(self, author: ModelCode) -> Self {
+        Self {
+            author: Some(author),
+            ..self
+        }
     }
 }
 

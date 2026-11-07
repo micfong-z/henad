@@ -60,6 +60,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - `time` column after `tick` for a model with a time scale: `--export-stats` (`StatsWriter::tick_length`) and a sweep's or search's `series.csv` (`SERIES_TIME_COLUMN`), the tick times the run's tick length; `ResultSet` and `read_directory_series` read the id columns from the header, older folders unchanged.
 - App time axis: Playback tick counter beside Play and Step ("Tick 24", "Tick 24 (12 days)" with a time scale); Charts and Results Series x axis labelled "Tick" or the unit ("Day"), samples at tick times tick length; Charts y range includes 0, a one-sample series drawn as a dot; hidden parameters left out of the Parameters tab and the graph editor's world panel, kept in the Sweep tab.
 - Conversion of a sheet to a node graph copy (`henad_graph::sheet`): `convert`, `ConvertOptions` (`new` numbers a taken id and name), `ConvertRefusal` (errors, skipped lines; `of`, `tooltip`), `ConvertError`; copy under `<id>_expert` and "(expert)", own code, `[editor] origin` (`ModelOrigin`: kind, model, name, file, hash, code, copy code, date), one frame per origin group with `line` or `lines`, labels of named results and reads, notes of the purpose and each parameter's meaning, no positions. `changes_since_conversion` (`ChangeGroup`, `ChangesError`): nodes added, removed and changed by id, grouped by frame. `LineMap::result_node`. Editor region: `model_origin`, `set_model_origin`, `FrameLayout::lines` (`new`, `with_lines`), `push_frame`, `move_frame_members`, `notes`, `add_note`, `NoteLayout`, `set_node_label`. Make function and Copy carry frame membership; `EditCommand::SetVariantColor`.
+- Sheet text in results: `ModelSource::with_author`, `author`, `same_author` (author text outside `code_hash` and equality); a sheet's entry records its canonical text as `henad-sheet/1` (`sheet::SHEET_CODE_FORMAT`, `GraphFile::author`); manifests record it as `model.author`, `ResultSet::author`, `ManifestModelCode::to_code`; a note edit resumes and records the new text. App: Open in Editor in the Results tab (the recorded sheet, else the recorded graph or grid rule), Edit model opens a sheet's model as the sheet, a note edit applies without a rebuild.
 
 ### Changed
 
@@ -86,6 +87,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - Graph editor: a move of a node, or Arrange, leaves the preview running (preview key follows the code); Arrange puts a region's input half in the column before its body.
 - App: New graph model renamed New node graph (Editor header, File menu).
 - Breaking: `Snapshot` gains `fire_counts` (`FireCounts`, empty on the CPU path and for a model with no probes).
+- Breaking: `ManifestModel` gains `author` (`None` for a model built from its code alone); `ModelSource` equality leaves the author text out.
 - Breaking: `OutputDir::open_writer` and `append_writer` take the model's time scale (`Option<&TimeScale>`, pass `entry.metadata().time.as_ref()`); `SeriesWriter::new` and `appending` take the tick length's position (`Option<usize>`, `None` for no `time` column), `write_run` the run's parameter values.
 
 ### Fixed
@@ -99,7 +101,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 - Descriptors: read fields through accessors (`descriptor.id()`, `.label()`, `.kind()`, ...); build them through the helpers, `ParamDescriptor::new`, `StatDescriptor::owned` or `ActionDescriptor::owned` (struct literals no longer compile); clone an `ActionDescriptor` where it was copied; a choice's options are `ChoiceOptions` (`get`, `iter`, `position`); pass `&[StatDescriptor]` to `stat_entries`; `known` lists and `ValueError::UnknownOption.options` are `Vec<String>`.
 - Views: `GridView`, `PointView` and `EdgeView` borrow their palettes for `'a`; a snapshot's palette is a `Vec<[u8; 4]>`.
 - Metadata: build `ModelMetadata` with `ModelMetadata::new(backend, structure).palette(..).replays_exactly(..)`; add a wildcard arm to matches on `Structure`.
-- Results: add arms for `ResumeError::CodeChanged` and `MergeError::CodeChanged`; build a `RecordedBuild` through `From`; pass `entry.source()` to `ResumeScan::read`.
+- Results: add arms for `ResumeError::CodeChanged` and `MergeError::CodeChanged`; build a `RecordedBuild` through `From`; pass `entry.source()` to `ResumeScan::read`; a `ManifestModel` literal adds `author: None`.
 - Runners: pass `ctx.faults.clone()` as `GpuSimThread::new`'s new last argument to keep its panics in the device's sink; a drop no longer waits for a stuck thread; call `stop(timeout)` and match `RunnerShutdown` where the thread has to be gone; `runner::Driver::shutdown` takes a timeout and returns `RunnerShutdown`; a `Snapshot` literal adds `fire_counts: FireCounts::default()`.
 
 ## [0.3.0] - 2026-10-10

@@ -1,7 +1,20 @@
 //! Tests of the sheet editor in the Editor tab: a sheet opens by the `kind` in its header, previews paused at tick 0,
 //! applies and saves its canonical text, and the New model dialog opens a sheet starter under a name.
 
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use henad_compute::entry::ModelEntry;
 use henad_core::diagnostic::DiagnosticSeverity;
+use henad_core::explore::design::DesignKind;
+use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::spec::{BlockSpec, SweepSpec};
+use henad_core::provenance::ModelCode;
+use henad_explore::handle::SweepOutput;
+use henad_explore::model_file::ModelFile;
+use henad_explore::progress::NoProgress;
+use henad_explore::result_set::ResultSet;
+use henad_explore::sweep::{Provenance, SweepOptions, run_spec};
 use henad_graph::sheet::check::check;
 use henad_graph::sheet::document::{
     LineKind, MadeOf, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, StartRule,
@@ -13,14 +26,19 @@ use web_time::Instant;
 
 use crate::state::{AppState, PreviewRun};
 use crate::tests::support::step_past;
+use crate::ui::dock::Tab;
 use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState, poll_at};
 use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::card_pane::{CardLine, LineNote, NoteColor, card_lines};
 use crate::ui::editor::sheet::new_model::{new_model_modal, starter_choices};
 use crate::ui::editor::sheet::sheet_pane::starts_text;
-use crate::ui::editor::{ApplyOutcome, EditorModel, apply, editor_ui, open_text, preview_running_text, save_name};
+use crate::ui::editor::{
+    ApplyOutcome, EditorModel, apply, edit_model, editor_ui, new_grid_rule, open_text, preview_running_text, save_name,
+};
 use crate::ui::menu_bar::file_menu;
 use crate::ui::playback::{press_build, tick_counter};
+use crate::ui::results::store::{ResultsSource, ResultsStore};
+use crate::ui::results::{open_folder, open_in_editor, poll};
 
 /// Returns an app over the example models on a headless device that runs compute shaders, or `None` to skip on a
 /// machine without a device.
@@ -1343,4 +1361,184 @@ fn tick_counter_words(metadata: &henad_core::metadata::ModelMetadata) -> String 
         )
     });
     henad_graph::sheet::sentence::tick_counter(4, elapsed.as_deref())
+}
+
+/// Returns the Game of Life sheet with a note on line 2. The note leaves the lowered graph alone.
+fn noted_life() -> String {
+    let text = starter_text("game_of_life.toml");
+    let noted = text.replacen(
+        "start_state = \"dead\"\n",
+        "start_state = \"dead\"\nnote = \"Birth\"\n",
+        1,
+    );
+    assert_ne!(noted, text, "the old state of line 2 was found");
+    noted
+}
+
+/// Returns the Game of Life sheet on a 16 by 16 grid.
+fn small_life() -> String {
+    let text = starter_text("game_of_life.toml");
+    let small = text.replacen("width = 1024\nheight = 1024\n", "width = 16\nheight = 16\n", 1);
+    assert_ne!(small, text, "the grid size was found");
+    small
+}
+
+/// Returns the entry of the model file `text`, which must build.
+fn entry_of(text: &str) -> ModelEntry {
+    ModelFile::parse(text)
+        .and_then(|file| file.entry())
+        .unwrap_or_else(|error| panic!("the model file does not build: {error}"))
+}
+
+/// Returns a sweep of model `id` over Initial density for 2 steps.
+fn density_sweep(id: &str) -> SweepSpec {
+    let mut spec = SweepSpec::new(id);
+    spec.blocks = vec![BlockSpec {
+        design: DesignKind::Factorial,
+        factors: vec![FactorSpec::param(
+            "initial_density",
+            LevelSpec::Values(vec!["0.2".to_owned(), "0.4".to_owned()]),
+        )],
+        design_seed: None,
+    }];
+    spec.run.steps = 2;
+    spec
+}
+
+/// Folder removed when the test ends.
+struct ScratchFolder(PathBuf);
+
+impl Drop for ScratchFolder {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.0));
+    }
+}
+
+/// Sweeps `entry` over Initial density into `folder` on the app's device.
+fn sweep_into(app: &AppState, entry: &ModelEntry, folder: &Path) {
+    drop(std::fs::remove_dir_all(folder));
+    let options = SweepOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
+    let output = SweepOutput::Directory(folder.to_owned());
+    run_spec(
+        entry,
+        app.gpu_ctx.as_ref(),
+        &density_sweep(entry.id()),
+        output,
+        &options,
+        &mut NoProgress,
+    )
+    .expect("the sweep runs");
+}
+
+/// Opens `folder` in the Results tab, and waits until its results show.
+fn open_results(app: &mut AppState, folder: &Path) {
+    open_folder(app, folder.to_owned());
+    let ctx = egui::Context::default();
+    for _ in 0..1000 {
+        poll(&ctx, app);
+        let shown = app
+            .results
+            .store()
+            .is_some_and(|store| store.source == ResultsSource::Folder(folder.to_owned()));
+        if shown {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("the folder's results did not show");
+}
+
+#[test]
+fn a_note_edit_does_not_reinstall_the_model() {
+    let Some(mut app) = app() else {
+        return;
+    };
+    open(&mut app, starter_text("game_of_life.toml"));
+    apply(&mut app);
+    app.wait_for_build();
+    step_past(&mut app, 0);
+    let id = sheet(&app).document().sheet.id.clone();
+    let before = app.models.get(&id).expect("the sheet is installed").source().clone();
+    assert_eq!(before.author().map(ModelCode::text), Some(sheet(&app).text()));
+
+    open(&mut app, &noted_life());
+    let noted_text = sheet(&app).text().to_owned();
+    apply(&mut app);
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Unchanged));
+    assert!(app.pending_rebuild.is_none() && !app.is_building(), "nothing rebuilds");
+    assert!(
+        app.snapshot.as_ref().is_some_and(|snapshot| snapshot.tick > 0),
+        "the run kept going"
+    );
+    let held = app.models.get(&id).expect("the sheet is installed").source().clone();
+    assert_eq!(held, before, "the code is unchanged");
+    assert_eq!(
+        held.author().map(ModelCode::text),
+        Some(noted_text.as_str()),
+        "the set's entry holds the sheet as it now reads"
+    );
+
+    // Edit model opens the sheet the selected model was built from, note included.
+    new_grid_rule(&mut app);
+    edit_model(&mut app);
+    let opened = sheet(&app);
+    assert_eq!(opened.text(), noted_text);
+    assert_eq!(app.focus_request, Some(Tab::Editor));
+}
+
+#[test]
+fn open_in_editor_opens_the_sheet_a_sweep_recorded_or_else_its_graph() {
+    let Some(mut app) = app() else {
+        return;
+    };
+    let text = small_life();
+    let document = ParsedSheet::parse(&text).expect("the sheet reads").into_document();
+
+    // A sweep run in the app records the entry it started with.
+    let entry = entry_of(&text);
+    let plan = Arc::new(density_sweep(entry.id()).plan(&entry.schema()).expect("a valid spec"));
+    app.results.begin_sweep(plan, &entry, None);
+    assert!(app.results.store().is_some_and(ResultsStore::records_editable_code));
+    new_grid_rule(&mut app);
+    app.focus_request = None;
+    open_in_editor(&mut app);
+    assert_eq!(sheet(&app).document(), &document);
+    assert_eq!(app.focus_request, Some(Tab::Editor));
+
+    // A folder records the sheet in its manifest.
+    let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-sheet-sweep-{}", std::process::id())));
+    sweep_into(&app, &entry, &folder.0);
+    open_results(&mut app, &folder.0);
+    new_grid_rule(&mut app);
+    open_in_editor(&mut app);
+    assert_eq!(sheet(&app).document(), &document, "the folder's sheet opens");
+
+    // A folder swept from the recorded graph alone records no sheet, and its graph opens on the canvas.
+    let set = ResultSet::open_dir(&folder.0, 0).expect("the folder reads");
+    let code = set
+        .manifest()
+        .model
+        .code
+        .as_ref()
+        .expect("the folder records the code")
+        .to_code();
+    let graph_entry = entry_of(code.text());
+    assert_eq!(graph_entry.source().author(), None);
+    let graph_folder =
+        ScratchFolder(std::env::temp_dir().join(format!("henad-app-graph-sweep-{}", std::process::id())));
+    sweep_into(&app, &graph_entry, &graph_folder.0);
+    open_results(&mut app, &graph_folder.0);
+    open_in_editor(&mut app);
+    assert!(app.editor.model.graph().is_some(), "the graph opens on the canvas");
+    let opened = ModelFile::parse(&app.editor.model.file_text()).expect("the opened graph reads");
+    assert_eq!(opened.code(), code);
+
+    // A compiled model records no code to open.
+    let sir = app.models.get("sir").expect("SIR is registered").clone();
+    let mut spec = SweepSpec::new("sir");
+    spec.run.steps = 2;
+    let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
+    app.results.begin_sweep(plan, &sir, None);
+    let store = app.results.store().expect("the sweep's results");
+    assert!(!store.records_editable_code() && store.editable_model().is_none());
 }

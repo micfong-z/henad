@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use henad_compute::entry::ModelState;
+use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::{BUILDING, Fault, FaultKind};
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::runtime_grid::{GridRule, LIFE_STEP};
@@ -16,8 +16,8 @@ use crate::tests::support::{set_of, step_past};
 use crate::ui::dock::Tab;
 use crate::ui::editor::code_view::{cursor_index, move_cursor};
 use crate::ui::editor::{
-    ApplyOutcome, EditorModel, NO_COMPUTE, apply, edit_model, editable_text, editor_ui, life_starter, move_cursor_to,
-    new_grid_rule, receive_open,
+    ApplyOutcome, EditableModel, EditorModel, NO_COMPUTE, apply, edit_model, editable_model, editor_ui, life_starter,
+    move_cursor_to, new_grid_rule, receive_open,
 };
 use crate::ui::files::{DialogFile, OpenResult};
 
@@ -51,6 +51,15 @@ fn insert_line(text: &str, after: &str, line: &str) -> (String, u32) {
         .expect("the text holds the line");
     let edited = text.replacen(&format!("{after}\n"), &format!("{after}\n{line}\n"), 1);
     (edited, u32::try_from(index + 2).expect("a short text"))
+}
+
+/// Returns the model file text the Editor opens for `entry`, `None` for a model that is no grid rule applied at run
+/// time.
+fn rule_text(entry: &ModelEntry) -> Option<String> {
+    match editable_model(entry.source().author(), entry.source().code()) {
+        Some(EditableModel::Rule(text)) => Some(text),
+        _ => None,
+    }
 }
 
 /// Returns the problems of the last Apply, which refused the text.
@@ -539,9 +548,9 @@ fn edit_model_shows_the_code_the_rule_runs() {
     apply(&mut app);
     app.wait_for_build();
     let applied = app.editor.model.file_text();
-    assert_eq!(app.selected_entry().and_then(editable_text), Some(applied.as_str()));
+    assert_eq!(app.selected_entry().and_then(rule_text), Some(applied.clone()));
     assert_eq!(
-        app.models.get("sir").and_then(editable_text),
+        app.models.get("sir").and_then(rule_text),
         None,
         "a compiled model has no model file"
     );

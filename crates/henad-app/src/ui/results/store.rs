@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use henad_compute::entry::{ModelEntry, ModelLookupError};
+use henad_compute::gpu::runtime_grid::GridRule;
 use henad_core::explore::factor::FactorTarget;
 use henad_core::explore::fingerprint::schema_hash;
 use henad_core::explore::measure::SeriesBuffer;
@@ -28,13 +29,15 @@ use henad_core::explore::summary::{ReplicateSummary, RunningMoments};
 use henad_core::explore::value::{format_value, parse_value};
 use henad_core::metadata::{TimeScale, TimeUnit};
 use henad_core::params::ParamDescriptor;
-use henad_core::provenance::CodeOrigin;
-use henad_explore::output::manifest::{BuildRole, Manifest, RecordedBuild};
+use henad_core::provenance::{CodeOrigin, ModelCode};
+use henad_explore::output::manifest::{BuildRole, Manifest, ManifestModelCode, RecordedBuild};
 use henad_explore::output::search_tables::SearchHistory;
 use henad_explore::result_set::ResultSet;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
+use henad_graph::sheet::SHEET_CODE_FORMAT;
 
 use crate::state::lookup_message;
+use crate::ui::editor::{EditableModel, editable_model};
 use crate::ui::sweep::draft::describe_error;
 use crate::ui::sweep::session::SessionExecution;
 use crate::ui::time_axis::RunTime;
@@ -510,6 +513,10 @@ struct RecordedModel {
     /// Manifest of a folder's sweep, `None` for a sweep run in this app. A resume of the folder compares the code of
     /// its sessions with the app's entry ([`Manifest::code_matches`]).
     manifest: Option<Manifest>,
+    /// Code of a model composed at run time, `None` for compiled code.
+    code: Option<ModelCode>,
+    /// Author text of a model built from a sheet, `None` for a model built from its code alone.
+    author: Option<ModelCode>,
 }
 
 impl RecordedModel {
@@ -522,6 +529,8 @@ impl RecordedModel {
             schema_hash: u64::from_str_radix(&model.schema_hash, 16).ok(),
             replays_exactly: model.replays_exactly,
             manifest: Some(set.manifest().clone()),
+            code: model.code.as_ref().map(ManifestModelCode::to_code),
+            author: set.author(),
         }
     }
 
@@ -533,6 +542,8 @@ impl RecordedModel {
             schema_hash: Some(schema_hash(&entry.schema())),
             replays_exactly: entry.metadata().replays_exactly,
             manifest: None,
+            code: entry.source().code().cloned(),
+            author: entry.source().author().cloned(),
         }
     }
 
@@ -844,6 +855,30 @@ impl ResultsStore {
             store.insert_run(row.outcome, !row.series_held);
         }
         store
+    }
+
+    /// Returns the model the sweep ran as the Editor opens it: the sheet the sweep recorded, or the graph or grid rule
+    /// of its code when it recorded no sheet. `None` for compiled code.
+    ///
+    /// A sweep run in this app records the entry it started with, and a folder records what its manifest holds.
+    pub fn editable_model(&self) -> Option<EditableModel> {
+        editable_model(self.recorded.author.as_ref(), self.recorded.code.as_ref())
+    }
+
+    /// Returns whether the sweep recorded a model the Editor can open, a sheet or code in a format it reads, without
+    /// reading the text.
+    pub fn records_editable_code(&self) -> bool {
+        let sheet = self
+            .recorded
+            .author
+            .as_ref()
+            .is_some_and(|author| author.format() == SHEET_CODE_FORMAT);
+        let code = self
+            .recorded
+            .code
+            .as_ref()
+            .is_some_and(|code| [henad_graph::CODE_FORMAT, GridRule::CODE_FORMAT].contains(&code.format()));
+        sheet || code
     }
 
     /// Replaces the configs with `texts`, the block and values of each config by id, and finds the axes they vary.

@@ -1279,6 +1279,7 @@ pub(crate) fn running_manifest(inputs: &SweepInputs<'_>, parts: &ManifestParts<'
             schema: schema_json(entry, Some(parts.probe)),
             replays_exactly: entry.metadata().replays_exactly,
             code: entry.source().code().map(ManifestModelCode::from),
+            author: entry.source().author().map(ManifestModelCode::from),
         },
         spec,
         spec_source: inputs.source.into(),

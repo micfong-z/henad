@@ -239,8 +239,12 @@ placed at their tables through `check::span_of`) and reads the lowered document 
 (`to_toml`), the checker's warnings placed (`warnings`, skip warnings included), the lowered
 `GraphFile` (`lowered`), the `LineMap` (`line_map`) and the `FaultNames` of its looks at agents
 (`fault_names`, D47). `code()` is the lowered graph's `code()` (D8): the IR's `name` is `[sheet]
-name`, both descriptions stay empty, and nothing else of the sheet text enters it. `Invalid` holds a
-`SheetErrors`, never empty, since `SheetErrors::new` takes a first error and the rest.
+name`, both descriptions stay empty, and nothing else of the sheet text enters it. The lowered
+`GraphFile` records the canonical text as its author text (`GraphFile::author`, crate-private
+`with_author`) in `SHEET_CODE_FORMAT` (`henad-sheet/1`), and `GraphFile::source` adds it to the
+`ModelSource` every entry of the graph records (AF9, D10). `GraphFile::from_code` and a graph read
+as a graph carry none (`a_lowered_sheet_records_its_canonical_text_outside_the_code`). `Invalid`
+holds a `SheetErrors`, never empty, since `SheetErrors::new` takes a first error and the rest.
 `SheetFileError::diagnostics` returns every diagnostic, `diagnostic` the first, and `Display` writes
 each on its line. `SheetFile` and `LineMap` write their own `Debug`.
 `SheetFile::place_graph_diagnostic` maps a diagnostic of the lowered graph (its checker, host

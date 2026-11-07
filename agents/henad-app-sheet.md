@@ -98,7 +98,11 @@ every lowering problem the report lacks, errors in the theme's error colour and 
 colour, as `<line>:<column> <message>`. A problem of a line the card shows sits under it on the
 card. `save_name` suggests `<sheet id>.toml` for a sheet with no file name, errors or not. Apply is
 unchanged: `ModelFile::parse(...).and_then(|file| file.entry())` installs the lowered graph's entry,
-and `edit_model` reopens an applied sheet's entry as its lowered graph unless the Editor applied it.
+whose source records the sheet's canonical text as its author text, and `edit_model` reopens an
+applied sheet's entry as that sheet unless the Editor applied it. A note edit leaves the source
+equal (D51): Apply reads `Unchanged`, rebuilds nothing, and replaces the set's entry through
+`install_models` when `same_author` fails, so a sweep started next records the new text
+(`a_note_edit_does_not_reinstall_the_model`).
 
 **The preview** (D52, D73). A sheet's preview takes the graph editor's path (`preview.rs`,
 `henad-app-editor.md`) with one difference: `EditorModel::preview_plays` is false, so

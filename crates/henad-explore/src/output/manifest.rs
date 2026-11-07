@@ -789,6 +789,13 @@ pub struct ManifestModel {
     /// Canonical text of a model composed at run time. Left out for compiled code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<ManifestModelCode>,
+    /// Canonical text of the author document the model was built from, such as a sheet, as
+    /// [`ModelSource::author`] records it. Left out for a model built from its code alone.
+    ///
+    /// The author text stays outside the code identity. A resume records the author text of the model it runs, and a
+    /// merge keeps the lowest shard's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<ManifestModelCode>,
 }
 
 /// Code of a model composed at run time, as a manifest carries it.
@@ -800,6 +807,15 @@ pub struct ManifestModelCode {
     pub fnv1a64: String,
     /// Canonical text of the model.
     pub text: String,
+}
+
+impl ManifestModelCode {
+    /// Returns the code the manifest records, in its format and with its text.
+    ///
+    /// The hash is computed again from the format and the text, and [`Self::fnv1a64`] is not read.
+    pub fn to_code(&self) -> ModelCode {
+        ModelCode::new(self.format.clone(), self.text.as_str())
+    }
 }
 
 impl From<&ModelCode> for ManifestModelCode {

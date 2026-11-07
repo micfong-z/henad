@@ -743,6 +743,22 @@ Comments outside the step, the order of the keys and the form of a number are le
 
 A file whose id is that of a model the CLI already offers, such as `gpu_game_of_life`, replaces that model for the one command, and a note on stderr says so.
 
+A [sheet](../reference/model-files.md#sheets) sweeps the same way, with its parameters named by their ids:
+
+``` bash
+cargo run --release -p henad-cli -- game_of_life \
+  --model-file crates/henad-graph/sheets/game_of_life.toml \
+  --vary initial_density=0.1:0.5:0.1 --reps 5 --steps 500 --out life-sheet-sweep
+```
+
+Only the code of the graph the sheet lowers to decides a resume.
+A sheet edited only outside that code resumes, and any edit that changes the code is rejected.
+[Code identity of a sheet](../reference/model-files.md#code-identity-of-a-sheet) lists the parts of a sheet outside the code.
+The manifest also records the sheet's text, and a resume records the text it ran.
+The sheet in the manifest is then the one the latest session read.
+Its code is the code of every earlier session.
+In the desktop app, open the folder in the Results tab and press <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> to see the sheet again.
+
 ### Sweeping the tick length
 
 A graph model whose ticks stand for a length of time holds that length as a hidden [tick length](../reference/model-files.md#time-scale) parameter, `tick_length`, in the unit its `tick_unit` names.

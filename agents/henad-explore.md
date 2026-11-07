@@ -150,6 +150,19 @@ plan checks (`MergeError::CodeChanged`). Compiled against compiled keeps `BuildC
 `two_codes_under_one_label_are_listed_apart` (`src/tests/provenance.rs`),
 `a_search_resume_refuses_changed_code` (`src/tests/search.rs`) and
 `schema_json_names_code_only_for_runtime_models` (`schema.rs`) hold it. Keep them.
+Author text (decision D10): `ManifestModel.author` (`ManifestModelCode`, `#[serde(default,
+skip_serializing_if = "Option::is_none")]`) records `ModelSource::author`, a sheet's canonical
+text in henad-graph's `SHEET_CODE_FORMAT` (`henad-sheet/1`), filled beside `code` in
+`sweep.rs`. It stays outside the code identity, so no resume, merge or build comparison reads it.
+The model block is rebuilt from the current entry each session, so a resume after a note edit
+records the new text, and a merge keeps the lowest shard's block.
+`ManifestModelCode::to_code` rebuilds a `ModelCode` (the hash recomputed), and
+`ResultSet::author` returns the recorded author text. A replay runs the recorded IR, which
+`ModelFile::parse` reads as a graph with no sheet reader. The `sheet_text` module of
+`src/tests/provenance.rs` (behind `model-files`, on the device) holds
+`the_manifest_records_the_sheet_text`, `a_note_edit_resumes_and_records_the_new_text`,
+`a_lowered_ir_change_refuses_to_resume`, `a_merge_keeps_the_lowest_shards_sheet_text` and
+`a_sheet_folder_replays_from_its_recorded_code_alone`. Keep them.
 Behind the `model-files` feature, which turns on henad-compute's `runtime-wgsl` and henad-graph,
 `model_file.rs` holds `ModelFile`, an enum over the kinds of model file:
 `GpuGrid(Box<GridRuleFile>)`, `Graph(Box<GraphFile>)` and `Sheet(Box<SheetFile>)`, all boxed for
