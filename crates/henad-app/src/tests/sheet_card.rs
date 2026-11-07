@@ -1,15 +1,17 @@
-//! Tests of writing lines on the Card pane: Game of Life and the chance SIR rebuilt from Blank by accessible names,
-//! the list blanks of numbers and of states, a list typed in a blank of one number, a chance refused in the field,
-//! shared state names, the line menu, a cleared blank's skip note, and the words rule over every menu, picker, select
-//! and help popover opened on the way.
+//! Tests of writing lines on the Card pane: Game of Life, the chance SIR and the forest fire rebuilt from Blank by
+//! accessible names, the list blanks of numbers and of states, a list typed in a blank of one number, a chance refused
+//! in the field, shared state names, the line menu, a cleared blank's skip note, When blocks built through their add
+//! rows, the offer to remove a When, moves that skip a line, the "otherwise" notice, a button's card with its notice and
+//! a When, and the words rule over every menu, picker, select, note and help popover opened on the way.
 
 use egui::accesskit::Role;
 use egui::{Event, Key, Modifiers};
 use henad_graph::sheet::document::{SheetChip, SheetDocument, SheetLiteral, SheetValue, Slot};
 use henad_graph::sheet::sentence::{
-    ADD_BUTTON, ADD_PROPERTY, ADD_STATE, AddButton, BUTTON_NAME_FIELD, CHANCE_OUT_OF_RANGE, CHOOSE_WHEN,
-    COLOR_CELLS_BY, CREATE_PARAMETER, DONE, LIST_HINT, LIST_IN_ONE_NUMBER, NEW_PARAMETER, NUMBER_BOX_HINT,
-    REMOVE_FROM_LIST, TYPE_ONE_NUMBER, run_once, start_again_for,
+    ADD_AT_END_NOTE, ADD_BUTTON, ADD_PARAMETER, ADD_PROPERTY, ADD_STATE, AddButton, BUTTON_NAME_FIELD,
+    CHANCE_OUT_OF_RANGE, CHOOSE_WHEN, COLOR_CELLS_BY, CREATE_PARAMETER, DONE, DRAW_NEW_NUMBERS, LIST_HINT,
+    LIST_IN_ONE_NUMBER, NEW_PARAMETER, NOTHING_INSIDE, NUMBER_BOX_HINT, REMOVE_FROM_LIST, TYPE_ONE_NUMBER,
+    add_inside_label, add_inside_name, run_once, start_again_for,
 };
 use henad_graph::sheet::{ParsedSheet, SheetFile, starters};
 
@@ -157,32 +159,36 @@ fn choose_seen(harness: &mut Harness, seen: &mut Seen, select: &str, item: &str)
     harness.settle();
 }
 
-/// Asserts that every control of every line of the sheet in the harness is drawn under its accessible name, and that
-/// the name of each control but a select holds the words it shows.
+/// Asserts that every control of every line of the sheet in the harness, every button of a note and every add row of
+/// a When block is drawn under its accessible name, and that the name of each but a select holds the words it shows.
 fn assert_controls_hold_their_words(harness: &mut Harness) {
-    use crate::ui::editor::sheet::card_pane::card_lines;
+    use crate::ui::editor::sheet::card_pane::{card_buttons, card_lines};
 
     let nodes = harness.settle();
     let editor = sheet(harness);
     let document = editor.document();
     let sentences = Sentences::new(document);
     for index in 0..document.cards.len() {
-        for line in card_lines(document, &sentences, editor.report(), index) {
-            for control in line.controls() {
-                assert!(
-                    nodes.iter().any(|node| node.label == control.name),
-                    "{} has no control named {}",
-                    line.label(),
-                    control.name
-                );
-                let words = control.visible.trim_end_matches("...").trim().to_lowercase();
-                assert!(
-                    control.select || control.name.to_lowercase().contains(&words),
-                    "{} does not hold {}",
-                    control.name,
-                    control.visible
-                );
-            }
+        let lines = card_lines(document, &sentences, editor.report(), index);
+        let controls = lines
+            .iter()
+            .flat_map(|line| line.controls().into_iter().map(|control| (line.label(), control)));
+        let buttons = card_buttons(document, &sentences, editor.report(), index)
+            .into_iter()
+            .map(|button| (format!("Card {}", index + 1), button));
+        for (owner, control) in controls.chain(buttons) {
+            assert!(
+                nodes.iter().any(|node| node.label == control.name),
+                "{owner} has no control named {}",
+                control.name
+            );
+            let words = control.visible.trim_end_matches("...").trim().to_lowercase();
+            assert!(
+                control.select || control.name.to_lowercase().contains(&words),
+                "{} does not hold {}",
+                control.name,
+                control.visible
+            );
         }
     }
 }
@@ -987,4 +993,434 @@ fn changed_by_and_the_controls_of_the_rebuilt_lines_follow_the_wording_table() {
             .any(|control| control.name == "Line 2: change or remove for each"),
         "the words for each are a control once on"
     );
+}
+
+// Card structure: When blocks, moves and "otherwise"
+
+/// Returns whether a settled frame shows a text that ends with `text`, as a notice after its icon does.
+fn shows_ending(harness: &mut Harness, text: &str) -> bool {
+    harness.accessible_texts().iter().any(|shown| shown.ends_with(text))
+}
+
+/// Returns the ids of the lines inside line `line` of the sheet in the harness.
+fn inside(harness: &Harness, line: &str) -> Vec<String> {
+    let (_, line) = sheet(harness).document().line(line).expect("the line");
+    line.lines.clone()
+}
+
+/// Returns the depth of line `line` on the first card of the sheet in the harness, as the card indents it.
+fn depth(harness: &Harness, line: &str) -> usize {
+    use crate::ui::editor::sheet::card_pane::card_lines;
+
+    let editor = sheet(harness);
+    let document = editor.document();
+    card_lines(document, &Sentences::new(document), editor.report(), 0)
+        .into_iter()
+        .find(|found| found.id == line)
+        .map(|found| found.depth)
+        .expect("the line is on the card")
+}
+
+/// Builds the sheet of the forest fire starter from Blank in the harness, every section but the card's lines: Cover
+/// with Empty, Tree and Burning, the trees by chance, two parameters, three measures and Replant.
+fn build_forest_fire_sheet(harness: &mut Harness, seen: &mut Seen, starter: &SheetDocument) {
+    new_blank(harness, "Forest fire");
+    enter_into(harness, "Width in cells", "1024");
+    enter_into(harness, "Height in cells", "1024");
+    add_states_property(harness, "Cover", &["Empty", "Tree", "Burning"]);
+    click(harness, "State 1 colour: Dark grey");
+    click(harness, "Black");
+    click(harness, DONE);
+    harness.settle();
+    choose(harness, "Cover starts as", "By chance");
+    click(harness, "Cover starts as, row 1: use a parameter");
+    click(harness, NEW_PARAMETER);
+    create_parameter(harness, seen, "Initial trees", "0.5", None);
+    click(harness, ADD_PARAMETER);
+    create_parameter(harness, seen, "Growth chance", "0.01", Some("0.1"));
+    for state in ["Empty", "Tree", "Burning"] {
+        click(harness, &format!("Plot {state}"));
+    }
+    click(harness, "Colour of Empty: Black");
+    click(harness, "Grey");
+    harness.settle();
+    choose(harness, COLOR_CELLS_BY, "Cover");
+    type_into(harness, "Purpose", starter.sheet.purpose.as_deref().unwrap_or_default());
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.settle();
+    click(harness, ADD_BUTTON);
+    type_into(harness, BUTTON_NAME_FIELD, "Replant");
+    choose(harness, "Start again for", "Cover");
+    click(harness, DONE);
+    harness.settle();
+}
+
+#[test]
+fn a_blank_model_builds_the_forest_fire_with_otherwise_and_equals_the_starter() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    let mut seen = Seen::default();
+    let starter = starter_document("forest_fire.toml");
+
+    build_forest_fire_sheet(&mut harness, &mut seen, &starter);
+
+    // Line 1: Burning neighbours over the 4 cells around me.
+    add(&mut harness, &mut seen, AddButton::LookAround, "Count");
+    pick(&mut harness, &mut seen, "Choose a property", "Cover");
+    pick(&mut harness, &mut seen, "Choose a state", "Burning");
+    choose_seen(&mut harness, &mut seen, "Line 1: which cells", "the 4 cells around me");
+    assert_eq!(
+        line_text(&mut harness, "Line 1"),
+        "Burning neighbours = count of the 4 cells around me whose Cover is Burning"
+    );
+
+    // Line 2: Become Burning from Tree, when Burning neighbours is at least 1.
+    add(&mut harness, &mut seen, AddButton::Change, "Become");
+    pick(&mut harness, &mut seen, "Choose a state", "Burning");
+    pick(&mut harness, &mut seen, "Choose the old state", "Tree");
+    open_and_pick(
+        &mut harness,
+        &mut seen,
+        "Line 2: choose when",
+        CHOOSE_WHEN,
+        "when ... is at least ...",
+    );
+    open_and_pick(
+        &mut harness,
+        &mut seen,
+        "Line 2: choose a value",
+        "Choose a value",
+        "Burning neighbours",
+    );
+    click(&mut harness, "Line 2: choose a number");
+    type_and_enter(&mut harness, "1");
+    assert_eq!(
+        line_text(&mut harness, "Line 2"),
+        "Become Burning from Tree, when Burning neighbours is at least 1"
+    );
+
+    // Line 3: a second Become from Tree reads "otherwise", and the first time it does a notice says why.
+    add(&mut harness, &mut seen, AddButton::Chance, "Become, with chance");
+    pick(&mut harness, &mut seen, "Choose a state", "Burning");
+    pick(&mut harness, &mut seen, "Choose the old state", "Tree");
+    let notice = "Line 3 now starts with otherwise. Line 2 also changes Cover for a cell that is Tree. When both \
+                  apply, line 2 wins.";
+    assert!(
+        shows_ending(&mut harness, notice),
+        "the notice explains the new otherwise"
+    );
+    seen.look(&mut harness);
+    click(&mut harness, "Line 3: choose a chance");
+    pick(&mut harness, &mut seen, "Choose a chance", NEW_PARAMETER);
+    create_parameter(&mut harness, &mut seen, "Lightning chance", "0.00001", Some("0.001"));
+    assert_eq!(
+        line_text(&mut harness, "Line 3"),
+        "otherwise (when line 2 does not apply) become Burning from Tree, with chance Lightning chance"
+    );
+    // The notice shows once. The next edit takes it away.
+    assert!(!shows_ending(&mut harness, notice));
+
+    // Line 4: Become Empty from Burning, always. Line 5: Become Tree from Empty, with chance Growth chance.
+    add(&mut harness, &mut seen, AddButton::Change, "Become");
+    pick(&mut harness, &mut seen, "Choose a state", "Empty");
+    pick(&mut harness, &mut seen, "Choose the old state", "Burning");
+    open_and_pick(&mut harness, &mut seen, "Line 4: choose when", CHOOSE_WHEN, "always");
+    add(&mut harness, &mut seen, AddButton::Chance, "Become, with chance");
+    pick(&mut harness, &mut seen, "Choose a state", "Tree");
+    pick(&mut harness, &mut seen, "Choose the old state", "Empty");
+    open_and_pick(
+        &mut harness,
+        &mut seen,
+        "Line 5: choose a chance",
+        "Choose a chance",
+        "Growth chance",
+    );
+
+    // "Draw new numbers" gives line 3 a new key.
+    let key = |harness: &Harness| sheet(harness).document().line("l3")?.1.key;
+    let before = key(&harness);
+    click(&mut harness, "Line 3 actions");
+    seen.look(&mut harness);
+    click(&mut harness, DRAW_NEW_NUMBERS);
+    assert_ne!(key(&harness), before, "line 3 draws new numbers");
+
+    let aligned = align_with_starter(sheet(&harness).document(), &starter);
+    assert_eq!(
+        text_and_code(&aligned),
+        text_and_code(&starter),
+        "the rebuild equals the starter in canonical text and lowered code"
+    );
+    assert_controls_hold_their_words(&mut harness);
+    // Line 3 starts with otherwise and keeps it after the alignment.
+    assert!(line_text(&mut harness, "Line 3").starts_with("otherwise (when line 2 does not apply)"));
+    assert_no_forbidden_word(&seen);
+}
+
+#[test]
+fn the_run_once_condition_picker_offers_no_rate() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    open_starter(&mut harness, "game_of_life.toml");
+    click(&mut harness, "Clear line 1: choose when, now always");
+    assert!(is_open(&mut harness, CHOOSE_WHEN));
+    let texts = harness.accessible_texts();
+    assert!(
+        texts.iter().any(|text| text == "with chance ..."),
+        "a chance is offered"
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("at rate")),
+        "no rate is offered: {texts:?}"
+    );
+    // The card of a button offers "+ Change" alone, with no When.
+    let nodes = harness.settle();
+    let when_buttons = nodes
+        .iter()
+        .filter(|node| node.label == AddButton::When.label())
+        .count();
+    assert_eq!(when_buttons, 1, "only the card that runs each tick offers a When");
+}
+
+#[test]
+fn a_button_card_explains_its_otherwise_and_its_when_offers_changes_alone() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    let mut seen = Seen::default();
+    open_starter(&mut harness, "game_of_life.toml");
+    // Clear line 2, under Clear line 1's "from any state", reads "otherwise", and the notice names it by its prefix.
+    add(&mut harness, &mut seen, AddButton::Change, "Become");
+    pick(&mut harness, &mut seen, "Choose a state", "Alive");
+    pick(&mut harness, &mut seen, "Choose the old state", "Dead");
+    assert!(line_text(&mut harness, "Clear line 2").starts_with("otherwise (when line 1 does not apply)"));
+    assert!(
+        shows_ending(
+            &mut harness,
+            "Clear line 2 now starts with otherwise. Line 1 also changes Status for a cell that is Dead. When both \
+             apply, line 1 wins."
+        ),
+        "the notice explains the otherwise of a button's card"
+    );
+    seen.look(&mut harness);
+    assert_no_forbidden_word(&seen);
+
+    // A When on a button's card, which only a written file can hold, offers changes alone inside it.
+    let starter = starters()
+        .iter()
+        .find(|starter| starter.file_name == "game_of_life.toml")
+        .expect("the starter");
+    let when = "lines = [\"l5\"]\n\n[card.line.l5]\nkind = \"when\"\nlines = [\"l4\"]\n\n[card.line.l5.condition]\n\
+                kind = \"compare\"\ntest = \"is\"\nleft = { my = \"status\" }\nright = { state = \"alive\" }\n\n# Become \
+                Dead from any state";
+    let text = starter.text.replacen("next_line = 5", "next_line = 6", 1).replacen(
+        "lines = [\"l4\"]\n\n# Become Dead from any state",
+        when,
+        1,
+    );
+    assert!(ParsedSheet::parse(&text).is_ok_and(|parsed| parsed.check().diagnostics.is_empty()));
+    harness.open_sheet(&text);
+    assert_eq!(line_text(&mut harness, "Clear line 1"), "When my Status is Alive:");
+    click(&mut harness, &add_inside_label(1));
+    let nodes = harness.settle();
+    let menu = bounds_of(&nodes, Role::Dialog, &add_inside_name(1));
+    let texts: Vec<&str> = nodes
+        .iter()
+        .filter(|node| node.bounds.is_some_and(|rect| menu.contains(rect.center())))
+        .flat_map(|node| [node.label.as_str(), node.value.as_str()])
+        .collect();
+    assert!(texts.contains(&AddButton::Change.group()), "{texts:?}");
+    assert!(texts.contains(&"Become"), "{texts:?}");
+    for group in [
+        AddButton::LookAround,
+        AddButton::Chance,
+        AddButton::YesOrNo,
+        AddButton::Calculate,
+        AddButton::When,
+    ] {
+        assert!(
+            !texts.contains(&group.group()),
+            "{} is offered: {texts:?}",
+            group.group()
+        );
+    }
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert_controls_hold_their_words(&mut harness);
+}
+
+/// Adds line 4 of Game of Life, "When my Status is Dead:", through "+ When, for several lines", and asserts that its
+/// "Choose when" opens by itself with no "always".
+fn add_dead_when(harness: &mut Harness, seen: &mut Seen) {
+    add_to_first(harness, seen, AddButton::When, "When");
+    assert!(is_open(harness, CHOOSE_WHEN), "a new When's condition opens by itself");
+    seen.look(harness);
+    assert!(!shows(harness, "always"), "a When cannot be always");
+    click_in(harness, CHOOSE_WHEN, "When ... is ...");
+    harness.settle();
+    open_and_pick(harness, seen, "Line 4: choose a value", "Choose a value", "my Status");
+    open_and_pick(harness, seen, "Line 4: choose a state", "Choose a state", "Dead");
+}
+
+#[test]
+fn a_nested_when_stores_its_parent_and_deleting_the_outer_when_keeps_its_lines() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    let mut seen = Seen::default();
+    open_starter(&mut harness, "game_of_life.toml");
+    let starter_text = text(&harness);
+
+    add_dead_when(&mut harness, &mut seen);
+    assert_eq!(line_text(&mut harness, "Line 4"), "When my Status is Dead:");
+    assert!(shows(&mut harness, NOTHING_INSIDE), "an empty When says so");
+    assert!(shows(&mut harness, ADD_AT_END_NOTE));
+
+    // Line 5, inside line 4: When Alive neighbours is at least 3.
+    assert_controls_hold_their_words(&mut harness);
+    click(&mut harness, &add_inside_label(4));
+    assert!(is_open(&mut harness, &add_inside_name(4)));
+    seen.look(&mut harness);
+    click_in(&mut harness, &add_inside_name(4), "When");
+    harness.settle();
+    click_in(&mut harness, CHOOSE_WHEN, "When ... is at least ...");
+    harness.settle();
+    open_and_pick(
+        &mut harness,
+        &mut seen,
+        "Line 5: choose a value",
+        "Choose a value",
+        "Alive neighbours",
+    );
+    click(&mut harness, "Line 5: choose a number");
+    type_and_enter(&mut harness, "3");
+    assert_eq!(
+        line_text(&mut harness, "Line 5"),
+        "When Alive neighbours is at least 3:"
+    );
+    assert!(shows(&mut harness, "Only when line 4 holds: my Status is Dead."));
+
+    // Line 6, inside line 5: a Become starts always, from the state of the nearest When around it testing
+    // "my Status is ...", which is line 4. Line 5 tests a count.
+    click(&mut harness, &add_inside_label(5));
+    seen.look(&mut harness);
+    click_in(&mut harness, &add_inside_name(5), "Become");
+    pick(&mut harness, &mut seen, "Choose a state", "Alive");
+    // Line 2 also makes a Dead cell Alive when it has 3 Alive neighbours, so line 6 reads "otherwise".
+    assert_eq!(
+        line_text(&mut harness, "Line 6"),
+        "otherwise (when line 2 does not apply) become Alive from Dead, always"
+    );
+    assert!(shows(
+        &mut harness,
+        "Only when line 5 holds: Alive neighbours is at least 3."
+    ));
+    click(&mut harness, "Line 6: choose when, now always");
+    assert!(shows(
+        &mut harness,
+        "Line 5 already gives a condition. Choose always to use only that one."
+    ));
+    seen.look(&mut harness);
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.settle();
+
+    assert_eq!(inside(&harness, "l5"), ["l6"]);
+    assert_eq!(inside(&harness, "l6"), ["l7"]);
+    assert_eq!(
+        (depth(&harness, "l5"), depth(&harness, "l6"), depth(&harness, "l7")),
+        (0, 1, 2)
+    );
+    // Line 5 holds line 6 alone, which holds always, so line 5 offers to move its condition there.
+    assert!(shows(
+        &mut harness,
+        "Only line 6 is inside. Its own when can hold this condition."
+    ));
+    assert!(!named(&mut harness, "Line 5: move it into line 6").is_empty());
+    assert_controls_hold_their_words(&mut harness);
+
+    // Deleting the outer When keeps its lines one level up, and Undo puts it back.
+    click(&mut harness, "Line 4 actions");
+    seen.look(&mut harness);
+    click(&mut harness, "Delete line 4");
+    assert!(sheet(&harness).document().line("l5").is_none());
+    assert_eq!(inside(&harness, "l6"), ["l7"]);
+    assert_eq!((depth(&harness, "l6"), depth(&harness, "l7")), (0, 1));
+    assert_eq!(
+        line_text(&mut harness, "Line 4"),
+        "When Alive neighbours is at least 3:"
+    );
+    click(&mut harness, "Undo");
+    assert_eq!(inside(&harness, "l5"), ["l6"]);
+    assert_eq!((depth(&harness, "l6"), depth(&harness, "l7")), (1, 2));
+
+    // Undo walks back to the starter.
+    while sheet(&harness).can_undo() {
+        click(&mut harness, "Undo");
+    }
+    assert_eq!(text(&harness), starter_text);
+    assert_no_forbidden_word(&seen);
+}
+
+#[test]
+fn a_when_that_repeats_its_lines_offers_to_remove_itself() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    let mut seen = Seen::default();
+    open_starter(&mut harness, "game_of_life.toml");
+    add_dead_when(&mut harness, &mut seen);
+    click(&mut harness, &add_inside_label(4));
+    click_in(&mut harness, &add_inside_name(4), "Become");
+    pick(&mut harness, &mut seen, "Choose a state", "Alive");
+    assert!(shows(
+        &mut harness,
+        "Line 5 already says from Dead, so this When repeats it."
+    ));
+    seen.look(&mut harness);
+    assert_controls_hold_their_words(&mut harness);
+    click(&mut harness, "Line 4: remove this When and keep the lines inside");
+    assert!(sheet(&harness).document().line("l5").is_none());
+    assert_eq!(
+        line_text(&mut harness, "Line 4"),
+        "otherwise (when line 2 does not apply) become Alive from Dead, always"
+    );
+    assert_eq!(depth(&harness, "l6"), 0);
+    assert_no_forbidden_word(&seen);
+}
+
+#[test]
+fn moving_a_line_above_its_result_skips_it_and_moving_it_back_runs_it() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    let mut seen = Seen::default();
+    open_starter(&mut harness, "game_of_life.toml");
+    let starter_text = text(&harness);
+    assert!(shows(
+        &mut harness,
+        "Lines 2 and 3 change different cells (Dead and Alive), so their order does not matter."
+    ));
+    click(&mut harness, "Line 2 actions");
+    seen.look(&mut harness);
+    click(&mut harness, "Move line 2 up");
+    assert_eq!(
+        line_text(&mut harness, "Line 1"),
+        "Become Alive from Dead, when Alive neighbours is 3"
+    );
+    assert!(shows(&mut harness, "Uses Alive neighbours, which is below this line"));
+    assert!(sheet(&harness).report().is_skipped("l2"), "the moved line is skipped");
+    assert!(!sheet(&harness).has_errors(), "a skipped line stops nothing");
+    click(&mut harness, "Line 1 actions");
+    seen.look(&mut harness);
+    click(&mut harness, "Move line 1 down");
+    assert!(!shows(&mut harness, "Uses Alive neighbours, which is below this line"));
+    assert!(!sheet(&harness).report().is_skipped("l2"), "the line runs again");
+    assert_eq!(text(&harness), starter_text);
+    assert_no_forbidden_word(&seen);
 }

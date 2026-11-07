@@ -4,7 +4,7 @@
 in the Editor tab as its Sheet and Card panes, and holds the New model dialog. The canvas and the
 code view are in `agents/henad-app-editor.md`, and the expert mode stays there beside the canvas it
 extends. The Sheet pane edits every section (S16a, S16b), those of a world of agents included
-(S26), and the Card pane writes the lines of a cells card (S19, `agents/henad-app-card.md`).
+(S26), and the Card pane writes the lines of a cells card (S19, S22, `agents/henad-app-card.md`).
 
 `mod.rs` holds `SheetEditor`: a `SheetBuilder` over the `SheetDocument` (so new draws take fresh
 keys), its canonical text (`text`, which Save model writes and Apply reads through

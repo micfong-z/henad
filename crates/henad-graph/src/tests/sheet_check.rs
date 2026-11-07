@@ -6,7 +6,7 @@ use henad_core::diagnostic::DiagnosticSeverity;
 use super::sheet_document::sheets;
 use crate::sheet::check::{self, SheetReport};
 use crate::sheet::document::{LineKind, SheetDocument, SheetLine, SheetValue, Slot};
-use crate::sheet::relations::CardRelations;
+use crate::sheet::relations::{CardRelations, RelationNote, RelationNoteKind};
 use crate::sheet::sentence::{self, Blank, LineSelect, NOT_RUN_TICK, ONE_AGENT_KIND, SHEET_EMPTY, Sentences};
 use crate::sheet::{ParsedSheet, starters};
 
@@ -704,5 +704,208 @@ fn a_grid_sheet_with_no_property_gets_the_empty_state_warning() {
         starters()
             .iter()
             .all(|starter| ParsedSheet::parse(starter.text).is_ok_and(|sheet| sheet.check().diagnostics.is_empty()))
+    );
+}
+
+/// Returns the relation notes of card `card` of `text`, every line running, as `(line id, words)`.
+fn relation_notes(text: &str, card: usize) -> Vec<RelationNote> {
+    let document = document(text);
+    let relations = CardRelations::new(&document, &document.cards[card]);
+    let report = check::check(&document);
+    relations.notes(&Sentences::new(&document), |line| !report.is_skipped(line))
+}
+
+/// Returns the words of the notes of `kind` among `notes`, each with the line it sits under.
+fn notes_of(notes: &[RelationNote], keep: impl Fn(&RelationNoteKind) -> bool) -> Vec<(String, String)> {
+    notes
+        .iter()
+        .filter(|note| keep(&note.kind))
+        .map(|note| (note.line.clone(), note.text.clone()))
+        .collect()
+}
+
+#[test]
+fn the_order_note_shows_on_game_of_life_and_sir_and_not_on_the_vote_or_the_forest_fire() {
+    let order = |file_name: &str| {
+        notes_of(&relation_notes(sheet_text(file_name), 0), |kind| {
+            *kind == RelationNoteKind::Order
+        })
+    };
+    assert_eq!(
+        order("game_of_life.toml"),
+        [(
+            "l3".to_owned(),
+            "Lines 2 and 3 change different cells (Dead and Alive), so their order does not matter.".to_owned()
+        )]
+    );
+    assert_eq!(
+        order("sir.toml"),
+        [(
+            "l3".to_owned(),
+            "Lines 2 and 3 change different cells (Susceptible and Infected), so their order does not matter."
+                .to_owned()
+        )]
+    );
+    assert!(order("vote.toml").is_empty());
+    assert!(order("forest_fire.toml").is_empty());
+    // A line that does not run takes the note away.
+    let skipped = edited(
+        "game_of_life.toml",
+        &[(
+            "[card.line.l2.condition]\nkind = \"compare\"\ntest = \"is\"\nleft = { result = \"l1\" }\nright = 3\n",
+            "",
+        )],
+    );
+    let notes = relation_notes(&skipped, 0);
+    assert!(
+        notes_of(&notes, |kind| *kind == RelationNoteKind::Order).is_empty(),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn the_vote_is_covered_and_a_gap_between_two_thresholds_is_named() {
+    let notes = relation_notes(sheet_text("vote.toml"), 0);
+    assert_eq!(
+        notes_of(&notes, |kind| *kind == RelationNoteKind::Coverage),
+        [(
+            "l3".to_owned(),
+            "Lines 2 and 3 cover every value of B in my block. A cell ends the tick A when it is 0 to 4 and B when it \
+             is 5 to 9."
+                .to_owned()
+        )]
+    );
+    assert!(notes_of(&notes, |kind| *kind == RelationNoteKind::Gap).is_empty());
+    // "Become A from any state, when B in my block is at most 3" leaves 4 to no line.
+    let gap = edited(
+        "vote.toml",
+        &[(
+            "[card.line.l3.condition]\nkind = \"always\"\n",
+            "[card.line.l3.condition]\nkind = \"compare\"\ntest = \"at_most\"\nleft = { result = \"l1\" }\nright = 3\n",
+        )],
+    );
+    let notes = relation_notes(&gap, 0);
+    assert_eq!(
+        notes_of(&notes, |kind| *kind == RelationNoteKind::Gap),
+        [(
+            "l3".to_owned(),
+            "None of lines 2 and 3 applies when B in my block is 4. Those cells keep their Opinion.".to_owned()
+        )]
+    );
+    // With a gap, a cell's end state depends on its own state, so no coverage note shows.
+    assert!(notes_of(&notes, |kind| *kind == RelationNoteKind::Coverage).is_empty());
+    // Lines that read the count from below this line do not run, and the gap note leaves them out.
+    let skipped = gap.replacen(
+        "lines = [\"l1\", \"l2\", \"l3\"]",
+        "lines = [\"l2\", \"l3\", \"l1\"]",
+        1,
+    );
+    let report = check::check(&document(&skipped));
+    assert!(report.is_skipped("l2") && report.is_skipped("l3"));
+    let notes = relation_notes(&skipped, 0);
+    assert!(
+        notes_of(&notes, |kind| *kind == RelationNoteKind::Gap).is_empty(),
+        "{notes:?}"
+    );
+    // Game of Life's lines change from different states, so the end state depends on the cell's own state.
+    let life = relation_notes(sheet_text("game_of_life.toml"), 0);
+    assert!(
+        notes_of(&life, |kind| matches!(
+            kind,
+            RelationNoteKind::Coverage | RelationNoteKind::Gap
+        ))
+        .is_empty()
+    );
+}
+
+/// Returns Game of Life with its card's lines `lines` and the When line `l5` testing `condition`, holding `inside`,
+/// followed by the tables `more`.
+fn life_with_when(lines: &str, condition: &str, inside: &str, more: &str) -> String {
+    let when = format!(
+        "[card.line.l5]\nkind = \"when\"\nlines = {inside}\n\n[card.line.l5.condition]\n{condition}\n\n\
+         {more}# Lines of Clear"
+    );
+    edited(
+        "game_of_life.toml",
+        &[
+            ("next_line = 5", "next_line = 7"),
+            ("lines = [\"l1\", \"l2\", \"l3\"]", lines),
+            ("# Lines of Clear", &when),
+        ],
+    )
+}
+
+#[test]
+fn a_when_offers_to_fold_into_its_lines_and_notes_what_holds_inside_it() {
+    let dead = "kind = \"compare\"\ntest = \"is\"\nleft = { my = \"status\" }\nright = { state = \"dead\" }";
+    // A When of "my Status is Dead" around the Become from Dead repeats it.
+    let repeats = life_with_when("lines = [\"l1\", \"l5\", \"l3\"]", dead, "[\"l2\"]", "");
+    let notes = relation_notes(&repeats, 0);
+    assert_eq!(
+        notes_of(&notes, |kind| *kind == RelationNoteKind::WhenRepeats),
+        [(
+            "l5".to_owned(),
+            "Line 3 already says from Dead, so this When repeats it.".to_owned()
+        )]
+    );
+    assert_eq!(
+        notes_of(&notes, |kind| *kind == RelationNoteKind::Inside),
+        [("l2".to_owned(), "Only when line 2 holds: my Status is Dead.".to_owned())]
+    );
+    // A When around one change that holds always offers to move its condition into the change.
+    let three = "kind = \"compare\"\ntest = \"is\"\nleft = { result = \"l1\" }\nright = 3";
+    let mut moved = life_with_when("lines = [\"l1\", \"l5\", \"l3\"]", three, "[\"l2\"]", "");
+    moved = moved.replacen(
+        "[card.line.l2.condition]\nkind = \"compare\"\ntest = \"is\"\nleft = { result = \"l1\" }\nright = 3\n",
+        "[card.line.l2.condition]\nkind = \"always\"\n",
+        1,
+    );
+    let notes = relation_notes(&moved, 0);
+    let fold: Vec<&RelationNote> = notes
+        .iter()
+        .filter(|note| matches!(note.kind, RelationNoteKind::OnlyOneInside { .. }))
+        .collect();
+    assert_eq!(fold.len(), 1, "{notes:?}");
+    assert_eq!(fold[0].line, "l5");
+    assert_eq!(
+        fold[0].text,
+        "Only line 3 is inside. Its own when can hold this condition."
+    );
+    assert_eq!(
+        fold[0].kind,
+        RelationNoteKind::OnlyOneInside {
+            inside: "l2".to_owned(),
+            number: 3
+        }
+    );
+    // A result inside a When is worked out for every cell, and an empty When holds nothing.
+    let result_inside = life_with_when("lines = [\"l5\", \"l2\", \"l3\"]", three, "[\"l1\"]", "");
+    let notes = relation_notes(&result_inside, 0);
+    assert_eq!(
+        notes_of(&notes, |kind| *kind == RelationNoteKind::Inside),
+        [(
+            "l1".to_owned(),
+            "Worked out for every cell, whatever line 1 says. Only lines inside line 1 can use it.".to_owned()
+        )]
+    );
+    let empty = life_with_when("lines = [\"l1\", \"l2\", \"l3\", \"l5\"]", three, "[]", "");
+    let notes = relation_notes(&empty, 0);
+    assert_eq!(
+        notes_of(&notes, |kind| *kind == RelationNoteKind::NothingInside),
+        [("l5".to_owned(), "Nothing inside yet.".to_owned())]
+    );
+    // A When holding another When offers no fold, and the inner When notes its outer one.
+    let inner = format!("[card.line.l6]\nkind = \"when\"\nlines = [\"l2\"]\n\n[card.line.l6.condition]\n{three}\n\n");
+    let nested = life_with_when("lines = [\"l1\", \"l5\", \"l3\"]", dead, "[\"l6\"]", &inner);
+    let notes = relation_notes(&nested, 0);
+    assert!(
+        notes
+            .iter()
+            .all(|note| note.line != "l5" || note.kind == RelationNoteKind::Inside),
+        "{notes:?}"
+    );
+    assert!(
+        notes_of(&notes, |kind| *kind == RelationNoteKind::Inside)
+            .contains(&("l6".to_owned(), "Only when line 2 holds: my Status is Dead.".to_owned()))
     );
 }

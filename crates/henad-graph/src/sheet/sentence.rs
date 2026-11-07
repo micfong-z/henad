@@ -71,8 +71,8 @@ pub fn add_inside_label(number: usize) -> String {
     format!("+ Add inside line {number}")
 }
 
-/// Returns the accessible name of the row that ends When line `number`, which is also the title of its menu, such as
-/// "Add a line inside line 4".
+/// Returns the title of the menu of the row that ends When line `number`, such as "Add a line inside line 4". The row
+/// itself is named by its label, [`add_inside_label`].
 pub fn add_inside_name(number: usize) -> String {
     format!("Add a line inside line {number}")
 }
@@ -220,6 +220,19 @@ impl AddButton {
             Self::Calculate => "Work out a number from two numbers",
             Self::Change => "Change a state or a number",
             Self::When => "Give several lines one shared condition",
+        }
+    }
+
+    /// Heading of the button's group in the menu of a When block's add row: "Change", "When", "Chance", "Look
+    /// around", "Yes or no" or "Calculate".
+    pub fn group(self) -> &'static str {
+        match self {
+            Self::LookAround => "Look around",
+            Self::Chance => "Chance",
+            Self::YesOrNo => "Yes or no",
+            Self::Calculate => "Calculate",
+            Self::Change => "Change",
+            Self::When => "When",
         }
     }
 
@@ -1204,17 +1217,26 @@ pub fn order_note(lines: &[usize], states: &[&str]) -> String {
     )
 }
 
-/// Returns the note under a When whose lines all change from `state`, which the line `number` already says.
-pub fn when_repeats_note(number: usize, state: &str) -> String {
-    format!("Line {number} already says from {state}, so this When repeats it.")
+/// Returns the note under a When whose lines all change from `state`, which the lines `lines` already say.
+///
+/// For example "Line 3 already says from Alive, so this When repeats it.", or "Lines 3 and 4 already say from Alive,
+/// so this When repeats it."
+pub fn when_repeats_note(lines: &[usize], state: &str) -> String {
+    let who = if lines.len() == 1 {
+        format!("Line {} already says", number_list(lines))
+    } else {
+        format!("Lines {} already say", number_list(lines))
+    };
+    format!("{who} from {state}, so this When repeats it.")
 }
 
 /// Label of the button that removes a When and keeps its lines.
 pub const REMOVE_THIS_WHEN: &str = "Remove this When";
 
-/// Returns the accessible name of the button that removes When line `number`.
-pub fn remove_when_name(number: usize) -> String {
-    format!("Remove line {number} and keep the lines inside")
+/// Returns the accessible name of the button that removes a When and keeps its lines, such as "Line 2: remove this
+/// When and keep the lines inside", where `prefix` is the When's line prefix.
+pub fn remove_when_name(prefix: &str) -> String {
+    format!("{prefix}: remove this When and keep the lines inside")
 }
 
 /// Returns the note under a When around the one change on line `number`.
@@ -1227,15 +1249,21 @@ pub fn move_into_label(number: usize) -> String {
     format!("Move it into line {number}")
 }
 
-/// Returns the accessible name of the button that moves the condition of When line `when` into line `inside`.
-pub fn move_into_name(when: usize, inside: usize) -> String {
-    format!("Move the condition of line {when} into line {inside}")
+/// Returns the accessible name of the button that moves a When's condition into line `inside`, such as "Line 4: move
+/// it into line 5", where `prefix` is the When's line prefix.
+pub fn move_into_name(prefix: &str, inside: usize) -> String {
+    format!("{prefix}: move it into line {inside}")
 }
 
-/// Returns the note under a change or When inside When line `number`, whose condition reads `condition`, such as
-/// "Only when line 4 holds: my Health is Recovered."
-pub fn only_when_note(number: usize, condition: &str) -> String {
-    format!("Only when line {number} holds: {condition}.")
+/// Returns the note under a change or When inside When line `number`, whose condition reads `condition`.
+///
+/// For example "Only when line 4 holds: my Health is Recovered.", or "Only when line 4 holds." while `condition` is
+/// `None`, a blank condition.
+pub fn only_when_note(number: usize, condition: Option<&str>) -> String {
+    match condition {
+        Some(condition) => format!("Only when line {number} holds: {condition}."),
+        None => format!("Only when line {number} holds."),
+    }
 }
 
 /// Returns the note under a result line inside When line `number`.
@@ -1275,11 +1303,13 @@ pub fn otherwise_tooltip(lines: &[usize], property: &str, state: Option<&str>) -
     format!("{who} {property}{for_whom}. {wins}")
 }
 
-/// Returns the notice shown the first time in a session that line `number` starts with "otherwise", followed by the
-/// tooltip of [`otherwise_tooltip`].
-pub fn otherwise_notice(number: usize, lines: &[usize], property: &str, state: Option<&str>) -> String {
+/// Returns the notice shown the first time in a session that a line starts with "otherwise".
+///
+/// `prefix` is the line prefix, such as "Line 6" or "Clear line 2", and the tooltip of [`otherwise_tooltip`] follows
+/// the first sentence.
+pub fn otherwise_notice(prefix: &str, lines: &[usize], property: &str, state: Option<&str>) -> String {
     format!(
-        "Line {number} now starts with otherwise. {}",
+        "{prefix} now starts with otherwise. {}",
         otherwise_tooltip(lines, property, state)
     )
 }

@@ -24,7 +24,7 @@ use henad_graph::sheet::sentence::{
     STATES, Sentences, THIS_CELLS_PROPERTIES, TYPE_ONE_NUMBER, USE_BUTTON, around_words, binary_formula,
     comparison_words, for_each_lead, literal_words, my_property_item, operation_words, otherwise_description,
     otherwise_item_name, read_typed_number, result_condition_item, result_description, shared_state_name,
-    this_cells_property,
+    this_cells_property, when_lead,
 };
 
 use super::accessible_group;
@@ -451,7 +451,7 @@ impl LineContext<'_> {
                 let number = self.relations.number(id).unwrap_or(0);
                 Some(PickerItem {
                     label: if condition {
-                        result_condition_item(&name, false)
+                        result_condition_item(&name, self.line.kind == LineKind::When)
                     } else {
                         name
                     },
@@ -691,13 +691,24 @@ fn property_items(context: &LineContext<'_>, keep: impl Fn(&SheetProperty) -> bo
         .collect()
 }
 
-/// Returns "Choose when" for the line of `context`: its yes or no results above as "when [name]", then the forms of a
-/// condition.
+/// Returns "Choose when" for the line of `context`: inside a When the lead that names it, then its yes or no results
+/// above as "when [name]", then the forms of a condition.
 ///
 /// `otherwise` holds the numbers of the higher lines that would override the line were its condition always. While it
-/// is not empty, "otherwise" stands in place of "always".
+/// is not empty, "otherwise" stands in place of "always". On a When line the items start with "When", and "always"
+/// is left out, since a When cannot be always.
 pub fn choose_when(context: &LineContext<'_>, otherwise: &[usize]) -> CardPicker {
     let mut picker = CardPicker::titled(CHOOSE_WHEN.to_owned(), NO_YES_OR_NO_RESULT);
+    let on_when = context.line.kind == LineKind::When;
+    if !on_when
+        && let Some(parent) = context.relations.parent(context.line_id)
+        && context
+            .relations
+            .line(parent)
+            .is_some_and(|block| block.kind == LineKind::When)
+    {
+        picker.lead = context.relations.number(parent).map(when_lead);
+    }
     let results = context.results_above(ResultKind::YesOrNo, true);
     let heading = if results.is_empty() {
         CONDITIONS
@@ -706,8 +717,7 @@ pub fn choose_when(context: &LineContext<'_>, otherwise: &[usize]) -> CardPicker
     };
     let forms = ConditionItem::ALL
         .into_iter()
-        // The card writes no rate line. "Choose when" offers no rate.
-        .filter(|item| *item != ConditionItem::AtRate)
+        .filter(|item| offers_condition(context, *item))
         .map(|item| match item {
             ConditionItem::Always if !otherwise.is_empty() => PickerItem {
                 label: OTHERWISE.to_owned(),
@@ -716,7 +726,7 @@ pub fn choose_when(context: &LineContext<'_>, otherwise: &[usize]) -> CardPicker
                 choice: Choice::Condition(item),
             },
             _ => PickerItem {
-                label: item.label(false),
+                label: item.label(on_when),
                 name: None,
                 detail: item.description().map(str::to_owned),
                 choice: Choice::Condition(item),
@@ -731,6 +741,18 @@ pub fn choose_when(context: &LineContext<'_>, otherwise: &[usize]) -> CardPicker
         PickerGroup { heading, items: forms },
     ];
     picker
+}
+
+/// Returns whether "Choose when" offers the form `item` on the line of `context`.
+///
+/// A When cannot be always. "at rate ... per ..." is never offered. A button's card has no duration and takes chances
+/// only. The card writes no rate line on a card that runs each tick.
+fn offers_condition(context: &LineContext<'_>, item: ConditionItem) -> bool {
+    match item {
+        ConditionItem::Always => context.line.kind != LineKind::When,
+        ConditionItem::AtRate => false,
+        _ => true,
+    }
 }
 
 // The selects inside a line

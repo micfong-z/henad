@@ -8,7 +8,13 @@
 //!
 //! A click on a blank or a chip opens its *picker* ([`super::picker`]), and a choice runs one edit of the sheet. A
 //! select lists its options, the grey "always" and the arrow after a condition word open "Choose when", and the add
-//! buttons under a card add a line at its end. Each line has one menu, "Line 2 actions", always drawn.
+//! buttons under a card add a line at its end. Each line has one menu, "Line 2 actions", always drawn, which renames,
+//! moves, draws new numbers for and deletes the line.
+//!
+//! A *When block* is a When line and the lines inside it. Each block ends with a row "+ Add inside line 4" whose menu
+//! adds a line of any kind at the end of the block, inner blocks closing before outer ones. A move follows the
+//! outline: the first line of a block moves up out of it, a line beside a block moves into it, and a block moves with
+//! its lines.
 //!
 //! *Focus rules.* Only a new line's first blank opens by itself. After a choice, the focus moves to the next blank or
 //! select of the line without opening it. Two kinds of blank open as the focus reaches them: an empty state blank (a
@@ -29,25 +35,27 @@ use egui::{
     RichText, Sense, Shape, Stroke, TextEdit, TextStyle, Ui, WidgetInfo, WidgetType, vec2,
 };
 use henad_core::diagnostic::DiagnosticSeverity;
-use henad_graph::sheet::check::{SheetDiagnostic, SheetReport};
+use henad_graph::sheet::check::{SheetDiagnostic, SheetReport, holds_draw};
 use henad_graph::sheet::document::{
     CardRuns, CompareTest, LineKind, LookSummary, MadeOf, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine,
     SheetProperty, SheetValue, Slot, SummaryKind,
 };
-use henad_graph::sheet::edit::{LineField, SheetBuilder, SheetEdit, SheetEditError};
+use henad_graph::sheet::edit::{LineField, MoveDirection, SheetBuilder, SheetEdit, SheetEditError};
 use henad_graph::sheet::rates::{chance_note, count_as_draw, parameter_defaults};
-use henad_graph::sheet::relations::CardRelations;
+use henad_graph::sheet::relations::{CardRelations, RelationNote, RelationNoteKind};
 use henad_graph::sheet::sentence::comparison_words;
 use henad_graph::sheet::sentence::{
-    ALWAYS, ALWAYS_TOOLTIP, ANY_STATE_ID, AddButton, AddItem, BLANK_MODEL_CARD, BLANK_TEXT, BUTTON_CARD_EMPTY, Blank,
-    CONDITION_ARROW_TOOLTIP, ChipKind, DrawKind, FOR_EACH_BLANK_WORDS, FOR_EACH_WORDS, FROM_TOOLTIP, FROM_WORD,
-    FieldPlace, LAW, LineSelect, ONE_SIDED_RANGE, PartPlace, PlaceTarget, PlacedPart, SHARED_DRAW_GROUP, SentenceChip,
-    SentencePart, Sentences, UNIT_PLACEHOLDER, add_value_name, always_name, card_header, condition_arrow_name,
-    count_used_as_draw, delete_line, for_each_change_name, for_each_optional_name, for_each_optional_tooltip,
-    for_each_words, line_actions_name, line_count, line_list_name, line_name, line_prefix, line_word, operation_words,
-    otherwise_tooltip, otherwise_words, rename_field_name, rename_line, result_below_tooltip, result_inside_tooltip,
-    result_name_taken, sentence_text, use_for_each_label, use_for_each_name, use_instead_label, use_instead_name,
-    uses_result_below, uses_result_inside,
+    ADD_AT_END_NOTE, ALWAYS, ALWAYS_TOOLTIP, ANY_STATE_ID, AddButton, AddItem, BLANK_MODEL_CARD, BLANK_TEXT,
+    BUTTON_CARD_EMPTY, Blank, CONDITION_ARROW_TOOLTIP, ChipKind, DELETE_WHEN_TOOLTIP, DRAW_NEW_NUMBERS, DrawKind,
+    FOR_EACH_BLANK_WORDS, FOR_EACH_WORDS, FROM_TOOLTIP, FROM_WORD, FieldPlace, LAW, LineSelect, ONE_SIDED_RANGE,
+    PartPlace, PlaceTarget, PlacedPart, REMOVE_THIS_WHEN, SHARED_DRAW_GROUP, SentenceChip, SentencePart, Sentences,
+    UNIT_PLACEHOLDER, add_inside_label, add_inside_name, add_value_name, always_name, card_header,
+    condition_arrow_name, count_used_as_draw, delete_line, for_each_change_name, for_each_optional_name,
+    for_each_optional_tooltip, for_each_words, line_actions_name, line_count, line_list_name, line_name, line_prefix,
+    line_word, move_into_label, move_into_name, move_line_down, move_line_up, operation_words, otherwise_notice,
+    otherwise_tooltip, otherwise_words, remove_when_name, rename_field_name, rename_line, result_below_tooltip,
+    result_inside_tooltip, result_name_taken, sentence_text, use_for_each_label, use_for_each_name, use_instead_label,
+    use_instead_name, uses_result_below, uses_result_inside,
 };
 
 use super::help::{Help, help_button};
@@ -61,7 +69,7 @@ use super::widgets::{
     message_ui, new_parameter_modal, set_name,
 };
 use super::{SheetEditor, accessible_group};
-use crate::icons::material_design_icons::{MDI_CHEVRON_DOWN, MDI_DOTS_HORIZONTAL};
+use crate::icons::material_design_icons::{MDI_CHEVRON_DOWN, MDI_DOTS_HORIZONTAL, MDI_INFORMATION};
 use crate::ui::mcs;
 use crate::ui::sweep::layout::add_button;
 
@@ -96,6 +104,11 @@ pub struct CardState {
     focus_next: Option<Id>,
     /// Reason the last edit of the card was refused, `None` while none shows.
     refusal: Option<String>,
+    /// Ids of the lines whose "otherwise" has been explained in this session, `None` before the pane is first drawn.
+    /// A new or opened model counts its "otherwise" words as explained.
+    explained: Option<BTreeSet<String>>,
+    /// Notice that a line now starts with "otherwise", `None` while none shows.
+    otherwise_notice: Option<String>,
 }
 
 impl CardState {
@@ -110,6 +123,8 @@ impl CardState {
             open_next: None,
             focus_next: None,
             refusal: None,
+            explained: None,
+            otherwise_notice: None,
         }
     }
 
@@ -123,6 +138,7 @@ impl CardState {
         self.open_next = None;
         self.focus_next = None;
         self.refusal = None;
+        self.otherwise_notice = None;
     }
 
     /// Returns whether the New parameter dialog is open.
@@ -232,6 +248,9 @@ pub fn card_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool) {
     {
         let document = sheet.builder.document();
         let state = &mut sheet.card;
+        if let Some(notice) = &state.otherwise_notice {
+            ui.add(Label::new(format!("{MDI_INFORMATION} {notice}")).wrap());
+        }
         cards_ui(ui, document, &sheet.report, state, &mut pending);
         if let Some(refusal) = &state.refusal {
             message_ui(ui, refusal);
@@ -261,6 +280,7 @@ fn run_card_edit(sheet: &mut SheetEditor, past_start: bool, edit: CardEdit) {
     match result {
         Ok(()) => {
             state.refusal = None;
+            state.otherwise_notice = None;
             if rename {
                 state.renaming = None;
             }
@@ -411,23 +431,50 @@ fn cards_ui(
         ui.add_space(16.0);
     }
     let values = parameter_defaults(document);
+    let mut overridden: Vec<(String, String)> = Vec::new();
     for (index, card) in document.cards.iter().enumerate() {
         if index > 0 {
             ui.add_space(16.0);
         }
         let lines = card_lines(document, &sentences, report, index);
+        overridden.extend(
+            lines
+                .iter()
+                .filter(|line| !line.otherwise.is_empty())
+                .map(|line| (line.id.clone(), line.otherwise_notice.clone())),
+        );
         let drawing = CardDrawing {
             document,
             sentences: &sentences,
+            report,
             card,
             values: &values,
             highlight: &highlight,
         };
         card_ui(ui, &drawing, &lines, state, &mut hovered, pending);
     }
+    explain_otherwise(ui.ctx(), state, overridden);
     if hovered != highlight {
         ui.data_mut(|data| data.insert_temp(highlight_id, hovered));
         ui.ctx().request_repaint();
+    }
+}
+
+/// Shows the notice that a line now starts with "otherwise" the first time a line of `overridden` gets it in the
+/// session, where `overridden` holds each line that reads "otherwise" with its notice.
+///
+/// On the pane's first frame every such line counts as explained, as a new or opened model's lines do. The notice is
+/// drawn above the cards, so a new one requests another frame of `ctx`.
+fn explain_otherwise(ctx: &egui::Context, state: &mut CardState, overridden: Vec<(String, String)>) {
+    let Some(explained) = &mut state.explained else {
+        state.explained = Some(overridden.into_iter().map(|(line, _)| line).collect());
+        return;
+    };
+    for (line, notice) in overridden {
+        if explained.insert(line) {
+            state.otherwise_notice = Some(notice);
+            ctx.request_repaint();
+        }
     }
 }
 
@@ -437,6 +484,8 @@ struct CardDrawing<'a> {
     document: &'a SheetDocument,
     /// Writer of the sheet's sentences.
     sentences: &'a Sentences<'a>,
+    /// Report of the sheet's check.
+    report: &'a SheetReport,
     /// The card.
     card: &'a SheetCard,
     /// Value of each parameter the notes read, by id.
@@ -481,16 +530,187 @@ fn card_ui(
     }
     let list_name = line_list_name(button_of(drawing.document, card));
     let relations = CardRelations::new(drawing.document, card);
+    let report = drawing.report;
+    let notes = relations.notes(drawing.sentences, |line| !report.is_skipped(line));
+    let editable = card.every == "cells";
+    let closing = closing_blocks(&relations, lines);
     let list = ui.scope(|ui| {
-        for line in lines {
-            line_ui(ui, drawing, &relations, line, state, hovered, pending);
+        for (index, line) in lines.iter().enumerate() {
+            line_ui(ui, drawing, &relations, &notes, line, state, hovered, pending);
+            if !editable {
+                continue;
+            }
+            for block in closing.get(&index).into_iter().flatten() {
+                add_inside_ui(ui, drawing, block, state, pending);
+            }
         }
         ui.unique_id()
     });
     accessible_group(ui.ctx(), list.inner, Role::List, &list_name, list.response.rect);
-    if card.every == "cells" {
+    if editable {
+        if card.line_tables.values().any(|line| line.kind == LineKind::When) {
+            ui.add_space(4.0);
+            ui.weak(ADD_AT_END_NOTE);
+        }
         add_buttons_ui(ui, drawing.document, state, Some(card), pending);
     }
+}
+
+/// A When block whose add row follows a line.
+#[derive(Debug, Clone)]
+struct ClosingBlock {
+    /// Id of the When line.
+    id: String,
+    /// Number of the When line on its card.
+    number: usize,
+    /// Number of blocks around the lines inside the block.
+    depth: usize,
+}
+
+/// Returns the When blocks of `lines` that close after each line, by the line's index, inner blocks first.
+///
+/// A block closes after the last line inside it, or after its When line while it holds none.
+fn closing_blocks(relations: &CardRelations<'_>, lines: &[CardLine]) -> BTreeMap<usize, Vec<ClosingBlock>> {
+    let mut closing: BTreeMap<usize, Vec<ClosingBlock>> = BTreeMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        if relations.line(&line.id).is_none_or(|data| data.kind != LineKind::When) {
+            continue;
+        }
+        let last = lines
+            .iter()
+            .enumerate()
+            .skip(index + 1)
+            .take_while(|(_, inner)| relations.is_within(&inner.id, &line.id))
+            .last()
+            .map_or(index, |(last, _)| last);
+        closing.entry(last).or_default().push(ClosingBlock {
+            id: line.id.clone(),
+            number: line.number,
+            depth: line.depth + 1,
+        });
+    }
+    for blocks in closing.values_mut() {
+        blocks.sort_by_key(|block| std::cmp::Reverse(block.depth));
+    }
+    closing
+}
+
+/// Draws the row that ends `block`, "+ Add inside line 4", indented to the block's inner level. Its menu, "Add a
+/// line inside line 4", lists every kind of line in groups, and an item adds its line at the end of the block.
+///
+/// On a card that runs once the menu holds the Change group alone, as the card's own add buttons offer "+ Change"
+/// alone.
+fn add_inside_ui(
+    ui: &mut Ui,
+    drawing: &CardDrawing<'_>,
+    block: &ClosingBlock,
+    state: &CardState,
+    pending: &mut Option<CardEdit>,
+) {
+    let states = pattern_states(drawing.document);
+    let states = states.as_ref().map(|(new, old)| (new.as_str(), old.as_str()));
+    let label = add_inside_label(block.number);
+    let title = add_inside_name(block.number);
+    let groups = add_inside_groups(drawing.card);
+    let id = state.widgets.with(("add inside", &block.id));
+    let chosen = ui
+        .horizontal(|ui| {
+            ui.add_space(INDENT * block.depth as f32 + NUMBER_WIDTH);
+            let response = add_button(
+                ui,
+                true,
+                Button::new(label.as_str()).wrap_mode(egui::TextWrapMode::Extend),
+                &label,
+            );
+            let popup = Popup::menu(&response).id(id.with("menu")).show(|ui| {
+                let menu = ui.scope(|ui| {
+                    ui.strong(&title);
+                    let mut chosen = None;
+                    for &button in groups {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(button.group()).weak().small());
+                        if let Some(item) = add_items_ui(ui, button, states) {
+                            chosen = Some(item);
+                        }
+                    }
+                    (chosen, ui.unique_id())
+                });
+                let (chosen, menu_id) = menu.inner;
+                accessible_group(ui.ctx(), menu_id, Role::Dialog, &title, menu.response.rect);
+                chosen
+            })?;
+            popup.inner
+        })
+        .inner;
+    if let Some(item) = chosen {
+        *pending = Some(add_line_edit(
+            Some(drawing.card.id.clone()),
+            Some(block.id.clone()),
+            item,
+        ));
+    }
+}
+
+/// Returns the groups of the menu of a When block's add row on `card`: the Change group alone on a card that runs once,
+/// and every group otherwise.
+fn add_inside_groups(card: &SheetCard) -> &'static [AddButton] {
+    if card.runs == CardRuns::Once {
+        &[AddButton::Change]
+    } else {
+        &AddButton::ADD_INSIDE_ORDER
+    }
+}
+
+/// Returns every button that card `card_index` of `document` draws under its lines and as its When blocks' add rows,
+/// each with its visible words and its accessible name, in the state where no range is being filled. A card that the
+/// pane cannot edit draws none.
+#[cfg(test)]
+pub fn card_buttons(
+    document: &SheetDocument,
+    sentences: &Sentences<'_>,
+    report: &SheetReport,
+    card_index: usize,
+) -> Vec<LineControl> {
+    let Some(card) = document.cards.get(card_index).filter(|card| card.every == "cells") else {
+        return Vec::new();
+    };
+    let values = parameter_defaults(document);
+    let drawing = CardDrawing {
+        document,
+        sentences,
+        report,
+        card,
+        values: &values,
+        highlight: &[],
+    };
+    let relations = CardRelations::new(document, card);
+    let notes = relations.notes(sentences, |line| !report.is_skipped(line));
+    let lines = card_lines(document, sentences, report, card_index);
+    let mut buttons = Vec::new();
+    for line in &lines {
+        let Some(line_data) = relations.line(&line.id) else {
+            continue;
+        };
+        buttons.extend(
+            card_notes(&drawing, line, line_data, &notes, false)
+                .into_iter()
+                .filter_map(|note| note.action)
+                .map(|action| LineControl {
+                    visible: action.label,
+                    name: action.name,
+                    select: false,
+                }),
+        );
+    }
+    buttons.extend(closing_blocks(&relations, &lines).into_values().flatten().map(|block| {
+        let label = add_inside_label(block.number);
+        LineControl {
+            visible: label.clone(),
+            name: label,
+            select: false,
+        }
+    }));
+    buttons
 }
 
 /// Returns the name of the button that runs `card` once, `None` for a card that runs every tick or that no button
@@ -523,17 +743,7 @@ fn add_buttons_ui(
     pending: &mut Option<CardEdit>,
 ) {
     let once = card.is_some_and(|card| card.runs == CardRuns::Once);
-    let buttons: &[AddButton] = if once {
-        &[AddButton::Change]
-    } else {
-        &[
-            AddButton::LookAround,
-            AddButton::Chance,
-            AddButton::YesOrNo,
-            AddButton::Calculate,
-            AddButton::Change,
-        ]
-    };
+    let buttons: &[AddButton] = if once { &[AddButton::Change] } else { &AddButton::ALL };
     let states = pattern_states(document);
     let card_id = card.map(|card| card.id.clone());
     ui.add_space(4.0);
@@ -558,7 +768,7 @@ fn add_buttons_ui(
                 })
                 .and_then(|popup| popup.inner);
             if let Some(item) = chosen {
-                *pending = Some(add_line_edit(card_id.clone(), item));
+                *pending = Some(add_line_edit(card_id.clone(), None, item));
             }
         }
     });
@@ -570,6 +780,12 @@ fn add_buttons_ui(
 /// The pattern is painted, so it stays out of the accessibility tree and the item is named by its label alone.
 fn add_menu_ui(ui: &mut Ui, button: AddButton, states: Option<(&str, &str)>) -> Option<AddItem> {
     ui.strong(button.heading());
+    add_items_ui(ui, button, states)
+}
+
+/// Draws each item of the menu of the add button `button` with its pattern in grey under it, and returns the item
+/// chosen.
+fn add_items_ui(ui: &mut Ui, button: AddButton, states: Option<(&str, &str)>) -> Option<AddItem> {
     let mut chosen = None;
     for item in button.items() {
         // The card writes no rate line, so the add menus leave out the rate items.
@@ -651,8 +867,8 @@ fn new_line(item: AddItem) -> SheetLine {
 }
 
 /// Returns the edit that adds the line of `item` at the end of the card `card`, or of a new card that runs each tick
-/// for `None`.
-fn add_line_edit(card: Option<String>, item: AddItem) -> CardEdit {
+/// for `None`, or at the end of the When block `inside` when one is given.
+fn add_line_edit(card: Option<String>, inside: Option<String>, item: AddItem) -> CardEdit {
     let line = new_line(item);
     CardEdit {
         run: Box::new(move |builder| {
@@ -668,7 +884,7 @@ fn add_line_edit(card: Option<String>, item: AddItem) -> CardEdit {
             };
             builder.apply(SheetEdit::AddLine {
                 card,
-                inside: None,
+                inside,
                 line: Box::new(line),
             })
         }),
@@ -748,6 +964,9 @@ pub struct CardLine {
     pub otherwise: Vec<String>,
     /// Tooltip and accessible description of the "otherwise" words, empty for a line with no "otherwise".
     pub otherwise_tooltip: String,
+    /// Notice shown the first time in a session that the line starts with "otherwise", empty for a line with no
+    /// "otherwise".
+    pub otherwise_notice: String,
     /// Index in [`Self::parts`] of each result chip that the line cannot use, with the chip's tooltip.
     pub red_chips: Vec<(usize, String)>,
     /// Index in [`Self::parts`] of each state chip, with the colour of its state. A state that no property has is
@@ -822,6 +1041,7 @@ pub fn card_lines(
                 block = relations.parent(parent);
             }
             let number = relations.number(line_id).unwrap_or(index + 1);
+            let prefix = line_prefix(button, number);
             let otherwise_numbers = relations.otherwise_numbers(line_id);
             let placed = sentences.placed_parts(line_id, &otherwise_numbers);
             let (parts, places): (Vec<SentencePart>, Vec<Option<PartPlace>>) =
@@ -829,19 +1049,21 @@ pub fn card_lines(
             let red_chips = red_chips(&relations, line_id, index, &parts);
             let (notes, skips) = line_notes(report, card_index, line_id, &red_chips);
             let swatches = swatches(document, &parts);
+            let (otherwise_tooltip, otherwise_notice) = if otherwise_numbers.is_empty() {
+                (String::new(), String::new())
+            } else {
+                otherwise_words_of(document, &relations, line_id, &prefix, &otherwise_numbers)
+            };
             CardLine {
                 id: line_id.to_owned(),
                 number,
                 depth,
-                prefix: line_prefix(button, number),
+                prefix,
                 word: line_word(button, number),
                 sentence: sentence_text(&parts),
                 otherwise: relations.otherwise_of(line_id).into_iter().map(str::to_owned).collect(),
-                otherwise_tooltip: if otherwise_numbers.is_empty() {
-                    String::new()
-                } else {
-                    otherwise_tooltip_of(document, &relations, line_id, &otherwise_numbers)
-                },
+                otherwise_tooltip,
+                otherwise_notice,
                 parts,
                 places,
                 red_chips: red_chips.into_iter().map(|red| (red.index, red.tooltip)).collect(),
@@ -973,15 +1195,17 @@ pub fn draws_diagnostic(document: &SheetDocument, diagnostic: &SheetDiagnostic) 
         .is_some_and(|card| CardRelations::new(document, card).index(line).is_some())
 }
 
-/// Returns the tooltip of the "otherwise" words of line `line_id`, overridden by the lines numbered `numbers`.
+/// Returns the tooltip of the "otherwise" words of line `line_id`, whose line prefix is `prefix`, overridden by the
+/// lines numbered `numbers`, and the notice shown the first time the line starts with "otherwise".
 ///
-/// It names the property the lines change, and the old state a cell must be in for both to apply.
-fn otherwise_tooltip_of(
+/// Both name the property the lines change, and the old state a cell must be in for both to apply.
+fn otherwise_words_of(
     document: &SheetDocument,
     relations: &CardRelations<'_>,
     line_id: &str,
+    prefix: &str,
     numbers: &[usize],
-) -> String {
+) -> (String, String) {
     let line = relations.line(line_id);
     let property = line
         .and_then(|line| line.property.as_deref())
@@ -995,7 +1219,10 @@ fn otherwise_tooltip_of(
                 .map(|state| state.name.as_str())
         });
     let property_name = property.map_or(BLANK_TEXT, |property| property.name.as_str());
-    otherwise_tooltip(numbers, property_name, state)
+    (
+        otherwise_tooltip(numbers, property_name, state),
+        otherwise_notice(prefix, numbers, property_name, state),
+    )
 }
 
 /// Returns the property `id` of any kind of thing of `document`.
@@ -1010,8 +1237,16 @@ fn property_of<'a>(document: &'a SheetDocument, id: &str) -> Option<&'a SheetPro
 }
 
 /// Returns the notes the card adds under `line` to those of the check, in the order of the wording table: the one-side
-/// offer after the skip note, then the count used as a chance or a rate, then the note of a chance for each.
-fn card_notes(drawing: &CardDrawing<'_>, line: &CardLine, line_data: &SheetLine, filling: bool) -> Vec<LineNote> {
+/// offer after the skip note, then the count used as a chance or a rate, then the note of a chance for each, then the
+/// line's `relation_notes`: the gap, coverage and order notes, the offers to fold a When, and the notes inside and
+/// under a When.
+fn card_notes(
+    drawing: &CardDrawing<'_>,
+    line: &CardLine,
+    line_data: &SheetLine,
+    relation_notes: &[RelationNote],
+    filling: bool,
+) -> Vec<LineNote> {
     let mut notes = line.notes.clone();
     if line.skips > 0
         && !filling
@@ -1060,7 +1295,42 @@ fn card_notes(drawing: &CardDrawing<'_>, line: &CardLine, line_data: &SheetLine,
             action: None,
         });
     }
+    notes.extend(
+        relation_notes
+            .iter()
+            .filter(|note| note.line == line.id)
+            .map(|note| relation_line_note(line, note)),
+    );
     notes
+}
+
+/// Returns `note`, a relation note under `line`, as the card draws it: grey, or amber with its button for an offer to
+/// fold a When.
+fn relation_line_note(line: &CardLine, note: &RelationNote) -> LineNote {
+    let (color, action) = match &note.kind {
+        RelationNoteKind::WhenRepeats => (
+            NoteColor::Amber,
+            Some(NoteAction {
+                label: REMOVE_THIS_WHEN.to_owned(),
+                name: remove_when_name(&line.prefix),
+                edit: SheetEdit::DeleteLine { line: line.id.clone() },
+            }),
+        ),
+        RelationNoteKind::OnlyOneInside { number, .. } => (
+            NoteColor::Amber,
+            Some(NoteAction {
+                label: move_into_label(*number),
+                name: move_into_name(&line.prefix, *number),
+                edit: SheetEdit::MoveConditionInto { when: line.id.clone() },
+            }),
+        ),
+        _ => (NoteColor::Grey, None),
+    };
+    LineNote {
+        text: note.text.clone(),
+        color,
+        action,
+    }
 }
 
 /// What the parts of one line gather while they are drawn.
@@ -1079,11 +1349,17 @@ struct LineDrawing<'a> {
     arrow_drawn: bool,
 }
 
-/// Draws `line`: its number, its sentence part by part, its menu, its rename field and its notes under it.
+/// Draws `line`: its number, its sentence part by part, its menu, its rename field and its notes under it, with the
+/// relation notes of the card among them.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the card, its relations and notes, the line and the pane's state each take a part"
+)]
 fn line_ui(
     ui: &mut Ui,
     drawing: &CardDrawing<'_>,
     relations: &CardRelations<'_>,
+    relation_notes: &[RelationNote],
     line: &CardLine,
     state: &mut CardState,
     hovered: &mut Vec<String>,
@@ -1136,7 +1412,7 @@ fn line_ui(
         }
         if editable {
             ui.add_space(6.0);
-            line_menu_ui(ui, line, line_data, state, pending);
+            line_menu_ui(ui, relations, line, line_data, state, pending);
         }
         ui.unique_id()
     });
@@ -1162,7 +1438,7 @@ fn line_ui(
         ui,
         line,
         line_data,
-        card_notes(drawing, line, line_data, filling),
+        card_notes(drawing, line, line_data, relation_notes, filling),
         editable,
         pending,
     );
@@ -1284,10 +1560,7 @@ fn part_ui(
         // A word that does not wrap moves to the next row whole when the row has no room left for it.
         SentencePart::ConditionWord(words) => {
             ui.add(Label::new(RichText::new(*words).strong()).extend());
-            if drawing.editable
-                && !gathered.arrow_drawn
-                && matches!(drawing.context.line.kind, LineKind::Become | LineKind::Set)
-            {
+            if drawing.editable && !gathered.arrow_drawn && takes_condition(drawing.context.line.kind) {
                 gathered.arrow_drawn = true;
                 condition_arrow_ui(ui, drawing, state, gathered, pending);
             }
@@ -1495,6 +1768,11 @@ fn add_value_ui(
     gathered.focused |= response.has_focus();
     let blank = SentencePart::Blank(place.want.unwrap_or(Blank::NumberList));
     control_picker(ui, drawing, place, &blank, &response, id, state, gathered, pending);
+}
+
+/// Returns whether a line of `kind` holds a condition of its own: a Become, a Set or a When.
+fn takes_condition(kind: LineKind) -> bool {
+    matches!(kind, LineKind::Become | LineKind::Set | LineKind::When)
 }
 
 /// Draws the arrow after the condition word of a change. A click opens "Choose when" for its condition.
@@ -1863,9 +2141,26 @@ fn select_ui(ui: &mut Ui, id: Option<Id>, words: &str, name: &str, empty: bool) 
 
 // The line menu and the rename field
 
-/// Draws the menu of `line`, "Line 2 actions", with Rename on a result line and Delete.
+/// A tool of a line's menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineTool {
+    /// Rename the line's result.
+    Rename,
+    /// Move the line up.
+    MoveUp,
+    /// Move the line down.
+    MoveDown,
+    /// Give the line's draws a new key.
+    DrawNewNumbers,
+    /// Delete the line.
+    Delete,
+}
+
+/// Draws the menu of `line`, "Line 2 actions": Rename on a result line, Move up and Move down where the outline
+/// lets the line move, Draw new numbers on a line that draws, and Delete.
 fn line_menu_ui(
     ui: &mut Ui,
+    relations: &CardRelations<'_>,
     line: &CardLine,
     line_data: &SheetLine,
     state: &mut CardState,
@@ -1880,32 +2175,76 @@ fn line_menu_ui(
         &line_actions_name(&line.prefix),
     );
     let is_result = line_data.name.is_some();
+    let (up, down) = can_move(relations, &line.id);
+    let draws = holds_draw(line_data);
+    let is_when = line_data.kind == LineKind::When;
     let chosen = Popup::menu(&response)
         .id(id.with("popup"))
         .show(|ui| {
-            let rename = is_result && ui.button(rename_line(&line.word)).clicked();
-            let delete = ui.button(delete_line(&line.word)).clicked();
-            // Some(true) deletes the line and Some(false) renames its result.
-            (rename || delete).then_some(delete)
+            let mut chosen = None;
+            let mut tool = |ui: &mut Ui, shown: bool, enabled: bool, words: String, tool: LineTool| {
+                if shown && ui.add_enabled(enabled, Button::new(words)).clicked() {
+                    chosen = Some(tool);
+                }
+            };
+            tool(ui, is_result, true, rename_line(&line.word), LineTool::Rename);
+            tool(ui, true, up, move_line_up(&line.word), LineTool::MoveUp);
+            tool(ui, true, down, move_line_down(&line.word), LineTool::MoveDown);
+            tool(ui, draws, true, DRAW_NEW_NUMBERS.to_owned(), LineTool::DrawNewNumbers);
+            let delete = ui.button(delete_line(&line.word));
+            let delete = if is_when {
+                delete.on_hover_text(DELETE_WHEN_TOOLTIP)
+            } else {
+                delete
+            };
+            if delete.clicked() {
+                chosen = Some(LineTool::Delete);
+            }
+            chosen
         })
         .and_then(|popup| popup.inner);
+    let edit = |edit: SheetEdit| Some(CardEdit::commands(vec![edit], After::Stay));
+    let line_id = line.id.clone();
     match chosen {
-        Some(true) => {
-            *pending = Some(CardEdit::commands(
-                vec![SheetEdit::DeleteLine { line: line.id.clone() }],
-                After::Stay,
-            ));
-        }
-        Some(false) => {
+        Some(LineTool::Rename) => {
             state.renaming = Some(Renaming {
-                line: line.id.clone(),
+                line: line_id,
                 text: line_data.name.clone().unwrap_or_default(),
                 message: None,
                 focused: false,
             });
         }
+        Some(LineTool::MoveUp) => {
+            *pending = edit(SheetEdit::MoveLine {
+                line: line_id,
+                direction: MoveDirection::Up,
+            });
+        }
+        Some(LineTool::MoveDown) => {
+            *pending = edit(SheetEdit::MoveLine {
+                line: line_id,
+                direction: MoveDirection::Down,
+            });
+        }
+        Some(LineTool::DrawNewNumbers) => *pending = edit(SheetEdit::DrawNewNumbers { line: line_id }),
+        Some(LineTool::Delete) => *pending = edit(SheetEdit::DeleteLine { line: line_id }),
         None => {}
     }
+}
+
+/// Returns whether line `line_id` can move up and whether it can move down in the outline of its card.
+///
+/// Only the card's first line stays at the top, and only a line at the top level with no line or block after it stays
+/// at the bottom. A line inside a block moves out of it at either end.
+fn can_move(relations: &CardRelations<'_>, line_id: &str) -> (bool, bool) {
+    let up = relations.index(line_id).is_some_and(|index| index > 0);
+    let down = relations.parent(line_id).is_some()
+        || relations.index(line_id).is_some_and(|index| {
+            relations.order()[index + 1..]
+                .iter()
+                .any(|later| relations.parent(later).is_none())
+        });
+    (up, down)
 }
 
 /// Draws the field that renames `line`, under it. Enter or leaving the field keeps the name, and Escape cancels.

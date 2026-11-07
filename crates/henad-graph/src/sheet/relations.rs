@@ -15,15 +15,23 @@
 //!   an all of, nested all of included. Its lines compete for the cells in that state and read "or" against each other
 //!   instead of "otherwise".
 //!
-//! The sheet checker and the writer's comments take these relations from here.
+//! - A *relation note* is a note under a line that the relations between the card's lines decide: the gap, coverage
+//!   and order notes of Become lines, the offers to fold a When into its lines, and the notes inside and under a When.
+//!
+//! The sheet checker, the writer's comments and the card's notes take these relations from here.
 
 use std::collections::HashMap;
 
+use super::check::is_result_kind;
 use super::document::{
-    CompareTest, LineKind, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetValue,
-    Slot, SummaryKind,
+    Around, CompareTest, LineKind, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine, SheetLiteral,
+    SheetProperty, SheetValue, Slot, SummaryKind,
 };
-use super::sentence::ANY_STATE_ID;
+use super::edit::automatic_name;
+use super::sentence::{
+    ANY_STATE_ID, NOTHING_INSIDE, Sentences, coverage_note, gap_note, only_one_inside_note, only_when_note, order_note,
+    when_repeats_note, worked_out_everywhere_note,
+};
 
 /// Allowance of the comparisons of the "otherwise" rule, so that two tests of one listed number agree on it.
 const NEAR: f64 = 1e-9;
@@ -387,6 +395,466 @@ impl<'a> CardRelations<'a> {
             .chain(document.agents.iter().flat_map(|kind| &kind.properties))
             .chain(document.ground.iter().flat_map(|ground| &ground.properties))
             .find(|property| property.id == id)
+    }
+}
+
+/// A note under a line that the relations between the card's lines decide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RelationNote {
+    /// Id of the line the note sits under.
+    pub line: String,
+    /// Words of the note.
+    pub text: String,
+    /// Kind of the note.
+    pub kind: RelationNoteKind,
+}
+
+/// Kind of a [`RelationNote`], in the order the notes stand under one line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RelationNoteKind {
+    /// Values of a count that none of a group of Become lines applies to, such as "None of lines 2 and 3 applies when
+    /// B in my block is 4 or 5. Those cells keep their Opinion."
+    Gap,
+    /// The state a cell ends the tick in for each value of a count, such as "Lines 2 and 3 cover every value of B in
+    /// my block. ..."
+    Coverage,
+    /// Become lines from different states, whose order does not matter.
+    Order,
+    /// A When whose test every line inside it already makes. The offer removes the When and keeps its lines.
+    WhenRepeats,
+    /// A When around one change that holds always. The offer moves the When's condition into that change, the line
+    /// `inside`.
+    OnlyOneInside {
+        /// Id of the change inside the When.
+        inside: String,
+        /// Number of the change on the card.
+        number: usize,
+    },
+    /// A change, When or result line inside a When.
+    Inside,
+    /// A When that holds no line.
+    NothingInside,
+}
+
+impl<'a> CardRelations<'a> {
+    /// Returns every relation note of the card, the notes of one line in the order they stand under it.
+    ///
+    /// `sentences` writes the conditions the notes quote, and `runs` returns whether a line runs. The gap, coverage
+    /// and order notes speak only of lines that run.
+    pub fn notes(&self, sentences: &Sentences<'_>, runs: impl Fn(&str) -> bool) -> Vec<RelationNote> {
+        let mut notes = Vec::new();
+        notes.extend(self.gap_notes(&runs));
+        notes.extend(self.coverage_notes(&runs));
+        notes.extend(self.order_notes(&runs));
+        notes.extend(self.fold_notes());
+        notes.extend(self.inside_notes(sentences));
+        // A stable sort keeps the kinds of one line in the order they were added.
+        notes.sort_by_key(|note| self.index(&note.line).unwrap_or(usize::MAX));
+        notes
+    }
+
+    /// Returns the gap notes: for two or more top-level Become lines of one property from the same state, each running
+    /// and testing one count with a compare or outside condition, with two or more new states, the values of the count
+    /// that none of them applies to. The note sits under the last line of the group.
+    fn gap_notes(&self, runs: &impl Fn(&str) -> bool) -> Vec<RelationNote> {
+        let mut groups: Vec<((&str, &str), Vec<&str>)> = Vec::new();
+        for &id in &self.order {
+            let Some(line) = self.line(id) else {
+                continue;
+            };
+            if line.kind != LineKind::Become || self.parent(id).is_some() || line.new_state.is_none() {
+                continue;
+            }
+            let (Some(property), Some(start)) = (line.property.as_deref(), line.start_state.as_deref()) else {
+                continue;
+            };
+            if line.condition.is_blank() {
+                continue;
+            }
+            match groups.iter_mut().find(|(key, _)| *key == (property, start)) {
+                Some((_, lines)) => lines.push(id),
+                None => groups.push(((property, start), vec![id])),
+            }
+        }
+        let mut notes = Vec::new();
+        for ((property, _), lines) in groups {
+            if lines.len() < 2 || self.new_states(&lines) < 2 || !lines.iter().all(|&id| runs(id)) {
+                continue;
+            }
+            let Some((count, tests)) = self.count_tests(&lines, false) else {
+                continue;
+            };
+            let Some(most) = most_counted(count) else {
+                continue;
+            };
+            let gaps: Vec<u32> = (0..=most)
+                .filter(|&x| !tests.iter().flatten().any(|test| test.test.passes(f64::from(x))))
+                .collect();
+            let Some(&last) = lines.last() else {
+                continue;
+            };
+            if gaps.is_empty() {
+                continue;
+            }
+            let property_name = self.property(property).map_or(property, |found| found.name.as_str());
+            notes.push(RelationNote {
+                line: last.to_owned(),
+                text: gap_note(&self.numbers(&lines), &self.result_name(count), &gaps, property_name),
+                kind: RelationNoteKind::Gap,
+            });
+        }
+        notes
+    }
+
+    /// Returns the coverage notes: for a States property whose Become lines on the card all sit at the top level,
+    /// name a state they change from, run, and test one count or hold always, the state a cell ends the tick in for
+    /// each value of the count, when it never depends on the cell's own state and takes two or more states. A cell
+    /// no line changes keeps its state. The note sits under the last Become line of the property.
+    fn coverage_notes(&self, runs: &impl Fn(&str) -> bool) -> Vec<RelationNote> {
+        let mut notes = Vec::new();
+        for (property, lines) in self.becomes_by_property() {
+            let Some(found) = self
+                .property(property)
+                .filter(|found| found.property_type == PropertyType::States)
+            else {
+                continue;
+            };
+            if lines.len() < 2
+                || lines.iter().any(|&id| {
+                    self.parent(id).is_some()
+                        || !runs(id)
+                        || self.line(id).is_none_or(|line| {
+                            line.start_state.is_none() || line.new_state.is_none() || line.condition.is_blank()
+                        })
+                })
+            {
+                continue;
+            }
+            let Some((count, tests)) = self.count_tests(&lines, true) else {
+                continue;
+            };
+            let Some(most) = most_counted(count) else {
+                continue;
+            };
+            let mut ends: Vec<&str> = Vec::new();
+            for x in 0..=most {
+                let mut end: Option<&str> = None;
+                let mut agree = true;
+                for state in &found.states {
+                    let mut result = state.id.as_str();
+                    for (&id, test) in lines.iter().zip(&tests) {
+                        let Some(line) = self.line(id) else {
+                            continue;
+                        };
+                        let from = line.start_state.as_deref();
+                        let applies = from == Some(ANY_STATE_ID) || from == Some(state.id.as_str());
+                        if applies && test.as_ref().is_none_or(|test| test.test.passes(f64::from(x))) {
+                            result = line.new_state.as_deref().unwrap_or(result);
+                            break;
+                        }
+                    }
+                    match end {
+                        None => end = Some(result),
+                        Some(other) if other != result => {
+                            agree = false;
+                            break;
+                        }
+                        Some(_) => {}
+                    }
+                }
+                let Some(end) = end.filter(|_| agree) else {
+                    ends.clear();
+                    break;
+                };
+                ends.push(end);
+            }
+            let mut order: Vec<&str> = Vec::new();
+            for end in &ends {
+                if !order.contains(end) {
+                    order.push(end);
+                }
+            }
+            let Some(&last) = lines.last() else {
+                continue;
+            };
+            if order.len() < 2 {
+                continue;
+            }
+            let values: Vec<(&str, Vec<u32>)> = order
+                .iter()
+                .map(|&state| {
+                    let values = (0..=most).zip(&ends).filter(|(_, end)| **end == state).map(|(x, _)| x);
+                    (state_name(found, state), values.collect())
+                })
+                .collect();
+            let ends: Vec<(&str, &[u32])> = values
+                .iter()
+                .map(|(state, values)| (*state, values.as_slice()))
+                .collect();
+            notes.push(RelationNote {
+                line: last.to_owned(),
+                text: coverage_note(&self.numbers(&lines), &self.result_name(count), &ends),
+                kind: RelationNoteKind::Coverage,
+            });
+        }
+        notes
+    }
+
+    /// Returns the order notes: for a property with two or more Become lines on the card, every one running and
+    /// changing from a named state of the property, no two from the same state, a note that their order does not
+    /// matter. Lines inside a When count too. The note sits under the last Become line of the property.
+    fn order_notes(&self, runs: &impl Fn(&str) -> bool) -> Vec<RelationNote> {
+        let mut notes = Vec::new();
+        for (property, lines) in self.becomes_by_property() {
+            let Some(found) = self.property(property) else {
+                continue;
+            };
+            let starts: Option<Vec<&str>> = lines
+                .iter()
+                .map(|&id| {
+                    let start = self.line(id)?.start_state.as_deref()?;
+                    let known = found.states.iter().any(|state| state.id == start);
+                    (runs(id) && known).then_some(start)
+                })
+                .collect();
+            let Some(starts) = starts else {
+                continue;
+            };
+            let distinct = starts
+                .iter()
+                .enumerate()
+                .all(|(index, start)| !starts[..index].contains(start));
+            let Some(&last) = lines.last() else {
+                continue;
+            };
+            if lines.len() < 2 || !distinct {
+                continue;
+            }
+            let names: Vec<&str> = starts.iter().map(|start| state_name(found, start)).collect();
+            notes.push(RelationNote {
+                line: last.to_owned(),
+                text: order_note(&self.numbers(&lines), &names),
+                kind: RelationNoteKind::Order,
+            });
+        }
+        notes
+    }
+
+    /// Returns the offers to fold a When into its lines, each under its When. A When whose test is "my [property] is
+    /// [state]" and whose lines are all Become lines from that state repeats them. Otherwise a When around one change
+    /// that holds always can move its condition into the change. A When holding another When gets neither.
+    fn fold_notes(&self) -> Vec<RelationNote> {
+        let mut notes = Vec::new();
+        for &id in &self.order {
+            let Some(when) = self.line(id).filter(|line| line.kind == LineKind::When) else {
+                continue;
+            };
+            let Some(SheetValue::Phrase(condition)) = when.condition.value() else {
+                continue;
+            };
+            if condition.kind == LineKind::Always {
+                continue;
+            }
+            let inside: Vec<(&str, &SheetLine)> = self
+                .order
+                .iter()
+                .filter(|&&inner| self.parent(inner) == Some(id))
+                .filter_map(|&inner| Some((inner, self.line(inner)?)))
+                .collect();
+            if inside.is_empty() || inside.iter().any(|(_, line)| line.kind == LineKind::When) {
+                continue;
+            }
+            if let Some((property, state)) = self.tested_state(condition)
+                && inside.iter().all(|(_, line)| {
+                    line.kind == LineKind::Become
+                        && line.property.as_deref() == Some(property)
+                        && line.start_state.as_deref() == Some(state)
+                })
+            {
+                let numbers: Vec<usize> = inside.iter().filter_map(|(inner, _)| self.number(inner)).collect();
+                let name = self.property(property).map_or(state, |found| state_name(found, state));
+                notes.push(RelationNote {
+                    line: id.to_owned(),
+                    text: when_repeats_note(&numbers, name),
+                    kind: RelationNoteKind::WhenRepeats,
+                });
+                continue;
+            }
+            if let [(inner, line)] = inside.as_slice()
+                && matches!(line.kind, LineKind::Become | LineKind::Set)
+                && matches!(line.condition.value(), Some(SheetValue::Phrase(phrase)) if phrase.kind == LineKind::Always)
+                && let Some(number) = self.number(inner)
+            {
+                notes.push(RelationNote {
+                    line: id.to_owned(),
+                    text: only_one_inside_note(number),
+                    kind: RelationNoteKind::OnlyOneInside {
+                        inside: (*inner).to_owned(),
+                        number,
+                    },
+                });
+            }
+        }
+        notes
+    }
+
+    /// Returns the notes inside and under a When: under a change or a When inside one, the condition it holds only
+    /// under, under a result line inside one, that it is worked out for every cell, and under an empty When, that it
+    /// holds nothing.
+    fn inside_notes(&self, sentences: &Sentences<'_>) -> Vec<RelationNote> {
+        let mut notes = Vec::new();
+        for &id in &self.order {
+            let Some(line) = self.line(id) else {
+                continue;
+            };
+            if let Some(parent) = self.parent(id)
+                && let Some(block) = self.line(parent).filter(|block| block.kind == LineKind::When)
+                && let Some(number) = self.number(parent)
+            {
+                let text = if matches!(line.kind, LineKind::Become | LineKind::Set | LineKind::When) {
+                    let condition = (!block.condition.is_blank()).then(|| sentences.slot(&block.condition, None));
+                    Some(only_when_note(number, condition.as_deref()))
+                } else {
+                    is_result_kind(line.kind).then(|| worked_out_everywhere_note(number))
+                };
+                if let Some(text) = text {
+                    notes.push(RelationNote {
+                        line: id.to_owned(),
+                        text,
+                        kind: RelationNoteKind::Inside,
+                    });
+                }
+            }
+            if line.kind == LineKind::When && !line.lines.iter().any(|inner| self.index(inner).is_some()) {
+                notes.push(RelationNote {
+                    line: id.to_owned(),
+                    text: NOTHING_INSIDE.to_owned(),
+                    kind: RelationNoteKind::NothingInside,
+                });
+            }
+        }
+        notes
+    }
+
+    /// Returns the Become lines of the card by the property they change, each list in display order, the properties
+    /// in the order of their first line.
+    fn becomes_by_property(&self) -> Vec<(&'a str, Vec<&'a str>)> {
+        let mut groups: Vec<(&'a str, Vec<&'a str>)> = Vec::new();
+        for &id in &self.order {
+            let Some(property) = self
+                .line(id)
+                .filter(|line| line.kind == LineKind::Become)
+                .and_then(|line| line.property.as_deref())
+            else {
+                continue;
+            };
+            match groups.iter_mut().find(|(key, _)| *key == property) {
+                Some((_, lines)) => lines.push(id),
+                None => groups.push((property, vec![id])),
+            }
+        }
+        groups
+    }
+
+    /// Returns the Count line that the own conditions of `lines` all test, with each line's test of it, `None` unless
+    /// every condition is a compare or outside test of that count. With `always`, a condition that holds always
+    /// passes every value and reads as `None`, and one line must still test the count.
+    fn count_tests(&self, lines: &[&str], always: bool) -> Option<(&'a SheetLine, Vec<Option<ValueTest>>)> {
+        let mut count: Option<&str> = None;
+        let mut tests = Vec::new();
+        for &id in lines {
+            let SheetValue::Phrase(condition) = self.line(id)?.condition.value()? else {
+                return None;
+            };
+            if always && condition.kind == LineKind::Always {
+                tests.push(None);
+                continue;
+            }
+            if condition.kind != LineKind::Compare {
+                return None;
+            }
+            let test = self.compare_test(condition)?;
+            let Operand::Result {
+                line,
+                part: None,
+                property: None,
+            } = &test.operand
+            else {
+                return None;
+            };
+            if count.is_some_and(|count| count != line) {
+                return None;
+            }
+            count = Some(self.order.iter().copied().find(|&known| known == line)?);
+            tests.push(Some(test));
+        }
+        let source = self.line(count?).filter(|line| line.kind == LineKind::Count)?;
+        Some((source, tests))
+    }
+
+    /// Returns the number of different new states among the Become `lines`.
+    fn new_states(&self, lines: &[&str]) -> usize {
+        let mut states: Vec<&str> = Vec::new();
+        for state in lines.iter().filter_map(|&id| self.line(id)?.new_state.as_deref()) {
+            if !states.contains(&state) {
+                states.push(state);
+            }
+        }
+        states.len()
+    }
+
+    /// Returns the numbers of `lines` on the card.
+    fn numbers(&self, lines: &[&str]) -> Vec<usize> {
+        lines.iter().filter_map(|&id| self.number(id)).collect()
+    }
+
+    /// Returns the name of the result of `line`: its own name, its automatic name, or "result".
+    fn result_name(&self, line: &SheetLine) -> String {
+        line.name
+            .clone()
+            .or_else(|| automatic_name(self.document, line))
+            .unwrap_or_else(|| "result".to_owned())
+    }
+
+    /// Returns the property and the state that `condition` tests as "my [property] is [state]", `None` for any other
+    /// condition.
+    fn tested_state<'b>(&self, condition: &'b SheetLine) -> Option<(&'b str, &'b str)> {
+        if condition.kind != LineKind::Compare || condition.test != Some(CompareTest::Is) {
+            return None;
+        }
+        let Some(SheetValue::Chip(SheetChip::My(property))) = condition.left.value() else {
+            return None;
+        };
+        let Some(SheetValue::Chip(SheetChip::State(state))) = condition.right.value() else {
+            return None;
+        };
+        let found = self.property(property)?;
+        found
+            .states
+            .iter()
+            .any(|known| known.id == *state)
+            .then_some((property.as_str(), state.as_str()))
+    }
+}
+
+/// Returns the name of state `state` of `property`, or the id of a state it does not hold.
+fn state_name<'b>(property: &'b SheetProperty, state: &'b str) -> &'b str {
+    property
+        .states
+        .iter()
+        .find(|found| found.id == state)
+        .map_or(state, |found| found.name.as_str())
+}
+
+/// Returns the most a Count line `count` can count: 8, 4 or 9 cells, `None` for a count of agents.
+fn most_counted(count: &SheetLine) -> Option<u32> {
+    match count.around? {
+        Around::Cells8 => Some(8),
+        Around::Cells4 => Some(4),
+        Around::Block3x3 => Some(9),
+        Around::AgentsWithin => None,
     }
 }
 

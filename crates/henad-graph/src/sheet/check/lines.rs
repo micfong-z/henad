@@ -1384,7 +1384,10 @@ pub(in crate::sheet) fn formula_chip(reference: &str, document: &crate::sheet::d
 }
 
 /// Returns whether `line`, a phrase or a value inside it draws random numbers.
-pub(crate) fn holds_draw(line: &SheetLine) -> bool {
+///
+/// A line that draws holds a key, and [`SheetEdit::DrawNewNumbers`](crate::sheet::edit::SheetEdit::DrawNewNumbers)
+/// gives it a new one.
+pub fn holds_draw(line: &SheetLine) -> bool {
     matches!(
         line.kind,
         LineKind::Chance | LineKind::Rate | LineKind::RandomNumber | LineKind::RandomDirection | LineKind::PickCell

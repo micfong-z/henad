@@ -241,6 +241,21 @@ the condition or as an item of an all of, nested all of included. A rate inside 
 of keeps the line out of every group, since no share of a hazard is defined there, and a chance
 anywhere does too, as does a Repeat around the line (`group_key`). `otherwise_of` leaves a partner in the line's own group out (decision D1's
 "or").
+`CardRelations::notes(sentences, runs)` returns the card's `RelationNote`s (line, words,
+`RelationNoteKind`), a line's notes in the wording table's order, `runs` saying whether a line runs:
+`Gap` under the last of two or more top-level Become lines of one property from one start state
+(`any_state` included), each running and a compare or outside test of one Count result, with two or
+more new states, naming the counts from 0 to 8, 4 or 9 (`most_counted`) none passes; `Coverage`
+under the last Become line of a States property whose Become lines all sit at the top level, run,
+name a start state, and test one Count or hold always, when for every count each state of the
+property ends the tick in one state (the first passing line from the top, else its own) and two or
+more end states appear; `Order` (D109) under the last Become line of a property whose Become lines,
+at any depth, all run and start from distinct named states; `WhenRepeats` under a When of "my X is
+S" whose lines are all Become lines of X from S; `OnlyOneInside` under a When around one change that
+holds always (with its id and number, for `MoveConditionInto`), neither for a When holding a When;
+`Inside` under a change or When inside a When (`only_when_note` with the When's condition words, or
+none while it is blank) and under a result line inside one (`worked_out_everywhere_note`);
+`NothingInside` under an empty When. `check::holds_draw` is public for the card's Draw new numbers.
 
 **The checker.** `check::check(&document)` returns diagnostics with no span in a stable order (the
 tables outside the cards, then every card's line ids, then each card's lists and its lines in
@@ -353,17 +368,21 @@ seed, so a sheet added to the corpus leaves the others' edits alone) and `src/te
 (`every_sheet_checks_clean`, file order, the otherwise rule with exclusive and overlapping tests,
 the starters, the forest fire, the ants' Set lines, competing groups, skipped lines and blocks, the
 When scope, `every_skip_note_equals_its_wording_table_entry`, reserved ids, the second agent kind,
-the empty grid sheet). Rate tests sit in `src/tests/sheet_rates.rs`: the known chances (0.2592,
-0.9093 with 8, a rate per week in days, the competing 0.5034 and its half, the number rule), the
-uniform block of the SIR tick shader (no `exp`, 1 - e^(-0.1) with e^(-0.1) one f32 step from the
-true value, the `math.powi` table within 3 steps, since its powers are f32 `powi` of the base), the
-competing thresholds at a tick of 7 days, a group with a worked-out rate splitting on the host, the
-rates SIR conserving its cells at half a day, `a_tick_length_override_keeps_the_code_and_the_keys`,
-the factor of a rate per week, every other form of rate, a rate in an any of drawing alone, the
-notes of the final wording table (`rate_notes_match_the_spec_examples`,
-`worked_out_rate_notes_match_the_spec_examples`), the two conversion commands and their refusals,
-the D14 warning, and `a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named`. The places
-of parts are held by `every_control_of_a_life_line_is_placed_at_the_slot_or_field_it_shows`,
+the empty grid sheet, and the relation notes:
+`the_order_note_shows_on_game_of_life_and_sir_and_not_on_the_vote_or_the_forest_fire`,
+`the_vote_is_covered_and_a_gap_between_two_thresholds_is_named` (with skipped lines that take the
+gap note away) and `a_when_offers_to_fold_into_its_lines_and_notes_what_holds_inside_it`). Rate
+tests sit in `src/tests/sheet_rates.rs`: the known chances (0.2592, 0.9093 with 8, a rate per week
+in days, the competing 0.5034 and its half, the number rule), the uniform block of the SIR tick
+shader (no `exp`, 1 - e^(-0.1) with e^(-0.1) one f32 step from the true value, the `math.powi`
+table within 3 steps, since its powers are f32 `powi` of the base), the competing thresholds at a
+tick of 7 days, a group with a worked-out rate splitting on the host, the rates SIR conserving its
+cells at half a day, `a_tick_length_override_keeps_the_code_and_the_keys`, the factor of a rate per
+week, every other form of rate, a rate in an any of drawing alone, the notes of the final wording
+table (`rate_notes_match_the_spec_examples`, `worked_out_rate_notes_match_the_spec_examples`), the
+two conversion commands and their refusals, the D14 warning, and
+`a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named`. The places of parts are held by
+`every_control_of_a_life_line_is_placed_at_the_slot_or_field_it_shows`,
 `a_new_count_wants_a_property_then_a_state_and_an_empty_calculate_its_two_values`,
 `the_words_for_each_are_a_part_placed_at_its_count` and
 `a_formula_inside_a_slot_places_no_value_and_no_operation` in `src/tests/sheet_sentence.rs`. A

@@ -72,7 +72,7 @@ characters, and a file that grows past that splits by subsystem, as henad-app's 
 | henad-app: options, state, builds, teardown, install, export | `agents/henad-app.md` |
 | henad-app's Editor tab | `agents/henad-app-editor.md` |
 | henad-app's sheet editor: the Sheet pane, the toolbar, the New model dialog | `agents/henad-app-sheet.md` |
-| henad-app's Card pane: lines written with blanks, pickers and chips | `agents/henad-app-card.md` |
+| henad-app's Card pane: lines written with blanks, pickers and chips, When blocks and moves | `agents/henad-app-card.md` |
 | henad-app's Sweep and Results tabs | `agents/henad-app-sweep.md` |
 | UI text, corners and colours | `agents/ui.md` |
 | henad-cli | `agents/henad-cli.md` |

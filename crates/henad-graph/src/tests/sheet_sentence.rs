@@ -484,23 +484,29 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         (
             "Line 3 already says from Alive, so this When repeats it.",
-            sentence::when_repeats_note(3, "Alive"),
+            sentence::when_repeats_note(&[3], "Alive"),
+        ),
+        (
+            "Lines 3 and 4 already say from Alive, so this When repeats it.",
+            sentence::when_repeats_note(&[3, 4], "Alive"),
         ),
         ("Remove this When", fixed(sentence::REMOVE_THIS_WHEN)),
-        ("Remove line 2 and keep the lines inside", sentence::remove_when_name(2)),
+        // The two names below differ from the table. Each holds its button's words, as every accessible name does.
+        (
+            "Line 2: remove this When and keep the lines inside",
+            sentence::remove_when_name("Line 2"),
+        ),
         (
             "Only line 5 is inside. Its own when can hold this condition.",
             sentence::only_one_inside_note(5),
         ),
         ("Move it into line 5", sentence::move_into_label(5)),
-        (
-            "Move the condition of line 4 into line 5",
-            sentence::move_into_name(4, 5),
-        ),
+        ("Line 4: move it into line 5", sentence::move_into_name("Line 4", 5)),
         (
             "Only when line 4 holds: my Health is Recovered.",
-            sentence::only_when_note(4, "my Health is Recovered"),
+            sentence::only_when_note(4, Some("my Health is Recovered")),
         ),
+        ("Only when line 4 holds.", sentence::only_when_note(4, None)),
         (
             "Worked out for every cell, whatever line 4 says. Only lines inside line 4 can use it.",
             sentence::worked_out_everywhere_note(4),
@@ -527,7 +533,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         (
             "Line 6 now starts with otherwise. Lines 2 and 5 also change Cover for a cell that is Tree. When more \
              than one applies, the highest line wins.",
-            sentence::otherwise_notice(6, &[2, 5], "Cover", Some("Tree")),
+            sentence::otherwise_notice("Line 6", &[2, 5], "Cover", Some("Tree")),
         ),
         // Rates and chances.
         (
