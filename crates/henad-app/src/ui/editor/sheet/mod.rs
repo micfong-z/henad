@@ -7,9 +7,10 @@
 //!
 //! A sheet opens through the sheet reader alone, so a sheet with checker errors still opens here. Its preview builds
 //! only while the sheet reads, checks and lowers and holds a property, and the preview waits paused at tick 0 until
-//! Play. Every edit of the Sheet pane runs [`SheetEdit`](henad_graph::sheet::edit::SheetEdit) commands. Until the
-//! preview passes tick 0 or a button is pressed, an edit draws the start again at tick 0. After that, a changed
-//! Starts as waits for Start again, and any other edit starts the world again from tick 0 with a notice.
+//! Play. Every edit of the Sheet pane and the Card pane runs [`SheetEdit`](henad_graph::sheet::edit::SheetEdit)
+//! commands. Until the preview passes tick 0 or a button is pressed, an edit draws the start again at tick 0. After
+//! that, a changed Starts as waits for Start again, and any other edit starts the world again from tick 0 with a
+//! notice.
 //!
 //! The *toolbar* above the panes holds the model's name and Undo and Redo. A click on the name turns it into a field.
 //! Undo keeps the canonical text of the sheet before each edit, and an undo or a redo reads that text back as one
@@ -18,6 +19,7 @@
 pub mod card_pane;
 pub mod help;
 pub mod new_model;
+pub mod picker;
 pub mod sheet_pane;
 pub mod widgets;
 
@@ -70,6 +72,8 @@ pub struct SheetEditor {
     notice: Option<&'static str>,
     /// State of the Sheet pane's forms, fields and dialogs.
     pane: sheet_pane::PaneState,
+    /// State of the Card pane's pickers, rename field and dialog.
+    card: card_pane::CardState,
     /// Canonical texts of the sheet before each edit, and after each undo, for Undo and Redo.
     history: History,
     /// Text of the model name's field while it is open, `None` while the name shows as a button.
@@ -104,6 +108,7 @@ impl SheetEditor {
             built_starts: None,
             notice: None,
             pane: sheet_pane::PaneState::new(load),
+            card: card_pane::CardState::new(load),
             history: History::default(),
             renaming: None,
         };
@@ -211,14 +216,16 @@ impl SheetEditor {
         let starts_only = without_starts_or_words(self.document()) == without_starts_or_words(&document);
         self.builder = SheetBuilder::new(document);
         self.pane.close_forms();
+        self.card.close();
         self.renaming = None;
         self.settle(past_start, starts_only);
         true
     }
 
-    /// Returns whether a form of the Sheet pane holds a dialog open. An open dialog takes the keys of Undo and Redo.
+    /// Returns whether a form of the Sheet pane or a picker of the Card pane holds a dialog open. An open dialog takes
+    /// the keys of Undo and Redo.
     pub fn dialog_open(&self) -> bool {
-        self.pane.dialog_open()
+        self.pane.dialog_open() || self.card.dialog_open()
     }
 
     /// Records the start of each property as the preview was just built with it.
@@ -404,7 +411,7 @@ pub fn sheet_ui(
             ScrollArea::vertical()
                 .id_salt("henad_card_pane_scroll")
                 .auto_shrink([false; 2])
-                .show(ui, |ui| card_pane::card_pane(ui, sheet.document(), sheet.report()));
+                .show(ui, |ui| card_pane::card_pane(ui, sheet, past_start));
             pane_group(ui, CARD_PANE);
         });
     });

@@ -431,6 +431,8 @@ pub struct Harness {
     pub window_focused: bool,
     /// Size of the screen in points. A tall screen keeps every section of a long sheet in view.
     pub screen: egui::Vec2,
+    /// Accessible name of the node that held the keyboard focus in the last frame, empty for none.
+    pub focused: String,
 }
 
 /// Returns the top of `node` on the screen.
@@ -462,6 +464,7 @@ impl Harness {
             time: 0.0,
             window_focused: true,
             screen: egui::vec2(1600.0, 1000.0),
+            focused: String::new(),
         };
         harness.context.enable_accesskit();
         Some(harness)
@@ -486,6 +489,13 @@ impl Harness {
         });
         output.textures_delta.clear();
         let update = output.platform_output.accesskit_update.expect("an AccessKit update");
+        self.focused = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == update.focus)
+            .and_then(|(_, node)| node.label())
+            .unwrap_or_default()
+            .to_owned();
         update
             .nodes
             .iter()
@@ -655,10 +665,10 @@ pub fn without_card_lines(starter: &SheetDocument) -> SheetDocument {
 /// nothing about the editor.
 ///
 /// Each drawing line takes the key of the starter's line of the same id, and each start the key of the starter's
-/// property of the same id, when both draw, whatever kind of thing holds the property. A parameter takes the step and
-/// the meaning of the starter's parameter of the same id. No control sets either. A state or a measure takes the
-/// starter's colour when the palette names the two colours alike, since a starter's colour can lie outside the palette
-/// the editor offers. No id is copied.
+/// property of the same id, when both draw, whatever kind of thing holds the property. A parameter takes the step, the
+/// meaning and the format of the starter's parameter of the same id. No control sets any of them. A state or a measure
+/// takes the starter's colour when the palette names the two colours alike, since a starter's colour can lie outside
+/// the palette the editor offers. No id is copied.
 pub fn align_with_starter(rebuilt: &SheetDocument, starter: &SheetDocument) -> SheetDocument {
     use crate::ui::editor::sheet::widgets::color_name;
 
@@ -698,6 +708,7 @@ pub fn align_with_starter(rebuilt: &SheetDocument, starter: &SheetDocument) -> S
         if let Some(theirs) = starter.parameters.iter().find(|known| known.id == parameter.id) {
             parameter.step = theirs.step;
             parameter.means.clone_from(&theirs.means);
+            parameter.format = theirs.format;
         }
     }
     for measure in &mut aligned.measures {

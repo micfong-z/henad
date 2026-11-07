@@ -12,6 +12,7 @@ mod install;
 mod preview_params;
 mod runaway;
 mod sheet_agents;
+mod sheet_card;
 mod sheet_editor;
 mod sheet_pane;
 mod threads;

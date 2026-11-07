@@ -585,7 +585,7 @@ impl ConditionItem {
 // Blanks and their accessible names
 
 /// What a blank wants. It names the blank, titles its picker and words its skip note.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Blank {
     /// A state.
@@ -2991,6 +2991,8 @@ pub enum SentencePart {
     Otherwise(Vec<usize>),
     /// The empty optional "for each ..." blank after a chance or a rate. Plain text leaves it out.
     ForEachBlank(DrawKind),
+    /// The words "for each" of a chance or a rate whose "for each" is on, before its count.
+    ForEach(DrawKind),
 }
 
 impl SentencePart {
@@ -3006,6 +3008,110 @@ impl SentencePart {
             Self::Always => ALWAYS.to_owned(),
             Self::Otherwise(lines) => otherwise_words(lines),
             Self::ForEachBlank(_) => String::new(),
+            Self::ForEach(_) => FOR_EACH_WORDS.to_owned(),
+        }
+    }
+}
+
+/// Words of a chance or a rate whose "for each" is on, before its count.
+pub const FOR_EACH_WORDS: &str = "for each";
+
+/// One part of a line's sentence with the place in the line that an edit of it sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacedPart {
+    /// The part.
+    pub part: SentencePart,
+    /// Place of the part in the line, `None` for words and for a part that no edit sets.
+    pub place: Option<PartPlace>,
+}
+
+/// Place of a chip, a blank or a select of a line's sentence: the slot or the field that holds what it shows, and what
+/// the place wants.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PartPlace {
+    /// Slot or field of the line, or of a phrase inside it.
+    pub target: PlaceTarget,
+    /// What the place takes, the blank it shows while empty, `None` for a select.
+    pub want: Option<Blank>,
+}
+
+/// A slot or a field of a line, or of a phrase inside it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PlaceTarget {
+    /// A slot, by its slot path, such as `condition.right`.
+    Slot(String),
+    /// An item of the list a slot holds, by the slot's path and the item's index from 0.
+    ListItem {
+        /// Slot path of the slot that holds the list.
+        slot: String,
+        /// Index of the item in the list.
+        index: usize,
+    },
+    /// A field of the line, or of the phrase at a slot path.
+    Field {
+        /// Slot path of the phrase that holds the field, empty for the line itself.
+        phrase: String,
+        /// The field.
+        field: FieldPlace,
+    },
+}
+
+/// A field of a line or a phrase that a part of its sentence shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FieldPlace {
+    /// The property a Set line changes.
+    Property,
+    /// The new state of a Become line.
+    NewState,
+    /// The old state of a Become line.
+    StartState,
+    /// The test of a comparison.
+    Test,
+    /// The neighbourhood of a Count or a Total or average line.
+    Around,
+    /// The unit of a rate.
+    RateUnit,
+    /// Total or average, the summary of a Total or average line.
+    Summary,
+    /// The value of a Total or average line.
+    SummaryValue,
+    /// The operation of a Calculate line of one operation.
+    Operation,
+    /// The value left of the operation of a Calculate line of one operation.
+    FirstOperand,
+    /// The value right of the operation of a Calculate line of one operation.
+    SecondOperand,
+}
+
+impl PlaceTarget {
+    /// Returns the target of `self`, a target relative to the slot `key`, as a target of the line.
+    fn under(self, key: &str) -> Self {
+        let join = |path: String| match (key.is_empty(), path.is_empty()) {
+            (true, _) => path,
+            (false, true) => key.to_owned(),
+            (false, false) => format!("{key}.{path}"),
+        };
+        match self {
+            Self::Slot(path) => Self::Slot(join(path)),
+            Self::ListItem { slot, index } => Self::ListItem {
+                slot: join(slot),
+                index,
+            },
+            Self::Field { phrase, field } => Self::Field {
+                phrase: join(phrase),
+                field,
+            },
+        }
+    }
+
+    /// Returns whether the target is the slot itself or an item of its list, as a value that a slot holds directly
+    /// places its parts before [`Self::under`].
+    fn is_direct(&self) -> bool {
+        match self {
+            Self::Slot(path) | Self::ListItem { slot: path, .. } => path.is_empty(),
+            Self::Field { .. } => false,
         }
     }
 }
@@ -3062,9 +3168,9 @@ pub fn sentence_text(parts: &[SentencePart]) -> String {
     parts.iter().map(SentencePart::text).collect()
 }
 
-/// Parts of a sentence being written. Adjacent words merge into one [`SentencePart::Text`].
+/// Parts of a sentence being written, each with its place. Adjacent words merge into one [`SentencePart::Text`].
 #[derive(Debug, Default)]
-struct Parts(Vec<SentencePart>);
+struct Parts(Vec<PlacedPart>);
 
 impl Parts {
     /// Returns parts holding `words` alone.
@@ -3079,6 +3185,29 @@ impl Parts {
         let mut parts = Self::default();
         parts.add(part);
         parts
+    }
+
+    /// Returns parts holding `part` alone, at `target` and wanting `want`.
+    fn placed(part: SentencePart, target: PlaceTarget, want: Option<Blank>) -> Self {
+        Self(vec![PlacedPart {
+            part,
+            place: Some(PartPlace { target, want }),
+        }])
+    }
+
+    /// Returns the parts as the parts of the value in the slot `key`: each place under the slot, and each place of the
+    /// value itself wanting `want` when it wants nothing yet.
+    fn under(mut self, key: &str, want: Blank) -> Self {
+        for placed in &mut self.0 {
+            if let Some(place) = &mut placed.place {
+                if place.want.is_none() && place.target.is_direct() && !matches!(placed.part, SentencePart::Select(..))
+                {
+                    place.want = Some(want);
+                }
+                place.target = std::mem::replace(&mut place.target, PlaceTarget::Slot(String::new())).under(key);
+            }
+        }
+        self
     }
 
     /// Returns `groups` with `separator` between each two.
@@ -3098,49 +3227,68 @@ impl Parts {
         if words.is_empty() {
             return;
         }
-        if let Some(SentencePart::Text(last)) = self.0.last_mut() {
+        if let Some(PlacedPart {
+            part: SentencePart::Text(last),
+            ..
+        }) = self.0.last_mut()
+        {
             last.push_str(words);
         } else {
-            self.0.push(SentencePart::Text(words.to_owned()));
+            self.0.push(PlacedPart {
+                part: SentencePart::Text(words.to_owned()),
+                place: None,
+            });
         }
     }
 
-    /// Adds `part` at the end.
+    /// Adds `part` at the end, with no place.
     fn add(&mut self, part: SentencePart) {
-        match part {
+        self.add_placed(PlacedPart { part, place: None });
+    }
+
+    /// Adds `placed` at the end.
+    fn add_placed(&mut self, placed: PlacedPart) {
+        match placed.part {
             SentencePart::Text(words) => self.push(&words),
-            part => self.0.push(part),
+            part => self.0.push(PlacedPart {
+                part,
+                place: placed.place,
+            }),
         }
     }
 
     /// Adds every part of `other` at the end.
     fn append(&mut self, other: Self) {
-        for part in other.0 {
-            self.add(part);
+        for placed in other.0 {
+            self.add_placed(placed);
         }
     }
 
     /// Replaces the words of the first part with `map` of them, when the first part is words.
     fn map_first_text(&mut self, map: fn(&str) -> String) {
-        if let Some(SentencePart::Text(first)) = self.0.first_mut() {
+        if let Some(PlacedPart {
+            part: SentencePart::Text(first),
+            ..
+        }) = self.0.first_mut()
+        {
             *first = map(first);
         }
     }
 
     /// Merges every run of adjacent words into one part.
     fn merge_text(&mut self) {
-        for part in std::mem::take(&mut self.0) {
-            self.add(part);
+        for placed in std::mem::take(&mut self.0) {
+            self.add_placed(placed);
         }
     }
 
     /// Returns the parts as plain text.
     fn plain(&self) -> String {
-        sentence_text(&self.0)
+        self.0.iter().map(|placed| placed.part.text()).collect()
     }
 
-    /// Returns the parts in order.
-    fn into_vec(self) -> Vec<SentencePart> {
+    /// Returns the parts in order, with their places.
+    fn into_placed(self) -> Vec<PlacedPart> {
         self.0
     }
 }
@@ -3250,8 +3398,17 @@ impl<'a> Sentences<'a> {
     ///
     /// A line that no card holds reads as one part of [`BLANK_TEXT`].
     pub fn line_parts(&self, line_id: &str, otherwise: &[usize]) -> Vec<SentencePart> {
+        self.placed_parts(line_id, otherwise)
+            .into_iter()
+            .map(|placed| placed.part)
+            .collect()
+    }
+
+    /// Returns the parts of the sentence of line `line_id` as [`Self::line_parts`] does, each with the place in the
+    /// line that an edit of it sets.
+    pub fn placed_parts(&self, line_id: &str, otherwise: &[usize]) -> Vec<PlacedPart> {
         let Some(line) = self.lines.get(line_id) else {
-            return vec![SentencePart::Text(BLANK_TEXT.to_owned())];
+            return Parts::text(BLANK_TEXT).into_placed();
         };
         if is_result_kind(line.kind) {
             let phrase = self.phrase(line, false);
@@ -3259,35 +3416,35 @@ impl<'a> Sentences<'a> {
                 Some(name) if !(line.kind == LineKind::Compare && *name == phrase.plain()) => {
                     let mut parts = Parts::text(&format!("{name} = "));
                     parts.append(phrase);
-                    parts.into_vec()
+                    parts.into_placed()
                 }
-                _ => phrase.into_vec(),
+                _ => phrase.into_placed(),
             };
         }
         let mut change = match line.kind {
             LineKind::When => {
-                let mut parts = self.condition(&line.condition, true);
+                let mut parts = self.condition(&line.condition, true).under("condition", Blank::When);
                 parts.push(":");
-                return parts.into_vec();
+                return parts.into_placed();
             }
             LineKind::Repeat => {
                 let mut parts = Parts::text("Repeat ");
-                parts.append(self.slot_parts(&line.times, None, Blank::Number));
+                parts.append(self.slot_parts(&line.times, None, Blank::Number, "times"));
                 parts.push(" times:");
-                return parts.into_vec();
+                return parts.into_placed();
             }
-            LineKind::Always => return vec![SentencePart::Text(ALWAYS.to_owned())],
+            LineKind::Always => return Parts::text(ALWAYS).into_placed(),
             _ => self.change(line),
         };
         if otherwise.is_empty() {
             change.map_first_text(upper_first);
-            change.into_vec()
+            change.into_placed()
         } else {
             let mut parts = Parts::part(SentencePart::Otherwise(otherwise.to_vec()));
             parts.push(" ");
             change.map_first_text(lower_first);
             parts.append(change);
-            parts.into_vec()
+            parts.into_placed()
         }
     }
 
@@ -3303,37 +3460,56 @@ impl<'a> Sentences<'a> {
         match line.kind {
             LineKind::Become => {
                 parts.push("Become ");
-                parts.append(self.state_part(line.property.as_deref(), line.new_state.as_deref(), Blank::State));
+                parts.append(self.state_part(
+                    line.property.as_deref(),
+                    line.new_state.as_deref(),
+                    Blank::State,
+                    FieldPlace::NewState,
+                ));
                 parts.push(" ");
                 parts.add(SentencePart::From);
                 parts.push(" ");
                 match line.start_state.as_deref() {
-                    Some(ANY_STATE_ID) => parts.add(SentencePart::Chip(SentenceChip {
-                        kind: ChipKind::AnyState,
-                        lead: "",
-                        name: ANY_STATE.to_owned(),
-                    })),
-                    other => parts.append(self.state_part(line.property.as_deref(), other, Blank::OldState)),
+                    Some(ANY_STATE_ID) => parts.append(Parts::placed(
+                        SentencePart::Chip(SentenceChip {
+                            kind: ChipKind::AnyState,
+                            lead: "",
+                            name: ANY_STATE.to_owned(),
+                        }),
+                        field_target(FieldPlace::StartState),
+                        Some(Blank::OldState),
+                    )),
+                    other => parts.append(self.state_part(
+                        line.property.as_deref(),
+                        other,
+                        Blank::OldState,
+                        FieldPlace::StartState,
+                    )),
                 }
             }
             LineKind::Set => {
                 parts.push("Set ");
-                match line.property.as_deref() {
-                    Some(id) => parts.add(SentencePart::Chip(SentenceChip {
+                let part = match line.property.as_deref() {
+                    Some(id) => SentencePart::Chip(SentenceChip {
                         kind: ChipKind::Property(id.to_owned()),
                         lead: "",
                         name: property,
-                    })),
-                    None => parts.add(SentencePart::Blank(Blank::NumberProperty)),
-                }
+                    }),
+                    None => SentencePart::Blank(Blank::NumberProperty),
+                };
+                parts.append(Parts::placed(
+                    part,
+                    field_target(FieldPlace::Property),
+                    Some(Blank::NumberProperty),
+                ));
                 parts.push(" to ");
-                parts.append(self.slot_parts(&line.value, None, Blank::Number));
+                parts.append(self.slot_parts(&line.value, None, Blank::Number, "value"));
             }
             LineKind::Steer => {
                 parts.push(&format!("Steer {property} {} ", mode_words(line.mode)));
-                parts.append(self.slot_parts(&line.value, None, Blank::Value));
+                parts.append(self.slot_parts(&line.value, None, Blank::Value, "value"));
                 parts.push(", strength ");
-                parts.append(self.slot_parts(&line.strength, None, Blank::Number));
+                parts.append(self.slot_parts(&line.strength, None, Blank::Number, "strength"));
             }
             LineKind::KeepBetween => {
                 let arrow = line
@@ -3347,17 +3523,17 @@ impl<'a> Sentences<'a> {
                     property
                 };
                 parts.push(&format!("Keep {measured} between "));
-                parts.append(self.slot_parts(&line.minimum, None, Blank::Number));
+                parts.append(self.slot_parts(&line.minimum, None, Blank::Number, "minimum"));
                 parts.push(" and ");
-                parts.append(self.slot_parts(&line.maximum, None, Blank::Number));
+                parts.append(self.slot_parts(&line.maximum, None, Blank::Number, "maximum"));
             }
             LineKind::Move => {
                 parts.push(&format!("Move {} ", mode_words(line.mode)));
-                parts.append(self.slot_parts(&line.value, None, Blank::Value));
+                parts.append(self.slot_parts(&line.value, None, Blank::Value, "value"));
             }
             LineKind::Leave => {
                 parts.push("Leave ");
-                parts.append(self.slot_parts(&line.amount, None, Blank::Number));
+                parts.append(self.slot_parts(&line.amount, None, Blank::Number, "amount"));
                 parts.push(&format!(" on {}", self.property_name(line.ground_property.as_deref())));
             }
             LineKind::Record => parts.push(&format!(
@@ -3375,13 +3551,15 @@ impl<'a> Sentences<'a> {
         );
         if takes_condition || !line.condition.is_blank() {
             parts.push(", ");
-            parts.append(self.condition(&line.condition, false));
+            parts.append(self.condition(&line.condition, false).under("condition", Blank::When));
         }
         parts
     }
 
     /// Returns the parts of the condition in `slot`: "always", "when ...", "with chance ..." or "at rate ...", or on a
     /// When line "When ...", "When with chance ..." or "When at rate ...".
+    ///
+    /// The places are relative to the slot, as [`Parts::under`] takes them.
     fn condition(&self, slot: &Slot, on_when_line: bool) -> Parts {
         let Some(value) = slot.value() else {
             let mut parts = if on_when_line {
@@ -3389,13 +3567,23 @@ impl<'a> Sentences<'a> {
             } else {
                 Parts::default()
             };
-            parts.add(SentencePart::Blank(Blank::When));
+            parts.append(Parts::placed(
+                SentencePart::Blank(Blank::When),
+                PlaceTarget::Slot(String::new()),
+                Some(Blank::When),
+            ));
             return parts;
         };
         let (kind, body) = match value {
             SheetValue::Phrase(phrase) => match phrase.kind {
                 LineKind::Always if on_when_line => return Parts::text(&format!("When {ALWAYS}")),
-                LineKind::Always => return Parts::part(SentencePart::Always),
+                LineKind::Always => {
+                    return Parts::placed(
+                        SentencePart::Always,
+                        PlaceTarget::Slot(String::new()),
+                        Some(Blank::When),
+                    );
+                }
                 LineKind::Chance => (ConditionKind::Chance, self.chance_body(phrase)),
                 LineKind::Rate => (ConditionKind::Rate, self.rate_body(phrase)),
                 _ => (ConditionKind::When, self.value_parts(value, None)),
@@ -3412,17 +3600,19 @@ impl<'a> Sentences<'a> {
     ///
     /// `about` is the property that a state in the slot belongs to.
     pub fn slot(&self, slot: &Slot, about: Option<&str>) -> String {
-        self.slot_parts(slot, about, Blank::Value).plain()
+        self.slot_parts(slot, about, Blank::Value, "").plain()
     }
 
-    /// Returns the parts of the value in `slot`, or `blank` for a blank slot.
+    /// Returns the parts of the value in `slot`, the slot of the key `key`, or `blank` for a blank slot.
     ///
-    /// `about` is the property that a state in the slot belongs to.
-    fn slot_parts(&self, slot: &Slot, about: Option<&str>, blank: Blank) -> Parts {
-        slot.value().map_or_else(
-            || Parts::part(SentencePart::Blank(blank)),
-            |value| self.value_parts(value, about),
-        )
+    /// `about` is the property that a state in the slot belongs to. Every place is under the slot.
+    fn slot_parts(&self, slot: &Slot, about: Option<&str>, blank: Blank, key: &str) -> Parts {
+        slot.value()
+            .map_or_else(
+                || Parts::placed(SentencePart::Blank(blank), PlaceTarget::Slot(String::new()), None),
+                |value| self.value_parts(value, about),
+            )
+            .under(key, blank)
     }
 
     /// Returns the words of `value`, where `about` is the property that a state in it belongs to.
@@ -3431,14 +3621,22 @@ impl<'a> Sentences<'a> {
     }
 
     /// Returns the parts of `value`, where `about` is the property that a state in it belongs to.
+    ///
+    /// A chip of the value itself is placed at the empty slot path, an item of a list at its index, and the parts of a
+    /// phrase at their places in the phrase, as [`Parts::under`] takes them.
     fn value_parts(&self, value: &SheetValue, about: Option<&str>) -> Parts {
+        let here = || PlaceTarget::Slot(String::new());
         match value {
-            SheetValue::Literal(literal) => Parts::part(SentencePart::Chip(SentenceChip {
-                kind: ChipKind::Literal,
-                lead: "",
-                name: literal_words(*literal),
-            })),
-            SheetValue::Chip(chip) => Parts::part(SentencePart::Chip(self.chip(chip, about))),
+            SheetValue::Literal(literal) => Parts::placed(
+                SentencePart::Chip(SentenceChip {
+                    kind: ChipKind::Literal,
+                    lead: "",
+                    name: literal_words(*literal),
+                }),
+                here(),
+                None,
+            ),
+            SheetValue::Chip(chip) => Parts::placed(SentencePart::Chip(self.chip(chip, about)), here(), None),
             SheetValue::Phrase(phrase) if phrase.kind == LineKind::Calculate => {
                 let mut parts = Parts::text("(");
                 parts.append(self.phrase(phrase, true));
@@ -3446,7 +3644,23 @@ impl<'a> Sentences<'a> {
                 parts
             }
             SheetValue::Phrase(phrase) => self.phrase(phrase, true),
-            SheetValue::List(items) => Parts::join(items.iter().map(|item| self.value_parts(item, about)), ", "),
+            SheetValue::List(items) => Parts::join(
+                items.iter().enumerate().map(|(index, item)| {
+                    let mut parts = self.value_parts(item, about);
+                    for placed in &mut parts.0 {
+                        if let Some(place) = &mut placed.place
+                            && place.target == here()
+                        {
+                            place.target = PlaceTarget::ListItem {
+                                slot: String::new(),
+                                index,
+                            };
+                        }
+                    }
+                    parts
+                }),
+                ", ",
+            ),
         }
     }
 
@@ -3515,7 +3729,7 @@ impl<'a> Sentences<'a> {
                 parts.append(self.around(line));
                 if !line.whose.is_blank() {
                     parts.push(" whose ");
-                    parts.append(self.whose(&line.whose, Blank::Property));
+                    parts.append(self.whose(&line.whose, Blank::Property, "whose"));
                 }
                 parts
             }
@@ -3525,32 +3739,50 @@ impl<'a> Sentences<'a> {
                     && line.only.is_blank()
                     && let Some(kind @ (SummaryKind::Total | SummaryKind::Average)) = summary.summary
                 {
-                    let mut parts = Parts::part(SentencePart::Select(
-                        LineSelect::TotalOrAverage,
-                        summary_word(kind).to_owned(),
-                    ));
+                    let mut parts = Parts::placed(
+                        SentencePart::Select(LineSelect::TotalOrAverage, summary_word(kind).to_owned()),
+                        field_target(FieldPlace::Summary),
+                        None,
+                    );
                     parts.push(" of ");
-                    parts.append(self.whose(&summary.value, Blank::NumberProperty));
+                    let mut value = self.whose(&summary.value, Blank::NumberProperty, "");
+                    for placed in &mut value.0 {
+                        if let Some(place) = &mut placed.place
+                            && place.target == PlaceTarget::Slot(String::new())
+                        {
+                            place.target = field_target(FieldPlace::SummaryValue);
+                        }
+                    }
+                    parts.append(value);
                     parts.push(" over ");
-                    parts.add(SentencePart::Select(LineSelect::WhichCells, cells.to_owned()));
+                    parts.append(Parts::placed(
+                        SentencePart::Select(LineSelect::WhichCells, cells.to_owned()),
+                        field_target(FieldPlace::Around),
+                        None,
+                    ));
                     return parts;
                 }
                 let mut parts = Parts::text("look at ");
                 parts.append(self.around(line));
                 if !line.only.is_blank() {
                     parts.push(", only those whose ");
-                    parts.append(self.whose(&line.only, Blank::Property));
+                    parts.append(self.whose(&line.only, Blank::Property, "only"));
                 }
                 parts.push(": ");
-                let summaries = line.summaries.iter().map(|summary| match summary.summary {
-                    Some(SummaryKind::Count) => Parts::text(&format!("count ({})", summary.name)),
-                    kind => {
-                        let mut parts = Parts::text(&format!("{} of ", kind.map_or(BLANK_TEXT, summary_word)));
-                        parts.append(self.slot_parts(&summary.value, None, Blank::Value));
-                        parts.push(&format!(" ({})", summary.name));
-                        parts
-                    }
-                });
+                let summaries = line
+                    .summaries
+                    .iter()
+                    .enumerate()
+                    .map(|(index, summary)| match summary.summary {
+                        Some(SummaryKind::Count) => Parts::text(&format!("count ({})", summary.name)),
+                        kind => {
+                            let mut parts = Parts::text(&format!("{} of ", kind.map_or(BLANK_TEXT, summary_word)));
+                            let key = format!("summaries.{index}.value");
+                            parts.append(self.slot_parts(&summary.value, None, Blank::Value, &key));
+                            parts.push(&format!(" ({})", summary.name));
+                            parts
+                        }
+                    });
                 parts.append(Parts::join(summaries, ", "));
                 parts
             }
@@ -3570,7 +3802,7 @@ impl<'a> Sentences<'a> {
                 Some(CellWhich::Ahead) => Parts::text("the cell ahead of me"),
                 Some(CellWhich::At) => {
                     let mut parts = Parts::text("the cell at ");
-                    parts.append(self.slot_parts(&line.place, None, Blank::Value));
+                    parts.append(self.slot_parts(&line.place, None, Blank::Value, "place"));
                     parts
                 }
                 None => Parts::text(BLANK_TEXT),
@@ -3592,14 +3824,14 @@ impl<'a> Sentences<'a> {
             }
             LineKind::RandomNumber => {
                 let mut parts = Parts::text("a random number between ");
-                parts.append(self.slot_parts(&line.low, None, Blank::Number));
+                parts.append(self.slot_parts(&line.low, None, Blank::Number, "low"));
                 parts.push(" and ");
-                parts.append(self.slot_parts(&line.high, None, Blank::Number));
+                parts.append(self.slot_parts(&line.high, None, Blank::Number, "high"));
                 parts
             }
             LineKind::RandomDirection => {
                 let mut parts = Parts::text("a random direction of length ");
-                parts.append(self.slot_parts(&line.length, None, Blank::Number));
+                parts.append(self.slot_parts(&line.length, None, Blank::Number, "length"));
                 parts
             }
             LineKind::Compare => self.compare(line),
@@ -3612,24 +3844,34 @@ impl<'a> Sentences<'a> {
                 };
                 let mut parts = Parts::text(&format!("{words} "));
                 if line.items.is_empty() {
-                    parts.add(SentencePart::Blank(Blank::YesOrNoList));
+                    parts.append(Parts::placed(
+                        SentencePart::Blank(Blank::YesOrNoList),
+                        PlaceTarget::Slot("items.0".to_owned()),
+                        Some(Blank::YesOrNoList),
+                    ));
                 } else {
                     parts.append(Parts::join(
-                        line.items.iter().map(|item| self.value_parts(item, None)),
+                        line.items.iter().enumerate().map(|(index, item)| {
+                            self.value_parts(item, None)
+                                .under(&format!("items.{index}"), Blank::YesOrNoList)
+                        }),
                         ", ",
                     ));
                 }
                 parts
             }
             LineKind::Choose => {
-                let rows = line.rows.iter().map(|row| {
-                    let mut parts = self.slot_parts(&row.value, None, Blank::Value);
+                let rows = line.rows.iter().enumerate().map(|(index, row)| {
+                    let mut parts = self.slot_parts(&row.value, None, Blank::Value, &format!("row.{index}.value"));
                     parts.push(", ");
-                    parts.append(self.condition(&row.condition, false));
+                    parts.append(
+                        self.condition(&row.condition, false)
+                            .under(&format!("row.{index}.condition"), Blank::When),
+                    );
                     parts
                 });
                 let mut otherwise = Parts::text("otherwise ");
-                otherwise.append(self.slot_parts(&line.otherwise, None, Blank::Value));
+                otherwise.append(self.slot_parts(&line.otherwise, None, Blank::Value, "otherwise"));
                 let mut parts = Parts::text("choose, first that applies: ");
                 parts.append(Parts::join(rows.chain(std::iter::once(otherwise)), "; "));
                 parts
@@ -3653,7 +3895,10 @@ impl<'a> Sentences<'a> {
                 let branches = ordered.filter_map(|state| {
                     line.branches.get(state).map(|value| {
                         let mut parts = Parts::text(&format!("{} -> ", self.state_name(property, Some(state))));
-                        parts.append(self.value_parts(value, None));
+                        parts.append(
+                            self.value_parts(value, None)
+                                .under(&format!("branches.{state}"), Blank::Value),
+                        );
                         parts
                     })
                 });
@@ -3662,26 +3907,68 @@ impl<'a> Sentences<'a> {
                 parts
             }
             LineKind::Calculate => match line.formula.as_deref() {
+                Some(formula) if inline => {
+                    // The card edits the values and the operation of a Calculate line only, never of a formula
+                    // inside a slot.
+                    let mut parts = self.formula(formula);
+                    for placed in &mut parts.0 {
+                        placed.place = None;
+                    }
+                    parts
+                }
                 Some(formula) => self.formula(formula),
-                None => Parts::part(SentencePart::Blank(Blank::Number)),
+                None if inline => Parts::part(SentencePart::Blank(Blank::Number)),
+                None => {
+                    // An empty Calculate line offers its two values and its operation.
+                    let mut parts = Parts::placed(
+                        SentencePart::Blank(Blank::Number),
+                        field_target(FieldPlace::FirstOperand),
+                        Some(Blank::Number),
+                    );
+                    parts.push(" ");
+                    parts.append(Parts::placed(
+                        SentencePart::Select(LineSelect::Operation, String::new()),
+                        field_target(FieldPlace::Operation),
+                        None,
+                    ));
+                    parts.push(" ");
+                    parts.append(Parts::placed(
+                        SentencePart::Blank(Blank::Number),
+                        field_target(FieldPlace::SecondOperand),
+                        Some(Blank::Number),
+                    ));
+                    parts
+                }
             },
             LineKind::Always => Parts::text(ALWAYS),
             _ => self.change(line),
         }
     }
 
-    /// Returns the parts after "whose" or "only those whose": the value in `slot` with the word "their" of its first
-    /// chip left out, and its comparison as plain words. An empty `slot` reads as `blank`.
-    fn whose(&self, slot: &Slot, blank: Blank) -> Parts {
-        let mut parts = self.slot_parts(slot, None, blank);
-        if let Some(SentencePart::Chip(chip)) = parts.0.first_mut()
+    /// Returns the parts after "whose" or "only those whose": the value in `slot`, the slot of the key `key`, with the
+    /// word "their" of its first chip left out, and its comparison as plain words. An empty `slot` reads as `blank`.
+    ///
+    /// A comparison there wants a property on its left and, while that is empty or a States property, a state on its
+    /// right.
+    fn whose(&self, slot: &Slot, blank: Blank, key: &str) -> Parts {
+        let mut parts = match slot.value() {
+            Some(SheetValue::Phrase(phrase)) if phrase.kind == LineKind::Compare => {
+                self.compare_parts(phrase, true).under(key, blank)
+            }
+            _ => self.slot_parts(slot, None, blank, key),
+        };
+        if let Some(PlacedPart {
+            part: SentencePart::Chip(chip),
+            ..
+        }) = parts.0.first_mut()
             && chip.lead == "their"
         {
             chip.lead = "";
         }
-        for part in &mut parts.0 {
-            if let SentencePart::Select(LineSelect::Comparison, words) = part {
-                *part = SentencePart::Text(std::mem::take(words));
+        for placed in &mut parts.0 {
+            if let SentencePart::Select(LineSelect::Comparison, words) = &mut placed.part {
+                placed.part = SentencePart::Text(std::mem::take(words));
+                placed.place = None;
             }
         }
         parts.merge_text();
@@ -3690,18 +3977,22 @@ impl<'a> Sentences<'a> {
 
     /// Returns the parts of a chance after "with chance": its chance and its "for each".
     fn chance_body(&self, line: &SheetLine) -> Parts {
-        let mut parts = self.slot_parts(&line.chance, None, Blank::Chance);
+        let mut parts = self.slot_parts(&line.chance, None, Blank::Chance, "chance");
         parts.append(self.for_each(&line.tries, DrawKind::Chance));
         parts
     }
 
     /// Returns the parts of a rate after "at rate": its rate, its unit and its "for each".
     fn rate_body(&self, line: &SheetLine) -> Parts {
-        let mut parts = self.slot_parts(&line.rate, None, Blank::Rate);
+        let mut parts = self.slot_parts(&line.rate, None, Blank::Rate, "rate");
         parts.push(" per ");
-        parts.add(SentencePart::Select(
-            LineSelect::UnitOfTime,
-            line.rate_unit.map(rate_unit_word).unwrap_or_default().to_owned(),
+        parts.append(Parts::placed(
+            SentencePart::Select(
+                LineSelect::UnitOfTime,
+                line.rate_unit.map(rate_unit_word).unwrap_or_default().to_owned(),
+            ),
+            field_target(FieldPlace::RateUnit),
+            None,
         ));
         parts.append(self.for_each(&line.tries, DrawKind::Rate));
         parts
@@ -3710,10 +4001,12 @@ impl<'a> Sentences<'a> {
     /// Returns " for each ..." for a filled "for each" slot of a draw of `draw`, and the empty optional blank for a
     /// blank one.
     ///
-    /// A named result reads in the singular through [`for_each_words`].
+    /// A named result reads in the singular through [`for_each_words`]. The words "for each" and the count are both
+    /// placed at the slot `tries`.
     fn for_each(&self, tries: &Slot, draw: DrawKind) -> Parts {
-        match tries.value() {
-            None => Parts::part(SentencePart::ForEachBlank(draw)),
+        let slot = || PlaceTarget::Slot("tries".to_owned());
+        let value = match tries.value() {
+            None => return Parts::placed(SentencePart::ForEachBlank(draw), slot(), Some(Blank::Count)),
             Some(SheetValue::Chip(SheetChip::Result {
                 line,
                 part: None,
@@ -3724,64 +4017,79 @@ impl<'a> Sentences<'a> {
                     .get(line.as_str())
                     .and_then(|line| line.name.as_deref())
                     .map_or_else(|| line.clone(), for_each_words);
-                let mut parts = Parts::text(" for each ");
-                parts.add(SentencePart::Chip(SentenceChip {
-                    kind: ChipKind::Result(line.clone()),
-                    lead: "",
-                    name,
-                }));
-                parts
+                Parts::placed(
+                    SentencePart::Chip(SentenceChip {
+                        kind: ChipKind::Result(line.clone()),
+                        lead: "",
+                        name,
+                    }),
+                    slot(),
+                    Some(Blank::Count),
+                )
             }
-            Some(value) => {
-                let mut parts = Parts::text(" for each ");
-                parts.append(self.value_parts(value, None));
-                parts
-            }
-        }
+            Some(_) => self.slot_parts(tries, None, Blank::Count, "tries"),
+        };
+        let mut parts = Parts::text(" ");
+        parts.append(Parts::placed(SentencePart::ForEach(draw), slot(), Some(Blank::Count)));
+        parts.push(" ");
+        parts.append(value);
+        parts
     }
 
     /// Returns the parts of a comparison.
     fn compare(&self, line: &SheetLine) -> Parts {
+        self.compare_parts(line, false)
+    }
+
+    /// Returns the parts of a comparison, where `whose` is whether it follows "whose": a blank on its left then wants a
+    /// property, and a blank on its right a state while the left is empty.
+    fn compare_parts(&self, line: &SheetLine, whose: bool) -> Parts {
         let about = Self::compared_property(&line.left);
         let of_states = about
             .and_then(|id| self.properties.get(id))
             .is_some_and(|property| property.property_type == PropertyType::States);
-        let mut parts = self.slot_parts(&line.left, None, Blank::Value);
+        let states_on_right = of_states || (whose && line.left.is_blank());
+        let left_blank = if whose { Blank::Property } else { Blank::Value };
+        let mut parts = self.slot_parts(&line.left, None, left_blank, "left");
+        let comparison = |words: &str| {
+            Parts::placed(
+                SentencePart::Select(LineSelect::Comparison, words.to_owned()),
+                field_target(FieldPlace::Test),
+                None,
+            )
+        };
         let Some(test) = line.test else {
             parts.push(" ");
-            parts.add(SentencePart::Select(LineSelect::Comparison, String::new()));
+            parts.append(comparison(""));
             parts.push(" ");
-            parts.append(self.slot_parts(&line.right, about, Blank::Value));
+            parts.append(self.slot_parts(&line.right, about, Blank::Value, "right"));
             return parts;
         };
         match test {
             CompareTest::Within => {
                 parts.push(" is within ");
-                parts.append(self.slot_parts(&line.tolerance, None, Blank::Number));
+                parts.append(self.slot_parts(&line.tolerance, None, Blank::Number, "tolerance"));
                 parts.push(" of ");
-                parts.append(self.slot_parts(&line.right, about, Blank::Number));
+                parts.append(self.slot_parts(&line.right, about, Blank::Number, "right"));
             }
             CompareTest::Outside => {
                 parts.push(" is less than ");
-                parts.append(self.slot_parts(&line.low, None, Blank::LowerNumber));
+                parts.append(self.slot_parts(&line.low, None, Blank::LowerNumber, "low"));
                 parts.push(" or more than ");
-                parts.append(self.slot_parts(&line.high, None, Blank::UpperNumber));
+                parts.append(self.slot_parts(&line.high, None, Blank::UpperNumber, "high"));
             }
             _ => {
                 let list = matches!(test, CompareTest::OneOf | CompareTest::NotOneOf);
-                let blank = match (of_states, list) {
+                let blank = match (states_on_right, list) {
                     (true, true) => Blank::StateList,
                     (true, false) => Blank::State,
                     (false, true) => Blank::NumberList,
                     (false, false) => Blank::Number,
                 };
                 parts.push(" ");
-                parts.add(SentencePart::Select(
-                    LineSelect::Comparison,
-                    comparison_words(test, of_states).to_owned(),
-                ));
+                parts.append(comparison(comparison_words(test, of_states)));
                 parts.push(" ");
-                parts.append(self.slot_parts(&line.right, about, blank));
+                parts.append(self.slot_parts(&line.right, about, blank, "right"));
             }
         }
         parts
@@ -3805,11 +4113,16 @@ impl<'a> Sentences<'a> {
             SheetValue::Phrase(phrase) => matches!(phrase.kind, LineKind::Chance | LineKind::Rate),
             _ => false,
         };
+        let item_parts = |(index, item): (usize, &SheetValue)| {
+            self.value_parts(item, None)
+                .under(&format!("items.{index}"), Blank::YesOrNo)
+        };
         let tests: Vec<Parts> = line
             .items
             .iter()
-            .filter(|item| !is_draw(item))
-            .map(|item| self.value_parts(item, None))
+            .enumerate()
+            .filter(|(_, item)| !is_draw(item))
+            .map(item_parts)
             .collect();
         let mut groups: Vec<Parts> = Vec::new();
         if !tests.is_empty() {
@@ -3818,8 +4131,9 @@ impl<'a> Sentences<'a> {
         groups.extend(
             line.items
                 .iter()
-                .filter(|item| is_draw(item))
-                .map(|item| self.value_parts(item, None)),
+                .enumerate()
+                .filter(|(_, item)| is_draw(item))
+                .map(item_parts),
         );
         if groups.is_empty() {
             let mut parts = Parts::text("all of ");
@@ -3839,16 +4153,20 @@ impl<'a> Sentences<'a> {
                     .as_deref()
                     .map_or_else(|| BLANK_TEXT.to_owned(), |kind| plural(&self.thing_word(kind)));
                 let mut parts = Parts::text(&format!("{thing} within "));
-                parts.append(self.slot_parts(&line.distance, None, Blank::Number));
+                parts.append(self.slot_parts(&line.distance, None, Blank::Number, "distance"));
                 if line.include_me == Some(true) {
                     parts.push(" including me");
                 }
                 parts
             }
-            around => Parts::part(SentencePart::Select(
-                LineSelect::WhichCells,
-                around.and_then(around_words).unwrap_or_default().to_owned(),
-            )),
+            around => Parts::placed(
+                SentencePart::Select(
+                    LineSelect::WhichCells,
+                    around.and_then(around_words).unwrap_or_default().to_owned(),
+                ),
+                field_target(FieldPlace::Around),
+                None,
+            ),
         }
     }
 
@@ -3869,7 +4187,7 @@ impl<'a> Sentences<'a> {
                 .is_some_and(|operator| operation_words(operator).is_some());
         for (index, token) in tokens.iter().enumerate() {
             let previous = index.checked_sub(1).and_then(|before| tokens.get(before));
-            let word = match token.as_str() {
+            let mut word = match token.as_str() {
                 "(" => {
                     let call = previous.is_some_and(|previous| function_words(previous).is_some());
                     calls.push(call);
@@ -3921,6 +4239,21 @@ impl<'a> Sentences<'a> {
                 }
                 other => Parts::text(other),
             };
+            if binary {
+                let (field, want) = match index {
+                    0 => (FieldPlace::FirstOperand, Some(Blank::Number)),
+                    1 => (FieldPlace::Operation, None),
+                    _ => (FieldPlace::SecondOperand, Some(Blank::Number)),
+                };
+                for placed in &mut word.0 {
+                    if !matches!(placed.part, SentencePart::Text(_)) {
+                        placed.place = Some(PartPlace {
+                            target: field_target(field),
+                            want,
+                        });
+                    }
+                }
+            }
             if glue_next {
                 match words.last_mut() {
                     Some(last) => last.append(word),
@@ -3996,11 +4329,29 @@ impl<'a> Sentences<'a> {
         id.map_or_else(|| BLANK_TEXT.to_owned(), |id| self.state_chip(about, id).name)
     }
 
-    /// Returns the parts of state `id` of property `about`: its chip, or `blank` for `None`.
-    fn state_part(&self, about: Option<&str>, id: Option<&str>, blank: Blank) -> Parts {
-        Parts::part(id.map_or(SentencePart::Blank(blank), |id| {
-            SentencePart::Chip(self.state_chip(about, id))
-        }))
+    /// Returns the parts of state `id` of property `about`, the line's field `field`: its chip, or `blank` for `None`.
+    fn state_part(&self, about: Option<&str>, id: Option<&str>, blank: Blank, field: FieldPlace) -> Parts {
+        Parts::placed(
+            id.map_or(SentencePart::Blank(blank), |id| {
+                SentencePart::Chip(self.state_chip(about, id))
+            }),
+            field_target(field),
+            Some(blank),
+        )
+    }
+
+    /// Returns the chip a value of a formula of one operation shows, such as "Infected neighbours" for `l1` or "my
+    /// Food" for `my.food`, where `operand` is a reference or a number as the formula writes it.
+    pub fn formula_operand(&self, operand: &str) -> SentenceChip {
+        if operand.starts_with(|first: char| first.is_ascii_alphabetic()) {
+            self.formula_reference(operand)
+        } else {
+            SentenceChip {
+                kind: ChipKind::Literal,
+                lead: "",
+                name: operand.to_owned(),
+            }
+        }
     }
 
     /// Returns the chip of state `id` of property `about`, or of the first property with such a state when `about`
@@ -4099,6 +4450,39 @@ pub fn literal_words(literal: SheetLiteral) -> String {
 /// Returns the word of a Steer or Move line's mode: "by", "towards" or "to".
 fn mode_words(mode: Option<LineMode>) -> &'static str {
     mode.map_or(BLANK_TEXT, LineMode::as_str)
+}
+
+/// Returns the target of the field `field` of the line or phrase itself, before [`PlaceTarget::under`] places it.
+fn field_target(field: FieldPlace) -> PlaceTarget {
+    PlaceTarget::Field {
+        phrase: String::new(),
+        field,
+    }
+}
+
+/// Returns the two values and the operator of `formula` when it is one operation between two values, as in `l1 *
+/// infection_rate`, and `None` for any other formula.
+///
+/// ```
+/// use henad_graph::sheet::sentence::binary_formula;
+///
+/// assert_eq!(binary_formula("l1*infection_rate"), Some(("l1".to_owned(), '*', "infection_rate".to_owned())));
+/// assert_eq!(binary_formula("smaller(l1, 2)"), None);
+/// ```
+pub fn binary_formula(formula: &str) -> Option<(String, char, String)> {
+    let tokens = formula_tokens(formula);
+    let [first, operator, second] = tokens.as_slice() else {
+        return None;
+    };
+    let operator = operator
+        .chars()
+        .next()
+        .filter(|_| operation_words(operator).is_some())?;
+    let is_value = |token: &str| {
+        token.starts_with(|first: char| first.is_ascii_alphanumeric() || first == '.')
+            && function_words(token).is_none()
+    };
+    (is_value(first) && is_value(second)).then(|| (first.clone(), operator, second.clone()))
 }
 
 /// Returns the word of a summary of a Look around line, such as "average".

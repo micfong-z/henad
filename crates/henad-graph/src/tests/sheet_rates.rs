@@ -942,3 +942,51 @@ fn a_rate_read_in_another_unit_than_its_parameter_warns() {
     assert_eq!(factors, 1);
     assert!(lowered(sheet_text("sir.toml")).warnings().is_empty());
 }
+
+#[test]
+fn a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named() {
+    use crate::sheet::rates::{chance_note, count_as_draw};
+
+    let document = ParsedSheet::parse(sheet_text("sir_chance.toml"))
+        .expect("the sheet reads")
+        .into_document();
+    let values = parameter_defaults(&document);
+    assert_eq!(
+        chance_note(&document, "l2", &values).as_deref(),
+        Some(
+            "Each tick, a Susceptible cell becomes Infected with chance 0.3 with 1 infected neighbour, and 0.51 with 2. \
+             Each one counted is a separate try: 1 − (1 − 0.3)^n, where n is Infected neighbours."
+        )
+    );
+    assert_eq!(
+        chance_note(&document, "l3", &values),
+        None,
+        "a chance without for each has no note"
+    );
+    // A chance that is a result leads with words.
+    let mut builder = SheetBuilder::new(document.clone());
+    builder
+        .apply(SheetEdit::SetSlot {
+            line: "l2".to_owned(),
+            path: "condition.chance".to_owned(),
+            value: Slot::Filled(SheetValue::Chip(crate::sheet::document::SheetChip::Result {
+                line: "l1".to_owned(),
+                part: None,
+                property: None,
+            })),
+        })
+        .expect("the chance takes the count");
+    let edited = builder.document();
+    assert_eq!(
+        chance_note(edited, "l2", &values).as_deref(),
+        Some(
+            "Each tick, a Susceptible cell becomes Infected with a chance that grows with n, where p is Infected \
+             neighbours and n is Infected neighbours. Each one counted is a separate try: 1 − (1 − p)^n."
+        )
+    );
+    assert_eq!(
+        count_as_draw(edited, "l2"),
+        Some(("Infected neighbours".to_owned(), sentence::DrawKind::Chance))
+    );
+    assert_eq!(count_as_draw(&document, "l2"), None);
+}

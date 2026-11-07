@@ -427,6 +427,89 @@ pub fn rate_note(document: &SheetDocument, line_id: &str, values: &BTreeMap<Stri
     })
 }
 
+/// Returns the chance phrase of `line`: the line itself or its condition.
+fn chance_phrase(line: &SheetLine) -> Option<&SheetLine> {
+    if line.kind == LineKind::Chance {
+        return Some(line);
+    }
+    match line.condition.value()? {
+        SheetValue::Phrase(phrase) if phrase.kind == LineKind::Chance => Some(phrase),
+        _ => None,
+    }
+}
+
+/// Returns the note under the chance line `line_id` whose chance holds "for each", read with the parameter values
+/// `values`, or `None` for a line with no such note.
+///
+/// A fixed chance `p` gives the chances `1 - (1 - p)^n` for 1 and for 2 of the count, each printed by the number rule
+/// against `p n`. A chance that is a result or a property leads with words. A chance without "for each" has no note.
+pub fn chance_note(document: &SheetDocument, line_id: &str, values: &BTreeMap<String, f64>) -> Option<String> {
+    let (card_index, line) = document.line(line_id)?;
+    let phrase = chance_phrase(line)?;
+    if phrase.tries.is_blank() {
+        return None;
+    }
+    let relations = CardRelations::new(document, document.cards.get(card_index)?);
+    let subject = subject(document, &relations, line_id, line);
+    let tick = document.time.map(|time| time_words(time.tick_length, time.tick_unit));
+    let sentences = Sentences::new(document);
+    let count = sentences.slot(&phrase.tries, None);
+    if let Some(chance) = fixed_number(phrase.chance.value(), values) {
+        let chance = chance.clamp(0.0, 1.0);
+        // With one counted, the chance is the chance itself. The subtraction would blur it.
+        let first = chance_words(chance, chance);
+        let second = chance_words(1.0 - (1.0 - chance).powi(2), 2.0 * chance);
+        return Some(sentence::chance_for_each_note(
+            tick.as_deref(),
+            &subject,
+            &count,
+            &first,
+            &second,
+        ));
+    }
+    let chance_words = sentences.slot(&phrase.chance, None);
+    Some(sentence::growing_chance_note(
+        tick.as_deref(),
+        &subject,
+        &chance_words,
+        &count,
+    ))
+}
+
+/// Returns the name of the Count line that the chance or rate of line `line_id` takes as its value, with the kind of
+/// draw, or `None` when its value is no count.
+///
+/// The line still runs, and the card offers to move the count into "for each".
+pub fn count_as_draw(document: &SheetDocument, line_id: &str) -> Option<(String, sentence::DrawKind)> {
+    let (_, line) = document.line(line_id)?;
+    let (phrase, draw) = match (chance_phrase(line), rate_phrase(line)) {
+        (Some(phrase), _) => (phrase, sentence::DrawKind::Chance),
+        (None, Some(phrase)) if phrase.kind == LineKind::Rate => (phrase, sentence::DrawKind::Rate),
+        _ => return None,
+    };
+    let value = match draw {
+        sentence::DrawKind::Chance => phrase.chance.value(),
+        sentence::DrawKind::Rate => phrase.rate.value(),
+    };
+    let Some(SheetValue::Chip(SheetChip::Result {
+        line: count_id,
+        part: None,
+        property: None,
+    })) = value
+    else {
+        return None;
+    };
+    let (_, count) = document.line(count_id)?;
+    if count.kind != LineKind::Count {
+        return None;
+    }
+    let name = count
+        .name
+        .clone()
+        .or_else(|| super::edit::automatic_name(document, count))?;
+    Some((name, draw))
+}
+
 /// Returns the note of the competing group `group`, its line ids in display order, under its highest line.
 fn group_note(
     document: &SheetDocument,

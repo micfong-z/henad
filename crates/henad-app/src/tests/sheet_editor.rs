@@ -755,6 +755,7 @@ fn a_skipped_line_shows_its_note_under_it() {
         [LineNote {
             text: "Not run yet: choose the old state".to_owned(),
             color: NoteColor::Amber,
+            action: None,
         }]
     );
     assert!(lines[0].notes.is_empty() && lines[2].notes.is_empty());
@@ -883,6 +884,7 @@ fn a_result_used_above_its_line_is_red_with_its_tooltip() {
         [LineNote {
             text: "Uses Alive neighbours, which is below this line".to_owned(),
             color: NoteColor::Red,
+            action: None,
         }]
     );
     assert!(lines[2].red_chips.is_empty(), "line 3 sits below the result it uses");

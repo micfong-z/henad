@@ -1747,3 +1747,188 @@ fn a_typed_number_reads_as_its_known_answers() {
         "Type a size from 1 to 16384 cells."
     );
 }
+
+#[test]
+fn every_control_of_a_life_line_is_placed_at_the_slot_or_field_it_shows() {
+    use crate::sheet::sentence::{FieldPlace, PartPlace, PlaceTarget};
+
+    let game = document("game_of_life.toml");
+    let sentences = Sentences::new(&game);
+    let places = |line_id: &str| -> Vec<(String, Option<PartPlace>)> {
+        sentences
+            .placed_parts(line_id, &[])
+            .into_iter()
+            .filter(|placed| {
+                !matches!(
+                    placed.part,
+                    sentence::SentencePart::Text(_) | sentence::SentencePart::From
+                )
+            })
+            .map(|placed| (placed.part.text(), placed.place))
+            .collect()
+    };
+    let slot = |path: &str, want: Blank| {
+        Some(PartPlace {
+            target: PlaceTarget::Slot(path.to_owned()),
+            want: Some(want),
+        })
+    };
+    let field = |phrase: &str, field: FieldPlace, want: Option<Blank>| {
+        Some(PartPlace {
+            target: PlaceTarget::Field {
+                phrase: phrase.to_owned(),
+                field,
+            },
+            want,
+        })
+    };
+    assert_eq!(
+        places("l1"),
+        [
+            ("the 8 cells around me".to_owned(), field("", FieldPlace::Around, None)),
+            ("Status".to_owned(), slot("whose.left", Blank::Property)),
+            ("Alive".to_owned(), slot("whose.right", Blank::State)),
+        ]
+    );
+    assert_eq!(
+        places("l2"),
+        [
+            ("Alive".to_owned(), field("", FieldPlace::NewState, Some(Blank::State))),
+            (
+                "Dead".to_owned(),
+                field("", FieldPlace::StartState, Some(Blank::OldState))
+            ),
+            ("when".to_owned(), None),
+            ("Alive neighbours".to_owned(), slot("condition.left", Blank::Value)),
+            ("is".to_owned(), field("condition", FieldPlace::Test, None)),
+            ("3".to_owned(), slot("condition.right", Blank::Number)),
+        ]
+    );
+    let line_three = places("l3");
+    let list_item = |index: usize| {
+        Some(PartPlace {
+            target: PlaceTarget::ListItem {
+                slot: "condition.right".to_owned(),
+                index,
+            },
+            want: Some(Blank::NumberList),
+        })
+    };
+    assert_eq!(
+        line_three[line_three.len() - 2..],
+        [("2".to_owned(), list_item(0)), ("3".to_owned(), list_item(1))]
+    );
+    assert_eq!(
+        places("l4").last(),
+        Some(&("always".to_owned(), slot("condition", Blank::When)))
+    );
+}
+
+#[test]
+fn a_new_count_wants_a_property_then_a_state_and_an_empty_calculate_its_two_values() {
+    use crate::sheet::sentence::{FieldPlace, PlaceTarget, SentencePart, sentence_text};
+
+    let mut game = document("game_of_life.toml");
+    let line = game.cards[0].line_tables.get_mut("l1").expect("line 1");
+    let mut whose = SheetLine::new(LineKind::Compare);
+    whose.test = Some(CompareTest::Is);
+    line.whose = Slot::Filled(SheetValue::Phrase(Box::new(whose)));
+    line.name = Some("Count".to_owned());
+    let mut calculate = SheetLine::new(LineKind::Calculate);
+    calculate.name = Some("Result".to_owned());
+    game.cards[0].line_tables.insert("l9".to_owned(), calculate);
+    game.cards[0].lines.push("l9".to_owned());
+    let sentences = Sentences::new(&game);
+    let parts = sentences.line_parts("l1", &[]);
+    assert_eq!(
+        sentence_text(&parts),
+        "Count = count of the 8 cells around me whose ... is ..."
+    );
+    assert!(parts.contains(&SentencePart::Blank(Blank::Property)), "{parts:?}");
+    assert!(parts.contains(&SentencePart::Blank(Blank::State)), "{parts:?}");
+    let placed = sentences.placed_parts("l9", &[]);
+    let targets: Vec<PlaceTarget> = placed
+        .iter()
+        .filter_map(|placed| placed.place.as_ref().map(|place| place.target.clone()))
+        .collect();
+    let field = |field: FieldPlace| PlaceTarget::Field {
+        phrase: String::new(),
+        field,
+    };
+    assert_eq!(
+        targets,
+        [
+            field(FieldPlace::FirstOperand),
+            field(FieldPlace::Operation),
+            field(FieldPlace::SecondOperand)
+        ]
+    );
+    assert_eq!(sentences.line("l9", &[]), "Result = ... ... ...");
+    assert_eq!(
+        sentence::binary_formula("l1 / 2"),
+        Some(("l1".to_owned(), '/', "2".to_owned()))
+    );
+    assert_eq!(sentence::binary_formula("-l1"), None);
+    assert_eq!(sentences.formula_operand("l1").name, "Count");
+}
+
+#[test]
+fn the_words_for_each_are_a_part_placed_at_its_count() {
+    use crate::sheet::sentence::{PartPlace, PlaceTarget, SentencePart, sentence_text};
+
+    let text = super::sheet_document::sheet_text("sir_chance.toml");
+    let sir = ParsedSheet::parse(text).expect("the sheet reads").into_document();
+    let sentences = Sentences::new(&sir);
+    let placed = sentences.placed_parts("l2", &[]);
+    let tries = Some(PartPlace {
+        target: PlaceTarget::Slot("condition.tries".to_owned()),
+        want: Some(Blank::Count),
+    });
+    let for_each = placed
+        .iter()
+        .find(|placed| placed.part == SentencePart::ForEach(DrawKind::Chance))
+        .expect("the words for each");
+    assert_eq!(for_each.place, tries);
+    assert_eq!(placed.last().map(|placed| placed.place.clone()), Some(tries));
+    let parts: Vec<SentencePart> = placed.into_iter().map(|placed| placed.part).collect();
+    assert_eq!(
+        sentence_text(&parts),
+        "Become Infected from Susceptible, with chance Infection chance for each infected neighbour"
+    );
+}
+
+#[test]
+fn a_formula_inside_a_slot_places_no_value_and_no_operation() {
+    use crate::sheet::sentence::{FieldPlace, PlaceTarget, SentencePart, sentence_text};
+
+    let text = super::sheet_document::sheet_text("sir_chance.toml");
+    let mut sir = ParsedSheet::parse(text).expect("the sheet reads").into_document();
+    let line = sir.cards[0].line_tables.get_mut("l2").expect("line 2");
+    let Slot::Filled(SheetValue::Phrase(condition)) = &mut line.condition else {
+        panic!("line 2 has a chance");
+    };
+    let mut calculate = SheetLine::new(LineKind::Calculate);
+    calculate.formula = Some("infection_chance / 2".to_owned());
+    condition.chance = Slot::Filled(SheetValue::Phrase(Box::new(calculate)));
+    let sentences = Sentences::new(&sir);
+    let placed = sentences.placed_parts("l2", &[]);
+    let operand_places: Vec<&PlaceTarget> = placed
+        .iter()
+        .filter_map(|placed| placed.place.as_ref().map(|place| &place.target))
+        .filter(|target| {
+            matches!(
+                target,
+                PlaceTarget::Field {
+                    field: FieldPlace::FirstOperand | FieldPlace::Operation | FieldPlace::SecondOperand,
+                    ..
+                }
+            )
+        })
+        .collect();
+    assert!(operand_places.is_empty(), "{operand_places:?}");
+    let parts: Vec<SentencePart> = placed.into_iter().map(|placed| placed.part).collect();
+    assert_eq!(
+        sentence_text(&parts),
+        "Become Infected from Susceptible, with chance (Infection chance divided by 2) for each infected neighbour"
+    );
+}

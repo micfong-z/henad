@@ -4,7 +4,7 @@
 in the Editor tab as its Sheet and Card panes, and holds the New model dialog. The canvas and the
 code view are in `agents/henad-app-editor.md`, and the expert mode stays there beside the canvas it
 extends. The Sheet pane edits every section (S16a, S16b), those of a world of agents included
-(S26). The Card pane is read-only: chips, blanks and selects show the sheet and nothing edits it.
+(S26), and the Card pane writes the lines of a cells card (S19, `agents/henad-app-card.md`).
 
 `mod.rs` holds `SheetEditor`: a `SheetBuilder` over the `SheetDocument` (so new draws take fresh
 keys), its canonical text (`text`, which Save model writes and Apply reads through
@@ -239,36 +239,7 @@ order, reading every field with a percent. The modal (`henad_new_parameter_modal
 named `NEW_PARAMETER_HEADING`. A rate's starting values and its "per [unit]" Unit wait for the first
 rate blank (S19).
 
-`card_pane.rs` draws every card in file order: `Sentences::card_heading`, the line count
-(`line_count`) and, on a card that runs every tick, the Lines help and the law (`LAW`) in a
-`GRAY_900` box, then the lines in a group of role `List` named `line_list_name` ("Lines", "Lines of
-Clear"). `card_lines(document, sentences, report, card_index)` returns a `CardLine` per line in
-display order (`CardRelations`): id, number, depth (indent 20 points), `prefix` (`line_prefix`,
-"Line 2" or "Clear line 1"), the plain `sentence`, its `parts` from `Sentences::line_parts` with
-`otherwise_numbers`, the ids and tooltip of its "otherwise" (`otherwise_tooltip` with the line's
-property and old state), `red_chips` (a result chip whose line sits at or below this one, or whose
-direct When does not hold this line, with `result_below_tooltip` or `result_inside_tooltip`, as the
-checker decides its skip), `swatches` (each state chip's colour from the sheet) and `notes`: the
-report's diagnostics at that card and line, the skip note first, red for an error or a skip note
-that names a red chip (`uses_result_below`, `uses_result_inside`), amber (the theme's warn colour)
-otherwise. Notes sit under their line, and `sheet_outcome_ui` in `editor/mod.rs` lists every problem
-the card does not draw (`card_pane::draws_diagnostic`: a card and a line in that card's display
-order). A line table no lines list names, or one inside a block no line reaches, has its errors in
-the list. `line_ui` draws a row in a `horizontal_wrapped` with no item spacing, the row a group of
-role `Group` named `CardLine::label` ("Line 2: Become Alive from Dead, when Alive neighbours is 3"),
-bounds set by `accessible_group` (`sheet/mod.rs`), as egui gives a `Ui` node none. `part_ui` draws
-each part: words as labels, a `ConditionWord` bold, `From` with `FROM_TOOLTIP` (both
-`Label::extend`, each one unbroken word, `FROM_WORD`), a chip (`chip_ui`, a button named by
-`SentenceChip::text`), a blank (`blank_ui`, dashed, named `Blank::name`), a select (`select_ui`, a
-disabled `ComboBox` named `LineSelect::name` with its words as value, "unit" grey while empty),
-`Always` (a grey button named `always_name`, `ALWAYS_TOOLTIP`), `Otherwise` (a muted label with
-click sense, so it takes focus, labelled by its words and described by its tooltip through
-`set_description`) and `ForEachBlank` (`FOR_EACH_BLANK_WORDS`, named `for_each_optional_name`, laid
-out always, painted only while the row is hovered or holds focus, D99). `CardLine::control` returns
-each control's visible words and name, which `part_ui` uses and the label-in-name test reads.
-Hovering or focusing a result chip or "otherwise" records the lines it names, stored in egui temp
-data and drawn on the next frame as a `BLUE_950` background. Every word comes from
-`henad_graph::sheet::sentence`.
+`card_pane.rs` and `picker.rs` draw and edit the cards, which `agents/henad-app-card.md` describes.
 
 `help.rs` holds `Help` (`Section(SheetSection)` or `Lines`) and `help_button`: a borderless
 `MDI_HELP_CIRCLE_OUTLINE` button named `SheetSection::help_name` or `HELP_LINES_NAME` ("Help:

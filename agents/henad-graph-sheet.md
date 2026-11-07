@@ -48,7 +48,12 @@ the line, its condition or an item of an all of in it. A fixed rate gives `rate_
 worked-out rate `growing_rate_note` with the Calculate's words. Δt prints in the rate's unit with
 three figures ("0.25 days"). The highest line of a competing group takes `competing_note` and the
 others none, and a group with a "for each", a worked-out rate, two units, or a line whose rate is
-not its whole condition or that a block holds has no note. A line with no `[time]` has none. The
+not its whole condition or that a block holds has no note. A line with no `[time]` has none.
+`chance_note` returns the note of a chance with "for each" on the line or in its condition (S19):
+`chance_for_each_note` for a fixed chance, its chance at 1 the chance itself and at 2 by the number
+rule against `2p`, or `growing_chance_note` with words first for a chance that is a result (D106).
+`count_as_draw` returns the name of the Count a chance or a rate holds as its value, with the
+`DrawKind`, for the card's note and its button. The
 mean stay is a Become from a named state at a fixed rate with no "for each", its rate the whole
 condition and no block around it (`rate_alone`). A worked-out note names an unnamed Count by
 `edit::automatic_name`. `pub(super) shortest_f32` is the conversion commands' number.
@@ -176,8 +181,21 @@ typed number back (a trailing "%" makes a percent, "inf" and "nan" are refused),
 `world_side_out_of_range` for a grid side that is no whole number from 1 to the limit. `line_parts`
 returns the same sentence as `SentencePart`s, which `line` joins through `sentence_text`: words, a
 bold `ConditionWord`, `From`, a `Chip` (`ChipKind` and a grey `lead` such as "my"), a `Blank`, a
-`Select`, `Always`, `Otherwise` and the empty `ForEachBlank`, which reads as nothing. One builder
-(`Parts`) writes both forms, so the card and the writer never differ.
+`Select`, `Always`, `Otherwise`, the empty `ForEachBlank`, which reads as nothing, and `ForEach`,
+the words "for each" once on (`FOR_EACH_WORDS`). One builder (`Parts`) writes both forms, so the
+card and the writer never differ. `placed_parts` returns the same parts as `PlacedPart`s, each with
+the `PartPlace` an edit of it sets (S19): a `target` (`PlaceTarget::Slot` with its slot path,
+`ListItem` with the list's slot path and the item's index, or `Field` with the phrase's slot path
+and a `FieldPlace`: `Property`, `NewState`, `StartState`, `Test`, `Around`, `RateUnit`, `Summary`,
+`SummaryValue`, `Operation`, `FirstOperand`, `SecondOperand`) and the `want`, the `Blank` the place
+shows while empty (`None` for a select). `Parts` places a value relative to its slot and
+`Parts::under(key, want)` puts it under the slot's key, so a phrase's places compose
+(`condition.left`). Words, `From`, `Otherwise` and a hand-written formula of more than one operation
+have no place. A Count's `whose` comparison wants a property on its left and, while that is empty
+or a States property, a state on its right, and an empty Calculate line reads "[number]
+[operation] [number]", both values and the select placed. The words "for each" and their count
+share the place `tries`. `binary_formula` splits a formula of one operation between two values, and
+`Sentences::formula_operand` returns the chip of one value as a formula writes it.
 
 **Places.** `SheetPlaces::root` is a `TablePlaces` tree that follows the TOML structure: `table`
 (the header, an inline table's braces, or the first key naming an implicit table such as
@@ -344,9 +362,15 @@ rates SIR conserving its cells at half a day, `a_tick_length_override_keeps_the_
 the factor of a rate per week, every other form of rate, a rate in an any of drawing alone, the
 notes of the final wording table (`rate_notes_match_the_spec_examples`,
 `worked_out_rate_notes_match_the_spec_examples`), the two conversion commands and their refusals,
-and the D14 warning. Reader tests sit in `src/tests/sheet_document.rs`, over eleven sheets: the
-eight starters, and three test sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and
-`ants.toml` are the author format's examples, and `random_walk.toml`, `bounded_confidence.toml` and
+the D14 warning, and `a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named`. The places
+of parts are held by `every_control_of_a_life_line_is_placed_at_the_slot_or_field_it_shows`,
+`a_new_count_wants_a_property_then_a_state_and_an_empty_calculate_its_two_values`,
+`the_words_for_each_are_a_part_placed_at_its_count` and
+`a_formula_inside_a_slot_places_no_value_and_no_operation` in `src/tests/sheet_sentence.rs`. A
+formula inside a slot has no places, and the card edits the values and the operation of a Calculate
+line only. Reader tests sit in `src/tests/sheet_document.rs`, over eleven sheets: the eight
+starters, and three test sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and `ants.toml` are
+the author format's examples, and `random_walk.toml`, `bounded_confidence.toml` and
 `sir_chance.toml` (round 1's SIR with chances per tick, sheet id `sir_chance`) were written from
 round 1's models, as `vote.toml` and `forest_fire.toml` were. The random walk's measure is "Average
 of Position" (`average_of_position`), the name the sheet editor's average gives it (S26).

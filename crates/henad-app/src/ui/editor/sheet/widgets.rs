@@ -17,7 +17,8 @@ use henad_graph::sheet::sentence::{
     COLOR_NAMES, CREATE_PARAMETER, ChipKind, DEFAULT_LABEL, DEFAULT_NAME, DEFAULT_OUTSIDE_LIMITS, DIALOG_NAME_MISSING,
     DIALOG_UNIT_PLACEHOLDER, LIMITS_NOT_NUMBERS, MAX_LABEL, MIN_LABEL, MIN_NOT_BELOW_MAX, NAME_LABEL, NEW_PARAMETER,
     NEW_PARAMETER_HEADING, NEW_PARAMETER_LEAD, NUMBER_BOX_HINT, NUMBER_PARAMETER_PLACEHOLDER, PARAMETER_NAME_FIELD,
-    SentenceChip, TYPE_ONE_NUMBER, UNIT_LABEL, USE_BUTTON, parameter_name_taken, read_typed_number,
+    RATE_BELOW_ZERO, RATE_PARAMETER_PLACEHOLDER, SentenceChip, TYPE_ONE_NUMBER, UNIT_LABEL, USE_BUTTON,
+    parameter_name_taken, read_typed_number,
 };
 use henad_graph::value::Color;
 
@@ -85,6 +86,12 @@ fn chip_colors(kind: &ChipKind, red: bool) -> ChipColors {
 /// A result chip fills blue, or red when `red` holds. A parameter chip carries a slider mark, a state chip a swatch of
 /// the colour `swatch`, and a property chip its lead word ("my") in grey. Clicking a chip does nothing.
 pub fn chip_ui(ui: &mut Ui, chip: &SentenceChip, red: bool, swatch: Option<Color32>) -> Response {
+    chip_with_id(ui, None, chip, red, swatch)
+}
+
+/// Adds the chip of `chip` as [`chip_ui`] does, under the widget id `id` when one is given, so another frame can open
+/// its picker or give it the focus.
+pub fn chip_with_id(ui: &mut Ui, id: Option<Id>, chip: &SentenceChip, red: bool, swatch: Option<Color32>) -> Response {
     let colors = chip_colors(&chip.kind, red);
     let font = TextStyle::Body.resolve(ui.style());
     let painter = ui.painter();
@@ -101,7 +108,7 @@ pub fn chip_ui(ui: &mut Ui, chip: &SentenceChip, red: bool, swatch: Option<Color
         + lead.as_ref().map_or(0.0, |galley| galley.size().x)
         + name.size().x;
     let height = (name.size().y + CHIP_PADDING.y * 2.0).max(ui.spacing().interact_size.y - 2.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    let (rect, response) = allocate_control(ui, id, vec2(width, height));
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, chip.text()));
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
@@ -139,13 +146,19 @@ pub fn chip_ui(ui: &mut Ui, chip: &SentenceChip, red: bool, swatch: Option<Color
 /// Adds a dashed blank showing `word`, named `name`, and returns its response with the index of its shapes.
 ///
 /// A blank with `painted` false is laid out and named but not painted, and returns the index of an empty shape that
-/// the caller fills to paint it.
-pub fn blank_ui(ui: &mut Ui, word: &str, name: &str, painted: bool) -> (Option<egui::layers::ShapeIdx>, Response) {
+/// the caller fills to paint it. The blank takes the widget id `id` when one is given.
+pub fn blank_ui(
+    ui: &mut Ui,
+    id: Option<Id>,
+    word: &str,
+    name: &str,
+    painted: bool,
+) -> (Option<egui::layers::ShapeIdx>, Response) {
     let font = TextStyle::Body.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(word.to_owned(), font, mcs::GRAY_400);
     let size = galley.size() + CHIP_PADDING * 2.0;
     let height = size.y.max(ui.spacing().interact_size.y - 2.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(size.x, height), Sense::click());
+    let (rect, response) = allocate_control(ui, id, vec2(size.x, height));
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
     if painted {
         if ui.is_rect_visible(rect) {
@@ -163,6 +176,18 @@ pub fn blank_ui(ui: &mut Ui, word: &str, name: &str, painted: bool) -> (Option<e
         (None, response)
     } else {
         (Some(ui.painter().add(Shape::Noop)), response)
+    }
+}
+
+/// Allocates a clickable control of `size`, under the widget id `id` when one is given, and returns its rectangle and
+/// response.
+pub fn allocate_control(ui: &mut Ui, id: Option<Id>, size: Vec2) -> (Rect, Response) {
+    match id {
+        Some(id) => {
+            let (_, rect) = ui.allocate_space(size);
+            (rect, ui.interact(rect, id, Sense::click()))
+        }
+        None => ui.allocate_exact_size(size, Sense::click()),
     }
 }
 
@@ -405,12 +430,14 @@ pub fn message_ui(ui: &mut Ui, message: &str) {
 
 // The picker
 
-/// Range a typed number is read in: a chance or any number. A picker's Number box and the New parameter dialog
+/// Range a typed number is read in: a chance, a rate or any number. A picker's Number box and the New parameter dialog
 /// accept numbers in it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumberUse {
     /// A chance, from 0 to 1.
     Chance,
+    /// A rate, from 0 up.
+    Rate,
     /// Any number.
     Number,
 }
@@ -420,12 +447,13 @@ impl NumberUse {
     ///
     /// # Errors
     ///
-    /// Returns the message for text that is not one number, or a chance outside 0 to 1.
+    /// Returns the message for text that is not one number, a chance outside 0 to 1, or a rate below 0.
     pub fn read(self, text: &str) -> Result<SheetLiteral, &'static str> {
         let literal = read_typed_number(text).ok_or(TYPE_ONE_NUMBER)?;
         let number = literal.number().unwrap_or_default();
         match self {
             Self::Chance if !(0.0..=1.0).contains(&number) => Err(CHANCE_OUT_OF_RANGE),
+            Self::Rate if number < 0.0 => Err(RATE_BELOW_ZERO),
             _ => Ok(literal),
         }
     }
@@ -555,7 +583,7 @@ impl Picker<'_> {
 fn number_box(ui: &mut Ui, number_use: NumberUse) -> Option<SheetLiteral> {
     let hint = match number_use {
         NumberUse::Chance => CHANCE_BOX_HINT,
-        NumberUse::Number => NUMBER_BOX_HINT,
+        NumberUse::Rate | NumberUse::Number => NUMBER_BOX_HINT,
     };
     ui.weak(hint);
     let id = ui.id().with("henad_number_box");
@@ -713,11 +741,11 @@ impl NewParameterDialog {
     /// Returns the dialog for a parameter that stands for `number_use`, from the number `typed` in the field or blank
     /// it is for, with the unit `unit`.
     ///
-    /// A chance starts from 0.1 in 0 to 1, any other number from 1 in 0 to 10, and a typed number from itself with a
-    /// Max about ten times it.
+    /// A chance or a rate starts from 0.1 in 0 to 1, any other number from 1 in 0 to 10, and a typed number from itself
+    /// with a Max about ten times it.
     pub fn new(number_use: NumberUse, typed: Option<f64>, unit: Option<String>) -> Self {
         let (mut default, mut min, mut max) = match number_use {
-            NumberUse::Chance => (0.1, 0.0, 1.0),
+            NumberUse::Chance | NumberUse::Rate => (0.1, 0.0, 1.0),
             NumberUse::Number => (1.0, 0.0, 10.0),
         };
         if let Some(value) = typed.filter(|value| value.is_finite()) {
@@ -836,6 +864,7 @@ pub fn new_parameter_modal(ctx: &egui::Context, dialog: &mut NewParameterDialog,
         ui.add_space(6.0);
         let placeholder = match dialog.number_use {
             NumberUse::Chance => CHANCE_PARAMETER_PLACEHOLDER,
+            NumberUse::Rate => RATE_PARAMETER_PLACEHOLDER,
             NumberUse::Number => NUMBER_PARAMETER_PLACEHOLDER,
         };
         egui::Grid::new("henad_new_parameter_fields")
