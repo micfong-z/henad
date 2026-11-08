@@ -41,6 +41,7 @@ use henad_graph::types::{Rate, ValueType};
 use henad_graph::value::{ConfigValue, InputValue, Literal, MemberName, PortRef};
 
 use super::arrange::{COLUMN_GAP, CanvasKey, NODE_SIZE};
+use super::changes::ChangeMark;
 use super::display::display_name;
 use super::quick_add::{WireEnd, offered_kinds};
 use super::sockets::{rate_shape, type_color};
@@ -1156,6 +1157,8 @@ pub struct CanvasContext<'a> {
     pub pass: Option<&'a Pass>,
     /// Document the body belongs to.
     pub document: &'a GraphDocument,
+    /// Mark of each node of the body that Show changes lists as added or changed.
+    pub marks: &'a BTreeMap<NodeId, ChangeMark>,
 }
 
 /// Viewer of one frame of a canvas.
@@ -2117,7 +2120,11 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
         _outputs: &[OutPin],
         snarl: &Snarl<NodeView>,
     ) -> Frame {
-        match snarl.get_node(node).and_then(|view| issue_colors(&view.issues)) {
+        let Some(view) = snarl.get_node(node) else {
+            return default;
+        };
+        let mark = self.context.marks.get(&view.id).map(|mark| mark.colors());
+        match issue_colors(&view.issues).or(mark) {
             Some([_, _, stroke]) => default.stroke(Stroke::new(2.0, stroke)),
             None => default,
         }
@@ -2154,6 +2161,16 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
                     node: view.id,
                 });
             }
+        }
+        if let Some(mark) = self.context.marks.get(&view.id) {
+            let [fill, text, _] = mark.colors();
+            Frame::NONE
+                .fill(fill)
+                .corner_radius(CornerRadius::ZERO)
+                .inner_margin(Margin::symmetric(4, 1))
+                .show(ui, |ui| {
+                    ui.add(Label::new(RichText::new(mark.word()).small().color(text)).selectable(false));
+                });
         }
     }
 

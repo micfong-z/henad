@@ -2317,7 +2317,13 @@ pub const PLOTTED: &str = "Plotted";
 
 /// Returns the accessible name of the colour button of the measure `measure`, such as "Colour of Alive: Blue".
 pub fn measure_color_name(measure: &str, color: &str) -> String {
-    format!("Colour of {measure}: {color}")
+    color_button_name(measure, color)
+}
+
+/// Returns the accessible name of the button that sets the colour of `subject`, a measure or a state, to one of the
+/// palette, such as "Colour of recovered: Green".
+pub fn color_button_name(subject: &str, color: &str) -> String {
+    format!("Colour of {subject}: {color}")
 }
 
 /// Returns the accessible name of the button that removes `measure`, such as "Remove measure Alive".
@@ -2967,6 +2973,65 @@ pub fn converted_link(copy: &str) -> String {
 
 /// Heading of the side panel's section about the source of a copy.
 pub const FROM_AUTHOR_MODEL: &str = "From the author model";
+
+/// Banner's toggle that lists the nodes an edit of a copy changed and marks them on the canvas.
+pub const SHOW_CHANGES: &str = "Show changes";
+
+/// Heading of the side panel's list of the nodes an edit of a copy changed.
+pub const CHANGES_HEADING: &str = "Changes since conversion";
+
+/// Group of the changes list that holds the nodes in no frame. The expert added these nodes after conversion.
+pub const IN_NO_FRAME: &str = "In no frame";
+
+/// Badge of a node the expert added to a copy, and the list's word for it.
+pub const NODE_ADDED: &str = "Added";
+
+/// List's word for a node the expert removed from a copy.
+pub const NODE_REMOVED: &str = "Removed";
+
+/// Badge of a node the expert changed in a copy, and the list's word for it.
+pub const NODE_CHANGED: &str = "Changed";
+
+/// Banner's button that runs a copy beside its source and plots both.
+pub const COMPARE_RUNS: &str = "Compare runs";
+
+/// Returns the line shown while a copy `copy` and its source `name` run for `ticks` ticks at `seed`, such as "Running
+/// Game of Life and Game of Life (expert) for 200 ticks at seed 1."
+pub fn compare_running(name: &str, copy: &str, ticks: u64, seed: u64) -> String {
+    format!("Running {name} and {copy} for {ticks} ticks at seed {seed}.")
+}
+
+/// Returns the line shown once a copy `copy` matched its source `name` at every tick up to `ticks`.
+pub fn runs_match(name: &str, copy: &str, ticks: u64) -> String {
+    format!("{copy} matches {name} at every tick from 0 to {ticks}.")
+}
+
+/// Returns the line shown once a copy `copy` first differed from its source `name`, at `tick` in the measure
+/// `measure`, where the copy read `copy_value` and the source `value`.
+pub fn runs_differ(name: &str, copy: &str, tick: u64, measure: &str, copy_value: &str, value: &str) -> String {
+    format!("{copy} first differs from {name} at tick {tick}: {measure} is {copy_value} against {value}.")
+}
+
+/// Returns the line shown when a copy and its source share no measure to compare.
+pub fn runs_share_no_measure(name: &str, copy: &str) -> String {
+    format!("{copy} and {name} share no measure to compare.")
+}
+
+/// Returns the line shown when the runs of a comparison failed with `message`.
+pub fn compare_failed(message: &str) -> String {
+    format!("Comparison failed: {message}")
+}
+
+/// Returns the legend entry of the measure `measure` in the run of the model `name`, such as "Alive, Game of Life".
+pub fn compare_series(measure: &str, name: &str) -> String {
+    format!("{measure}, {name}")
+}
+
+/// Tooltip of Compare runs in a browser. A browser runs no sweep of a GPU model.
+pub const COMPARE_NEEDS_NATIVE: &str = "Compare runs is unavailable in a browser.";
+
+/// Button that closes the comparison of a copy and its source.
+pub const CLOSE_COMPARISON: &str = "Close comparison";
 
 /// Returns the title of the frame around the nodes of one line in a converted copy, such as "Line 2: Become Alive
 /// from Dead, when Alive neighbours is 3", where `prefix` is the line prefix.

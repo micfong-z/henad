@@ -75,7 +75,8 @@ Dropping the handle aborts the sweep, and on native waits for the thread to writ
 detached. `SweepRunOptions::build_pool` (native) names the pool the probes and a GPU model's run
 builds run in (`SweepOptions::in_build_pool`, `Executor::with_build_pool`), and a CPU model's runs
 build in their lane pools either way. A pause never changes a result. A run's trajectory depends
-on its seed and schedule alone.
+on its seed and schedule alone. The Editor's Compare runs starts two such sweeps of one run each,
+and stops each with `SweepRun::stop(STOP_WAIT)` when dropped, never through the handle's own drop.
 
 `SimCommand::SetParam` reaches either loop between two pumps, and the state's `set_param` decides.
 A live edit on a GPU engine writes its uniform blocks with `queue.write_buffer` before the next

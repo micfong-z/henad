@@ -314,7 +314,7 @@ impl SweepSession {
 }
 
 /// Returns the provenance a sweep's manifest records: `host`, the build of this app, with its command line.
-fn provenance(host: BuildInfo) -> Provenance {
+pub(crate) fn provenance(host: BuildInfo) -> Provenance {
     let arguments = std::env::args_os()
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect();

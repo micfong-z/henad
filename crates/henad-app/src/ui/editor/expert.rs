@@ -9,24 +9,29 @@
 //! The *original* of a copy is the sheet its origin record names: the counterpart when it holds that sheet, or else
 //! the file the record names beside the copy's own file. The banner compares the original's text with the record to
 //! tell an unedited copy, an edited one, a copy whose original changed since, and one whose original is not found.
+//! For an edited copy, Show changes lists the nodes added, removed and changed by frame in the side panel and marks
+//! them on the canvas.
 
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::path::PathBuf;
 
 use egui::{Frame, Id, Margin, Modal, RichText};
 use henad_graph::GraphFile;
-use henad_graph::editor::ModelOrigin;
+use henad_graph::editor::{ModelOrigin, NoteLayout};
 use henad_graph::sheet::sentence::{
-    CANCEL, CONVERT, CONVERT_HEADING, FROM_AUTHOR_MODEL, convert_text, converted_banner, converted_date, edited_banner,
-    node_edits, open_original, original_changed_banner, original_not_beside,
+    CANCEL, COMPARE_NEEDS_NATIVE, COMPARE_RUNS, CONVERT, CONVERT_HEADING, FROM_AUTHOR_MODEL, SHOW_CHANGES,
+    convert_text, converted_banner, converted_date, edited_banner, node_edits, open_original, original_changed_banner,
+    original_not_beside,
 };
 use henad_graph::sheet::{
-    ChangesError, ConvertOptions, ConvertRefusal, KIND_SHEET, SheetFile, changes_since_conversion, convert,
+    ChangeGroup, ChangesError, ConvertOptions, ConvertRefusal, KIND_SHEET, SheetFile, changes_since_conversion, convert,
 };
 use web_time::{SystemTime, UNIX_EPOCH};
 
+use super::graph::GraphEditor;
+use super::graph::changes::CopyChanges;
 use super::sheet::SheetEditor;
-use super::{EditorModel, EditorPanel, EditorRequest};
+use super::{BannerKey, EditorModel, EditorPanel, EditorRequest};
 use crate::state::AppState;
 use crate::ui::dock::Tab;
 use crate::ui::mcs;
@@ -60,13 +65,17 @@ pub enum CopyState {
     NotFound,
 }
 
-/// Banner of a converted copy: the copy's origin record and its state against the original.
+/// Banner of a converted copy: the copy's origin record, its state against the original and the nodes its edits
+/// changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyBanner {
     /// Origin record of the copy.
     pub origin: ModelOrigin,
     /// State of the copy against its original.
     pub state: CopyState,
+    /// Nodes added, removed and changed since the conversion, by frame, empty unless the state is
+    /// [`CopyState::Edited`].
+    pub changes: CopyChanges,
 }
 
 impl CopyBanner {
@@ -84,6 +93,20 @@ impl CopyBanner {
     /// Returns whether the banner offers to open the original.
     pub fn opens_original(&self) -> bool {
         self.state != CopyState::NotFound
+    }
+
+    /// Returns whether the banner offers to list the changes since the conversion.
+    ///
+    /// Note that an edit that changes no node, such as a new category or a parameter's default, leaves the copy
+    /// edited with no change to list. The banner offers nothing to show then.
+    pub fn shows_changes(&self) -> bool {
+        matches!(self.state, CopyState::Edited(_)) && !self.changes.is_empty()
+    }
+
+    /// Returns whether the banner offers to run the copy beside its original. The original has to be the sheet the
+    /// copy was converted from.
+    pub fn compares_runs(&self) -> bool {
+        matches!(self.state, CopyState::Unedited | CopyState::Edited(_))
     }
 }
 
@@ -307,11 +330,42 @@ fn original<'a>(panel: &'a EditorPanel, origin: &ModelOrigin) -> Original<'a> {
     }
 }
 
+/// Returns the canonical text of the original of the graph in the Editor, `None` for a graph with no original that
+/// lowers.
+pub fn original_text(panel: &EditorPanel) -> Option<String> {
+    let origin = panel.model.graph()?.editor_region().model_origin()?;
+    match original(panel, &origin) {
+        Original::Sheet(file) => Some(file.to_toml().to_owned()),
+        Original::Broken | Original::Missing => None,
+    }
+}
+
 /// Returns a hash of `text`, which keys the banner on the original's text without a copy of it.
 fn text_hash(text: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Returns the key of the copy `graph` and its original `original`: the load and code revision of `graph` and the hash
+/// of the text of `original`. The banner and a comparison are keyed on it.
+fn copy_key(graph: &GraphEditor, original: &Original<'_>) -> BannerKey {
+    let original_hash = match original {
+        Original::Sheet(file) => Some(text_hash(file.to_toml())),
+        Original::Broken | Original::Missing => None,
+    };
+    let [load, revision, _] = graph.preview_key();
+    (load, revision, original_hash)
+}
+
+/// Returns the key of the copy in the Editor and its original, `None` while the Editor shows no copy converted from a
+/// sheet.
+///
+/// The key changes when the copy is loaded again or edited, and when the original's text changes.
+pub fn current_copy_key(panel: &EditorPanel) -> Option<BannerKey> {
+    let graph = panel.model.graph()?;
+    let origin = graph.editor_region().model_origin()?;
+    Some(copy_key(graph, &original(panel, &origin)))
 }
 
 /// Returns the banner of the graph in the Editor, `None` for a graph that records no conversion from a sheet or for
@@ -322,47 +376,47 @@ pub fn copy_banner(panel: &mut EditorPanel) -> Option<CopyBanner> {
     let graph = panel.model.graph()?;
     let origin = graph.editor_region().model_origin()?;
     let original = original(panel, &origin);
-    let original_hash = match original {
-        Original::Sheet(file) => Some(text_hash(file.to_toml())),
-        Original::Broken | Original::Missing => None,
-    };
-    let [load, revision, _] = graph.preview_key();
-    let key = (load, revision, original_hash);
+    let key = copy_key(graph, &original);
     if let Some((cached, banner)) = &panel.banner
         && *cached == key
     {
         return banner.clone();
     }
-    let state = match original {
-        Original::Missing => CopyState::NotFound,
-        Original::Broken => CopyState::OriginalChanged,
+    let (state, changes) = match original {
+        Original::Missing => (CopyState::NotFound, CopyChanges::default()),
+        Original::Broken => (CopyState::OriginalChanged, CopyChanges::default()),
         Original::Sheet(file) => {
             let copy = graph.to_file()?;
             let edited = graph
                 .code_hash()
                 .is_some_and(|hash| format!("{hash:016x}") != origin.copy_code);
             match changes_since_conversion(&copy, file) {
-                Err(ChangesError::OriginalChanged { .. }) => CopyState::OriginalChanged,
+                Err(ChangesError::OriginalChanged { .. }) => (CopyState::OriginalChanged, CopyChanges::default()),
                 Err(_) => return None,
-                Ok(_) if !edited => CopyState::Unedited,
+                Ok(_) if !edited => (CopyState::Unedited, CopyChanges::default()),
                 Ok(groups) => {
-                    let count = |list: fn(&henad_graph::sheet::ChangeGroup) -> usize| groups.iter().map(list).sum();
-                    CopyState::Edited(node_edits(
+                    let count = |list: fn(&ChangeGroup) -> usize| groups.iter().map(list).sum();
+                    let edits = node_edits(
                         count(|group| group.added.len()),
                         count(|group| group.removed.len()),
                         count(|group| group.changed.len()),
-                    ))
+                    );
+                    (
+                        CopyState::Edited(edits),
+                        CopyChanges::new(groups, file.lowered().document()),
+                    )
                 }
             }
         }
     };
-    let banner = Some(CopyBanner { origin, state });
+    let banner = Some(CopyBanner { origin, state, changes });
     panel.banner = Some((key, banner.clone()));
     banner
 }
 
-/// Draws `banner` in the info colours, with its button, and sets `request` when the button is pressed.
-pub fn banner_ui(ui: &mut egui::Ui, banner: &CopyBanner, request: &mut Option<EditorRequest>) {
+/// Draws `banner` in the info colours, with its buttons, and sets `request` when a button is pressed.
+/// `showing_changes` is whether the changes since the conversion are listed, which Show changes toggles.
+pub fn banner_ui(ui: &mut egui::Ui, banner: &CopyBanner, showing_changes: bool, request: &mut Option<EditorRequest>) {
     Frame::NONE
         .fill(mcs::BLUE_950)
         .inner_margin(Margin::symmetric(8, 6))
@@ -373,8 +427,29 @@ pub fn banner_ui(ui: &mut egui::Ui, banner: &CopyBanner, request: &mut Option<Ed
                 if banner.opens_original() && ui.button(open_original(&banner.origin.name)).clicked() {
                     *request = Some(EditorRequest::OpenOriginal);
                 }
+                if banner.compares_runs() {
+                    let enabled = cfg!(not(target_arch = "wasm32"));
+                    let compare = ui
+                        .add_enabled(enabled, egui::Button::new(COMPARE_RUNS))
+                        .on_disabled_hover_text(COMPARE_NEEDS_NATIVE);
+                    if compare.clicked() {
+                        *request = Some(EditorRequest::CompareRuns);
+                    }
+                }
+                if banner.shows_changes() && ui.selectable_label(showing_changes, SHOW_CHANGES).clicked() {
+                    *request = Some(EditorRequest::ShowChanges);
+                }
             });
         });
+}
+
+/// Returns the changes of the copy in the Editor that the side panel lists and the canvas marks: the banner's changes
+/// while Show changes is on, and none otherwise.
+pub fn shown_changes(panel: &mut EditorPanel) -> CopyChanges {
+    if !panel.show_changes {
+        return CopyChanges::default();
+    }
+    copy_banner(panel).map(|banner| banner.changes).unwrap_or_default()
 }
 
 /// Returns the name of the copy the counterpart holds when it was converted from the sheet in the Editor, `None`
@@ -430,8 +505,9 @@ pub fn open_original_of(panel: &mut EditorPanel) {
     }
 }
 
-/// Draws the side panel's section about the source of a copy recorded in `origin`.
-pub fn origin_ui(ui: &mut egui::Ui, origin: &ModelOrigin) {
+/// Draws the side panel's section about the source of a copy recorded in `origin`, then each of `notes`, the prose of
+/// the source that has no place in the code.
+pub fn origin_ui(ui: &mut egui::Ui, origin: &ModelOrigin, notes: &[NoteLayout]) {
     ui.strong(FROM_AUTHOR_MODEL);
     crate::ui::kv_grid(ui, "henad_expert_origin").show(ui, |ui, rows| {
         for (label, value) in [
@@ -444,6 +520,13 @@ pub fn origin_ui(ui: &mut egui::Ui, origin: &ModelOrigin) {
             rows.end_row(ui);
         }
     });
+    for note in notes {
+        ui.add_space(4.0);
+        if !note.title.is_empty() {
+            ui.label(RichText::new(&note.title).strong());
+        }
+        ui.label(&note.text);
+    }
 }
 
 #[cfg(test)]

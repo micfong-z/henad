@@ -34,10 +34,12 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   (`mcs::BLUE_700`), and its module doc maps each state to entries: the state picks the hue, and
   the element carrying the colour picks the step. A badge, a fill or a coloured text takes its
   entry from that mapping in place of a `gamma_multiply` tint, a `Color32` literal or a theme
-  colour borrowed as a fill. The theme's warn and error colours are orange 500 and red 500, and a
-  status text reads them from the theme. The theme's neutral surfaces and strokes in `init.rs`
-  predate MCS and stay as they are. Data colours (the plot series, the heatmap scale and its
-  no-data grey) are not MCS and come from `ui/results/plot.rs`.
+  colour borrowed as a fill. A node of a converted copy added since the conversion is green, and a
+  node changed since then is yellow (`ChangeMark::colors`, badge 900 and 200, stroke 500). The
+  theme's warn and error colours are orange 500 and red 500, and a status text reads them from the
+  theme. The theme's neutral surfaces and strokes in `init.rs` predate MCS and stay as they are.
+  Data colours (the plot series, the heatmap scale and its no-data grey) are not MCS and come from
+  `ui/results/plot.rs`.
 - **Chips of the sheet editor take MCS mappings** (`ui/editor/sheet/card_pane.rs`). A result chip
   fills with blue 900 and writes in blue 200, a result its line cannot use with red 900 and red
   200, and every other chip with gray 800 and gray 100, its lead word ("my") and the parameter's

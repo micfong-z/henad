@@ -253,7 +253,24 @@ The inputs of the node that changes a state read by line, such as "Line 2 when".
 A banner above the canvas says which sheet the copy came from and when, and whether the copy was edited since.
 Press the banner's button named after the sheet, such as **Open Game of Life**, to return to the sheet, whose toolbar then shows "Converted to node graph:" and the copy's name, a link back to the copy.
 The banner says when the sheet has changed since the conversion, or when it is not beside the copy's file.
-The panel beside the canvas ends with **From the author model**, naming the sheet, its file and the date of the conversion.
+The panel beside the canvas ends with **From the author model**, naming the sheet, its file and the date of the conversion, then the sheet's purpose and what each parameter means, which the node graph has no place for.
+
+Once an edit of the copy adds, removes or changes a node, press **Show changes** in the banner to list every node added, removed or changed since the conversion, at the top of the panel beside the canvas.
+Each node is listed under the title of the frame it sits in, and nodes added after the conversion, which join no frame, under "In no frame".
+Press a listed node to open it on its canvas.
+On the canvas, an added node carries a green **Added** badge and a changed node a yellow **Changed** badge.
+Press **Show changes** again to hide the list and the badges.
+
+Press **Compare runs** in the banner to run the copy and the sheet side by side for 200 ticks, at the seed the Parameters tab sets and at the preview's size.
+When both runs finish, a line under the banner says whether the copy matches the sheet at every tick, or names the first tick at which a measure differs, with both values.
+A plot shows each measure of the sheet as a solid line and the copy's as a dashed line, with a vertical line at the first difference.
+An unedited copy matches the sheet at every tick, since the conversion copies every random draw.
+Press **Close comparison** to stop the runs and close the plot.
+An edit of the copy or the sheet closes the comparison, and **Compare runs** runs both again.
+Compare runs is unavailable in a browser.
+
+The **Categories** section of the panel beside the canvas holds each state of the copy with its colour.
+Press a colour to choose another from the sheet's twelve, type a name under a category and press the plus button to add a state in the next unused colour, or fill in **New category id** and **First variant** and press **Add category** for a category of its own.
 
 ## Node graphs
 

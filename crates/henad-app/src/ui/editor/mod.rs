@@ -15,6 +15,7 @@
 //! dialog as before.
 
 pub mod code_view;
+pub mod compare;
 pub mod expert;
 pub mod graph;
 pub mod preview;
@@ -231,10 +232,15 @@ pub struct EditorPanel {
     /// Banner of the copy in the Editor, with the load, code revision and hash of the original's text it was worked
     /// out for.
     banner: Option<(BannerKey, Option<expert::CopyBanner>)>,
+    /// Whether the side panel lists the changes of the copy since the conversion and the canvas marks them.
+    pub show_changes: bool,
+    /// Runs of the copy and its original that Compare runs started, `None` before Compare runs and after Close
+    /// comparison.
+    pub comparison: Option<Box<compare::Comparison>>,
 }
 
-/// Load, code revision and hash of the original's text that a copy's banner was worked out for.
-type BannerKey = (u64, u64, Option<u64>);
+/// Load, code revision and hash of the original's text that a copy's banner and comparison were worked out for.
+pub type BannerKey = (u64, u64, Option<u64>);
 
 /// Outcome of a press on Apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -376,6 +382,8 @@ impl EditorPanel {
         self.counterpart = None;
         self.beside = None;
         self.banner = None;
+        self.show_changes = false;
+        self.comparison = None;
     }
 
     /// Clears the outcome of the last Apply, the state of the preview and the banner after the model and its
@@ -387,6 +395,7 @@ impl EditorPanel {
         self.preview = preview::Preview::default();
         self.banner = None;
         self.convert = None;
+        self.show_changes = false;
     }
 
     /// Clears the code field's undo history and returns the view to the top left on the field's next frame, after
@@ -437,6 +446,12 @@ pub enum EditorRequest {
     OpenOriginal,
     /// Opens the copy of the sheet.
     OpenCopy,
+    /// Lists the changes of the copy since the conversion, or stops listing them.
+    ShowChanges,
+    /// Runs the copy beside its original and compares their measures.
+    CompareRuns,
+    /// Stops the comparison and closes it.
+    CloseComparison,
     /// Moves the cursor to a line and a column of the text, both counted from 1.
     MoveCursor {
         line: u32,
@@ -484,6 +499,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
         });
 
     let copy = expert::counterpart_copy(panel);
+    let changes = expert::shown_changes(panel);
     let refusal = panel.model.sheet().and_then(expert::convert_refusal);
 
     let marked: Vec<u32> = panel
@@ -503,7 +519,10 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
         scroll: std::mem::take(&mut panel.reset_scroll),
     };
     CentralPanel::no_frame().show(ui, |ui| match &mut panel.model {
-        EditorModel::Graph(graph) => graph::graph_ui(ui, graph),
+        EditorModel::Graph(graph) => {
+            graph.shown_changes = changes;
+            graph::graph_ui(ui, graph);
+        }
         EditorModel::Sheet(sheet) => {
             let shown = sheet::SheetShown {
                 past_start,
@@ -576,7 +595,24 @@ fn header_ui(
         Panel::top("henad_expert_banner")
             .resizable(false)
             .frame(Frame::NONE.inner_margin(Margin::symmetric(0, 4)))
-            .show(ui, |ui| expert::banner_ui(ui, &banner, request));
+            .show(ui, |ui| expert::banner_ui(ui, &banner, panel.show_changes, request));
+    }
+    // A comparison of an earlier copy or original describes a model the Editor no longer holds.
+    if let Some(key) = expert::current_copy_key(panel)
+        && panel
+            .comparison
+            .as_ref()
+            .is_some_and(|comparison| comparison.key != key)
+    {
+        panel.comparison = None;
+    }
+    if let Some(comparison) = panel.comparison.as_mut() {
+        comparison.poll();
+    }
+    if panel.model.graph().is_some()
+        && let Some(comparison) = &panel.comparison
+    {
+        compare::comparison_ui(ui, comparison, request);
     }
 }
 
@@ -932,6 +968,9 @@ fn apply_request(ctx: &egui::Context, app: &mut AppState, request: EditorRequest
         EditorRequest::ConfirmConvert => expert::convert_sheet(app),
         EditorRequest::OpenOriginal => expert::open_original_of(&mut app.editor),
         EditorRequest::OpenCopy => expert::swap_counterpart(&mut app.editor),
+        EditorRequest::ShowChanges => app.editor.show_changes = !app.editor.show_changes,
+        EditorRequest::CompareRuns => compare::start_comparison(app),
+        EditorRequest::CloseComparison => app.editor.comparison = None,
         EditorRequest::MoveCursor { line, column } => move_cursor_to(ctx, &mut app.editor, line, column),
     }
 }

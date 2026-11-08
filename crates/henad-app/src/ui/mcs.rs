@@ -3,7 +3,8 @@
 //!
 //! A colour marks a state, and the state picks the hue. Progress, running and the primary action are blue. Paused,
 //! ended early and a warning are orange. Finished is green, failed or invalid is red, and missing or neutral is gray.
-//! The element that carries the colour picks the step.
+//! In a converted copy, a node added since the conversion is green and a node changed since then is yellow. The element
+//! that carries the colour picks the step.
 //!
 //! - A status badge or a destructive button fills with the hue's 900 and writes its text in the hue's 200. A gray
 //!   badge fills with [`GRAY_800`] instead. [`GRAY_900`] is the window fill a badge sits on.

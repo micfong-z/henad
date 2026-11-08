@@ -39,10 +39,12 @@ mod build;
 mod install;
 mod pool;
 
+#[cfg(test)]
+pub use build::STILL_STOPPING;
+#[cfg(not(target_arch = "wasm32"))]
+pub use build::STOP_WAIT;
 pub use build::{BUILDING_MODEL, DID_NOT_STOP};
 use build::{PendingBuild, Stopping};
-#[cfg(test)]
-pub use build::{STILL_STOPPING, STOP_WAIT};
 pub use install::{PendingRebuild, remap_schedule, remap_values, same_code};
 pub use pool::{ModelPool, UiPool};
 

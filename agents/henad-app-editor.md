@@ -268,20 +268,80 @@ differs from `origin.copy_code` (counts from `changes_since_conversion`), `Origi
 hash differs, or the counterpart no longer lowers) and `NotFound`. `header_ui` draws it in a
 `Panel::top` under the header, blue 950 fill and blue 200 text, with Open <name>
 (`EditorRequest::OpenOriginal`, `open_original_of`: a swap, or the sheet read from beside, which
-takes the copy as its counterpart) in every state but `NotFound`. Show changes and Compare runs are
-not built. The sheet's link line (`counterpart_copy`) sends `OpenCopy`. The graph side panel ends
-with `origin_ui` under `FROM_AUTHOR_MODEL` (model, file, converted date) when the file records a
-`ModelOrigin`. Nodes added after conversion join no frame (D22). The app draws and renames no frame,
-so a frame's title stays as the conversion wrote it (D25). `src/tests/expert.rs` holds the Diagram
-tests, `the_conversion_modal_names_no_preset`, `convert_is_disabled_with_its_tooltip` (an error and
-a skipped line, both controls disabled and their tooltips shown on hover),
+takes the copy as its counterpart) in every state but `NotFound`. The sheet's link line
+(`counterpart_copy`) sends `OpenCopy`. The graph side panel ends with `origin_ui` under
+`FROM_AUTHOR_MODEL` (model, file, converted date, then each `[[editor.note]]` title and text, the
+sheet's purpose and each parameter's meaning, C10, D24) when the file records a `ModelOrigin`. Nodes
+added after conversion join no frame (D22). The app draws and renames no frame, so a frame's title
+stays as the conversion wrote it (D25).
+
+**Show changes** (C8, D20). `CopyBanner::changes` holds a `CopyChanges` in the `Edited` state,
+empty otherwise: the `ChangeGroup`s of `changes_since_conversion` and the name of each removed node,
+the display name of its kind in the original's lowered graph (`CopyChanges::new`). The banner
+offers the `SHOW_CHANGES` toggle only for an edited copy with a change to list (`shows_changes`).
+An edit that changes no node, such as a new category, leaves the copy `Edited` with no toggle.
+The toggle runs `EditorRequest::ShowChanges` on `EditorPanel::show_changes`, cleared by every load
+and swap. `editor_ui` sets `GraphEditor::shown_changes` from `expert::shown_changes` each frame
+before `graph_ui`. `graph/changes.rs` draws `CHANGES_HEADING` at the top of the side panel: each
+group under its frame title or `IN_NO_FRAME`, its pass, then a link per added or changed node
+("Changed: Either (n2001)", the label or display name, `GraphRequest::Frame` on its canvas,
+`canvas_scope`) and a line per removed node ("Removed: Is (n2001)", the id alone when the original
+holds no such node). `marks_of` gives the open canvas a `ChangeMark` per
+added or changed node (`CanvasContext::marks`): a 2-point stroke and a header badge, green for
+`NODE_ADDED` and yellow for `NODE_CHANGED`, an issue's colour taking the stroke first.
+
+**Compare runs** (C9, D20). The banner offers `COMPARE_RUNS` in the `Unedited` and `Edited` states
+(`compares_runs`), disabled in a browser with `COMPARE_NEEDS_NATIVE`, since a GPU model runs in no
+sweep there. `compare::start_comparison` reads the original's canonical text (`original_text`) and
+the copy's, builds both entries through `ModelFile`, and `Comparison::start` runs each as a sweep of
+one run in memory (`SweepRun`, `SweepOutput::Memory`, the Sweep tab's `provenance` and build pool, a
+repaint waker) for `COMPARE_TICKS` (200) ticks at the Parameters tab's seed or
+`DEFAULT_COMPARE_SEED`, with the sizes `preview_values` caps (`grid_width`, `grid_height`,
+`num_agents`) and no reducers. `header_ui` polls it each frame (`Comparison::poll`, `Planned` gives
+the stat columns, `RunFinished` the series) and draws `comparison_ui` under the banner while the
+Editor shows a graph: its line (`compare_running`, `runs_match`, `runs_differ` with both values in
+`format_precise`, or in every digit when that prints both the same, `runs_share_no_measure`,
+`compare_failed`), Close comparison
+(`EditorRequest::CloseComparison`) and one `show_plot` of every measure, the original solid and the
+copy dashed in the same data colour, with a vertical line at the first difference.
+`first_difference` compares the measures both runs hold by name, tick by tick, two non-numbers
+counting as equal. Each run sits in a `Side` whose drop stops it within `STOP_WAIT`, so closing,
+replacing or loading never joins a run's thread without a bound (`agents/sim-runner.md`).
+`EditorPanel::comparison` survives a swap to the sheet and is cleared by every load.
+`Comparison::key` holds the copy's load and code revision and the hash of the original's text when
+the runs started (`BannerKey`, `expert::current_copy_key`), and `header_ui` drops the comparison
+once the Editor shows that copy with another key. A placement keeps the code revision and the
+comparison.
+
+**Categories** (C11). `world.rs`'s Categories section draws each variant's colour as the sheet's
+`color_button` (the twelve palette colours, named "Colour of waned: Purple" by `variant_color_name`
+through `sentence::color_button_name`), which runs `SetVariantColor`, Add variant gives the new
+variant `next_variant_color` (the first of `STATE_COLORS` its category lacks, gray once all are
+taken), and `add_category_ui` adds a category with its id and first variant (`AddCategory`, the
+first variant in `STATE_COLORS[0]`), since the checker refuses a category with none. The three
+fields carry their accessible names through `set_name`.
+
+`src/tests/expert.rs` holds the Diagram tests, `the_conversion_modal_names_no_preset`,
+`convert_is_disabled_with_its_tooltip` (an error and a skipped line, both controls disabled and
+their tooltips shown on hover),
 `the_words_rule_exempts_whole_controls_and_still_reports_a_bare_node`,
 `converting_game_of_life_opens_the_copy_with_frames_titled_by_line_and_the_banner` (frames apart
 from one another, at their drawn sizes),
 `editing_a_node_of_the_copy_changes_the_banner_and_a_new_node_joins_no_frame`,
 `open_original_returns_to_the_sheet_and_its_line_opens_the_copy` (and `OriginalChanged` after a
-sheet edit) and `a_sheet_with_a_file_has_its_copy_written_beside_it_and_found_again` (a taken file
-numbers the copy, `NotFound` once the sheet is gone).
+sheet edit), `a_sheet_with_a_file_has_its_copy_written_beside_it_and_found_again` (a taken file
+numbers the copy, `NotFound` once the sheet is gone),
+`show_changes_lists_a_highlife_edit_under_the_frame_of_line_2_and_marks_it_on_the_canvas` (the
+HighLife edit of henad-graph's `a_highlife_edit_is_found_by_changes_since_conversion`, rebuilt in
+the app test, one changed node under line 2's frame, two added in no frame, badges on the canvas, a
+link that opens its node), `an_unedited_copy_offers_no_show_changes`,
+`a_removed_node_is_listed_by_the_name_of_its_kind`,
+`the_notes_of_the_author_model_show_under_its_section`,
+`add_category_on_a_converted_sir_adds_a_state_with_its_colour_and_the_copy_still_checks` (and no
+Show changes after it), `an_unedited_copy_matches_its_sheet_at_every_tick_of_compare_runs`,
+`compare_runs_names_the_first_tick_at_which_a_highlife_edit_differs` (hidden in sheet mode, shown
+again on the copy) and `an_edit_of_the_copy_drops_the_comparison_of_the_copy_before_it` (a move
+keeps it). `compare.rs` holds the unit tests of `first_difference` and `difference_texts`.
 
 **Display names, origin ports and frame titles** (C4, C5, C6, D21). `graph/display.rs` holds
 `DISPLAY_NAMES`, a `DisplayName` (kind, name, category, description) for each of the catalogue's

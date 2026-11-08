@@ -1133,6 +1133,10 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
         ),
         ("Plotted", fixed(sentence::PLOTTED)),
         ("Colour of Alive: Blue", sentence::measure_color_name("Alive", "Blue")),
+        (
+            "Colour of recovered: Green",
+            sentence::color_button_name("recovered", "Green"),
+        ),
         ("Remove measure Alive", sentence::remove_measure_name("Alive")),
         ("Choose a property and a state.", fixed(sentence::MEASURE_NEEDS_STATE)),
         (
@@ -1973,4 +1977,26 @@ fn the_banner_of_a_copy_reads_as_the_expert_design_writes_it() {
         sentence::original_not_beside("Game of Life"),
         "Game of Life is not beside this file. Frames still show the line each node came from."
     );
+}
+
+#[test]
+fn a_comparison_of_a_copy_reads_in_full_sentences() {
+    assert_eq!(
+        sentence::compare_running("Game of Life", "Game of Life (expert)", 200, 1),
+        "Running Game of Life and Game of Life (expert) for 200 ticks at seed 1."
+    );
+    assert_eq!(
+        sentence::runs_match("Game of Life", "Game of Life (expert)", 200),
+        "Game of Life (expert) matches Game of Life at every tick from 0 to 200."
+    );
+    assert_eq!(
+        sentence::runs_differ("Game of Life", "Game of Life (expert)", 1, "Alive", "366946", "359603"),
+        "Game of Life (expert) first differs from Game of Life at tick 1: Alive is 366946 against 359603."
+    );
+    assert_eq!(
+        sentence::runs_share_no_measure("Game of Life", "Game of Life (expert)"),
+        "Game of Life (expert) and Game of Life share no measure to compare."
+    );
+    assert_eq!(sentence::compare_failed("no adapter"), "Comparison failed: no adapter");
+    assert_eq!(sentence::compare_series("Alive", "Game of Life"), "Alive, Game of Life");
 }

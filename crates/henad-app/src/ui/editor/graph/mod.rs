@@ -12,6 +12,7 @@
 
 pub mod arrange;
 pub mod canvas;
+pub mod changes;
 pub mod display;
 pub mod functions;
 pub mod history;
@@ -353,6 +354,9 @@ pub struct GraphEditor {
     import: Option<ImportSource>,
     /// Whether a dialog that picks a file to import from waits to open.
     pick_import: bool,
+    /// Changes of a converted copy since the conversion that the side panel lists and the canvas marks, empty while
+    /// Show changes is off.
+    pub shown_changes: changes::CopyChanges,
 }
 
 /// Prints the graph's id, the open body and the revision.
@@ -403,6 +407,7 @@ impl GraphEditor {
             wrap_fit: None,
             import: None,
             pick_import: false,
+            shown_changes: changes::CopyChanges::default(),
         };
         editor.refresh();
         editor
@@ -606,7 +611,7 @@ impl GraphEditor {
     }
 
     /// Returns the body of `scope`.
-    fn body(&self, scope: &Scope) -> Option<&NodeBody> {
+    pub(crate) fn body(&self, scope: &Scope) -> Option<&NodeBody> {
         let document = self.document();
         match scope {
             Scope::Pass(id) => document
@@ -1482,6 +1487,10 @@ pub fn graph_ui(ui: &mut egui::Ui, graph: &mut GraphEditor) {
             ScrollArea::vertical()
                 .id_salt("henad_graph_sidebar_scroll")
                 .show(ui, |ui| {
+                    if !graph.shown_changes.is_empty() {
+                        changes::changes_ui(ui, graph, &mut requests);
+                        ui.add_space(8.0);
+                    }
                     passes::passes_ui(ui, graph, &mut requests);
                     ui.add_space(8.0);
                     functions::functions_ui(ui, graph, &mut requests);
@@ -1489,7 +1498,7 @@ pub fn graph_ui(ui: &mut egui::Ui, graph: &mut GraphEditor) {
                     world::world_ui(ui, graph, &mut requests);
                     if let Some(origin) = graph.editor_region().model_origin() {
                         ui.add_space(8.0);
-                        super::expert::origin_ui(ui, &origin);
+                        super::expert::origin_ui(ui, &origin, &graph.editor_region().notes());
                     }
                 });
         });
@@ -1528,12 +1537,14 @@ pub fn graph_ui(ui: &mut egui::Ui, graph: &mut GraphEditor) {
             Scope::Pass(id) => document.passes.iter().find(|pass| pass.id == *id),
             _ => None,
         };
+        let marks = changes::marks_of(&graph.shown_changes.groups, &scope);
         if let Some(body) = graph.body(&scope) {
             let context = CanvasContext {
                 scope: &scope,
                 body,
                 pass,
                 document,
+                marks: &marks,
             };
             requests.extend(show_canvas(ui, &mut canvas, context));
         }

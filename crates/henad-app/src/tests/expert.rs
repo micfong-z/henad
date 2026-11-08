@@ -590,3 +590,442 @@ fn a_frame_is_at_least_as_wide_as_its_title() {
     let wide = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 50.0));
     assert_eq!(fit_title(wide, 300.0), wide);
 }
+
+/// Returns `copy`, the converted Game of Life, with the birth rule B36/S23 of High Life: line 2's comparison becomes an
+/// either of two new comparisons, the count is 3 and the count is 6.
+fn highlife(copy: &henad_graph::GraphFile) -> henad_graph::GraphFile {
+    use henad_graph::node::Node as GraphNode;
+    use henad_graph::value::{InputValue, PortRef};
+
+    let id = |number: u32| NodeId::new(number).expect("an id");
+    let mut document = copy.document().clone();
+    let tick = document
+        .passes
+        .iter_mut()
+        .find(|pass| pass.id == "tick_cell_tick")
+        .expect("the tick pass");
+    let count = PortRef {
+        node: id(1001),
+        port: None,
+    };
+    let equals = |number: u32, value: u32| {
+        let mut node = GraphNode::new(id(number), "cmp.eq");
+        node.inputs.insert("a".to_owned(), InputValue::Link(count.clone()));
+        node.inputs
+            .insert("b".to_owned(), InputValue::Literal(Literal::U32(value)));
+        node
+    };
+    tick.body.nodes.push(equals(9001, 3));
+    tick.body.nodes.push(equals(9002, 6));
+    let birth = tick
+        .body
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == id(2001))
+        .expect("line 2's comparison");
+    *birth = GraphNode::new(id(2001), "logic.or");
+    for (port, source) in [("a", 9001), ("b", 9002)] {
+        birth.inputs.insert(
+            port.to_owned(),
+            InputValue::Link(PortRef {
+                node: id(source),
+                port: None,
+            }),
+        );
+    }
+    henad_graph::GraphFile::from_document(&document, copy.editor()).expect("the edited copy reads")
+}
+
+/// Converts Game of Life in `harness` and gives the copy the birth rule of High Life, as an expert's edit on the canvas
+/// would, keeping the sheet as the copy's counterpart.
+fn convert_to_highlife(harness: &mut Harness) {
+    convert_life(harness);
+    let EditorModel::Graph(graph) = &mut harness.app.editor.model else {
+        panic!("the copy opens in the Editor");
+    };
+    let edited = highlife(&graph.to_file().expect("the copy reads"));
+    **graph = crate::ui::editor::graph::GraphEditor::new(&edited);
+    harness.settle();
+}
+
+#[test]
+fn show_changes_lists_a_highlife_edit_under_the_frame_of_line_2_and_marks_it_on_the_canvas() {
+    use henad_graph::sheet::sentence::{CHANGES_HEADING, IN_NO_FRAME, NODE_ADDED, NODE_CHANGED, SHOW_CHANGES};
+
+    use crate::ui::editor::graph::changes::{ChangeMark, marks_of};
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    convert_to_highlife(&mut harness);
+    let banner = copy_banner(&mut harness.app.editor).expect("a banner");
+    assert_eq!(banner.state, CopyState::Edited("2 nodes added, 1 changed".to_owned()));
+    let texts = harness.accessible_texts();
+    assert!(
+        !texts.iter().any(|text| text == CHANGES_HEADING),
+        "the changes wait for Show changes"
+    );
+
+    harness.click(SHOW_CHANGES);
+    assert!(harness.app.editor.show_changes);
+    let texts = harness.accessible_texts();
+    for expected in [
+        CHANGES_HEADING,
+        LINE_2,
+        IN_NO_FRAME,
+        "Changed: Either (n2001)",
+        "Added: Is (n9001)",
+    ] {
+        assert!(texts.iter().any(|text| text == expected), "{expected} shows: {texts:?}");
+    }
+    let graph = harness.app.editor.model.graph().expect("the copy");
+    let line_2 = graph
+        .shown_changes
+        .groups
+        .iter()
+        .find(|group| group.title.as_deref() == Some(LINE_2))
+        .expect("the group of line 2");
+    assert_eq!(
+        line_2.changed,
+        [NodeId::new(2001).expect("an id")],
+        "one node under line 2"
+    );
+    let marks = marks_of(&graph.shown_changes.groups, &Scope::pass("tick_cell_tick"));
+    assert_eq!(
+        marks.get(&NodeId::new(2001).expect("an id")),
+        Some(&ChangeMark::Changed)
+    );
+    assert_eq!(marks.get(&NodeId::new(9002).expect("an id")), Some(&ChangeMark::Added));
+    assert_eq!(marks.len(), 3);
+    assert!(
+        texts.iter().filter(|text| *text == NODE_ADDED).count() == 2 && texts.iter().any(|text| text == NODE_CHANGED),
+        "the canvas badges the marked nodes: {texts:?}"
+    );
+
+    // A listed node opens on its canvas.
+    harness.click("Added: Is (n9002)");
+    let graph = harness.app.editor.model.graph().expect("the copy");
+    assert_eq!(graph.scope(), &Scope::pass("tick_cell_tick"));
+
+    harness.click(SHOW_CHANGES);
+    let texts = harness.accessible_texts();
+    assert!(
+        !texts.iter().any(|text| text == CHANGES_HEADING),
+        "the toggle hides the list"
+    );
+    assert!(
+        harness
+            .app
+            .editor
+            .model
+            .graph()
+            .is_some_and(|graph| graph.shown_changes.is_empty())
+    );
+}
+
+#[test]
+fn an_unedited_copy_offers_no_show_changes() {
+    use henad_graph::sheet::sentence::SHOW_CHANGES;
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    convert_life(&mut harness);
+    let banner = copy_banner(&mut harness.app.editor).expect("a banner");
+    assert!(!banner.shows_changes());
+    assert!(banner.changes.is_empty());
+    let texts = harness.accessible_texts();
+    assert!(!texts.iter().any(|text| text == SHOW_CHANGES), "{texts:?}");
+}
+
+#[test]
+fn the_notes_of_the_author_model_show_under_its_section() {
+    use henad_graph::sheet::sentence::FROM_AUTHOR_MODEL;
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("sir.toml"));
+    harness.click(MODEL_ACTIONS);
+    harness.click(CONVERT_HEADING);
+    harness.click(CONVERT);
+    let graph = harness.app.editor.model.graph().expect("the copy opens");
+    let notes = graph.editor_region().notes();
+    assert!(notes.len() >= 2, "the purpose and the parameters' meanings: {notes:?}");
+    let texts = harness.accessible_texts();
+    assert!(texts.iter().any(|text| text == FROM_AUTHOR_MODEL));
+    for note in &notes {
+        assert!(texts.contains(&note.title), "{} shows", note.title);
+        assert!(texts.contains(&note.text), "{} shows", note.text);
+    }
+    assert!(
+        texts.iter().any(|text| text.starts_with("A spatial SIR epidemic.")),
+        "the purpose shows"
+    );
+}
+
+#[test]
+fn add_category_on_a_converted_sir_adds_a_state_with_its_colour_and_the_copy_still_checks() {
+    use henad_graph::sheet::edit::STATE_COLORS;
+
+    use crate::ui::editor::graph::world::{next_variant_color, variant_color_name};
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    // A tall screen keeps the forms under the categories above the Editor's list of problems.
+    harness.screen = egui::vec2(1600.0, 1600.0);
+    harness.open_sheet(starter_text("sir.toml"));
+    harness.click(MODEL_ACTIONS);
+    harness.click(CONVERT_HEADING);
+    harness.click(CONVERT);
+    let graph = harness.app.editor.model.graph().expect("the copy opens");
+    let category = graph.document().categories.first().expect("SIR's states").clone();
+    let color = next_variant_color(&category);
+    assert!(
+        category.variants.iter().all(|variant| variant.color != color),
+        "a new state takes a colour no state of its category has"
+    );
+
+    let categories = format!("Categories ({})", graph.document().categories.len());
+    harness.click(&categories);
+    let field = |harness: &mut Harness, hint: &str| {
+        let nodes = harness.settle();
+        nodes
+            .iter()
+            .filter(|node| node.role == Role::TextInput)
+            .find(|node| node.label == hint)
+            .and_then(|node| node.bounds)
+            .unwrap_or_else(|| panic!("the field {hint}"))
+            .center()
+    };
+    let type_into = |harness: &mut Harness, hint: &str, text: &str| {
+        let position = field(harness, hint);
+        harness.click_at(position);
+        harness.frame(vec![egui::Event::Text(text.to_owned())]);
+        harness.settle();
+    };
+
+    // A state added to SIR's category takes the next colour of the palette.
+    type_into(&mut harness, &format!("New variant of {}", category.id), "waned");
+    harness.click("Add variant");
+    let graph = harness.app.editor.model.graph().expect("the copy");
+    let states = &graph.document().categories[0];
+    let waned = states
+        .variants
+        .iter()
+        .find(|variant| variant.name == "waned")
+        .expect("the new state")
+        .clone();
+    assert_eq!(waned.color, color);
+    assert!(!graph.has_errors(), "{:?}", graph.report().diagnostics);
+
+    // Its colour changes through the palette.
+    harness.click(&variant_color_name(&waned));
+    harness.click("Purple");
+    let graph = harness.app.editor.model.graph().expect("the copy");
+    let purple = graph.document().categories[0]
+        .variants
+        .iter()
+        .find(|variant| variant.name == "waned")
+        .expect("the new state")
+        .color;
+    assert_ne!(purple, waned.color, "the colour changed");
+    assert_eq!(
+        variant_color_name(&graph.document().categories[0].variants[3]),
+        "Colour of waned: Purple"
+    );
+
+    // A category of its own starts with its first state in the first palette colour.
+    type_into(&mut harness, "New category id", "mood");
+    type_into(&mut harness, "First variant", "calm");
+    harness.click("Add category");
+    let graph = harness.app.editor.model.graph().expect("the copy");
+    let mood = graph
+        .document()
+        .categories
+        .iter()
+        .find(|category| category.id == "mood")
+        .expect("the new category");
+    assert_eq!(mood.variants.len(), 1);
+    assert_eq!(mood.variants[0].color, STATE_COLORS[0]);
+    assert!(!graph.has_errors(), "{:?}", graph.report().diagnostics);
+
+    // The copy is edited with no node changed, and the banner offers no empty list of changes.
+    let banner = copy_banner(&mut harness.app.editor).expect("a banner");
+    assert!(matches!(banner.state, CopyState::Edited(_)), "{:?}", banner.state);
+    assert!(banner.changes.is_empty());
+    assert!(!banner.shows_changes());
+    let texts = harness.accessible_texts();
+    assert!(
+        !texts
+            .iter()
+            .any(|text| text == henad_graph::sheet::sentence::SHOW_CHANGES),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn a_removed_node_is_listed_by_the_name_of_its_kind() {
+    use henad_graph::sheet::sentence::SHOW_CHANGES;
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    convert_life(&mut harness);
+    let EditorModel::Graph(graph) = &mut harness.app.editor.model else {
+        panic!("the copy opens in the Editor");
+    };
+    let removed = graph.edit(
+        vec![EditCommand::RemoveNode {
+            scope: Scope::pass("tick_cell_tick"),
+            node: NodeId::new(2001).expect("an id"),
+        }],
+        None,
+    );
+    assert!(removed, "line 2's comparison is removed");
+    harness.settle();
+    harness.click(SHOW_CHANGES);
+    let texts = harness.accessible_texts();
+    assert!(texts.iter().any(|text| text == "Removed: Is (n2001)"), "{texts:?}");
+}
+
+/// Draws frames of `harness` until both runs of its comparison finished or one failed, and returns the outcome.
+///
+/// Panics after two minutes, or when a run failed.
+fn wait_for_comparison(harness: &mut Harness) -> crate::ui::editor::compare::CompareOutcome {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        harness.frame(Vec::new());
+        let comparison = harness.app.editor.comparison.as_ref().expect("a comparison runs");
+        assert_eq!(comparison.failure, None, "the runs finish");
+        if let Some(outcome) = comparison.outcome() {
+            return outcome;
+        }
+        assert!(std::time::Instant::now() < deadline, "the runs never finished");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn an_unedited_copy_matches_its_sheet_at_every_tick_of_compare_runs() {
+    use henad_graph::sheet::sentence::{CLOSE_COMPARISON, COMPARE_RUNS, runs_match};
+
+    use crate::ui::editor::compare::{COMPARE_TICKS, CompareOutcome};
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    convert_life(&mut harness);
+    harness.click(COMPARE_RUNS);
+    let outcome = wait_for_comparison(&mut harness);
+    assert_eq!(outcome, CompareOutcome::Match { ticks: COMPARE_TICKS });
+    let text = runs_match("Game of Life", "Game of Life (expert)", COMPARE_TICKS);
+    assert_eq!(
+        harness
+            .app
+            .editor
+            .comparison
+            .as_ref()
+            .map(|comparison| comparison.text()),
+        Some(text.clone())
+    );
+    let texts = harness.accessible_texts();
+    assert!(texts.contains(&text), "the comparison shows its line: {texts:?}");
+    harness.click(CLOSE_COMPARISON);
+    assert!(harness.app.editor.comparison.is_none());
+}
+
+#[test]
+fn an_edit_of_the_copy_drops_the_comparison_of_the_copy_before_it() {
+    use henad_graph::document::{Category, Variant};
+    use henad_graph::sheet::edit::STATE_COLORS;
+    use henad_graph::sheet::sentence::{COMPARE_RUNS, runs_match};
+
+    use crate::ui::editor::compare::COMPARE_TICKS;
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    convert_life(&mut harness);
+    harness.click(COMPARE_RUNS);
+    wait_for_comparison(&mut harness);
+    let text = runs_match("Game of Life", "Game of Life (expert)", COMPARE_TICKS);
+    assert!(harness.accessible_texts().contains(&text));
+
+    // Moving a node changes no code, and the comparison stays.
+    let EditorModel::Graph(graph) = &mut harness.app.editor.model else {
+        panic!("the copy opens in the Editor");
+    };
+    let moved = graph.edit(
+        vec![EditCommand::Move {
+            node: NodeId::new(2001).expect("an id"),
+            pos: [10.0, 10.0],
+        }],
+        None,
+    );
+    assert!(moved);
+    harness.settle();
+    assert!(harness.app.editor.comparison.is_some(), "a move keeps the comparison");
+
+    let EditorModel::Graph(graph) = &mut harness.app.editor.model else {
+        panic!("the copy opens in the Editor");
+    };
+    let mood = Category::new("mood", vec![Variant::new("calm", STATE_COLORS[0])]);
+    assert!(graph.edit(vec![EditCommand::AddCategory(mood)], None));
+    harness.settle();
+    assert!(harness.app.editor.comparison.is_none(), "an edit drops the comparison");
+    let texts = harness.accessible_texts();
+    assert!(!texts.contains(&text), "the old line is gone: {texts:?}");
+    assert!(
+        texts.iter().any(|shown| shown == COMPARE_RUNS),
+        "Compare runs runs again"
+    );
+}
+
+#[test]
+fn compare_runs_names_the_first_tick_at_which_a_highlife_edit_differs() {
+    use henad_graph::sheet::sentence::COMPARE_RUNS;
+
+    use crate::ui::editor::compare::CompareOutcome;
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    convert_to_highlife(&mut harness);
+    harness.click(COMPARE_RUNS);
+    let outcome = wait_for_comparison(&mut harness);
+    let CompareOutcome::Differ {
+        tick,
+        measure,
+        value,
+        copy_value,
+    } = outcome
+    else {
+        panic!("the edit changes the run: {outcome:?}");
+    };
+    assert_eq!(measure, "Alive");
+    assert!(tick >= 1, "tick 0 is the start both share");
+    assert_ne!(value, copy_value);
+    let text = harness
+        .app
+        .editor
+        .comparison
+        .as_ref()
+        .map(|comparison| comparison.text())
+        .expect("a comparison");
+    assert!(
+        text.starts_with(&format!(
+            "Game of Life (expert) first differs from Game of Life at tick {tick}: Alive is "
+        )),
+        "{text}"
+    );
+
+    // Opening the sheet hides the comparison, and the copy shows it again.
+    harness.click(&open_original("Game of Life"));
+    let texts = harness.accessible_texts();
+    assert!(!texts.contains(&text), "sheet mode shows no comparison");
+    assert_eq!(forbidden_words(&texts), Vec::new());
+    harness.click(&converted_link("Game of Life (expert)"));
+    assert!(harness.accessible_texts().contains(&text));
+}

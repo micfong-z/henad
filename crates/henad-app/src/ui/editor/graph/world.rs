@@ -6,20 +6,24 @@
 use egui::{Button, CollapsingHeader, ComboBox, DragValue, Id, RichText, TextEdit, Ui};
 use henad_core::authoring::primitives::space::Boundary;
 use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind};
-use henad_graph::document::{Action, GraphDocument, Lane, Variant, World};
+use henad_graph::document::{Action, Category, GraphDocument, Lane, Variant, World};
 use henad_graph::edit::EditCommand;
+use henad_graph::sheet::edit::STATE_COLORS;
+use henad_graph::sheet::sentence::color_button_name;
 use henad_graph::types::ValueType;
+use henad_graph::value::Color;
 
 use super::passes::{FIELD_WIDTH, commit_field, topology_domain};
 use super::{GraphEdit, GraphEditor, GraphRequest};
 use crate::icons::material_design_icons::{MDI_DELETE_OUTLINE, MDI_PLUS};
+use crate::ui::editor::sheet::widgets::{color_button, color_name, set_name};
 use crate::ui::sweep::layout::add_button;
 
 /// Largest grid side the world form takes, in cells.
 const MAX_GRID_SIDE: u32 = 16384;
 
-/// Colour of a variant added in the form, gray until the file sets another.
-const NEW_VARIANT_COLOR: [u8; 4] = [128, 128, 128, 255];
+/// Colour of a variant added in the form once its category holds every colour of [`STATE_COLORS`].
+const NEW_VARIANT_COLOR: Color = [128, 128, 128, 255];
 
 /// Kinds of parameter the add form offers, with their names in the form.
 const PARAM_KINDS: [&str; 3] = ["Float", "Integer", "Switch"];
@@ -357,7 +361,22 @@ fn lanes_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<GraphReque
     ui.data_mut(|data| data.insert_temp(form_id, (id, type_index)));
 }
 
-/// Draws each category with its variants, and a form per category that adds a variant.
+/// Returns the colour of a variant added to `category`: the first of [`STATE_COLORS`] that no variant of `category`
+/// takes, or gray once every one is taken.
+pub fn next_variant_color(category: &Category) -> Color {
+    STATE_COLORS
+        .into_iter()
+        .find(|color| category.variants.iter().all(|variant| variant.color != *color))
+        .unwrap_or(NEW_VARIANT_COLOR)
+}
+
+/// Returns the accessible name of the colour button of the variant `variant`, such as "Colour of recovered: Green".
+pub fn variant_color_name(variant: &Variant) -> String {
+    color_button_name(&variant.name, color_name(variant.color))
+}
+
+/// Draws each category with its variants, each variant's colour button, a form per category that adds a variant, and
+/// the form that adds a category with its first variant.
 fn categories_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<GraphRequest>) {
     if document.categories.is_empty() {
         ui.weak("No category.");
@@ -366,9 +385,18 @@ fn categories_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<Graph
         ui.label(RichText::new(&category.id).strong());
         for variant in &category.variants {
             ui.horizontal(|ui| {
-                let [red, green, blue, alpha] = variant.color;
-                let color = egui::Color32::from_rgba_unmultiplied(red, green, blue, alpha);
-                ui.colored_label(color, "■");
+                if let Some(color) = color_button(ui, &variant_color_name(variant), variant.color)
+                    && color != variant.color
+                {
+                    push(
+                        requests,
+                        EditCommand::SetVariantColor {
+                            category: category.id.clone(),
+                            name: variant.name.clone(),
+                            color,
+                        },
+                    );
+                }
                 ui.label(&variant.name);
                 ui.weak(&variant.label);
                 if small_button(ui, MDI_DELETE_OUTLINE, "Remove variant", "Remove variant") {
@@ -385,11 +413,12 @@ fn categories_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<Graph
         let form_id = Id::new("henad_graph_add_variant").with(&category.id);
         let mut name = ui.data(|data| data.get_temp::<String>(form_id)).unwrap_or_default();
         ui.horizontal(|ui| {
-            ui.add(
+            let field = ui.add(
                 TextEdit::singleline(&mut name)
                     .hint_text("new variant")
                     .desired_width(FIELD_WIDTH),
             );
+            set_name(ui, field.id, &format!("New variant of {}", category.id));
             if add_button(ui, !name.is_empty(), Button::new(MDI_PLUS).small(), "Add variant")
                 .on_hover_text("Add variant at end of category")
                 .clicked()
@@ -398,7 +427,7 @@ fn categories_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<Graph
                     requests,
                     EditCommand::AddVariant {
                         category: category.id.clone(),
-                        variant: Variant::new(&name, NEW_VARIANT_COLOR),
+                        variant: Variant::new(&name, next_variant_color(category)),
                     },
                 );
                 name.clear();
@@ -406,6 +435,44 @@ fn categories_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<Graph
         });
         ui.data_mut(|data| data.insert_temp(form_id, name));
     }
+    add_category_ui(ui, requests);
+}
+
+/// Draws the form that adds a category with its id and first variant. The checker refuses a category with no variant.
+fn add_category_ui(ui: &mut Ui, requests: &mut Vec<GraphRequest>) {
+    let form_id = Id::new("henad_graph_add_category");
+    let (mut id, mut first) = ui
+        .data(|data| data.get_temp::<(String, String)>(form_id))
+        .unwrap_or_default();
+    let field = ui.add(
+        TextEdit::singleline(&mut id)
+            .hint_text("new category id")
+            .desired_width(FIELD_WIDTH),
+    );
+    set_name(ui, field.id, "New category id");
+    let field = ui.add(
+        TextEdit::singleline(&mut first)
+            .hint_text("first variant")
+            .desired_width(FIELD_WIDTH),
+    );
+    set_name(ui, field.id, "First variant");
+    let add = add_button(
+        ui,
+        !id.is_empty() && !first.is_empty(),
+        Button::new(format!("{MDI_PLUS} Add category")),
+        "Add category",
+    )
+    .on_hover_text("Add category with its first variant")
+    .on_disabled_hover_text("Enter an id and a first variant for the category.");
+    if add.clicked() {
+        push(
+            requests,
+            EditCommand::AddCategory(Category::new(&id, vec![Variant::new(&first, STATE_COLORS[0])])),
+        );
+        id.clear();
+        first.clear();
+    }
+    ui.data_mut(|data| data.insert_temp(form_id, (id, first)));
 }
 
 /// Draws each statistic with the output it reads.

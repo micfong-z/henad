@@ -186,6 +186,7 @@ nav = [
             { "#99, 2026-11-07" = "developing/agent-record/20261107-99-card-structure.md" },
             { "#100, 2026-11-08" = "developing/agent-record/20261108-100-rates-in-the-card.md" },
             { "#101, 2026-11-08" = "developing/agent-record/20261108-101-expert-mode.md" },
+            { "#102, 2026-11-08" = "developing/agent-record/20261108-102-show-changes-and-compare-runs.md" },
         ] },
     ] },
 ]
