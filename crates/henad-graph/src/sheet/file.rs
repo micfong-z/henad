@@ -13,7 +13,9 @@ use super::document::{CardRuns, LineKind, MadeOf, SheetChip, SheetDocument, Shee
 use super::lower::{self, Problem};
 use super::relations::CardRelations;
 use super::sentence::{self, Sentences};
-use super::{LineMap, NodeOrigin, NodeOwner, ParsedSheet, SHEET_CODE_FORMAT, SheetErrors, SheetFileError, SheetPlaces};
+use super::{
+    FireLines, LineMap, NodeOrigin, NodeOwner, ParsedSheet, SHEET_CODE_FORMAT, SheetErrors, SheetFileError, SheetPlaces,
+};
 use crate::GraphFile;
 use crate::document::GraphDocument;
 use crate::ids::NodeId;
@@ -50,6 +52,8 @@ pub struct SheetFile {
     line_map: LineMap,
     /// Name in the author's words of each look at agents, by the id of its fold in [`Self::lowered`].
     fault_names: FaultNames,
+    /// Probes of the change lines of [`Self::lowered`], each with its line.
+    fire_lines: FireLines,
 }
 
 /// Prints the sheet's id, the number of warnings and the lowered graph's nodes.
@@ -120,6 +124,7 @@ impl SheetFile {
             canonical,
             line_map: lowered.map,
             fault_names: lowered.fault_names,
+            fire_lines: lowered.fires,
         })
     }
 
@@ -194,6 +199,15 @@ impl SheetFile {
     /// [`AgentProgram::compile_with_fault_names`]: crate::wgsl::AgentProgram::compile_with_fault_names
     pub fn fault_names(&self) -> &FaultNames {
         &self.fault_names
+    }
+
+    /// Probes of the change lines of [`Self::lowered`], each with the line it counts for.
+    ///
+    /// A GPU program compiled with these probes counts, on its counted step, the elements each change line applied to,
+    /// and [`FireLines::counts_by_line`] turns the counts into a count per line. The probes leave the lowered graph's
+    /// text and code identity alone.
+    pub fn fire_lines(&self) -> &FireLines {
+        &self.fire_lines
     }
 
     /// Returns the reasons a device of `limits` cannot run `entry`, the entry this sheet builds, at `params`, with the

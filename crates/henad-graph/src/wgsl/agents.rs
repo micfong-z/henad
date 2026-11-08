@@ -304,6 +304,23 @@ impl AgentProgram {
         Self::compile_named(file, &Probes::default(), Some(names))
     }
 
+    /// Checks `file` and compiles every pass the GPU runs, each step counting the fires of its probes in `probes`, and
+    /// the fault of each radius fold `names` holds naming its words, as [`Self::compile_with_probes`] and
+    /// [`Self::compile_with_fault_names`] do.
+    ///
+    /// A sheet passes the probes of its change lines and the names of its looks at agents.
+    ///
+    /// # Errors
+    ///
+    /// Returns the problems of [`Self::compile_with_probes`].
+    pub fn compile_with_probes_and_fault_names(
+        file: &GraphFile,
+        probes: &Probes,
+        names: &FaultNames,
+    ) -> Result<Self, Vec<CodeDiagnostic>> {
+        Self::compile_named(file, probes, Some(names))
+    }
+
     /// Checks `file` and compiles every pass the GPU runs with `probes`, naming each fault `names` holds in its words.
     #[expect(clippy::too_many_lines, reason = "every declaration of the entry is read here once")]
     fn compile_named(

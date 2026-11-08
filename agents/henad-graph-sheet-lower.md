@@ -391,3 +391,29 @@ deposit, one counter, the tick pass's node count, `ANTS_TICK_NODES`, 110),
 `a_button_that_starts_ants_and_ground_again_reruns_two_passes` and
 `a_move_to_a_blocked_cell_leaves_the_agent_where_it_is` (20 host ticks, and
 `NOT_YET_BLOCKED_MOVE_BY`).
+
+**Fire lines** (S31, row X1, D48). `Builder::record_fire(node, port, line)` records a `bool` output
+that holds where a change line applies, and `Builder::fire_lines` keeps, at `finish`, those of a
+node in a tick pass outside every region and not a `math.expr` or `fn.call`, renumbered, as
+`Lowered::fires`. `transition` records `fired.<rule>` of each row of a property's `cat.transition`,
+one row per state for a Become from any state. `CardLowering::fires_when(id, condition)` records a
+condition that is a link (a constant `always` has no node): a Set's after `any_time`, unless
+`overridden_set` finds a line of `CardRelations::otherwise_of` that the report does not skip (the
+"otherwise" Set, which applies where its higher Sets do not and no output holds), and
+`change_condition` of a Steer, Keep between, Move by, Leave and Record. A Move to records nothing,
+since its open test decides. `fires_when` records nothing for a line with a `repeat_of`, wherever
+its condition was lowered, and the region filter of `Builder::fire_lines` stays behind it.
+`FireLines` (`table.rs`, re-exported from `sheet`) holds the `Probes` and the line id of each,
+`counts_by_line` summing a line's rows into a `BTreeMap` and returning an empty one for counts of
+another length. `SheetFile::fire_lines` returns it. The probes leave the lowered document and the
+code alone. Tests in `src/tests/sheet_fires.rs`:
+`every_sheet_compiles_with_the_probes_of_its_change_lines`, `the_starters_count_their_change_lines`
+(Game of Life `l2`, `l3`; the vote's rows; the ants' otherwise Set left out),
+`the_life_sheet_blinker_fires_lines_2_and_3_twice_each_tick` (host),
+`the_sird_competing_lines_count_separately` (each count equal to the cells that changed by its line,
+30 host ticks), `probes_leave_the_sheet_code_and_the_lowered_text_alone`,
+`counts_by_line_adds_the_rows_of_a_line_and_drops_counts_of_another_length`,
+`a_change_inside_a_repeat_has_no_count` (a Move by with a blank condition in a Repeat inside a When)
+and `a_fire_count_reads_as_its_number_and_its_description`. henad-models' `sheet_grid.rs` holds the
+device: `the_life_sheet_blinker_fires_lines_2_and_3_twice_each_tick_on_the_device` and
+`the_forest_fire_counts_equal_the_host_every_tick_for_50_ticks` (the model file's entry).

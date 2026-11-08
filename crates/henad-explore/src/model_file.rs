@@ -42,7 +42,7 @@ use henad_graph::host::HostEvaluator;
 use henad_graph::model_text::{LineEnds, ModelHeader, ParamTable, toml_string as string, write_param};
 use henad_graph::sheet::sentence::SHEET_EMPTY;
 use henad_graph::sheet::{KIND_SHEET, SheetFile, SheetFileError};
-use henad_graph::wgsl::{AgentProgram, FaultNames, GridProgram};
+use henad_graph::wgsl::{AgentProgram, FaultNames, GridProgram, Probes};
 use henad_graph::{GraphFile, GraphFileError, KIND_GRAPH};
 
 /// Value of a model file's `format` key.
@@ -327,7 +327,11 @@ impl ModelFile {
                     error.severity = DiagnosticSeverity::Error;
                     return Err(ModelFileError::Sheet(vec![error]));
                 }
-                graph_entry(file.lowered(), Some(file.fault_names()), |diagnostic| {
+                let additions = SheetAdditions {
+                    faults: file.fault_names(),
+                    probes: sheet_probes(file),
+                };
+                graph_entry(file.lowered(), Some(additions), |diagnostic| {
                     file.place_graph_diagnostic(diagnostic)
                 })
                 .map_err(ModelFileError::Sheet)
@@ -336,8 +340,27 @@ impl ModelFile {
     }
 }
 
-/// Builds the entry of `graph`, passing each error through `place`. A graph of agents names each fault of a radius
-/// fold `names` holds in its words.
+/// Returns the probes every entry built from the sheet `file` counts the fires of: the probes of its change lines,
+/// [`SheetFile::fire_lines`].
+///
+/// The Editor's preview of a sheet compiles with the same probes, so a count of either run maps to its line through
+/// [`FireLines::counts_by_line`](henad_graph::sheet::FireLines::counts_by_line). Empty probes would turn counting off
+/// for every sheet.
+pub fn sheet_probes(file: &SheetFile) -> &Probes {
+    file.fire_lines().probes()
+}
+
+/// Parts of a sheet added to the compilation of the graph it lowers to.
+#[derive(Debug, Clone, Copy)]
+struct SheetAdditions<'a> {
+    /// Name in the author's words of each radius fold whose fault a run reports.
+    faults: &'a FaultNames,
+    /// Probes of the sheet's change lines.
+    probes: &'a Probes,
+}
+
+/// Builds the entry of `graph`, passing each error through `place`. A graph lowered from a sheet counts the fires of
+/// the probes of `additions`, and a graph of agents names each fault of a radius fold `additions` holds in its words.
 ///
 /// # Errors
 ///
@@ -345,7 +368,7 @@ impl ModelFile {
 /// then the errors of [`GridProgram::compile`] or [`AgentProgram::compile`].
 fn graph_entry(
     graph: &GraphFile,
-    names: Option<&FaultNames>,
+    additions: Option<SheetAdditions<'_>>,
     place: impl Fn(CodeDiagnostic) -> CodeDiagnostic,
 ) -> Result<ModelEntry, Vec<CodeDiagnostic>> {
     let placed = |diagnostics: Vec<CodeDiagnostic>| diagnostics.into_iter().map(&place).collect::<Vec<_>>();
@@ -355,15 +378,19 @@ fn graph_entry(
     }
     HostEvaluator::new(graph).map_err(|error| placed(error.diagnostics()))?;
     if matches!(graph.document().world, World::Agents(_)) {
-        let program = match names {
-            Some(names) => AgentProgram::compile_with_fault_names(graph, names),
+        let program = match additions {
+            Some(additions) => {
+                AgentProgram::compile_with_probes_and_fault_names(graph, additions.probes, additions.faults)
+            }
             None => AgentProgram::compile(graph),
         };
         return program.map(|program| program.entry()).map_err(placed);
     }
-    GridProgram::compile(graph)
-        .map(|program| program.entry())
-        .map_err(placed)
+    let program = match additions {
+        Some(additions) => GridProgram::compile_with_probes(graph, additions.probes),
+        None => GridProgram::compile(graph),
+    };
+    program.map(|program| program.entry()).map_err(placed)
 }
 
 /// Returns a TOML error placed in `text`, whose line ends `line_ends` maps.

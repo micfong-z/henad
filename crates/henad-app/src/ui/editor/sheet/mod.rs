@@ -24,10 +24,15 @@ pub mod picker;
 pub mod sheet_pane;
 pub mod widgets;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 
 use egui::{Button, CentralPanel, Frame, Key, KeyboardShortcut, Margin, Modifiers, Panel, ScrollArea, TextEdit};
+use henad_compute::entry::ModelEntry;
+use henad_compute::snapshot::Snapshot;
 use henad_core::diagnostic::CodeDiagnostic;
+use henad_core::provenance::ModelCode;
+use henad_explore::model_file::sheet_probes;
 use henad_graph::sheet::ConvertRefusal;
 use henad_graph::sheet::check::{SheetReport, check};
 use henad_graph::sheet::document::{MadeOf, SheetDocument, StartsAs};
@@ -69,6 +74,13 @@ pub struct SheetEditor {
     load: u64,
     /// Program the preview runs, compiled on first use.
     program: Option<CompiledProgram>,
+    /// Code identity of [`Self::file`], `None` while a problem stops the sheet lowering.
+    code: Option<ModelCode>,
+    /// Ids of the lines with a fire count in the last lowering of the sheet.
+    ///
+    /// Note that an edit that stops the sheet lowering keeps the ids of the lowering before it, and the cards keep their
+    /// column of counts until the sheet lowers again.
+    counted: BTreeSet<String>,
     /// Start of each property when the preview was last built, `None` before the first build.
     built_starts: Option<Vec<(String, Option<StartsAs>)>>,
     /// Notice of the last edit, such as [`RESTART_NOTICE`], `None` while none shows.
@@ -110,6 +122,8 @@ impl SheetEditor {
             file: Err(Vec::new()),
             load,
             program: None,
+            code: None,
+            counted: BTreeSet::new(),
             built_starts: None,
             notice: None,
             pane: sheet_pane::PaneState::new(load),
@@ -122,8 +136,8 @@ impl SheetEditor {
         editor
     }
 
-    /// Writes the canonical text of the document again, with its report and its lowering, and drops the compiled
-    /// program.
+    /// Writes the canonical text of the document again, with its report, its lowering and its code identity, and drops
+    /// the compiled program.
     fn refresh(&mut self) {
         let document = self.builder.document();
         let (text, report, file) = match document.to_text() {
@@ -150,6 +164,10 @@ impl SheetEditor {
         };
         self.text = text;
         self.report = report;
+        self.code = file.as_ref().ok().map(SheetFile::code);
+        if let Ok(file) = &file {
+            self.counted = file.fire_lines().lines().iter().cloned().collect();
+        }
         self.file = file;
         self.program = None;
     }
@@ -310,7 +328,8 @@ impl SheetEditor {
         [self.load, 0, 0]
     }
 
-    /// Returns the program the preview runs: the graph the sheet lowers to, compiled on first use.
+    /// Returns the program the preview runs: the graph the sheet lowers to, compiled on first use with the probes of
+    /// its change lines, as Apply builds it.
     ///
     /// # Errors
     ///
@@ -320,7 +339,7 @@ impl SheetEditor {
         let file = &self.file;
         self.program
             .get_or_insert_with(|| match file {
-                Ok(file) => GraphProgram::compile(file.lowered()).map_err(|problems| {
+                Ok(file) => GraphProgram::compile_with_probes(file.lowered(), sheet_probes(file)).map_err(|problems| {
                     problems
                         .into_iter()
                         .map(|problem| file.place_graph_diagnostic(problem))
@@ -377,6 +396,37 @@ impl SheetEditor {
     }
 }
 
+/// Fire counts of the run of the sheet: the number of cells or agents each change line applied to in one tick.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LineFires {
+    /// Tick the counted step reached.
+    pub tick: u64,
+    /// Number of cells or agents each counted line applied to in that tick, by line id.
+    pub counts: BTreeMap<String, u64>,
+}
+
+/// Returns the fire counts of `sheet` in `snapshot`, the latest snapshot of the run of `loaded`.
+///
+/// The counts are `None` before the run's first counted step, for counts of another number of probes than the sheet's,
+/// and while the run is not the sheet as it now lowers (its code differs, as after an edit before the preview builds
+/// again). The code identity compared is the one [`SheetEditor`] keeps from its last edit.
+pub fn line_fires(sheet: &SheetEditor, loaded: Option<&ModelEntry>, snapshot: Option<&Snapshot>) -> Option<LineFires> {
+    let fires = &snapshot?.fire_counts;
+    let file = sheet.file()?;
+    let lines = file.fire_lines();
+    if fires.tick == 0 || fires.is_empty() || fires.counts.len() != lines.probes().len() {
+        return None;
+    }
+    if loaded?.source().code() != Some(sheet.code.as_ref()?) {
+        return None;
+    }
+    let counts = lines.counts_by_line(&fires.counts);
+    (!counts.is_empty()).then_some(LineFires {
+        tick: fires.tick,
+        counts,
+    })
+}
+
 /// What the sheet editor shows besides the sheet, for one frame.
 #[derive(Debug)]
 pub struct SheetShown<'a> {
@@ -391,6 +441,8 @@ pub struct SheetShown<'a> {
     pub copy: Option<&'a str>,
     /// Reason the sheet does not convert, `None` for a sheet that converts.
     pub refusal: Option<ConvertRefusal>,
+    /// Fire counts of the run of the sheet on its latest snapshot, `None` while the run counts none.
+    pub fires: Option<&'a LineFires>,
 }
 
 /// Request of the sheet editor that the Editor runs once the tab has drawn.
@@ -474,7 +526,7 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'
                             request = Some(SheetRequest::Convert);
                         }
                     } else {
-                        card_pane::card_pane(ui, sheet, past_start, trials);
+                        card_pane::card_pane(ui, sheet, past_start, trials, shown.fires);
                     }
                 });
             pane_group(ui, CARD_PANE);

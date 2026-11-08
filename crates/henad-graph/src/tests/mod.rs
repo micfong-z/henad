@@ -25,6 +25,7 @@ mod sheet_check;
 mod sheet_convert;
 pub(crate) mod sheet_document;
 mod sheet_edit;
+mod sheet_fires;
 mod sheet_ground;
 mod sheet_lower;
 mod sheet_mutation;

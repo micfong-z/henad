@@ -471,6 +471,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let rebuild_pending = app.pending_rebuild.is_some();
     let past_start = app.sheet_preview_past_start();
     let trials = sheet_trials(app);
+    let fires = sheet_fires(app);
     let panel = &mut app.editor;
     panel.settle_outcome(loaded.as_ref(), rebuild_pending);
     let empty = panel.model.is_empty();
@@ -530,6 +531,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 keys,
                 copy: copy.as_deref(),
                 refusal,
+                fires: fires.as_ref(),
             };
             if let Some(sheet_request) = sheet::sheet_ui(ui, sheet, &shown) {
                 request = Some(match sheet_request {
@@ -614,6 +616,13 @@ fn header_ui(
     {
         compare::comparison_ui(ui, comparison, request);
     }
+}
+
+/// Returns the fire counts of the Editor's sheet in the latest snapshot of the loaded run, `None` for no sheet or a
+/// run that counts none of its lines.
+fn sheet_fires(app: &AppState) -> Option<sheet::LineFires> {
+    let sheet = app.editor.model.sheet()?;
+    sheet::line_fires(sheet, app.loaded_entry(), app.snapshot.as_ref())
 }
 
 /// Returns each value the preview of the Editor's sheet tries, as the Sheet pane shows it beside its parameter. Empty

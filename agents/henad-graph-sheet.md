@@ -318,9 +318,10 @@ placed at their tables through `check::span_of`) and reads the lowered document 
 `GraphFile::from_document`. It keeps the `ParsedSheet` (text, places, line ends), the canonical text
 (`to_toml`), the checker's warnings placed (`warnings`, skip warnings included), the lowered
 `GraphFile` (`lowered`), the `LineMap` (`line_map`) and the `FaultNames` of its looks at agents
-(`fault_names`, D47). `code()` is the lowered graph's `code()` (D8): the IR's `name` is `[sheet]
-name`, both descriptions stay empty, and nothing else of the sheet text enters it. The lowered
-`GraphFile` records the canonical text as its author text (`GraphFile::author`, crate-private
+(`fault_names`, D47), and the `FireLines` of its change lines (`fire_lines`, S31). `code()` is
+the lowered graph's `code()` (D8): the IR's `name` is `[sheet] name`, both descriptions stay empty,
+and nothing else of the sheet text enters it. The lowered `GraphFile` records the canonical text as
+its author text (`GraphFile::author`, crate-private
 `with_author`) in `SHEET_CODE_FORMAT` (`henad-sheet/1`), and `GraphFile::source` adds it to the
 `ModelSource` every entry of the graph records (AF9, D10). `GraphFile::from_code` and a graph read
 as a graph carry none (`a_lowered_sheet_records_its_canonical_text_outside_the_code`). `Invalid`

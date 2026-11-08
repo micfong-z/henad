@@ -267,6 +267,18 @@ Press <span class="ui" markdown>:material-check: Apply</span> to install the mod
 A sheet that holds a problem still opens, with the problem under its line, or listed under the panes when no line holds it.
 [Sheets](../reference/model-files.md#sheets) in the model file reference describes the file.
 
+### Fire counts
+
+While the sheet runs, a grey number at the right of each change line counts the cells or agents that line applied to in the last tick.
+Hover over it to read the line, the count and the tick, such as "Line 2 applied to 2 cells in tick 4.".
+The counts stay at their last values while the run is paused, and disappear after a change until the world built from it runs a tick.
+
+A line that works out a result has no count.
+A change other than a Become that always applies has no count either, since it applies to every cell or agent.
+A Become that reads "otherwise" counts only the cells it applied to, and the lines of a competing group count separately.
+A Become from any state also counts the cells already in its state.
+A Set that reads "otherwise", a Move to, and any change inside a Repeat show no count.
+
 ### The Diagram
 
 Press **Diagram** beside the Card heading to draw each card as boxes and arrows in place of its lines.

@@ -162,7 +162,8 @@ henad_deposit)`. The scale and the resolution both come from `FieldCombine::depo
 adding 0, to the host's total on the device.
 
 **Probes** (`wgsl/probes.rs`). `GridProgram::compile_with_probes(file, &Probes)` and
-`AgentProgram::compile_with_probes` take a `Probes` list beside the file, each a `PortRef` to a
+`AgentProgram::compile_with_probes` take a `Probes` list beside the file (and
+`AgentProgram::compile_with_probes_and_fault_names` both, for a sheet), each a `PortRef` to a
 `bool` output of a node in a tick pass, and `compile` passes an empty one. Probes are no part of the
 document, so the canonical text and the code identity ignore them, and a graph with none compiles to
 the shaders of `compile` (`probes_leave_the_code_identity_and_text_alone`). `probes::resolve` finds

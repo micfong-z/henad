@@ -16,6 +16,7 @@ mod sheet_agent_lines;
 mod sheet_agents;
 mod sheet_card;
 mod sheet_editor;
+mod sheet_fires;
 mod sheet_pane;
 mod sheet_rates;
 mod threads;

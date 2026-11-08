@@ -1281,6 +1281,7 @@ impl<'a> CardLowering<'_, 'a> {
             .ok_or_else(|| format!("'{property}' is no property of the ground"))?;
         let amount = self.slot(&site.at("amount"), &line.amount)?;
         let condition = self.change_condition(site, id, line)?;
+        self.fires_when(id, &condition);
         self.leaves.push(LeaveMark {
             line: id,
             field,
@@ -1298,6 +1299,7 @@ impl<'a> CardLowering<'_, 'a> {
             .as_deref()
             .ok_or_else(|| "the line names no event".to_owned())?;
         let condition = self.change_condition(site, id, line)?;
+        self.fires_when(id, &condition);
         let amount = match condition {
             Operand::Constant(Literal::Bool(true)) => InputValue::Literal(Literal::U32(1)),
             condition => {

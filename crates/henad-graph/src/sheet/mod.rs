@@ -79,7 +79,7 @@ mod writer;
 pub use changes::{ChangeGroup, ChangesError, changes_since_conversion};
 pub use convert::{ConvertError, ConvertOptions, ConvertRefusal, convert};
 pub use file::SheetFile;
-pub use lower::table::{LineMap, NodeOrigin, NodeOwner};
+pub use lower::table::{FireLines, LineMap, NodeOrigin, NodeOwner};
 pub use reader::{ParsedSheet, SheetPlaces, TablePlaces};
 pub use starters::starters;
 pub use writer::{SheetWriteError, format_number};

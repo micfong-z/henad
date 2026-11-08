@@ -15,6 +15,8 @@
 //!   where two lines can both apply to one cell, and in line id order where they cannot, so a reorder that cannot
 //!   change the result leaves the document as it was.
 //! - A *skipped* line, one the checker gives a skip warning, is left out with every line that reads it.
+//! - A change line's *fire* is a Boolean output of the tick pass that holds for an element where the line applies.
+//!   [`table::FireLines`] gathers the fires as probes, which a GPU program counts beside the document.
 //!
 //! A sheet of agents lowers the same way over its one kind of agent: the init pass `start_<kind>`, the tick pass of
 //! its card, a view pass for its colours, the measures and the buttons, each pass over the agents. [`agents`] holds
@@ -50,17 +52,17 @@ mod world;
 use std::collections::{HashMap, HashSet};
 
 use self::ids::{Numberer, Owner, SheetKey};
-use self::table::{LineMap, NodeOrigin};
+use self::table::{FireLines, LineMap, NodeOrigin};
 use self::value::Operand;
 use super::check::{Place, SheetReport, Thing};
 use super::document::{Edges, LineKind, LineMode, MadeOf, PropertyType, SheetDocument, SheetProperty};
 use super::sentence;
-use crate::document::{Domain, GraphDocument, Pass};
+use crate::document::{Domain, GraphDocument, Pass, PassStage};
 use crate::ids::NodeId;
 use crate::node::Node;
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, Literal, MemberName, PortRef};
-use crate::wgsl::FaultNames;
+use crate::wgsl::{FaultNames, Probes};
 
 /// A sheet lowered to a graph document, with the table of its nodes.
 #[derive(Debug)]
@@ -71,6 +73,8 @@ pub(super) struct Lowered {
     pub map: LineMap,
     /// Name in the author's words of each look at agents, by the id of its fold.
     pub fault_names: FaultNames,
+    /// Probes of the change lines of the tick pass, each with the line it counts for.
+    pub fires: FireLines,
 }
 
 /// One problem that stops a sheet from lowering, at the table it is about.
@@ -245,6 +249,8 @@ struct Builder<'a> {
     fades: Vec<(String, InputValue, String)>,
     /// Index of the measure of each `[[stat]]` written so far, in the order of the stats.
     stat_measures: Vec<usize>,
+    /// Boolean output that holds where each change line applies, as a temporary id and a port, with the line's id.
+    fires: Vec<(NodeId, Option<String>, String)>,
 }
 
 impl<'a> Builder<'a> {
@@ -272,6 +278,7 @@ impl<'a> Builder<'a> {
             ground_layers: HashMap::new(),
             fades: Vec::new(),
             stat_measures: Vec::new(),
+            fires: Vec::new(),
         }
     }
 
@@ -427,6 +434,45 @@ impl<'a> Builder<'a> {
     /// Records the temporary node `node` as the node whose output is the result of line `line_id`.
     fn record_result(&mut self, node: NodeId, line_id: &str) {
         self.results.push((node, line_id.to_owned()));
+    }
+
+    /// Records the output `port` of the temporary node `node`, or its only output with `None`, as an output that holds
+    /// for each element where line `line_id` applies.
+    fn record_fire(&mut self, node: NodeId, port: Option<String>, line_id: &str) {
+        self.fires.push((node, port, line_id.to_owned()));
+    }
+
+    /// Returns the probes of the recorded fires that a tick pass computes outside every region, each with its line,
+    /// with `renumber` mapping a temporary id to the node's id.
+    ///
+    /// A fire of a button's pass is left out, since only a tick pass counts, and so is a node inside a region and a
+    /// node whose outputs normalisation copies, an expression or a function call.
+    fn fire_lines(&self, renumber: impl Fn(NodeId) -> NodeId) -> FireLines {
+        let counted = |node: NodeId| {
+            self.passes.iter().any(|pass| {
+                pass.pass.stage == PassStage::Tick
+                    && pass.drafts.iter().any(|draft| {
+                        draft.node.id == node
+                            && draft.node.region.is_none()
+                            && !matches!(draft.node.op.as_str(), "math.expr" | "fn.call")
+                    })
+            })
+        };
+        let (outputs, lines) = self
+            .fires
+            .iter()
+            .filter(|(node, _, _)| counted(*node))
+            .map(|(node, port, line)| {
+                (
+                    PortRef {
+                        node: renumber(*node),
+                        port: port.clone(),
+                    },
+                    line.clone(),
+                )
+            })
+            .unzip();
+        FireLines::new(Probes::new(outputs), lines)
     }
 
     /// Records a draw with key `key`, owned by `owner` in words, at `place`.
@@ -591,6 +637,7 @@ impl<'a> Builder<'a> {
             self.graph.functions.push(function);
         }
         let renumber = |id: NodeId| renumbered.get(&id).copied().unwrap_or(id);
+        let fires = self.fire_lines(renumber);
         for draft in self.passes {
             let mut pass = draft.pass;
             for mut entry in draft.drafts {
@@ -620,6 +667,7 @@ impl<'a> Builder<'a> {
             document: self.graph,
             map,
             fault_names,
+            fires,
         })
     }
 

@@ -37,8 +37,8 @@ use std::rc::Rc;
 
 use egui::accesskit::Role;
 use egui::{
-    Button, Color32, CornerRadius, Frame, Id, Key, Label, Margin, Popup, PopupCloseBehavior, Pos2, Rect, Response,
-    RichText, Sense, Shape, Stroke, TextEdit, TextStyle, Ui, WidgetInfo, WidgetType, vec2,
+    Align, Button, Color32, CornerRadius, Frame, Id, Key, Label, Layout, Margin, Popup, PopupCloseBehavior, Pos2, Rect,
+    Response, RichText, Sense, Shape, Stroke, TextEdit, TextStyle, Ui, UiBuilder, WidgetInfo, WidgetType, vec2,
 };
 use henad_core::diagnostic::DiagnosticSeverity;
 use henad_graph::sheet::check::{SheetDiagnostic, SheetReport, holds_draw};
@@ -64,8 +64,8 @@ use henad_graph::sheet::sentence::{
 };
 use henad_graph::sheet::sentence::{
     CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, RANDOM_VALUE_GROUP, add_choose_row_name, add_for_each_label,
-    add_for_each_name, add_summary_name, comparison_words, competing_parts, competing_tooltip, include_me_tool,
-    leave_me_out_tool, long_tick_note, rate_grow_prompt, tick_set_notice,
+    add_for_each_name, add_summary_name, comparison_words, competing_parts, competing_tooltip, fire_count,
+    fire_count_description, include_me_tool, leave_me_out_tool, long_tick_note, rate_grow_prompt, tick_set_notice,
 };
 
 use super::help::{Help, help_button};
@@ -80,7 +80,7 @@ use super::widgets::{
     CHIP_PADDING, DialogOutcome, NewParameterDialog, NumberUse, allocate_control, blank_shapes, blank_ui, chip_with_id,
     message_ui, new_parameter_modal, set_name,
 };
-use super::{SheetEditor, accessible_group};
+use super::{LineFires, SheetEditor, accessible_group};
 use crate::icons::material_design_icons::{MDI_CHEVRON_DOWN, MDI_DOTS_HORIZONTAL, MDI_INFORMATION};
 use crate::ui::mcs;
 use crate::ui::sweep::layout::add_button;
@@ -90,6 +90,9 @@ const INDENT: f32 = 20.0;
 
 /// Width in points of the column of line numbers.
 const NUMBER_WIDTH: f32 = 22.0;
+
+/// Width in points of the column at the right of a card that runs each tick, which holds the fire count of each line.
+const COUNT_WIDTH: f32 = 72.0;
 
 /// Distance in points from the left edge of the rows to the bracket of a competing group, inside the pane's margin.
 const BRACKET_OFFSET: f32 = 5.0;
@@ -271,7 +274,13 @@ impl CardEdit {
 ///
 /// The notes under rate and chance lines read the parameters' defaults, with the values the world tries in their
 /// place while a run of the sheet is loaded.
-pub fn card_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials: &[SheetTrial]) {
+pub fn card_pane(
+    ui: &mut Ui,
+    sheet: &mut SheetEditor,
+    past_start: bool,
+    trials: &[SheetTrial],
+    fires: Option<&LineFires>,
+) {
     let mut pending = None;
     {
         let document = sheet.builder.document();
@@ -285,7 +294,13 @@ pub fn card_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials:
                 *value = trial.value;
             }
         }
-        cards_ui(ui, document, &sheet.report, &values, state, &mut pending);
+        let shown = CardsShown {
+            report: &sheet.report,
+            values: &values,
+            fires,
+            counted: &sheet.counted,
+        };
+        cards_ui(ui, document, &shown, state, &mut pending);
         if let Some(refusal) = &state.refusal {
             message_ui(ui, refusal);
         }
@@ -448,11 +463,12 @@ fn starts_with(target: &PlaceTarget, outer: &PlaceTarget) -> bool {
 fn cards_ui(
     ui: &mut Ui,
     document: &SheetDocument,
-    report: &SheetReport,
-    values: &BTreeMap<String, f64>,
+    shown: &CardsShown<'_>,
     state: &mut CardState,
     pending: &mut Option<CardEdit>,
 ) {
+    let report = shown.report;
+    let values = shown.values;
     let sentences = Sentences::new(document);
     let highlight_id = ui.id().with("henad_card_highlight");
     let highlight: Vec<String> = ui.data(|data| data.get_temp(highlight_id)).unwrap_or_default();
@@ -495,6 +511,8 @@ fn cards_ui(
             card,
             values,
             highlight: &highlight,
+            fires: shown.fires.filter(|_| card.runs == CardRuns::EachTick),
+            counted: card.runs == CardRuns::EachTick && card.line_tables.keys().any(|id| shown.counted.contains(id)),
         };
         card_ui(ui, &drawing, &lines, state, &mut hovered, pending);
     }
@@ -523,6 +541,18 @@ fn explain_otherwise(ctx: &egui::Context, state: &mut CardState, overridden: Vec
     }
 }
 
+/// Values the cards read besides the sheet while they are drawn.
+struct CardsShown<'a> {
+    /// Report of the sheet's check.
+    report: &'a SheetReport,
+    /// Value of each parameter the notes read, by id.
+    values: &'a BTreeMap<String, f64>,
+    /// Fire counts of the run of the sheet, `None` while the run counts none.
+    fires: Option<&'a LineFires>,
+    /// Ids of the lines with a fire count in the last lowering of the sheet.
+    counted: &'a BTreeSet<String>,
+}
+
 /// What every line of one card reads while the card is drawn.
 struct CardDrawing<'a> {
     /// The sheet.
@@ -537,6 +567,12 @@ struct CardDrawing<'a> {
     values: &'a BTreeMap<String, f64>,
     /// Ids of the lines to highlight.
     highlight: &'a [String],
+    /// Fire counts of the run of the sheet on a card that runs each tick, `None` on any other card or while the run
+    /// counts none.
+    fires: Option<&'a LineFires>,
+    /// Whether the card runs each tick and holds a line with a fire count. The card then keeps a column at its right
+    /// for the counts, whether or not the run has counted a tick.
+    counted: bool,
 }
 
 /// Draws the heading of the card of `drawing`, the law under a card that runs every tick, the numbered `lines` and the
@@ -797,6 +833,8 @@ pub fn card_buttons(
         card,
         values: &values,
         highlight: &[],
+        fires: None,
+        counted: false,
     };
     let relations = CardRelations::new(document, card);
     let notes = relations.notes(sentences, |line| !report.is_skipped(line));
@@ -1670,7 +1708,10 @@ fn line_ui(
         closed_empty: false,
         arrow_drawn: false,
     };
+    let column = if drawing.counted { COUNT_WIDTH } else { 0.0 };
+    let right = ui.max_rect().right();
     let row = ui.horizontal_wrapped(|ui| {
+        ui.set_max_width((ui.available_width() - column).max(0.0));
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.add_space(INDENT * line.depth as f32);
         ui.add_sized(
@@ -1721,6 +1762,7 @@ fn line_ui(
     });
     let rect = row.response.rect;
     accessible_group(ui.ctx(), row.inner, Role::Group, &line.label(), rect);
+    fire_count_ui(ui, drawing, line, rect.top(), right);
     if drawing.highlight.contains(&line.id) {
         ui.painter()
             .set(background, Shape::rect_filled(rect, CornerRadius::ZERO, mcs::BLUE_950));
@@ -1745,6 +1787,34 @@ fn line_ui(
         pending,
     );
     rect
+}
+
+/// Draws the fire count of `line` in grey at the right of the card, in the column of [`COUNT_WIDTH`] that ends at
+/// `right`, level with the row's top at `top`, when the card's counts hold one for the line. Its hover text and
+/// accessible description name the line, the number of things the card runs on and the tick.
+fn fire_count_ui(ui: &mut Ui, drawing: &CardDrawing<'_>, line: &CardLine, top: f32, right: f32) {
+    let Some(fires) = drawing.fires else {
+        return;
+    };
+    let Some(&count) = fires.counts.get(&line.id) else {
+        return;
+    };
+    let thing = drawing.sentences.thing_word(&drawing.card.every);
+    let place = Rect::from_min_max(
+        Pos2::new(right - COUNT_WIDTH, top),
+        Pos2::new(right, top + ui.spacing().interact_size.y),
+    );
+    let description = fire_count_description(&line.prefix, count, &thing, fires.tick);
+    // A child placed over the row's top takes no space, so the notes under the row keep their place.
+    let mut column = ui.new_child(
+        UiBuilder::new()
+            .max_rect(place)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    let label = column.add(Label::new(RichText::new(fire_count(count)).weak()).selectable(false));
+    ui.ctx()
+        .accesskit_node_builder(label.id, |node| node.set_description(description.as_str()));
+    label.on_hover_text(description);
 }
 
 /// Draws `notes` under `line`, each note's button running its edit.

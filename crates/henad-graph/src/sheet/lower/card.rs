@@ -524,11 +524,38 @@ impl<'a> CardLowering<'_, 'a> {
                 let own = self.slot(&site.at("condition"), &line.condition)?;
                 let condition = self.inherit(&site, id, own)?;
                 let condition = self.any_time(&site, id, condition)?;
+                if !self.overridden_set(id) {
+                    self.fires_when(id, &condition);
+                }
                 self.add_change(index, id, ChangeKind::Set { value }, condition)?;
             }
             other => return Err(format!("a {} line has no lowering", other.as_str())),
         }
         Ok(())
+    }
+
+    /// Returns whether a Set line above the Set line `id` changes the same property and can apply to an element that
+    /// line `id` applies to. Line `id` then reads "otherwise", and applies only where its condition holds and the
+    /// higher line's does not.
+    fn overridden_set(&self, id: &str) -> bool {
+        self.relations
+            .otherwise_of(id)
+            .iter()
+            .any(|higher| !self.builder.report.is_skipped(higher))
+    }
+
+    /// Records `condition`, the condition under which line `id` changes an element, as the line's fire when it is the
+    /// output of a node. A condition that always holds has no node and gives the line no count.
+    ///
+    /// A line inside a Repeat has no count, wherever its condition is lowered. The Repeat may run the line several
+    /// times in one tick, or not at all.
+    pub(super) fn fires_when(&mut self, id: &str, condition: &Operand) {
+        if self.repeat_of(id).is_some() {
+            return;
+        }
+        if let Operand::Link(port, ValueType::Bool) = condition {
+            self.builder.record_fire(port.node, port.port.clone(), id);
+        }
     }
 
     /// Returns the property `id` of the card's kind of thing with its index.
@@ -980,6 +1007,7 @@ impl<'a> CardLowering<'_, 'a> {
     ) -> Result<Operand, String> {
         let lane_type = self.builder.lane_type(property);
         let mut rules = Vec::new();
+        let mut fired = Vec::new();
         let mut inputs = vec![(
             "state".to_owned(),
             self.builder.input_as(site, current, &lane_type, false)?,
@@ -999,6 +1027,7 @@ impl<'a> CardLowering<'_, 'a> {
                 } else {
                     format!("{}_{state}", change.line)
                 };
+                fired.push((format!("fired.{rule}"), change.line));
                 rules.push(ConfigValue::Table(BTreeMap::from([
                     ("id".to_owned(), text(&rule)),
                     ("from".to_owned(), text(state)),
@@ -1022,6 +1051,9 @@ impl<'a> CardLowering<'_, 'a> {
             vec![("category", text(&property.id)), ("rules", ConfigValue::Array(rules))],
             inputs,
         );
+        for (port, line) in fired {
+            self.builder.record_fire(node, Some(port), line);
+        }
         Ok(Operand::Link(
             PortRef {
                 node,

@@ -110,6 +110,7 @@ impl<'a> CardLowering<'_, 'a> {
             term = self.where_applies(site, &found, &term, &value_type)?;
         }
         let condition = self.change_condition(site, id, line)?;
+        self.fires_when(id, &condition);
         if let Some(repeat) = self.repeat_of(id) {
             return self.put_in_repeat(site, repeat, index, &term, &condition);
         }
@@ -141,6 +142,7 @@ impl<'a> CardLowering<'_, 'a> {
         let low = self.slot(&site.at("minimum"), &line.minimum)?;
         let high = self.slot(&site.at("maximum"), &line.maximum)?;
         let condition = self.change_condition(site, id, line)?;
+        self.fires_when(id, &condition);
         self.add_change(index, id, ChangeKind::Keep { low, high }, condition)
     }
 
@@ -154,6 +156,7 @@ impl<'a> CardLowering<'_, 'a> {
             .ok_or_else(|| "the agents have no Position to move".to_owned())?;
         let arrow = self.slot(&site.at("value"), &line.value)?;
         let condition = self.change_condition(site, id, line)?;
+        self.fires_when(id, &condition);
         if let Some(repeat) = self.repeat_of(id) {
             return self.put_in_repeat(site, repeat, index, &arrow, &condition);
         }

@@ -9,13 +9,18 @@
 //! Game of Life and Vote draw nothing on their cards. From shared tick-0 lanes they equal their hand-lowered files
 //! every tick. The forest fire and the chance SIR draw with other keys than their hand-lowered files, and are held to
 //! bands taken over the same seeds, with a planted rule error behind each band.
+//!
+//! The fire counts of the change lines are held to a planted blinker's known answer and, for the forest fire, to the
+//! host evaluator's counts every tick.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use henad_compute::entry::{EntryDeclarations, ModelEntry, ModelSet};
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_compute::gpu::{GpuContext, GridHooks, GridPassCtx, GridPassId, RerunUploads};
+use henad_compute::snapshot::FireCounts;
 use henad_core::action::action_seed;
 use henad_core::params::ParamValue;
 use henad_core::topology::TopologyHint;
@@ -26,7 +31,7 @@ use henad_graph::GraphFile;
 use henad_graph::document::{PassEnabled, PassStage, World};
 use henad_graph::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
 use henad_graph::sheet::SheetFile;
-use henad_graph::wgsl::GridProgram;
+use henad_graph::wgsl::{GridProgram, Probes};
 
 use super::graph_grid_parity::{build_gpu, press, snapshot, stat, step};
 
@@ -238,10 +243,10 @@ impl GridHooks for PlantedHooks {
     }
 }
 
-/// Returns the entry of `file`, a graph on a grid, whose build uploads the words of `planted` instead of the seeded
-/// lanes they name by id.
-fn planted_entry(file: &GraphFile, planted: &[(String, Vec<u32>)]) -> ModelEntry {
-    let program = GridProgram::compile(file).unwrap_or_else(|problems| panic!("{problems:#?}"));
+/// Returns the entry of `file`, a graph on a grid counting the fires of `probes`, whose build uploads the words of
+/// `planted` instead of the seeded lanes they name by id.
+fn planted_entry(file: &GraphFile, probes: &Probes, planted: &[(String, Vec<u32>)]) -> ModelEntry {
+    let program = GridProgram::compile_with_probes(file, probes).unwrap_or_else(|problems| panic!("{problems:#?}"));
     let plain = program.entry();
     let mut spec = program.spec();
     let buffers = lane_buffers(file);
@@ -325,7 +330,11 @@ fn life_on_the_device(ctx: &GpuContext, cells: &[(u32, u32)], ticks: u32) -> Vec
     let side = 32;
     let file = sheet_file(&sheet_text("game_of_life.toml"));
     let lowered = file.lowered();
-    let entry = planted_entry(lowered, &planted_lanes(lowered, side, "status", 1, cells));
+    let entry = planted_entry(
+        lowered,
+        &Probes::default(),
+        &planted_lanes(lowered, side, "status", 1, cells),
+    );
     let buffers = lane_buffers(lowered);
     let mut state = build_gpu(&entry, &device_params(&entry, side, &[]), Some(1), ctx);
     let mut states = Vec::new();
@@ -367,6 +376,119 @@ fn the_life_sheet_glider_moves_by_one_cell_on_each_axis_every_4_ticks_on_the_dev
     assert_eq!(states[4], moved(&glider, 1), "after 4 ticks");
     assert_eq!(states[8], moved(&glider, 2), "after 8 ticks");
     assert!(states.iter().all(|cells| cells.len() == 5), "a glider keeps 5 cells");
+}
+
+/// Runs every tick pass of `evaluator` once over `lanes` as tick `tick`, as [`host_tick`] does, and returns the count
+/// of each probe of `probes`.
+fn host_counted_tick(
+    evaluator: &HostEvaluator,
+    lanes: &mut HostLanes,
+    params: &[ParamValue],
+    seed: u64,
+    tick: u32,
+    probes: &Probes,
+) -> Vec<u32> {
+    let mut counts = vec![0; probes.len()];
+    let mut stream = 0;
+    let ticks: Vec<String> = evaluator
+        .document()
+        .passes
+        .iter()
+        .filter(|pass| pass.stage == PassStage::Tick)
+        .map(|pass| pass.id.clone())
+        .collect();
+    for pass in &ticks {
+        evaluator
+            .run_pass_counting(
+                pass,
+                lanes,
+                params,
+                &RunContext::tick(Some(seed), tick),
+                &mut stream,
+                probes,
+                &mut counts,
+            )
+            .unwrap_or_else(|error| panic!("{pass}: {error}"));
+    }
+    counts
+}
+
+/// A blinker planted in the tick-0 lanes gives 2 births and 2 deaths each tick on the device: line 2 counts 2 and line
+/// 3 counts 2, read from the counts of the step that reached each tick.
+#[test]
+fn the_life_sheet_blinker_fires_lines_2_and_3_twice_each_tick_on_the_device() {
+    let Some(ctx) = device("the_life_sheet_blinker_fires_lines_2_and_3_twice_each_tick_on_the_device") else {
+        return;
+    };
+    let side = 32;
+    let file = sheet_file(&sheet_text("game_of_life.toml"));
+    let lowered = file.lowered();
+    let fires = file.fire_lines();
+    let blinker = [(15, 14), (15, 15), (15, 16)];
+    let entry = planted_entry(
+        lowered,
+        fires.probes(),
+        &planted_lanes(lowered, side, "status", 1, &blinker),
+    );
+    let mut state = build_gpu(&entry, &device_params(&entry, side, &[]), Some(1), &ctx);
+    snapshot(&ctx, &mut *state);
+    assert!(
+        state.fire_counts().counts.iter().all(|&count| count == 0),
+        "no step has run"
+    );
+    for tick in 1..=6u64 {
+        step(&ctx, &mut *state, 1);
+        snapshot(&ctx, &mut *state);
+        let counts = state.fire_counts();
+        assert_eq!(counts.tick, tick);
+        assert_eq!(
+            fires.counts_by_line(&counts.counts),
+            BTreeMap::from([("l2".to_owned(), 2), ("l3".to_owned(), 2)]),
+            "tick {tick}"
+        );
+    }
+}
+
+/// The forest fire's entry, built as a model file builds it, counts on the device what the host evaluator counts,
+/// line by line, every tick for 50 ticks at 64 by 64 cells, and each of its four change lines applies in some tick.
+#[test]
+fn the_forest_fire_counts_equal_the_host_every_tick_for_50_ticks() {
+    let Some(ctx) = device("the_forest_fire_counts_equal_the_host_every_tick_for_50_ticks") else {
+        return;
+    };
+    let side = 64;
+    let name = "forest_fire.toml";
+    let text = sheet_text(name);
+    let file = sheet_file(&text);
+    let fires = file.fire_lines();
+    let entry = entry_of(&text);
+    let params = device_params(&entry, side, active_params(name));
+    let evaluator = HostEvaluator::new(file.lowered()).unwrap_or_else(|error| panic!("{error}"));
+    let seed = 3;
+    let mut state = build_gpu(&entry, &params, Some(seed), &ctx);
+    let mut lanes = evaluator
+        .init(host_world(side), &params[2..], Some(seed))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut applied: BTreeMap<String, u64> = BTreeMap::new();
+    for tick in 0..50u32 {
+        let host = host_counted_tick(&evaluator, &mut lanes, &params[2..], seed, tick, fires.probes());
+        step(&ctx, &mut *state, 1);
+        snapshot(&ctx, &mut *state);
+        assert_eq!(
+            state.fire_counts(),
+            FireCounts::new(u64::from(tick) + 1, host.clone()),
+            "the counts of tick {}",
+            tick + 1
+        );
+        for (line, count) in fires.counts_by_line(&host) {
+            *applied.entry(line).or_insert(0) += count;
+        }
+    }
+    assert_eq!(
+        applied.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["l2", "l3", "l4", "l5"]
+    );
+    assert!(applied.values().all(|&count| count > 0), "{applied:?}");
 }
 
 /// A press of Randomise on the device, the Game of Life sheet's Start again button, draws a new layout each press, the
@@ -637,8 +759,8 @@ fn the_drawless_sheets_equal_their_hand_lowered_files_every_tick_on_the_device()
         let reference_buffers = lane_buffers(&reference);
         for seed in SEEDS {
             let start = shared_start(&file, seed);
-            let sheet_entry = planted_entry(file.lowered(), &start);
-            let reference_entry = planted_entry(&reference, &start);
+            let sheet_entry = planted_entry(file.lowered(), &Probes::default(), &start);
+            let reference_entry = planted_entry(&reference, &Probes::default(), &start);
             let mut sheet_state = build_gpu(
                 &sheet_entry,
                 &device_params(&sheet_entry, EQUAL_SIDE, &[]),

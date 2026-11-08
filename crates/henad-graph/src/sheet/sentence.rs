@@ -1959,6 +1959,21 @@ pub fn start_costs_too_much(things: &str, count: u64) -> String {
     )
 }
 
+/// Returns the fire count `count` of a line as the card shows it beside the line, such as "30,877".
+pub fn fire_count(count: u64) -> String {
+    whole_number_text(count)
+}
+
+/// Returns the description of the fire count `count` of the line named `prefix`, whose card runs on things called
+/// `thing`, counted in tick `tick`, such as "Line 2 applied to 2 cells in tick 4.".
+pub fn fire_count_description(prefix: &str, count: u64, thing: &str, tick: u64) -> String {
+    let things = if count == 1 { thing.to_owned() } else { plural(thing) };
+    format!(
+        "{prefix} applied to {} {things} in tick {tick}.",
+        whole_number_text(count)
+    )
+}
+
 /// Returns `count` with a comma between each group of three digits, such as "1,000,000".
 fn whole_number_text(count: u64) -> String {
     let digits = count.to_string();

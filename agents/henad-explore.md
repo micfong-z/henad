@@ -190,9 +190,13 @@ takes a placer: for a graph it returns `ModelFileError::Graph` with the checker'
 otherwise builds the entry through `GridProgram::entry`, or for a graph of agents
 `AgentProgram::compile`'s errors or `AgentProgram::entry`. For a sheet the same errors of the
 lowered graph come as `ModelFileError::Sheet`, each placed at the sheet's line table with no pass
-and no node (decision D46). `graph_entry` also takes an optional `FaultNames`: a sheet passes its
-`SheetFile::fault_names`, and a graph of agents then compiles through
-`AgentProgram::compile_with_fault_names`, so a capped fold's fault names the sheet's lines (D47). A
+and no node (decision D46). `graph_entry` also takes an optional `SheetAdditions`: a sheet passes
+its `SheetFile::fault_names` and the probes of its change lines, `sheet_probes(file)` (S31, D48,
+the one place that turns counting off for every sheet when it returns empty probes, and the probes
+the app's preview compiles with too). A grid sheet compiles through
+`GridProgram::compile_with_probes`, and a sheet of agents through
+`AgentProgram::compile_with_probes_and_fault_names`, so a capped fold's fault names the sheet's
+lines (D47) and each counted step counts the lines' fires. A
 grid sheet with no property lowers to a graph with no lane and no pass, whose errors are in IR
 words, so `entry` returns the sheet's own `SHEET_EMPTY` warning, raised to an error at `[world]`,
 before `graph_entry` runs

@@ -162,6 +162,29 @@ or the focus lands outside the line and its pickers, both sides are filled, or U
 (`CardState::close`). The mark lives in the pane, so a sheet opened with one side empty shows the
 offer at once.
 
+**Fire counts** (S31, X1, D48). `SheetEditor::program` compiles the preview with henad-explore's
+`sheet_probes(file)` through `GraphProgram::compile_with_probes`, the probes Apply builds with.
+`SheetEditor::refresh` keeps the file's code identity in `SheetEditor::code` and the ids of
+`fire_lines().lines()` in `SheetEditor::counted`, the latter kept over an edit that stops the sheet
+lowering. `editor_ui` computes `sheet::line_fires(sheet, loaded, snapshot)` once a frame
+(`sheet_fires`): a `LineFires` (the counts' tick and `FireLines::counts_by_line`) while the
+snapshot's `fire_counts` hold a tick past 0 and one count per probe of the sheet, and the loaded
+entry's code equals the cached code, else `None`. The checks run in that order, and nothing writes
+the graph's text on a frame. An edit takes the counts away until the preview built from it counts,
+and a paused run keeps the snapshot and its counts. `SheetShown::fires` passes it to `card_pane`,
+and `CardDrawing::fires` holds it on a card that runs each tick. `CardDrawing::counted` holds on a
+card that runs each tick with a line in `SheetEditor::counted`, and there `line_ui` narrows each row
+by `COUNT_WIDTH` (72 points) whether or not counts have arrived, so the rows do not reflow on Play
+or after an edit. `fire_count_ui` puts the line's count (`sentence::fire_count`, "30,877") in grey,
+right-aligned in that column level with the row's top, a label with the hover text and AccessKit
+description `fire_count_description` ("Line 2 applied to 2 cells in tick 4."). A line with no count
+draws nothing there. `src/tests/sheet_fires.rs` holds
+`the_change_lines_show_their_counts_while_playing_and_keep_them_when_paused` (Game of Life and SIR
+from Play, the snapshot's counts per line, line 3 the same size before and after the first count,
+then Pause), `a_sheet_shows_no_counts_of_a_run_of_other_code` and
+`an_edit_hides_the_counts_and_a_blank_keeps_the_column` (an edit in place hides the counts, and a
+blank that skips line 2 leaves line 3 its size).
+
 **The Diagram** (`ui/editor/sheet/diagram.rs`, D59, D95). The toggle `DIAGRAM` beside the Card
 heading (tooltip `DIAGRAM_TOOLTIP`) sets `SheetEditor::diagram` and closes the card's pickers, and
 the pane then draws `diagram_ui` in place of `card_pane`: `DIAGRAM_NOTE` and `EDIT_AS_NODE_GRAPH`

@@ -40,7 +40,7 @@ use henad_graph::limits::MAX_REPEAT_ITERATIONS;
 use henad_graph::node::{NodeBody, OP_FUNCTION_INPUT, OP_FUNCTION_OUTPUT, OP_REGION_REPEAT};
 use henad_graph::types::ValueType;
 use henad_graph::value::{ConfigValue, Literal, PortRef};
-use henad_graph::wgsl::{AgentProgram, GeneratedShader, GridProgram};
+use henad_graph::wgsl::{AgentProgram, GeneratedShader, GridProgram, Probes};
 
 use self::arrange::CanvasKey;
 use self::canvas::{BodyCanvas, CanvasContext, Framing, can_add, show_canvas};
@@ -277,9 +277,18 @@ impl GraphProgram {
     ///
     /// Returns the problems that stop the file compiling.
     pub fn compile(file: &GraphFile) -> CompiledProgram {
+        Self::compile_with_probes(file, &Probes::default())
+    }
+
+    /// Compiles `file` through the compiler of its topology, each step counting the fires of its probes in `probes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the problems that stop the file compiling, a probe that names no `bool` output of a tick pass included.
+    pub fn compile_with_probes(file: &GraphFile, probes: &Probes) -> CompiledProgram {
         match file.document().world {
-            World::Grid(_) => GridProgram::compile(file).map(Self::Grid),
-            World::Agents(_) => AgentProgram::compile(file).map(Self::Agents),
+            World::Grid(_) => GridProgram::compile_with_probes(file, probes).map(Self::Grid),
+            World::Agents(_) => AgentProgram::compile_with_probes(file, probes).map(Self::Agents),
             _ => Err(vec![CodeDiagnostic::error(
                 "The Editor runs graphs on a grid or of agents.",
             )]),
