@@ -1603,6 +1603,18 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
             texts.push(item.pattern(None));
         }
     }
+    for button in AddButton::AGENTS {
+        texts.push(button.label().to_owned());
+        texts.push(button.tooltip_for(true).to_owned());
+        texts.push(button.heading_for(true).to_owned());
+        for item in button.items_for(true) {
+            texts.push(item.label().to_owned());
+            texts.push(item.pattern(None));
+        }
+    }
+    for select in LineSelect::ALL {
+        texts.push(select.name("Line 2"));
+    }
     for blank in Blank::ALL {
         texts.push(blank.name("Line 2"));
     }

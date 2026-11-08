@@ -9,7 +9,7 @@ use egui::{
     Button, Color32, CornerRadius, Id, Key, Modal, Popup, PopupCloseBehavior, Pos2, Rect, Response, RichText, Sense,
     Shape, Stroke, TextEdit, TextStyle, Ui, Vec2, WidgetInfo, WidgetType, vec2,
 };
-use henad_graph::sheet::document::SheetLiteral;
+use henad_graph::sheet::document::{ParameterType, SheetLiteral};
 use henad_graph::sheet::edit::PALETTE_COLORS;
 use henad_graph::sheet::format_number;
 use henad_graph::sheet::sentence::{
@@ -17,8 +17,8 @@ use henad_graph::sheet::sentence::{
     COLOR_NAMES, CREATE_PARAMETER, ChipKind, DEFAULT_LABEL, DEFAULT_NAME, DEFAULT_OUTSIDE_LIMITS, DIALOG_NAME_MISSING,
     DIALOG_UNIT_PLACEHOLDER, LIMITS_NOT_NUMBERS, MAX_LABEL, MIN_LABEL, MIN_NOT_BELOW_MAX, NAME_LABEL, NEW_PARAMETER,
     NEW_PARAMETER_HEADING, NEW_PARAMETER_LEAD, NUMBER_BOX_HINT, NUMBER_PARAMETER_PLACEHOLDER, PARAMETER_NAME_FIELD,
-    RATE_BELOW_ZERO, RATE_PARAMETER_PLACEHOLDER, SentenceChip, TYPE_ONE_NUMBER, UNIT_LABEL, USE_BUTTON,
-    parameter_name_taken, read_typed_number,
+    RATE_BELOW_ZERO, RATE_PARAMETER_PLACEHOLDER, SentenceChip, TIMES_LIMITS_NOT_INTEGERS, TIMES_PARAMETER_PLACEHOLDER,
+    TYPE_ONE_NUMBER, TYPE_TIMES, UNIT_LABEL, USE_BUTTON, parameter_name_taken, read_typed_number,
 };
 use henad_graph::value::Color;
 
@@ -440,6 +440,8 @@ pub enum NumberUse {
     Rate,
     /// Any number.
     Number,
+    /// A number of times, an integer from 0.
+    Times,
 }
 
 impl NumberUse {
@@ -454,6 +456,7 @@ impl NumberUse {
         match self {
             Self::Chance if !(0.0..=1.0).contains(&number) => Err(CHANCE_OUT_OF_RANGE),
             Self::Rate if number < 0.0 => Err(RATE_BELOW_ZERO),
+            Self::Times if number < 0.0 || number.fract() != 0.0 => Err(TYPE_TIMES),
             _ => Ok(literal),
         }
     }
@@ -583,7 +586,7 @@ impl Picker<'_> {
 fn number_box(ui: &mut Ui, number_use: NumberUse) -> Option<SheetLiteral> {
     let hint = match number_use {
         NumberUse::Chance => CHANCE_BOX_HINT,
-        NumberUse::Rate | NumberUse::Number => NUMBER_BOX_HINT,
+        NumberUse::Rate | NumberUse::Number | NumberUse::Times => NUMBER_BOX_HINT,
     };
     ui.weak(hint);
     let id = ui.id().with("henad_number_box");
@@ -724,6 +727,8 @@ pub struct NewParameter {
     pub max: f64,
     /// Unit of the value, `None` for none.
     pub unit: Option<String>,
+    /// Type of the parameter: an integer for a number of times, a number otherwise.
+    pub parameter_type: ParameterType,
 }
 
 /// Outcome of a frame of the New parameter dialog.
@@ -746,7 +751,7 @@ impl NewParameterDialog {
     pub fn new(number_use: NumberUse, typed: Option<f64>, unit: Option<String>) -> Self {
         let (mut default, mut min, mut max) = match number_use {
             NumberUse::Chance | NumberUse::Rate => (0.1, 0.0, 1.0),
-            NumberUse::Number => (1.0, 0.0, 10.0),
+            NumberUse::Number | NumberUse::Times => (1.0, 0.0, 10.0),
         };
         if let Some(value) = typed.filter(|value| value.is_finite()) {
             default = value;
@@ -812,6 +817,14 @@ impl NewParameterDialog {
         if self.number_use == NumberUse::Chance && (min < 0.0 || max > 1.0) {
             return Err(CHANCE_LIMITS_OUTSIDE.to_owned());
         }
+        let times = self.number_use == NumberUse::Times;
+        if times
+            && [default, min, max]
+                .iter()
+                .any(|value| *value < 0.0 || value.fract() != 0.0)
+        {
+            return Err(TIMES_LIMITS_NOT_INTEGERS.to_owned());
+        }
         let unit = self.unit.trim();
         Ok(NewParameter {
             name: name.to_owned(),
@@ -819,6 +832,11 @@ impl NewParameterDialog {
             min,
             max,
             unit: (!unit.is_empty()).then(|| unit.to_owned()),
+            parameter_type: if times {
+                ParameterType::WholeNumber
+            } else {
+                ParameterType::Number
+            },
         })
     }
 }
@@ -830,7 +848,11 @@ impl NewParameterDialog {
 pub fn default_max(value: f64, number_use: NumberUse) -> f64 {
     let size = value.abs();
     if size.is_nan() || size == 0.0 {
-        return if number_use == NumberUse::Number { 10.0 } else { 1.0 };
+        return if matches!(number_use, NumberUse::Number | NumberUse::Times) {
+            10.0
+        } else {
+            1.0
+        };
     }
     let target = 10.0 * size;
     let power = 10_f64.powf(target.log10().floor());
@@ -866,6 +888,7 @@ pub fn new_parameter_modal(ctx: &egui::Context, dialog: &mut NewParameterDialog,
             NumberUse::Chance => CHANCE_PARAMETER_PLACEHOLDER,
             NumberUse::Rate => RATE_PARAMETER_PLACEHOLDER,
             NumberUse::Number => NUMBER_PARAMETER_PLACEHOLDER,
+            NumberUse::Times => TIMES_PARAMETER_PLACEHOLDER,
         };
         egui::Grid::new("henad_new_parameter_fields")
             .num_columns(2)

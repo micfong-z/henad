@@ -8,7 +8,7 @@ use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::params::ParamValue;
 use henad_core::provenance::ModelCode;
 
-use super::check::{Place, SheetReport, Thing, span_of};
+use super::check::{Place, SheetDiagnostic, SheetReport, Thing, span_of};
 use super::document::{CardRuns, LineKind, MadeOf, SheetChip, SheetDocument, SheetValue};
 use super::lower::{self, Problem};
 use super::relations::CardRelations;
@@ -121,6 +121,39 @@ impl SheetFile {
             line_map: lowered.map,
             fault_names: lowered.fault_names,
         })
+    }
+
+    /// Returns the problems that stop the sheet `parsed` lowering, each placed at its table and with the card and the
+    /// line it is about when it is about a line, in the order the lowering finds them. `report` is the sheet's check,
+    /// [`ParsedSheet::check`].
+    ///
+    /// The list is empty when the sheet lowers, and when `report` holds an error, since the lowering runs only on a
+    /// sheet that checks. A card editor draws each problem about a line under that line, as "Line 3 steers Velocity. A
+    /// card that steers a property cannot also set it." under a Set of Velocity.
+    pub fn lowering_problems(parsed: &ParsedSheet, report: &SheetReport) -> Vec<SheetDiagnostic> {
+        if report.has_errors() {
+            return Vec::new();
+        }
+        let Err(problems) = lower::lower(parsed.document(), report) else {
+            return Vec::new();
+        };
+        problems
+            .into_iter()
+            .map(|problem| {
+                let (card, line) = match &problem.place {
+                    Place::Line(card, line) => (Some(*card), Some(line.clone())),
+                    Place::Card(card) => (Some(*card), None),
+                    _ => (None, None),
+                };
+                let diagnostic = placed_error(parsed, &problem.place, problem.message);
+                SheetDiagnostic {
+                    diagnostic,
+                    card,
+                    line,
+                    skips_line: false,
+                }
+            })
+            .collect()
     }
 
     /// Document the sheet holds.
@@ -437,14 +470,17 @@ fn warnings(report: &SheetReport) -> Vec<CodeDiagnostic> {
 fn placed(parsed: &ParsedSheet, problems: Vec<Problem>) -> Vec<CodeDiagnostic> {
     problems
         .into_iter()
-        .map(|problem| {
-            let error = CodeDiagnostic::error(problem.message);
-            match span_of(parsed, &problem.place) {
-                Some(span) => parsed.place(error, span),
-                None => error,
-            }
-        })
+        .map(|problem| placed_error(parsed, &problem.place, problem.message))
         .collect()
+}
+
+/// Returns the error `message` of the sheet `parsed`, placed at the table of `place` when the text holds one.
+fn placed_error(parsed: &ParsedSheet, place: &Place, message: String) -> CodeDiagnostic {
+    let error = CodeDiagnostic::error(message);
+    match span_of(parsed, place) {
+        Some(span) => parsed.place(error, span),
+        None => error,
+    }
 }
 
 /// Returns the product of the parameters of `entry` named `ids` at `params`: the number of agents, or of cells.

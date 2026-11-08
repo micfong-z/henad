@@ -28,10 +28,13 @@ to the largest number, and that largest number), `SetMarks` (a Number property o
 marks combine, and the share kept per tick, which no marks rule clears), `SetBlocked` (a state of a
 States property of the ground kept from agents or let in, held once); and the line commands
 `AddLine` (a `Box<SheetLine>` template at the end of a card or a When or Repeat), `SetSlot` and
-`SetField` (a `LineField`) at a slot path, `ChooseCondition` (a `ConditionItem`), `UseOneSide`,
+`SetField` (a `LineField`) at a slot path, `ChooseCondition` (a `ConditionItem`),
+`ChooseRowCondition` (a Choose row's condition, both through `condition_phrase`), `UseOneSide`,
 `UseCountForEach`, `MoveConditionInto`, `RenameResult`, `SetNote`, `MoveLine`, `DeleteLine`,
-`DrawNewNumbers`, `ChangeToRate` and `ChangeToChance`. "Remove this When" is `DeleteLine` on the
-When, and "Add for each" is `SetSlot` of `tries`.
+`DrawNewNumbers`, `ChangeToRate` and `ChangeToChance`, and for a look at agents `AddSummary` (a
+summary of a kind with its value blank, refused on a line that looks at no agents) and
+`DeleteSummary` (refused on the last summary, its users' slots cleared through `Target::Summary`).
+"Remove this When" is `DeleteLine` on the When, and "Add for each" is `SetSlot` of `tries`.
 
 Ids: `mint_id(name, space, is_taken)` lower-cases the name, turns each run of other characters than
 `a-z0-9` into one `_`, puts `x` before a leading digit (and mints `x` for a name with no letter or
@@ -116,6 +119,20 @@ when it had no name or equalled its old automatic name (a " N" suffix included),
 name the edit set follows when it is empty or its new automatic name. Names typed by hand are taken
 first, then the followers in display order take the base, " 2", " 3", unique case aside.
 `RenameResult` refuses a name another result holds.
+Summary names (S28): `automatic_summary_name` names a summary of a look at agents "count", "[kind]
+[property]" for their property ("average velocity", the name's ordinary capital dropped), "centre"
+for the average offset to them, "push" for the total offset away from them (`CENTER_SUMMARY`,
+`PUSH_SUMMARY`), "[kind] [relation words]" otherwise, and its kind alone while its value is empty.
+`update_summary_names(before, after)` runs before `update_names`: a summary follows when it is new
+with an empty or automatic name, or its name before the edit was its automatic name then (" 2"
+included), and a following summary takes its automatic name, unique within the line. Steady
+summaries, held by id before the edit with the same automatic name, take theirs first, and an edited
+summary that reaches another's name takes " 2". A summary whose name changes or that has no id takes
+the id `mint_id` gives its name, unique within the line, and `count_summary` for a reserved id such
+as `count`. `change_references` with `Target::Summary` rewrites every `part` and formula reference
+(`l1.centre`) in two passes, each old id first to a free `henad_summary_N`, so a new id equal to
+another summary's old id renames no reference twice. Every committed look at agents names its
+summaries this way, so a rebuild mints the starters' ids.
 
 Tests sit in `src/tests/sheet_edit.rs`: the author format's three diffs built by commands from the
 sheets (the waning line through `AddParameter`, `SetParameter`, `AddLine` with the diff's key,
@@ -132,6 +149,9 @@ automatic names, the condition offers, the for-each and fold offers, deletes tha
 lines and no error, colours, rate units and marks, Starts as commits, new buttons and cards, and
 `every_edit_leaves_a_document_that_reads_back` (random command sequences on every sheet: the text
 reads back to the same document, the checker never panics, no two lines share a key),
-`the_agents_take_a_count_up_to_their_largest_number` and
-`a_ground_property_takes_its_marks_and_fading_and_comes_and_goes_with_the_ground` (an add-up mark
-writes `marks = "add_up"` and lowers to `combine = "sum"`).
+`the_agents_take_a_count_up_to_their_largest_number`,
+`a_summary_follows_its_automatic_name_and_its_new_id_reaches_every_reference`,
+`a_summary_named_by_hand_keeps_its_name_and_a_removed_summary_blanks_its_users`,
+`the_automatic_summary_names_follow_round_1`, `a_choose_row_takes_its_condition_from_choose_when`
+and `a_ground_property_takes_its_marks_and_fading_and_comes_and_goes_with_the_ground` (an add-up
+mark writes `marks = "add_up"` and lowers to `combine = "sum"`).

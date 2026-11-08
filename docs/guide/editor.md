@@ -37,7 +37,7 @@ Save what you want to keep first.
 
 A sheet opens in two panes beside each other.
 **Sheet** lists what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.
-**Card** lists the lines every cell follows each tick, numbered from 1, each as a sentence such as "Become Alive from Dead, when Alive neighbours is 3".
+**Card** lists the lines every cell, or every agent, follows each tick, numbered from 1, each as a sentence such as "Become Alive from Dead, when Alive neighbours is 3".
 The world itself runs in the <span class="ui" markdown>:material-cube-outline: Viewport</span>, and the Playback, Pacing, Parameters and Charts tabs control it as they control any model.
 Each heading has a help button with a short explanation and an example.
 
@@ -191,6 +191,45 @@ Two offers fold a When that holds no more than its lines need:
 - A When whose test every line inside it already makes, as "When my Status is Dead" around Become lines from Dead, offers **Remove this When**.
 - A When around one change that holds always offers **Move it into line 5**, which moves the When's condition into the change and removes the When.
 
+### Agents
+
+A world of agents runs a card over its kind of agent, such as "Each tick, every bird", and the same add buttons offer the lines agents need.
+**+ Repeat...** comes after them on a card over agents alone.
+
+- **+ Look around** counts the agents within a distance whose property is in a state, looks at them and sums them up, picks the neighbouring cell of the ground with the most or the least of a property or one at random, or looks at the cell an agent is on or the cell ahead of it.
+- **+ Chance** adds a change made by chance, a yes or no drawn by chance, a random number between two values, or a random direction of a length.
+- **+ Calculate** works out a number, chooses the first of several values whose condition holds, or gives one value for each state of a property.
+- **+ Change** adds a Become, a Set, a Steer of a number or an arrow by a value or towards it, a Keep between that holds a number or an arrow's length inside two bounds, a Move by an arrow or to a cell, a Leave that marks the ground, and a Record that counts an event.
+- **+ Repeat...** adds a Repeat line, whose lines run that many times each tick. Its number of times takes an integer parameter, and **New parameter...** there makes one.
+
+A look at agents starts with one summary, an average.
+The select before each summary changes it to a total, the largest, the smallest or a count, or removes it, and **+** after the summaries adds another.
+A summary names itself after what it sums up, such as "average velocity" for the average of their Velocity, "centre" for the average offset to them and "push" for the total offset away from them.
+A summary's picker lists each agent's properties as "their Velocity" and the relations "offset to them", "offset away from them" and "distance to them".
+The line menu's **Include me in line 1** counts the agent itself among those it looks at, and **Leave me out of line 1** undoes it.
+
+A value on a card over agents also takes the summaries of the looks above, as "Flockmates' centre", the cells picked above, and new values: a random number between two values, or a random direction of a length.
+A number also takes the length of an arrow property, as "length of my Velocity".
+Below the last line that changes a property, a value can take "my new Velocity", the value the changes above give it this tick.
+Above that line it is not offered.
+Move to takes a cell picked or looked at above.
+
+Boids, built from a blank model of agents:
+
+```text
+1  Flockmates = look at birds within Visual range: average of their Velocity (average velocity), average of offset to them (centre)
+2  Too close = look at birds within Protected range: total of offset away from them (push)
+3  Steer Velocity by Too close's push, strength Separation
+4  Steer Velocity towards Flockmates' average velocity, strength Alignment
+5  Steer Velocity by Flockmates' centre, strength Cohesion
+6  Keep Velocity's length between Min speed and Max speed
+7  Move by my new Velocity
+```
+
+A card changes a property one way: by Set or by Steer, and an agent's place by Move by or by Move to.
+A second way shows under its line in red, such as "Line 3 steers Velocity. A card that steers a property cannot also set it.", and the model does not build until it is gone.
+A look around, a count or a pick of a cell inside a Repeat shows "A look around, a count or a pick of a cell cannot sit inside a Repeat." under its line.
+
 ### The line menu
 
 Each line has a menu, "Line 2 actions", always drawn at the end of the line:
@@ -199,7 +238,8 @@ Each line has a menu, "Line 2 actions", always drawn at the end of the line:
 - **Move line 2 up** and **Move line 2 down**, which follow the outline. The first line inside a block moves up out of it, the last moves down out of it, a line beside a block moves into it, and a When moves with all its lines.
 - **Draw new numbers**, on a line that draws by chance, which gives the line new random numbers.
 - **Change to a rate** on a line with a typed chance, and **Change to a chance** on a line with a typed rate, on a card that runs each tick. Both keep the chance per tick.
-- **Delete line 2**. Deleting a When keeps its lines and moves them out one level.
+- **Include me in line 2** or **Leave me out of line 2**, on a look at agents.
+- **Delete line 2**. Deleting a When or a Repeat keeps its lines and moves them out one level.
 
 A line moved above the result it uses says "Uses Alive neighbours, which is below this line" and does not run, and moving it back runs it again.
 
@@ -214,6 +254,8 @@ Grey notes explain how lines work together:
 - Become lines that test one count and leave some of its values to no line name those values. Those cells keep their state.
 - A chance with "for each" shows the chance for 1 and 2 of what it counts.
 - A rate shows the chance per tick it gives, as [Rates](#rates) describes.
+
+A note the model's author wrote under a line comes last, in grey, as the ant foraging model's note on its slower trail formation does.
 
 ### Running a sheet
 
@@ -451,8 +493,8 @@ A heavy step on a large grid can still take long enough per tick to lose the GPU
 
 - The Editor writes sheets, grid rules, and node graphs on a grid or of agents.
   CPU models cannot be written as a model file.
-- The card writes the lines of a world of cells.
-  The lines of a world of agents show on the card, and are written in the model file.
+- The card writes the lines of a world of cells and of a world of agents.
+  A formula of more than one operation, a condition on a Steer, Keep between or Move, the "only those whose" filter of a look at agents, a summary's own name and an arrow's start are written in the model file.
 - A step has no initialisation of its own.
   The states' `initial` shares seed the grid at tick 0.
 - A grid rule or a graph model reads its parameters when it is built.

@@ -4,7 +4,7 @@
 (S19), with When blocks, moves and the notes of the relations between lines (S22). The rest of the
 sheet editor, the Sheet pane, the toolbar and the New model dialog are in
 `agents/henad-app-sheet.md`. The card writes the lines of a card over `cells`, rates included
-(S25). An agent card stays read-only until S28, with no add button, no line menu and no picker.
+(S25), and of a card over agents (S28, **Agent lines** below).
 
 **Drawing.** `card_pane(ui, sheet, past_start, trials)` draws every card in file order:
 `Sentences::card_heading`, the line count (`line_count`) and, on a card that runs every tick, the
@@ -123,10 +123,10 @@ chance or a rate phrase. The line menu (`line_menu_ui`, "Line 2 actions", always
 top-level line with no top-level line after it at the bottom), `DRAW_NEW_NUMBERS` on a line
 `check::holds_draw` finds drawing (`DrawNewNumbers`), `CHANGE_TO_RATE` or `CHANGE_TO_CHANCE` where
 `rates::conversion` finds one (`ChangeToRate`, `ChangeToChance`), and `delete_line`, with
-`DELETE_WHEN_TOOLTIP`
-on a When. Rename opens a field named `rename_field_name` under the line: Enter or leaving it keeps
-(`RenameResult`), Escape cancels, and a taken name shows `result_name_taken` with the field focused
-again.
+`DELETE_WHEN_TOOLTIP` on a When, and on a look at agents `include_me_tool` or `leave_me_out_tool`
+(`SetField` `IncludeMe`). Rename shows on every line `picker::is_result_line` finds a result. Rename
+opens a field named `rename_field_name` under the line: Enter or leaving it keeps (`RenameResult`),
+Escape cancels, and a taken name shows `result_name_taken` with the field focused again.
 
 **Rates** (S25). The notes read `CardDrawing::values`: `rates::parameter_defaults` with each
 `SheetTrial` of the Params tab in its place while a run of the sheet is loaded (D62). After the
@@ -220,3 +220,69 @@ chance" on a typed rate, none on New outbreak's typed chance),
 `removing_the_time_unit_marks_the_rate_lines_and_a_rate_unit_sets_it_again` (the tick notice and the
 mismatch warning). A label's AccessKit node holds a `TextRun` child with its text, so the tests
 count nodes other than text runs.
+
+**Agent lines** (S28). Every card is editable. A card is over agents when its `every` is not
+`cells`, and the pane passes that as `agents` to `AddButton::items_for`, `tooltip_for` and
+`heading_for`, which return the agent menus (Look around: `CountAgents`, `LookAroundAgents`,
+`PickCell`, `CellHereOrAhead`; Chance: `BecomeWithChance`, `WithChance`, then under
+`RANDOM_VALUE_GROUP` `RandomNumber`, `RandomDirection`, and no rates; Calculate: `Calculate`,
+`Choose`, `DependingOn`; Change: `Become`, `Set`, `Steer`, `KeepBetween`, `MoveBy`, `MoveTo`,
+`Leave`, `Record`). The buttons are `AddButton::AGENTS`, "+ Repeat..." last, and a block's add row
+takes `AGENTS_INSIDE_ORDER`. A Repeat is a block like a When (`is_block`), with its add row and the
+add-at-end note. `cards_ui` draws a world of agents with no tick card as `card_header` of the kind
+and adds `AddCard { every: kind }` with the first line. `new_line(item, every)` fills what the
+checker asks of a template: a look at agents the card's kind, `include_me` false and one
+`LookSummary::new("", "")` average (named by henad-graph), a Pick a cell `Cells8`, `Most` and open
+cells, a Look at a cell `Here`, Steer and Move a mode, a Choose one empty row. Selects:
+`mode_options` (by and towards for Steer, by and to for Move), `pick_options`, `which_options`, and
+`look_summary_options` per summary (`LOOK_SUMMARIES`, "Remove this summary" running `DeleteSummary`
+while two or more are left, and a count blanks its value). `add_summary_ui` draws "+" named
+`add_summary_name` after a look's summaries, opening `summary_picker` (`CHOOSE_A_SUMMARY`), whose
+choice runs `AddSummary` and opens the new summary's value. `add_row_ui` draws "+" named
+`add_choose_row_name` after a Choose line, a value picker at `row.N.value` that `SetSlot` appends.
+A Choose row's condition takes `ChooseRowCondition` (`row_of_condition` in `slot_choice`). Leave and
+Record take the condition arrow too (`takes_condition`).
+
+Pickers on agents (`LineContext`): `every`, `agents`, `properties` (the card's kind),
+`ground_properties`, `my_heading` (`this_things_properties`, "This bird's properties"), and
+`lines_above` (the lines a line can read, a block's lines only to the lines after them inside it).
+`results_above_of` takes several `ResultKind`s (Number, YesOrNo, Arrow, Place; a Choose or a
+Depending on fits a number, an arrow or a place, and a look at agents none, `result_kinds`).
+`parts_above` offers each summary of a look above ("Flockmates' centre"), a pick's `amount` and each
+ground property of a cell picked or looked at above, named as `Sentences::value` writes the chip.
+`my_properties` adds "my new X" (`my_new_property_item`, detail `my_new_detail` with the number of
+the last change) for each property `check::changes_property` finds changed for the last time above
+the line (`last_change_above`), the same rule as the checker's skip. `lengths` offers
+`length_of_item` as the formula `length(my.<id>)`. `value_picker` puts `new_values` (a random
+number, and for a value a random direction, phrases with blank values) under `OR_A_NEW_VALUE`
+before the parameters, since a long picker scrolls. `fits_property(kind, agents, property)` is the
+property table: Steer a Number or an Arrow, Keep between a number or an Arrow, Set on agents
+anything but States, Position and Heading, any other a States property. `Blank::GroundProperty`
+lists Number properties of the ground (`ground_number_items`), `Blank::Event` the events
+(`event_items`, `Choice::Event`), `Blank::Times` integer parameters alone, with no results and no
+properties since `repeat_count` lowers nothing else (`NumberUse::Times`, an integer from 0,
+`TYPE_TIMES`; its New parameter dialog makes a `WholeNumber` and refuses other values with
+`TIMES_LIMITS_NOT_INTEGERS`). A summary's value opens `looked_at_picker`: `their_property_item` for
+each property but States, then the three relations, under `each_looked_at`. A Move to's value offers
+the places above alone (`NO_PLACE`).
+
+Refusals: `SheetEditor::refresh` adds `SheetFile::lowering_problems` to the report when the sheet
+checks and does not lower, so a lowering refusal about a line (a Set and a Steer of one property,
+Move by and Move to, a change a Repeat cannot hold) draws in red under its line, and the list under
+the panes keeps those about no line. A Count, Look around or Pick a cell inside a Repeat is a check
+error in the author's words (`LOOK_IN_REPEAT`) and draws there too. A Repeat's add-inside menu still
+offers them, as it offers the changes a Repeat cannot hold. `add_summary_ui` opens the new summary's
+value, except for a count, which has none. The author's own `note` under a line draws last, in grey
+(`author_note`).
+
+`src/tests/sheet_agent_lines.rs` holds
+`a_blank_agent_model_builds_the_random_walk_with_its_lines_and_equals_the_starter` and
+`a_blank_agent_model_builds_boids_with_its_lines_and_equals_the_starter` (by accessible names,
+`align_with_starter`, equal text and lowered code, label-in-name and the words rule; boids against
+`boids_as_the_editor_builds_it`, the starter with Velocity starting as a new Arrow does and no
+measures), `my_new_velocity_is_offered_below_the_last_change_to_velocity_and_nowhere_above`,
+`a_property_changed_two_ways_and_a_look_inside_a_repeat_show_their_refusals_on_the_line`,
+`opening_boids_leaves_a_default_off_its_slider_steps_as_it_is`,
+`each_agent_slot_offers_what_fits_it` (the picker table, a test per slot kind),
+`the_agent_menus_and_pickers_show_no_forbidden_word_and_name_each_control_by_its_words` and
+`the_ants_note_on_slower_trail_formation_stays_under_its_line_after_an_edit`.

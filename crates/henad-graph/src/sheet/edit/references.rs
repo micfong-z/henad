@@ -35,6 +35,13 @@ pub(super) enum Target {
     Card(String),
     /// A kind of agent, by id.
     Thing(String),
+    /// A summary of a Look around line, by the line's id and the summary's id.
+    Summary {
+        /// Id of the line.
+        line: String,
+        /// Id of the summary.
+        summary: String,
+    },
 }
 
 /// A change to every reference of a target.
@@ -227,9 +234,19 @@ impl<'a> Walker<'a> {
                 SheetChip::Param(id) if self.is_parameter(id) => self.hit(id),
                 SheetChip::My(id) | SheetChip::MyNew(id) | SheetChip::Their(id) if self.is_property(id) => self.hit(id),
                 SheetChip::State(id) if self.is_state(about, id) => self.hit(id),
-                SheetChip::Result { line, property, .. } => {
+                SheetChip::Result { line, part, property } => {
                     if self.is_line(line) {
                         return self.hit(line);
+                    }
+                    if let Target::Summary {
+                        line: target_line,
+                        summary,
+                    } = self.target
+                        && target_line == line
+                        && let Some(part) = part
+                        && part == summary
+                    {
+                        return self.hit(part);
                     }
                     match property {
                         Some(id) if self.is_property(id) => self.hit(id),
@@ -279,6 +296,7 @@ impl<'a> Walker<'a> {
                     (is_line_head || matches!(head, "my" | "my_new")) && tail == Some(id.as_str()) && !is_part
                 }
                 Target::Line(id) => head == id,
+                Target::Summary { line, summary } => head == line && tail == Some(summary.as_str()),
                 _ => false,
             };
             if !hit {
@@ -286,7 +304,7 @@ impl<'a> Walker<'a> {
             }
             named = true;
             match (self.change, self.target) {
-                (Change::Rename(new), Target::Property(_)) => Some(format!("{head}.{new}")),
+                (Change::Rename(new), Target::Property(_) | Target::Summary { .. }) => Some(format!("{head}.{new}")),
                 (Change::Rename(new), _) => Some(new.to_owned()),
                 (Change::Clear, _) => None,
             }

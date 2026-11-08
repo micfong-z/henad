@@ -355,7 +355,7 @@ fn every_line_inside_a_skipped_repeat_is_skipped_at_any_depth() {
     assert!(!report.has_errors(), "{:?}", report.diagnostics);
     assert_eq!(
         report.skip_note("l1"),
-        Some(sentence::not_run_choose(Blank::Number.want()).as_str())
+        Some(sentence::not_run_choose(Blank::Times.want()).as_str())
     );
     let unfinished = sentence::not_run_when_unfinished(1);
     for id in ["l3", "l4", "l2"] {

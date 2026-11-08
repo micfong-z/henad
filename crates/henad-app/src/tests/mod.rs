@@ -12,6 +12,7 @@ mod graph_regions;
 mod install;
 mod preview_params;
 mod runaway;
+mod sheet_agent_lines;
 mod sheet_agents;
 mod sheet_card;
 mod sheet_editor;

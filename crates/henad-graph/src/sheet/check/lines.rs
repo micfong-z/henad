@@ -328,14 +328,7 @@ fn check_line<'a>(
         );
     }
     if at.in_repeat && matches!(line.kind, LineKind::Count | LineKind::LookAround | LineKind::PickCell) {
-        checker.error(
-            format!(
-                "line {}: a {} line cannot sit inside a Repeat",
-                at.id,
-                line.kind.as_str()
-            ),
-            &place,
-        );
+        checker.error(sentence::LOOK_IN_REPEAT.to_owned(), &place);
     }
     if at.runs_once && matches!(line.kind, LineKind::Count | LineKind::LookAround | LineKind::PickCell) {
         checker.error(
@@ -513,7 +506,7 @@ impl<'a> Checker<'a> {
                     None => self.error("Pick a cell needs a pick rule: most, least or random", place),
                     Some(PickRule::Random) => {}
                     Some(_) => match line.ranked_by.as_deref() {
-                        None => state_skip(self, context, state, Want::Blank(Blank::Property)),
+                        None => state_skip(self, context, state, Want::Blank(Blank::GroundProperty)),
                         Some(property) if self.property_of(property, ground).is_none() => {
                             self.error(format!("'{property}' is no property of '{ground}'"), place);
                         }
@@ -574,8 +567,8 @@ impl<'a> Checker<'a> {
                 }
             }
             LineKind::RandomNumber => {
-                self.slot(&line.low, &inner, Want::Blank(Blank::Number), number, None, state);
-                self.slot(&line.high, &inner, Want::Blank(Blank::Number), number, None, state);
+                self.slot(&line.low, &inner, Want::Blank(Blank::LowerNumber), number, None, state);
+                self.slot(&line.high, &inner, Want::Blank(Blank::UpperNumber), number, None, state);
             }
             LineKind::RandomDirection => {
                 self.slot(&line.length, &inner, Want::Blank(Blank::Number), number, None, state);
@@ -677,7 +670,13 @@ impl<'a> Checker<'a> {
                 self.condition(line, context, state, true);
             }
             LineKind::Set => {
-                let property = self.changed_property(line, context, state, Want::Blank(Blank::NumberProperty));
+                // A Set over cells changes a number, and a Set over agents any property but its place.
+                let (want, value_want) = if matches!(context.thing, "cells" | "ground") {
+                    (Blank::NumberProperty, Blank::Number)
+                } else {
+                    (Blank::Property, Blank::Value)
+                };
+                let property = self.changed_property(line, context, state, Want::Blank(want));
                 if let Some(property) = property
                     && matches!(
                         property.property_type,
@@ -693,7 +692,7 @@ impl<'a> Checker<'a> {
                     );
                 }
                 let governing = property.map(|property| property.id.as_str());
-                self.slot(&line.value, &inner, Want::Blank(Blank::Number), None, governing, state);
+                self.slot(&line.value, &inner, Want::Blank(value_want), None, governing, state);
                 self.condition(line, context, state, true);
             }
             LineKind::Steer => {
@@ -715,8 +714,22 @@ impl<'a> Checker<'a> {
             }
             LineKind::KeepBetween => {
                 self.changed_property(line, context, state, Want::Blank(Blank::Property));
-                self.slot(&line.minimum, &inner, Want::Blank(Blank::Number), number, None, state);
-                self.slot(&line.maximum, &inner, Want::Blank(Blank::Number), number, None, state);
+                self.slot(
+                    &line.minimum,
+                    &inner,
+                    Want::Blank(Blank::LowerNumber),
+                    number,
+                    None,
+                    state,
+                );
+                self.slot(
+                    &line.maximum,
+                    &inner,
+                    Want::Blank(Blank::UpperNumber),
+                    number,
+                    None,
+                    state,
+                );
                 self.condition(line, context, state, false);
             }
             LineKind::Move => {
@@ -737,7 +750,7 @@ impl<'a> Checker<'a> {
             LineKind::Leave => {
                 self.slot(&line.amount, &inner, Want::Blank(Blank::Number), number, None, state);
                 match line.ground_property.as_deref() {
-                    None => state_skip(self, context, state, Want::Blank(Blank::NumberProperty)),
+                    None => state_skip(self, context, state, Want::Blank(Blank::GroundProperty)),
                     Some(id) => {
                         let fits = self
                             .property_of(id, "ground")
@@ -754,7 +767,7 @@ impl<'a> Checker<'a> {
             }
             LineKind::Record => {
                 match line.event.as_deref() {
-                    None => self.error("Record needs an event", place),
+                    None => state_skip(self, context, state, Want::Blank(Blank::Event)),
                     Some(event) if !self.events.contains(event) => {
                         self.error(format!("the event '{event}' does not exist"), place);
                     }
@@ -778,7 +791,7 @@ impl<'a> Checker<'a> {
                 );
             }
             LineKind::Repeat => {
-                self.slot(&line.times, &inner, Want::Blank(Blank::Number), number, None, state);
+                self.slot(&line.times, &inner, Want::Blank(Blank::Times), number, None, state);
             }
             LineKind::Always => {}
         }
@@ -1049,15 +1062,11 @@ impl<'a> Checker<'a> {
 
     /// Returns whether `line` changes property `id`. A Move changes the Position and the Heading.
     fn changes(&self, line: &SheetLine, id: &str) -> bool {
-        match line.kind {
-            LineKind::Become | LineKind::Set | LineKind::Steer | LineKind::KeepBetween => {
-                line.property.as_deref() == Some(id)
-            }
-            LineKind::Move => self.properties.get(id).is_some_and(|(property, _)| {
-                matches!(property.property_type, PropertyType::Position | PropertyType::Heading)
-            }),
-            _ => false,
-        }
+        changes_property(
+            line,
+            id,
+            self.properties.get(id).map(|(property, _)| property.property_type),
+        )
     }
 
     /// Returns the name of property `id`, its id when no property has it.
@@ -1380,6 +1389,20 @@ pub(in crate::sheet) fn formula_chip(reference: &str, document: &crate::sheet::d
         line: head.to_owned(),
         part: (!tail.is_empty() && is_part).then(|| tail.to_owned()),
         property: (!tail.is_empty() && !is_part).then(|| tail.to_owned()),
+    }
+}
+
+/// Returns whether `line` changes the property `id`, whose type is `property_type`: a Become, Set, Steer or Keep
+/// between of it, or a Move when it is a Position or a Heading.
+///
+/// A line below the last line that changes a property can read the property's new value, as "my new Velocity".
+pub fn changes_property(line: &SheetLine, id: &str, property_type: Option<PropertyType>) -> bool {
+    match line.kind {
+        LineKind::Become | LineKind::Set | LineKind::Steer | LineKind::KeepBetween => {
+            line.property.as_deref() == Some(id)
+        }
+        LineKind::Move => matches!(property_type, Some(PropertyType::Position | PropertyType::Heading)),
+        _ => false,
     }
 }
 

@@ -1,8 +1,10 @@
 //! Pickers of the Card pane: what a blank, a chip or a select of a line can take, and the commands a choice runs.
 //!
 //! A *picker* lists only what fits its place, in groups under headings: the results of the lines above ("From lines
-//! above"), the cell's properties ("This cell's properties"), the parameters with "New parameter...", the states, or
-//! the properties of one kind. A Number box takes a typed number, a list box several numbers at once. A group with no
+//! above"), the thing's properties ("This cell's properties", "This bird's properties"), the parameters with "New
+//! parameter...", the states, or the properties of one kind. On a card over agents a value also takes the summaries of
+//! the looks above, the cells picked above, "my new" values below the last change to a property, and new random
+//! values. A Number box takes a typed number, a list box several numbers at once. A group with no
 //! item is left out, and a picker with nothing to offer says what to make first.
 //!
 //! A *result above* a line is the result of a line higher on its card. A result worked out inside a When is open only
@@ -10,9 +12,10 @@
 
 use egui::{Button, Id, Key, Popup, PopupCloseBehavior, Response, RichText, ScrollArea, TextEdit, Ui};
 use henad_core::metadata::TimeUnit;
+use henad_graph::sheet::check::changes_property;
 use henad_graph::sheet::document::{
-    Around, CardRuns, CompareTest, LineKind, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral,
-    SheetProperty, SheetValue, Slot, SummaryKind,
+    Around, CardRuns, CellWhich, ChipRelation, CompareTest, LineKind, LineMode, ParameterType, PickRule, PropertyType,
+    SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, SummaryKind,
 };
 use henad_graph::sheet::edit::{LineField, SheetEdit, automatic_name};
 use henad_graph::sheet::format_number;
@@ -27,6 +30,12 @@ use henad_graph::sheet::sentence::{
     comparison_words, for_each_lead, literal_words, my_property_item, operation_words, otherwise_description,
     otherwise_item_name, rate_unit_word, read_typed_number, result_condition_item, result_description,
     shared_state_name, this_cells_property, when_lead,
+};
+use henad_graph::sheet::sentence::{
+    AddItem, CHOOSE_A_SUMMARY, EVENTS, GROUND_PROPERTIES, LOOK_AT_AHEAD, LOOK_AT_HERE, LOOK_AT_PLACE, NO_EVENT,
+    NO_GROUND_PROPERTY, NO_PLACE, NO_PROPERTY, OR_A_NEW_VALUE, REMOVE_SUMMARY, SUMMARIES, each_looked_at,
+    length_of_item, my_new_detail, my_new_property_item, relation_words, summary_item, their_property_item,
+    this_things_properties, this_things_property,
 };
 
 use super::accessible_group;
@@ -71,6 +80,10 @@ pub enum Choice {
     Numbers(Vec<SheetLiteral>),
     /// "Remove from list" or "Remove for each".
     Remove,
+    /// An event, by id.
+    Event(String),
+    /// A new summary of a look at agents, of this kind.
+    Summary(SummaryKind),
 }
 
 /// One item of a picker.
@@ -90,7 +103,7 @@ pub struct PickerItem {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PickerGroup {
     /// Heading of the group.
-    pub heading: &'static str,
+    pub heading: String,
     /// Items of the group, in order.
     pub items: Vec<PickerItem>,
 }
@@ -231,7 +244,7 @@ impl CardPicker {
             }
             offered = true;
             ui.add_space(4.0);
-            ui.label(RichText::new(group.heading).weak().small());
+            ui.label(RichText::new(&group.heading).weak().small());
             for item in &group.items {
                 let button = ui.add(Button::new(&item.label).frame(false));
                 if let Some(name) = &item.name {
@@ -293,7 +306,7 @@ struct BoxDraft {
 fn number_box_ui(ui: &mut Ui, popup_id: Id, number_box: &NumberBox) -> Option<SheetLiteral> {
     let hint = match number_box.number_use {
         NumberUse::Chance => CHANCE_BOX_HINT,
-        NumberUse::Rate | NumberUse::Number => NUMBER_BOX_HINT,
+        NumberUse::Rate | NumberUse::Number | NumberUse::Times => NUMBER_BOX_HINT,
     };
     ui.weak(hint);
     let id = popup_id.with(NUMBER_BOX_ID);
@@ -400,34 +413,56 @@ pub struct LineContext<'a> {
 /// Kind of result a line works out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResultKind {
-    /// A number: a count, a total or average, or a calculation.
+    /// A number: a count, a total or average, a calculation, a random number, or a value chosen from others.
     Number,
     /// A yes or no: a comparison, an all of or any of, a chance or a rate.
     YesOrNo,
+    /// An arrow: a random direction.
+    Arrow,
+    /// A cell of the ground: a picked cell, or the cell here or ahead.
+    Place,
 }
 
-/// Returns the kind of result a line of `kind` works out, `None` for a change or a block.
-fn result_kind(kind: LineKind) -> Option<ResultKind> {
-    match kind {
-        LineKind::Count | LineKind::LookAround | LineKind::Calculate | LineKind::RandomNumber => {
-            Some(ResultKind::Number)
-        }
+/// Returns the kinds of result `line` can work out, empty for a change, a block, or a look at agents, whose summaries
+/// are its results. A Choose or a Depending on gives the kind of its values, a number, an arrow or a place.
+fn result_kinds(line: &SheetLine) -> &'static [ResultKind] {
+    match line.kind {
+        LineKind::LookAround if line.around == Some(Around::AgentsWithin) => &[],
+        LineKind::Count | LineKind::LookAround | LineKind::Calculate | LineKind::RandomNumber => &[ResultKind::Number],
+        LineKind::Choose | LineKind::DependingOn => &[ResultKind::Number, ResultKind::Arrow, ResultKind::Place],
         LineKind::Compare
         | LineKind::AllOf
         | LineKind::AnyOf
         | LineKind::NoneOf
         | LineKind::Chance
-        | LineKind::Rate => Some(ResultKind::YesOrNo),
-        _ => None,
+        | LineKind::Rate => &[ResultKind::YesOrNo],
+        LineKind::RandomDirection => &[ResultKind::Arrow],
+        LineKind::PickCell | LineKind::LookAtCell => &[ResultKind::Place],
+        _ => &[],
     }
 }
 
+/// Returns whether a line of `kind` works out a result, so that it has a name to rename.
+pub fn is_result_line(kind: LineKind) -> bool {
+    !matches!(
+        kind,
+        LineKind::Become
+            | LineKind::Set
+            | LineKind::Steer
+            | LineKind::KeepBetween
+            | LineKind::Move
+            | LineKind::Leave
+            | LineKind::Record
+            | LineKind::When
+            | LineKind::Repeat
+            | LineKind::Always
+    )
+}
+
 impl LineContext<'_> {
-    /// Returns the result lines above the line that it can use, of the kind `kind`, as items that put the result in
-    /// the place, each named by its result's name with "line N: [its sentence]" under it.
-    ///
-    /// `condition` is whether the items read "when [name]", as in "Choose when".
-    fn results_above(&self, kind: ResultKind, condition: bool) -> Vec<PickerItem> {
+    /// Returns the ids of the lines above the line whose results it can use, in display order: every line above it
+    /// on its card, a line inside a When or Repeat only to the lines after it inside that block.
+    fn lines_above(&self) -> Vec<&str> {
         let Some(position) = self.relations.index(self.line_id) else {
             return Vec::new();
         };
@@ -435,14 +470,31 @@ impl LineContext<'_> {
             .order()
             .iter()
             .take(position)
-            .filter_map(|&id| {
+            .copied()
+            .filter(|id| {
+                self.relations
+                    .parent(id)
+                    .is_none_or(|block| self.relations.is_within(self.line_id, block))
+            })
+            .collect()
+    }
+
+    /// Returns the result lines above the line that it can use, of the kind `kind`, as items that put the result in
+    /// the place, each named by its result's name with "line N: [its sentence]" under it.
+    ///
+    /// `condition` is whether the items read "when [name]", as in "Choose when".
+    fn results_above(&self, kind: ResultKind, condition: bool) -> Vec<PickerItem> {
+        self.results_above_of(&[kind], condition)
+    }
+
+    /// Returns the result lines above the line that it can use, of any of the kinds `kinds`, once each, as
+    /// [`Self::results_above`] does.
+    fn results_above_of(&self, kinds: &[ResultKind], condition: bool) -> Vec<PickerItem> {
+        self.lines_above()
+            .into_iter()
+            .filter_map(|id| {
                 let line = self.relations.line(id)?;
-                if result_kind(line.kind) != Some(kind) {
-                    return None;
-                }
-                if let Some(block) = self.relations.parent(id)
-                    && !self.relations.is_within(self.line_id, block)
-                {
+                if !result_kinds(line).iter().any(|kind| kinds.contains(kind)) {
                     return None;
                 }
                 let name = line
@@ -469,24 +521,190 @@ impl LineContext<'_> {
             .collect()
     }
 
-    /// Returns the properties of the cells, the kind of thing a cells card runs over.
-    fn properties(&self) -> &[SheetProperty] {
-        self.document.cells.as_deref().unwrap_or_default()
+    /// Returns the summaries of the looks at agents above the line that it can use, and the properties and amounts
+    /// of the cells picked above it, as items that put the part in the place, each with "line N: [its sentence]" under
+    /// it.
+    fn parts_above(&self) -> Vec<PickerItem> {
+        let mut items = Vec::new();
+        for id in self.lines_above() {
+            let Some(line) = self.relations.line(id) else {
+                continue;
+            };
+            let number = self.relations.number(id).unwrap_or(0);
+            let detail = result_description(number, &self.sentences.result_words(line));
+            let mut chips: Vec<SheetChip> = Vec::new();
+            if line.kind == LineKind::LookAround && line.around == Some(Around::AgentsWithin) {
+                chips.extend(line.summaries.iter().map(|summary| SheetChip::Result {
+                    line: id.to_owned(),
+                    part: Some(summary.id.clone()),
+                    property: None,
+                }));
+            }
+            if matches!(line.kind, LineKind::PickCell | LineKind::LookAtCell) {
+                if line.kind == LineKind::PickCell && line.pick.is_some_and(|pick| pick != PickRule::Random) {
+                    chips.push(SheetChip::Result {
+                        line: id.to_owned(),
+                        part: Some("amount".to_owned()),
+                        property: None,
+                    });
+                }
+                chips.extend(self.ground_properties().iter().map(|property| SheetChip::Result {
+                    line: id.to_owned(),
+                    part: None,
+                    property: Some(property.id.clone()),
+                }));
+            }
+            items.extend(chips.into_iter().map(|chip| {
+                let value = SheetValue::Chip(chip);
+                PickerItem {
+                    label: self.sentences.value(&value, None),
+                    name: None,
+                    detail: Some(detail.clone()),
+                    choice: Choice::Value(value),
+                }
+            }));
+        }
+        items
     }
 
-    /// Returns the cell's properties as items "my Food", with "this cell's Food" beside each, keeping those for which
-    /// `keep` holds.
-    fn my_properties(&self, keep: impl Fn(&SheetProperty) -> bool) -> Vec<PickerItem> {
-        self.properties()
+    /// Returns the id of the kind of thing the line's card runs over: `cells` or a kind of agent's id.
+    fn every(&self) -> &str {
+        self.document
+            .line(self.line_id)
+            .and_then(|(card, _)| self.document.cards.get(card))
+            .map_or("cells", |card| card.every.as_str())
+    }
+
+    /// Returns whether the line's card runs over agents.
+    fn agents(&self) -> bool {
+        self.every() != "cells"
+    }
+
+    /// Returns the properties of the kind of thing the line's card runs over.
+    fn properties(&self) -> &[SheetProperty] {
+        let every = self.every();
+        if every == "cells" {
+            return self.document.cells.as_deref().unwrap_or_default();
+        }
+        self.document
+            .agents
             .iter()
-            .filter(|property| keep(property))
-            .map(|property| PickerItem {
+            .find(|kind| kind.id == every)
+            .map_or(&[], |kind| kind.properties.as_slice())
+    }
+
+    /// Returns the properties of the ground under agents.
+    fn ground_properties(&self) -> &[SheetProperty] {
+        self.document
+            .ground
+            .as_ref()
+            .map_or(&[], |ground| ground.properties.as_slice())
+    }
+
+    /// Returns the heading of the group of the properties of the thing the line's card runs over, "This cell's
+    /// properties" or "This bird's properties".
+    fn my_heading(&self) -> String {
+        if self.agents() {
+            this_things_properties(&self.sentences.thing_word(self.every()))
+        } else {
+            THIS_CELLS_PROPERTIES.to_owned()
+        }
+    }
+
+    /// Returns the thing's properties as items "my Food", with "this cell's Food" beside each, keeping those for which
+    /// `keep` holds. On a card over agents, the value a property takes from the changes above the line follows each
+    /// property that a line above changes for the last time, as "my new Velocity".
+    fn my_properties(&self, keep: impl Fn(&SheetProperty) -> bool) -> Vec<PickerItem> {
+        let thing = self.sentences.thing_word(self.every());
+        let agents = self.agents();
+        let mut items = Vec::new();
+        for property in self.properties().iter().filter(|property| keep(property)) {
+            items.push(PickerItem {
                 label: my_property_item(&property.name),
                 name: None,
-                detail: Some(this_cells_property(&property.name)),
+                detail: Some(if agents {
+                    this_things_property(&thing, &property.name)
+                } else {
+                    this_cells_property(&property.name)
+                }),
                 choice: Choice::Value(SheetValue::Chip(SheetChip::My(property.id.clone()))),
+            });
+            if agents && let Some(last) = self.last_change_above(property) {
+                items.push(PickerItem {
+                    label: my_new_property_item(&property.name),
+                    name: None,
+                    detail: Some(my_new_detail(&thing, &property.name, last)),
+                    choice: Choice::Value(SheetValue::Chip(SheetChip::MyNew(property.id.clone()))),
+                });
+            }
+        }
+        items
+    }
+
+    /// Returns the number of the last line of the card that changes `property` when that line sits above the line,
+    /// `None` when no line changes it or a line at or below the line does.
+    fn last_change_above(&self, property: &SheetProperty) -> Option<usize> {
+        let position = self.relations.index(self.line_id)?;
+        let order = self.relations.order();
+        let last = order.iter().rposition(|id| {
+            self.relations
+                .line(id)
+                .is_some_and(|line| changes_property(line, &property.id, Some(property.property_type)))
+        })?;
+        (last < position).then(|| self.relations.number(order[last]).unwrap_or(last + 1))
+    }
+
+    /// Returns the length of each arrow property of the thing, as items "length of my Velocity" whose value is the
+    /// formula that works it out.
+    fn lengths(&self) -> Vec<PickerItem> {
+        let thing = self.sentences.thing_word(self.every());
+        self.properties()
+            .iter()
+            .filter(|property| property.property_type == PropertyType::Arrow)
+            .map(|property| {
+                let mut formula = SheetLine::new(LineKind::Calculate);
+                formula.formula = Some(format!("length(my.{})", property.id));
+                PickerItem {
+                    label: length_of_item(&property.name),
+                    name: None,
+                    detail: Some(this_things_property(&thing, &property.name)),
+                    choice: Choice::Value(SheetValue::Phrase(Box::new(formula))),
+                }
             })
             .collect()
+    }
+
+    /// Returns what a look at agents reads from each agent it looks at: their properties and the relations to them.
+    fn looked_at(&self) -> PickerGroup {
+        let mut items: Vec<PickerItem> = self
+            .properties()
+            .iter()
+            .filter(|property| property.property_type != PropertyType::States)
+            .map(|property| PickerItem {
+                label: their_property_item(&property.name),
+                name: None,
+                detail: None,
+                choice: Choice::Value(SheetValue::Chip(SheetChip::Their(property.id.clone()))),
+            })
+            .collect();
+        items.extend(
+            [
+                ChipRelation::OffsetToThem,
+                ChipRelation::OffsetAwayFromThem,
+                ChipRelation::DistanceToThem,
+            ]
+            .into_iter()
+            .map(|relation| PickerItem {
+                label: relation_words(relation).to_owned(),
+                name: None,
+                detail: None,
+                choice: Choice::Value(SheetValue::Chip(SheetChip::Relation(relation))),
+            }),
+        );
+        PickerGroup {
+            heading: each_looked_at(&self.sentences.thing_word(self.every())),
+            items,
+        }
     }
 
     /// Returns the parameters as items, each with its value and unit beside it.
@@ -502,6 +720,7 @@ impl LineContext<'_> {
                 NumberUse::Chance => parameter_rate_unit(parameter).is_none(),
                 NumberUse::Rate => parameter.unit.is_none() || parameter_rate_unit(parameter).is_some(),
                 NumberUse::Number => true,
+                NumberUse::Times => parameter.parameter_type == ParameterType::WholeNumber,
             })
             .map(|parameter| {
                 let value = format_number(parameter.default).unwrap_or_default();
@@ -519,11 +738,12 @@ impl LineContext<'_> {
     }
 
     /// Returns the states of `property`, or of every States property when `property` is `None`, as items named as chips
-    /// name them.
+    /// name them. A state of the ground is offered too on a card over agents.
     fn states(&self, property: Option<&str>) -> Vec<PickerItem> {
         let states_properties: Vec<&SheetProperty> = self
             .properties()
             .iter()
+            .chain(self.ground_properties().iter().filter(|_| self.agents()))
             .filter(|candidate| candidate.property_type == PropertyType::States)
             .collect();
         states_properties
@@ -552,6 +772,24 @@ impl LineContext<'_> {
 /// Returns whether `property` holds a number.
 fn is_number(property: &SheetProperty) -> bool {
     matches!(property.property_type, PropertyType::Number | PropertyType::WholeNumber)
+}
+
+/// Returns whether the property `property` fits the property of a line of `kind` on a card over agents when `agents`
+/// holds: a Number or an Arrow to steer, a number or an Arrow to keep between bounds, anything but a States property, a
+/// Position or a Heading to set on a card over agents, a number to set on a card over cells, and a States property
+/// otherwise.
+fn fits_property(kind: LineKind, agents: bool, property: &SheetProperty) -> bool {
+    let arrow = property.property_type == PropertyType::Arrow;
+    match kind {
+        LineKind::Steer => arrow || property.property_type == PropertyType::Number,
+        LineKind::KeepBetween => arrow || is_number(property),
+        LineKind::Set if agents => !matches!(
+            property.property_type,
+            PropertyType::States | PropertyType::Position | PropertyType::Heading
+        ),
+        LineKind::Set => is_number(property),
+        _ => property.property_type == PropertyType::States,
+    }
 }
 
 /// Returns the property that a value in a slot reads, `None` for any other value.
@@ -584,12 +822,17 @@ pub fn picker_for(
     draw: DrawKind,
 ) -> CardPicker {
     let title = want.picker_title();
-    let one_group = |empty: &'static str, heading: &'static str, items: Vec<PickerItem>| {
+    let one_group = |empty: &'static str, heading: &str, items: Vec<PickerItem>| {
         let mut picker = CardPicker::titled(title.clone(), empty);
-        picker.groups = vec![PickerGroup { heading, items }];
+        picker.groups = vec![PickerGroup {
+            heading: heading.to_owned(),
+            items,
+        }];
         picker
     };
     let numbers = |first: bool, number_use: NumberUse| number_picker(context, title.clone(), first, number_use, typed);
+    let agents = context.agents();
+    let kind = context.line.kind;
     match want {
         Blank::State => one_group(NO_STATES, STATES, context.states(property)),
         Blank::OldState => {
@@ -608,23 +851,23 @@ pub fn picker_for(
             picker
         }
         Blank::Property => one_group(
-            NO_STATES_PROPERTY,
+            if agents { NO_PROPERTY } else { NO_STATES_PROPERTY },
             PROPERTIES,
-            property_items(context, |property| property.property_type == PropertyType::States),
+            property_items(context, |property| fits_property(kind, agents, property)),
         ),
         Blank::NumberProperty => one_group(
             NO_NUMBER_PROPERTY_ON_SHEET,
             PROPERTIES,
             property_items(context, is_number),
         ),
-        Blank::Value => {
-            let mut picker = numbers(false, NumberUse::Number);
-            let mut results = context.results_above(ResultKind::Number, false);
-            results.extend(context.results_above(ResultKind::YesOrNo, false));
-            picker.groups[0].items = results;
-            picker.groups[1].items = context.my_properties(|_| true);
-            picker
-        }
+        Blank::GroundProperty => one_group(NO_GROUND_PROPERTY, GROUND_PROPERTIES, ground_number_items(context)),
+        Blank::Event => one_group(NO_EVENT, EVENTS, event_items(context)),
+        Blank::Value if agents && kind == LineKind::Move && context.line.mode == Some(LineMode::To) => one_group(
+            NO_PLACE,
+            FROM_LINES_ABOVE,
+            context.results_above(ResultKind::Place, false),
+        ),
+        Blank::Value => value_picker(context, numbers(false, NumberUse::Number)),
         Blank::NumberList => {
             let mut picker = CardPicker::titled(title, NO_NUMBER_RESULT);
             picker.list_box = true;
@@ -633,10 +876,12 @@ pub fn picker_for(
         }
         Blank::Chance => numbers(true, NumberUse::Chance),
         Blank::Rate => numbers(true, NumberUse::Rate),
+        Blank::Times => numbers(true, NumberUse::Times),
         Blank::Count => {
             let mut picker = numbers(false, NumberUse::Number);
             picker.lead = Some(for_each_lead(draw).to_owned());
             picker.groups.retain(|group| group.heading == FROM_LINES_ABOVE);
+            picker.groups.truncate(1);
             picker.new_parameter = false;
             picker.remove = filled.then_some(REMOVE_FOR_EACH);
             picker
@@ -654,8 +899,73 @@ pub fn picker_for(
     }
 }
 
-/// Returns the picker of a number titled `title`: the number results above, the cell's Number properties, the
+/// Returns `picker`, a picker of a number, as the picker of any value on the line of `context`: every result above, and
+/// every property of the thing. On a card over agents the results add the summaries and cells above, and the new
+/// values add a random direction.
+fn value_picker(context: &LineContext<'_>, mut picker: CardPicker) -> CardPicker {
+    let agents = context.agents();
+    let mut results = if agents {
+        context.results_above_of(&[ResultKind::Number, ResultKind::YesOrNo, ResultKind::Arrow], false)
+    } else {
+        let mut results = context.results_above(ResultKind::Number, false);
+        results.extend(context.results_above(ResultKind::YesOrNo, false));
+        results
+    };
+    if agents {
+        results.extend(context.parts_above());
+    }
+    picker.groups[0].items = results;
+    picker.groups[1].items = context.my_properties(|_| true);
+    if agents {
+        // The new values come before the parameters, as a long picker scrolls.
+        picker.groups.retain(|group| group.heading != OR_A_NEW_VALUE);
+        picker.groups.insert(
+            2,
+            PickerGroup {
+                heading: OR_A_NEW_VALUE.to_owned(),
+                items: new_values(true),
+            },
+        );
+    }
+    picker
+}
+
+/// Returns the Number properties of the ground under agents as items that choose the property.
+fn ground_number_items(context: &LineContext<'_>) -> Vec<PickerItem> {
+    context
+        .ground_properties()
+        .iter()
+        .filter(|property| property.property_type == PropertyType::Number)
+        .map(|property| PickerItem {
+            label: property.name.clone(),
+            name: None,
+            detail: None,
+            choice: Choice::Property(property.id.clone()),
+        })
+        .collect()
+}
+
+/// Returns the sheet's events as items that choose the event.
+fn event_items(context: &LineContext<'_>) -> Vec<PickerItem> {
+    context
+        .document
+        .events
+        .iter()
+        .map(|event| PickerItem {
+            label: event.name.clone(),
+            name: None,
+            detail: None,
+            choice: Choice::Event(event.id.clone()),
+        })
+        .collect()
+}
+
+/// Returns the picker of a number titled `title`: the number results above, the thing's Number properties, the
 /// parameters with "New parameter...", and the Number box reading in `number_use`, first or last, showing `typed`.
+///
+/// On a card over agents the results add the summaries and amounts above, the properties add the length of each
+/// arrow, and a random number between two values comes last. A number of times takes integer parameters alone, with
+/// no results or properties, since a Repeat runs a typed number or an integer parameter of times.
 fn number_picker(
     context: &LineContext<'_>,
     title: String,
@@ -663,21 +973,40 @@ fn number_picker(
     number_use: NumberUse,
     typed: &str,
 ) -> CardPicker {
+    let agents = context.agents() && number_use != NumberUse::Times;
     let mut picker = CardPicker::titled(title, NO_NUMBER_RESULT);
-    picker.groups = vec![
-        PickerGroup {
-            heading: FROM_LINES_ABOVE,
-            items: context.results_above(ResultKind::Number, false),
-        },
-        PickerGroup {
-            heading: THIS_CELLS_PROPERTIES,
-            items: context.my_properties(is_number),
-        },
-        PickerGroup {
-            heading: PARAMETERS,
-            items: context.parameters(number_use),
-        },
-    ];
+    if number_use != NumberUse::Times {
+        let mut results = context.results_above(ResultKind::Number, false);
+        let mut properties = context.my_properties(is_number);
+        if agents {
+            results.extend(context.parts_above());
+            properties.extend(context.lengths());
+        }
+        picker.groups = vec![
+            PickerGroup {
+                heading: FROM_LINES_ABOVE.to_owned(),
+                items: results,
+            },
+            PickerGroup {
+                heading: context.my_heading(),
+                items: properties,
+            },
+        ];
+    }
+    picker.groups.push(PickerGroup {
+        heading: PARAMETERS.to_owned(),
+        items: context.parameters(number_use),
+    });
+    if agents && number_use == NumberUse::Number {
+        // The new values come before the parameters, as a long picker scrolls.
+        picker.groups.insert(
+            2,
+            PickerGroup {
+                heading: OR_A_NEW_VALUE.to_owned(),
+                items: new_values(false),
+            },
+        );
+    }
     picker.new_parameter = true;
     picker.number_box = Some(NumberBox {
         number_use,
@@ -687,7 +1016,27 @@ fn number_picker(
     picker
 }
 
-/// Returns the properties of the cells for which `keep` holds, as items that choose the property.
+/// Returns the new values a picker of a value offers on a card over agents: a random number between two values, and
+/// when `arrow` holds a random direction of a length. Each is a phrase whose own values start blank.
+fn new_values(arrow: bool) -> Vec<PickerItem> {
+    let mut items = vec![PickerItem {
+        label: AddItem::RandomNumber.pattern(None),
+        name: None,
+        detail: None,
+        choice: Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomNumber)))),
+    }];
+    if arrow {
+        items.push(PickerItem {
+            label: AddItem::RandomDirection.pattern(None),
+            name: None,
+            detail: None,
+            choice: Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomDirection)))),
+        });
+    }
+    items
+}
+
+/// Returns the properties of the thing for which `keep` holds, as items that choose the property.
 fn property_items(context: &LineContext<'_>, keep: impl Fn(&SheetProperty) -> bool) -> Vec<PickerItem> {
     context
         .properties()
@@ -746,10 +1095,13 @@ pub fn choose_when(context: &LineContext<'_>, otherwise: &[usize]) -> CardPicker
         .collect();
     picker.groups = vec![
         PickerGroup {
-            heading: FROM_LINES_ABOVE,
+            heading: FROM_LINES_ABOVE.to_owned(),
             items: results,
         },
-        PickerGroup { heading, items: forms },
+        PickerGroup {
+            heading: heading.to_owned(),
+            items: forms,
+        },
     ];
     picker
 }
@@ -790,6 +1142,94 @@ pub enum SelectOption {
     Operation(char),
     /// The unit of time of a rate.
     Unit(TimeUnit),
+    /// The mode of a Steer or Move line.
+    Mode(LineMode),
+    /// What a Pick a cell line picks.
+    Pick(PickRule),
+    /// The cell a Look at a cell line looks at.
+    Which(CellWhich),
+    /// How the summary at an index of a look at agents sums the agents up, as `(index, kind)`.
+    LookSummary(usize, SummaryKind),
+    /// "Remove this summary" in the select of the summary at an index.
+    RemoveSummary(usize),
+}
+
+/// Returns the options of the select of a Steer line's mode, "by" and "towards", or of a Move line's, "by" and "to",
+/// as `steer` says.
+pub fn mode_options(steer: bool) -> Vec<(String, SelectOption)> {
+    let second = if steer { LineMode::Towards } else { LineMode::To };
+    [LineMode::By, second]
+        .into_iter()
+        .map(|mode| (mode.as_str().to_owned(), SelectOption::Mode(mode)))
+        .collect()
+}
+
+/// Returns the options of the select of what a Pick a cell line picks: "most", "least" and "random".
+pub fn pick_options() -> Vec<(String, SelectOption)> {
+    PickRule::ALL
+        .iter()
+        .map(|pick| (pick.as_str().to_owned(), SelectOption::Pick(*pick)))
+        .collect()
+}
+
+/// Returns the options of the select of the cell a Look at a cell line looks at.
+pub fn which_options() -> Vec<(String, SelectOption)> {
+    [
+        (LOOK_AT_HERE, CellWhich::Here),
+        (LOOK_AT_AHEAD, CellWhich::Ahead),
+        (LOOK_AT_PLACE, CellWhich::At),
+    ]
+    .into_iter()
+    .map(|(words, which)| (words.to_owned(), SelectOption::Which(which)))
+    .collect()
+}
+
+/// Returns the options of the select of the summary at `index` of a look at agents: each way to sum the agents up,
+/// then "Remove this summary" when `removable`.
+pub fn look_summary_options(index: usize, removable: bool) -> Vec<(String, SelectOption)> {
+    let mut options: Vec<(String, SelectOption)> = LOOK_SUMMARIES
+        .into_iter()
+        .map(|kind| (kind.as_str().to_owned(), SelectOption::LookSummary(index, kind)))
+        .collect();
+    if removable {
+        options.push((REMOVE_SUMMARY.to_owned(), SelectOption::RemoveSummary(index)));
+    }
+    options
+}
+
+/// Ways a look at agents sums them up, in the order the editor offers them.
+pub const LOOK_SUMMARIES: [SummaryKind; 5] = [
+    SummaryKind::Average,
+    SummaryKind::Total,
+    SummaryKind::Largest,
+    SummaryKind::Smallest,
+    SummaryKind::Count,
+];
+
+/// Returns the picker of a new summary of a look at agents: each way to sum the agents up.
+pub fn summary_picker() -> CardPicker {
+    let mut picker = CardPicker::titled(CHOOSE_A_SUMMARY.to_owned(), NO_PROPERTY);
+    picker.groups = vec![PickerGroup {
+        heading: SUMMARIES.to_owned(),
+        items: LOOK_SUMMARIES
+            .into_iter()
+            .map(|kind| PickerItem {
+                label: summary_item(kind),
+                name: None,
+                detail: None,
+                choice: Choice::Summary(kind),
+            })
+            .collect(),
+    }];
+    picker
+}
+
+/// Returns the picker of what a summary of a look at agents reads from each agent: their properties and the relations
+/// to them.
+pub fn looked_at_picker(context: &LineContext<'_>) -> CardPicker {
+    let mut picker = CardPicker::titled(Blank::Value.picker_title(), NO_PROPERTY);
+    picker.groups = vec![context.looked_at()];
+    picker
 }
 
 /// Returns the options of the select of a comparison, with their words, where `of_states` is whether the value on its
@@ -919,10 +1359,17 @@ fn slot_choice(
 ) -> Vec<SheetEdit> {
     let filled = Slot::Filled;
     match choice {
-        Choice::Condition(item) => vec![SheetEdit::ChooseCondition {
-            line: line_id.to_owned(),
-            item: *item,
-        }],
+        Choice::Condition(item) => match row_of_condition(path) {
+            Some(row) => vec![SheetEdit::ChooseRowCondition {
+                line: line_id.to_owned(),
+                row,
+                item: *item,
+            }],
+            None => vec![SheetEdit::ChooseCondition {
+                line: line_id.to_owned(),
+                item: *item,
+            }],
+        },
         Choice::Remove => vec![set_slot(line_id, path, Slot::Blank)],
         Choice::Numbers(numbers) => {
             let items = numbers.iter().map(|number| SheetValue::Literal(*number)).collect();
@@ -972,8 +1419,18 @@ fn slot_choice(
             edits
         }
         Choice::Value(value) => vec![set_slot(line_id, path, filled(value.clone()))],
-        Choice::AnyState | Choice::NewParameter => Vec::new(),
+        Choice::Summary(summary) => vec![SheetEdit::AddSummary {
+            line: line_id.to_owned(),
+            summary: *summary,
+        }],
+        Choice::AnyState | Choice::NewParameter | Choice::Event(_) => Vec::new(),
     }
+}
+
+/// Returns the index of the row of a Choose line whose condition `path` names, as `row.1.condition`, `None` for any
+/// other path.
+fn row_of_condition(path: &str) -> Option<usize> {
+    path.strip_prefix("row.")?.strip_suffix(".condition")?.parse().ok()
 }
 
 /// Returns the commands that put `choice` at item `index` of the list in the slot `slot` of `line`, the line
@@ -1036,6 +1493,13 @@ fn field_choice(
         (FieldPlace::Property, Choice::Property(property)) => {
             vec![set_field(LineField::Property(Some(property.clone())))]
         }
+        (FieldPlace::GroundProperty, Choice::Property(property)) => {
+            vec![set_field(LineField::GroundProperty(Some(property.clone())))]
+        }
+        (FieldPlace::RankedBy, Choice::Property(property)) => {
+            vec![set_field(LineField::RankedBy(Some(property.clone())))]
+        }
+        (FieldPlace::Event, Choice::Event(event)) => vec![set_field(LineField::Event(Some(event.clone())))],
         (FieldPlace::SummaryValue, Choice::Property(property)) => match line.summaries.first() {
             Some(summary) => {
                 let mut summary = summary.clone();

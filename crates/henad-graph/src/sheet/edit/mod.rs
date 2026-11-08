@@ -50,7 +50,7 @@ pub(crate) mod lines;
 mod names;
 mod references;
 
-pub use names::automatic_name;
+pub use names::{automatic_name, automatic_summary_name};
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -64,7 +64,7 @@ use super::document::{
     AgentKind, Around, BlockedState, ButtonStep, ButtonStepRule, CardRuns, CellWhich, ColorRule, ColorRuleKind,
     CompareTest, Edges, LineKind, LineMode, LookSummary, MadeOf, Marks, MeasureRule, ParameterType, PickRule,
     PropertyType, SheetButton, SheetCard, SheetChip, SheetDocument, SheetEvent, SheetLine, SheetLiteral, SheetMeasure,
-    SheetParameter, SheetProperty, SheetState, SheetTime, SheetValue, Slot, StartRule, StartsAs,
+    SheetParameter, SheetProperty, SheetState, SheetTime, SheetValue, Slot, StartRule, StartsAs, SummaryKind,
 };
 use super::limits::{MAX_LINES_PER_CARD, MAX_NESTING, MAX_SHEET_ID_BYTES};
 use super::rates::{chance_from_rate, rate_from_chance, shortest_f32, tick_in};
@@ -578,6 +578,15 @@ pub enum SheetEdit {
         /// The form.
         item: ConditionItem,
     },
+    /// Chooses the form of the condition of a row of a Choose line, as [`Self::ChooseCondition`] chooses a change's.
+    ChooseRowCondition {
+        /// Id of the line.
+        line: String,
+        /// Index of the row, from 0.
+        row: usize,
+        /// The form.
+        item: ConditionItem,
+    },
     /// Replaces a condition "is less than ... or more than ..." with one side filled by the plain comparison it
     /// means: "is less than" the lower number or "is more than" the upper number.
     UseOneSide {
@@ -602,6 +611,23 @@ pub enum SheetEdit {
         line: String,
         /// New name, unique among the sheet's result names, case aside.
         name: String,
+    },
+    /// Adds a summary of the kind `summary` at the end of the summaries of a look at agents, with its value empty.
+    ///
+    /// The summary takes its automatic name, such as "average", and the id minted from it, and both follow its value
+    /// until it is renamed.
+    AddSummary {
+        /// Id of the line.
+        line: String,
+        /// How the summary sums up the agents.
+        summary: SummaryKind,
+    },
+    /// Removes the summary at an index of a look at agents. A slot that used it turns blank.
+    DeleteSummary {
+        /// Id of the line.
+        line: String,
+        /// Index of the summary, from 0.
+        index: usize,
     },
     /// Sets or clears the author's note under a line.
     SetNote {
@@ -732,6 +758,7 @@ impl SheetBuilder {
         };
         let made = draft.run(edit)?;
         draft.finish();
+        names::update_summary_names(&self.document, &mut draft.document);
         names::update_names(&self.document, &mut draft.document);
         self.document = draft.document;
         self.keys = draft.keys;
@@ -1078,6 +1105,7 @@ impl Draft {
             SheetEdit::SetSlot { line, path, value } => self.set_slot(&line, &path, value)?,
             SheetEdit::SetField { line, phrase, field } => self.set_field(&line, &phrase, field)?,
             SheetEdit::ChooseCondition { line, item } => self.choose_condition(&line, item)?,
+            SheetEdit::ChooseRowCondition { line, row, item } => self.choose_row_condition(&line, row, item)?,
             SheetEdit::UseOneSide { line } => self.use_one_side(&line)?,
             SheetEdit::UseCountForEach { line } => self.use_count_for_each(&line)?,
             SheetEdit::MoveConditionInto { when } => self.move_condition_into(&when)?,
@@ -1096,6 +1124,39 @@ impl Draft {
                     return Err(SheetEditError::Invalid(format!("line '{line}' works out no result")));
                 }
                 target.name = Some(name);
+            }
+            SheetEdit::AddSummary { line, summary } => {
+                let target = self.line_mut(&line)?;
+                if target.around != Some(Around::AgentsWithin) {
+                    return Err(SheetEditError::Invalid(format!("line '{line}' looks at no agents")));
+                }
+                let mut added = LookSummary::new("", "");
+                added.summary = Some(summary);
+                target.summaries.push(added);
+                self.touched.push(line);
+            }
+            SheetEdit::DeleteSummary { line, index } => {
+                let target = self.line_mut(&line)?;
+                if index >= target.summaries.len() {
+                    return Err(SheetEditError::Missing(format!(
+                        "line '{line}' has no summary {}",
+                        index + 1
+                    )));
+                }
+                if target.summaries.len() == 1 {
+                    return Err(SheetEditError::Invalid(format!(
+                        "line '{line}' keeps one summary at least"
+                    )));
+                }
+                let removed = target.summaries.remove(index);
+                change_references(
+                    &mut self.document,
+                    &Target::Summary {
+                        line,
+                        summary: removed.id,
+                    },
+                    Change::Clear,
+                );
             }
             SheetEdit::SetNote { line, note } => {
                 self.line_mut(&line)?.note = note.filter(|note| !note.trim().is_empty());
@@ -2231,61 +2292,29 @@ impl Draft {
     fn choose_condition(&mut self, line_id: &str, item: ConditionItem) -> Result<(), SheetEditError> {
         let tick = self.document.time.map(|time| time.tick_unit);
         let line = self.line_mut(line_id)?;
-        let current = match line.condition.value() {
-            Some(SheetValue::Phrase(phrase)) => Some(phrase.as_ref().clone()),
-            _ => None,
-        };
-        let phrase = match item {
-            ConditionItem::Always => {
-                if line.kind == LineKind::When {
-                    return Err(SheetEditError::Invalid("a When cannot be always".to_owned()));
-                }
-                SheetLine::new(LineKind::Always)
-            }
-            ConditionItem::Is | ConditionItem::AtLeast | ConditionItem::AtMost => {
-                let test = match item {
-                    ConditionItem::Is => CompareTest::Is,
-                    ConditionItem::AtLeast => CompareTest::AtLeast,
-                    _ => CompareTest::AtMost,
-                };
-                let mut compare = match current {
-                    Some(compare)
-                        if compare.kind == LineKind::Compare && compare.test != Some(CompareTest::Outside) =>
-                    {
-                        compare
-                    }
-                    _ => SheetLine::new(LineKind::Compare),
-                };
-                if let Slot::Filled(SheetValue::List(items)) = &compare.right {
-                    compare.right = items.first().cloned().map_or(Slot::Blank, Slot::Filled);
-                }
-                compare.test = Some(test);
-                compare
-            }
-            ConditionItem::Outside => match current {
-                Some(compare) if compare.kind == LineKind::Compare && compare.test == Some(CompareTest::Outside) => {
-                    compare
-                }
-                _ => {
-                    let mut compare = SheetLine::new(LineKind::Compare);
-                    compare.test = Some(CompareTest::Outside);
-                    compare
-                }
-            },
-            ConditionItem::WithChance => match current {
-                Some(chance) if chance.kind == LineKind::Chance => chance,
-                _ => SheetLine::new(LineKind::Chance),
-            },
-            ConditionItem::AtRate => match current {
-                Some(rate) if rate.kind == LineKind::Rate => rate,
-                _ => {
-                    let mut rate = SheetLine::new(LineKind::Rate);
-                    line_rates_from_tick(&mut rate, tick);
-                    rate
-                }
-            },
-        };
+        if item == ConditionItem::Always && line.kind == LineKind::When {
+            return Err(SheetEditError::Invalid("a When cannot be always".to_owned()));
+        }
+        let phrase = condition_phrase(&line.condition, item, tick);
         line.condition = Slot::Filled(SheetValue::Phrase(Box::new(phrase)));
+        Ok(())
+    }
+
+    /// Chooses the form `item` for the condition of row `row` of the Choose line `line_id`.
+    fn choose_row_condition(&mut self, line_id: &str, row: usize, item: ConditionItem) -> Result<(), SheetEditError> {
+        let tick = self.document.time.map(|time| time.tick_unit);
+        let line = self.line_mut(line_id)?;
+        if line.kind != LineKind::Choose {
+            return Err(SheetEditError::Invalid(format!("line '{line_id}' is no Choose line")));
+        }
+        let Some(target) = line.rows.get_mut(row) else {
+            return Err(SheetEditError::Missing(format!(
+                "line '{line_id}' has no row {}",
+                row + 1
+            )));
+        };
+        let phrase = condition_phrase(&target.condition, item, tick);
+        target.condition = Slot::Filled(SheetValue::Phrase(Box::new(phrase)));
         Ok(())
     }
 
@@ -2468,5 +2497,55 @@ impl Draft {
         lines::remove_line(&mut self.document.cards[card], line_id)?;
         change_references(&mut self.document, &Target::Line(line_id.to_owned()), Change::Clear);
         Ok(())
+    }
+}
+
+/// Returns the condition of the form `item` that replaces the condition in `slot`, keeping its values when the form
+/// stays, where `tick` is the unit of one tick that a new rate takes.
+fn condition_phrase(slot: &Slot, item: ConditionItem, tick: Option<TimeUnit>) -> SheetLine {
+    let current = match slot.value() {
+        Some(SheetValue::Phrase(phrase)) => Some(phrase.as_ref().clone()),
+        _ => None,
+    };
+    match item {
+        ConditionItem::Always => SheetLine::new(LineKind::Always),
+        ConditionItem::Is | ConditionItem::AtLeast | ConditionItem::AtMost => {
+            let test = match item {
+                ConditionItem::Is => CompareTest::Is,
+                ConditionItem::AtLeast => CompareTest::AtLeast,
+                _ => CompareTest::AtMost,
+            };
+            let mut compare = match current {
+                Some(compare) if compare.kind == LineKind::Compare && compare.test != Some(CompareTest::Outside) => {
+                    compare
+                }
+                _ => SheetLine::new(LineKind::Compare),
+            };
+            if let Slot::Filled(SheetValue::List(items)) = &compare.right {
+                compare.right = items.first().cloned().map_or(Slot::Blank, Slot::Filled);
+            }
+            compare.test = Some(test);
+            compare
+        }
+        ConditionItem::Outside => match current {
+            Some(compare) if compare.kind == LineKind::Compare && compare.test == Some(CompareTest::Outside) => compare,
+            _ => {
+                let mut compare = SheetLine::new(LineKind::Compare);
+                compare.test = Some(CompareTest::Outside);
+                compare
+            }
+        },
+        ConditionItem::WithChance => match current {
+            Some(chance) if chance.kind == LineKind::Chance => chance,
+            _ => SheetLine::new(LineKind::Chance),
+        },
+        ConditionItem::AtRate => match current {
+            Some(rate) if rate.kind == LineKind::Rate => rate,
+            _ => {
+                let mut rate = SheetLine::new(LineKind::Rate);
+                line_rates_from_tick(&mut rate, tick);
+                rate
+            }
+        },
     }
 }

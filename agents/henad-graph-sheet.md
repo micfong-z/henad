@@ -199,9 +199,15 @@ or `Field` with the phrase's slot path and a `FieldPlace`: `Property`, `NewState
 key, so a phrase's places compose (`condition.left`). Words, `From`, `Otherwise` and a hand-written
 formula of more than one operation have no place. A Count's `whose` comparison wants a property on
 its left and, while that is empty or a States property, a state on its right, and an empty Calculate
-line reads "[number] [operation] [number]", both values and the select placed. The words "for each"
-and their count share the place `tries`. `binary_formula` splits a formula of one operation between
-two values, and `Sentences::formula_operand` returns the chip of one value as a formula writes it.
+line reads "[number] [operation] [number]", both values and the select placed. Agent lines (S28)
+place their property (`property_part`), modes, picks and cells as selects, each summary of a look at
+agents (`LineSelect::LookSummary`), a Leave's and a pick's ground property, a Record's event
+(`ChipKind::Event`), every state of a Depending on, Keep between and Random number bounds as the
+lower and upper number, and a Repeat's `Blank::Times`. A Set over agents wants a property and a
+value. The agent menus are `AddButton::AGENTS` with `items_for`, `tooltip_for`, `heading_for`. The
+words "for each" and their count share the place `tries`. `binary_formula` splits a formula of one
+operation between two values, and `Sentences::formula_operand` returns the chip of one value as a
+formula writes it.
 
 **Places.** `SheetPlaces::root` is a `TablePlaces` tree that follows the TOML structure: `table`
 (the header, an inline table's braces, or the first key naming an implicit table such as
@@ -283,26 +289,28 @@ a line or outside a condition, a When that is always, `outside` outside a condit
 change kind, unknown parameters, states of another property, `their` and relations outside a look,
 results from another card or of a change line, parts, places, value types (a slot's expected type
 against a literal, chip or phrase), formulas, keys held twice, Count, Look around and Pick a cell
-inside a Repeat or a run-once card, `RATE_IN_BUTTON_CARD`, a rate inside a Repeat, and D75's ranges
-from the wording table (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on literals, a percent divided
-by 100, `CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters). Agent-only fields with no
-editor words yet (a Steer or Move mode, a pick rule, `which`, an event, `agent_kind`, `include_me`)
-are errors when absent. Warnings that keep the line running: a draw with no key, two result lines
-with one name, and `SHEET_EMPTY` at `[world]` for a grid sheet with no cells property. Skip warnings
-(D39), one per line, the first problem in the line's sentence order: a blank slot or select reads
-`not_run_choose` with `Blank::want` or `LineSelect::words` ("Not run yet: choose the old state"),
-Become's property counting as its new state; a result of a line no card holds reads the same; a
-result at or below its user reads `uses_result_below`; a result inside a When or Repeat that does
-not hold the user reads `uses_result_inside` (D84); `my_new` at or above the last change reads
-`uses_result_below("my new X")`, and with no change at all as a blank. After the slots, in order: a
-result of a skipped line above reads `not_run_result_unfinished`, a rate with no `[time]` reads
-`NOT_RUN_TICK`, and a change, When or Repeat inside a skipped block, or any line with a skipped
-Repeat among its blocks at any depth, reads `not_run_when_unfinished` with the direct parent's
-number, or else the nearest skipped Repeat's. A result without a name reads as its sentence in a
-note. Outside the cards a blank or unusable value is an error. A value's type walk through results
-stops past `MAX_NESTING`. A rate whose `rate` is a parameter whose Unit names another unit
+inside a Repeat (`LOOK_IN_REPEAT`) or a run-once card, `RATE_IN_BUTTON_CARD`, a rate inside a
+Repeat, and D75's ranges from the wording table (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on
+literals, a percent divided by 100, `CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters).
+Agent-only fields with no editor words yet (a Steer or Move mode, a pick rule, `which`, an event,
+`agent_kind`, `include_me`) are errors when absent. Warnings that keep the line running: a draw with
+no key, two result lines with one name, and `SHEET_EMPTY` at `[world]` for a grid sheet with no
+cells property. Skip warnings (D39), one per line, the first problem in the line's sentence order: a
+blank slot or select reads `not_run_choose` with `Blank::want` or `LineSelect::words` ("Not run yet:
+choose the old state"), Become's property counting as its new state; a result of a line no card
+holds reads the same; a result at or below its user reads `uses_result_below`; a result inside a
+When or Repeat that does not hold the user reads `uses_result_inside` (D84); `my_new` at or above
+the last change reads `uses_result_below("my new X")`, and with no change at all as a blank. After
+the slots, in order: a result of a skipped line above reads `not_run_result_unfinished`, a rate with
+no `[time]` reads `NOT_RUN_TICK`, and a change, When or Repeat inside a skipped block, or any line
+with a skipped Repeat among its blocks at any depth, reads `not_run_when_unfinished` with the direct
+parent's number, or else the nearest skipped Repeat's. A result without a name reads as its sentence
+in a note. Outside the cards a blank or unusable value is an error. A value's type walk through
+results stops past `MAX_NESTING`. A rate whose `rate` is a parameter whose Unit names another unit
 (`edit::unit_in_text`) than the line's `rate_unit` warns `unit_mismatch` at the line and keeps
-running in the line's unit (D14).
+running in the line's unit (D14). A Record with no event, a Leave or a pick with no ground property
+and a Repeat with no times skip their line in the blank's words. `changes_property` is the rule of
+`my_new`, public for the card's picker.
 
 **Sheet files.** `SheetFile::parse(text)` reads (the reader's errors), checks (the checker's errors
 as `SheetFileError::Invalid`, every one placed), lowers (the lowering's problems, also `Invalid`,
@@ -344,7 +352,9 @@ in `check/cost.rs` beside the message), rewords it through `SheetFile::cost_word
 note: `line_costs_too_much` names the line by `look_name` ("Line 1: too much work for one walker. A
 smaller maximum for Steps per tick would fit."), with `smaller_maximum` for a Repeat over a
 parameter, `FEWER_TIMES` for a Repeat of a number and `FEWER_LINES` for any other line, or names the
-card by its heading or a button by its name. `SheetFile::parse_planted` (`#[cfg(test)]`,
+card by its heading or a button by its name. `SheetFile::lowering_problems(parsed, report)` returns
+the lowering's problems of a sheet that checks, each a `SheetDiagnostic` with its card and line,
+which the card draws under the line (S28). `SheetFile::parse_planted` (`#[cfg(test)]`,
 crate-private) lowers with a closure run on the lowered document before it is read back, which the
 mapping tests use to plant a node the checker refuses.
 

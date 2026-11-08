@@ -56,10 +56,10 @@ use henad_graph::sheet::sentence::{
     tick_unit_choice, unit_suggestions, value_field_name, value_slider_name, world_side_out_of_range,
 };
 use henad_graph::sheet::sentence::{
-    ANYWHERE_AT_RANDOM, ARROW_KIND, BY_HEADING_NOTE, COLOR_AGENTS_BY, COLOR_GROUND_BY, COUNT_AGENTS_LEAD,
-    COUNT_AGENTS_MEASURE, HEADING_KIND, HEADING_KIND_DESCRIPTION, HEADING_START, NO, PAINTED, POSITION_KIND,
-    POSITION_KIND_DESCRIPTION, YES, YES_NO_KIND, YES_NO_KIND_DESCRIPTION, count_agents_measure, every_starts_at,
-    on_ground_start, painted_shapes, set_everywhere,
+    ANYWHERE_AT_RANDOM, ARROW_KIND, ARROW_KIND_DESCRIPTION, BY_HEADING_NOTE, COLOR_AGENTS_BY, COLOR_GROUND_BY,
+    COUNT_AGENTS_LEAD, COUNT_AGENTS_MEASURE, HEADING_KIND, HEADING_KIND_DESCRIPTION, HEADING_START, NO, PAINTED,
+    POSITION_KIND, POSITION_KIND_DESCRIPTION, YES, YES_NO_KIND, YES_NO_KIND_DESCRIPTION, count_agents_measure,
+    every_starts_at, on_ground_start, painted_shapes, set_everywhere,
 };
 use henad_graph::value::Color;
 
@@ -1546,7 +1546,9 @@ fn property_form(
             PropertyType::Heading => {
                 ui.weak(HEADING_KIND_DESCRIPTION);
             }
-            PropertyType::Arrow => {}
+            PropertyType::Arrow => {
+                ui.weak(ARROW_KIND_DESCRIPTION);
+            }
             _ => {
                 ui.weak(NUMBER_KIND_DESCRIPTION);
             }
@@ -1640,6 +1642,7 @@ fn form_kinds(document: &SheetDocument, form: &PropertyForm) -> Vec<PropertyType
     }
     if form.thing != CELLS && form.thing != GROUND {
         kinds.push(PropertyType::YesNo);
+        kinds.push(PropertyType::Arrow);
         for built_in in [PropertyType::Position, PropertyType::Heading] {
             let held = properties_of(document, &form.thing)
                 .iter()
@@ -1768,6 +1771,14 @@ fn form_edit(form: PropertyForm) -> EditRun {
         let start = match form.kind {
             PropertyType::Heading => None,
             PropertyType::Position => Some(StartsAs::new(StartRule::Anywhere)),
+            PropertyType::Arrow => {
+                // An arrow starts in a random direction of length 1, a start no control of the sheet changes.
+                let mut direction = SheetLine::new(LineKind::RandomDirection);
+                direction.length = Slot::Filled(SheetValue::Literal(SheetLiteral::Number(1.0)));
+                let mut start = StartsAs::new(StartRule::Value);
+                start.value = Slot::Filled(SheetValue::Phrase(Box::new(direction)));
+                Some(start)
+            }
             kind => {
                 let mut start = StartsAs::new(StartRule::Value);
                 start.value = Slot::Filled(match first {
@@ -2208,13 +2219,20 @@ fn value_slider(
         return value;
     }
     ui.data_mut(|data| data.remove::<f64>(id));
-    let released = if response.changed() { Some(value) } else { held };
+    // The slider rounds a default off its steps as it draws. egui reports that as a change. Only the author's click,
+    // drag or key edits the default, and otherwise the slider shows the stored default.
+    let touched = response.has_focus() || response.clicked() || response.drag_stopped();
+    let released = if response.changed() && touched {
+        Some(value)
+    } else {
+        held
+    };
     if let Some(released) = released
         && released != parameter.default
     {
         *pending = Some(set(parameter.min, parameter.max, released, parameter.unit.clone()));
     }
-    value
+    released.unwrap_or(parameter.default)
 }
 
 /// Returns how `state` of `property` is named on its own: its name, or the property's name and its name when another

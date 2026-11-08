@@ -11,8 +11,8 @@
 //! buttons under a card add a line at its end. Each line has one menu, "Line 2 actions", always drawn, which renames,
 //! moves, draws new numbers for and deletes the line.
 //!
-//! A *When block* is a When line and the lines inside it. Each block ends with a row "+ Add inside line 4" whose menu
-//! adds a line of any kind at the end of the block, inner blocks closing before outer ones. A move follows the
+//! A *block* is a When or Repeat line and the lines inside it. Each block ends with a row "+ Add inside line 4" whose
+//! menu adds a line of any kind at the end of the block, inner blocks closing before outer ones. A move follows the
 //! outline: the first line of a block moves up out of it, a line beside a block moves into it, and a block moves with
 //! its lines.
 //!
@@ -20,6 +20,12 @@
 //! select of the line without opening it. Two kinds of blank open as the focus reaches them: an empty state blank (a
 //! Count's state after its property, a Become's old state after its new state) and the empty upper number of a range
 //! after its lower number.
+//!
+//! A card over agents offers the agent lines of round 1 under the same add buttons, and "+ Repeat..." after them: looks
+//! at the agents within a distance with their summaries, picks and looks at cells of the ground, random numbers and
+//! directions, Choose and Depending on, Steer, Keep between, Move, Leave and Record. A summary of a look at agents
+//! names itself after what it sums up, and "+" after the summaries adds another. A problem the lowering finds in a
+//! line, such as a Set of a property another line steers, shows under that line.
 //!
 //! Each line is a group named "Line 2: " and its sentence, and each control inside it is named by its visible words,
 //! a blank or a select by what it wants and where it is ("Line 2: choose the old state"). Hovering or focusing
@@ -37,8 +43,8 @@ use egui::{
 use henad_core::diagnostic::DiagnosticSeverity;
 use henad_graph::sheet::check::{SheetDiagnostic, SheetReport, holds_draw};
 use henad_graph::sheet::document::{
-    CardRuns, CompareTest, LineKind, LookSummary, MadeOf, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine,
-    SheetProperty, SheetValue, Slot, SummaryKind,
+    Around, CardRuns, CellWhich, ChooseRow, CompareTest, LineKind, LineMode, LookSummary, MadeOf, PickRule,
+    PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine, SheetProperty, SheetValue, Slot, SummaryKind,
 };
 use henad_graph::sheet::edit::{LineField, MoveDirection, SheetBuilder, SheetEdit, SheetEditError};
 use henad_graph::sheet::rates::{chance_note, conversion, count_as_draw, grow_count, parameter_defaults, rate_note};
@@ -57,15 +63,17 @@ use henad_graph::sheet::sentence::{
     use_instead_name, uses_result_below, uses_result_inside,
 };
 use henad_graph::sheet::sentence::{
-    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, add_for_each_label, add_for_each_name, comparison_words,
-    competing_parts, competing_tooltip, long_tick_note, rate_grow_prompt, tick_set_notice,
+    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, RANDOM_VALUE_GROUP, add_choose_row_name, add_for_each_label,
+    add_for_each_name, add_summary_name, comparison_words, competing_parts, competing_tooltip, include_me_tool,
+    leave_me_out_tool, long_tick_note, rate_grow_prompt, tick_set_notice,
 };
 
 use super::help::{Help, help_button};
 use super::picker::{
     CalcDraft, CardPicker, Choice, DraftUpdate, LineContext, SelectOption, apply_choice, around_options,
-    calculate_edit, choose_when, comparison_options, list_len, operation_options, phrase_of, picker_for, read_property,
-    slot_at, summary_options, typed_text, unit_options, value_at,
+    calculate_edit, choose_when, comparison_options, is_result_line, list_len, look_summary_options, looked_at_picker,
+    mode_options, operation_options, phrase_of, pick_options, picker_for, read_property, slot_at, summary_options,
+    summary_picker, typed_text, unit_options, value_at, which_options,
 };
 use super::sheet_pane::SheetTrial;
 use super::widgets::{
@@ -449,16 +457,23 @@ fn cards_ui(
     let highlight_id = ui.id().with("henad_card_highlight");
     let highlight: Vec<String> = ui.data(|data| data.get_temp(highlight_id)).unwrap_or_default();
     let mut hovered: Vec<String> = Vec::new();
-    let cells = document.world.made_of == MadeOf::Cells;
-    let has_tick_card = document
-        .cards
-        .iter()
-        .any(|card| card.every == "cells" && card.runs == CardRuns::EachTick);
-    if cells && !has_tick_card {
+    let every = match document.world.made_of {
+        MadeOf::Agents => document.agents.first().map(|kind| kind.id.as_str()),
+        _ => Some("cells"),
+    };
+    let has_tick_card = |every: &str| {
+        document
+            .cards
+            .iter()
+            .any(|card| card.every == every && card.runs == CardRuns::EachTick)
+    };
+    if let Some(every) = every
+        && !has_tick_card(every)
+    {
         // A blank model holds no card. Its first line adds the card that runs each tick.
-        ui.label(RichText::new(card_header("cell")).strong());
+        ui.label(RichText::new(card_header(&sentences.thing_word(every))).strong());
         ui.weak(BLANK_MODEL_CARD);
-        add_buttons_ui(ui, document, state, None, pending);
+        add_buttons_ui(ui, document, state, None, every, pending);
         ui.add_space(16.0);
     }
     let mut overridden: Vec<(String, String)> = Vec::new();
@@ -562,15 +577,11 @@ fn card_ui(
     let relations = CardRelations::new(drawing.document, card);
     let report = drawing.report;
     let notes = relations.notes(drawing.sentences, |line| !report.is_skipped(line));
-    let editable = card.every == "cells";
     let closing = closing_blocks(&relations, lines);
     let list = ui.scope(|ui| {
         let mut rows = Vec::with_capacity(lines.len());
         for (index, line) in lines.iter().enumerate() {
             rows.push(line_ui(ui, drawing, &relations, &notes, line, state, hovered, pending));
-            if !editable {
-                continue;
-            }
             for block in closing.get(&index).into_iter().flatten() {
                 add_inside_ui(ui, drawing, block, state, pending);
             }
@@ -581,13 +592,16 @@ fn card_ui(
         ui.unique_id()
     });
     accessible_group(ui.ctx(), list.inner, Role::List, &list_name, list.response.rect);
-    if editable {
-        if card.line_tables.values().any(|line| line.kind == LineKind::When) {
-            ui.add_space(4.0);
-            ui.weak(ADD_AT_END_NOTE);
-        }
-        add_buttons_ui(ui, drawing.document, state, Some(card), pending);
+    if card.line_tables.values().any(|line| is_block(line.kind)) {
+        ui.add_space(4.0);
+        ui.weak(ADD_AT_END_NOTE);
     }
+    add_buttons_ui(ui, drawing.document, state, Some(card), &card.every, pending);
+}
+
+/// Returns whether a line of `kind` holds lines: a When or a Repeat.
+fn is_block(kind: LineKind) -> bool {
+    matches!(kind, LineKind::When | LineKind::Repeat)
 }
 
 /// Returns the competing groups of the card of `relations` as the brackets that join them: each the indices in
@@ -664,13 +678,13 @@ struct ClosingBlock {
     depth: usize,
 }
 
-/// Returns the When blocks of `lines` that close after each line, by the line's index, inner blocks first.
+/// Returns the When and Repeat blocks of `lines` that close after each line, by the line's index, inner blocks first.
 ///
-/// A block closes after the last line inside it, or after its When line while it holds none.
+/// A block closes after the last line inside it, or after its When or Repeat line while it holds none.
 fn closing_blocks(relations: &CardRelations<'_>, lines: &[CardLine]) -> BTreeMap<usize, Vec<ClosingBlock>> {
     let mut closing: BTreeMap<usize, Vec<ClosingBlock>> = BTreeMap::new();
     for (index, line) in lines.iter().enumerate() {
-        if relations.line(&line.id).is_none_or(|data| data.kind != LineKind::When) {
+        if relations.line(&line.id).is_none_or(|data| !is_block(data.kind)) {
             continue;
         }
         let last = lines
@@ -704,11 +718,12 @@ fn add_inside_ui(
     state: &CardState,
     pending: &mut Option<CardEdit>,
 ) {
-    let states = pattern_states(drawing.document);
+    let states = pattern_states(drawing.document, &drawing.card.every);
     let states = states.as_ref().map(|(new, old)| (new.as_str(), old.as_str()));
     let label = add_inside_label(block.number);
     let title = add_inside_name(block.number);
     let groups = add_inside_groups(drawing.card);
+    let agents = drawing.card.every != "cells";
     let id = state.widgets.with(("add inside", &block.id));
     let chosen = ui
         .horizontal(|ui| {
@@ -726,7 +741,7 @@ fn add_inside_ui(
                     for &button in groups {
                         ui.add_space(4.0);
                         ui.label(RichText::new(button.group()).weak().small());
-                        if let Some(item) = add_items_ui(ui, button, states) {
+                        if let Some(item) = add_items_ui(ui, button, agents, states) {
                             chosen = Some(item);
                         }
                     }
@@ -744,15 +759,18 @@ fn add_inside_ui(
             Some(drawing.card.id.clone()),
             Some(block.id.clone()),
             item,
+            &drawing.card.every,
         ));
     }
 }
 
-/// Returns the groups of the menu of a When block's add row on `card`: the Change group alone on a card that runs once,
-/// and every group otherwise.
+/// Returns the groups of the menu of a block's add row on `card`: the Change group alone on a card that runs once, and
+/// otherwise every group of the card's kind of thing, Repeat among them on a card over agents.
 fn add_inside_groups(card: &SheetCard) -> &'static [AddButton] {
     if card.runs == CardRuns::Once {
         &[AddButton::Change]
+    } else if card.every != "cells" {
+        &AddButton::AGENTS_INSIDE_ORDER
     } else {
         &AddButton::ADD_INSIDE_ORDER
     }
@@ -768,7 +786,7 @@ pub fn card_buttons(
     report: &SheetReport,
     card_index: usize,
 ) -> Vec<LineControl> {
-    let Some(card) = document.cards.get(card_index).filter(|card| card.every == "cells") else {
+    let Some(card) = document.cards.get(card_index) else {
         return Vec::new();
     };
     let values = parameter_defaults(document);
@@ -830,18 +848,24 @@ fn button_of<'a>(document: &'a SheetDocument, card: &SheetCard) -> Option<&'a st
 
 // The add buttons
 
-/// Draws the add buttons under `card`, or under the heading of the card that runs each tick while there is none. A card
-/// that runs once offers "+ Change" alone.
+/// Draws the add buttons under `card`, or under the heading of the card that runs each tick over `every` while there is
+/// none. A card that runs once offers "+ Change" alone, and a card over agents adds "+ Repeat...".
 fn add_buttons_ui(
     ui: &mut Ui,
     document: &SheetDocument,
     state: &CardState,
     card: Option<&SheetCard>,
+    every: &str,
     pending: &mut Option<CardEdit>,
 ) {
     let once = card.is_some_and(|card| card.runs == CardRuns::Once);
-    let buttons: &[AddButton] = if once { &[AddButton::Change] } else { &AddButton::ALL };
-    let states = pattern_states(document);
+    let agents = every != "cells";
+    let buttons: &[AddButton] = match (once, agents) {
+        (true, _) => &[AddButton::Change],
+        (false, true) => &AddButton::AGENTS,
+        (false, false) => &AddButton::ALL,
+    };
+    let states = pattern_states(document, every);
     let card_id = card.map(|card| card.id.clone());
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
@@ -853,41 +877,47 @@ fn add_buttons_ui(
                 Button::new(button.label()).wrap_mode(egui::TextWrapMode::Extend),
                 button.label(),
             )
-            .on_hover_text(button.tooltip());
+            .on_hover_text(button.tooltip_for(agents));
             let chosen = Popup::menu(&response)
                 .id(id.with("menu"))
                 .show(|ui| {
                     add_menu_ui(
                         ui,
                         *button,
+                        agents,
                         states.as_ref().map(|(new, old)| (new.as_str(), old.as_str())),
                     )
                 })
                 .and_then(|popup| popup.inner);
             if let Some(item) = chosen {
-                *pending = Some(add_line_edit(card_id.clone(), None, item));
+                *pending = Some(add_line_edit(card_id.clone(), None, item, every));
             }
         }
     });
 }
 
-/// Draws the menu of the add button `button`: its heading, and each item with its pattern in grey under it. Returns
-/// the item chosen.
+/// Draws the menu of the add button `button`, on a card over agents when `agents` holds: its heading, and each item
+/// with its pattern in grey under it. Returns the item chosen.
 ///
 /// The pattern is painted, so it stays out of the accessibility tree and the item is named by its label alone.
-fn add_menu_ui(ui: &mut Ui, button: AddButton, states: Option<(&str, &str)>) -> Option<AddItem> {
-    ui.strong(button.heading());
-    add_items_ui(ui, button, states)
+fn add_menu_ui(ui: &mut Ui, button: AddButton, agents: bool, states: Option<(&str, &str)>) -> Option<AddItem> {
+    ui.strong(button.heading_for(agents));
+    add_items_ui(ui, button, agents, states)
 }
 
-/// Draws each item of the menu of the add button `button` with its pattern in grey under it, and returns the item
-/// chosen.
-fn add_items_ui(ui: &mut Ui, button: AddButton, states: Option<(&str, &str)>) -> Option<AddItem> {
+/// Draws each item of the menu of the add button `button`, on a card over agents when `agents` holds, with its pattern
+/// in grey under it, and returns the item chosen.
+fn add_items_ui(ui: &mut Ui, button: AddButton, agents: bool, states: Option<(&str, &str)>) -> Option<AddItem> {
     let mut chosen = None;
-    for item in button.items() {
-        if *item == AddItem::WithChance {
+    for item in button.items_for(agents) {
+        let group = match item {
+            AddItem::WithChance => Some(SHARED_DRAW_GROUP),
+            AddItem::RandomNumber => Some(RANDOM_VALUE_GROUP),
+            _ => None,
+        };
+        if let Some(group) = group {
             ui.add_space(4.0);
-            ui.label(RichText::new(SHARED_DRAW_GROUP).weak().small());
+            ui.label(RichText::new(group).weak().small());
         }
         if ui.add(Button::new(item.label()).frame(false)).clicked() {
             chosen = Some(*item);
@@ -903,19 +933,29 @@ fn add_items_ui(ui: &mut Ui, button: AddButton, states: Option<(&str, &str)>) ->
     chosen
 }
 
-/// Returns the second and first states of the model's first States property with two or more states, as `(new, old)`,
-/// which the Become patterns of the add menus name.
-fn pattern_states(document: &SheetDocument) -> Option<(String, String)> {
-    let property = document
-        .cells
+/// Returns the second and first states of the first States property with two or more states of the kind of thing
+/// `every`, as `(new, old)`, which the Become patterns of the add menus name.
+fn pattern_states(document: &SheetDocument, every: &str) -> Option<(String, String)> {
+    let properties: &[SheetProperty] = if every == "cells" {
+        document.cells.as_deref().unwrap_or_default()
+    } else {
+        document
+            .agents
+            .iter()
+            .find(|kind| kind.id == every)
+            .map_or(&[], |kind| kind.properties.as_slice())
+    };
+    let property = properties
         .iter()
-        .flatten()
         .find(|property| property.property_type == PropertyType::States && property.states.len() >= 2)?;
     Some((property.states[1].name.clone(), property.states[0].name.clone()))
 }
 
-/// Returns the line that `item` adds, with its blanks empty.
-fn new_line(item: AddItem) -> SheetLine {
+/// Returns the line that `item` adds on a card over the kind of thing `every`, with its blanks empty.
+///
+/// A look at agents looks at the card's own kind, leaves the agent itself out and starts with one average, a Pick a
+/// cell picks the open cell with the most of a property, and a Look at a cell looks at the cell an agent is on.
+fn new_line(item: AddItem, every: &str) -> SheetLine {
     let compare = || {
         let mut compare = SheetLine::new(LineKind::Compare);
         compare.test = Some(CompareTest::Is);
@@ -955,22 +995,70 @@ fn new_line(item: AddItem) -> SheetLine {
         AddItem::Calculate => SheetLine::new(LineKind::Calculate),
         AddItem::Set => SheetLine::new(LineKind::Set),
         AddItem::When => SheetLine::new(LineKind::When),
+        AddItem::CountAgents | AddItem::LookAroundAgents => {
+            let count = item == AddItem::CountAgents;
+            let mut line = SheetLine::new(if count { LineKind::Count } else { LineKind::LookAround });
+            line.around = Some(Around::AgentsWithin);
+            line.agent_kind = Some(every.to_owned());
+            line.include_me = Some(false);
+            if count {
+                line.whose = phrase(compare());
+            } else {
+                let mut summary = LookSummary::new("", "");
+                summary.summary = Some(SummaryKind::Average);
+                line.summaries = vec![summary];
+            }
+            line
+        }
+        AddItem::PickCell => {
+            let mut line = SheetLine::new(LineKind::PickCell);
+            line.around = Some(Around::Cells8);
+            line.pick = Some(PickRule::Most);
+            line.open_only = Some(true);
+            line
+        }
+        AddItem::CellHereOrAhead => {
+            let mut line = SheetLine::new(LineKind::LookAtCell);
+            line.which = Some(CellWhich::Here);
+            line
+        }
+        AddItem::RandomNumber => SheetLine::new(LineKind::RandomNumber),
+        AddItem::RandomDirection => SheetLine::new(LineKind::RandomDirection),
+        AddItem::Choose => {
+            let mut line = SheetLine::new(LineKind::Choose);
+            line.rows = vec![ChooseRow::default()];
+            line
+        }
+        AddItem::DependingOn => SheetLine::new(LineKind::DependingOn),
+        AddItem::Steer | AddItem::MoveBy | AddItem::MoveTo => {
+            let (kind, mode) = match item {
+                AddItem::Steer => (LineKind::Steer, LineMode::By),
+                AddItem::MoveBy => (LineKind::Move, LineMode::By),
+                _ => (LineKind::Move, LineMode::To),
+            };
+            let mut line = SheetLine::new(kind);
+            line.mode = Some(mode);
+            line
+        }
+        AddItem::KeepBetween => SheetLine::new(LineKind::KeepBetween),
+        AddItem::Leave => SheetLine::new(LineKind::Leave),
+        AddItem::Record => SheetLine::new(LineKind::Record),
+        AddItem::Repeat => SheetLine::new(LineKind::Repeat),
         _ => SheetLine::new(LineKind::Become),
     }
 }
 
-/// Returns the edit that adds the line of `item` at the end of the card `card`, or of a new card that runs each tick
-/// for `None`, or at the end of the When block `inside` when one is given.
-fn add_line_edit(card: Option<String>, inside: Option<String>, item: AddItem) -> CardEdit {
-    let line = new_line(item);
+/// Returns the edit that adds the line of `item` at the end of the card `card` over the kind of thing `every`, or of a
+/// new card that runs each tick over `every` for `None`, or at the end of the block `inside` when one is given.
+fn add_line_edit(card: Option<String>, inside: Option<String>, item: AddItem, every: &str) -> CardEdit {
+    let line = new_line(item, every);
+    let every = every.to_owned();
     CardEdit {
         run: Box::new(move |builder| {
             let card = match card {
                 Some(card) => card,
                 None => builder
-                    .apply(SheetEdit::AddCard {
-                        every: "cells".to_owned(),
-                    })?
+                    .apply(SheetEdit::AddCard { every })?
                     .into_iter()
                     .next()
                     .unwrap_or_default(),
@@ -1367,7 +1455,7 @@ fn property_of<'a>(document: &'a SheetDocument, id: &str) -> Option<&'a SheetPro
 /// offer after the skip note, then the count used as a chance or a rate, then the note of a rate with its mean stay as
 /// its description and the long tick, or the note of a chance for each, then the offer to grow a rate for each count,
 /// then the line's `relation_notes`: the gap, coverage and order notes, the offers to fold a When, and the notes
-/// inside and under a When.
+/// inside and under a When. The author's own note under the line comes last.
 ///
 /// Note that the unit mismatch of a rate is a warning of the check, already among the line's notes.
 fn card_notes(
@@ -1473,7 +1561,18 @@ fn card_notes(
             .filter(|note| note.line == line.id)
             .map(|note| relation_line_note(line, note)),
     );
+    notes.extend(author_note(line_data));
     notes
+}
+
+/// Returns the author's own note under `line`, in grey, `None` for a line with none.
+fn author_note(line: &SheetLine) -> Option<LineNote> {
+    Some(LineNote {
+        text: line.note.clone()?,
+        color: NoteColor::Grey,
+        action: None,
+        description: None,
+    })
 }
 
 /// Returns `note`, a relation note under `line`, as the card draws it: grey, or amber with its button for an offer to
@@ -1555,7 +1654,6 @@ fn line_ui(
     let Some(line_data) = relations.line(&line.id) else {
         return Rect::NOTHING;
     };
-    let editable = drawing.card.every == "cells";
     let context = LineContext {
         document: drawing.document,
         sentences: drawing.sentences,
@@ -1580,13 +1678,12 @@ fn line_ui(
             Label::new(RichText::new(line.number.to_string()).weak()),
         );
         for (index, part) in line.parts.iter().enumerate() {
-            let place = line.places.get(index).cloned().flatten().filter(|_| editable);
+            let place = line.places.get(index).cloned().flatten();
             let parts = PartDrawing {
                 context: &context,
                 line,
                 index,
                 place,
-                editable,
             };
             part_ui(ui, &parts, part, state, &mut gathered, pending);
             if let Some(place) = parts.place.as_ref().and_then(|place| list_end(line_data, place)) {
@@ -1597,10 +1694,29 @@ fn line_ui(
                 add_value_ui(ui, &plus, state, &mut gathered, pending);
             }
         }
-        if editable {
-            ui.add_space(6.0);
-            line_menu_ui(ui, drawing.document, relations, line, line_data, state, pending);
+        if line_data.kind == LineKind::Choose {
+            let parts = PartDrawing {
+                context: &context,
+                line,
+                index: line.parts.len(),
+                place: Some(PartPlace {
+                    target: PlaceTarget::Slot(format!("row.{}.value", line_data.rows.len())),
+                    want: Some(Blank::Value),
+                }),
+            };
+            add_row_ui(ui, &parts, state, &mut gathered, pending);
         }
+        if line_data.around == Some(Around::AgentsWithin) && line_data.kind == LineKind::LookAround {
+            let parts = PartDrawing {
+                context: &context,
+                line,
+                index: line.parts.len(),
+                place: None,
+            };
+            add_summary_ui(ui, &parts, state, &mut gathered, pending);
+        }
+        ui.add_space(6.0);
+        line_menu_ui(ui, drawing.document, relations, line, line_data, state, pending);
         ui.unique_id()
     });
     let rect = row.response.rect;
@@ -1626,21 +1742,13 @@ fn line_ui(
         line,
         line_data,
         card_notes(drawing, line, line_data, relation_notes, filling),
-        editable,
         pending,
     );
     rect
 }
 
-/// Draws `notes` under `line`, each note's button running its edit when the pane edits the line.
-fn notes_ui(
-    ui: &mut Ui,
-    line: &CardLine,
-    line_data: &SheetLine,
-    notes: Vec<LineNote>,
-    editable: bool,
-    pending: &mut Option<CardEdit>,
-) {
+/// Draws `notes` under `line`, each note's button running its edit.
+fn notes_ui(ui: &mut Ui, line: &CardLine, line_data: &SheetLine, notes: Vec<LineNote>, pending: &mut Option<CardEdit>) {
     for note in notes {
         let color = match note.color {
             NoteColor::Amber => ui.visuals().warn_fg_color,
@@ -1655,9 +1763,7 @@ fn notes_ui(
                     .accesskit_node_builder(label.id, |node| node.set_description(description.as_str()));
                 label.on_hover_text(description.as_str());
             }
-            if let Some(action) = note.action
-                && editable
-            {
+            if let Some(action) = note.action {
                 let button = add_button(
                     ui,
                     true,
@@ -1723,10 +1829,8 @@ struct PartDrawing<'a> {
     line: &'a CardLine,
     /// Index of the part in the line's parts.
     index: usize,
-    /// Place of the part in the line, `None` for a part no edit sets or on a card the pane does not edit.
+    /// Place of the part in the line, `None` for a part no edit sets.
     place: Option<PartPlace>,
-    /// Whether the pane edits the line.
-    editable: bool,
 }
 
 /// Draws `part`, gathers what `gathered` holds, and opens its picker or select when its control is clicked.
@@ -1753,7 +1857,7 @@ fn part_ui(
         // A word that does not wrap moves to the next row whole when the row has no room left for it.
         SentencePart::ConditionWord(words) => {
             ui.add(Label::new(RichText::new(*words).strong()).extend());
-            if drawing.editable && !gathered.arrow_drawn && takes_condition(drawing.context.line.kind) {
+            if !gathered.arrow_drawn && takes_condition(drawing.context.line.kind) {
                 gathered.arrow_drawn = true;
                 condition_arrow_ui(ui, drawing, state, gathered, pending);
             }
@@ -1975,9 +2079,90 @@ fn add_value_ui(
     control_picker(ui, drawing, place, &blank, &response, id, state, gathered, pending);
 }
 
-/// Returns whether a line of `kind` holds a condition of its own: a Become, a Set or a When.
+/// Draws "+" after a Choose line, named "Line 7: add another row". A click opens the picker of a value, and a choice
+/// adds a row that gives it, with its condition empty.
+fn add_row_ui(
+    ui: &mut Ui,
+    drawing: &PartDrawing<'_>,
+    state: &mut CardState,
+    gathered: &mut LineDrawing<'_>,
+    pending: &mut Option<CardEdit>,
+) {
+    let Some(place) = drawing.place.as_ref() else {
+        return;
+    };
+    let id = state.control_id(&drawing.line.id, &place.target, 0);
+    ui.add_space(4.0);
+    let response = text_control(
+        ui,
+        Some(id),
+        "+",
+        mcs::GRAY_100,
+        &add_choose_row_name(&drawing.line.prefix),
+    );
+    gathered.focused |= response.has_focus();
+    control_picker(
+        ui,
+        drawing,
+        place,
+        &SentencePart::Blank(Blank::Value),
+        &response,
+        id,
+        state,
+        gathered,
+        pending,
+    );
+}
+
+/// Draws "+" after the summaries of a look at agents, named "Line 1: add another summary". A click opens the picker of
+/// a new summary, and a choice adds it with its value empty.
+fn add_summary_ui(
+    ui: &mut Ui,
+    drawing: &PartDrawing<'_>,
+    state: &CardState,
+    gathered: &mut LineDrawing<'_>,
+    pending: &mut Option<CardEdit>,
+) {
+    let line = drawing.line;
+    let target = PlaceTarget::Slot("summaries".to_owned());
+    let id = state.control_id(&line.id, &target, 3);
+    ui.add_space(4.0);
+    let response = text_control(ui, Some(id), "+", mcs::GRAY_100, &add_summary_name(&line.prefix));
+    gathered.focused |= response.has_focus();
+    let popup_id = id.with("picker");
+    if !Popup::is_id_open(ui.ctx(), popup_id) && !response.clicked() {
+        return;
+    }
+    let mut open = false;
+    let choice = summary_picker().show(ui, &response, popup_id, &mut open);
+    gathered.picker_open |= open;
+    if let Some(Choice::Summary(summary)) = choice {
+        let index = drawing.context.line.summaries.len();
+        // A count has no value to fill.
+        let after = if summary == SummaryKind::Count {
+            After::Stay
+        } else {
+            After::Open {
+                line: line.id.clone(),
+                target: PlaceTarget::Slot(format!("summaries.{index}.value")),
+            }
+        };
+        *pending = Some(CardEdit::commands(
+            vec![SheetEdit::AddSummary {
+                line: line.id.clone(),
+                summary,
+            }],
+            after,
+        ));
+    }
+}
+
+/// Returns whether a line of `kind` holds a condition of its own: a Become, a Set, a Leave, a Record or a When.
 fn takes_condition(kind: LineKind) -> bool {
-    matches!(kind, LineKind::Become | LineKind::Set | LineKind::When)
+    matches!(
+        kind,
+        LineKind::Become | LineKind::Set | LineKind::Leave | LineKind::Record | LineKind::When
+    )
 }
 
 /// Draws the arrow after the condition word of a change. A click opens "Choose when" for its condition.
@@ -2038,6 +2223,11 @@ fn place_picker(drawing: &PartDrawing<'_>, place: &PartPlace, part: &SentencePar
         return choose_when(context, &otherwise_if_always(context));
     }
     let line = context.line;
+    if let PlaceTarget::Slot(path) = &place.target
+        && path.starts_with("summaries.")
+    {
+        return looked_at_picker(context);
+    }
     let value = value_at(line, &place.target);
     let property = match &place.target {
         PlaceTarget::Field {
@@ -2106,6 +2296,7 @@ fn choice_edit(
         let number_use = match place.want {
             Some(Blank::Chance) => NumberUse::Chance,
             Some(Blank::Rate) => NumberUse::Rate,
+            Some(Blank::Times) => NumberUse::Times,
             _ => NumberUse::Number,
         };
         let line = drawing.context.line;
@@ -2213,6 +2404,22 @@ fn select_popup(
             field: FieldPlace::RateUnit,
             ..
         } => unit_options(),
+        PlaceTarget::Field {
+            field: FieldPlace::Mode,
+            ..
+        } => mode_options(line.kind == LineKind::Steer),
+        PlaceTarget::Field {
+            field: FieldPlace::Pick,
+            ..
+        } => pick_options(),
+        PlaceTarget::Field {
+            field: FieldPlace::Which,
+            ..
+        } => which_options(),
+        PlaceTarget::Field {
+            field: FieldPlace::LookSummary(index),
+            ..
+        } => look_summary_options(*index, line.summaries.len() > 1),
         _ => Vec::new(),
     };
     if anchor.clicked() {
@@ -2250,6 +2457,24 @@ fn select_edit(
         return None;
     };
     let field = match option {
+        SelectOption::Mode(mode) => LineField::Mode(Some(mode)),
+        SelectOption::Pick(pick) => LineField::Pick(Some(pick)),
+        SelectOption::Which(which) => LineField::Which(Some(which)),
+        SelectOption::LookSummary(index, kind) => {
+            let mut summaries = line.summaries.clone();
+            let summary = summaries.get_mut(index)?;
+            summary.summary = Some(kind);
+            if kind == SummaryKind::Count {
+                summary.value = Slot::Blank;
+            }
+            LineField::Summaries(summaries)
+        }
+        SelectOption::RemoveSummary(index) => {
+            return Some(CardEdit::commands(
+                vec![SheetEdit::DeleteSummary { line: line_id, index }],
+                After::Stay,
+            ));
+        }
         SelectOption::Test(test) => LineField::Test(Some(test)),
         SelectOption::Around(around) => LineField::Around(Some(around)),
         SelectOption::Unit(unit) => LineField::RateUnit(Some(unit)),
@@ -2356,6 +2581,8 @@ fn select_ui(ui: &mut Ui, id: Option<Id>, words: &str, name: &str, empty: bool) 
 enum LineTool {
     /// Rename the line's result.
     Rename,
+    /// Count the agent itself among the agents a look at agents looks at, or leave it out.
+    IncludeMe,
     /// Move the line up.
     MoveUp,
     /// Move the line down.
@@ -2390,7 +2617,9 @@ fn line_menu_ui(
         mcs::GRAY_400,
         &line_actions_name(&line.prefix),
     );
-    let is_result = line_data.name.is_some();
+    let is_result = is_result_line(line_data.kind);
+    let looks_at_agents = line_data.around == Some(Around::AgentsWithin);
+    let includes_me = line_data.include_me == Some(true);
     let (up, down) = can_move(relations, &line.id);
     let draws = holds_draw(line_data);
     let change = conversion(document, &line.id);
@@ -2405,6 +2634,12 @@ fn line_menu_ui(
                 }
             };
             tool(ui, is_result, true, rename_line(&line.word), LineTool::Rename);
+            let include = if includes_me {
+                leave_me_out_tool(&line.word)
+            } else {
+                include_me_tool(&line.word)
+            };
+            tool(ui, looks_at_agents, true, include, LineTool::IncludeMe);
             tool(ui, true, up, move_line_up(&line.word), LineTool::MoveUp);
             tool(ui, true, down, move_line_down(&line.word), LineTool::MoveDown);
             tool(ui, draws, true, DRAW_NEW_NUMBERS.to_owned(), LineTool::DrawNewNumbers);
@@ -2439,6 +2674,13 @@ fn line_menu_ui(
                 text: line_data.name.clone().unwrap_or_default(),
                 message: None,
                 focused: false,
+            });
+        }
+        Some(LineTool::IncludeMe) => {
+            *pending = edit(SheetEdit::SetField {
+                line: line_id,
+                phrase: String::new(),
+                field: LineField::IncludeMe(Some(!includes_me)),
             });
         }
         Some(LineTool::MoveUp) => {
@@ -2563,7 +2805,7 @@ fn new_parameter_dialog(ui: &Ui, document: &SheetDocument, state: &mut CardState
                 run: Box::new(move |builder| {
                     let made = builder.apply(SheetEdit::AddParameter {
                         name: parameter.name,
-                        parameter_type: henad_graph::sheet::document::ParameterType::Number,
+                        parameter_type: parameter.parameter_type,
                         min: parameter.min,
                         max: parameter.max,
                         default: parameter.default,

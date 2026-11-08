@@ -108,7 +108,10 @@ rows, the name as a `commit_field` named `sheet_parameter_name_field` (an empty 
 the old name back, with `PARAMETER_NAME_MISSING` or `parameter_name_taken` in
 `PaneState::parameter_message`), `value_slider` (an egui `Slider` named `value_slider_name`, step
 `slider_step`: about a 200th of the range rounded down to 1, 2 or 5 times a power of ten. A drag
-holds its value in temp data and commits once when let go, a click or a key at once), the value
+holds its value in temp data and commits once when let go, a click or a key at once. egui rounds a
+default off the steps as it draws and reports it as `changed`. Only a focused, clicked or released
+slider commits, and an untouched slider returns the stored default to the value field, so boids'
+Protected range keeps and shows 8 in 0.5 to 50), the value
 field named `value_field_name` (a typed value outside the range widens it) and × named
 `delete_parameter_name`, then `range_row`: Min and Max fields (`with_range_end`: Min above Max
 swaps, equal ends make Max one more, the value moves into the range) and Unit as a
@@ -149,11 +152,13 @@ shows as the form's message (`FormKind` on `Pending`).
 `property_table` draws any thing's table and `property_form_or_add` its form or "+ Add property",
 named `add_property_name(kind)` under the agents and `ADD_GROUND_PROPERTY_NAME` under the ground.
 `PropertyForm::thing` keeps the form under its own table. `form_kinds` offers States and Number,
-Integer for cells and agents (the ground lowers only numbers and states), and for agents Yes or no,
-then Position or Heading while the agents hold none, and always the property's own kind. A new
-property starts in its first state, at 0, at no (`Bool(false)`), anywhere at random (a Position) or
-with no start (a Heading). `kind_words` and `starts_text(document, property)` read every kind and
-start ("Anywhere at random", `on_ground_start`, `PAINTED`, "All Yes", `HEADING_START`).
+Integer for cells and agents (the ground lowers only numbers and states), and for agents Yes or no
+and Arrow (S28, `ARROW_KIND_DESCRIPTION`), then Position or Heading while the agents hold none, and
+always the property's own kind. A new property starts in its first state, at 0, at no
+(`Bool(false)`), anywhere at random (a Position), in a random direction of length 1 (an Arrow, a
+start no control changes) or with no start (a Heading). `kind_words` and `starts_text(document,
+property)` read every kind and start ("Anywhere at random", `on_ground_start`, `PAINTED`, "All Yes",
+`HEADING_START`).
 `start_select` offers by kind: a state or By chance (with `PAINTED` as a selected entry that
 changes nothing while the start is painted), All Yes or All No, Anywhere at random or each state of
 a ground States property that `StartsAs::paints_single_cells` accepts, the predicate the lowering's

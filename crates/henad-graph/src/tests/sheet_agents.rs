@@ -576,3 +576,38 @@ fn a_node_id_of_the_fold_is_a_node_the_sheet_owns() {
     assert_eq!(origin.path, "card.bird_tick");
     assert!(node < NodeId::new(1000).expect("an id"));
 }
+
+#[test]
+fn a_card_editor_reads_each_lowering_refusal_with_its_card_and_line() {
+    let set_after_steer = boids_with(
+        "[card.line.l9]\nkind = \"set\"\nproperty = \"velocity\"\nvalue = { my = \"velocity\" }\n\n\
+         [card.line.l9.condition]\nkind = \"always\"",
+    );
+    let move_to = boids_with(
+        "[card.line.l9]\nkind = \"move\"\nmode = \"to\"\n\n[card.line.l9.value]\nkind = \"look_at_cell\"\n\
+         which = \"here\"",
+    );
+    for (text, message) in [
+        (&set_after_steer, sentence::steered_already("Line 3", "Velocity")),
+        (&move_to, sentence::moved_by_already("Line 7")),
+    ] {
+        let parsed = crate::sheet::ParsedSheet::parse(text).expect("the sheet reads");
+        let problems = SheetFile::lowering_problems(&parsed, &parsed.check());
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        let problem = &problems[0];
+        assert_eq!(
+            (
+                problem.card,
+                problem.line.as_deref(),
+                problem.diagnostic.message.as_str()
+            ),
+            (Some(0), Some("l9"), message.as_str())
+        );
+        assert!(!problem.skips_line);
+    }
+    let parsed = crate::sheet::ParsedSheet::parse(sheet("boids.toml")).expect("boids reads");
+    assert!(
+        SheetFile::lowering_problems(&parsed, &parsed.check()).is_empty(),
+        "a sheet that lowers has no problem"
+    );
+}

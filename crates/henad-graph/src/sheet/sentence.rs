@@ -176,6 +176,8 @@ pub enum AddButton {
     Change,
     /// "+ When, for several lines".
     When,
+    /// "+ Repeat...", on a card over agents alone.
+    Repeat,
 }
 
 impl AddButton {
@@ -199,6 +201,28 @@ impl AddButton {
         Self::Calculate,
     ];
 
+    /// Every add button of a card over agents, in the order the card shows them.
+    pub const AGENTS: [Self; 7] = [
+        Self::LookAround,
+        Self::Chance,
+        Self::YesOrNo,
+        Self::Calculate,
+        Self::Change,
+        Self::When,
+        Self::Repeat,
+    ];
+
+    /// Groups of the menu of a block's add row on a card over agents, in order.
+    pub const AGENTS_INSIDE_ORDER: [Self; 7] = [
+        Self::Change,
+        Self::When,
+        Self::Repeat,
+        Self::Chance,
+        Self::LookAround,
+        Self::YesOrNo,
+        Self::Calculate,
+    ];
+
     /// Label of the button.
     pub fn label(self) -> &'static str {
         match self {
@@ -208,10 +232,11 @@ impl AddButton {
             Self::Calculate => "+ Calculate",
             Self::Change => "+ Change",
             Self::When => "+ When, for several lines",
+            Self::Repeat => REPEAT_BUTTON,
         }
     }
 
-    /// Tooltip of the button.
+    /// Tooltip of the button on a card over cells.
     pub fn tooltip(self) -> &'static str {
         match self {
             Self::LookAround => "Count or total of the cells around me (neighbours)",
@@ -220,6 +245,18 @@ impl AddButton {
             Self::Calculate => "Work out a number from two numbers",
             Self::Change => "Change a state or a number",
             Self::When => "Give several lines one shared condition",
+            Self::Repeat => "Run some lines several times each tick",
+        }
+    }
+
+    /// Returns the tooltip of the button on a card over agents when `agents` holds, and over cells otherwise.
+    pub fn tooltip_for(self, agents: bool) -> &'static str {
+        match (agents, self) {
+            (true, Self::LookAround) => "Count or sum up the agents near me, or look at a cell",
+            (true, Self::Chance) => "Change a state by chance, or draw a random number or direction",
+            (true, Self::Calculate) => "Work out a number, or choose between values",
+            (true, Self::Change) => "Change a state, a number, a direction or a place, or leave a mark",
+            _ => self.tooltip(),
         }
     }
 
@@ -233,10 +270,11 @@ impl AddButton {
             Self::Calculate => "Calculate",
             Self::Change => "Change",
             Self::When => "When",
+            Self::Repeat => "Repeat",
         }
     }
 
-    /// Heading of the button's menu.
+    /// Heading of the button's menu on a card over cells.
     pub fn heading(self) -> &'static str {
         match self {
             Self::LookAround => "Look at the cells around me (neighbours)",
@@ -245,10 +283,22 @@ impl AddButton {
             Self::Calculate => "Work out a number",
             Self::Change => "Change one of my properties",
             Self::When => "Several lines that share one condition",
+            Self::Repeat => "Lines that run several times each tick",
         }
     }
 
-    /// Items of the button's menu, in order.
+    /// Returns the heading of the button's menu on a card over agents when `agents` holds, and over cells otherwise.
+    pub fn heading_for(self, agents: bool) -> &'static str {
+        match (agents, self) {
+            (true, Self::LookAround) => "Look at the agents near me, or at a cell",
+            (true, Self::Chance) => "Change a state by chance, or draw a random value",
+            (true, Self::Calculate) => "Work out a value",
+            (true, Self::Change) => "Change one of my properties, or leave a mark",
+            _ => self.heading(),
+        }
+    }
+
+    /// Items of the button's menu on a card over cells, in order.
     pub fn items(self) -> &'static [AddItem] {
         match self {
             Self::LookAround => &[AddItem::Count, AddItem::TotalOrAverage],
@@ -262,9 +312,47 @@ impl AddButton {
             Self::Calculate => &[AddItem::Calculate],
             Self::Change => &[AddItem::Become, AddItem::Set],
             Self::When => &[AddItem::When],
+            Self::Repeat => &[AddItem::Repeat],
+        }
+    }
+
+    /// Returns the items of the button's menu on a card over agents when `agents` holds, and over cells otherwise, in
+    /// order.
+    ///
+    /// A card over agents takes chances and no rates.
+    pub fn items_for(self, agents: bool) -> &'static [AddItem] {
+        match (agents, self) {
+            (true, Self::LookAround) => &[
+                AddItem::CountAgents,
+                AddItem::LookAroundAgents,
+                AddItem::PickCell,
+                AddItem::CellHereOrAhead,
+            ],
+            (true, Self::Chance) => &[
+                AddItem::BecomeWithChance,
+                AddItem::WithChance,
+                AddItem::RandomNumber,
+                AddItem::RandomDirection,
+            ],
+            (true, Self::Calculate) => &[AddItem::Calculate, AddItem::Choose, AddItem::DependingOn],
+            (true, Self::Change) => &[
+                AddItem::Become,
+                AddItem::Set,
+                AddItem::Steer,
+                AddItem::KeepBetween,
+                AddItem::MoveBy,
+                AddItem::MoveTo,
+                AddItem::Leave,
+                AddItem::Record,
+            ],
+            _ => self.items(),
         }
     }
 }
+
+/// Heading of the group of the Chance menu of a card over agents that adds a random number or direction, above
+/// [`AddItem::RandomNumber`].
+pub const RANDOM_VALUE_GROUP: &str = "Or a random value";
 
 /// Heading of the group of the Chance menu that adds a yes or no result, above [`AddItem::WithChance`] and
 /// [`AddItem::AtRate`].
@@ -300,13 +388,43 @@ pub enum AddItem {
     Set,
     /// When, under "+ When, for several lines".
     When,
+    /// Count of the agents within a distance, under "+ Look around" on a card over agents.
+    CountAgents,
+    /// Look around at the agents within a distance, under "+ Look around" on a card over agents.
+    LookAroundAgents,
+    /// Pick a neighbouring cell of the ground, under "+ Look around" on a card over agents.
+    PickCell,
+    /// The cell here or ahead, under "+ Look around" on a card over agents.
+    CellHereOrAhead,
+    /// A random number, under "+ Chance" on a card over agents.
+    RandomNumber,
+    /// A random direction, under "+ Chance" on a card over agents.
+    RandomDirection,
+    /// Choose, under "+ Calculate" on a card over agents.
+    Choose,
+    /// Depending on my state, under "+ Calculate" on a card over agents.
+    DependingOn,
+    /// Steer, under "+ Change" on a card over agents.
+    Steer,
+    /// Keep between, under "+ Change" on a card over agents.
+    KeepBetween,
+    /// Move by an arrow, under "+ Change" on a card over agents.
+    MoveBy,
+    /// Move to a place, under "+ Change" on a card over agents.
+    MoveTo,
+    /// Leave a mark on the ground, under "+ Change" on a card over agents.
+    Leave,
+    /// Record an event, under "+ Change" on a card over agents.
+    Record,
+    /// Repeat, under "+ Repeat..." on a card over agents.
+    Repeat,
 }
 
 impl AddItem {
     /// Label of the item, which is also its accessible name.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Count => "Count",
+            Self::Count | Self::CountAgents => "Count",
             Self::TotalOrAverage => "Total or average",
             Self::BecomeWithChance => "Become, with chance",
             Self::BecomeAtRate => "Become, at a rate",
@@ -319,6 +437,20 @@ impl AddItem {
             Self::Become => "Become",
             Self::Set => "Set",
             Self::When => "When",
+            Self::LookAroundAgents => "Look around",
+            Self::PickCell => "Pick a cell",
+            Self::CellHereOrAhead => "The cell here or ahead",
+            Self::RandomNumber => "Random number",
+            Self::RandomDirection => "Random direction",
+            Self::Choose => "Choose",
+            Self::DependingOn => "Depending on",
+            Self::Steer => "Steer",
+            Self::KeepBetween => "Keep between",
+            Self::MoveBy => "Move by",
+            Self::MoveTo => "Move to",
+            Self::Leave => "Leave",
+            Self::Record => "Record",
+            Self::Repeat => "Repeat",
         }
     }
 
@@ -342,6 +474,23 @@ impl AddItem {
             Self::Become => format!("Change a state: Become {new} from {old}, when ..."),
             Self::Set => "Change a number: Set ... to ..., when ...".to_owned(),
             Self::When => "When ...: then add the lines that share it".to_owned(),
+            Self::CountAgents => "count of the agents within ... whose ... is ...".to_owned(),
+            Self::LookAroundAgents => {
+                "look at the agents within ...: average of ..., total of ... and others".to_owned()
+            }
+            Self::PickCell => "the open neighbouring cell with the most ... (ties at random)".to_owned(),
+            Self::CellHereOrAhead => "the cell I am on, or the cell ahead of me".to_owned(),
+            Self::RandomNumber => "a random number between ... and ...".to_owned(),
+            Self::RandomDirection => "a random direction of length ...".to_owned(),
+            Self::Choose => "choose, first that applies: ..., when ...; otherwise ...".to_owned(),
+            Self::DependingOn => "depending on my ...: a value for each state".to_owned(),
+            Self::Steer => "Steer ... by or towards ..., strength ...".to_owned(),
+            Self::KeepBetween => "Keep ... between ... and ...".to_owned(),
+            Self::MoveBy => "Move by ..., such as a random direction".to_owned(),
+            Self::MoveTo => "Move to a cell a line above picks".to_owned(),
+            Self::Leave => "Leave ... on a ground property, when ...".to_owned(),
+            Self::Record => "Record an event, when ...".to_owned(),
+            Self::Repeat => "Repeat ... times: then add the lines to repeat".to_owned(),
         }
     }
 }
@@ -400,6 +549,12 @@ pub fn relation_words(relation: ChipRelation) -> &'static str {
         ChipRelation::DistanceToThem => "distance to them",
     }
 }
+
+/// Automatic name of the average offset to the agents looked at, the way to their centre.
+pub const CENTER_SUMMARY: &str = "centre";
+
+/// Automatic name of the total offset away from the agents looked at, a push away from them.
+pub const PUSH_SUMMARY: &str = "push";
 
 // Comparisons
 
@@ -633,11 +788,17 @@ pub enum Blank {
     UpperNumber,
     /// A condition.
     When,
+    /// The number of times a Repeat runs its lines, a whole number.
+    Times,
+    /// A property of the ground.
+    GroundProperty,
+    /// An event.
+    Event,
 }
 
 impl Blank {
     /// Every blank.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 19] = [
         Self::State,
         Self::OldState,
         Self::Property,
@@ -654,6 +815,9 @@ impl Blank {
         Self::LowerNumber,
         Self::UpperNumber,
         Self::When,
+        Self::Times,
+        Self::GroundProperty,
+        Self::Event,
     ];
 
     /// Visible word of the blank, drawn in its dashed button.
@@ -664,7 +828,7 @@ impl Blank {
             Self::Property => "property",
             Self::NumberProperty => "number property",
             Self::Value => "value",
-            Self::Number | Self::LowerNumber | Self::UpperNumber => "number",
+            Self::Number | Self::LowerNumber | Self::UpperNumber | Self::Times => "number",
             Self::NumberList => "list of numbers",
             Self::StateList => "list of states",
             Self::Chance => "chance",
@@ -673,6 +837,8 @@ impl Blank {
             Self::YesOrNo => "result",
             Self::YesOrNoList => "results",
             Self::When => "when",
+            Self::GroundProperty => "ground property",
+            Self::Event => "event",
         }
     }
 
@@ -695,6 +861,9 @@ impl Blank {
             Self::LowerNumber => "the lower number",
             Self::UpperNumber => "the upper number",
             Self::When => "when",
+            Self::Times => "how many times",
+            Self::GroundProperty => "a ground property",
+            Self::Event => "an event",
         }
     }
 
@@ -723,19 +892,34 @@ pub enum LineSelect {
     TotalOrAverage,
     /// The operation of a Calculate line.
     Operation,
+    /// Whether a Steer line steers by a value or towards it.
+    SteerMode,
+    /// Whether a Move line moves by an arrow or to a place.
+    MoveMode,
+    /// What a Pick a cell line picks: the most, the least or a cell at random.
+    Pick,
+    /// The cell a Look at a cell line looks at.
+    WhichCell,
+    /// How the summary at this index of a look at agents sums up the agents, from 0.
+    LookSummary(usize),
 }
 
 impl LineSelect {
-    /// Every select.
-    pub const ALL: [Self; 5] = [
+    /// Every select of fixed words. [`Self::LookSummary`] takes the summary's number in its name.
+    pub const ALL: [Self; 9] = [
         Self::UnitOfTime,
         Self::Comparison,
         Self::WhichCells,
         Self::TotalOrAverage,
         Self::Operation,
+        Self::SteerMode,
+        Self::MoveMode,
+        Self::Pick,
+        Self::WhichCell,
     ];
 
-    /// Words of the select, after the line prefix in its accessible name.
+    /// Words of the select, after the line prefix in its accessible name. A summary's select reads "summary" before
+    /// its number.
     pub fn words(self) -> &'static str {
         match self {
             Self::UnitOfTime => "unit of time",
@@ -743,12 +927,21 @@ impl LineSelect {
             Self::WhichCells => "which cells",
             Self::TotalOrAverage => "total or average",
             Self::Operation => "operation",
+            Self::SteerMode => "by or towards",
+            Self::MoveMode => "by or to",
+            Self::Pick => "most, least or random",
+            Self::WhichCell => "which cell",
+            Self::LookSummary(_) => "summary",
         }
     }
 
-    /// Returns the accessible name of the select, such as "Line 2: unit of time".
+    /// Returns the accessible name of the select, such as "Line 2: unit of time", or "Line 1: summary 2" for the
+    /// second summary of a look at agents.
     pub fn name(self, prefix: &str) -> String {
-        format!("{prefix}: {}", self.words())
+        match self {
+            Self::LookSummary(index) => format!("{prefix}: {} {}", self.words(), index + 1),
+            _ => format!("{prefix}: {}", self.words()),
+        }
     }
 }
 
@@ -874,6 +1067,114 @@ pub fn my_property_item(property: &str) -> String {
 pub fn this_cells_property(property: &str) -> String {
     format!("this cell's {property}")
 }
+
+/// Returns the heading of the group of the properties of the thing a card runs over, such as "This cell's properties"
+/// or "This bird's properties", where `thing` is the word for one of the thing.
+pub fn this_things_properties(thing: &str) -> String {
+    format!("This {thing}'s properties")
+}
+
+/// Returns the grey words beside an item of the properties of the thing a card runs over, such as "this bird's
+/// Velocity".
+pub fn this_things_property(thing: &str, property: &str) -> String {
+    format!("this {thing}'s {property}")
+}
+
+/// Returns an item of the value a property takes from the changes above a line, such as "my new Velocity".
+pub fn my_new_property_item(property: &str) -> String {
+    format!("my new {property}")
+}
+
+/// Returns the grey words beside "my new Velocity": "this bird's Velocity after line 6", where `number` is the number
+/// of the last line that changes the property.
+pub fn my_new_detail(thing: &str, property: &str, number: usize) -> String {
+    format!("this {thing}'s {property} after line {number}")
+}
+
+/// Returns an item of the length of an arrow property, such as "length of my Velocity".
+pub fn length_of_item(property: &str) -> String {
+    format!("length of my {property}")
+}
+
+/// Returns the heading of the group of what a look at agents reads from each agent, such as "Each bird looked at".
+pub fn each_looked_at(thing: &str) -> String {
+    format!("Each {thing} looked at")
+}
+
+/// Returns an item of a property of each agent looked at, such as "their Velocity".
+pub fn their_property_item(property: &str) -> String {
+    format!("their {property}")
+}
+
+/// Words of a Look at a cell line that looks at the cell an agent is on.
+pub const LOOK_AT_HERE: &str = "the cell I am on";
+
+/// Words of a Look at a cell line that looks at the cell ahead of an agent.
+pub const LOOK_AT_AHEAD: &str = "the cell ahead of me";
+
+/// Words of a Look at a cell line that looks at a place, before the place.
+pub const LOOK_AT_PLACE: &str = "the cell at";
+
+/// Heading of the group of new values a picker of a value offers on a card over agents.
+pub const OR_A_NEW_VALUE: &str = "Or a new value";
+
+/// Heading of the group of the ground's properties in a picker of a value or of a ground property.
+pub const GROUND_PROPERTIES: &str = "Ground properties";
+
+/// Heading of the group of events in a picker of an event.
+pub const EVENTS: &str = "Events";
+
+/// Heading of the group of ways to sum the agents up in the picker of a new summary.
+pub const SUMMARIES: &str = "Summaries";
+
+/// Title of the picker of a new summary of a look at agents.
+pub const CHOOSE_A_SUMMARY: &str = "Choose a summary";
+
+/// Returns the accessible name of the "+" after the summaries of a look at agents, such as "Line 1: add another
+/// summary".
+pub fn add_summary_name(prefix: &str) -> String {
+    format!("{prefix}: add another summary")
+}
+
+/// Returns the accessible name of the "+" after the rows of a Choose line, such as "Line 7: add another row".
+pub fn add_choose_row_name(prefix: &str) -> String {
+    format!("{prefix}: add another row")
+}
+
+/// Returns an item of the picker of a new summary, such as "average of ..." or "count".
+pub fn summary_item(kind: SummaryKind) -> String {
+    match kind {
+        SummaryKind::Count => summary_word(kind).to_owned(),
+        _ => format!("{} of {BLANK_TEXT}", summary_word(kind)),
+    }
+}
+
+/// Item of a summary's picker that removes the summary.
+pub const REMOVE_SUMMARY: &str = "Remove this summary";
+
+/// Returns the tool of a look at agents' menu that counts the agent itself among those it looks at, such as "Include
+/// me in line 1", where `word` is the line word.
+pub fn include_me_tool(word: &str) -> String {
+    format!("Include me in {word}")
+}
+
+/// Returns the tool of a look at agents' menu that leaves the agent itself out of those it looks at, such as "Leave
+/// me out of line 1", where `word` is the line word.
+pub fn leave_me_out_tool(word: &str) -> String {
+    format!("Leave me out of {word}")
+}
+
+/// No ground property for a picker of a ground property.
+pub const NO_GROUND_PROPERTY: &str = "No ground property yet. Add one under Ground on the sheet.";
+
+/// No event for a picker of an event.
+pub const NO_EVENT: &str = "No event yet. Add one under Events on the sheet.";
+
+/// No place for a Move to line.
+pub const NO_PLACE: &str = "No cell picked above this line yet. Make one with + Look around above this line.";
+
+/// A typed number of times that is no whole number from 0.
+pub const TYPE_TIMES: &str = "Type an integer from 0, such as 4.";
 
 /// Heading of the group of parameters in a picker of a number.
 pub const PARAMETERS: &str = "Parameters";
@@ -1554,6 +1855,9 @@ pub const ON_GROUND_CELLS: &str = "Agents can start only on a state the ground p
 
 /// Error on a look at the cell ahead in a sheet whose agents do not move to cells.
 pub const AHEAD_NEEDS_CELLS: &str = "The cell ahead needs agents that move to cells.";
+
+/// Error on a Count, Look around or Pick a cell line inside a Repeat.
+pub const LOOK_IN_REPEAT: &str = "A look around, a count or a pick of a cell cannot sit inside a Repeat.";
 
 /// Error on a Set inside a Repeat whose value reads a line inside that Repeat.
 pub const SET_IN_REPEAT: &str =
@@ -2485,6 +2789,10 @@ pub const YES_NO_KIND: &str = "Yes or no";
 /// Kind of a property that holds an arrow in the plane.
 pub const ARROW_KIND: &str = "Arrow";
 
+/// Description of [`ARROW_KIND`].
+pub const ARROW_KIND_DESCRIPTION: &str =
+    "A direction with a length, such as a velocity. It starts in a random direction of length 1.";
+
 /// Description of [`POSITION_KIND`].
 pub const POSITION_KIND_DESCRIPTION: &str = "Where the agent is in the world.";
 
@@ -2710,6 +3018,9 @@ pub const CHANCE_PARAMETER_PLACEHOLDER: &str = "Such as Initial density";
 /// Placeholder of the parameter's name when it is for any other number.
 pub const NUMBER_PARAMETER_PLACEHOLDER: &str = "Such as Step size";
 
+/// Placeholder of the New parameter dialog's Name field for a number of times.
+pub const TIMES_PARAMETER_PLACEHOLDER: &str = "Such as Steps per tick";
+
 /// Label of the parameter's default.
 pub const DEFAULT_LABEL: &str = "Default";
 
@@ -2733,6 +3044,10 @@ pub const DIALOG_NAME_MISSING: &str = "Type a name.";
 
 /// Message on a default, a minimum or a maximum that does not read.
 pub const LIMITS_NOT_NUMBERS: &str = "Default, Min and Max must be numbers.";
+
+/// Check of the New parameter dialog for a number of times whose Default, Min or Max is no integer from 0.
+pub const TIMES_LIMITS_NOT_INTEGERS: &str =
+    "A number of times is an integer. Make Default, Min and Max integers from 0.";
 
 /// Message on a minimum at or above the maximum.
 pub const MIN_NOT_BELOW_MAX: &str = "Min must be below Max.";
@@ -3118,7 +3433,7 @@ fn indefinite_article(word: &str) -> &'static str {
 
 /// Returns `words` with its first letter in lower case when it starts an ordinary capitalised word, a capital and a
 /// small letter. A one-letter or all-capital word keeps its capital.
-fn drop_ordinary_capital(words: &str) -> String {
+pub(crate) fn drop_ordinary_capital(words: &str) -> String {
     let mut chars = words.chars();
     match (chars.next(), chars.next()) {
         (Some(first), Some(second)) if first.is_uppercase() && second.is_lowercase() => {
@@ -3292,6 +3607,20 @@ pub enum FieldPlace {
     FirstOperand,
     /// The value right of the operation of a Calculate line of one operation.
     SecondOperand,
+    /// The mode of a Steer or Move line.
+    Mode,
+    /// What a Pick a cell line picks.
+    Pick,
+    /// The ground property a Pick a cell line ranks cells by.
+    RankedBy,
+    /// The cell a Look at a cell line looks at.
+    Which,
+    /// The ground property a Leave line marks.
+    GroundProperty,
+    /// The event a Record line records.
+    Event,
+    /// How the summary at this index of a look at agents sums up the agents, from 0.
+    LookSummary(usize),
 }
 
 impl PlaceTarget {
@@ -3370,6 +3699,8 @@ pub enum ChipKind {
     Result(String),
     /// A relation to the agent looked at, such as "distance to them".
     Relation,
+    /// The event of this id.
+    Event(String),
 }
 
 /// Returns `parts` joined into the sentence as plain text.
@@ -3638,7 +3969,7 @@ impl<'a> Sentences<'a> {
             }
             LineKind::Repeat => {
                 let mut parts = Parts::text("Repeat ");
-                parts.append(self.slot_parts(&line.times, None, Blank::Number, "times"));
+                parts.append(self.slot_parts(&line.times, None, Blank::Times, "times"));
                 parts.push(" times:");
                 return parts.into_placed();
             }
@@ -3663,6 +3994,7 @@ impl<'a> Sentences<'a> {
     }
 
     /// Returns the parts of a change line with its condition, with the first letter in upper case.
+    #[expect(clippy::too_many_lines, reason = "one arm per line kind reads best as one table")]
     fn change(&self, line: &SheetLine) -> Parts {
         let property = self.property_name(line.property.as_deref());
         let mut parts = Parts::default();
@@ -3698,24 +4030,22 @@ impl<'a> Sentences<'a> {
             }
             LineKind::Set => {
                 parts.push("Set ");
-                let part = match line.property.as_deref() {
-                    Some(id) => SentencePart::Chip(SentenceChip {
-                        kind: ChipKind::Property(id.to_owned()),
-                        lead: "",
-                        name: property,
-                    }),
-                    None => SentencePart::Blank(Blank::NumberProperty),
+                // A Set over cells changes a number, and a Set over agents any property but its place.
+                let (blank, value) = if self.document.world.made_of == MadeOf::Agents {
+                    (Blank::Property, Blank::Value)
+                } else {
+                    (Blank::NumberProperty, Blank::Number)
                 };
-                parts.append(Parts::placed(
-                    part,
-                    field_target(FieldPlace::Property),
-                    Some(Blank::NumberProperty),
-                ));
+                parts.append(self.property_part(line.property.as_deref(), blank, FieldPlace::Property));
                 parts.push(" to ");
-                parts.append(self.slot_parts(&line.value, None, Blank::Number, "value"));
+                parts.append(self.slot_parts(&line.value, None, value, "value"));
             }
             LineKind::Steer => {
-                parts.push(&format!("Steer {property} {} ", mode_words(line.mode)));
+                parts.push("Steer ");
+                parts.append(self.property_part(line.property.as_deref(), Blank::Property, FieldPlace::Property));
+                parts.push(" ");
+                parts.append(mode_select(LineSelect::SteerMode, line.mode));
+                parts.push(" ");
                 parts.append(self.slot_parts(&line.value, None, Blank::Value, "value"));
                 parts.push(", strength ");
                 parts.append(self.slot_parts(&line.strength, None, Blank::Number, "strength"));
@@ -3726,32 +4056,49 @@ impl<'a> Sentences<'a> {
                     .as_deref()
                     .and_then(|id| self.properties.get(id))
                     .is_some_and(|property| property.property_type == PropertyType::Arrow);
-                let measured = if arrow {
-                    format!("{} length", possessive(&property))
-                } else {
-                    property
-                };
-                parts.push(&format!("Keep {measured} between "));
-                parts.append(self.slot_parts(&line.minimum, None, Blank::Number, "minimum"));
+                parts.push("Keep ");
+                parts.append(self.property_part(line.property.as_deref(), Blank::Property, FieldPlace::Property));
+                if arrow {
+                    // The possessive's ending after the chip: "Velocity's length", or "Pass' length".
+                    let ending = possessive(&property).split_off(property.len());
+                    parts.push(&format!("{ending} length"));
+                }
+                parts.push(" between ");
+                parts.append(self.slot_parts(&line.minimum, None, Blank::LowerNumber, "minimum"));
                 parts.push(" and ");
-                parts.append(self.slot_parts(&line.maximum, None, Blank::Number, "maximum"));
+                parts.append(self.slot_parts(&line.maximum, None, Blank::UpperNumber, "maximum"));
             }
             LineKind::Move => {
-                parts.push(&format!("Move {} ", mode_words(line.mode)));
+                parts.push("Move ");
+                parts.append(mode_select(LineSelect::MoveMode, line.mode));
+                parts.push(" ");
                 parts.append(self.slot_parts(&line.value, None, Blank::Value, "value"));
             }
             LineKind::Leave => {
                 parts.push("Leave ");
                 parts.append(self.slot_parts(&line.amount, None, Blank::Number, "amount"));
-                parts.push(&format!(" on {}", self.property_name(line.ground_property.as_deref())));
+                parts.push(" on ");
+                parts.append(self.property_part(
+                    line.ground_property.as_deref(),
+                    Blank::GroundProperty,
+                    FieldPlace::GroundProperty,
+                ));
             }
-            LineKind::Record => parts.push(&format!(
-                "Record a {}",
-                line.event.as_deref().map_or(BLANK_TEXT, |id| self
-                    .events
-                    .get(id)
-                    .map_or(id, |event| event.name.as_str()))
-            )),
+            LineKind::Record => {
+                parts.push("Record a ");
+                let part = match line.event.as_deref() {
+                    Some(id) => SentencePart::Chip(SentenceChip {
+                        kind: ChipKind::Event(id.to_owned()),
+                        lead: "",
+                        name: self
+                            .events
+                            .get(id)
+                            .map_or_else(|| id.to_owned(), |event| event.name.clone()),
+                    }),
+                    None => SentencePart::Blank(Blank::Event),
+                };
+                parts.append(Parts::placed(part, field_target(FieldPlace::Event), Some(Blank::Event)));
+            }
             _ => parts.push(line.kind.as_str()),
         }
         let takes_condition = matches!(
@@ -3763,6 +4110,19 @@ impl<'a> Sentences<'a> {
             parts.append(self.condition(&line.condition, false).under("condition", Blank::When));
         }
         parts
+    }
+
+    /// Returns the parts of property `id`, the line's field `field`: its chip, or `blank` for `None`.
+    fn property_part(&self, id: Option<&str>, blank: Blank, field: FieldPlace) -> Parts {
+        let part = match id {
+            Some(id) => SentencePart::Chip(SentenceChip {
+                kind: ChipKind::Property(id.to_owned()),
+                lead: "",
+                name: self.property_name(Some(id)),
+            }),
+            None => SentencePart::Blank(blank),
+        };
+        Parts::placed(part, field_target(field), Some(blank))
     }
 
     /// Returns the parts of the condition in `slot`: "always", "when ...", "with chance ..." or "at rate ...", or on a
@@ -3978,44 +4338,78 @@ impl<'a> Sentences<'a> {
                     parts.append(self.whose(&line.only, Blank::Property, "only"));
                 }
                 parts.push(": ");
-                let summaries = line
-                    .summaries
-                    .iter()
-                    .enumerate()
-                    .map(|(index, summary)| match summary.summary {
-                        Some(SummaryKind::Count) => Parts::text(&format!("count ({})", summary.name)),
-                        kind => {
-                            let mut parts = Parts::text(&format!("{} of ", kind.map_or(BLANK_TEXT, summary_word)));
-                            let key = format!("summaries.{index}.value");
-                            parts.append(self.slot_parts(&summary.value, None, Blank::Value, &key));
-                            parts.push(&format!(" ({})", summary.name));
-                            parts
-                        }
-                    });
+                // A look at agents chooses how each summary sums them up. A look over cells writes the words alone.
+                let agents = line.around == Some(Around::AgentsWithin);
+                let summaries = line.summaries.iter().enumerate().map(|(index, summary)| {
+                    let words = summary.summary.map_or("", summary_word);
+                    let mut parts = if agents {
+                        Parts::placed(
+                            SentencePart::Select(LineSelect::LookSummary(index), words.to_owned()),
+                            field_target(FieldPlace::LookSummary(index)),
+                            None,
+                        )
+                    } else {
+                        Parts::text(if words.is_empty() { BLANK_TEXT } else { words })
+                    };
+                    if summary.summary != Some(SummaryKind::Count) {
+                        parts.push(" of ");
+                        let key = format!("summaries.{index}.value");
+                        parts.append(self.slot_parts(&summary.value, None, Blank::Value, &key));
+                    }
+                    parts.push(&format!(" ({})", summary.name));
+                    parts
+                });
                 parts.append(Parts::join(summaries, ", "));
                 parts
             }
             LineKind::PickCell => {
                 let open = if line.open_only == Some(true) { "open " } else { "" };
-                Parts::text(&match line.pick {
-                    Some(PickRule::Random) => format!("a random {open}neighbouring cell"),
-                    pick => format!(
-                        "the {open}neighbouring cell with the {} {} (ties at random)",
-                        pick.map_or(BLANK_TEXT, |pick| pick.as_str()),
-                        self.property_name(line.ranked_by.as_deref())
+                let pick = Parts::placed(
+                    SentencePart::Select(
+                        LineSelect::Pick,
+                        line.pick.map_or_else(String::new, |pick| pick.as_str().to_owned()),
                     ),
-                })
-            }
-            LineKind::LookAtCell => match line.which {
-                Some(CellWhich::Here) => Parts::text("the cell I am on"),
-                Some(CellWhich::Ahead) => Parts::text("the cell ahead of me"),
-                Some(CellWhich::At) => {
-                    let mut parts = Parts::text("the cell at ");
-                    parts.append(self.slot_parts(&line.place, None, Blank::Value, "place"));
+                    field_target(FieldPlace::Pick),
+                    None,
+                );
+                if line.pick == Some(PickRule::Random) {
+                    let mut parts = Parts::text("a ");
+                    parts.append(pick);
+                    parts.push(&format!(" {open}neighbouring cell"));
+                    parts
+                } else {
+                    let mut parts = Parts::text(&format!("the {open}neighbouring cell with the "));
+                    parts.append(pick);
+                    parts.push(" ");
+                    parts.append(self.property_part(
+                        line.ranked_by.as_deref(),
+                        Blank::GroundProperty,
+                        FieldPlace::RankedBy,
+                    ));
+                    parts.push(" (ties at random)");
                     parts
                 }
-                None => Parts::text(BLANK_TEXT),
-            },
+            }
+            LineKind::LookAtCell => {
+                let which = |words: &str| {
+                    Parts::placed(
+                        SentencePart::Select(LineSelect::WhichCell, words.to_owned()),
+                        field_target(FieldPlace::Which),
+                        None,
+                    )
+                };
+                match line.which {
+                    Some(CellWhich::Here) => which(LOOK_AT_HERE),
+                    Some(CellWhich::Ahead) => which(LOOK_AT_AHEAD),
+                    Some(CellWhich::At) => {
+                        let mut parts = which(LOOK_AT_PLACE);
+                        parts.push(" ");
+                        parts.append(self.slot_parts(&line.place, None, Blank::Value, "place"));
+                        parts
+                    }
+                    None => which(""),
+                }
+            }
             LineKind::Chance => {
                 let mut parts = Parts::part(SentencePart::ConditionWord(condition_head(
                     ConditionKind::Chance,
@@ -4033,9 +4427,9 @@ impl<'a> Sentences<'a> {
             }
             LineKind::RandomNumber => {
                 let mut parts = Parts::text("a random number between ");
-                parts.append(self.slot_parts(&line.low, None, Blank::Number, "low"));
+                parts.append(self.slot_parts(&line.low, None, Blank::LowerNumber, "low"));
                 parts.push(" and ");
-                parts.append(self.slot_parts(&line.high, None, Blank::Number, "high"));
+                parts.append(self.slot_parts(&line.high, None, Blank::UpperNumber, "high"));
                 parts
             }
             LineKind::RandomDirection => {
@@ -4091,27 +4485,29 @@ impl<'a> Sentences<'a> {
                     .and_then(|id| self.properties.get(id))
                     .map(|property| property.states.iter().map(|state| state.id.as_str()).collect())
                     .unwrap_or_default();
-                let ordered = states
-                    .iter()
-                    .copied()
-                    .filter(|state| line.branches.contains_key(*state))
-                    .chain(
-                        line.branches
-                            .keys()
-                            .map(String::as_str)
-                            .filter(|state| !states.contains(state)),
-                    );
-                let branches = ordered.filter_map(|state| {
-                    line.branches.get(state).map(|value| {
-                        let mut parts = Parts::text(&format!("{} -> ", self.state_name(property, Some(state))));
-                        parts.append(
-                            self.value_parts(value, None)
-                                .under(&format!("branches.{state}"), Blank::Value),
-                        );
-                        parts
-                    })
+                // Every state of the property takes a branch, a blank one until it holds a value.
+                let ordered = states.iter().copied().chain(
+                    line.branches
+                        .keys()
+                        .map(String::as_str)
+                        .filter(|state| !states.contains(state)),
+                );
+                let branches = ordered.map(|state| {
+                    let mut parts = Parts::text(&format!("{} -> ", self.state_name(property, Some(state))));
+                    let key = format!("branches.{state}");
+                    parts.append(match line.branches.get(state) {
+                        Some(value) => self.value_parts(value, None).under(&key, Blank::Value),
+                        None => Parts::placed(
+                            SentencePart::Blank(Blank::Value),
+                            PlaceTarget::Slot(key),
+                            Some(Blank::Value),
+                        ),
+                    });
+                    parts
                 });
-                let mut parts = Parts::text(&format!("depending on my {}: ", self.property_name(property)));
+                let mut parts = Parts::text("depending on my ");
+                parts.append(self.property_part(property, Blank::Property, FieldPlace::Property));
+                parts.push(": ");
                 parts.append(Parts::join(branches, ", "));
                 parts
             }
@@ -4521,6 +4917,11 @@ impl<'a> Sentences<'a> {
         self.chip(&SheetChip::Param(reference.to_owned()), None)
     }
 
+    /// Returns the name of property `id`, its id when no property has it.
+    pub fn property_words(&self, id: &str) -> String {
+        self.property_name(Some(id))
+    }
+
     /// Returns the name of property `id`, its id when no property has it, or [`BLANK_TEXT`] for `None`.
     fn property_name(&self, id: Option<&str>) -> String {
         match id {
@@ -4656,9 +5057,13 @@ pub fn literal_words(literal: SheetLiteral) -> String {
     }
 }
 
-/// Returns the word of a Steer or Move line's mode: "by", "towards" or "to".
-fn mode_words(mode: Option<LineMode>) -> &'static str {
-    mode.map_or(BLANK_TEXT, LineMode::as_str)
+/// Returns the select of a Steer or Move line's mode, `select`, showing "by", "towards" or "to", empty for `None`.
+fn mode_select(select: LineSelect, mode: Option<LineMode>) -> Parts {
+    Parts::placed(
+        SentencePart::Select(select, mode.map_or("", LineMode::as_str).to_owned()),
+        field_target(FieldPlace::Mode),
+        None,
+    )
 }
 
 /// Returns the target of the field `field` of the line or phrase itself, before [`PlaceTarget::under`] places it.

@@ -128,8 +128,18 @@ impl SheetEditor {
         let document = self.builder.document();
         let (text, report, file) = match document.to_text() {
             Ok(text) => {
-                let report = ParsedSheet::parse(&text).map_or_else(|_| check(document), |parsed| parsed.check());
+                let parsed = ParsedSheet::parse(&text).ok();
+                let mut report = parsed.as_ref().map_or_else(|| check(document), ParsedSheet::check);
                 let file = SheetFile::parse(&text).map_err(|error| error.diagnostics().to_vec());
+                // A sheet that checks but does not lower takes the lowering's problems into its report, so the card
+                // draws each problem about a line under that line.
+                if file.is_err()
+                    && !report.has_errors()
+                    && let Some(parsed) = &parsed
+                {
+                    let problems = SheetFile::lowering_problems(parsed, &report);
+                    report.diagnostics.extend(problems);
+                }
                 (text, report, file)
             }
             Err(error) => (

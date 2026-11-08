@@ -442,7 +442,7 @@ fn a_count_inside_a_repeat_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "line l2: a count line cannot sit inside a Repeat",
+        "A look around, a count or a pick of a cell cannot sit inside a Repeat.",
         "[card.line.l2]",
     );
 }

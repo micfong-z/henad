@@ -11,11 +11,11 @@ use henad_graph::sheet::document::{
 };
 use henad_graph::sheet::sentence::{
     ADD_BUTTON, ADD_EVENT, ADD_GROUND_PROPERTY_NAME, ADD_MEASURE, ADD_PARAMETER, AGENT_COUNT_NAME, AGENT_MAX_NAME,
-    AGENT_NAME_FIELD, AGENT_NAME_MISSING, AGENTS_IN_OPEN_SPACE, ANYWHERE_AT_RANDOM, AVERAGE_MEASURE, BUTTON_NAME_FIELD,
-    BY_HEADING_NOTE, CANCEL, COLOR_AGENTS_BY, COLOR_GROUND_BY, COUNT_AGENTS_MEASURE, CREATE_PARAMETER, DONE,
-    EVENT_NAME_FIELD, EVENT_NAME_MISSING, EVENTS_EMPTY, GROUND_EMPTY, HEADING_START, KEPT_OUT_OF_RANGE,
-    MEASURE_PROPERTY_NAME, NUMBER_KIND, PAINTED, START_AGAIN_FOR, STATES_KIND, YES_NO_KIND, add_property_name,
-    blocked_state_name, count_agents_measure, event_name_taken, integer_up_to, marks_name, run_once,
+    AGENT_NAME_FIELD, AGENT_NAME_MISSING, AGENTS_IN_OPEN_SPACE, ANYWHERE_AT_RANDOM, ARROW_KIND, AVERAGE_MEASURE,
+    BUTTON_NAME_FIELD, BY_HEADING_NOTE, CANCEL, COLOR_AGENTS_BY, COLOR_GROUND_BY, COUNT_AGENTS_MEASURE,
+    CREATE_PARAMETER, DONE, EVENT_NAME_FIELD, EVENT_NAME_MISSING, EVENTS_EMPTY, GROUND_EMPTY, HEADING_START,
+    KEPT_OUT_OF_RANGE, MEASURE_PROPERTY_NAME, NUMBER_KIND, PAINTED, START_AGAIN_FOR, STATES_KIND, YES_NO_KIND,
+    add_property_name, blocked_state_name, count_agents_measure, event_name_taken, integer_up_to, marks_name, run_once,
 };
 use henad_graph::sheet::sentence::{MARKS_ADD_UP, MARKS_LARGEST, MARKS_NONE};
 
@@ -200,11 +200,11 @@ fn agents_take_states_numbers_and_yes_or_no_and_no_start_on_an_unpainted_ground(
             .expect("the property")
     };
 
-    // A Position and a Heading are offered only while the agents lack one.
+    // A Position and a Heading are offered only while the agents lack one. An Arrow is always offered.
     click(&mut harness, &add);
     assert_eq!(
         radio_names(&mut harness),
-        [STATES_KIND, NUMBER_KIND, "Integer", YES_NO_KIND]
+        [STATES_KIND, NUMBER_KIND, "Integer", YES_NO_KIND, ARROW_KIND]
     );
     click(&mut harness, CANCEL);
 
