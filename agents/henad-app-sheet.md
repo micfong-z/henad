@@ -63,7 +63,12 @@ fraction or a percent included, and `TYPE_ONE_NUMBER` for text that is no number
 `ComboBox` named `EDGES_LABEL` with `WRAP_TOOLTIP` or `WALLS_SENTENCE` and the grey sentence (no
 torus mark, D93), then the Time line: `ONE_TICK_IS`, the length field named `TICK_LENGTH_NAME` while
 a unit is set (0 or less becomes 1), and the unit select named `TICK_UNIT_NAME` with
-`tick_unit_choice` (None first, "one step (no unit)", which writes no `[time]`). The Cells table
+`tick_unit_choice` (None first, "one step (no unit)", which writes no `[time]`). An edit that gives
+the tick a new length or unit sets `PaneState::time_changed`, and while it holds the Time line is
+followed by `chances_per_tick_note` of `rates::chance_line_numbers`, read from the sheet each frame
+so that a card edit renumbers or removes the lines it names, and left out while no line draws a
+chance (T9). The next edit of the pane or `close_forms` clears the flag. The same edit drops the
+Card pane's tick notice (`CardState::drop_tick_notice`). The Cells table
 (`CELLS_COLUMNS`): the name as a frameless button named `edit_property_heading` that opens the
 property form, the kind (`STATES_KIND` with a swatch per state, `NUMBER_KIND`, or `INTEGER_KIND`
 with `INTEGER_KIND_TOOLTIP`, D23), Starts as (a select named `starts_place` showing `starts_text`:

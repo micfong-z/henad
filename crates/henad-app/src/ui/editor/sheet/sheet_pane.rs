@@ -29,6 +29,7 @@ use henad_graph::sheet::edit::{
     STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem, suggested_state_color,
 };
 use henad_graph::sheet::format_number;
+use henad_graph::sheet::rates::chance_line_numbers;
 use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
     A_RANDOM_NUMBER, A_VALUE, ADD_BUTTON, ADD_MEASURE, ADD_PARAMETER, ADD_PROPERTY, ADD_ROW, ADD_STATE,
@@ -46,13 +47,13 @@ use henad_graph::sheet::sentence::{
     STATE_NAMES_REPEATED, STATES_KIND, STATES_KIND_DESCRIPTION, SentenceChip, Sentences, SheetSection, StartsField,
     TICK_LENGTH_NAME, TICK_UNIT_NAME, TOO_FEW_STATES, TYPE_A_CHANCE, TYPE_ONE_NUMBER, UNIT_FIELD_PLACEHOLDER,
     UNIT_LABEL, USE_A_PARAMETER, WALLS, WALLS_SENTENCE, WIDTH_NAME, WITH_CHANCE, WRAP_AROUND, WRAP_SENTENCE,
-    WRAP_TOOLTIP, add_row_name, average_measure, button_name_taken, changed_by, count_measure, delete_button_name,
-    delete_parameter_name, edit_button_name, edit_property_heading, literal_words, measure_color_name,
-    parameter_max_name, parameter_min_name, parameter_name_taken, parameter_unit_name, plot_state, property_name_taken,
-    read_typed_number, remove_measure_name, remove_row_name, remove_state_name, run_once, sheet_parameter_name_field,
-    sheet_trying_value, start_again_for, starts_all, starts_field_name, starts_high_place, starts_low_place,
-    starts_otherwise_name, starts_place, starts_row_place, state_color_name, state_name_field, tick_unit_choice,
-    unit_suggestions, value_field_name, value_slider_name, world_side_out_of_range,
+    WRAP_TOOLTIP, add_row_name, average_measure, button_name_taken, chances_per_tick_note, changed_by, count_measure,
+    delete_button_name, delete_parameter_name, edit_button_name, edit_property_heading, literal_words,
+    measure_color_name, parameter_max_name, parameter_min_name, parameter_name_taken, parameter_unit_name, plot_state,
+    property_name_taken, read_typed_number, remove_measure_name, remove_row_name, remove_state_name, run_once,
+    sheet_parameter_name_field, sheet_trying_value, start_again_for, starts_all, starts_field_name, starts_high_place,
+    starts_low_place, starts_otherwise_name, starts_place, starts_row_place, state_color_name, state_name_field,
+    tick_unit_choice, unit_suggestions, value_field_name, value_slider_name, world_side_out_of_range,
 };
 use henad_graph::sheet::sentence::{
     ANYWHERE_AT_RANDOM, ARROW_KIND, BY_HEADING_NOTE, COLOR_AGENTS_BY, COLOR_GROUND_BY, COUNT_AGENTS_LEAD,
@@ -70,6 +71,7 @@ use super::widgets::{
     color_name, color32, commit_area, commit_field, field_message, forget_field, message_ui, new_parameter_modal,
     set_name, suggestion_field,
 };
+use crate::icons::material_design_icons::MDI_INFORMATION;
 use crate::ui::sweep::layout::{add_button, destructive_button, filled_button};
 
 mod agents;
@@ -135,6 +137,9 @@ pub struct PaneState {
     refusal: Option<String>,
     /// Id of the parameter whose new name was refused, with the message under it, `None` while none shows.
     parameter_message: Option<(String, String)>,
+    /// Whether the last edit of the pane changed the length or the unit of one tick. The notice under the Time line
+    /// then names the lines that use chances per tick, read from the sheet as it is drawn.
+    time_changed: bool,
 }
 
 impl PaneState {
@@ -149,6 +154,7 @@ impl PaneState {
             new_parameter: None,
             refusal: None,
             parameter_message: None,
+            time_changed: false,
         }
     }
 
@@ -161,6 +167,7 @@ impl PaneState {
         self.new_parameter = None;
         self.refusal = None;
         self.parameter_message = None;
+        self.time_changed = false;
     }
 
     /// Returns whether the New parameter dialog is open.
@@ -496,7 +503,7 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
                 });
                 match section {
                     SheetSection::Purpose => purpose(ui, document, pane.widgets, &mut pending),
-                    SheetSection::World => world(ui, document, pane.widgets, &mut pending),
+                    SheetSection::World => world(ui, document, pane, &mut pending),
                     SheetSection::Cells => cells(ui, document, pane, &stale, &mut pending),
                     SheetSection::Agents => agents::agents(ui, document, pane, &stale, &mut pending),
                     SheetSection::Ground => agents::ground(ui, document, pane, &stale, &mut pending),
@@ -514,11 +521,18 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
     let Some(Pending { starts_only, form, run }) = pending else {
         return;
     };
+    let time = sheet.document().time;
     let outcome = sheet.edit(past_start, starts_only, run);
+    let time_changed = sheet.document().time.is_some() && sheet.document().time != time;
+    if time_changed {
+        // The notice of a time a rate's unit set no longer states the length of one tick.
+        sheet.card.drop_tick_notice();
+    }
     let pane = &mut sheet.pane;
     match outcome {
         Ok(()) => {
             pane.refusal = None;
+            pane.time_changed = time_changed;
             match form {
                 Some(FormKind::Property) => pane.property_form = None,
                 Some(FormKind::Measure) => pane.measure_form = None,
@@ -570,9 +584,9 @@ fn purpose(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Opt
     );
 }
 
-/// Draws the world's kind, its size and edges as fields, and the length of one tick. `widgets` is the id the pane's
-/// widgets are keyed under.
-fn world(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Option<Pending>) {
+/// Draws the world's kind, its size and edges as fields, and the length of one tick with the notice of `pane` under it.
+fn world(ui: &mut Ui, document: &SheetDocument, pane: &PaneState, pending: &mut Option<Pending>) {
+    let widgets = pane.widgets;
     let world = document.world;
     ui.label(match world.made_of {
         MadeOf::Agents => AGENTS_IN_OPEN_SPACE,
@@ -626,6 +640,14 @@ fn world(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Optio
     });
     ui.weak(sentence);
     time_line(ui, document, widgets, pending);
+    // A chance is per tick, and a new length of one tick leaves the lines that draw with one behind the time scale.
+    if pane.time_changed && document.time.is_some() {
+        let lines = chance_line_numbers(document);
+        if !lines.is_empty() {
+            let notice = chances_per_tick_note(&lines);
+            ui.add(Label::new(format!("{MDI_INFORMATION} {notice}")).wrap());
+        }
+    }
 }
 
 /// Adds the field of one side of the grid, named `name`, holding `side` cells. A whole number of cells from 1 to

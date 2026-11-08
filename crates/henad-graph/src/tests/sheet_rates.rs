@@ -990,3 +990,119 @@ fn a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named() {
     );
     assert_eq!(count_as_draw(&document, "l2"), None);
 }
+
+#[test]
+fn the_card_offers_the_conversion_a_typed_draw_allows() {
+    use crate::sheet::rates::conversion;
+    use crate::sheet::sentence::DrawKind;
+
+    let document = |text: &str| ParsedSheet::parse(text).expect("the sheet reads").into_document();
+    let sir = sheet_text("sir.toml");
+    let typed_recovery = edited(sir, "rate = { param = \"recovery_rate\" }", "rate = 0.1");
+    assert_eq!(conversion(&document(sir), "l3"), None, "a parameter is no typed number");
+    assert_eq!(conversion(&document(&typed_recovery), "l3"), Some(DrawKind::Chance));
+    // A chance on the card of a button has no duration and changes into no rate.
+    let typed_outbreak = edited(
+        sir,
+        "kind = \"chance\"\nchance = { param = \"initial_infected\" }\n",
+        "kind = \"chance\"\nchance = 0.01\n",
+    );
+    assert_eq!(conversion(&document(&typed_outbreak), "l4"), None);
+    let chance = edited(
+        sheet_text("sir_chance.toml"),
+        "chance = { param = \"recovery_chance\" }",
+        "chance = 0.05",
+    );
+    assert_eq!(conversion(&document(&chance), "l3"), None, "one tick has no length");
+    let timed = edited(
+        &chance,
+        "edges = \"wrap\"\n",
+        "edges = \"wrap\"\n\n[time]\ntick_length = 1\ntick_unit = \"day\"\n",
+    );
+    assert_eq!(conversion(&document(&timed), "l3"), Some(DrawKind::Rate));
+    assert_eq!(conversion(&document(&timed), "l1"), None, "a count draws nothing");
+}
+
+#[test]
+fn the_time_notice_names_the_chance_lines_of_cards_that_run_each_tick() {
+    use crate::sheet::rates::chance_line_numbers;
+
+    let document = |text: &str| ParsedSheet::parse(text).expect("the sheet reads").into_document();
+    assert_eq!(chance_line_numbers(&document(sheet_text("sir_chance.toml"))), [2, 3]);
+    assert!(
+        chance_line_numbers(&document(sheet_text("sir.toml"))).is_empty(),
+        "the rates SIR draws at rates, and the chance of New outbreak runs once"
+    );
+}
+
+#[test]
+fn a_fixed_rate_below_a_count_of_its_new_state_asks_to_grow_with_it() {
+    use crate::sheet::rates::grow_count;
+
+    let document = |text: &str| ParsedSheet::parse(text).expect("the sheet reads").into_document();
+    let sir = sheet_text("sir.toml");
+    assert_eq!(grow_count(&document(sir), "l2"), None, "line 2 already grows for each");
+    assert_eq!(grow_count(&document(sir), "l3"), None, "no line counts Recovered");
+    let alone = edited(
+        sir,
+        "rate_unit = \"day\"\ntries = { result = \"l1\" }\n",
+        "rate_unit = \"day\"\n",
+    );
+    let found = grow_count(&document(&alone), "l2").expect("line 2 asks");
+    assert_eq!(
+        (found.line.as_str(), found.name.as_str()),
+        ("l1", "Infected neighbours")
+    );
+    assert_eq!(
+        sentence::rate_grow_prompt(&found.name),
+        "Should this rate grow with the number of Infected neighbours?"
+    );
+    // An empty rate has no note and asks nothing.
+    let empty = edited(&alone, "rate = { param = \"infection_rate\" }\n", "");
+    assert_eq!(note(&empty, "l2"), None);
+    assert_eq!(grow_count(&document(&empty), "l2"), None);
+    // A rate worked out from the count asks nothing.
+    let worked_out = edited(
+        &alone,
+        "rate = { param = \"infection_rate\" }",
+        "rate = { result = \"l1\" }",
+    );
+    assert_eq!(grow_count(&document(&worked_out), "l2"), None);
+    // A count below the line is not open to it.
+    let mut builder = SheetBuilder::new(document(&alone));
+    builder
+        .apply(SheetEdit::MoveLine {
+            line: "l1".to_owned(),
+            direction: crate::sheet::edit::MoveDirection::Down,
+        })
+        .expect("line 1 moves down");
+    assert_eq!(grow_count(builder.document(), "l2"), None);
+}
+
+#[test]
+fn a_lower_line_of_a_competing_group_reads_or() {
+    let document = ParsedSheet::parse(sheet_text("sird.toml"))
+        .expect("the sheet reads")
+        .into_document();
+    let sentences = crate::sheet::sentence::Sentences::new(&document);
+    let parts = sentence::competing_parts(sentences.placed_parts("l4", &[]), vec![3, 4]);
+    let parts: Vec<_> = parts.into_iter().map(|placed| placed.part).collect();
+    assert_eq!(parts.first(), Some(&sentence::SentencePart::Competing(vec![3, 4])));
+    assert_eq!(
+        sentence::sentence_text(&parts),
+        "or become Dead from Infected, at rate Death rate per day"
+    );
+    let units: Vec<Option<TimeUnit>> = document
+        .parameters
+        .iter()
+        .map(crate::sheet::rates::parameter_rate_unit)
+        .collect();
+    assert_eq!(
+        units,
+        [Some(TimeUnit::Day), Some(TimeUnit::Day), Some(TimeUnit::Day), None]
+    );
+    assert_eq!(
+        sentence::long_tick_note("up to 0.909 with 8"),
+        "Up to 0.909 with 8. This tick is long for this rate. A shorter tick follows the rate more closely."
+    );
+}

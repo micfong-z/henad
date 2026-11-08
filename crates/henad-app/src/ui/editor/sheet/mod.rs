@@ -411,7 +411,7 @@ pub fn sheet_ui(
             ScrollArea::vertical()
                 .id_salt("henad_card_pane_scroll")
                 .auto_shrink([false; 2])
-                .show(ui, |ui| card_pane::card_pane(ui, sheet, past_start));
+                .show(ui, |ui| card_pane::card_pane(ui, sheet, past_start, trials));
             pane_group(ui, CARD_PANE);
         });
     });

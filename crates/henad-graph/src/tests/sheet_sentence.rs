@@ -695,7 +695,7 @@ fn every_wording_table_entry_equals_the_final_words() {
     ];
     let tooltips = [
         "Count or total of the cells around me (neighbours)",
-        "Change a state by chance",
+        "Change a state by chance or at a rate",
         "Compare values, or join yes or no results",
         "Work out a number from two numbers",
         "Change a state or a number",

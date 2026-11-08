@@ -24,7 +24,10 @@ use henad_core::metadata::TimeUnit;
 
 use super::check::formula::{self, FormulaTree};
 use super::check::formula_chip;
-use super::document::{LineKind, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetTime, SheetValue};
+use super::document::{
+    CardRuns, CompareTest, LineKind, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetParameter, SheetTime,
+    SheetValue, Slot,
+};
 use super::relations::CardRelations;
 use super::sentence::{self, ANY_STATE_ID, Sentences};
 use super::writer::format_number;
@@ -336,9 +339,10 @@ pub fn largest_count_chance(
 /// Returns the note under the rate line `line_id`, read with the parameter values `values`, or `None` for a line with
 /// no note.
 ///
-/// A line with no rate, a rate with no unit, and a sheet whose tick has no length have no note. The highest line of a
-/// competing group takes the group's note and the group's other lines none. A group has a note only when each of its
-/// lines holds a fixed rate in one unit with no "for each" as its whole condition, outside any block.
+/// A line with no rate, an empty rate, a rate with no unit, and a sheet whose tick has no length have no note.
+/// The highest line of a competing group takes the group's note and the group's other lines none. A group has a note
+/// only when each of its lines holds a fixed rate in one unit with no "for each" as its whole condition, outside any
+/// block.
 pub fn rate_note(document: &SheetDocument, line_id: &str, values: &BTreeMap<String, f64>) -> Option<RateNote> {
     let (card_index, line) = document.line(line_id)?;
     let time = document.time?;
@@ -355,6 +359,9 @@ pub fn rate_note(document: &SheetDocument, line_id: &str, values: &BTreeMap<Stri
         };
     }
     let phrase = rate_phrase(line)?;
+    if phrase.rate.is_blank() {
+        return None;
+    }
     let unit = phrase.rate_unit?;
     let dt = tick_in(time, unit);
     let tick = time_words(dt, unit);
@@ -579,6 +586,159 @@ fn group_note(
         text,
         mean_stay,
         long_tick: None,
+    })
+}
+
+/// Returns the unit of time that the Unit of `parameter` names, as "per day" names a day, `None` for a parameter whose
+/// Unit names none.
+///
+/// The first "per second" to "per year" anywhere in the Unit counts, so "per day per infected neighbour" names a day.
+/// A parameter whose Unit names a unit of time is a *rate parameter*.
+pub fn parameter_rate_unit(parameter: &SheetParameter) -> Option<TimeUnit> {
+    parameter.unit.as_deref().and_then(super::edit::unit_in_text)
+}
+
+/// Returns the number typed in `slot`, `None` for a slot that holds no typed number.
+fn typed_number(slot: &Slot) -> Option<f64> {
+    match slot.value()? {
+        SheetValue::Literal(literal @ (SheetLiteral::Number(_) | SheetLiteral::Percent(_))) => literal.number(),
+        _ => None,
+    }
+}
+
+/// Returns the kind of draw that line `line_id` can change into while keeping its chance per tick, `None` for none.
+///
+/// A line that draws with a chance can change into a rate, and a line that draws at a rate into a chance.
+/// The draw is the line itself or its condition, and holds a typed number: a chance from 0 to below 1, or a rate with
+/// a unit. One tick of the sheet needs a length. A card that runs once has no duration and takes no rate, so a chance
+/// there changes into nothing. [`SheetEdit::ChangeToRate`](super::edit::SheetEdit::ChangeToRate) and
+/// [`SheetEdit::ChangeToChance`](super::edit::SheetEdit::ChangeToChance) make the change.
+pub fn conversion(document: &SheetDocument, line_id: &str) -> Option<sentence::DrawKind> {
+    document.time?;
+    let (card_index, line) = document.line(line_id)?;
+    let holder = match line.kind {
+        LineKind::Chance | LineKind::Rate => line,
+        _ => match line.condition.value()? {
+            SheetValue::Phrase(phrase) if matches!(phrase.kind, LineKind::Chance | LineKind::Rate) => phrase,
+            _ => return None,
+        },
+    };
+    if holder.kind == LineKind::Chance {
+        let runs_once = document.cards.get(card_index)?.runs == CardRuns::Once;
+        let chance = typed_number(&holder.chance)?;
+        (!runs_once && (0.0..1.0).contains(&chance)).then_some(sentence::DrawKind::Rate)
+    } else {
+        holder.rate_unit?;
+        typed_number(&holder.rate)?;
+        Some(sentence::DrawKind::Chance)
+    }
+}
+
+/// Returns whether `line` or a phrase inside it draws with a chance.
+fn holds_chance(line: &SheetLine) -> bool {
+    line.kind == LineKind::Chance || line.slot_values().any(value_holds_chance)
+}
+
+/// Returns whether `value` draws with a chance.
+fn value_holds_chance(value: &SheetValue) -> bool {
+    match value {
+        SheetValue::Phrase(phrase) => holds_chance(phrase),
+        SheetValue::List(items) => items.iter().any(value_holds_chance),
+        _ => false,
+    }
+}
+
+/// Returns the numbers of the lines that draw with a chance on the cards of `document` that run each tick, card by
+/// card in file order and each card in display order.
+///
+/// A chance is per tick and does not follow the time scale. A card that runs once has no duration, and its lines are
+/// left out.
+pub fn chance_line_numbers(document: &SheetDocument) -> Vec<usize> {
+    document
+        .cards
+        .iter()
+        .filter(|card| card.runs == CardRuns::EachTick)
+        .flat_map(|card| {
+            let relations = CardRelations::new(document, card);
+            relations
+                .order()
+                .iter()
+                .filter(|id| relations.line(id).is_some_and(holds_chance))
+                .filter_map(|id| relations.number(id))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The Count line that a fixed rate can grow with through "for each".
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GrowCount {
+    /// Id of the Count line.
+    pub line: String,
+    /// Name of the Count line's result, such as "Infected neighbours".
+    pub name: String,
+}
+
+/// Returns the Count line that the rate of line `line_id` could grow with, `None` for a line that the editor does not
+/// ask about.
+///
+/// The line is a Become whose condition is a rate, or a Rate line whose result is the whole condition of a Become. The
+/// rate is a typed number or a parameter with no "for each". The count is the nearest Count line above the line, open
+/// to it, that counts the cells around whose property, the one the Become changes, is the state the Become leads to,
+/// as "Infected neighbours" counts for "Become Infected".
+pub fn grow_count(document: &SheetDocument, line_id: &str) -> Option<GrowCount> {
+    let (card_index, line) = document.line(line_id)?;
+    let card = document.cards.get(card_index)?;
+    let relations = CardRelations::new(document, card);
+    let (rate, change) = match line.kind {
+        LineKind::Become => match line.condition.value()? {
+            SheetValue::Phrase(phrase) if phrase.kind == LineKind::Rate => (phrase.as_ref(), line),
+            _ => return None,
+        },
+        LineKind::Rate => {
+            let change = card.line_tables.values().find(|other| {
+                other.kind == LineKind::Become
+                    && matches!(
+                        other.condition.value(),
+                        Some(SheetValue::Chip(SheetChip::Result { line, part: None, property: None }))
+                            if line == line_id
+                    )
+            })?;
+            (line, change)
+        }
+        _ => return None,
+    };
+    if !rate.tries.is_blank() || fixed_number(rate.rate.value(), &parameter_defaults(document)).is_none() {
+        return None;
+    }
+    let property = change.property.as_deref()?;
+    let state = change.new_state.as_deref()?;
+    let position = relations.index(line_id)?;
+    let counts = |count: &SheetLine| {
+        let Some(SheetValue::Phrase(whose)) = count.whose.value() else {
+            return false;
+        };
+        count.kind == LineKind::Count
+            && count_bound(count).is_some()
+            && whose.test == Some(CompareTest::Is)
+            && matches!(whose.left.value(), Some(SheetValue::Chip(SheetChip::Their(their))) if their == property)
+            && matches!(whose.right.value(), Some(SheetValue::Chip(SheetChip::State(counted))) if counted == state)
+    };
+    let found = relations.order()[..position].iter().rev().find(|id| {
+        let open = relations
+            .parent(id)
+            .is_none_or(|block| relations.is_within(line_id, block));
+        open && relations.line(id).is_some_and(counts)
+    })?;
+    let (_, count) = document.line(found)?;
+    let name = count
+        .name
+        .clone()
+        .or_else(|| super::edit::automatic_name(document, count))?;
+    Some(GrowCount {
+        line: (*found).to_owned(),
+        name,
     })
 }
 

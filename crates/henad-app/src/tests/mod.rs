@@ -15,5 +15,6 @@ mod sheet_agents;
 mod sheet_card;
 mod sheet_editor;
 mod sheet_pane;
+mod sheet_rates;
 mod threads;
 mod time_axis;

@@ -53,7 +53,12 @@ not its whole condition or that a block holds has no note. A line with no `[time
 `chance_for_each_note` for a fixed chance, its chance at 1 the chance itself and at 2 by the number
 rule against `2p`, or `growing_chance_note` with words first for a chance that is a result (D106).
 `count_as_draw` returns the name of the Count a chance or a rate holds as its value, with the
-`DrawKind`, for the card's note and its button. The
+`DrawKind`, for the card's note and its button. `conversion` returns the `DrawKind` a typed chance
+or rate can change into (none with no `[time]`, and no rate on a card that runs once),
+`chance_line_numbers` the lines drawing a chance on cards that run each tick (the Time notice),
+`grow_count` the nearest open Count above a Become at a fixed rate with no "for each" (or a Rate
+line a Become takes whole) that counts its new state (`GrowCount`), and `parameter_rate_unit` the
+unit a parameter's Unit names. The
 mean stay is a Become from a named state at a fixed rate with no "for each", its rate the whole
 condition and no block around it (`rate_alone`). A worked-out note names an unnamed Count by
 `edit::automatic_name`. `pub(super) shortest_f32` is the conversion commands' number.
@@ -149,11 +154,11 @@ taking numbers already formatted (`rate_note`, `rate_for_each_note`, `worked_out
 `growing_rate_note`, `chance_for_each_note`, `growing_chance_note`, `competing_note`,
 `mean_stay_note`), which `sheet::rates` fills. The words the plan adds for its own decisions sit in
 one group (`RATE_IN_BUTTON_CARD`, `ONE_AGENT_KIND`, competing rates, the long tick,
-`chances_per_tick_note`), with the interim refusals (`NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHANGE`,
-`NOT_YET_AGENT_WALLS`, `NOT_YET_BLOCKED_MOVE_BY`), the errors of the ground and the places
-(`ON_GROUND_CELLS`, `AHEAD_NEEDS_CELLS`, `SET_IN_REPEAT`), a property changed two ways
-(`set_already`, `steered_already`, `moved_by_already`, `moved_to_already`) and the words of a look
-at agents (`look_name`, "line 3, Flockmates") and of its cost (`look_costs_too_much`,
+`chances_per_tick_note`, `long_tick_note`), with the interim refusals (`NOT_YET_REPEAT`,
+`NOT_YET_REPEAT_CHANGE`, `NOT_YET_AGENT_WALLS`, `NOT_YET_BLOCKED_MOVE_BY`), the errors of the ground
+and the places (`ON_GROUND_CELLS`, `AHEAD_NEEDS_CELLS`, `SET_IN_REPEAT`), a property changed two
+ways (`set_already`, `steered_already`, `moved_by_already`, `moved_to_already`) and the words of a
+look at agents (`look_name`, "line 3, Flockmates") and of its cost (`look_costs_too_much`,
 `card_costs_too_much`, `start_costs_too_much`, counts written with thousands commas, and for a pass
 past its cost per element `line_costs_too_much`, `smaller_maximum`, `FEWER_TIMES` and
 `FEWER_LINES`). `plural` is crate-visible for `SheetFile::shortfalls`. Every editor milestone and
@@ -182,20 +187,21 @@ typed number back (a trailing "%" makes a percent, "inf" and "nan" are refused),
 returns the same sentence as `SentencePart`s, which `line` joins through `sentence_text`: words, a
 bold `ConditionWord`, `From`, a `Chip` (`ChipKind` and a grey `lead` such as "my"), a `Blank`, a
 `Select`, `Always`, `Otherwise`, the empty `ForEachBlank`, which reads as nothing, and `ForEach`,
-the words "for each" once on (`FOR_EACH_WORDS`). One builder (`Parts`) writes both forms, so the
-card and the writer never differ. `placed_parts` returns the same parts as `PlacedPart`s, each with
-the `PartPlace` an edit of it sets (S19): a `target` (`PlaceTarget::Slot` with its slot path,
-`ListItem` with the list's slot path and the item's index, or `Field` with the phrase's slot path
-and a `FieldPlace`: `Property`, `NewState`, `StartState`, `Test`, `Around`, `RateUnit`, `Summary`,
-`SummaryValue`, `Operation`, `FirstOperand`, `SecondOperand`) and the `want`, the `Blank` the place
-shows while empty (`None` for a select). `Parts` places a value relative to its slot and
-`Parts::under(key, want)` puts it under the slot's key, so a phrase's places compose
-(`condition.left`). Words, `From`, `Otherwise` and a hand-written formula of more than one operation
-have no place. A Count's `whose` comparison wants a property on its left and, while that is empty
-or a States property, a state on its right, and an empty Calculate line reads "[number]
-[operation] [number]", both values and the select placed. The words "for each" and their count
-share the place `tries`. `binary_formula` splits a formula of one operation between two values, and
-`Sentences::formula_operand` returns the chip of one value as a formula writes it.
+the words "for each" once on (`FOR_EACH_WORDS`). `Competing` is the "or" (`COMPETING_WORD`) that
+`competing_parts` puts before a lower line of a competing group, in the card alone. One builder
+(`Parts`) writes both forms, so the card and the writer never differ. `placed_parts` returns the
+same parts as `PlacedPart`s, each with the `PartPlace` an edit of it sets (S19): a `target`
+(`PlaceTarget::Slot` with its slot path, `ListItem` with the list's slot path and the item's index,
+or `Field` with the phrase's slot path and a `FieldPlace`: `Property`, `NewState`, `StartState`,
+`Test`, `Around`, `RateUnit`, `Summary`, `SummaryValue`, `Operation`, `FirstOperand`,
+`SecondOperand`) and the `want`, the `Blank` the place shows while empty (`None` for a select).
+`Parts` places a value relative to its slot and `Parts::under(key, want)` puts it under the slot's
+key, so a phrase's places compose (`condition.left`). Words, `From`, `Otherwise` and a hand-written
+formula of more than one operation have no place. A Count's `whose` comparison wants a property on
+its left and, while that is empty or a States property, a state on its right, and an empty Calculate
+line reads "[number] [operation] [number]", both values and the select placed. The words "for each"
+and their count share the place `tries`. `binary_formula` splits a formula of one operation between
+two values, and `Sentences::formula_operand` returns the chip of one value as a formula writes it.
 
 **Places.** `SheetPlaces::root` is a `TablePlaces` tree that follows the TOML structure: `table`
 (the header, an inline table's braces, or the first key naming an implicit table such as

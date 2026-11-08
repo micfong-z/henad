@@ -41,9 +41,8 @@ use henad_graph::sheet::document::{
     SheetProperty, SheetValue, Slot, SummaryKind,
 };
 use henad_graph::sheet::edit::{LineField, MoveDirection, SheetBuilder, SheetEdit, SheetEditError};
-use henad_graph::sheet::rates::{chance_note, count_as_draw, parameter_defaults};
+use henad_graph::sheet::rates::{chance_note, conversion, count_as_draw, grow_count, parameter_defaults, rate_note};
 use henad_graph::sheet::relations::{CardRelations, RelationNote, RelationNoteKind};
-use henad_graph::sheet::sentence::comparison_words;
 use henad_graph::sheet::sentence::{
     ADD_AT_END_NOTE, ALWAYS, ALWAYS_TOOLTIP, ANY_STATE_ID, AddButton, AddItem, BLANK_MODEL_CARD, BLANK_TEXT,
     BUTTON_CARD_EMPTY, Blank, CONDITION_ARROW_TOOLTIP, ChipKind, DELETE_WHEN_TOOLTIP, DRAW_NEW_NUMBERS, DrawKind,
@@ -57,13 +56,18 @@ use henad_graph::sheet::sentence::{
     result_inside_tooltip, result_name_taken, sentence_text, use_for_each_label, use_for_each_name, use_instead_label,
     use_instead_name, uses_result_below, uses_result_inside,
 };
+use henad_graph::sheet::sentence::{
+    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, add_for_each_label, add_for_each_name, comparison_words,
+    competing_parts, competing_tooltip, long_tick_note, rate_grow_prompt, tick_set_notice,
+};
 
 use super::help::{Help, help_button};
 use super::picker::{
     CalcDraft, CardPicker, Choice, DraftUpdate, LineContext, SelectOption, apply_choice, around_options,
     calculate_edit, choose_when, comparison_options, list_len, operation_options, phrase_of, picker_for, read_property,
-    slot_at, summary_options, typed_text, value_at,
+    slot_at, summary_options, typed_text, unit_options, value_at,
 };
+use super::sheet_pane::SheetTrial;
 use super::widgets::{
     CHIP_PADDING, DialogOutcome, NewParameterDialog, NumberUse, allocate_control, blank_shapes, blank_ui, chip_with_id,
     message_ui, new_parameter_modal, set_name,
@@ -78,6 +82,9 @@ const INDENT: f32 = 20.0;
 
 /// Width in points of the column of line numbers.
 const NUMBER_WIDTH: f32 = 22.0;
+
+/// Distance in points from the left edge of the rows to the bracket of a competing group, inside the pane's margin.
+const BRACKET_OFFSET: f32 = 5.0;
 
 /// Width in points of the field that renames a result.
 const RENAME_WIDTH: f32 = 200.0;
@@ -109,6 +116,8 @@ pub struct CardState {
     explained: Option<BTreeSet<String>>,
     /// Notice that a line now starts with "otherwise", `None` while none shows.
     otherwise_notice: Option<String>,
+    /// Notice that a rate's unit set the length of one tick, `None` while none shows.
+    tick_notice: Option<String>,
 }
 
 impl CardState {
@@ -125,6 +134,7 @@ impl CardState {
             refusal: None,
             explained: None,
             otherwise_notice: None,
+            tick_notice: None,
         }
     }
 
@@ -139,11 +149,18 @@ impl CardState {
         self.focus_next = None;
         self.refusal = None;
         self.otherwise_notice = None;
+        self.tick_notice = None;
     }
 
     /// Returns whether the New parameter dialog is open.
     pub fn dialog_open(&self) -> bool {
         self.new_parameter.is_some()
+    }
+
+    /// Drops the notice that a rate's unit set the length of one tick, as an edit of that length on the Sheet pane
+    /// does.
+    pub fn drop_tick_notice(&mut self) {
+        self.tick_notice = None;
     }
 
     /// Returns the id of the control of line `line` at `target`. `tag` tells apart two controls at one target, as the
@@ -242,16 +259,25 @@ impl CardEdit {
 }
 
 /// Draws every card of `sheet` and runs the edit made on it. `past_start` is whether the preview has passed tick 0 or
-/// a button was pressed in it.
-pub fn card_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool) {
+/// a button was pressed in it, and `trials` holds the values the world tries for the sheet's parameters.
+///
+/// The notes under rate and chance lines read the parameters' defaults, with the values the world tries in their
+/// place while a run of the sheet is loaded.
+pub fn card_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials: &[SheetTrial]) {
     let mut pending = None;
     {
         let document = sheet.builder.document();
         let state = &mut sheet.card;
-        if let Some(notice) = &state.otherwise_notice {
+        for notice in [&state.tick_notice, &state.otherwise_notice].into_iter().flatten() {
             ui.add(Label::new(format!("{MDI_INFORMATION} {notice}")).wrap());
         }
-        cards_ui(ui, document, &sheet.report, state, &mut pending);
+        let mut values = parameter_defaults(document);
+        for trial in trials {
+            if let Some(value) = values.get_mut(&trial.parameter) {
+                *value = trial.value;
+            }
+        }
+        cards_ui(ui, document, &sheet.report, &values, state, &mut pending);
         if let Some(refusal) = &state.refusal {
             message_ui(ui, refusal);
         }
@@ -272,15 +298,19 @@ fn run_card_edit(sheet: &mut SheetEditor, past_start: bool, edit: CardEdit) {
         late_draft,
     } = edit;
     let mut made = Vec::new();
+    let timed = sheet.document().time.is_some();
     let result = sheet.edit(past_start, false, |builder| {
         made = run(builder)?;
         Ok(())
     });
+    let time = sheet.document().time;
     let state = &mut sheet.card;
     match result {
         Ok(()) => {
             state.refusal = None;
             state.otherwise_notice = None;
+            // A rate's unit chosen while one tick has no length sets one tick to 1 of that unit.
+            state.tick_notice = time.filter(|_| !timed).map(|time| tick_set_notice(time.tick_unit));
             if rename {
                 state.renaming = None;
             }
@@ -406,11 +436,12 @@ fn starts_with(target: &PlaceTarget, outer: &PlaceTarget) -> bool {
 // The cards
 
 /// Draws every card of `document` in file order, with the notes of `report` under their lines and the add buttons
-/// under each card.
+/// under each card. The notes read the parameter values `values`, by id.
 fn cards_ui(
     ui: &mut Ui,
     document: &SheetDocument,
     report: &SheetReport,
+    values: &BTreeMap<String, f64>,
     state: &mut CardState,
     pending: &mut Option<CardEdit>,
 ) {
@@ -430,7 +461,6 @@ fn cards_ui(
         add_buttons_ui(ui, document, state, None, pending);
         ui.add_space(16.0);
     }
-    let values = parameter_defaults(document);
     let mut overridden: Vec<(String, String)> = Vec::new();
     for (index, card) in document.cards.iter().enumerate() {
         if index > 0 {
@@ -448,7 +478,7 @@ fn cards_ui(
             sentences: &sentences,
             report,
             card,
-            values: &values,
+            values,
             highlight: &highlight,
         };
         card_ui(ui, &drawing, &lines, state, &mut hovered, pending);
@@ -535,14 +565,18 @@ fn card_ui(
     let editable = card.every == "cells";
     let closing = closing_blocks(&relations, lines);
     let list = ui.scope(|ui| {
+        let mut rows = Vec::with_capacity(lines.len());
         for (index, line) in lines.iter().enumerate() {
-            line_ui(ui, drawing, &relations, &notes, line, state, hovered, pending);
+            rows.push(line_ui(ui, drawing, &relations, &notes, line, state, hovered, pending));
             if !editable {
                 continue;
             }
             for block in closing.get(&index).into_iter().flatten() {
                 add_inside_ui(ui, drawing, block, state, pending);
             }
+        }
+        for bracket in brackets(&relations, lines) {
+            bracket_ui(ui, &rows, &bracket);
         }
         ui.unique_id()
     });
@@ -554,6 +588,69 @@ fn card_ui(
         }
         add_buttons_ui(ui, drawing.document, state, Some(card), pending);
     }
+}
+
+/// Returns the competing groups of the card of `relations` as the brackets that join them: each the indices in
+/// `lines` of the group's lines, top to bottom.
+fn brackets(relations: &CardRelations<'_>, lines: &[CardLine]) -> Vec<Vec<usize>> {
+    relations
+        .competing_groups()
+        .into_iter()
+        .map(|group| {
+            group
+                .into_iter()
+                .filter_map(|id| lines.iter().position(|line| line.id == id))
+                .collect::<Vec<_>>()
+        })
+        .filter(|indices| indices.len() > 1)
+        .collect()
+}
+
+/// Returns the numbers of the lines each bracket of card `card_index` of `document` joins, one list per competing
+/// group.
+#[cfg(test)]
+pub fn competing_brackets(document: &SheetDocument, card_index: usize) -> Vec<Vec<usize>> {
+    let Some(card) = document.cards.get(card_index) else {
+        return Vec::new();
+    };
+    let sentences = Sentences::new(document);
+    let report = henad_graph::sheet::check::check(document);
+    let lines = card_lines(document, &sentences, &report, card_index);
+    brackets(&CardRelations::new(document, card), &lines)
+        .into_iter()
+        .map(|bracket| bracket.into_iter().map(|index| lines[index].number).collect())
+        .collect()
+}
+
+/// Draws the thin bracket that joins the rows `rows` of the lines of `bracket`, indices in `lines`, in the margin left
+/// of the rows.
+///
+/// A row that wraps starts its next lines at the left edge of the card, under the line numbers. The margin is the one
+/// place beside the rows that no text reaches.
+fn bracket_ui(ui: &Ui, rows: &[Rect], bracket: &[usize]) {
+    let (Some(&first), Some(&last)) = (bracket.first(), bracket.last()) else {
+        return;
+    };
+    let (Some(top), Some(bottom)) = (rows.get(first), rows.get(last)) else {
+        return;
+    };
+    let x = top.left() - BRACKET_OFFSET;
+    let (y0, y1) = (top.top() + 3.0, bottom.bottom() - 3.0);
+    let stroke = Stroke::new(1.0, mcs::GRAY_500);
+    let clip = ui.clip_rect();
+    let painter = ui.painter().with_clip_rect(Rect::from_min_max(
+        Pos2::new(clip.left().min(x - 1.0), clip.top()),
+        clip.max,
+    ));
+    painter.add(Shape::line(
+        vec![
+            Pos2::new(x + 3.0, y0),
+            Pos2::new(x, y0),
+            Pos2::new(x, y1),
+            Pos2::new(x + 3.0, y1),
+        ],
+        stroke,
+    ));
 }
 
 /// A When block whose add row follows a line.
@@ -788,10 +885,6 @@ fn add_menu_ui(ui: &mut Ui, button: AddButton, states: Option<(&str, &str)>) -> 
 fn add_items_ui(ui: &mut Ui, button: AddButton, states: Option<(&str, &str)>) -> Option<AddItem> {
     let mut chosen = None;
     for item in button.items() {
-        // The card writes no rate line, so the add menus leave out the rate items.
-        if matches!(item, AddItem::BecomeAtRate | AddItem::AtRate) {
-            continue;
-        }
         if *item == AddItem::WithChance {
             ui.add_space(4.0);
             ui.label(RichText::new(SHARED_DRAW_GROUP).weak().small());
@@ -928,6 +1021,8 @@ pub struct LineNote {
     pub color: NoteColor,
     /// Button of the note, `None` for a note with none.
     pub action: Option<NoteAction>,
+    /// Tooltip and accessible description of the note, `None` for a note with none.
+    pub description: Option<String>,
 }
 
 /// A control inside a line: a chip, a blank, a select, "always", "otherwise" or the optional "for each ..." blank.
@@ -967,6 +1062,10 @@ pub struct CardLine {
     /// Notice shown the first time in a session that the line starts with "otherwise", empty for a line with no
     /// "otherwise".
     pub otherwise_notice: String,
+    /// Ids of the other lines of the competing group the line starts with "or" in, empty for a line with no "or".
+    pub competing: Vec<String>,
+    /// Tooltip and accessible description of the word "or", empty for a line with no "or".
+    pub competing_tooltip: String,
     /// Index in [`Self::parts`] of each result chip that the line cannot use, with the chip's tooltip.
     pub red_chips: Vec<(usize, String)>,
     /// Index in [`Self::parts`] of each state chip, with the colour of its state. A state that no property has is
@@ -995,6 +1094,7 @@ impl CardLine {
             }
             SentencePart::Always => (ALWAYS.to_owned(), always_name(&self.prefix), false),
             SentencePart::Otherwise(lines) => (otherwise_words(lines), otherwise_words(lines), false),
+            SentencePart::Competing(_) => (COMPETING_WORD.to_owned(), COMPETING_WORD.to_owned(), false),
             SentencePart::ForEachBlank(_) => (
                 FOR_EACH_BLANK_WORDS.to_owned(),
                 for_each_optional_name(&self.prefix),
@@ -1026,6 +1126,7 @@ pub fn card_lines(
     };
     let button = button_of(document, card);
     let relations = CardRelations::new(document, card);
+    let groups = relations.competing_groups();
     relations
         .order()
         .iter()
@@ -1043,7 +1144,26 @@ pub fn card_lines(
             let number = relations.number(line_id).unwrap_or(index + 1);
             let prefix = line_prefix(button, number);
             let otherwise_numbers = relations.otherwise_numbers(line_id);
-            let placed = sentences.placed_parts(line_id, &otherwise_numbers);
+            let mut placed = sentences.placed_parts(line_id, &otherwise_numbers);
+            // A lower line of a competing group starts with "or", unless a line outside the group overrides it.
+            let group = groups
+                .iter()
+                .find(|group| group.contains(&line_id))
+                .filter(|group| group.first() != Some(&line_id) && otherwise_numbers.is_empty());
+            let (competing, competing_tooltip) = match group {
+                Some(group) => {
+                    let numbers: Vec<usize> = group.iter().filter_map(|id| relations.number(id)).collect();
+                    let state = relations
+                        .line(line_id)
+                        .and_then(|line| state_of(document, line.property.as_deref(), line.start_state.as_deref()))
+                        .unwrap_or(BLANK_TEXT);
+                    let tooltip = competing_tooltip(&numbers, state);
+                    placed = competing_parts(placed, numbers);
+                    let others = group.iter().filter(|id| **id != line_id).map(|id| (*id).to_owned());
+                    (others.collect(), tooltip)
+                }
+                None => (Vec::new(), String::new()),
+            };
             let (parts, places): (Vec<SentencePart>, Vec<Option<PartPlace>>) =
                 placed.into_iter().map(|placed| (placed.part, placed.place)).unzip();
             let red_chips = red_chips(&relations, line_id, index, &parts);
@@ -1064,6 +1184,8 @@ pub fn card_lines(
                 otherwise: relations.otherwise_of(line_id).into_iter().map(str::to_owned).collect(),
                 otherwise_tooltip,
                 otherwise_notice,
+                competing,
+                competing_tooltip,
                 parts,
                 places,
                 red_chips: red_chips.into_iter().map(|red| (red.index, red.tooltip)).collect(),
@@ -1174,6 +1296,7 @@ fn line_notes(report: &SheetReport, card_index: usize, line_id: &str, red_chips:
                 text,
                 color: if red { NoteColor::Red } else { NoteColor::Amber },
                 action: None,
+                description: None,
             }
         })
         .collect();
@@ -1210,19 +1333,23 @@ fn otherwise_words_of(
     let property = line
         .and_then(|line| line.property.as_deref())
         .and_then(|id| property_of(document, id));
-    let state = line
-        .and_then(|line| line.start_state.as_deref())
-        .filter(|state| *state != ANY_STATE_ID)
-        .and_then(|state| {
-            property
-                .and_then(|property| property.states.iter().find(|candidate| candidate.id == state))
-                .map(|state| state.name.as_str())
-        });
+    let state = line.and_then(|line| state_of(document, line.property.as_deref(), line.start_state.as_deref()));
     let property_name = property.map_or(BLANK_TEXT, |property| property.name.as_str());
     (
         otherwise_tooltip(numbers, property_name, state),
         otherwise_notice(prefix, numbers, property_name, state),
     )
+}
+
+/// Returns the name of the named state `state` of the property `property` of `document`, `None` for any state or a
+/// state the property does not hold.
+fn state_of<'a>(document: &'a SheetDocument, property: Option<&str>, state: Option<&str>) -> Option<&'a str> {
+    let state = state.filter(|state| *state != ANY_STATE_ID)?;
+    property_of(document, property?)?
+        .states
+        .iter()
+        .find(|candidate| candidate.id == state)
+        .map(|state| state.name.as_str())
 }
 
 /// Returns the property `id` of any kind of thing of `document`.
@@ -1237,9 +1364,12 @@ fn property_of<'a>(document: &'a SheetDocument, id: &str) -> Option<&'a SheetPro
 }
 
 /// Returns the notes the card adds under `line` to those of the check, in the order of the wording table: the one-side
-/// offer after the skip note, then the count used as a chance or a rate, then the note of a chance for each, then the
-/// line's `relation_notes`: the gap, coverage and order notes, the offers to fold a When, and the notes inside and
-/// under a When.
+/// offer after the skip note, then the count used as a chance or a rate, then the note of a rate with its mean stay as
+/// its description and the long tick, or the note of a chance for each, then the offer to grow a rate for each count,
+/// then the line's `relation_notes`: the gap, coverage and order notes, the offers to fold a When, and the notes
+/// inside and under a When.
+///
+/// Note that the unit mismatch of a rate is a warning of the check, already among the line's notes.
 fn card_notes(
     drawing: &CardDrawing<'_>,
     line: &CardLine,
@@ -1273,6 +1403,7 @@ fn card_notes(
                     name: use_instead_name(&line.prefix, &words),
                     edit: SheetEdit::UseOneSide { line: line.id.clone() },
                 }),
+                description: None,
             },
         );
     }
@@ -1286,13 +1417,54 @@ fn card_notes(
                 name: use_for_each_name(&line.prefix, draw, &each),
                 edit: SheetEdit::UseCountForEach { line: line.id.clone() },
             }),
+            description: None,
         });
+    }
+    if let Some(note) = rate_note(drawing.document, &line.id, drawing.values) {
+        notes.push(LineNote {
+            text: note.text,
+            color: NoteColor::Grey,
+            action: None,
+            description: note.mean_stay,
+        });
+        if let Some(largest) = note.long_tick {
+            notes.push(LineNote {
+                text: long_tick_note(&largest),
+                color: NoteColor::Grey,
+                action: None,
+                description: None,
+            });
+        }
     }
     if let Some(text) = chance_note(drawing.document, &line.id, drawing.values) {
         notes.push(LineNote {
             text,
             color: NoteColor::Grey,
             action: None,
+            description: None,
+        });
+    }
+    if let Some(count) = grow_count(drawing.document, &line.id)
+        && let Some(path) = tries_path(line_data)
+    {
+        let each = for_each_words(&count.name);
+        notes.push(LineNote {
+            text: rate_grow_prompt(&count.name),
+            color: NoteColor::Amber,
+            action: Some(NoteAction {
+                label: add_for_each_label(&each),
+                name: add_for_each_name(&line.prefix, &each),
+                edit: SheetEdit::SetSlot {
+                    line: line.id.clone(),
+                    path,
+                    value: Slot::Filled(SheetValue::Chip(SheetChip::Result {
+                        line: count.line,
+                        part: None,
+                        property: None,
+                    })),
+                },
+            }),
+            description: None,
         });
     }
     notes.extend(
@@ -1330,7 +1502,22 @@ fn relation_line_note(line: &CardLine, note: &RelationNote) -> LineNote {
         text: note.text.clone(),
         color,
         action,
+        description: None,
     }
+}
+
+/// Returns the path of the "for each" slot of the rate or chance line `line` draws with, on the line or in its
+/// condition.
+fn tries_path(line: &SheetLine) -> Option<String> {
+    let PlaceTarget::Slot(path) = draw_value_target(line)? else {
+        return None;
+    };
+    let holder = path.rsplit_once('.').map_or("", |(holder, _)| holder);
+    Some(if holder.is_empty() {
+        "tries".to_owned()
+    } else {
+        format!("{holder}.tries")
+    })
 }
 
 /// What the parts of one line gather while they are drawn.
@@ -1350,7 +1537,7 @@ struct LineDrawing<'a> {
 }
 
 /// Draws `line`: its number, its sentence part by part, its menu, its rename field and its notes under it, with the
-/// relation notes of the card among them.
+/// relation notes of the card among them. Returns the row of the sentence.
 #[expect(
     clippy::too_many_arguments,
     reason = "the card, its relations and notes, the line and the pane's state each take a part"
@@ -1364,9 +1551,9 @@ fn line_ui(
     state: &mut CardState,
     hovered: &mut Vec<String>,
     pending: &mut Option<CardEdit>,
-) {
+) -> Rect {
     let Some(line_data) = relations.line(&line.id) else {
-        return;
+        return Rect::NOTHING;
     };
     let editable = drawing.card.every == "cells";
     let context = LineContext {
@@ -1412,7 +1599,7 @@ fn line_ui(
         }
         if editable {
             ui.add_space(6.0);
-            line_menu_ui(ui, relations, line, line_data, state, pending);
+            line_menu_ui(ui, drawing.document, relations, line, line_data, state, pending);
         }
         ui.unique_id()
     });
@@ -1442,6 +1629,7 @@ fn line_ui(
         editable,
         pending,
     );
+    rect
 }
 
 /// Draws `notes` under `line`, each note's button running its edit when the pane edits the line.
@@ -1461,7 +1649,12 @@ fn notes_ui(
         };
         ui.horizontal_wrapped(|ui| {
             ui.add_space(INDENT * line.depth as f32 + NUMBER_WIDTH);
-            ui.add(Label::new(RichText::new(note.text.as_str()).color(color)).wrap());
+            let label = ui.add(Label::new(RichText::new(note.text.as_str()).color(color)).wrap());
+            if let Some(description) = &note.description {
+                ui.ctx()
+                    .accesskit_node_builder(label.id, |node| node.set_description(description.as_str()));
+                label.on_hover_text(description.as_str());
+            }
             if let Some(action) = note.action
                 && editable
             {
@@ -1612,19 +1805,15 @@ fn part_ui(
             select_ui(ui, id, select_words(*select, &words), &name, words.is_empty())
         }
         SentencePart::Always => text_control(ui, id, ALWAYS, mcs::GRAY_400, &name).on_hover_text(ALWAYS_TOOLTIP),
-        SentencePart::Otherwise(lines) => {
-            let words = otherwise_words(lines);
-            let response = ui
-                .add(Label::new(RichText::new(words.as_str()).weak()).sense(Sense::click()))
-                .on_hover_text(line.otherwise_tooltip.as_str());
-            ui.ctx().accesskit_node_builder(response.id, |node| {
-                node.set_label(words);
-                node.set_description(line.otherwise_tooltip.as_str());
-            });
-            if response.contains_pointer() || response.has_focus() {
-                gathered.hovered.extend(line.otherwise.iter().cloned());
-            }
-            response
+        SentencePart::Otherwise(lines) => lead_word_ui(
+            ui,
+            &otherwise_words(lines),
+            &line.otherwise_tooltip,
+            &line.otherwise,
+            gathered,
+        ),
+        SentencePart::Competing(_) => {
+            lead_word_ui(ui, COMPETING_WORD, &line.competing_tooltip, &line.competing, gathered)
         }
         SentencePart::ForEachBlank(draw) => {
             ui.add_space(4.0);
@@ -1642,6 +1831,22 @@ fn part_ui(
         return;
     };
     control_picker(ui, drawing, place, part, &response, id, state, gathered, pending);
+}
+
+/// Draws the muted word `words` that leads a change, "otherwise (when line 2 does not apply)" or "or", focusable and
+/// described by `tooltip`. Hovering or focusing it highlights the lines `lines` on the next frame.
+fn lead_word_ui(ui: &mut Ui, words: &str, tooltip: &str, lines: &[String], gathered: &mut LineDrawing<'_>) -> Response {
+    let response = ui
+        .add(Label::new(RichText::new(words).weak()).sense(Sense::click()))
+        .on_hover_text(tooltip);
+    ui.ctx().accesskit_node_builder(response.id, |node| {
+        node.set_label(words);
+        node.set_description(tooltip);
+    });
+    if response.contains_pointer() || response.has_focus() {
+        gathered.hovered.extend(lines.iter().cloned());
+    }
+    response
 }
 
 /// Opens the picker or the select of the control `id` at `place`, whose response is `response`, when it is clicked
@@ -2004,6 +2209,10 @@ fn select_popup(
             field: FieldPlace::Operation,
             ..
         } => operation_options(),
+        PlaceTarget::Field {
+            field: FieldPlace::RateUnit,
+            ..
+        } => unit_options(),
         _ => Vec::new(),
     };
     if anchor.clicked() {
@@ -2043,6 +2252,7 @@ fn select_edit(
     let field = match option {
         SelectOption::Test(test) => LineField::Test(Some(test)),
         SelectOption::Around(around) => LineField::Around(Some(around)),
+        SelectOption::Unit(unit) => LineField::RateUnit(Some(unit)),
         SelectOption::Summary(kind) => {
             let mut summary = line.summaries.first()?.clone();
             summary.summary = Some(kind);
@@ -2152,14 +2362,20 @@ enum LineTool {
     MoveDown,
     /// Give the line's draws a new key.
     DrawNewNumbers,
+    /// Turn the line's chance into a rate.
+    ChangeToRate,
+    /// Turn the line's rate into a chance.
+    ChangeToChance,
     /// Delete the line.
     Delete,
 }
 
 /// Draws the menu of `line`, "Line 2 actions": Rename on a result line, Move up and Move down where the outline
-/// lets the line move, Draw new numbers on a line that draws, and Delete.
+/// lets the line move, Draw new numbers on a line that draws, Change to a rate or Change to a chance on a line whose
+/// typed chance or rate can change, and Delete.
 fn line_menu_ui(
     ui: &mut Ui,
+    document: &SheetDocument,
     relations: &CardRelations<'_>,
     line: &CardLine,
     line_data: &SheetLine,
@@ -2177,6 +2393,7 @@ fn line_menu_ui(
     let is_result = line_data.name.is_some();
     let (up, down) = can_move(relations, &line.id);
     let draws = holds_draw(line_data);
+    let change = conversion(document, &line.id);
     let is_when = line_data.kind == LineKind::When;
     let chosen = Popup::menu(&response)
         .id(id.with("popup"))
@@ -2191,6 +2408,16 @@ fn line_menu_ui(
             tool(ui, true, up, move_line_up(&line.word), LineTool::MoveUp);
             tool(ui, true, down, move_line_down(&line.word), LineTool::MoveDown);
             tool(ui, draws, true, DRAW_NEW_NUMBERS.to_owned(), LineTool::DrawNewNumbers);
+            let to_rate = change == Some(DrawKind::Rate);
+            tool(ui, to_rate, true, CHANGE_TO_RATE.to_owned(), LineTool::ChangeToRate);
+            let to_chance = change == Some(DrawKind::Chance);
+            tool(
+                ui,
+                to_chance,
+                true,
+                CHANGE_TO_CHANCE.to_owned(),
+                LineTool::ChangeToChance,
+            );
             let delete = ui.button(delete_line(&line.word));
             let delete = if is_when {
                 delete.on_hover_text(DELETE_WHEN_TOOLTIP)
@@ -2227,6 +2454,8 @@ fn line_menu_ui(
             });
         }
         Some(LineTool::DrawNewNumbers) => *pending = edit(SheetEdit::DrawNewNumbers { line: line_id }),
+        Some(LineTool::ChangeToRate) => *pending = edit(SheetEdit::ChangeToRate { line: line_id }),
+        Some(LineTool::ChangeToChance) => *pending = edit(SheetEdit::ChangeToChance { line: line_id }),
         Some(LineTool::Delete) => *pending = edit(SheetEdit::DeleteLine { line: line_id }),
         None => {}
     }

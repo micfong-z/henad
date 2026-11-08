@@ -23,23 +23,23 @@ use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::picker::{LineContext, picker_for};
 
 /// Height in points of a screen that holds every section of a long sheet and every line of its card.
-const TALL_SCREEN: egui::Vec2 = egui::vec2(1800.0, 2600.0);
+pub(super) const TALL_SCREEN: egui::Vec2 = egui::vec2(1800.0, 2600.0);
 
 /// Text of the chance SIR, a copy of the sheet henad-graph's and henad-models' tests read.
 const SIR_CHANCE: &str = include_str!("sheets/sir_chance.toml");
 
 /// Sheet in the harness's Editor.
-fn sheet(harness: &Harness) -> &SheetEditor {
+pub(super) fn sheet(harness: &Harness) -> &SheetEditor {
     harness.app.editor.model.sheet().expect("a sheet")
 }
 
 /// Returns the canonical text of the sheet in the harness's Editor.
-fn text(harness: &Harness) -> String {
+pub(super) fn text(harness: &Harness) -> String {
     sheet(harness).text().to_owned()
 }
 
 /// Returns the nodes of a settled frame named exactly `name`, top to bottom.
-fn named(harness: &mut Harness, name: &str) -> Vec<Node> {
+pub(super) fn named(harness: &mut Harness, name: &str) -> Vec<Node> {
     let mut found: Vec<Node> = harness
         .settle()
         .into_iter()
@@ -55,7 +55,7 @@ fn top_of(node: &Node) -> f32 {
 }
 
 /// Clicks the one widget named exactly `name`.
-fn click(harness: &mut Harness, name: &str) {
+pub(super) fn click(harness: &mut Harness, name: &str) {
     let found = named(harness, name);
     assert_eq!(found.len(), 1, "one widget is named {name}: {found:?}");
     let position = found[0].bounds.expect("bounds").center();
@@ -63,7 +63,7 @@ fn click(harness: &mut Harness, name: &str) {
 }
 
 /// Clicks the last of the widgets named exactly `name`, the one lowest on the screen.
-fn click_last(harness: &mut Harness, name: &str) {
+pub(super) fn click_last(harness: &mut Harness, name: &str) {
     let found = named(harness, name);
     let last = found.last().unwrap_or_else(|| panic!("no widget is named {name}"));
     let position = last.bounds.expect("bounds").center();
@@ -81,7 +81,7 @@ fn bounds_of(nodes: &[Node], role: Role, name: &str) -> egui::Rect {
 }
 
 /// Clicks the widget named exactly `item` inside the open picker or menu titled `dialog`.
-fn click_in(harness: &mut Harness, dialog: &str, item: &str) {
+pub(super) fn click_in(harness: &mut Harness, dialog: &str, item: &str) {
     let nodes = harness.settle();
     let area = bounds_of(&nodes, Role::Dialog, dialog);
     let found: Vec<&Node> = nodes
@@ -102,7 +102,7 @@ fn click_in(harness: &mut Harness, dialog: &str, item: &str) {
 }
 
 /// Clicks the widget named exactly `item` on the line whose accessible name starts with `line`.
-fn click_on_line(harness: &mut Harness, line: &str, item: &str) {
+pub(super) fn click_on_line(harness: &mut Harness, line: &str, item: &str) {
     let nodes = harness.settle();
     let area = bounds_of(&nodes, Role::Group, line);
     let found: Vec<&Node> = nodes
@@ -115,7 +115,7 @@ fn click_on_line(harness: &mut Harness, line: &str, item: &str) {
 }
 
 /// Returns whether a picker or menu titled `dialog` is open.
-fn is_open(harness: &mut Harness, dialog: &str) -> bool {
+pub(super) fn is_open(harness: &mut Harness, dialog: &str) -> bool {
     harness
         .settle()
         .iter()
@@ -123,7 +123,7 @@ fn is_open(harness: &mut Harness, dialog: &str) -> bool {
 }
 
 /// Types `text` into the field that holds the focus and presses Enter.
-fn type_and_enter(harness: &mut Harness, text: &str) {
+pub(super) fn type_and_enter(harness: &mut Harness, text: &str) {
     harness.press(Key::A, Modifiers::COMMAND);
     harness.frame(vec![Event::Text(text.to_owned())]);
     harness.press(Key::Enter, Modifiers::NONE);
@@ -131,21 +131,21 @@ fn type_and_enter(harness: &mut Harness, text: &str) {
 }
 
 /// Replaces the text of the field named `name` with `text`, without committing it.
-fn type_into(harness: &mut Harness, name: &str, text: &str) {
+pub(super) fn type_into(harness: &mut Harness, name: &str, text: &str) {
     click(harness, name);
     harness.press(Key::A, Modifiers::COMMAND);
     harness.frame(vec![Event::Text(text.to_owned())]);
 }
 
 /// Replaces the text of the field named `name` with `text` and presses Enter.
-fn enter_into(harness: &mut Harness, name: &str, text: &str) {
+pub(super) fn enter_into(harness: &mut Harness, name: &str, text: &str) {
     type_into(harness, name, text);
     harness.press(Key::Enter, Modifiers::NONE);
     harness.settle();
 }
 
 /// Chooses `item` in the select named `select`.
-fn choose(harness: &mut Harness, select: &str, item: &str) {
+pub(super) fn choose(harness: &mut Harness, select: &str, item: &str) {
     click(harness, select);
     click(harness, item);
     harness.settle();
@@ -161,7 +161,7 @@ fn choose_seen(harness: &mut Harness, seen: &mut Seen, select: &str, item: &str)
 
 /// Asserts that every control of every line of the sheet in the harness, every button of a note and every add row of
 /// a When block is drawn under its accessible name, and that the name of each but a select holds the words it shows.
-fn assert_controls_hold_their_words(harness: &mut Harness) {
+pub(super) fn assert_controls_hold_their_words(harness: &mut Harness) {
     use crate::ui::editor::sheet::card_pane::{card_buttons, card_lines};
 
     let nodes = harness.settle();
@@ -194,12 +194,12 @@ fn assert_controls_hold_their_words(harness: &mut Harness) {
 }
 
 /// Returns whether a settled frame shows `text` as a label, a value or a description.
-fn shows(harness: &mut Harness, text: &str) -> bool {
+pub(super) fn shows(harness: &mut Harness, text: &str) -> bool {
     harness.accessible_texts().iter().any(|shown| shown == text)
 }
 
 /// Returns the sentence of line `number` of the card pane's first card, read from its accessible name.
-fn line_text(harness: &mut Harness, prefix: &str) -> String {
+pub(super) fn line_text(harness: &mut Harness, prefix: &str) -> String {
     let nodes = harness.settle();
     let found: Vec<&Node> = nodes
         .iter()
@@ -211,17 +211,17 @@ fn line_text(harness: &mut Harness, prefix: &str) -> String {
 
 /// Every text a settled frame shows, gathered while menus, pickers and help popovers are open.
 #[derive(Debug, Default)]
-struct Seen(Vec<String>);
+pub(super) struct Seen(Vec<String>);
 
 impl Seen {
     /// Adds every text the harness shows now.
-    fn look(&mut self, harness: &mut Harness) {
+    pub(super) fn look(&mut self, harness: &mut Harness) {
         self.0.extend(harness.accessible_texts());
     }
 }
 
 /// Opens the add button `button`'s menu under the lowest card, records what it shows, and chooses `item`.
-fn add(harness: &mut Harness, seen: &mut Seen, button: AddButton, item: &str) {
+pub(super) fn add(harness: &mut Harness, seen: &mut Seen, button: AddButton, item: &str) {
     click_last(harness, button.label());
     choose_add_item(harness, seen, button, item);
 }
@@ -247,7 +247,7 @@ fn choose_add_item(harness: &mut Harness, seen: &mut Seen, button: AddButton, it
 }
 
 /// Picks `item` in the open picker titled `dialog`, after recording what it shows.
-fn pick(harness: &mut Harness, seen: &mut Seen, dialog: &str, item: &str) {
+pub(super) fn pick(harness: &mut Harness, seen: &mut Seen, dialog: &str, item: &str) {
     assert!(is_open(harness, dialog), "{dialog} is open");
     seen.look(harness);
     click_in(harness, dialog, item);
@@ -255,13 +255,13 @@ fn pick(harness: &mut Harness, seen: &mut Seen, dialog: &str, item: &str) {
 }
 
 /// Clicks the control named `control` and picks `item` in the picker titled `dialog` it opens.
-fn open_and_pick(harness: &mut Harness, seen: &mut Seen, control: &str, dialog: &str, item: &str) {
+pub(super) fn open_and_pick(harness: &mut Harness, seen: &mut Seen, control: &str, dialog: &str, item: &str) {
     click(harness, control);
     pick(harness, seen, dialog, item);
 }
 
 /// Returns the canonical text and the lowered code of `document`.
-fn text_and_code(document: &SheetDocument) -> (String, String) {
+pub(super) fn text_and_code(document: &SheetDocument) -> (String, String) {
     let text = document.to_text().expect("the sheet writes");
     let code = SheetFile::parse(&text)
         .expect("the sheet lowers")
@@ -272,12 +272,12 @@ fn text_and_code(document: &SheetDocument) -> (String, String) {
 }
 
 /// Returns the document of `text`.
-fn document_of(text: &str) -> SheetDocument {
+pub(super) fn document_of(text: &str) -> SheetDocument {
     ParsedSheet::parse(text).expect("the sheet reads").into_document()
 }
 
 /// Returns the document of the starter whose file is named `file_name`.
-fn starter_document(file_name: &str) -> SheetDocument {
+pub(super) fn starter_document(file_name: &str) -> SheetDocument {
     let starter = starters()
         .iter()
         .find(|starter| starter.file_name == file_name)
@@ -286,7 +286,7 @@ fn starter_document(file_name: &str) -> SheetDocument {
 }
 
 /// Opens the New model dialog, names the model `name`, and creates a blank model.
-fn new_blank(harness: &mut Harness, name: &str) {
+pub(super) fn new_blank(harness: &mut Harness, name: &str) {
     click(harness, "New model");
     harness.click_name_field();
     harness.press(Key::A, Modifiers::COMMAND);
@@ -296,7 +296,7 @@ fn new_blank(harness: &mut Harness, name: &str) {
 }
 
 /// Adds a States property `name` with `states` through the property form, each state in its usual or default colour.
-fn add_states_property(harness: &mut Harness, name: &str, states: &[&str]) {
+pub(super) fn add_states_property(harness: &mut Harness, name: &str, states: &[&str]) {
     click(harness, ADD_PROPERTY);
     type_into(harness, "Property name", name);
     for (index, state) in states.iter().enumerate() {
@@ -308,7 +308,7 @@ fn add_states_property(harness: &mut Harness, name: &str, states: &[&str]) {
 }
 
 /// Creates a parameter in the open New parameter dialog, with the default `default` and the top `max` when given.
-fn create_parameter(harness: &mut Harness, seen: &mut Seen, name: &str, default: &str, max: Option<&str>) {
+pub(super) fn create_parameter(harness: &mut Harness, seen: &mut Seen, name: &str, default: &str, max: Option<&str>) {
     seen.look(harness);
     type_into(harness, "Parameter name", name);
     type_into(harness, "Default value", default);
@@ -320,7 +320,7 @@ fn create_parameter(harness: &mut Harness, seen: &mut Seen, name: &str, default:
 }
 
 /// Returns every text of `seen` that holds a forbidden word, with the word.
-fn assert_no_forbidden_word(seen: &Seen) {
+pub(super) fn assert_no_forbidden_word(seen: &Seen) {
     let found = forbidden_words(&seen.0);
     assert!(found.is_empty(), "forbidden words: {found:?}");
 }
@@ -587,7 +587,7 @@ fn a_blank_model_builds_the_chance_sir_with_its_lines_and_equals_the_sheet() {
 }
 
 /// Opens the starter `file_name` in the harness's Editor.
-fn open_starter(harness: &mut Harness, file_name: &str) {
+pub(super) fn open_starter(harness: &mut Harness, file_name: &str) {
     let starter = starters()
         .iter()
         .find(|starter| starter.file_name == file_name)

@@ -77,7 +77,7 @@ Hover over a result chip to highlight the line that works it out.
 The add buttons under the lines add a line at the end of the card, each from a menu with a pattern of the sentence under every item:
 
 - **+ Look around** counts the cells around a cell whose property is in a state, or totals or averages a number over them.
-- **+ Chance** adds a change made by chance, or a yes or no result drawn by chance that several lines can share.
+- **+ Chance** adds a change made by chance or at a rate, or a yes or no result drawn that way that several lines can share.
 - **+ Yes or no** compares two values, or joins yes or no results with all of or any of.
 - **+ Calculate** works out a number from two numbers.
 - **+ Change** adds a Become, which changes a state, or a Set, which changes a number.
@@ -107,8 +107,9 @@ The blank opens **Choose when**, which lists the yes or no results of the lines 
 - **always**, for a change that applies to every cell in its old state.
 - **when ... is ...**, **when ... is at least ...**, **when ... is at most ...**, and **when ... is less than ... or more than ...**, which compare a value.
 - **with chance ...**, for a change made by chance.
+- **at rate ... per ...**, for a change made at a rate, on a card that runs each tick.
 
-The words "when" and "with chance" on a line are plain text.
+The words "when", "with chance" and "at rate" on a line are plain text.
 The small arrow after them opens **Choose when** again to change the kind of condition.
 
 ### "otherwise"
@@ -127,6 +128,45 @@ Moving a line updates its "otherwise".
 4  Become Empty from Burning, always
 5  Become Tree from Empty, with chance Growth chance
 ```
+
+### Rates
+
+A chance holds once per tick, whatever a tick stands for.
+A rate holds per unit of time, such as 0.1 per day, and follows the length of one tick.
+Henad turns a rate into a chance per tick as 1 − e^(−rate × tick), with the tick counted in the rate's unit.
+A rate line runs only while one tick has a length, so a model of rates sets **One tick is** under World, such as 1 day.
+
+A new rate starts in the unit of one tick.
+A parameter put into a rate gives the line its unit, read from the first "per day" or the like in the parameter's Unit.
+A rate's picker lists the parameters whose Unit names a unit of time or none, and a chance's picker leaves out those that name one.
+The unit select on the line sets a unit by hand.
+If one tick has no length yet, choosing a unit sets one tick to 1 of it, and a notice says so: "One tick is now 1 day. Change it on the sheet."
+
+A grey note under a rate line states the chance per tick it gives with the parameters' values, as the SIR epidemic's line 3 does:
+
+```text
+3  Become Recovered from Infected, at rate Recovery rate per day
+   Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. A rate is not a chance.
+   Henad turns it into one as 1 − e^(−0.1 × 1 day).
+```
+
+The note reads the values the world tries while a run of the sheet is loaded, and the values the sheet keeps otherwise.
+Hover over it to read how long a cell stays in its state on average at this tick length.
+A rate for each infected neighbour gives the chances for 1 and 2 of them, and adds a second note when the chance at the largest count passes one half, such as "Up to 0.909 with 8.", since a shorter tick then follows the rate more closely.
+Other notes ask about a rate that looks wrong:
+
+- A rate read per week from a parameter per day says "Infection rate is per day on the sheet, but this line reads it per week."
+- A count put in as the rate itself offers **Use a rate for each infected neighbour**.
+- A fixed rate below a count of the state it leads to asks "Should this rate grow with the number of Infected neighbours?" and offers **Add for each infected neighbour**.
+
+Two rate lines that take a cell out of one state compete, as Recovered and Dead do out of Infected.
+The lower line starts with "or" in place of "otherwise", a thin bracket joins the lines, and one note under the higher line states the chance of leaving and each line's share.
+A cell leaves at the sum of the rates, and each line takes the share its rate gives it, whatever the order of the lines.
+
+A button's card has no duration, so it takes chances and no rate.
+Removing the unit of one tick leaves every rate line with "Not run yet: set how long one tick is, under World on the sheet".
+When the length of one tick changes, a notice under the Time line names the lines that use chances per tick, which do not follow the time scale.
+**Change to a rate** in the line menu turns a typed chance into the rate that gives the same chance at the current tick, and **Change to a chance** turns a typed rate back.
 
 ### When blocks
 
@@ -158,6 +198,7 @@ Each line has a menu, "Line 2 actions", always drawn at the end of the line:
 - **Rename line 2**, on a result line.
 - **Move line 2 up** and **Move line 2 down**, which follow the outline. The first line inside a block moves up out of it, the last moves down out of it, a line beside a block moves into it, and a When moves with all its lines.
 - **Draw new numbers**, on a line that draws by chance, which gives the line new random numbers.
+- **Change to a rate** on a line with a typed chance, and **Change to a chance** on a line with a typed rate, on a card that runs each tick. Both keep the chance per tick.
 - **Delete line 2**. Deleting a When keeps its lines and moves them out one level.
 
 A line moved above the result it uses says "Uses Alive neighbours, which is below this line" and does not run, and moving it back runs it again.
@@ -172,6 +213,7 @@ Grey notes explain how lines work together:
 - Become lines that test one count and settle every value of it say so, as in the majority vote: "Lines 2 and 3 cover every value of B in my block. A cell ends the tick A when it is 0 to 4 and B when it is 5 to 9."
 - Become lines that test one count and leave some of its values to no line name those values. Those cells keep their state.
 - A chance with "for each" shows the chance for 1 and 2 of what it counts.
+- A rate shows the chance per tick it gives, as [Rates](#rates) describes.
 
 ### Running a sheet
 

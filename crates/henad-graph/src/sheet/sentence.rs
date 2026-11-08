@@ -215,7 +215,7 @@ impl AddButton {
     pub fn tooltip(self) -> &'static str {
         match self {
             Self::LookAround => "Count or total of the cells around me (neighbours)",
-            Self::Chance => "Change a state by chance",
+            Self::Chance => "Change a state by chance or at a rate",
             Self::YesOrNo => "Compare values, or join yes or no results",
             Self::Calculate => "Work out a number from two numbers",
             Self::Change => "Change a state or a number",
@@ -1682,6 +1682,27 @@ pub fn competing_tooltip(lines: &[usize], state: &str) -> String {
 /// Note on a tick that is long for its rate.
 pub const LONG_TICK: &str = "This tick is long for this rate. A shorter tick follows the rate more closely.";
 
+/// Returns the note under a rate line on a tick that is long for it, where `largest` is the chance at the largest
+/// count, such as "up to 0.909 with 8".
+///
+/// For example "Up to 0.909 with 8. This tick is long for this rate. A shorter tick follows the rate more closely."
+pub fn long_tick_note(largest: &str) -> String {
+    format!("{}. {LONG_TICK}", upper_first(largest))
+}
+
+/// Returns `parts`, the parts of a Become of a competing group below its highest line, led by the word "or".
+///
+/// `lines` holds the numbers of the group's lines, and the change's first word drops to lower case: "or become Dead
+/// from Infected, at rate Death rate per day".
+pub fn competing_parts(parts: Vec<PlacedPart>, lines: Vec<usize>) -> Vec<PlacedPart> {
+    let mut led = Parts::part(SentencePart::Competing(lines));
+    led.push(" ");
+    let mut change = Parts(parts);
+    change.map_first_text(lower_first);
+    led.append(change);
+    led.0
+}
+
 /// Item of a line's menu that turns its chance into a rate.
 pub const CHANGE_TO_RATE: &str = "Change to a rate";
 
@@ -3019,6 +3040,9 @@ pub enum SentencePart {
     /// The words "otherwise (when line 2 does not apply)" before a change, with the numbers of the higher lines that
     /// override it.
     Otherwise(Vec<usize>),
+    /// The word "or" before a Become of a competing group below its highest line, with the numbers of the group's
+    /// lines. [`competing_parts`] puts it in place.
+    Competing(Vec<usize>),
     /// The empty optional "for each ..." blank after a chance or a rate. Plain text leaves it out.
     ForEachBlank(DrawKind),
     /// The words "for each" of a chance or a rate whose "for each" is on, before its count.
@@ -3037,6 +3061,7 @@ impl SentencePart {
             Self::Blank(_) => BLANK_TEXT.to_owned(),
             Self::Always => ALWAYS.to_owned(),
             Self::Otherwise(lines) => otherwise_words(lines),
+            Self::Competing(_) => COMPETING_WORD.to_owned(),
             Self::ForEachBlank(_) => String::new(),
             Self::ForEach(_) => FOR_EACH_WORDS.to_owned(),
         }

@@ -9,12 +9,14 @@
 //! to the lines after it inside that When.
 
 use egui::{Button, Id, Key, Popup, PopupCloseBehavior, Response, RichText, ScrollArea, TextEdit, Ui};
+use henad_core::metadata::TimeUnit;
 use henad_graph::sheet::document::{
-    Around, CompareTest, LineKind, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty,
-    SheetValue, Slot, SummaryKind,
+    Around, CardRuns, CompareTest, LineKind, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral,
+    SheetProperty, SheetValue, Slot, SummaryKind,
 };
 use henad_graph::sheet::edit::{LineField, SheetEdit, automatic_name};
 use henad_graph::sheet::format_number;
+use henad_graph::sheet::rates::parameter_rate_unit;
 use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
     ANY_STATE, ANY_STATE_ID, Blank, CHANCE_BOX_HINT, CHOOSE_WHEN, COMPARISONS, CONDITIONS, ConditionItem, DrawKind,
@@ -23,8 +25,8 @@ use henad_graph::sheet::sentence::{
     OR_A_NEW_CONDITION, OTHERWISE, PARAMETERS, PROPERTIES, PartPlace, PlaceTarget, REMOVE_FOR_EACH, REMOVE_FROM_LIST,
     STATES, Sentences, THIS_CELLS_PROPERTIES, TYPE_ONE_NUMBER, USE_BUTTON, around_words, binary_formula,
     comparison_words, for_each_lead, literal_words, my_property_item, operation_words, otherwise_description,
-    otherwise_item_name, read_typed_number, result_condition_item, result_description, shared_state_name,
-    this_cells_property, when_lead,
+    otherwise_item_name, rate_unit_word, read_typed_number, result_condition_item, result_description,
+    shared_state_name, this_cells_property, when_lead,
 };
 
 use super::accessible_group;
@@ -488,10 +490,19 @@ impl LineContext<'_> {
     }
 
     /// Returns the parameters as items, each with its value and unit beside it.
-    fn parameters(&self) -> Vec<PickerItem> {
+    ///
+    /// A rate's picker leaves out a parameter whose Unit is set and names no unit of time, and a chance's picker leaves
+    /// out a rate parameter, one whose Unit names a unit of time, as "per day" does. Any other number offers every
+    /// parameter.
+    fn parameters(&self, number_use: NumberUse) -> Vec<PickerItem> {
         self.document
             .parameters
             .iter()
+            .filter(|parameter| match number_use {
+                NumberUse::Chance => parameter_rate_unit(parameter).is_none(),
+                NumberUse::Rate => parameter.unit.is_none() || parameter_rate_unit(parameter).is_some(),
+                NumberUse::Number => true,
+            })
             .map(|parameter| {
                 let value = format_number(parameter.default).unwrap_or_default();
                 PickerItem {
@@ -664,7 +675,7 @@ fn number_picker(
         },
         PickerGroup {
             heading: PARAMETERS,
-            items: context.parameters(),
+            items: context.parameters(number_use),
         },
     ];
     picker.new_parameter = true;
@@ -745,14 +756,23 @@ pub fn choose_when(context: &LineContext<'_>, otherwise: &[usize]) -> CardPicker
 
 /// Returns whether "Choose when" offers the form `item` on the line of `context`.
 ///
-/// A When cannot be always. "at rate ... per ..." is never offered. A button's card has no duration and takes chances
-/// only. The card writes no rate line on a card that runs each tick.
+/// A When cannot be always. "at rate ... per ..." is offered on a card that runs each tick. A button's card has no
+/// duration and takes chances only.
 fn offers_condition(context: &LineContext<'_>, item: ConditionItem) -> bool {
     match item {
         ConditionItem::Always => context.line.kind != LineKind::When,
-        ConditionItem::AtRate => false,
+        ConditionItem::AtRate => runs_each_tick(context),
         _ => true,
     }
+}
+
+/// Returns whether the card that holds the line of `context` runs each tick.
+fn runs_each_tick(context: &LineContext<'_>) -> bool {
+    context
+        .document
+        .line(context.line_id)
+        .and_then(|(card, _)| context.document.cards.get(card))
+        .is_some_and(|card| card.runs == CardRuns::EachTick)
 }
 
 // The selects inside a line
@@ -768,6 +788,8 @@ pub enum SelectOption {
     Summary(SummaryKind),
     /// An operation of a Calculate line: `+`, `-`, `*` or `/`.
     Operation(char),
+    /// The unit of time of a rate.
+    Unit(TimeUnit),
 }
 
 /// Returns the options of the select of a comparison, with their words, where `of_states` is whether the value on its
@@ -802,6 +824,14 @@ pub fn operation_options() -> Vec<(String, SelectOption)> {
         .filter_map(|operator| {
             operation_words(&operator.to_string()).map(|words| (words.to_owned(), SelectOption::Operation(operator)))
         })
+        .collect()
+}
+
+/// Returns the options of the select of a rate's unit, with their words: "second" to "year".
+pub fn unit_options() -> Vec<(String, SelectOption)> {
+    TimeUnit::ALL
+        .into_iter()
+        .map(|unit| (rate_unit_word(unit).to_owned(), SelectOption::Unit(unit)))
         .collect()
 }
 
