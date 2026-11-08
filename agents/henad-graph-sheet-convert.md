@@ -1,7 +1,12 @@
 # henad-graph: conversion of a sheet to a node graph
 
 `agents/henad-graph-sheet.md` holds the sheet module, and `agents/henad-graph-edit.md` the editor
-region the copy writes. Only the tests call the conversion.
+region the copy writes. The app's expert mode (`agents/henad-app-editor.md`) calls the conversion
+and `changes_since_conversion`, and reads its words from `sheet::sentence`: `EDIT_AS_NODE_GRAPH`,
+`MODEL_ACTIONS`, the banner's `converted_banner`, `edited_banner` with `node_edits` ("2 nodes
+added, 1 changed", "1 node changed", "no node changed"), `original_changed_banner`,
+`original_not_beside`, `open_original`, `converted_link`, `converted_date` ("7 Nov 2026") and
+`FROM_AUTHOR_MODEL`.
 
 **`sheet/convert.rs`** (private, `sheet` re-exports `convert`, `ConvertOptions`, `ConvertError` and
 `ConvertRefusal`). `convert(&SheetFile, &ConvertOptions)` returns a `GraphFile`: the lowered

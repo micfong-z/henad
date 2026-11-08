@@ -2,8 +2,8 @@
 //!
 //! A *sheet* is a model file of `kind = "sheet"`, the author document of [`henad_graph::sheet`]. The *Sheet* pane
 //! lists what the model holds (its purpose, world, properties, parameters, measures, colours and buttons), and the
-//! *Card* pane lists each card's numbered lines as sentences. The world itself stays in the dock's Viewport, Playback,
-//! Pacing, Parameters and Charts tabs.
+//! *Card* pane lists each card's numbered lines as sentences, or draws them read-only as the *Diagram*. The world
+//! itself stays in the dock's Viewport, Playback, Pacing, Parameters and Charts tabs.
 //!
 //! A sheet opens through the sheet reader alone, so a sheet with checker errors still opens here. Its preview builds
 //! only while the sheet reads, checks and lowers and holds a property, and the preview waits paused at tick 0 until
@@ -17,6 +17,7 @@
 //! more edit of the world.
 
 pub mod card_pane;
+pub mod diagram;
 pub mod help;
 pub mod new_model;
 pub mod picker;
@@ -27,17 +28,19 @@ use std::sync::atomic::Ordering;
 
 use egui::{Button, CentralPanel, Frame, Key, KeyboardShortcut, Margin, Modifiers, Panel, ScrollArea, TextEdit};
 use henad_core::diagnostic::CodeDiagnostic;
+use henad_graph::sheet::ConvertRefusal;
 use henad_graph::sheet::check::{SheetReport, check};
 use henad_graph::sheet::document::{MadeOf, SheetDocument, StartsAs};
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit, SheetEditError};
 use henad_graph::sheet::sentence::{
-    MODEL_NAME_FIELD, REDO, REDO_TOOLTIP, RENAME_MODEL_TOOLTIP, RESTART_NOTICE, UNDO, UNDO_TOOLTIP, model_name_button,
+    CONVERT_HEADING, DIAGRAM, DIAGRAM_TOOLTIP, MODEL_ACTIONS, MODEL_NAME_FIELD, REDO, REDO_TOOLTIP,
+    RENAME_MODEL_TOOLTIP, RESTART_NOTICE, UNDO, UNDO_TOOLTIP, converted_link, model_name_button,
 };
 use henad_graph::sheet::{ParsedSheet, SheetFile};
 
 use super::graph::history::History;
 use super::graph::{CompiledProgram, GraphProgram, LOADS};
-use crate::icons::material_design_icons::{MDI_REDO, MDI_UNDO};
+use crate::icons::material_design_icons::{MDI_DOTS_HORIZONTAL, MDI_REDO, MDI_UNDO};
 use crate::ui::sweep::layout::add_button;
 
 /// Heading of the pane that lists what the model holds.
@@ -78,6 +81,8 @@ pub struct SheetEditor {
     history: History,
     /// Text of the model name's field while it is open, `None` while the name shows as a button.
     renaming: Option<String>,
+    /// Whether the Card pane shows the Diagram in place of the lines.
+    pub diagram: bool,
 }
 
 /// Prints the sheet's id, the load and whether the sheet lowers.
@@ -111,6 +116,7 @@ impl SheetEditor {
             card: card_pane::CardState::new(load),
             history: History::default(),
             renaming: None,
+            diagram: false,
         };
         editor.refresh();
         editor
@@ -274,6 +280,11 @@ impl SheetEditor {
         &self.report
     }
 
+    /// Sheet read, checked and lowered from [`Self::text`], `None` while a problem stops it lowering.
+    pub fn file(&self) -> Option<&SheetFile> {
+        self.file.as_ref().ok()
+    }
+
     /// Returns whether the sheet holds a problem that stops it lowering. The preview is then left unbuilt.
     pub fn has_errors(&self) -> bool {
         self.file.is_err()
@@ -356,20 +367,40 @@ impl SheetEditor {
     }
 }
 
-/// Draws the sheet editor: the toolbar, then the Sheet pane on the left and the Card pane beside it, each scrolling on
-/// its own.
+/// What the sheet editor shows besides the sheet, for one frame.
+#[derive(Debug)]
+pub struct SheetShown<'a> {
+    /// Whether the preview has passed tick 0 or a button was pressed in it.
+    pub past_start: bool,
+    /// Values the world tries for the sheet's parameters.
+    pub trials: &'a [sheet_pane::SheetTrial],
+    /// Whether the New model dialog is closed. Undo and Redo then take their keys while no modal of the app is open
+    /// and no text field holds the focus.
+    pub keys: bool,
+    /// Name of the node graph copy converted from the sheet in this session, `None` for none.
+    pub copy: Option<&'a str>,
+    /// Reason the sheet does not convert, `None` for a sheet that converts.
+    pub refusal: Option<ConvertRefusal>,
+}
+
+/// Request of the sheet editor that the Editor runs once the tab has drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SheetRequest {
+    /// Opens the conversion dialog.
+    Convert,
+    /// Opens the node graph copy converted from the sheet.
+    OpenCopy,
+}
+
+/// Draws the sheet editor: the toolbar, the line that opens the sheet's copy, then the Sheet pane on the left and the
+/// Card pane beside it, each scrolling on its own, and returns the request of a pressed control.
 ///
-/// Each pane is a group named by its heading. `past_start` is whether the preview has passed tick 0 or a button was
-/// pressed in it, and `trials` holds the values the world tries for the sheet's parameters. `keys` is whether the New
-/// model dialog is closed. Undo and Redo then take their keys while no modal of the app is open and no text field
-/// holds the focus.
-pub fn sheet_ui(
-    ui: &mut egui::Ui,
-    sheet: &mut SheetEditor,
-    past_start: bool,
-    trials: &[sheet_pane::SheetTrial],
-    keys: bool,
-) {
+/// Each pane is a group named by its heading.
+pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'_>) -> Option<SheetRequest> {
+    let past_start = shown.past_start;
+    let trials = shown.trials;
+    let keys = shown.keys;
+    let mut request = None;
     // egui reports the top modal layer of the previous frame. Every modal stays open past the frame that opens it.
     let modal_open = ui.ctx().memory(|memory| memory.top_modal_layer().is_some());
     if keys && !modal_open && !sheet.dialog_open() && !ui.ctx().text_edit_focused() {
@@ -389,7 +420,14 @@ pub fn sheet_ui(
     Panel::top("henad_sheet_toolbar")
         .resizable(false)
         .frame(Frame::NONE.inner_margin(Margin::symmetric(8, 4)))
-        .show(ui, |ui| ui.horizontal(|ui| toolbar_ui(ui, sheet, past_start)));
+        .show(ui, |ui| {
+            ui.horizontal(|ui| toolbar_ui(ui, sheet, past_start, shown.refusal, &mut request));
+            if let Some(copy) = shown.copy
+                && ui.link(converted_link(copy)).clicked()
+            {
+                request = Some(SheetRequest::OpenCopy);
+            }
+        });
     let width = ui.available_width();
     Panel::left("henad_sheet_pane")
         .resizable(true)
@@ -407,21 +445,46 @@ pub fn sheet_ui(
         });
     CentralPanel::no_frame().show(ui, |ui| {
         Frame::NONE.inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
-            ui.heading(CARD_PANE);
+            ui.horizontal(|ui| {
+                ui.heading(CARD_PANE);
+                let toggle = ui
+                    .selectable_label(sheet.diagram, DIAGRAM)
+                    .on_hover_text(DIAGRAM_TOOLTIP);
+                if toggle.clicked() {
+                    sheet.diagram = !sheet.diagram;
+                    sheet.card.close();
+                }
+            });
             ScrollArea::vertical()
                 .id_salt("henad_card_pane_scroll")
                 .auto_shrink([false; 2])
-                .show(ui, |ui| card_pane::card_pane(ui, sheet, past_start, trials));
+                .show(ui, |ui| {
+                    if sheet.diagram {
+                        if diagram::diagram_ui(ui, sheet.document(), &sheet.report, shown.refusal) {
+                            request = Some(SheetRequest::Convert);
+                        }
+                    } else {
+                        card_pane::card_pane(ui, sheet, past_start, trials);
+                    }
+                });
             pane_group(ui, CARD_PANE);
         });
     });
+    request
 }
 
-/// Draws the toolbar: the model's name, a button that turns into a field named "Model name", then Undo and Redo.
+/// Draws the toolbar: the model's name, a button that turns into a field named "Model name", then Undo, Redo and the
+/// menu of the model's actions, which holds Convert to node graph.
 ///
 /// In the field, Enter or a click elsewhere keeps the name and Escape puts the old name back. An empty name keeps the
-/// old one.
-fn toolbar_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, past_start: bool) {
+/// old one. Convert to node graph is disabled with the tooltip of `refusal` while the sheet does not convert.
+fn toolbar_ui(
+    ui: &mut egui::Ui,
+    sheet: &mut SheetEditor,
+    past_start: bool,
+    refusal: Option<ConvertRefusal>,
+    request: &mut Option<SheetRequest>,
+) {
     let name = sheet.document().sheet.name.clone();
     if let Some(text) = &mut sheet.renaming {
         let field = ui.add(TextEdit::singleline(text).desired_width(200.0));
@@ -459,6 +522,21 @@ fn toolbar_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, past_start: bool) {
     if redo.clicked() {
         sheet.redo(past_start);
     }
+    ui.separator();
+    let menu = ui
+        .menu_button(MDI_DOTS_HORIZONTAL, |ui| {
+            let convert = add_button(ui, refusal.is_none(), Button::new(CONVERT_HEADING), CONVERT_HEADING);
+            let convert = match refusal {
+                Some(refusal) => convert.on_disabled_hover_text(refusal.tooltip()),
+                None => convert,
+            };
+            if convert.clicked() {
+                *request = Some(SheetRequest::Convert);
+                ui.close();
+            }
+        })
+        .response;
+    menu.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, MODEL_ACTIONS));
 }
 
 /// Returns `document` with no name, no purpose and no property holding a start.

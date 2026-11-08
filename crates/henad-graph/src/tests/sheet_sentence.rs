@@ -1333,6 +1333,13 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
         ("Convert to node graph", fixed(sentence::CONVERT_HEADING)),
         ("Game of Life (expert)", sentence::expert_copy_name("Game of Life")),
         ("Convert", fixed(sentence::CONVERT)),
+        ("Edit as node graph", fixed(sentence::EDIT_AS_NODE_GRAPH)),
+        ("Open Game of Life", sentence::open_original("Game of Life")),
+        (
+            "Converted to node graph: Game of Life (expert)",
+            sentence::converted_link("Game of Life (expert)"),
+        ),
+        ("From the author model", fixed(sentence::FROM_AUTHOR_MODEL)),
     ]);
     let [first, second] = sentence::convert_text("Game of Life");
     entries.push((
@@ -1936,5 +1943,34 @@ fn a_formula_inside_a_slot_places_no_value_and_no_operation() {
     assert_eq!(
         sentence_text(&parts),
         "Become Infected from Susceptible, with chance (Infection chance divided by 2) for each infected neighbour"
+    );
+}
+
+#[test]
+fn the_banner_of_a_copy_reads_as_the_expert_design_writes_it() {
+    assert_eq!(sentence::converted_date("2026-11-07"), "7 Nov 2026");
+    assert_eq!(sentence::converted_date("2026-13-07"), "2026-13-07");
+    assert_eq!(sentence::converted_date("today"), "today");
+    assert_eq!(
+        sentence::converted_banner("Game of Life", "2026-11-07"),
+        "Node graph converted from Game of Life on 7 Nov 2026. Frames show the line each node came from."
+    );
+    assert_eq!(sentence::node_edits(2, 0, 1), "2 nodes added, 1 changed");
+    assert_eq!(sentence::node_edits(0, 0, 1), "1 node changed");
+    assert_eq!(sentence::node_edits(0, 3, 1), "3 nodes removed, 1 changed");
+    assert_eq!(sentence::node_edits(0, 2, 0), "2 nodes removed");
+    assert_eq!(sentence::node_edits(1, 3, 0), "1 node added, 3 removed");
+    assert_eq!(sentence::node_edits(0, 0, 0), "no node changed");
+    assert_eq!(
+        sentence::edited_banner("Game of Life", "2026-11-07", &sentence::node_edits(2, 0, 1)),
+        "Node graph converted from Game of Life on 7 Nov 2026. Edited since: 2 nodes added, 1 changed."
+    );
+    assert_eq!(
+        sentence::original_changed_banner("Game of Life"),
+        "Game of Life has changed since this conversion. Convert it again for a new node graph."
+    );
+    assert_eq!(
+        sentence::original_not_beside("Game of Life"),
+        "Game of Life is not beside this file. Frames still show the line each node came from."
     );
 }

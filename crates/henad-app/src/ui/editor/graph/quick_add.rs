@@ -11,6 +11,7 @@ use henad_graph::catalogue::{Effect, NodeDef, SocketType, definitions, lookup};
 use henad_graph::document::{Domain, GraphDocument, Pass, PassStage};
 use henad_graph::node::{OP_FUNCTION_INPUT, OP_FUNCTION_OUTPUT};
 
+use super::display::display_name;
 use super::passes::topology_domain;
 use henad_graph::types::ValueType;
 
@@ -42,9 +43,9 @@ pub enum WireEnd {
 /// Returns the kinds `pass` of `document` takes, or a function of it when `pass` is `None`, that fit `wire` and match
 /// `query`, in catalogue order, at the top of the body or, when `in_region` holds, in a region's body.
 ///
-/// Every word of `query` has to appear in the kind's id, label or group, or stand for a word that does. A kind that
-/// only a region body takes, such as `region.put`, is offered in a region alone, and a kind a region body refuses,
-/// such as `lane.set`, outside every region alone.
+/// Every word of `query` has to appear in the kind's id, label, group, display name or category, or stand for a word
+/// that does. A kind that only a region body takes, such as `region.put`, is offered in a region alone, and a kind a
+/// region body refuses, such as `lane.set`, outside every region alone.
 pub fn offered_kinds(
     document: &GraphDocument,
     pass: Option<&Pass>,
@@ -149,9 +150,11 @@ fn fits(def: &NodeDef, socket: SocketType, value_type: Option<&ValueType>) -> bo
     }
 }
 
-/// Returns whether every one of `words` appears in the id, label or group of `def`, directly or through a synonym.
+/// Returns whether every one of `words` appears in the id, label or group of `def` or in its display name or category,
+/// directly or through a synonym.
 fn matches_words(def: &NodeDef, words: &[String]) -> bool {
-    let haystack = format!("{} {} {}", def.id, def.label, def.group).to_lowercase();
+    let (name, category) = display_name(def.id).map_or(("", ""), |display| (display.name, display.category));
+    let haystack = format!("{} {} {} {name} {category}", def.id, def.label, def.group).to_lowercase();
     words.iter().all(|word| {
         haystack.contains(word.as_str())
             || SYNONYMS

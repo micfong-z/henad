@@ -3,6 +3,7 @@
 pub mod support;
 
 mod editor;
+mod expert;
 mod graph_canvas;
 mod graph_editor;
 mod graph_functions;

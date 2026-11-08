@@ -1111,6 +1111,8 @@ impl AppState {
                 && let SaveResult::Saved(name) | SaveResult::Downloaded(name) = &result
             {
                 self.editor.file_name = Some(name.clone());
+                // The file was saved where the dialog chose, which can be another folder.
+                self.editor.file_path = None;
             }
             *self.save_status(target) = Some(match result {
                 SaveResult::Saved(name) => format!("Saved {name}"),

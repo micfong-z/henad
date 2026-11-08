@@ -18,8 +18,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use egui::emath::TSTransform;
 use egui::epaint::Shadow;
 use egui::{
-    Align2, Button, Color32, CornerRadius, DragValue, FontId, Frame, Id, Label, LayerId, Margin, Painter, Pos2, Rect,
-    RichText, ScrollArea, Stroke, StrokeKind, Style, TextEdit, Ui, pos2, vec2,
+    Button, Color32, CornerRadius, DragValue, FontId, Frame, Id, Label, LayerId, Margin, Painter, Pos2, Rect, RichText,
+    ScrollArea, Stroke, StrokeKind, Style, TextEdit, Ui, pos2, vec2,
 };
 use egui_snarl::ui::{
     AnyPins, BackgroundPattern, Grid, PinInfo, PinPlacement, SelectionStyle, SnarlPin, SnarlStyle, SnarlViewer,
@@ -41,6 +41,7 @@ use henad_graph::types::{Rate, ValueType};
 use henad_graph::value::{ConfigValue, InputValue, Literal, MemberName, PortRef};
 
 use super::arrange::{COLUMN_GAP, CanvasKey, NODE_SIZE};
+use super::display::display_name;
 use super::quick_add::{WireEnd, offered_kinds};
 use super::sockets::{rate_shape, type_color};
 use super::view_pass::can_view;
@@ -54,6 +55,12 @@ const FRAME_MARGIN: f32 = 14.0;
 
 /// Height in canvas points of the title strip on top of a frame.
 const FRAME_TITLE_HEIGHT: f32 = 18.0;
+
+/// Space in canvas points between a frame's title and each side of the frame.
+const FRAME_TITLE_PADDING: f32 = 6.0;
+
+/// Kind of a Become.
+const OP_TRANSITION: &str = "cat.transition";
 
 /// Canvas points left around the nodes a framing shows.
 const FRAMING_MARGIN: f32 = 80.0;
@@ -105,6 +112,8 @@ pub enum InputShown {
 pub struct InputView {
     /// Port name, dotted when configuration makes it.
     pub port: String,
+    /// Name the pin shows: the port name, or its origin in a converted copy, such as "Line 2 when".
+    pub label: String,
     /// Value the input holds.
     pub shown: InputShown,
     /// Type of the value, `None` when unknown.
@@ -120,6 +129,8 @@ pub struct InputView {
 pub struct OutputView {
     /// Port name.
     pub port: String,
+    /// Name the pin shows: the port name, or its origin in a converted copy, such as "Line 2 fired".
+    pub label: String,
     /// Type of the value, `None` when unknown.
     pub value_type: Option<ValueType>,
     /// Rate of the value.
@@ -148,8 +159,10 @@ pub struct NodeView {
     pub part: NodePart,
     /// Kind of the node.
     pub op: String,
-    /// Text of the header: the placement's label, or the kind's name.
+    /// Text of the header: the placement's label, or the kind's display name.
     pub title: String,
+    /// Grey text under the title: the raw kind, after the display name when the node has a label of its own.
+    pub subtitle: String,
     /// Written semantics of the kind, empty for an unknown kind.
     pub semantics: &'static str,
     /// Input pins.
@@ -671,8 +684,7 @@ fn node_views(
     issues: NodeIssues,
 ) -> (NodeView, Option<NodeView>) {
     let def = lookup(&node.op, document.library);
-    let label = editor.node_layout(node.id).and_then(|layout| layout.label);
-    let title = label.unwrap_or_else(|| def.map_or_else(|| node.op.clone(), |def| def.label.to_owned()));
+    let (title, subtitle) = node_titles(node, def, editor);
     let output_type = |source: &PortRef| -> (Option<ValueType>, Rate) {
         let Some(report) = report else {
             return (None, Rate::Element);
@@ -717,7 +729,10 @@ fn node_views(
         }
     }
 
-    let outputs = def.map_or_else(Vec::new, |def| output_views(def, node, document, report));
+    let mut outputs = def.map_or_else(Vec::new, |def| output_views(def, node, document, report));
+    if node.op == OP_TRANSITION {
+        label_by_origin(node, document, editor, &mut inputs, &mut outputs);
+    }
 
     let is_region = def.is_some_and(|def| def.is_region);
     let settings = settings_lines(def, node, body);
@@ -728,6 +743,7 @@ fn node_views(
             part: NodePart::Whole,
             op: node.op.clone(),
             title,
+            subtitle,
             semantics,
             inputs,
             outputs,
@@ -742,6 +758,7 @@ fn node_views(
         part: NodePart::RegionOutput,
         op: node.op.clone(),
         title: format!("{title} output"),
+        subtitle: subtitle.clone(),
         semantics,
         inputs: Vec::new(),
         outputs: outer,
@@ -753,6 +770,7 @@ fn node_views(
         part: NodePart::RegionInput,
         op: node.op.clone(),
         title,
+        subtitle,
         semantics,
         inputs,
         outputs: inner,
@@ -760,6 +778,99 @@ fn node_views(
         issues,
     };
     (input_half, Some(output_half))
+}
+
+/// Returns the title of `node`, of kind `def`, and the grey text under it.
+///
+/// The title is the node's label, or else the display name of its kind. The grey text is the raw kind, after the
+/// display name when the node has a label.
+fn node_titles(node: &Node, def: Option<&NodeDef>, editor: &EditorRegion) -> (String, String) {
+    let label = editor.node_layout(node.id).and_then(|layout| layout.label);
+    let kind_name = display_name(&node.op)
+        .map(|display| display.name.to_owned())
+        .or_else(|| def.map(|def| def.label.to_owned()))
+        .unwrap_or_else(|| node.op.clone());
+    match label {
+        Some(label) => (label, format!("{kind_name} · {}", node.op)),
+        None => (kind_name, node.op.clone()),
+    }
+}
+
+/// Names the pins of `node`, a Become, by the lines their rules came from, as [`origin_port_label`] names them.
+fn label_by_origin(
+    node: &Node,
+    document: &GraphDocument,
+    editor: &EditorRegion,
+    inputs: &mut [InputView],
+    outputs: &mut [OutputView],
+) {
+    let prefixes = line_prefixes(editor);
+    for input in inputs {
+        if let Some(origin) = origin_port_label(&input.port, node, document, &prefixes) {
+            input.label = origin;
+        }
+    }
+    for output in outputs {
+        if let Some(origin) = origin_port_label(&output.port, node, document, &prefixes) {
+            output.label = origin;
+        }
+    }
+}
+
+/// Returns the line prefix of each line id that a frame of `editor` records alone, such as `l2` to "Line 2", read from
+/// the frame's title before its first ": ".
+fn line_prefixes(editor: &EditorRegion) -> HashMap<String, String> {
+    editor
+        .frames()
+        .into_iter()
+        .filter_map(|frame| {
+            let [line] = frame.lines.as_slice() else {
+                return None;
+            };
+            let (prefix, _) = frame.title.split_once(": ")?;
+            Some((line.clone(), prefix.to_owned()))
+        })
+        .collect()
+}
+
+/// Returns the name by origin of the port `port` of `node`, a Become, while a frame records the line of its rule:
+/// "Line 2 when" for `rule.l2.when` and "Line 2 fired" for `fired.l2`, `None` for any other port.
+///
+/// A rule of a change from any state, such as `l2_alive`, takes its old state after the line: "Line 2 when (Alive)".
+/// `prefixes` holds the line prefix of each line a frame records alone.
+fn origin_port_label(
+    port: &str,
+    node: &Node,
+    document: &GraphDocument,
+    prefixes: &HashMap<String, String>,
+) -> Option<String> {
+    let (rule, word) = match port.strip_prefix("rule.").and_then(|rest| rest.strip_suffix(".when")) {
+        Some(rule) => (rule, "when"),
+        None => (port.strip_prefix("fired.")?, "fired"),
+    };
+    if let Some(prefix) = prefixes.get(rule) {
+        return Some(format!("{prefix} {word}"));
+    }
+    let (line, state) = rule.rsplit_once('_')?;
+    let prefix = prefixes.get(line)?;
+    let category = match node.config.get("category") {
+        Some(ConfigValue::String(category)) => document.categories.iter().find(|known| known.id == *category),
+        _ => None,
+    };
+    let state = category
+        .and_then(|category| category.variants.iter().find(|variant| variant.name == state))
+        .map_or(state, |variant| variant.label.as_str());
+    Some(format!("{prefix} {word} ({state})"))
+}
+
+/// Returns `rect`, the rectangle of a titled frame, widened to hold a title `title_width` points wide.
+pub fn fit_title(rect: Rect, title_width: f32) -> Rect {
+    let width = title_width + FRAME_TITLE_PADDING * 2.0;
+    if rect.width() >= width {
+        rect
+    } else {
+        Rect::from_min_size(rect.min, vec2(width, rect.height()))
+    }
 }
 
 /// Returns the output pins of `node` of kind `def`, outer outputs before inner outputs, typed by `report`.
@@ -782,6 +893,7 @@ fn output_views(def: &NodeDef, node: &Node, document: &GraphDocument, report: Op
             OutputView {
                 value_type: typed.and_then(|typed| typed.value_type.clone()).or(resolved.declared),
                 rate: typed.map_or(Rate::Element, |typed| typed.rate),
+                label: resolved.name.clone(),
                 port: resolved.name,
                 inner,
             }
@@ -894,6 +1006,7 @@ fn input_view(
     };
     InputView {
         port: port.to_owned(),
+        label: port.to_owned(),
         shown,
         value_type,
         rate,
@@ -1225,9 +1338,12 @@ impl GraphViewer<'_> {
                         ui.label(RichText::new(group).small().weak());
                     }
                     let first_sentence = def.semantics.split(". ").next().unwrap_or_default();
+                    let display = display_name(def.id);
+                    let name = display.map_or(def.label, |display| display.name);
+                    let description = display.map_or(first_sentence, |display| display.description);
                     if ui
-                        .add(Button::new(def.label).frame(false))
-                        .on_hover_text(format!("{}\n{first_sentence}", def.id))
+                        .add(Button::new(name).frame(false))
+                        .on_hover_text(format!("{}\n{description}", def.id))
                         .clicked()
                     {
                         picked = Some(def.id);
@@ -1760,7 +1876,10 @@ impl GraphViewer<'_> {
                     && can_join(body, id, other.id)
             })
             .map(|other| {
-                let label = lookup(&other.op, document.library).map_or(other.op.as_str(), |def| def.label);
+                let label = display_name(&other.op).map_or_else(
+                    || lookup(&other.op, document.library).map_or(other.op.as_str(), |def| def.label),
+                    |display| display.name,
+                );
                 (other.id, format!("{label} {}", other.id))
             })
             .collect();
@@ -2015,6 +2134,7 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
         let Some(view) = snarl.get_node(node) else { return };
         // A selectable label takes the press, and the node would not drag by its title.
         ui.add(Label::new(RichText::new(&view.title).strong()).selectable(false));
+        ui.add(Label::new(RichText::new(&view.subtitle).small().weak()).selectable(false));
         ui.add(Label::new(RichText::new(view.id.to_string()).small().weak()).selectable(false));
         if let Some([fill, text, _]) = issue_colors(&view.issues) {
             let count = view.issues.errors.len() + view.issues.warnings.len();
@@ -2052,7 +2172,7 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
         let Some(input) = view.inputs.get(pin.id.input).cloned() else {
             return GraphPin::plain(self.canvas_id);
         };
-        let mut name = RichText::new(&input.port);
+        let mut name = RichText::new(&input.label);
         if input.required && input.shown == InputShown::Empty {
             name = name.color(ui.visuals().warn_fg_color);
         }
@@ -2099,9 +2219,9 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
             return GraphPin::plain(self.canvas_id);
         };
         let text = if output.inner {
-            RichText::new(&output.port).italics()
+            RichText::new(&output.label).italics()
         } else {
-            RichText::new(&output.port)
+            RichText::new(&output.label)
         };
         let hover = match &output.value_type {
             Some(value_type) => format!("{}: {value_type}", output.port),
@@ -2182,6 +2302,9 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
         ui.set_max_width(POPUP_WIDTH);
         ui.strong(format!("{} ({})", view.title, view.id));
         ui.weak(&view.op);
+        if let Some(display) = display_name(&view.op) {
+            ui.label(display.description);
+        }
         if !view.semantics.is_empty() {
             ui.label(view.semantics);
         }
@@ -2241,9 +2364,14 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
                     Some(drawn_rect(self.rects.get(pin_node), position))
                 })
                 .reduce(Rect::union);
-            let Some(rect) = rect.map(|rect| frame_rect(rect, &frame.title)) else {
+            let Some(mut rect) = rect.map(|rect| frame_rect(rect, &frame.title)) else {
                 continue;
             };
+            let title = (!frame.title.is_empty())
+                .then(|| painter.layout_no_wrap(frame.title.clone(), FontId::proportional(11.0), frame.colors[2]));
+            if let Some(title) = &title {
+                rect = fit_title(rect, title.size().x);
+            }
             if let Some(region) = frame.region {
                 self.region_rects.push((region, frame.depth, rect));
             }
@@ -2254,14 +2382,8 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
                 Stroke::new(1.0, stroke)
             };
             painter.rect(rect, CornerRadius::ZERO, fill, stroke, StrokeKind::Inside);
-            if !frame.title.is_empty() {
-                painter.text(
-                    rect.left_top() + vec2(6.0, 4.0),
-                    Align2::LEFT_TOP,
-                    &frame.title,
-                    FontId::proportional(11.0),
-                    text,
-                );
+            if let Some(title) = title {
+                painter.galley(rect.left_top() + vec2(FRAME_TITLE_PADDING, 4.0), title, text);
             }
         }
     }

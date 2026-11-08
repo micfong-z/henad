@@ -414,9 +414,10 @@ fn quick_add_in_a_frame_adds_the_node_to_the_region() {
     let corner = frame(&harness, repeat).min + vec2(4.0, 4.0);
     let position = harness.screen(corner);
     harness.secondary_click(position);
+    // The search matches the catalogue's label, and the list shows the display name.
     harness.frame(vec![Event::Text("Accumulate".to_owned())]);
     harness.settle();
-    let item = harness.accessible_with_role("Accumulate", Some(egui::accesskit::Role::Button));
+    let item = harness.accessible_with_role("Add to summary", Some(egui::accesskit::Role::Button));
     harness.click(item.center());
     let body = &harness.graph.open_pass().expect("a pass").body;
     let put = body

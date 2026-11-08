@@ -162,6 +162,21 @@ or the focus lands outside the line and its pickers, both sides are filled, or U
 (`CardState::close`). The mark lives in the pane, so a sheet opened with one side empty shows the
 offer at once.
 
+**The Diagram** (`ui/editor/sheet/diagram.rs`, D59, D95). The toggle `DIAGRAM` beside the Card
+heading (tooltip `DIAGRAM_TOOLTIP`) sets `SheetEditor::diagram` and closes the card's pickers, and
+the pane then draws `diagram_ui` in place of `card_pane`: `DIAGRAM_NOTE` and `EDIT_AS_NODE_GRAPH`
+(disabled with `ConvertRefusal::tooltip`, `agents/henad-app-editor.md`), then each card's heading
+and line count and its drawing in a horizontal scroll area. `diagram_boxes` returns a `DiagramBox`
+per line from `card_lines` and `CardRelations`: prefix, number, sentence, the result it works out,
+the results of lines on the card it reads (from its `ChipKind::Result` chips, once each), its When
+and whether it is one. A box's column is one past every box it reads and its When (`columns`), and
+each box takes a row of its own in display order, so every arrow runs right and down. A frame
+"Inside line N" (`inside_line_frame`) surrounds the boxes inside each When, nested Whens included,
+built innermost first as the union of its boxes and inner frames, with a connector from the When's
+box. The drawing is painted with the painter and holds no widget. It is one accessible node of role
+`Image` named `diagram_name` ("Diagram of the card's 3 lines, read-only"). Colours: boxes gray 900
+with a gray 600 stroke and a gray 800 header, results and arrows blue, frames dashed gray 500.
+
 `src/tests/sheet_card.rs` holds
 `a_blank_model_builds_game_of_life_with_its_lines_and_equals_the_starter` and
 `a_blank_model_builds_the_chance_sir_with_its_lines_and_equals_the_sheet` (from Blank by accessible

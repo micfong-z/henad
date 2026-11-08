@@ -238,6 +238,66 @@ changes, and a refusal (a draw, which a view pass cannot make) is `status`. `pre
 compiles the view file while `viewing` holds, and drops a view the document no longer allows with
 "Stopped viewing ...". `preview_key` (load, revision, view changes) is what the preview compares.
 
+## The expert mode
+
+`ui/editor/expert.rs` (C1, C7, D17, D19, D68, D96). Convert to node graph in the sheet toolbar's
+Model actions menu and Edit as node graph beside the Diagram send `EditorRequest::Convert`, and
+`open_convert` opens the dialog (`EditorPanel::convert` holds the sheet's name) unless
+`convert_refusal` (`ConvertRefusal::of` the report, or `Errors` for a sheet that does not lower)
+holds. Both controls are disabled then, with `ConvertRefusal::tooltip`. `convert_modal` is a `Modal`
+of role `Dialog` named `CONVERT_HEADING`, the two paragraphs of `convert_text` one label per line,
+Cancel and Convert (`filled_button`), and Convert sends `ConfirmConvert`. `convert_sheet` takes
+`ConvertOptions::new` with `today()` (UTC, Hinnant's `civil_date`) and a `taken` closure over the
+app's model ids and names and the files beside the sheet, and the sheet's own file name for
+`origin.file`. On native, a sheet with `EditorPanel::file_path` (set by `receive_open` from
+`DialogFile::path`, cleared by every load and by a save of the model) has its copy written beside it
+(`save_beside`, status "Saved <file>"). The copy opens through `load_graph`, so `GraphEditor::new`
+places it: `place_unplaced` and Arrange pass `arrange::frame_groups` (one group per frame with
+`lines`, a frame drawn by hand makes none) and `arrange` gives each group a band of rows of its own
+across the columns its nodes and estimated title cover (`FRAME_SPACE`, `TITLE_CHAR_WIDTH`), a region
+joining the group of its contents (`group_of_nodes`). The sheet moves to `EditorPanel::counterpart`
+(`Counterpart`: model, file name, path), which keeps its undo history. Every `load*` clears the
+counterpart, the path, `beside`, the banner and the dialog (`clear_expert`), and `swap_counterpart`
+exchanges the model with the counterpart and clears what `settle_swap` names.
+
+The *original* of a copy is the counterpart when it is a sheet with `origin.model`'s id, else
+`EditorPanel::beside`, the sheet `find_original` read from `origin.file` beside the copy's path.
+`copy_banner` returns a `CopyBanner` (cached by load, code revision and a hash of the original's
+text) in four states (`CopyState`): `Unedited`, `Edited(node_edits)` when `GraphEditor::code_hash`
+differs from `origin.copy_code` (counts from `changes_since_conversion`), `OriginalChanged` (the
+hash differs, or the counterpart no longer lowers) and `NotFound`. `header_ui` draws it in a
+`Panel::top` under the header, blue 950 fill and blue 200 text, with Open <name>
+(`EditorRequest::OpenOriginal`, `open_original_of`: a swap, or the sheet read from beside, which
+takes the copy as its counterpart) in every state but `NotFound`. Show changes and Compare runs are
+not built. The sheet's link line (`counterpart_copy`) sends `OpenCopy`. The graph side panel ends
+with `origin_ui` under `FROM_AUTHOR_MODEL` (model, file, converted date) when the file records a
+`ModelOrigin`. Nodes added after conversion join no frame (D22). The app draws and renames no frame,
+so a frame's title stays as the conversion wrote it (D25). `src/tests/expert.rs` holds the Diagram
+tests, `the_conversion_modal_names_no_preset`, `convert_is_disabled_with_its_tooltip` (an error and
+a skipped line, both controls disabled and their tooltips shown on hover),
+`the_words_rule_exempts_whole_controls_and_still_reports_a_bare_node`,
+`converting_game_of_life_opens_the_copy_with_frames_titled_by_line_and_the_banner` (frames apart
+from one another, at their drawn sizes),
+`editing_a_node_of_the_copy_changes_the_banner_and_a_new_node_joins_no_frame`,
+`open_original_returns_to_the_sheet_and_its_line_opens_the_copy` (and `OriginalChanged` after a
+sheet edit) and `a_sheet_with_a_file_has_its_copy_written_beside_it_and_found_again` (a taken file
+numbers the copy, `NotFound` once the sheet is gone).
+
+**Display names, origin ports and frame titles** (C4, C5, C6, D21). `graph/display.rs` holds
+`DISPLAY_NAMES`, a `DisplayName` (kind, name, category, description) for each of the catalogue's
+114 kinds, and `display_name(kind)`. A node's header (`node_titles`) shows its label, or else the
+display name, with the raw kind in grey under it, after the display name when the node has a label
+("Count around me · grid.count"), then the id. The hover shows the description before the
+catalogue's semantics. Quick-add lists display names, its hover the kind and the description, and
+`matches_words` searches the id, the catalogue label and group, the display name and the category,
+so a catalogue label still finds its kind. Move into region names nodes by display name. A pin
+shows `InputView::label` or `OutputView::label`, the port name except on a Become, where
+`label_by_origin` names `rule.<id>.when` and `fired.<id>` by the line prefix that a frame recording
+that line alone gives before ": " (`line_prefixes`): "Line 2 when", "Line 2 fired", and "Line 2 when
+(Alive)" for a rule `l2_alive` of a change from any state. The hover keeps the port name. A titled
+frame is at least as wide as its title laid out (`fit_title`, `FRAME_TITLE_PADDING`), and the title
+is painted whole.
+
 ## The live preview
 
 `ui/editor/preview.rs`: `EditorPanel::preview` (`Preview`), and `poll`/`poll_at`, which

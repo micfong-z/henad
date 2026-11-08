@@ -15,6 +15,7 @@
 //! dialog as before.
 
 pub mod code_view;
+pub mod expert;
 pub mod graph;
 pub mod preview;
 pub mod sheet;
@@ -217,7 +218,23 @@ pub struct EditorPanel {
     pub preview: preview::Preview,
     /// New model dialog, `None` while it is closed.
     pub new_model: Option<sheet::new_model::NewModelDialog>,
+    /// Path of the file the model was opened from on native, `None` for a model with no file, after a save, or in a
+    /// browser.
+    pub file_path: Option<std::path::PathBuf>,
+    /// Name of the sheet the conversion dialog converts, `None` while the dialog is closed.
+    pub convert: Option<String>,
+    /// Model held beside the one shown: the sheet of a copy converted in this session, or the copy of a sheet opened
+    /// from it.
+    pub counterpart: Option<Box<expert::Counterpart>>,
+    /// Sheet a copy was converted from, read from beside the copy's file, with its path.
+    pub beside: Option<(std::path::PathBuf, Box<henad_graph::sheet::SheetFile>)>,
+    /// Banner of the copy in the Editor, with the load, code revision and hash of the original's text it was worked
+    /// out for.
+    banner: Option<(BannerKey, Option<expert::CopyBanner>)>,
 }
+
+/// Load, code revision and hash of the original's text that a copy's banner was worked out for.
+type BannerKey = (u64, u64, Option<u64>);
 
 /// Outcome of a press on Apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,6 +320,7 @@ impl EditorPanel {
     /// The outcome of the last Apply and the state of the preview are cleared, and a later fault of the applied code
     /// no longer belongs to the Editor.
     fn load(&mut self, text: String, file_name: Option<String>) {
+        self.clear_expert();
         self.model = EditorModel::Rule(text);
         self.file_name = file_name;
         self.outcome = None;
@@ -317,6 +335,7 @@ impl EditorPanel {
     /// The outcome of the last Apply and the state of the preview are cleared, as [`Self::load`] clears them for a
     /// text.
     pub fn load_graph(&mut self, file: &GraphFile, file_name: Option<String>) {
+        self.clear_expert();
         self.model = EditorModel::Graph(Box::new(graph::GraphEditor::new(file)));
         self.file_name = file_name;
         self.outcome = None;
@@ -340,12 +359,34 @@ impl EditorPanel {
     /// The outcome of the last Apply and the state of the preview are cleared, as [`Self::load`] clears them for a
     /// text.
     pub fn load_sheet(&mut self, sheet: sheet::SheetEditor, file_name: Option<String>) {
+        self.clear_expert();
         self.model = EditorModel::Sheet(Box::new(sheet));
         self.file_name = file_name;
         self.outcome = None;
         self.applied = None;
         self.scroll_to = None;
         self.preview = preview::Preview::default();
+    }
+
+    /// Forgets the file path, the counterpart, the original read from beside the file, the banner and the conversion
+    /// dialog, as a model from elsewhere replaces the Editor's.
+    fn clear_expert(&mut self) {
+        self.file_path = None;
+        self.convert = None;
+        self.counterpart = None;
+        self.beside = None;
+        self.banner = None;
+    }
+
+    /// Clears the outcome of the last Apply, the state of the preview and the banner after the model and its
+    /// counterpart changed places.
+    pub fn settle_swap(&mut self) {
+        self.outcome = None;
+        self.applied = None;
+        self.scroll_to = None;
+        self.preview = preview::Preview::default();
+        self.banner = None;
+        self.convert = None;
     }
 
     /// Clears the code field's undo history and returns the view to the top left on the field's next frame, after
@@ -378,7 +419,7 @@ impl EditorPanel {
 
 /// Request from the Editor, applied once the tab has drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EditorRequest {
+pub enum EditorRequest {
     NewModel,
     NewGridRule,
     /// Opens the starter with this file name as a new graph model.
@@ -388,6 +429,14 @@ enum EditorRequest {
     PickImport,
     SaveModel,
     Apply,
+    /// Opens the conversion dialog for the sheet.
+    Convert,
+    /// Converts the sheet, after Convert in the conversion dialog.
+    ConfirmConvert,
+    /// Opens the original of the copy.
+    OpenOriginal,
+    /// Opens the copy of the sheet.
+    OpenCopy,
     /// Moves the cursor to a line and a column of the text, both counted from 1.
     MoveCursor {
         line: u32,
@@ -413,21 +462,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     // The New model dialog takes the keys of Undo and Redo while it is open.
     let keys = panel.new_model.is_none();
 
-    Panel::top("henad_editor_header")
-        .resizable(false)
-        .frame(Frame::NONE.inner_margin(Margin::symmetric(0, 4)))
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| header_buttons(ui, compute, empty, &mut request));
-            if let Some(name) = &panel.file_name {
-                ui.weak(name);
-            }
-            if let Some(status) = &panel.file_status {
-                ui.label(status);
-            }
-            if !compute {
-                ui.colored_label(ui.visuals().warn_fg_color, format!("{MDI_ALERT} {NO_COMPUTE}"));
-            }
-        });
+    header_ui(ui, panel, compute, empty, &mut request);
 
     Panel::bottom("henad_editor_diagnostics")
         .resizable(true)
@@ -448,6 +483,9 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 });
         });
 
+    let copy = expert::counterpart_copy(panel);
+    let refusal = panel.model.sheet().and_then(expert::convert_refusal);
+
     let marked: Vec<u32> = panel
         .outcome
         .as_ref()
@@ -466,7 +504,21 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     };
     CentralPanel::no_frame().show(ui, |ui| match &mut panel.model {
         EditorModel::Graph(graph) => graph::graph_ui(ui, graph),
-        EditorModel::Sheet(sheet) => sheet::sheet_ui(ui, sheet, past_start, &trials, keys),
+        EditorModel::Sheet(sheet) => {
+            let shown = sheet::SheetShown {
+                past_start,
+                trials: &trials,
+                keys,
+                copy: copy.as_deref(),
+                refusal,
+            };
+            if let Some(sheet_request) = sheet::sheet_ui(ui, sheet, &shown) {
+                request = Some(match sheet_request {
+                    sheet::SheetRequest::Convert => EditorRequest::Convert,
+                    sheet::SheetRequest::OpenCopy => EditorRequest::OpenCopy,
+                });
+            }
+        }
         EditorModel::Rule(text) => {
             code_view::code_view(ui, text, &marked, scroll_to, reset);
         }
@@ -487,8 +539,44 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
         request = Some(EditorRequest::PickImport);
     }
 
+    if expert::convert_modal(ui.ctx(), panel) {
+        request = Some(EditorRequest::ConfirmConvert);
+    }
+
     if let Some(request) = request {
         apply_request(ui.ctx(), app, request);
+    }
+}
+
+/// Draws the header of the Editor tab: its buttons, the file name, the status of the last open or save, the reason
+/// nothing runs without compute, and the banner of a copy converted from a sheet. A pressed button sets `request`.
+fn header_ui(
+    ui: &mut egui::Ui,
+    panel: &mut EditorPanel,
+    compute: bool,
+    empty: bool,
+    request: &mut Option<EditorRequest>,
+) {
+    Panel::top("henad_editor_header")
+        .resizable(false)
+        .frame(Frame::NONE.inner_margin(Margin::symmetric(0, 4)))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| header_buttons(ui, compute, empty, request));
+            if let Some(name) = &panel.file_name {
+                ui.weak(name);
+            }
+            if let Some(status) = &panel.file_status {
+                ui.label(status);
+            }
+            if !compute {
+                ui.colored_label(ui.visuals().warn_fg_color, format!("{MDI_ALERT} {NO_COMPUTE}"));
+            }
+        });
+    if let Some(banner) = expert::copy_banner(panel) {
+        Panel::top("henad_expert_banner")
+            .resizable(false)
+            .frame(Frame::NONE.inner_margin(Margin::symmetric(0, 4)))
+            .show(ui, |ui| expert::banner_ui(ui, &banner, request));
     }
 }
 
@@ -840,6 +928,10 @@ fn apply_request(ctx: &egui::Context, app: &mut AppState, request: EditorRequest
         EditorRequest::PickImport => app.open_file(OpenTarget::Function),
         EditorRequest::SaveModel => save_model(app),
         EditorRequest::Apply => apply(app),
+        EditorRequest::Convert => expert::open_convert(&mut app.editor),
+        EditorRequest::ConfirmConvert => expert::convert_sheet(app),
+        EditorRequest::OpenOriginal => expert::open_original_of(&mut app.editor),
+        EditorRequest::OpenCopy => expert::swap_counterpart(&mut app.editor),
         EditorRequest::MoveCursor { line, column } => move_cursor_to(ctx, &mut app.editor, line, column),
     }
 }
@@ -985,13 +1077,15 @@ pub fn receive_open(app: &mut AppState, result: OpenResult) {
         }
         OpenResult::Folder(_) | OpenResult::Canceled => return,
     };
-    let Some(DialogFile { name, bytes, .. }) = file else {
+    let Some(DialogFile { name, bytes, path }) = file else {
         return;
     };
     match String::from_utf8(bytes) {
         Ok(text) => {
             app.editor.file_status = Some(format!("Opened {name}"));
             open_text(&mut app.editor, text, Some(name));
+            app.editor.file_path = path;
+            expert::find_original(&mut app.editor);
             app.focus_request = Some(Tab::Editor);
         }
         Err(_) => app.editor.file_status = Some(format!("Open failed: {name} is not UTF-8 text")),

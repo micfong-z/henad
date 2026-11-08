@@ -12,6 +12,7 @@
 
 pub mod arrange;
 pub mod canvas;
+pub mod display;
 pub mod functions;
 pub mod history;
 pub mod passes;
@@ -423,6 +424,16 @@ impl GraphEditor {
         self.builder.editor()
     }
 
+    /// Returns the graph as a file, `[editor]` included, `None` for a document whose canonical text does not read back.
+    pub fn to_file(&self) -> Option<GraphFile> {
+        self.builder.to_file().ok()
+    }
+
+    /// Hash of the document's code at the last check, `None` while the document does not read back.
+    pub fn code_hash(&self) -> Option<u64> {
+        self.code_hash
+    }
+
     /// Returns the canonical text of the file, `[editor]` included.
     pub fn text(&self) -> String {
         self.builder.to_toml()
@@ -667,7 +678,8 @@ impl GraphEditor {
                     })
                     .unwrap_or_default();
                 let library = self.document().library;
-                let moves = arrange::arrange(body, library, [0.0, 0.0], &sizes)
+                let groups = arrange::frame_groups(self.builder.editor(), &self.scope.canvas());
+                let moves = arrange::arrange(body, library, [0.0, 0.0], &sizes, &groups)
                     .into_iter()
                     .map(|(key, pos)| place_command(key, pos))
                     .collect();
@@ -1415,10 +1427,15 @@ fn place_unplaced(builder: &mut GraphBuilder) {
     let bodies = document
         .passes
         .iter()
-        .map(|pass| &pass.body)
-        .chain(document.functions.iter().map(|function| &function.body));
+        .map(|pass| (Scope::pass(&pass.id), &pass.body))
+        .chain(
+            document
+                .functions
+                .iter()
+                .map(|function| (Scope::Function(function.id.clone()), &function.body)),
+        );
     let mut moves = Vec::new();
-    for body in bodies {
+    for (scope, body) in bodies {
         let editor = builder.editor();
         let placed: Vec<[f64; 2]> = body.nodes.iter().filter_map(|node| editor.node_pos(node.id)).collect();
         if placed.len() == body.nodes.len() {
@@ -1433,7 +1450,8 @@ fn place_unplaced(builder: &mut GraphBuilder) {
             .map_or([0.0, 0.0], |right| {
                 [right + arrange::NODE_SIZE[0] + arrange::COLUMN_GAP, 0.0]
             });
-        for (key, pos) in arrange::arrange(body, document.library, origin, &BTreeMap::new()) {
+        let groups = arrange::frame_groups(editor, &scope.canvas());
+        for (key, pos) in arrange::arrange(body, document.library, origin, &BTreeMap::new(), &groups) {
             let placed = if key.output_half {
                 editor
                     .node_layout(key.node)
@@ -1469,6 +1487,10 @@ pub fn graph_ui(ui: &mut egui::Ui, graph: &mut GraphEditor) {
                     functions::functions_ui(ui, graph, &mut requests);
                     ui.add_space(8.0);
                     world::world_ui(ui, graph, &mut requests);
+                    if let Some(origin) = graph.editor_region().model_origin() {
+                        ui.add_space(8.0);
+                        super::expert::origin_ui(ui, &origin);
+                    }
                 });
         });
     Panel::top("henad_graph_toolbar")

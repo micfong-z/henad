@@ -453,6 +453,10 @@ pub struct Node {
     pub role: egui::accesskit::Role,
     /// Bounds on the screen.
     pub bounds: Option<egui::Rect>,
+    /// Whether the node is disabled.
+    pub disabled: bool,
+    /// Accessible name of the nearest dialog that holds the node, empty for a node in no dialog.
+    pub dialog: String,
 }
 
 impl Harness {
@@ -496,15 +500,33 @@ impl Harness {
             .and_then(|(_, node)| node.label())
             .unwrap_or_default()
             .to_owned();
+        let parents: std::collections::HashMap<egui::accesskit::NodeId, egui::accesskit::NodeId> = update
+            .nodes
+            .iter()
+            .flat_map(|(id, node)| node.children().iter().map(move |child| (*child, *id)))
+            .collect();
+        let dialogs: std::collections::HashMap<egui::accesskit::NodeId, &str> = update
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.role() == egui::accesskit::Role::Dialog)
+            .map(|(id, node)| (*id, node.label().unwrap_or_default()))
+            .collect();
+        let dialog_of = |id: egui::accesskit::NodeId| {
+            std::iter::successors(Some(id), |id| parents.get(id).copied())
+                .find_map(|ancestor| dialogs.get(&ancestor))
+                .map_or_else(String::new, |label| (*label).to_owned())
+        };
         update
             .nodes
             .iter()
-            .map(|(_, node)| Node {
+            .map(|(id, node)| Node {
+                dialog: dialog_of(*id),
                 // A submenu's button ends with its arrow.
                 label: node.label().unwrap_or_default().trim_end_matches(" ⏵").to_owned(),
                 value: node.value().unwrap_or_default().to_owned(),
                 description: node.description().unwrap_or_default().to_owned(),
                 role: node.role(),
+                disabled: node.is_disabled(),
                 bounds: node.bounds().map(|rect| {
                     egui::Rect::from_min_max(
                         egui::pos2(rect.x0 as f32, rect.y0 as f32),
@@ -597,6 +619,17 @@ impl Harness {
             .collect()
     }
 
+    /// Returns the label, the value and the description of every node of a settled frame that lies outside the
+    /// dialog named `dialog`.
+    pub fn accessible_texts_outside(&mut self, dialog: &str) -> Vec<String> {
+        self.settle()
+            .into_iter()
+            .filter(|node| node.dialog != dialog)
+            .flat_map(|node| [node.label, node.value, node.description])
+            .filter(|text| !text.is_empty())
+            .collect()
+    }
+
     /// Opens the sheet `text` in the Editor and draws it.
     pub fn open_sheet(&mut self, text: &str) {
         open_text(&mut self.app.editor, text.to_owned(), Some("opened.toml".to_owned()));
@@ -610,9 +643,24 @@ pub fn words(text: &str) -> impl Iterator<Item = &str> {
         .filter(|word| !word.is_empty())
 }
 
-/// Returns whether `text` belongs to a control that opens or creates a node graph, which the words rule exempts.
+/// Returns whether `text` is the whole name of a control that opens or creates a node graph, which the words rule
+/// exempts: New node graph, Convert to node graph, Edit as node graph and the sheet's line that opens its copy. The
+/// empty Editor's text, which names New node graph and shows no sheet, is exempt too.
+///
+/// An icon before the name is left out of the match. The conversion dialog is exempt by place instead, through
+/// [`Harness::accessible_texts_outside`].
 pub fn opens_a_node_graph(text: &str) -> bool {
-    text.contains(crate::ui::editor::NEW_NODE_GRAPH)
+    use henad_graph::sheet::sentence::{CONVERT_HEADING, EDIT_AS_NODE_GRAPH, converted_link};
+
+    let name = text.trim_start_matches(|c: char| !c.is_alphanumeric());
+    [
+        crate::ui::editor::NEW_NODE_GRAPH,
+        crate::ui::editor::EMPTY_EDITOR,
+        CONVERT_HEADING,
+        EDIT_AS_NODE_GRAPH,
+    ]
+    .contains(&name)
+        || name.starts_with(converted_link("").as_str())
 }
 
 /// Returns every property of `document`: those of the cells, of each kind of agent, then of the ground.

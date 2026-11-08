@@ -2879,6 +2879,95 @@ pub fn original_changed(name: &str) -> String {
     format!("{name} has changed since this conversion.")
 }
 
+/// Button beside the Diagram that opens the conversion dialog.
+pub const EDIT_AS_NODE_GRAPH: &str = "Edit as node graph";
+
+/// Accessible name of the sheet toolbar's menu of the model's actions.
+pub const MODEL_ACTIONS: &str = "Model actions";
+
+/// Returns `date`, a date written as `2026-11-07`, as the banner of a copy writes it: "7 Nov 2026". A date that does
+/// not read as one is returned as written.
+pub fn converted_date(date: &str) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let mut fields = date.split('-');
+    let parsed = (|| {
+        let year: u32 = fields.next()?.parse().ok()?;
+        let month: usize = fields.next()?.parse().ok()?;
+        let day: u32 = fields.next()?.parse().ok()?;
+        let month = MONTHS.get(month.checked_sub(1)?)?;
+        (fields.next().is_none() && (1..=31).contains(&day)).then(|| format!("{day} {month} {year}"))
+    })();
+    parsed.unwrap_or_else(|| date.to_owned())
+}
+
+/// Returns the banner of a copy converted from the model `name` on `date` and not edited since, such as "Node graph
+/// converted from Game of Life on 7 Nov 2026. Frames show the line each node came from."
+pub fn converted_banner(name: &str, date: &str) -> String {
+    format!(
+        "Node graph converted from {name} on {}. Frames show the line each node came from.",
+        converted_date(date)
+    )
+}
+
+/// Returns the banner of a copy converted from the model `name` on `date` and edited since, where `edits` says what
+/// the edits changed, as [`node_edits`] writes it.
+pub fn edited_banner(name: &str, date: &str, edits: &str) -> String {
+    format!(
+        "Node graph converted from {name} on {}. Edited since: {edits}.",
+        converted_date(date)
+    )
+}
+
+/// Returns the nodes an edit of a copy added, removed and changed, such as "2 nodes added, 1 changed" or "1 node
+/// changed", or "no node changed" when it changed none.
+///
+/// The first part names the noun, whichever part it is, and the parts after it leave the noun out.
+pub fn node_edits(added: usize, removed: usize, changed: usize) -> String {
+    let parts: Vec<(usize, &str)> = [(added, "added"), (removed, "removed"), (changed, "changed")]
+        .into_iter()
+        .filter(|(count, _)| *count > 0)
+        .collect();
+    if parts.is_empty() {
+        return "no node changed".to_owned();
+    }
+    parts
+        .iter()
+        .enumerate()
+        .map(|(index, (count, verb))| match (index, count) {
+            (0, 1) => format!("1 node {verb}"),
+            (0, _) => format!("{count} nodes {verb}"),
+            _ => format!("{count} {verb}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Returns the banner of a copy whose source `name` has changed since the conversion.
+pub fn original_changed_banner(name: &str) -> String {
+    format!("{} Convert it again for a new node graph.", original_changed(name))
+}
+
+/// Returns the banner of a copy whose source `name` is not found beside its file.
+pub fn original_not_beside(name: &str) -> String {
+    format!("{name} is not beside this file. Frames still show the line each node came from.")
+}
+
+/// Returns the banner's button that opens the source `name` of a copy, such as "Open Game of Life".
+pub fn open_original(name: &str) -> String {
+    format!("Open {name}")
+}
+
+/// Returns the line under a sheet's name that opens its copy `copy`, such as "Converted to node graph: Game of Life
+/// (expert)".
+pub fn converted_link(copy: &str) -> String {
+    format!("Converted to node graph: {copy}")
+}
+
+/// Heading of the side panel's section about the source of a copy.
+pub const FROM_AUTHOR_MODEL: &str = "From the author model";
+
 /// Returns the title of the frame around the nodes of one line in a converted copy, such as "Line 2: Become Alive
 /// from Dead, when Alive neighbours is 3", where `prefix` is the line prefix.
 pub fn line_frame_title(prefix: &str, sentence: &str) -> String {

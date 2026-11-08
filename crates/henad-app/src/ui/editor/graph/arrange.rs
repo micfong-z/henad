@@ -8,10 +8,17 @@
 //! columns from left to right, so every wire of an acyclic body runs rightwards.
 //! Within a column a node sits at the mean row of the nodes it reads, ties broken by id. A column is as wide as its
 //! widest node, and the nodes of a column stack with a gap between them.
+//!
+//! A *frame group* holds the members of one frame of the `[editor]` region that records the sheet lines its nodes came
+//! from, as a converted copy's frames do. The layout keeps a group's nodes together: the group takes a band of rows of
+//! its own across the columns its nodes and its title cover, below every node placed before it in those columns, with
+//! room for the frame's margin and title. A node in no group is a group of its own, so a body with no such frame
+//! stacks each column as before.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use henad_graph::catalogue::lookup;
+use henad_graph::editor::EditorRegion;
 use henad_graph::ids::NodeId;
 use henad_graph::node::NodeBody;
 use henad_graph::value::InputValue;
@@ -24,6 +31,36 @@ pub const COLUMN_GAP: f64 = 60.0;
 
 /// Gap in canvas points between two nodes of one column.
 pub const ROW_GAP: f64 = 30.0;
+
+/// Space in canvas points that a frame takes above its nodes, for its margin and its title strip, and below them.
+const FRAME_SPACE: [f64; 2] = [36.0, 18.0];
+
+/// Width in canvas points assumed for one character of a frame's title.
+const TITLE_CHAR_WIDTH: f64 = 6.5;
+
+/// The members of one titled frame, which the layout keeps together.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameGroup {
+    /// Document nodes inside the frame.
+    pub members: Vec<NodeId>,
+    /// Width in canvas points assumed for the frame's title.
+    pub title_width: f64,
+}
+
+/// Returns the frame groups of the canvas `canvas` in `editor`, such as `pass.step`, in file order: one per frame that
+/// records the lines of a sheet its nodes came from, as the frames of a converted copy do. A frame drawn by hand makes
+/// no group.
+pub fn frame_groups(editor: &EditorRegion, canvas: &str) -> Vec<FrameGroup> {
+    editor
+        .frames()
+        .into_iter()
+        .filter(|frame| frame.scope == canvas && !frame.members.is_empty() && !frame.lines.is_empty())
+        .map(|frame| FrameGroup {
+            members: frame.members,
+            title_width: frame.title.chars().count() as f64 * TITLE_CHAR_WIDTH,
+        })
+        .collect()
+}
 
 /// One node of a canvas: a document node, or the input half of a region, or a region's output half.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -118,12 +155,14 @@ fn canvas_wires(body: &NodeBody, library: u32) -> (Vec<CanvasKey>, BTreeMap<Canv
 /// with the first column's top at `origin`.
 ///
 /// `sizes` holds the drawn size of each canvas node it knows, and a node it lacks takes [`NODE_SIZE`]. A node on a
-/// cycle, which a broken file can hold, goes to a column after every other node.
+/// cycle, which a broken file can hold, goes to a column after every other node. The nodes of each of `groups` stay
+/// together in a band of their own, as the module doc says.
 pub fn arrange(
     body: &NodeBody,
     library: u32,
     origin: [f64; 2],
     sizes: &BTreeMap<CanvasKey, [f64; 2]>,
+    groups: &[FrameGroup],
 ) -> Vec<(CanvasKey, [f64; 2])> {
     let size = |id: &CanvasKey| sizes.get(id).copied().unwrap_or(NODE_SIZE);
     let (ids, sources) = canvas_wires(body, library);
@@ -192,10 +231,38 @@ pub fn arrange(
     for id in &ids {
         columns.entry(layers[id]).or_default().push(*id);
     }
+    let layout = order_columns(columns, &sources, origin[0], &size);
+    let framed = group_of_nodes(body, library, groups);
+    let places = place_groups(&ids, &layout, groups, &framed, origin[1], &size);
+    ids.iter().map(|id| (*id, places[id])).collect()
+}
+
+/// Columns of a layout: the left edge and the width of each column, and the column and row of each canvas node.
+struct ColumnLayout {
+    /// Left edge of each column, in canvas points.
+    lefts: Vec<f64>,
+    /// Width of each column, in canvas points.
+    widths: Vec<f64>,
+    /// Column of each canvas node.
+    column_of: BTreeMap<CanvasKey, usize>,
+    /// Row of each canvas node in its column.
+    rows: BTreeMap<CanvasKey, f64>,
+}
+
+/// Returns the layout of `columns`, the canvas nodes of each layer, with the nodes of a column ordered by the mean row
+/// of their `sources` and the first column's left edge at `left`. `size` returns the size of a canvas node.
+fn order_columns(
+    mut columns: BTreeMap<usize, Vec<CanvasKey>>,
+    sources: &BTreeMap<CanvasKey, BTreeSet<CanvasKey>>,
+    left: f64,
+    size: &impl Fn(&CanvasKey) -> [f64; 2],
+) -> ColumnLayout {
+    let mut left = left;
+    let mut column_of: BTreeMap<CanvasKey, usize> = BTreeMap::new();
     let mut rows: BTreeMap<CanvasKey, f64> = BTreeMap::new();
-    let mut places: BTreeMap<CanvasKey, [f64; 2]> = BTreeMap::new();
-    let mut left = origin[0];
-    for column in columns.values_mut() {
+    let mut lefts: Vec<f64> = Vec::with_capacity(columns.len());
+    let mut widths: Vec<f64> = Vec::with_capacity(columns.len());
+    for (index, column) in columns.values_mut().enumerate() {
         let barycenter = |id: &CanvasKey| {
             let placed: Vec<f64> = sources
                 .get(id)
@@ -211,19 +278,110 @@ pub fn arrange(
         };
         let mut keyed: Vec<(f64, CanvasKey)> = column.iter().map(|id| (barycenter(id), *id)).collect();
         keyed.sort_by(|left, right| left.0.total_cmp(&right.0).then(left.1.cmp(&right.1)));
-        let mut top = origin[1];
+        *column = keyed.into_iter().map(|(_, id)| id).collect();
         let mut width: f64 = 0.0;
-        for (row, (_, id)) in keyed.iter().enumerate() {
+        for (row, id) in column.iter().enumerate() {
             rows.insert(*id, row as f64);
-            places.insert(*id, [left, top]);
-            let [node_width, node_height] = size(id);
-            top += node_height + ROW_GAP;
-            width = width.max(node_width);
+            column_of.insert(*id, index);
+            width = width.max(size(id)[0]);
         }
+        lefts.push(left);
+        widths.push(width);
         left += width + COLUMN_GAP;
     }
+    ColumnLayout {
+        lefts,
+        widths,
+        column_of,
+        rows,
+    }
+}
 
-    ids.iter().map(|id| (*id, places[id])).collect()
+/// Returns the index in `groups` of the group of each node of `body` that one holds.
+///
+/// A node in several groups belongs to the first. A region whose own node or one of whose contents belongs to a group
+/// joins that group with every node inside it. Otherwise the region's frame would reach across another group's band.
+fn group_of_nodes(body: &NodeBody, library: u32, groups: &[FrameGroup]) -> BTreeMap<NodeId, usize> {
+    let mut framed: BTreeMap<NodeId, usize> = groups
+        .iter()
+        .enumerate()
+        .rev()
+        .flat_map(|(index, group)| group.members.iter().map(move |member| (*member, index)))
+        .collect();
+    for node in &body.nodes {
+        if !lookup(&node.op, library).is_some_and(|def| def.is_region) {
+            continue;
+        }
+        let contents = body.region_contents(node.id);
+        let group = std::iter::once(node.id)
+            .chain(contents.iter().copied())
+            .find_map(|member| framed.get(&member).copied());
+        if let Some(group) = group {
+            for member in std::iter::once(node.id).chain(contents) {
+                framed.insert(member, group);
+            }
+        }
+    }
+    framed
+}
+
+/// Returns the place of each of `ids` in `layout`, the nodes of each of `groups` together in a band of their own, with
+/// the bands' tops from `top` down. `framed` holds the group of each node in one, and `size` returns the size of a
+/// canvas node.
+fn place_groups(
+    ids: &[CanvasKey],
+    layout: &ColumnLayout,
+    groups: &[FrameGroup],
+    framed: &BTreeMap<NodeId, usize>,
+    top: f64,
+    size: &impl Fn(&CanvasKey) -> [f64; 2],
+) -> BTreeMap<CanvasKey, [f64; 2]> {
+    let ColumnLayout {
+        lefts,
+        widths,
+        column_of,
+        rows,
+    } = layout;
+    // Each canvas node joins the group of its document node, or a group of its own.
+    let mut bands: BTreeMap<Option<usize>, Vec<CanvasKey>> = BTreeMap::new();
+    let mut singles: Vec<CanvasKey> = Vec::new();
+    for id in ids {
+        match framed.get(&id.node) {
+            Some(group) => bands.entry(Some(*group)).or_default().push(*id),
+            None => singles.push(*id),
+        }
+    }
+    let mut placed_bands: Vec<(Option<usize>, Vec<CanvasKey>)> = bands.into_iter().collect();
+    placed_bands.extend(singles.into_iter().map(|id| (None, vec![id])));
+    placed_bands.sort_by_key(|(_, members)| members.iter().map(|id| (column_of[id], rows[id] as usize, *id)).min());
+
+    let mut skyline: Vec<f64> = vec![top; lefts.len()];
+    let mut places: BTreeMap<CanvasKey, [f64; 2]> = BTreeMap::new();
+    for (group, mut members) in placed_bands {
+        members.sort_by_key(|id| (column_of[id], rows[id] as usize, *id));
+        let first_column = members.iter().map(|id| column_of[id]).min().unwrap_or(0);
+        let last_column = members.iter().map(|id| column_of[id]).max().unwrap_or(0);
+        let [above, below] = if group.is_some() { FRAME_SPACE } else { [0.0, 0.0] };
+        let title_right = group.map_or(0.0, |group| lefts[first_column] + groups[group].title_width);
+        let right = (lefts[last_column] + widths[last_column]).max(title_right);
+        let covered: Vec<usize> = (0..lefts.len())
+            .filter(|&column| column >= first_column && lefts[column] < right)
+            .collect();
+        let band_top = covered.iter().map(|&column| skyline[column]).fold(top, f64::max) + above;
+        let mut bottoms: BTreeMap<usize, f64> = BTreeMap::new();
+        for id in &members {
+            let column = column_of[id];
+            let y = bottoms.get(&column).copied().unwrap_or(band_top);
+            places.insert(*id, [lefts[column], y]);
+            bottoms.insert(column, y + size(id)[1] + ROW_GAP);
+        }
+        let bottom = bottoms.values().copied().fold(band_top, f64::max) + below;
+        for column in covered {
+            skyline[column] = bottom;
+        }
+    }
+
+    places
 }
 
 #[cfg(test)]
@@ -245,7 +403,7 @@ mod tests {
         for starter in starters.chain(henad_graph::starters::agent_starters()) {
             let file = GraphFile::parse(starter.text).expect("the starter reads");
             for pass in &file.document().passes {
-                let placed: BTreeMap<CanvasKey, [f64; 2]> = arrange(&pass.body, 1, [0.0, 0.0], &BTreeMap::new())
+                let placed: BTreeMap<CanvasKey, [f64; 2]> = arrange(&pass.body, 1, [0.0, 0.0], &BTreeMap::new(), &[])
                     .into_iter()
                     .collect();
                 let mains = placed.keys().filter(|key| !key.output_half).count();
@@ -307,8 +465,9 @@ mod tests {
             .find(|pass| pass.id == "step")
             .expect("the step pass")
             .body;
-        let placed: BTreeMap<CanvasKey, [f64; 2]> =
-            arrange(body, 1, [0.0, 0.0], &BTreeMap::new()).into_iter().collect();
+        let placed: BTreeMap<CanvasKey, [f64; 2]> = arrange(body, 1, [0.0, 0.0], &BTreeMap::new(), &[])
+            .into_iter()
+            .collect();
         assert_eq!(placed.len(), body.nodes.len() + 1, "the output half has a place");
         let input = placed[&CanvasKey::main(repeat)][0];
         let output = placed[&CanvasKey::output(repeat)][0];
@@ -346,8 +505,9 @@ mod tests {
             })
             .expect("the node is wrapped");
         let body = &builder.document().passes[1].body;
-        let placed: BTreeMap<CanvasKey, [f64; 2]> =
-            arrange(body, 1, [0.0, 0.0], &BTreeMap::new()).into_iter().collect();
+        let placed: BTreeMap<CanvasKey, [f64; 2]> = arrange(body, 1, [0.0, 0.0], &BTreeMap::new(), &[])
+            .into_iter()
+            .collect();
         let input = placed[&CanvasKey::main(made[0])][0];
         let first = placed[&CanvasKey::main(n37)][0];
         assert!(input < first);

@@ -192,8 +192,15 @@ The toolbar (`toolbar_ui`, a `Panel::top` above both panes): the model name as a
 named `model_name_button` ("Model name: X. Rename", tooltip `RENAME_MODEL_TOOLTIP`) that opens
 `SheetEditor::renaming`, a field named `MODEL_NAME_FIELD` that takes the focus, keeps on Enter or a
 click elsewhere (`SetSheetName`, the id kept) and puts the old name back on Escape or an empty name,
-then Undo and Redo with their icons and tooltips. Undo (`SheetEditor::history`, the graph editor's
-`History` of canonical texts): `edit` and `keep_value` record the text before a kept edit, and
+then Undo and Redo with their icons and tooltips, then the menu named `MODEL_ACTIONS` (an icon,
+"Model actions") holding `CONVERT_HEADING`, disabled with `ConvertRefusal::tooltip` while
+`SheetShown::refusal` holds (`agents/henad-app-editor.md`, the expert mode). Under the toolbar, a
+link `converted_link` ("Converted to node graph: Game of Life (expert)") shows while
+`SheetShown::copy` names the copy held as the counterpart, and returns `SheetRequest::OpenCopy`.
+`sheet_ui(ui, sheet, &SheetShown)` returns the `SheetRequest` of a pressed control
+(`Convert`, `OpenCopy`), which `editor_ui` maps to an `EditorRequest`. Undo
+(`SheetEditor::history`, the graph editor's `History` of canonical texts): `edit` and
+`keep_value` record the text before a kept edit, and
 `undo` and `redo` read a text back through `restore` (a fresh `SheetBuilder`, the pane's forms
 closed, the restart rule with `starts_only` when the two documents differ only in starts, the name
 and the purpose, `without_starts_or_words`). `sheet_ui` takes Cmd or Ctrl+Z, Shift+Cmd+Z and Cmd+Y
@@ -361,9 +368,9 @@ order, Name following the starter, a typed name kept, Create, the three lines, C
 `enter_in_the_name_field_creates_the_model` and
 `new_node_graph_lists_the_six_graph_starters_from_the_header_and_the_file_menu` (a submenu's label
 ends with " ⏵", which the harness strips). `the_empty_editor_names_every_way_in` holds
-`EMPTY_EDITOR`. The `Harness` (`Node`, `top`, `accessible_texts`, `open_sheet`, `window_focused`),
-`forbidden_words`, `tick_zero_stat` and `wait_for_snapshot` sit in `src/tests/support.rs` for both
-files.
+`EMPTY_EDITOR`. The `Harness` (`Node` with its `disabled` flag and enclosing `dialog`, `top`,
+`accessible_texts`, `accessible_texts_outside`, `open_sheet`, `window_focused`), `forbidden_words`,
+`tick_zero_stat` and `wait_for_snapshot` sit in `src/tests/support.rs` for both files.
 `src/tests/sheet_pane.rs` holds `a_blank_model_builds_the_life_start_by_accessible_names` (New
 model, Blank, Status with Dead and Alive, By chance, "Use a parameter", New parameter Initial
 density at 0.3, then a count of Alive added by command reads a tick-0 share of 0.3 +/- 0.02 on 100

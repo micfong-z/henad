@@ -225,6 +225,36 @@ Press <span class="ui" markdown>:material-check: Apply</span> to install the mod
 A sheet that holds a problem still opens, with the problem under its line, or listed under the panes when no line holds it.
 [Sheets](../reference/model-files.md#sheets) in the model file reference describes the file.
 
+### The Diagram
+
+Press **Diagram** beside the Card heading to draw each card as boxes and arrows in place of its lines.
+Each line is a box with its sentence, the result it works out on its right, and on its left the results of lines above that it reads.
+An arrow runs from a result to every line that reads it, and a dashed frame labelled "Inside line N" surrounds the lines inside each When.
+The Diagram is read-only: edit the lines to change it, and press **Diagram** again to return to them.
+
+### Converting to a node graph
+
+A sheet can be copied to a node graph, the form Henad runs, for edits the card cannot write.
+Choose **Convert to node graph** from the "Model actions" menu at the end of the sheet's toolbar, or press **Edit as node graph** beside the Diagram.
+A dialog says what the conversion does, and **Convert** makes the copy.
+Both controls are disabled while the card holds a problem or a line that does not run yet, and their tooltip says which.
+
+The conversion runs one way.
+The copy is a new model, named after the sheet with "(expert)" added, and the sheet stays as it is.
+The copy has no sheet or cards, so lines, fire counts and "otherwise" do not appear in it, and changes to the copy cannot be turned back into lines.
+On the desktop, a sheet opened from a file has its copy saved beside that file.
+
+The copy opens on the canvas with a frame around the nodes of each line, titled with the line's number and sentence, such as "Line 2: Become Alive from Dead, when Alive neighbours is 3".
+Nodes several lines share sit in a frame naming them all, and nodes made by the sheet itself, such as a start or a measure, in a grey frame.
+A node shows its kind's name, such as **Is** or **Count around me**, over the kind as the file writes it, such as `cmp.eq`.
+A node named on the card, such as "Alive neighbours", shows that name instead.
+The inputs of the node that changes a state read by line, such as "Line 2 when".
+
+A banner above the canvas says which sheet the copy came from and when, and whether the copy was edited since.
+Press the banner's button named after the sheet, such as **Open Game of Life**, to return to the sheet, whose toolbar then shows "Converted to node graph:" and the copy's name, a link back to the copy.
+The banner says when the sheet has changed since the conversion, or when it is not beside the copy's file.
+The panel beside the canvas ends with **From the author model**, naming the sheet, its file and the date of the conversion.
+
 ## Node graphs
 
 A node graph opens on a canvas.
