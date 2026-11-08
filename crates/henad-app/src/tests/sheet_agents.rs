@@ -4,6 +4,7 @@
 
 use egui::accesskit::Role;
 use egui::{Key, Modifiers};
+use henad_core::params::ParamValue;
 use henad_graph::sheet::SheetFile;
 use henad_graph::sheet::document::{
     BlockedState, ButtonStepRule, ColorRuleKind, MadeOf, Marks, ParameterType, PropertyType, SheetLiteral, SheetValue,
@@ -23,8 +24,12 @@ use super::sheet_pane::{
     TALL_SCREEN, assert_control_holds, center_of, choose, click, enter_into, field_value, sheet, shows,
     starter_document, text, type_into,
 };
+use crate::state::default_values;
 use crate::tests::support::{Harness, Node, align_with_starter, forbidden_words, without_card_lines};
+use crate::ui::editor::EditorModel;
+use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::new_model::create_blank_agent_model;
+use crate::ui::params::notice_content;
 
 /// Returns a harness whose Editor holds a blank model of agents on a tall screen, or `None` to skip on a machine
 /// without a device.
@@ -544,4 +549,57 @@ fn the_agent_sections_show_no_forbidden_word_in_any_state() {
     for visible in [DONE, CANCEL, STATES_KIND, NUMBER_KIND, YES_NO_KIND] {
         assert_control_holds(&nodes, visible);
     }
+}
+
+/// Work past the budget on the boids sheet in the Editor names the lines of its looks in the sheet's words, where the
+/// entry's own reasons name a pass of the lowered graph.
+#[test]
+fn work_past_the_budget_on_a_sheet_names_its_lines_and_no_pass() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.app.editor.model = EditorModel::Sheet(Box::new(SheetEditor::new(starter_document("boids.toml"))));
+    let entry = match &mut harness.app.editor.model {
+        EditorModel::Sheet(sheet) => sheet.program().expect("the boids sheet compiles").entry(),
+        _ => unreachable!("the Editor holds the sheet"),
+    };
+    let mut values = default_values(&entry);
+    for (id, value) in [
+        ("num_agents", ParamValue::U32(70_000)),
+        ("world_width", ParamValue::F32(200.0)),
+        ("world_height", ParamValue::F32(200.0)),
+        ("visual_range", ParamValue::F32(200.0)),
+    ] {
+        let index = entry
+            .param_descriptors()
+            .iter()
+            .position(|descriptor| descriptor.id() == id)
+            .expect("a boids parameter");
+        values[index] = value;
+    }
+    let raw = entry.shortfalls(&values, &harness.app.runtime.granted);
+    assert!(raw.iter().any(|reason| reason.contains("pass")), "{raw:?}");
+
+    let shortfalls = harness.app.entry_shortfalls(&entry, &values);
+    assert!(
+        shortfalls
+            .iter()
+            .any(|reason| reason.starts_with("Lines 1 and 2, Flockmates and Too close: looks at too many birds")),
+        "{shortfalls:?}"
+    );
+    assert!(
+        shortfalls.iter().all(|reason| !reason.contains("pass")),
+        "{shortfalls:?}"
+    );
+
+    // The Parameters tab's notice ends each reason with one full stop.
+    let notice = notice_content(&harness.app, 0, &shortfalls).expect("a notice");
+    assert!(
+        notice
+            .detail
+            .ends_with("Use a shorter distance or fewer birds. Reduce the size parameters to build."),
+        "{}",
+        notice.detail
+    );
+    assert!(!notice.detail.contains(".."), "{}", notice.detail);
 }

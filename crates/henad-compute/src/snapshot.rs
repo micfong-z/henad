@@ -34,6 +34,20 @@ pub struct Snapshot {
     /// Counts of the elements each probe of the model fired for on the latest counted step, empty for a model that
     /// counts nothing and on the CPU path.
     pub fire_counts: FireCounts,
+    /// Stats sampled on the way to this snapshot's tick during a run to a tick, oldest first, and empty otherwise.
+    ///
+    /// A run to a tick can pass hundreds of ticks between two publishes, and these samples keep its course. A publish
+    /// the host never took passes its samples on to the next publish.
+    pub run_to_samples: Vec<StatSample>,
+}
+
+/// Stat values of one tick, sampled during a run to a tick.
+#[derive(Debug, Clone)]
+pub struct StatSample {
+    /// Tick the stats were read at.
+    pub tick: u64,
+    /// Stat values, one per stat series.
+    pub stats: Vec<StatEntry>,
 }
 
 /// Counts of the elements each probe of a GPU model fired for on one step, with the tick that step reached.

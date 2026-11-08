@@ -10,7 +10,7 @@ use egui::{
     Shape, Stroke, TextEdit, TextStyle, Ui, Vec2, WidgetInfo, WidgetType, vec2,
 };
 use henad_graph::sheet::document::{ParameterType, SheetLiteral};
-use henad_graph::sheet::edit::PALETTE_COLORS;
+use henad_graph::sheet::edit::{IdSpace, PALETTE_COLORS, SheetEditError, is_reserved_name};
 use henad_graph::sheet::format_number;
 use henad_graph::sheet::sentence::{
     CANCEL, CHANCE_BOX_HINT, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, CHANCE_PARAMETER_PLACEHOLDER, CHOOSE_A_COLOR,
@@ -42,6 +42,20 @@ const DIALOG_WIDTH: f32 = 380.0;
 /// Gives the accessible node `id` the name `name`, in place of the name its widget gave it.
 pub fn set_name(ui: &Ui, id: Id, name: &str) {
     ui.ctx().accesskit_node_builder(id, |node| node.set_label(name));
+}
+
+/// Returns the reason `error` gives for a refused edit as a sentence. A reserved id reads as a name Henad keeps for
+/// itself, and never names the id.
+pub fn refusal_text(error: &SheetEditError) -> String {
+    if let SheetEditError::Reserved(_) = error {
+        return henad_graph::sheet::sentence::NAME_RESERVED.to_owned();
+    }
+    let text = error.to_string();
+    let mut characters = text.chars();
+    match characters.next() {
+        Some(first) => format!("{}{}.", first.to_uppercase(), characters.as_str()),
+        None => text,
+    }
 }
 
 /// Returns `color`, the red, green, blue and alpha bytes of a sheet's colour, as egui draws it.
@@ -122,9 +136,9 @@ pub fn chip_with_id(ui: &mut Ui, id: Option<Id>, chip: &SentenceChip, red: bool,
             );
         }
         let mut x = rect.left() + CHIP_PADDING.x;
-        let centre_y = rect.center().y;
+        let center_y = rect.center().y;
         if let Some(color) = swatch {
-            let square = Rect::from_center_size(Pos2::new(x + swatch_side / 2.0, centre_y), Vec2::splat(swatch_side));
+            let square = Rect::from_center_size(Pos2::new(x + swatch_side / 2.0, center_y), Vec2::splat(swatch_side));
             painter.rect_filled(square, CornerRadius::ZERO, color);
             painter.rect_stroke(
                 square,
@@ -136,7 +150,7 @@ pub fn chip_with_id(ui: &mut Ui, id: Option<Id>, chip: &SentenceChip, red: bool,
         }
         for galley in [mark, lead, Some(name)].into_iter().flatten() {
             let size = galley.size();
-            painter.galley(Pos2::new(x, centre_y - size.y / 2.0), galley, colors.text);
+            painter.galley(Pos2::new(x, center_y - size.y / 2.0), galley, colors.text);
             x += size.x;
         }
     }
@@ -803,6 +817,9 @@ impl NewParameterDialog {
         }
         if taken.iter().any(|known| known.to_lowercase() == name.to_lowercase()) {
             return Err(parameter_name_taken(name));
+        }
+        if is_reserved_name(name, IdSpace::Item) {
+            return Err(henad_graph::sheet::sentence::name_reserved(name));
         }
         let read = |text: &str| read_typed_number(text).and_then(SheetLiteral::number);
         let (Some(default), Some(min), Some(max)) = (read(&self.default), read(&self.min), read(&self.max)) else {

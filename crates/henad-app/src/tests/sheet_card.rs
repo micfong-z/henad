@@ -1,8 +1,8 @@
 //! Tests of writing lines on the Card pane: Game of Life, the chance SIR and the forest fire rebuilt from Blank by
 //! accessible names, the list blanks of numbers and of states, a list typed in a blank of one number, a chance refused
 //! in the field, shared state names, the line menu, a cleared blank's skip note, When blocks built through their add
-//! rows, the offer to remove a When, moves that skip a line, the "otherwise" notice, a button's card with its notice and
-//! a When, and the words rule over every menu, picker, select, note and help popover opened on the way.
+//! rows, the offer to remove a When, moves that skip a line, the "otherwise" notice, a button's card with its notice
+//! and a When, and the words rule over every menu, picker, select, note and help popover opened on the way.
 
 use egui::accesskit::Role;
 use egui::{Event, Key, Modifiers};

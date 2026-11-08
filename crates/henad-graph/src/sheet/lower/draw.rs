@@ -12,7 +12,7 @@
 use super::Site;
 use super::card::CardLowering;
 use super::keys;
-use super::look::neighbour_count;
+use super::look::neighbor_count;
 use super::value::Operand;
 use crate::ids::NodeId;
 use crate::sheet::check::Place;
@@ -128,7 +128,7 @@ impl<'a> CardLowering<'_, 'a> {
             SheetValue::Phrase(phrase) => (phrase.as_ref(), None),
             _ => return None,
         };
-        let bound = neighbour_count(counting.around?)?;
+        let bound = neighbor_count(counting.around?)?;
         match (counting.kind, part) {
             (LineKind::Count, None) | (LineKind::LookAround, Some("count")) => Some(bound),
             (LineKind::LookAround, Some(part)) => counting

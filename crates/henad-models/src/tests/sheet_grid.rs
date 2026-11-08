@@ -1,8 +1,7 @@
-//! Grid sheets on the device: the sheet starters of a grid world and round 1's chance SIR, lowered and run by the GPU
-//! engine.
+//! Grid sheets on the device: the sheet starters of a grid world and the chance SIR, lowered and run by the GPU engine.
 //!
 //! The sheets are the grid sheets of `henad_graph::sheet::starters()` and `tests/fixtures/sheets/sir_chance.toml`, a
-//! copy of henad-graph's test sheet of round 1's SIR with chances per tick. Each is held to the host evaluator, to
+//! copy of henad-graph's test sheet of SIR with chances per tick. Each is held to the host evaluator, to
 //! known answers and to the hand-lowered references in `tests/fixtures/lowered/round1/`. No sheet start and no app tool
 //! paints cells, so a test that needs given tick-0 lanes plants them through the entry's hooks.
 //!
@@ -41,14 +40,17 @@ pub(super) fn fixture_text(path: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
-/// Returns the name and text of every grid sheet: the sheet starters of a grid world, then the chance SIR.
+/// Returns the name and text of every grid sheet: the sheet starters of a grid world, then the chance SIR and the SIRD
+/// of two competing rates.
 fn grid_sheets() -> Vec<(String, String)> {
     let mut sheets: Vec<(String, String)> = henad_graph::sheet::starters()
         .iter()
         .filter(|starter| matches!(sheet_file(starter.text).lowered().document().world, World::Grid(_)))
         .map(|starter| (starter.file_name.to_owned(), starter.text.to_owned()))
         .collect();
-    sheets.push(("sir_chance.toml".to_owned(), fixture_text("sheets/sir_chance.toml")));
+    for name in ["sir_chance.toml", "sird.toml"] {
+        sheets.push((name.to_owned(), fixture_text(&format!("sheets/{name}"))));
+    }
     sheets
 }
 
@@ -571,8 +573,44 @@ fn active_params(name: &str) -> &'static [(&'static str, f32)] {
     }
 }
 
+/// Tick after which the comparisons of the host and the device press New outbreak, on the sheets that have it.
+const OUTBREAK_TICK: u32 = 10;
+
+/// Presses the action `id` of the graph `evaluator` runs once on the host, after `tick` ticks of a run at `seed`: its
+/// reruns, then its action passes.
+fn host_press(evaluator: &HostEvaluator, lanes: &mut HostLanes, params: &[ParamValue], seed: u64, id: &str, tick: u32) {
+    let document = evaluator.document();
+    let position = document
+        .actions
+        .iter()
+        .position(|action| action.id == id)
+        .unwrap_or_else(|| panic!("no action {id}"));
+    let mut stream = action_seed(Some(seed));
+    evaluator
+        .rerun(id, 1, lanes, params, Some(seed), &mut stream)
+        .unwrap_or_else(|error| panic!("{id}: {error}"));
+    let passes: Vec<String> = document
+        .passes
+        .iter()
+        .filter(|pass| pass.stage == PassStage::Action && pass.action.as_deref() == Some(id))
+        .map(|pass| pass.id.clone())
+        .collect();
+    for pass in &passes {
+        evaluator
+            .run_pass(
+                pass,
+                lanes,
+                params,
+                &RunContext::action(Some(seed), position, 1, tick),
+                &mut stream,
+            )
+            .unwrap_or_else(|error| panic!("{pass}: {error}"));
+    }
+}
+
 /// Every grid sheet steps to equal lanes on the host evaluator and on the device every tick for 50 ticks at 64 by 64
-/// cells, from the start both draw at two seeds.
+/// cells, from the start both draw at two seeds, across a press of New outbreak after tick 10 on the sheets that have
+/// it.
 #[test]
 fn every_grid_sheet_steps_alike_on_the_host_and_the_device() {
     let Some(ctx) = device("every_grid_sheet_steps_alike_on_the_host_and_the_device") else {
@@ -582,8 +620,8 @@ fn every_grid_sheet_steps_alike_on_the_host_and_the_device() {
     let sheets = grid_sheets();
     assert_eq!(
         sheets.len(),
-        5,
-        "Game of Life, the rates SIR, Vote, the forest fire and the chance SIR"
+        6,
+        "Game of Life, the rates SIR, Vote, the forest fire, the chance SIR and the SIRD"
     );
     for (name, text) in &sheets {
         let file = sheet_file(text);
@@ -600,6 +638,17 @@ fn every_grid_sheet_steps_alike_on_the_host_and_the_device() {
             let start = host_words(&lanes, lowered);
             let mut changed = false;
             for tick in 0..=50u32 {
+                if tick == OUTBREAK_TICK
+                    && let Some(outbreak) = entry.action_index("new_outbreak")
+                {
+                    let before = host_words(&lanes, lowered);
+                    press(&ctx, &mut *state, outbreak);
+                    host_press(&evaluator, &mut lanes, &params[2..], seed, "new_outbreak", tick);
+                    assert!(
+                        host_words(&lanes, lowered) != before,
+                        "{name} at seed {seed}: New outbreak changed no cell"
+                    );
+                }
                 let host = host_words(&lanes, lowered);
                 changed |= host != start;
                 assert!(
@@ -934,10 +983,11 @@ fn outside(reference: &[Vec<f64>], sheet: &[Vec<f64>], cells: f64) -> Vec<(usize
 ///    Infected), the share of each state at the last tick, and the share of cells ever in the active state, the burnt
 ///    share of the forest fire.
 /// 2. Run the sheet at the same seeds and record the same measures.
-/// 3. Hold the sheet's mean of each measure over the four seeds within its band, as [`bands`] takes it: the hand-lowered
-///    file's mean, give or take five standard errors of the difference of the two means. A run of an epidemic or of
-///    fires spreads further from seed to seed than a binomial share, as the cells of one wave decide together. The
-///    variance of one run is the larger of the variance pooled over the eight runs and the binomial variance.
+/// 3. Hold the sheet's mean of each measure over the four seeds within its band, as [`bands`] takes it: the
+///    hand-lowered file's mean, give or take five standard errors of the difference of the two means. A run of an
+///    epidemic or of fires spreads further from seed to seed than a binomial share, as the cells of one wave decide
+///    together. The variance of one run is the larger of the variance pooled over the eight runs and the binomial
+///    variance.
 /// 4. Plant the rule error, the "from" state of one Become dropped, run the sheet so edited at the same seeds, and hold
 ///    at least one of its means outside its band, against the same four runs of the hand-lowered file.
 #[test]

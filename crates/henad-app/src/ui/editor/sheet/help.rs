@@ -1,12 +1,13 @@
 //! The "?" help of the sheet editor: a small button beside a heading that opens a popover in plain words.
 //!
 //! Each popover holds its text, "Example:" with one example, and Close help. Its words come from
-//! [`henad_graph::sheet::sentence`]: the help of each [`SheetSection`] and the Lines help beside the card.
+//! [`henad_graph::sheet::sentence`]: the help of each [`SheetSection`] and the Lines help beside the card, each with
+//! its own words for a world of agents where the words for cells do not fit.
 
 use egui::{Button, Popup, PopupCloseBehavior, RichText, Ui};
 use henad_graph::sheet::sentence::{
-    CLOSE_HELP, HELP_EXAMPLE_LABEL, HELP_LINES_NAME, LINES_HELP, LINES_HELP_EXAMPLE, LINES_HELP_HEADING, SheetSection,
-    help_dialog_name,
+    CLOSE_HELP, HELP_EXAMPLE_LABEL, HELP_LINES_NAME, LINES_HELP, LINES_HELP_AGENTS, LINES_HELP_AGENTS_EXAMPLE,
+    LINES_HELP_EXAMPLE, LINES_HELP_HEADING, SheetSection, WORLD_HELP_AGENTS, help_dialog_name,
 };
 
 use super::accessible_group;
@@ -23,6 +24,10 @@ pub enum Help {
     Section(SheetSection),
     /// The help of the card's lines.
     Lines,
+    /// The help of the World section of a world of agents.
+    AgentWorld,
+    /// The help of the lines of a kind of agent's card.
+    AgentLines,
 }
 
 impl Help {
@@ -30,7 +35,8 @@ impl Help {
     pub fn heading(self) -> &'static str {
         match self {
             Self::Section(section) => section.heading(),
-            Self::Lines => LINES_HELP_HEADING,
+            Self::AgentWorld => SheetSection::World.heading(),
+            Self::Lines | Self::AgentLines => LINES_HELP_HEADING,
         }
     }
 
@@ -38,7 +44,9 @@ impl Help {
     pub fn text(self) -> &'static str {
         match self {
             Self::Section(section) => section.help(),
+            Self::AgentWorld => WORLD_HELP_AGENTS,
             Self::Lines => LINES_HELP,
+            Self::AgentLines => LINES_HELP_AGENTS,
         }
     }
 
@@ -46,7 +54,9 @@ impl Help {
     pub fn example(self) -> &'static str {
         match self {
             Self::Section(section) => section.help_example(),
+            Self::AgentWorld => SheetSection::World.help_example(),
             Self::Lines => LINES_HELP_EXAMPLE,
+            Self::AgentLines => LINES_HELP_AGENTS_EXAMPLE,
         }
     }
 
@@ -54,7 +64,8 @@ impl Help {
     pub fn name(self) -> String {
         match self {
             Self::Section(section) => section.help_name(),
-            Self::Lines => HELP_LINES_NAME.to_owned(),
+            Self::AgentWorld => SheetSection::World.help_name(),
+            Self::Lines | Self::AgentLines => HELP_LINES_NAME.to_owned(),
         }
     }
 }

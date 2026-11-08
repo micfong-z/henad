@@ -106,9 +106,9 @@ fast math the loop and its copies differ by up to 2 units in the last place (rec
 `src/tests/graph_grid_sums.rs` reduces a grid graph's `stat.sum` and `stat.mean` of an `f32` lane
 and a `vec2f` sum on the device through the engine's `partials` tree, at sizes from 1 by 1 to 300
 by 211, to closed forms that every order of addition reaches exactly. Keep these files.
-`tests/fixtures/lowered/` holds the hand-lowered references a lowered sheet is compared with: round
-1's eight models in `round1/` (`r1_<model>`, SIR with chances per tick, Seed outbreak as round 1
-named it) and the rates design's `sir_rates.toml`, `sird_competing.toml` and `sird_higher_wins.toml`
+`tests/fixtures/lowered/` holds the hand-lowered references a lowered sheet is compared with: eight
+models in `round1/` (`r1_<model>`, SIR with chances per tick, Seed outbreak named as in the study
+that wrote them) and `sir_rates.toml`, `sird_competing.toml` and `sird_higher_wins.toml`
 in `rates/` (`r2_<model>`, the tick length a `tick_length` parameter in days). They are graph files
 written by hand, with hand-numbered node ids and keys, and no script writes them.
 `tests/fixtures/docs/lowered_fixture.md` holds the procedure: the mapping from each author form to
@@ -120,17 +120,18 @@ exactly these eleven files, each with `kind = "graph"` in its header, read by `G
 checked with no error. Keep these files.
 `src/tests/sheet_grid.rs` holds the grid sheets on the device: the grid sheets of
 `henad_graph::sheet::starters()` (filtered by the lowered world, so an agents sheet joining the
-starters stays out) and `tests/fixtures/sheets/sir_chance.toml`, a copy of henad-graph's test sheet
-`src/tests/sheets/sir_chance.toml` (round 1's SIR with chances per tick). Copy it again when the
-source changes. Entries come from `ModelFile::parse`. A test that needs given tick-0 lanes plants
+starters stays out), `tests/fixtures/sheets/sir_chance.toml`, a copy of henad-graph's test sheet
+`src/tests/sheets/sir_chance.toml` (the SIR of `round1/`, with chances per tick), and
+`tests/fixtures/sheets/sird.toml` below. Copy them again when the source changes. Entries come from `ModelFile::parse`. A test that needs given tick-0 lanes plants
 them through `planted_entry`, whose `PlantedHooks` wrap the lowered graph's `GridHooks` and replace
-the seeded words of the lanes it names, since no sheet start and no app tool paints cells (D74).
+the seeded words of the lanes it names, since no sheet start and no app tool paints cells.
 The tests: the Game of Life sheet's blinker (period 2) and glider (moved by one cell on each axis
 after 4 ticks) on a 32 by 32 world; `a_start_again_button_draws_a_new_layout_each_press` (two
 presses of Randomise differ, replay in a second build, and equal the host's `rerun`) and
 `a_rebuild_replays_the_same_start`; `every_grid_sheet_steps_alike_on_the_host_and_the_device`
 (every lane every tick for 50 ticks at 64 by 64, two seeds, the forest fire at lightning 0.001 and
-growth 0.05 so every draw decides cells); the chance SIR's lanes and measures summing to the cells
+growth 0.05 so every draw decides cells, the SIRD's competing group included, and a press of New
+outbreak after tick 10 on each sheet that has it, through `host_press` on the host); the chance SIR's lanes and measures summing to the cells
 for 200 ticks across a New outbreak press; Game of Life and Vote, whose cards draw nothing, equal to
 their files in `lowered/round1/` in every lane every tick for 200 ticks at 64 by 64 from the tick-0
 lanes each sheet draws at seeds 1 to 4, on the host (every tick pass in document order) and on the
@@ -146,7 +147,7 @@ the hand-lowered file's mean, the variance of one run the larger of the variance
 eight runs and the binomial `p (1 - p) / cells`. Behind each band a planted rule error (the
 "from" state dropped from the forest fire's lightning line, which then strikes empty cells too,
 and from the SIR's recovery line) moves at least one mean outside. Keep these files.
-`src/tests/sheet_rates.rs` holds the rate gates (T11) on the same device, its helpers
+`src/tests/sheet_rates.rs` holds the rate gates on the same device, its helpers
 (`device`, `device_params`, `entry_of`, `fixture_text`) taken from `sheet_grid.rs`. The SIR starter
 `sir.toml` (rates per day) at beta 0.3 and gamma 0.1 on 256 by 256 cells for 80 days, seeds 1 to 3,
 at ticks of 1, 0.5, 0.25 and 0.125 days against 0.0625: the largest gap in infected share, sampled
@@ -158,7 +159,8 @@ with the share of the removed cells that are Dead within 0.01 of 0.5, and the ha
 `lowered/rates/sird_higher_wins.toml` within 0.01 of its predicted 0.4134 as the planted contrast.
 `two_runs_at_one_seed_write_identical_statistics` runs the SIR starter twice at seed 5 and a tick of
 half a day. The rates SIR also joins every grid-sheet gate of `sheet_grid.rs` through
-`starters()`, five grid sheets in all. Keep these files.
+`starters()`, and the SIRD joins them through `grid_sheets`, six grid sheets in all. Keep these
+files.
 `src/tests/sheet_agents.rs` gates the agent sheet starters (the random walk, boids, bounded
 confidence and the ants, whose tick pass binds exactly 8 storage buffers) on a
 `TestDeviceRequest::baseline()` device: `every_agent_sheet_lowers_checks_and_compiles` (no warning,
@@ -177,9 +179,9 @@ at most 0.95 (the planted error steers by the average velocity, near 1, and a ru
 not repeatable at one seed, so no lower edge holds), bounded confidence's one
 opinion group (runs of 0.01 bins each holding 1% of the people) after 100 ticks (the planted error
 steers by the average, no group), and the ants' deliveries, at most 1000 by tick 2000 and at least
-500 by tick 3000 at the defaults (`the_ants_sheet_delivers_food_in_band`: round 1's file delivers
-nothing by tick 2000 at seed 2, so the lower edge sits at tick 3000; the planted error picks the
-least To food as the Food way). Keep these files.
+500 by tick 3000 at the defaults (`the_ants_sheet_delivers_food_in_band`: the `round1/` file
+delivers nothing by tick 2000 at seed 2, so the lower edge sits at tick 3000; the planted error
+picks the least To food as the Food way). Keep these files.
 
 ## Adding a new model
 

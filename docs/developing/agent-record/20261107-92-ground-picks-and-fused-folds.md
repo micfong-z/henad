@@ -258,7 +258,9 @@ Every one held against the code but part of the line-width nit, and `fix: s20 re
 6. The shape geometry (fractions of the world, the angle towards smaller rows) is this milestone's reading of the author format, which leaves shapes unspecified.
    With it the ants' rocks cross the food-to-nest diagonal as the stock geometry's do, but the sizes differ from the stock's.
 7. A Become or Set inside a Repeat applies when its condition held at any time, and the highest such row wins, where round 1's semantics say "the first time it applies".
-   The two differ only when two changes of one property inside one Repeat apply at different times round, which needs the carried values answer 11a leaves out.
+   The two differ whenever two changes of one property inside one Repeat apply at different times round, and two chance lines inside one Repeat already do, with no carried value.
+   Answer 11a chooses between sums that read the start of the tick and carried values, and says nothing about which time round wins.
+   This sentence was corrected in the redesign audit (S32), which leaves the choice of rule to the maintainer.
 8. Fusing a look into a shared fold changes the iteration word of a draw inside its body, the fold's `k`, so a sheet whose looks draw inside their test would replay differently from S17's lowering.
    No starter draws inside a look.
 9. The ants read each trail once per visited cell, as round 1's hand-lowered file does: the fold holds three `field.get` nodes, the open test's Ground, Food way's To food and Home way's To home.

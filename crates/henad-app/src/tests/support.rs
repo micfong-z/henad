@@ -20,7 +20,7 @@ use henad_core::view::{EdgeView, GridView, PointView, StatDescriptor, StatEntry,
 use henad_explore::model_file::ModelFile;
 
 use henad_graph::sheet::document::{CardRuns, SheetDocument, SheetProperty};
-use henad_graph::sheet::sentence::FORBIDDEN_WORDS;
+use henad_graph::sheet::sentence::is_forbidden_word;
 
 use crate::state::AppState;
 use crate::ui::about::about_modal;
@@ -680,11 +680,7 @@ pub fn forbidden_words(texts: &[String]) -> Vec<(String, String)> {
         .filter(|text| !opens_a_node_graph(text))
         .flat_map(|text| {
             words(text)
-                .filter(|word| {
-                    FORBIDDEN_WORDS
-                        .iter()
-                        .any(|forbidden| forbidden.eq_ignore_ascii_case(word))
-                })
+                .filter(|word| is_forbidden_word(word))
                 .map(|word| (word.to_owned(), text.clone()))
                 .collect::<Vec<_>>()
         })

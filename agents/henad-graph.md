@@ -212,7 +212,7 @@ information, and a coverage line, the kinds the corpus uses out of every kind.
 `CodeOrigin::Runtime`. `from_code` refuses another format with the message
 `Recorded under X, and this build runs henad-graph/1`.
 
-**The time scale** (D31). A `[[param]]` table takes two optional keys, `hidden = true` and
+**The time scale**. A `[[param]]` table takes two optional keys, `hidden = true` and
 `tick_unit = "day"` (read through `TimeUnit::parse`). `ParamTable::into_graph_param` reads both,
 and `into_descriptor`, the grid rule's reader, refuses either at its table. The descriptor is
 `hidden()`, and `GraphDocument.time` holds the one `TimeScale` (unit and parameter id) a table's
@@ -220,12 +220,12 @@ and `into_descriptor`, the grid rule's reader, refuses either at its table. The 
 one. `write_param` writes `hidden = true` only when set, and the writer adds `tick_unit` after the
 tick length's keys, so a file setting neither keeps its code.
 `graph_codes_are_unchanged_by_the_new_keys` in henad-models' `lowered_fixtures.rs` pins the
-starters', the corpus files' and the round 1 fixtures' hashes at `be338ec`. Keep it.
-`check_tick_length` refuses a tick length that is not an `f32`, not hidden, or has a `min` of 0 or
-below, and a time scale naming no parameter. `RenameParam` renames the time scale's parameter,
-`renamed_param` keeps `hidden`, and `RemoveParam` drops the time scale with its tick length.
-henad-app's World pane rebuilds a descriptor for `SetParam` in `world.rs`'s `param_with`, which
-keeps `hidden` too. A new descriptor flag goes into both copiers.
+starters', the corpus files' and the `tests/fixtures/lowered/round1/` files' hashes at `be338ec`.
+Keep it. `check_tick_length` refuses a tick length that is not an `f32`, not hidden, or has a `min`
+of 0 or below, and a time scale naming no parameter. `RenameParam` renames the time scale's
+parameter, `renamed_param` keeps `hidden`, and `RemoveParam` drops the time scale with its tick
+length. henad-app's World pane rebuilds a descriptor for `SetParam` in `world.rs`'s `param_with`,
+which keeps `hidden` too. A new descriptor flag goes into both copiers.
 `GridProgram` and `AgentProgram` copy `document.time` to `EntryDeclarations.time`, so a
 manifest's replayed text and an expert copy keep their time axis. `src/tests/time_scale.rs` holds
 the round trip, the refusals and the entry. The three rates fixtures in henad-models set both

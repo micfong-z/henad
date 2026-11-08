@@ -2,11 +2,12 @@
 //!
 //! The Steers of a property add up onto its value at the start of the tick, each a term of the value times the
 //! strength, or for "towards" the difference from my value times the strength. A Steer towards a part of a Look around
-//! that found no one adds nothing. A Keep between holds the value inside its limits after the changes above it: a
-//! number through a clamp, and an arrow through the clamp of its length, an arrow of length 0 turning into one of the
-//! lower length along the x axis. The Move by lines add up, and the position moves by their sum and wraps at the
-//! world's edges. Heading holds the last move that was not 0, and none before the first. "my new X" is the value before
-//! its write. A random direction is an arrow of the given length at an angle drawn between 0 and 2 pi.
+//! that found no one adds nothing. A Keep between holds the value inside its limits after the property's Sets, above or
+//! below it, and the Steers above it: a number through a clamp, and an arrow through the clamp of its length, an arrow
+//! of length 0 turning into one of the lower length along the x axis. The Move by lines add up, and the position moves
+//! by their sum and wraps at the world's edges. Heading holds the last move that was not 0, and none before the first.
+//! "my new X" is the value before its write. A random direction is an arrow of the given length at an angle drawn
+//! between 0 and 2 pi.
 
 use super::Site;
 use super::card::{CardLowering, Change, ChangeKind};
@@ -196,14 +197,24 @@ impl<'a> CardLowering<'_, 'a> {
     }
 
     /// Returns `value` after the Steers and Keep betweens among `changes`, in row order.
+    ///
+    /// The Steers between two Keep betweens add up in line id order, so a reorder of them leaves the lowered graph
+    /// alone.
     pub(super) fn steered(
         &mut self,
         value: Operand,
         changes: &[Change<'a>],
         value_type: &ValueType,
     ) -> Result<Operand, String> {
+        let mut ordered: Vec<&Change<'a>> = changes
+            .iter()
+            .filter(|change| matches!(change.kind, ChangeKind::Steer { .. } | ChangeKind::Keep { .. }))
+            .collect();
+        for run in ordered.split_mut(|change| matches!(change.kind, ChangeKind::Keep { .. })) {
+            run.sort_by_key(|change| change.number);
+        }
         let mut value = value;
-        for change in changes {
+        for change in ordered {
             let site = self.change_site(change.line)?;
             match &change.kind {
                 ChangeKind::Steer { term } => {

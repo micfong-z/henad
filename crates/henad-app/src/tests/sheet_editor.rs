@@ -470,7 +470,7 @@ fn the_new_model_dialog_offers_every_starter_with_its_description() {
         agent_starters += usize::from(document.world.made_of == MadeOf::Agents);
         assert!(offered.contains(&starter.file_name), "{}", starter.file_name);
     }
-    assert_eq!(agent_starters, 4, "the four agent starters are offered (D64, D67)");
+    assert_eq!(agent_starters, 4, "the four agent starters are offered");
     for choice in &choices {
         assert!(choice.description.is_some(), "{} has a description", choice.name);
     }

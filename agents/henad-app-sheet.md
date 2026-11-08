@@ -3,8 +3,8 @@
 `ui/editor/sheet/` shows a sheet, a model file of `kind = "sheet"` (`agents/henad-graph-sheet.md`),
 in the Editor tab as its Sheet and Card panes, and holds the New model dialog. The canvas and the
 code view are in `agents/henad-app-editor.md`, and the expert mode stays there beside the canvas it
-extends. The Sheet pane edits every section (S16a, S16b), those of a world of agents included
-(S26), and the Card pane writes the lines of a cells card (S19, S22, `agents/henad-app-card.md`).
+extends. The Sheet pane edits every section, those of a world of agents included,
+and the Card pane writes the lines of a cells card (`agents/henad-app-card.md`).
 
 `mod.rs` holds `SheetEditor`: a `SheetBuilder` over the `SheetDocument` (so new draws take fresh
 keys), its canonical text (`text`, which Save model writes and Apply reads through
@@ -26,9 +26,9 @@ through `SheetFile::place_graph_diagnostic`. `place` does the same for a problem
 the tab's width by default, each pane at least 160 points) and the Card pane in the `CentralPanel`,
 each under a heading ("Sheet", "Card", `SHEET_PANE` and `CARD_PANE`) in a `ScrollArea` of its own
 (`henad_sheet_pane_scroll`, `henad_card_pane_scroll`). The world stays in the dock's Viewport,
-Playback, Pacing, Parameters and Charts tabs (D56).
+Playback, Pacing, Parameters and Charts tabs.
 
-**Edits** (D52). `SheetEditor::edit(past_start, starts_only, run)` runs `run`, a closure of
+**Edits**. `SheetEditor::edit(past_start, starts_only, run)` runs `run`, a closure of
 `SheetEdit` commands, on a clone of the builder and keeps it only when every command is accepted, so
 one form or field commit is one edit and one undo step. An edit that leaves the document
 equal changes nothing. Every edit takes a fresh `load`, the preview key, so the preview builds again
@@ -56,34 +56,36 @@ box derive from it, so a refused draft never shows in another sheet, and removin
 forgets the drafts of that row and every row after it. The pane collects at most one `Pending` edit
 per frame (a boxed closure, `starts_only`, `from_form`), run through `SheetEditor::edit` after
 drawing. A refusal shows as the form's message or as `PaneState::refusal` under the Cells or Agents
-section, through `refusal_text`. The world: `CELLS_ON_A_GRID`, Size as two `commit_field`s named
+section, through `widgets::refusal_text`, which the card shares and which reads `Reserved` as
+`NAME_RESERVED` without its id. The property, button and event forms and the New parameter dialog
+refuse a new name `is_reserved_name` holds with `name_reserved` before running the command. The world: `CELLS_ON_A_GRID`, Size as two `commit_field`s named
 `WIDTH_NAME` and `HEIGHT_NAME` (a whole number of cells from 1 to
-`henad_graph::limits::MAX_GRID_SIDE`, D72, with `world_side_out_of_range` for any other number, a
+`henad_graph::limits::MAX_GRID_SIDE`, with `world_side_out_of_range` for any other number, a
 fraction or a percent included, and `TYPE_ONE_NUMBER` for text that is no number), Edges as a
 `ComboBox` named `EDGES_LABEL` with `WRAP_TOOLTIP` or `WALLS_SENTENCE` and the grey sentence (no
-torus mark, D93), then the Time line: `ONE_TICK_IS`, the length field named `TICK_LENGTH_NAME` while
-a unit is set (0 or less becomes 1), and the unit select named `TICK_UNIT_NAME` with
-`tick_unit_choice` (None first, "one step (no unit)", which writes no `[time]`). An edit that gives
-the tick a new length or unit sets `PaneState::time_changed`, and while it holds the Time line is
-followed by `chances_per_tick_note` of `rates::chance_line_numbers`, read from the sheet each frame
-so that a card edit renumbers or removes the lines it names, and left out while no line draws a
-chance (T9). The next edit of the pane or `close_forms` clears the flag. The same edit drops the
-Card pane's tick notice (`CardState::drop_tick_notice`). The Cells table
-(`CELLS_COLUMNS`): the name as a frameless button named `edit_property_heading` that opens the
-property form, the kind (`STATES_KIND` with a swatch per state, `NUMBER_KIND`, or `INTEGER_KIND`
-with `INTEGER_KIND_TOOLTIP`, D23), Starts as (a select named `starts_place` showing `starts_text`:
-`starts_all` per state and `BY_CHANCE`, or `A_VALUE` and `A_RANDOM_NUMBER`, the latter for Number
-only, since the lowering refuses a random whole number), and `changed_by` over the Become and Set
-lines of the cards that run each tick. By chance draws each row on a line of its own (state select,
-`WITH_CHANCE`, the number, × named `remove_row_name`), "+ Add row" named `add_row_name` (the first
-state no row draws), and `OTHERWISE` with its select. A new by-chance start draws the second state
-with an empty chance, otherwise the first. A Number start shows `STARTS_AT` or
-`RANDOM_NUMBER_BETWEEN` .. `RANDOM_NUMBER_AND` (0 and 1 to start). Each Starts as number
-(`start_number`, D111) is a `commit_field` named `starts_field_name(place, ...)` showing
+torus mark), `AGENT_WRAP_TOOLTIP` and `AGENT_WALLS_SENTENCE` in a world of agents, then the Time
+line: `ONE_TICK_IS`, the length field named `TICK_LENGTH_NAME` while a unit is set (0 or less
+becomes 1), and the unit select named `TICK_UNIT_NAME` with `tick_unit_choice` (None first, "one
+step (no unit)", which writes no `[time]`). An edit that gives the tick a new length or unit sets
+`PaneState::time_changed`, and while it holds the Time line is followed by `chances_per_tick_note`
+of `rates::chance_line_numbers`, read from the sheet each frame so that a card edit renumbers or
+removes the lines it names, and left out while no line draws a chance. The next edit of the
+pane or `close_forms` clears the flag. The same edit drops the Card pane's tick notice
+(`CardState::drop_tick_notice`). The Cells table (`CELLS_COLUMNS`): the name as a frameless button
+named `edit_property_heading` that opens the property form, the kind (`STATES_KIND` with a swatch
+per state, `NUMBER_KIND`, or `INTEGER_KIND` with `INTEGER_KIND_TOOLTIP`), Starts as (a select named
+`starts_place` showing `starts_text`: `starts_all` per state and `BY_CHANCE`, or `A_VALUE` and
+`A_RANDOM_NUMBER`, the latter for Number only, since the lowering refuses a random whole number),
+and `changed_by` over the Become and Set lines of the cards that run each tick. By chance draws each
+row on a line of its own (state select, `WITH_CHANCE`, the number, × named `remove_row_name`), "+
+Add row" named `add_row_name` (the first state no row draws), and `OTHERWISE` with its select. A new
+by-chance start draws the second state with an empty chance, otherwise the first. A Number start
+shows `STARTS_AT` or `RANDOM_NUMBER_BETWEEN` .. `RANDOM_NUMBER_AND` (0 and 1 to start). Each Starts
+as number (`start_number`) is a `commit_field` named `starts_field_name(place, ...)` showing
 `literal_words` (a percent as typed), with "Use a parameter" beside it opening `CHOOSE_A_PARAMETER`.
 A parameter chip replaces the field and reopens `Blank::picker_title` with the Number box. A row's
 empty field empties the chance, text that does not read keeps the old value with `TYPE_A_CHANCE` or
-`TYPE_ONE_NUMBER`, and a chance outside 0 to 1 `CHANCE_OUT_OF_RANGE` (D75). `start_edit` changes the
+`TYPE_ONE_NUMBER`, and a chance outside 0 to 1 `CHANCE_OUT_OF_RANGE`. `start_edit` changes the
 start as the builder holds it when the edit runs. "New parameter..." opens the New parameter dialog
 for that `StartTarget`, and Create runs `AddParameter` and the start's change as one edit, marked
 `starts_only` since only the start uses the parameter. Past the start it waits for Start again, as a
@@ -95,14 +97,14 @@ The property form (`PropertyForm`, under the table, one at a time): `NEW_PROPERT
 `state_color_name`, a name field named `state_name_field` and × named `remove_state_name`, then "+
 Add state". Two empty rows start a new property, in `STATE_COLORS` 0 and 1. Enter in a state name
 moves to the next row or adds one. While a row's colour is not picked by hand, its name sets
-`suggested_state_color` or the row's default (B16). An existing property's states count as picked.
+`suggested_state_color` or the row's default. An existing property's states count as picked.
 Done checks in the page's order (`check_form`) and runs `form_edit`: a new property is
 `AddProperty`, `AddState` per row and a start in the first state (or at 0 for a number). A changed
 kind runs `SetPropertyType` and starts afresh the same way, and otherwise removed states are
 `Delete`, kept ones `Rename` and `Recolor`, new rows `AddState`. "Delete property" (edit only) runs
 `Delete`. The form closes once its edit is kept.
 
-The other sections (S16b). Purpose is a `commit_area` named "Purpose" with `PURPOSE_PLACEHOLDER`,
+The other sections. Purpose is a `commit_area` named "Purpose" with `PURPOSE_PLACEHOLDER`,
 committing `SetPurpose` on focus loss. Parameters: a header ("Name", "Value") and per parameter two
 rows, the name as a `commit_field` named `sheet_parameter_name_field` (an empty or taken name puts
 the old name back, with `PARAMETER_NAME_MISSING` or `parameter_name_taken` in
@@ -116,36 +118,38 @@ field named `value_field_name` (a typed value outside the range widens it) and �
 `delete_parameter_name`, then `range_row`: Min and Max fields (`with_range_end`: Min above Max
 swaps, equal ends make Max one more, the value moves into the range) and Unit as a
 `suggestion_field` named `parameter_unit_name` with `UNIT_FIELD_PLACEHOLDER` and `unit_suggestions`
-(free text, D89). Each edit is one `SetParameter` keeping `step` and `means`. Every number field
-reads a percent. The trying line of S24 sits under its parameter. "+ Add parameter" opens the New
-parameter dialog with no `StartTarget` (1 in 0 to 10), and Create runs `AddParameter` alone.
-Measures: per States property a "Plot" box beside each state named `plot_state` of `state_label`
-("Status Alive" when another property shares the state name), adding a count named by the state
-(`add_count`, the property's name before it when the name is taken) or deleting the counts of that
-state, then `PLOTTED` with a `color_button` named `measure_color_name` (`Recolor`), `measure_words`
-(`count_measure`, `average_measure`, or the name) and × named `remove_measure_name`, then the
-measure form (`MeasureForm`: `NEW_MEASURE`, radios `COUNT_MEASURE` and `AVERAGE_MEASURE`, selects
-named `MEASURE_PROPERTY_NAME` and `MEASURE_STATE_NAME`, Done checked by `measure_edit` with the
-three messages, and an average reads `{ my = <property> }` and takes the next of `MEASURE_COLORS`).
-Colours: "Colour cells by" a select of every property (the rule's, else the first States property,
-else the first), `color_rule_edit` writing `by_state` or `shaded_rule` (blue from 0 to 1, or the
-previous shading's hue and ends), swatches under a States property, and `shading_ui` for a Number
-property: `SHADE` select of `SHADE_COLORS` over `ShadeHue::ALL`, a gradient of `ShadeHue::ends` in
-16 bands, and `SHADE_FROM` [`DARKEST_NAME`] `SHADE_DARK_TO` [`LIGHTEST_NAME`] `SHADE_LIGHT`, the
-ends left out read as 0 and 1, and a value equal to the other end refused with `SHADE_ENDS_EQUAL`
-(a darkest value above the lightest one is kept, and the lowering reverses the palette). A first
-property that is a Number, with no States property and no rule, gets a shaded rule in `form_edit`.
-Buttons: each with its name, `button_does` (`start_again_for`, `run_once("cell")`), `EDIT` named
-`edit_button_name` and × named `delete_button_name`, the button form (`ButtonForm`, under the button
-it edits or at the end: `NEW_BUTTON` or `edit_button_name`, Name named `BUTTON_NAME_FIELD`,
-`BUTTON_DOES` with radios `START_AGAIN` beside a select named `START_AGAIN_FOR` and `run_once`,
-checked by `check_button_form`), and `run_once_card` read-only under a Run once button (the card's
-heading, each line's number and sentence from `card_lines`, or `BUTTON_CARD_EMPTY`). `button_edit`
-adds with `AddButton` and `SetButtonSteps` (one property as `properties`, every property as `thing =
+(free text). Each edit is one `SetParameter` keeping `step` and `means`. Every number field
+reads a percent. The trying line of the Parameters tab's preview mode sits under its parameter. "+
+Add parameter" opens the New parameter dialog with no `StartTarget` (1 in 0 to 10), and Create runs
+`AddParameter` alone. Measures: per States property one row per state (egui wraps no nested
+group, and a row of groups ran past a narrow pane) with a "Plot" box beside the state named
+`plot_state` of `state_label` ("Status Alive" when another property shares the state name), adding a
+count named by the state (`add_count`, the property's name before it when the name is taken) or
+deleting the counts of that state, then `PLOTTED` with a `color_button` named `measure_color_name`
+(`Recolor`), `measure_words` (`count_measure`, `average_measure`, or the name) and × named
+`remove_measure_name`, then the measure form (`MeasureForm`: `NEW_MEASURE`, radios `COUNT_MEASURE`
+and `AVERAGE_MEASURE`, selects named `MEASURE_PROPERTY_NAME` and `MEASURE_STATE_NAME`, Done checked
+by `measure_edit` with the three messages, and an average reads `{ my = <property> }` and takes the
+next of `MEASURE_COLORS`). Colours: "Colour cells by" a select of every property (the rule's, else
+the first States property, else the first), `color_rule_edit` writing `by_state` or `shaded_rule`
+(blue from 0 to 1, or the previous shading's hue and ends), swatches under a States property, and
+`shading_ui` for a Number property: `SHADE` select of `SHADE_COLORS` over `ShadeHue::ALL`, a
+gradient of `ShadeHue::ends` in 16 bands, and `SHADE_FROM` [`DARKEST_NAME`] `SHADE_DARK_TO`
+[`LIGHTEST_NAME`] `SHADE_LIGHT`, the ends left out read as 0 and 1, and a value equal to the other
+end refused with `SHADE_ENDS_EQUAL` (a darkest value above the lightest one is kept, and the
+lowering reverses the palette). A first property that is a Number, with no States property and no
+rule, gets a shaded rule in `form_edit`. Buttons: each with its name, `button_does`
+(`start_again_for`, `run_once("cell")`), `EDIT` named `edit_button_name` and × named
+`delete_button_name`, the button form (`ButtonForm`, under the button it edits or at the end:
+`NEW_BUTTON` or `edit_button_name`, Name named `BUTTON_NAME_FIELD`, `BUTTON_DOES` with radios
+`START_AGAIN` beside a select named `START_AGAIN_FOR` and `run_once`, checked by
+`check_button_form`), and `run_once_card` read-only under a Run once button (the card's heading,
+each line's number and sentence from `card_lines`, or `BUTTON_CARD_EMPTY`). `button_edit` adds with
+`AddButton` and `SetButtonSteps` (one property as `properties`, every property as `thing =
 "cells"`), renames and sets steps, and deletes and adds again a button whose kind changes. A refusal
 shows as the form's message (`FormKind` on `Pending`).
 
-**A world of agents** (S26). The pane works on a *thing*, `cells`, `ground` or the agent kind's id:
+**A world of agents**. The pane works on a *thing*, `cells`, `ground` or the agent kind's id:
 `properties_of`, `find_property`, `all_properties` (also behind `starts_of` and
 `without_starts_or_words` in `mod.rs`, so a start of any thing waits for Start again) and
 `measured_thing` (the cells, or the first kind of agent, which Measures and Buttons act on).
@@ -153,7 +157,7 @@ shows as the form's message (`FormKind` on `Pending`).
 named `add_property_name(kind)` under the agents and `ADD_GROUND_PROPERTY_NAME` under the ground.
 `PropertyForm::thing` keeps the form under its own table. `form_kinds` offers States and Number,
 Integer for cells and agents (the ground lowers only numbers and states), and for agents Yes or no
-and Arrow (S28, `ARROW_KIND_DESCRIPTION`), then Position or Heading while the agents hold none, and
+and Arrow (`ARROW_KIND_DESCRIPTION`), then Position or Heading while the agents hold none, and
 always the property's own kind. A new property starts in its first state, at 0, at no
 (`Bool(false)`), anywhere at random (a Position), in a random direction of length 1 (an Arrow, a
 start no control changes) or with no start (a Heading). `kind_words` and `starts_text(document,
@@ -183,7 +187,7 @@ States property `blocked_row` (`blocked_lead`, a box per state named `blocked_st
 `SetBlocked`). Events: `EVENTS_EMPTY`, each name a `commit_field` named `event_name_name` with the
 two checks, × named `delete_event_name`, and `EventForm` (`NEW_EVENT`, `EVENT_NAME_FIELD`, Done or
 Enter). Measures count agents (`COUNT_AGENTS_MEASURE`, `COUNT_AGENTS_LEAD`,
-`count_agents_measure`) and average a Number, Integer or Position. Colours draw `colours_of` for
+`count_agents_measure`) and average a Number, Integer or Position. Colours draw `colors_of` for
 the cells (`COLOR_CELLS_BY`), or for the agents (`COLOR_AGENTS_BY`) and the ground
 (`COLOR_GROUND_BY`, once it has a property), offering States, Number, Integer and Heading
 (`ByHeading` with `BY_HEADING_NOTE`). The select's choice compares with the rule's own property, so
@@ -214,7 +218,7 @@ modal of the app (egui memory's `top_modal_layer`, from the previous frame) and 
 field (`text_edit_focused`), anywhere in the Editor tab. A focused field keeps its own undo.
 `Pending::one` counts `SetPurpose` and `SetSheetName` as `starts_only`, so a name or a purpose
 leaves the running world alone. The Charts tab shows `PLOT_EMPTY` while `runs_editor_sheet` and the
-sheet holds no measure (D87, D107). The Card pane shows `BUTTON_CARD_EMPTY` under a card that runs
+sheet holds no measure. The Card pane shows `BUTTON_CARD_EMPTY` under a card that runs
 once with no line.
 
 `widgets.rs` adds `commit_area` and `suggestion_field` beside `commit_field`, all three over
@@ -225,7 +229,7 @@ the last frame), since a click on a suggestion takes the focus from the field fi
 `sheet_ui` and `sheet_pane` take the `SheetTrial`s (parameter id and tried value) that `editor_ui`
 reads through `sheet_trials` (`params::sheet_number`, which Keep uses too) while the sheet's preview
 runs, and a wrapped weak label under the tried parameter reads `sheet_trying_value` ("The world is
-trying 0.5. The model keeps 0.3.", D88), wrapping at the clip rectangle's right edge, since the
+trying 0.5. The model keeps 0.3."), wrapping at the clip rectangle's right edge, since the
 pane's content can be wider than the pane. `SheetEditor::keep_value` runs one
 `SheetEdit::SetParameter` for the Parameters tab's Keep (range widened), one step of Undo, and
 refreshes the sheet with its load number kept, so the preview starts nothing again.
@@ -233,7 +237,7 @@ refreshes the sheet with its load number kept, so the preview starts nothing aga
 state chip as `starts_all` of the state's name ("All Tree"), a `RandomNumber` phrase as
 `A_RANDOM_NUMBER`, and anything else as `A_VALUE`. `starts.state` belongs to `OnGround` alone. A
 painted, anywhere or on-ground start, which no grid sheet holds, reads as an empty cell, and a
-`set_everywhere` step, which no grid control writes (D98), as the pane's own "Set everywhere".
+`set_everywhere` step, which no grid control writes, as the pane's own "Set everywhere".
 
 `widgets.rs` holds what both panes share: `chip_ui`, `blank_ui` and `blank_shapes` (moved from the
 card pane), `set_name` (the accessible name of a `TextEdit` or a `ComboBox`, set after the widget),
@@ -254,11 +258,12 @@ swatch opening `CHOOSE_A_COLOR` with the twelve `PALETTE_COLORS` named by `COLOR
 negative Min follow Default until typed. `parameter(taken)` runs the checks of the wording table in
 order, reading every field with a percent. The modal (`henad_new_parameter_modal`) is a `Dialog`
 named `NEW_PARAMETER_HEADING`. A rate's starting values and its "per [unit]" Unit wait for the first
-rate blank (S19).
+rate blank.
 
 `card_pane.rs` and `picker.rs` draw and edit the cards, which `agents/henad-app-card.md` describes.
 
-`help.rs` holds `Help` (`Section(SheetSection)` or `Lines`) and `help_button`: a borderless
+`help.rs` holds `Help` (`Section(SheetSection)`, `Lines`, and `AgentWorld` and `AgentLines` with the
+words of a world of agents) and `help_button`: a borderless
 `MDI_HELP_CIRCLE_OUTLINE` button named `SheetSection::help_name` or `HELP_LINES_NAME` ("Help:
 World", "Help: lines") toggling a `Popup` (320 points wide, closed by a click outside, Escape or
 Close help) that holds the heading (`LINES_HELP_HEADING` for the lines), the text, "Example:" with
@@ -267,7 +272,7 @@ apart from the button's name. Its id derives from the button's, so two "Help: li
 two popovers. `sheet_ui` makes each pane a `Group` named "Sheet" or "Card" (`pane_group`), so
 "region" never reaches the tree.
 
-**Accessible names and the words rule** (D57, D60, D96, D112). Every chip is a button named by its
+**Accessible names and the words rule**. Every chip is a button named by its
 text, blanks and selects by what they want and where ("Line 2: choose the old state", "Line 2:
 comparison"), every name holds its visible words, and a control with no words of its own (the help
 button) is named by what it does. Sheet mode never shows a word of `FORBIDDEN_WORDS`, in the Editor
@@ -275,28 +280,30 @@ tab or in what a sheet puts in the world tabs (names, measures, buttons, the tic
 controls that open or create a node graph (New node graph) and the world tabs' own controls (Seed,
 Build) are exempt.
 
-The Editor opens a file by the `kind` in its header (`open_text`, through `model_text::read_header`,
-D55): `sheet` through `ParsedSheet::parse` alone into `EditorPanel::load_sheet`, so a sheet with
-checker errors opens and shows them, `graph` through `GraphFile::parse` onto the canvas, and any
-other text in the code view. A sheet or a graph that does not read opens in the code view. For a
-sheet the reader's problem is set as `ApplyOutcome::Unread` ("Model file has problems. Fix them,
-then press Apply."), so the list under the code names it at once without reading as a refused Apply.
-`load_sheet` clears the outcome, the applied source and the preview, as `load_graph` does. The list
-under the panes (`sheet_outcome_ui`) shows the preview's state (`preview_ui` with `plays` false, so
-a running preview reads `preview_running_text`'s "Preview at 256 × 256 cells starts at tick 0. Press
-Play to run it, or Apply to run the model at its own size."), the last Apply's outcome with any
-problem the check does not list, then every diagnostic of the report the card does not draw and
-every lowering problem the report lacks, errors in the theme's error colour and warnings in its warn
-colour, as `<line>:<column> <message>`. A problem of a line the card shows sits under it on the
-card. `save_name` suggests `<sheet id>.toml` for a sheet with no file name, errors or not. Apply is
-unchanged: `ModelFile::parse(...).and_then(|file| file.entry())` installs the lowered graph's entry,
-whose source records the sheet's canonical text as its author text, and `edit_model` reopens an
-applied sheet's entry as that sheet unless the Editor applied it. A note edit leaves the source
-equal (D51): Apply reads `Unchanged`, rebuilds nothing, and replaces the set's entry through
-`install_models` when `same_author` fails, so a sweep started next records the new text
-(`a_note_edit_does_not_reinstall_the_model`).
+The Editor opens a file by the `kind` in its header (`open_text`, through
+`model_text::read_header`): `sheet` through `ParsedSheet::parse` alone into
+`EditorPanel::load_sheet`, so a sheet with checker errors opens and shows them, `graph` through
+`GraphFile::parse` onto the canvas, and any other text in the code view. A sheet or a graph that
+does not read opens in the code view. For a sheet the reader's problem is set as
+`ApplyOutcome::Unread` ("Model file has problems. Fix them, then press Apply."), so the list under
+the code names it at once without reading as a refused Apply. `load_sheet` clears the outcome, the
+applied source and the preview, as `load_graph` does. The list under the panes (`sheet_outcome_ui`)
+shows the preview's state (`preview_ui` with `plays` false, so a running preview reads
+`preview_running_text`'s "Preview at 256 × 256 cells starts at tick 0. Press Play to run it, or
+Apply to run the model at its own size."), the last Apply's outcome with any problem the check does
+not list, then every diagnostic of the report the card does not draw and every lowering problem the
+report lacks, errors in the theme's error colour and warnings in its warn colour, as the message
+alone. Its line and column point into the sheet's text, which sheet mode never shows. A waiting
+preview reads the sheet's `PREVIEW_WAITS`, which names Offload. A problem of a line the card shows
+sits under it on the card. `save_name` suggests `<sheet id>.toml` for a sheet with no file name,
+errors or not. Apply is unchanged: `ModelFile::parse(...).and_then(|file| file.entry())` installs
+the lowered graph's entry, whose source records the sheet's canonical text as its author text, and
+`edit_model` reopens an applied sheet's entry as that sheet unless the Editor applied it. A note
+edit leaves the source equal: Apply reads `Unchanged`, rebuilds nothing, and replaces the set's
+entry through `install_models` when `same_author` fails, so a sweep started next records the new
+text (`a_note_edit_does_not_reinstall_the_model`).
 
-**The preview** (D52, D73). A sheet's preview takes the graph editor's path (`preview.rs`,
+**The preview**. A sheet's preview takes the graph editor's path (`preview.rs`,
 `henad-app-editor.md`) with one difference: `EditorModel::preview_plays` is false, so
 `load_preview` builds it paused at tick 0 with its start drawn, and Playback's Play runs it.
 Playback's `preview_line` adds `PREVIEW_WAITS_FOR_PLAY` ("Press Play to run the preview.") while a
@@ -312,11 +319,11 @@ selected model's, and Build builds it as for any model, at the Seed field's seed
 `AppState::runs_editor_sheet` holds for the sheet's preview or the source the Editor applied, and
 Playback's `tick_counter` then reads `henad_graph::sheet::sentence::tick_counter` ("Tick 4 (a tick
 is one step of time)", or "Tick 4 (4 days)" through `time_axis::elapsed_text` once the entry has a
-time scale). No autosave and no Facilitator panel (D61).
+time scale). No autosave and no Facilitator panel.
 
-**The New model dialog** (`new_model.rs`, D57, D71). `NewModelDialog` sits in
+**The New model dialog** (`new_model.rs`). `NewModelDialog` sits in
 `EditorPanel::new_model` while open: the `StarterChoice`s (`starter_choices`: every sheet starter,
-grid and agent alike (D64, D67), with its file name, the model name read from it, and its
+grid and agent alike, with its file name, the model name read from it, and its
 description from `STARTER_CHOICES` by that name), the chosen index, the Name text, `name_typed` and
 `made_of`. `choose` sets the index and, until the
 author types in Name, the name to the starter's. "Untitled model" is the default name of Blank, the
@@ -329,8 +336,8 @@ label, Cancel and Create (`filled_button`, blue 700). Enter in Name creates, as 
 Cancel, Escape or a click on the backdrop closes it. `create_model(app, file_name, name)` reads the
 starter, runs `SheetEdit::SetSheetName` when the name differs (an empty name is `UNTITLED_MODEL`,
 and a refused one keeps the starter's name with the reason as the file status), loads the sheet with
-no file name and brings the Editor to the front. The world question of the final dialog shows only
-under Blank, and Blank is offered first (S16a). `starter_choices` puts Blank first (`file_name`
+no file name and brings the Editor to the front. The world question of the dialog shows only
+under Blank, and Blank is offered first. `starter_choices` puts Blank first (`file_name`
 `None`, "Untitled model" as its name), and the world question (`WORLD_QUESTION`, `CELLS_ON_A_GRID`
 or `AGENTS_IN_OPEN_SPACE` into `made_of`) shows under Blank while it is chosen. `create_blank_model`
 loads `blank_model(name)`: 100 by 100 cells that wrap, the id minted from the name (or
@@ -363,8 +370,8 @@ line), `a_result_used_above_its_line_is_red_with_its_tooltip`,
 `every_line_of_the_life_starter_reads_its_sentence_by_accessible_name` (the four lines, the pane and
 list groups, chips, selects and help buttons), `a_help_popover_opens_and_closes`,
 `the_sheet_editor_never_shows_a_forbidden_word` (every starter, every help popover, a skipped and a
-red line, the New model dialog, D96's control exempt),
-`every_accessible_name_holds_its_visible_words` (D112, each control's name in the tree and holding
+red line, the New model dialog, the control that opens a node graph exempt),
+`every_accessible_name_holds_its_visible_words` (each control's name in the tree and holding
 its words, selects aside), `the_world_tabs_show_no_forbidden_word_from_a_sheet`, and over a
 `Harness` that draws the File menu, the Editor tab, the dialog and the About modal with AccessKit
 on:
@@ -391,7 +398,7 @@ value and random number), `editing_a_property_renames_recolors_and_changes_its_k
 `the_property_form_checks_in_the_order_of_the_page`,
 `the_new_parameter_dialog_starts_from_the_values_of_the_page` and
 `the_edited_sections_show_no_forbidden_word_in_any_state` (at least 25 states, with the
-label-in-name check of D112), and from S16b
+label-in-name check), and
 `a_blank_model_builds_the_life_sheet_and_undo_walks_back_to_blank` (New model named Game of Life,
 1024 by 1024, Status with Alive picked Green, Initial density, Plot Alive, colour by Status, the
 starter's purpose, Randomise and Clear, then `align_with_starter` against `without_card_lines` of
@@ -403,7 +410,8 @@ then the ants' agent and ground starts),
 `a_parameter_edit_after_play_restarts_at_tick_zero_with_the_notice` (a purpose, its Undo and its
 Redo do not),
 `measures_count_states_average_numbers_and_follow_their_state_colour` (the average published by the
-preview), `a_number_property_shades_the_cells_in_a_hue_between_two_values` (equal ends refused in
+preview), `every_plot_box_of_three_states_stays_in_the_sheet_pane_and_takes_a_click` (a 450-point
+Editor), `a_number_property_shades_the_cells_in_a_hue_between_two_values` (equal ends refused in
 the field, reversed ends kept),
 `buttons_start_again_or_run_once_and_check_their_names`, `the_model_name_renames_from_the_toolbar`,
 `the_charts_tab_says_how_to_plot_while_the_sheet_has_no_measure`,
@@ -414,7 +422,7 @@ for a long sheet), `align_with_starter` (keys of drawing lines and starts, a par
 (card lines, the cards that run each tick and `next_line`) sit in `src/tests/support.rs`. Keep
 them. The alignment covers the properties of every thing and copies no parameter's type. The
 random walk's rebuild, which has no card lines, sets Steps per tick to Number in the expected
-document. `src/tests/sheet_agents.rs` (S26), on the helpers
+document. `src/tests/sheet_agents.rs`, on the helpers
 `sheet_pane.rs` shares as `pub(super)`, holds
 `a_blank_agent_model_builds_the_random_walk_sheet_by_accessible_names` (New model, Agents in open
 space, 1000 by 1000, Walker, 10000, two parameters, Average of Position, Colour agents by Heading,

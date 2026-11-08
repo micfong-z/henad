@@ -15,7 +15,7 @@ state), `SetPropertyType` (clears every reference to the property and its states
 drops a colour rule over it, empties its states, start and marks, keeps its place and id, and
 colours its thing by state again when it becomes a States property of a thing with no colour rule;
 the same type changes nothing), `AddState` (the next of `STATE_COLORS` after the property's states,
-the final editor's dark grey, blue, orange, purple and on, and `PALETTE_COLORS` holds the same
+dark grey, blue, orange, purple and on, and `PALETTE_COLORS` holds the same
 twelve in the order of `sentence::COLOR_NAMES`), `AddParameter`, `SetParameter` (min, max, default,
 step, unit and means as one edit), `AddMeasure` (a count in a state takes the state's colour, else
 the next of `MEASURE_COLORS`), `AddEvent`, `AddButton` (start again over a kind of thing, or run
@@ -45,11 +45,13 @@ checker's reserved words, `l<digits>`, the IR's parameter ids, `tick_length`, `h
 mints against buttons and cards together. `ChangeId` checks the grammar, the length, the reservation
 and the namespace, then rewrites every reference; a card of the button's id that the button runs and
 an agent kind's tick card follow. A suffixed id that is reserved (`henad_2`) is refused like a
-reserved base. Lines take `l<next_line>`, and `next_line` grows past it, so a deleted number
+reserved base. `is_reserved_name(name, space)` lets a form refuse such a name first, in the words of
+`sentence::name_reserved` ("Henad uses the name Count itself. Choose another name."). Lines take `l<next_line>`, and `next_line` grows past it, so a deleted number
 never comes back. After a command, every line it touched that draws gets a key no other draw holds
 (a template's own key is kept when free), and every start it set that draws (by chance, anywhere, a
-value that draws, never on the ground) or shares its key gets one; a line keeps its key while an
-edit takes its draw away.
+value that draws, on the ground when its state is painted on two or more cells, `starts_draws`) or
+shares its key gets one; a start on the ground counts as set when the ground's start is. A line
+keeps its key while an edit takes its draw away (`a_start_on_two_painted_cells_takes_a_key`).
 
 References (`references.rs`): `change_references(document, target, Rename(id) | Clear)` walks every
 slot, list, item, branch, summary, row, line field, formula (`rewrite_formula`, the formula parser's
@@ -62,7 +64,7 @@ shape, a blocked state, a colour rule over a deleted property, a button step nam
 property or card); a start's `otherwise`, `base` or state chip `value` falls back to the first
 remaining state of the property, and an `on_ground` start's `state` to the first remaining state of
 its ground property. A deleted property clears its states' references first. A deleted line's
-result chips turn blank (D39: the user is skipped, never refused). Most blanks in a card line are
+result chips turn blank: the user is skipped, never refused. Most blanks in a card line are
 skips, but a blank outside the card lines (a start's chance or value, `kept_per_tick`, an
 `on_ground` start's property) and a few agent line fields (a Record's event, some agent slots) are
 checker errors after a delete. A deleted When or Repeat leaves its lines one level up in its place,
@@ -77,7 +79,7 @@ the last into a phrase. The lowering's `LineMap` paths use the same grammar, and
 holds them together. `SetSlot` with a filled value at one past the last item or row appends, and
 a blank removes an item or a branch. A line whose tables would nest past `MAX_NESTING` (counted
 generously from the line table's depth of 4) is refused, and so is a card past `MAX_LINES_PER_CARD`.
-Moves follow the final editor's outline (`CHANGES-A.md` F4): the first line of a block moves up out
+Moves follow the outline: the first line of a block moves up out
 of it and the last moves down out of it, a line that is not a block beside a block moves into it (at
 its end from below, at its start from above), and a block swaps with the line or block beside it; a
 move past the card's top or bottom is `Invalid`. `AddLine` inside a When gives a Become or Set with
@@ -93,14 +95,14 @@ the change's condition is neither blank nor always.
 `Property` clears states of another property, `Test` between a single value and a list keeps the
 first value or makes a list of one.
 
-Rates (D83): a rate phrase put in by `AddLine`, `SetSlot` or `ChooseCondition` with no unit takes
+Rates: a rate phrase put in by `AddLine`, `SetSlot` or `ChooseCondition` with no unit takes
 the tick's unit and `rate_unit_from_tick = true` while `[time]` exists. A parameter put into `rate`
 whose rate has no unit or a marked one gives the rate the first "per <unit>" its Unit text names and
 clears the mark, and with no `[time]` sets one tick to 1 of that unit. `unit_in_text` reads the Unit
-as the final editor's `paramPerUnit` does: case aside, spaces after "per", a plural "s", a word
+case aside, spaces after "per", a plural "s", a word
 boundary at both ends. `LineField::RateUnit` by hand clears the mark, sets one tick when `[time]` is
 absent, and gives a parameter with no unit in the rate's `rate` slot `unit_suggestion` of the unit.
-`ChangeToRate` and `ChangeToChance` (T9) turn the chance of a Chance line or of a change's condition
+`ChangeToRate` and `ChangeToChance` turn the chance of a Chance line or of a change's condition
 into a rate and back, keeping the chance per tick through `sheet::rates` (`rate_from_chance` with
 the tick's length, `chance_from_rate` with `tick_in` of the rate's unit). Each refuses a sheet with
 no `[time]`, a value that is no typed number (a parameter or a result), a chance outside 0 to below
@@ -109,7 +111,7 @@ the mark, both keep `tries` and the line's key, and the number is written as the
 that reads back as the same `f32` (`rates::shortest_f32`), so 1 - e^(-0.1) turns into 0.1 per day
 and back into the same chance.
 
-Names (`names.rs`, D85): `automatic_name(document, line)` follows the wording table's result names
+Names (`names.rs`): `automatic_name(document, line)` follows the wording table's result names
 (Count, Total or average as a cells Look around with one total or average summary, chance and rate
 with `happens_base` of a parameter, of the first parameter in a named Calculate's formula, of a
 typed number or percent, or of another value's words, Compare and Calculate through
@@ -119,7 +121,7 @@ when it had no name or equalled its old automatic name (a " N" suffix included),
 name the edit set follows when it is empty or its new automatic name. Names typed by hand are taken
 first, then the followers in display order take the base, " 2", " 3", unique case aside.
 `RenameResult` refuses a name another result holds.
-Summary names (S28): `automatic_summary_name` names a summary of a look at agents "count", "[kind]
+Summary names: `automatic_summary_name` names a summary of a look at agents "count", "[kind]
 [property]" for their property ("average velocity", the name's ordinary capital dropped), "centre"
 for the average offset to them, "push" for the total offset away from them (`CENTER_SUMMARY`,
 `PUSH_SUMMARY`), "[kind] [relation words]" otherwise, and its kind alone while its value is empty.

@@ -28,7 +28,7 @@ whose builds and demand share it and which boxes the engine itself, as a grid ru
 same, through `register_gpu_agent_model`, `ModelEntry::from_agent_spec` and `GpuAgentState<M>`.
 Behind `runtime-wgsl`, `EntryDeclarations` (`entry/declarations.rs`, with `new`) is public, as are
 `ModelEntry::from_gpu_grid_spec` and `from_gpu_agent_spec`, which forward to those two.
-**Live parameters on the GPU** (L1). `from_grid_spec` and `from_agent_spec` pass each declared
+**Live parameters on the GPU**. `from_grid_spec` and `from_agent_spec` pass each declared
 parameter's `is_live` to the engine through the crate-private `with_live_params(Vec<bool>)`, and a
 model type's engine (`GpuGridState`, `GpuAgentState`) gets none, so every parameter of a
 registered GPU model stays reload-only. `SimState::set_param` rejects a reload-only index and an

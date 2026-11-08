@@ -1,7 +1,7 @@
 [package]
 name = "henad-graph"
 version.workspace = true
-description = "Graph models of Henad: the node graph a model file holds, read and written in one canonical form."
+description = "Graph models and sheets of Henad: node graphs and author documents as model files, checked, lowered and compiled to WGSL."
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true

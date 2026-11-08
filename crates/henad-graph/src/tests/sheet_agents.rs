@@ -342,6 +342,50 @@ fn a_chance_once_for_each_agent_follows_the_power_rule_on_the_host() {
     assert_eq!(host_hits(MOBILE, 1001, 0.0, 3), 0, "a chance of 0 for each of 1000");
 }
 
+/// Returns a sheet of 3 walkers whose card holds the line tables `first` as `l1` and `second` as `l2`, over a Number
+/// Level starting at 0.
+fn levels_with(first: &str, second: &str) -> String {
+    format!(
+        "format = \"henad-model\"\nformat_version = 1\nkind = \"sheet\"\n\n[sheet]\nversion = 1\nid = \"levels\"\n\
+         name = \"Levels\"\nnext_line = 3\n\n[world]\nmade_of = \"agents\"\nwidth = 10\nheight = 10\nedges = \"wrap\"\n\n\
+         [[agents]]\nid = \"walker\"\nname = \"Walker\"\ncount = 3\nmax_count = 3\n\n[[agents.property]]\n\
+         id = \"position\"\nname = \"Position\"\ntype = \"position\"\n\n[agents.property.starts_as]\nrule = \"anywhere\"\n\
+         key = 11\n\n[[agents.property]]\nid = \"level\"\nname = \"Level\"\ntype = \"number\"\n\n\
+         [agents.property.starts_as]\nrule = \"value\"\nvalue = 0\n\n[[card]]\nid = \"walker_tick\"\nevery = \"walker\"\n\
+         runs = \"each_tick\"\nlines = [\"l1\", \"l2\"]\n\n[card.line.l1]\n{first}\n\n[card.line.l2]\n{second}\n"
+    )
+}
+
+/// A Keep between holds a property inside its limits after every Set of the property, above or below it in the card.
+#[test]
+fn a_keep_between_holds_the_value_after_every_set() {
+    let keep = "kind = \"keep_between\"\nproperty = \"level\"\nminimum = 0\nmaximum = 1";
+    let set = "kind = \"set\"\nproperty = \"level\"\nvalue = 5\ncondition = { kind = \"always\" }";
+    for text in [levels_with(keep, set), levels_with(set, keep)] {
+        let file = lowered(&text);
+        let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+        let world = HostWorld::Agents {
+            count: 3,
+            width: 10.0,
+            height: 10.0,
+        };
+        let mut lanes = evaluator.init(world, &[], Some(7)).expect("the init runs");
+        evaluator
+            .run_pass(
+                "tick_walker_tick",
+                &mut lanes,
+                &[],
+                &RunContext::tick(Some(7), 0),
+                &mut 0,
+            )
+            .expect("a tick runs");
+        let level = lanes.column("level").expect("the level lane");
+        for index in 0..3 {
+            assert_eq!(level.get(index), Some(HostValue::F32(1.0)), "{text}");
+        }
+    }
+}
+
 /// A chance of 1 once for each of no infected person never holds, on the host and on the device. With no guard the
 /// power `0^0` is not 1 on every device.
 #[test]

@@ -173,7 +173,7 @@ pub(crate) enum TrialChoice {
 }
 
 /// Draws the parameters of the Editor's preview, a change of each tried in the preview, then the buttons of its
-/// actions (D54, D88).
+/// actions.
 ///
 /// A size is left out, since the preview sets its own, and so is a hidden parameter. A tried value shows the value the
 /// model keeps under its slider, with Reset, and with Keep while the Editor holds the document the preview runs. The
@@ -714,6 +714,18 @@ fn notice(ui: &mut egui::Ui, app: &AppState, descriptors: &[ParamDescriptor], wi
     });
 }
 
+/// Returns `reasons` joined as sentences, without the closing full stop.
+///
+/// A reason may close with its own full stop, as a sheet's reasons in the model's words do, and the stop is not
+/// doubled.
+fn sentences(reasons: &[String]) -> String {
+    reasons
+        .iter()
+        .map(|reason| reason.trim_end_matches('.'))
+        .collect::<Vec<_>>()
+        .join(". ")
+}
+
 /// Banner on the state of the parameters, as [`notice_content`] returns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParamsNotice {
@@ -749,7 +761,7 @@ pub(crate) fn notice_content(app: &AppState, pending_count: usize, shortfalls: &
             MDI_ALERT,
             ParamsNoticeTone::Error,
             "Too large for this device",
-            format!("{}. Reduce the size parameters to build.", shortfalls.join(". ")),
+            format!("{}. Reduce the size parameters to build.", sentences(shortfalls)),
         );
     }
     if !app.has_simulation() {

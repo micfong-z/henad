@@ -1,9 +1,9 @@
 //! Rates on the device: the known-answer gates of a sheet with rates, run by the GPU engine.
 //!
 //! The SIR starter states its changes as rates per day, so its epidemic curve in days converges as the tick halves,
-//! while round 1's chance SIR at fixed chances per tick does not. The SIRD sheet,
-//! `tests/fixtures/sheets/sird.toml`, leaves Infected at two rates of 0.05 per day each. Its two lines compete, and half
-//! of the removed cells are Dead at any tick length, where the hand-lowered `lowered/rates/sird_higher_wins.toml`
+//! while the chance SIR of `tests/fixtures/lowered/round1/sir.toml` at fixed chances per tick does not. The SIRD sheet,
+//! `tests/fixtures/sheets/sird.toml`, leaves Infected at two rates of 0.05 per day each. Its two lines compete, and
+//! half of the removed cells are Dead at any tick length, where the hand-lowered `lowered/rates/sird_higher_wins.toml`
 //! lets the higher line win and gives 0.4134 at a tick of 7 days.
 
 use henad_compute::entry::ModelEntry;
@@ -163,6 +163,39 @@ fn the_sird_sheet_splits_its_removed_cells_by_its_rates() {
             "seed {seed}: {contrast} of the removed are Dead"
         );
     }
+}
+
+/// A recovery rate of 2e-8 per day, whose `1 - e^(-h)` in `f32` is exactly 0, recovers its share of every cell
+/// infected at the start on 2048 by 2048 cells over 600 one-day ticks: about 50 cells, within five standard errors of
+/// the binomial count, where a chance resolved to 2^-24 recovers none.
+#[test]
+fn a_rate_below_the_resolution_of_a_float_draw_recovers_its_share() {
+    let Some(ctx) = device("a_rate_below_the_resolution_of_a_float_draw_recovers_its_share") else {
+        return;
+    };
+    let (side, ticks, rate) = (2048u32, 600u32, 2e-8f64);
+    let entry = entry_of(starter_text("sir.toml"));
+    let params = device_params(
+        &entry,
+        side,
+        &[
+            ("infection_rate", 0.0),
+            ("recovery_rate", rate as f32),
+            ("initial_infected", 1.0),
+        ],
+    );
+    let mut state = build_gpu(&entry, &params, Some(3), &ctx);
+    step(&ctx, &mut *state, ticks);
+    snapshot(&ctx, &mut *state);
+    let recovered = stat(&state.stats(), "Recovered");
+    let trials = f64::from(side * side);
+    let chance = 1.0 - (1.0 - rate).powf(f64::from(ticks));
+    let expected = trials * chance;
+    let error = (trials * chance * (1.0 - chance)).sqrt();
+    assert!(
+        (recovered - expected).abs() <= 5.0 * error,
+        "{recovered} cells recovered, {expected} expected"
+    );
 }
 
 /// Two runs of the rates SIR at one seed and a tick of half a day write identical statistics every tick.

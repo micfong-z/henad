@@ -29,11 +29,11 @@ pub(super) struct Fold {
     pub(super) node: NodeId,
     /// Read of each property of the neighbour, by property id.
     pub(super) reads: HashMap<String, Operand>,
-    /// What the fold walks.
+    /// Things the fold walks over.
     pub(super) kind: FoldKind,
 }
 
-/// What a fold walks, and so how `their` reads the neighbour.
+/// Things a fold walks over. They decide how `their` reads the neighbour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FoldKind {
     /// The cells of a grid, whose inner output `cell` names the neighbour's lanes.
@@ -60,7 +60,7 @@ fn stencil(around: Option<Around>) -> Result<(bool, bool), String> {
 }
 
 /// Returns the number of cells that `around` looks at, `None` for agents within a distance.
-pub(super) fn neighbour_count(around: Around) -> Option<u32> {
+pub(super) fn neighbor_count(around: Around) -> Option<u32> {
     match around {
         Around::Cells8 => Some(8),
         Around::Cells4 => Some(4),

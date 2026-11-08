@@ -6,8 +6,8 @@
 //! structure it changes (ids, names, the line a slot path reaches) and leaves the meaning to [`super::check`].
 //!
 //! - **Ids.** A new item's id is minted once from its name by [`mint_id`]: lower case, each run of other characters
-//!   as one `_`, a leading `x` before a digit, `_2`, `_3` and so on against a clash, and a reserved id refused. A rename
-//!   changes the name alone, and [`SheetEdit::ChangeId`] rewrites every reference. A card that runs each tick is
+//!   as one `_`, a leading `x` before a digit, `_2`, `_3` and so on against a clash, and a reserved id refused. A
+//!   rename changes the name alone, and [`SheetEdit::ChangeId`] rewrites every reference. A card that runs each tick is
 //!   `cell_tick` or `<agent kind id>_tick`, and the card of a button that runs once takes the button's id.
 //! - **Lines.** A new line takes the id `l<next_line>`, and `next_line` grows past it. A deleted line's number is never
 //!   minted again. A line that draws takes a fresh key, distinct from every key of the sheet, and keeps it for its
@@ -170,6 +170,20 @@ impl IdSpace {
     }
 }
 
+/// Returns whether a new item named `name` in `space` would take a reserved id, as "Count" and "Grid width" would in
+/// [`IdSpace::Item`].
+///
+/// ```
+/// use henad_graph::sheet::edit::{IdSpace, is_reserved_name};
+///
+/// assert!(is_reserved_name("Count", IdSpace::Item));
+/// assert!(is_reserved_name("Grid width", IdSpace::Item));
+/// assert!(!is_reserved_name("Infection rate", IdSpace::Item));
+/// ```
+pub fn is_reserved_name(name: &str, space: IdSpace) -> bool {
+    matches!(mint_id(name, space, |_| false), Err(SheetEditError::Reserved(_)))
+}
+
 /// Returns the id minted from `name` in `space`, where `is_taken` returns whether an id is already held.
 ///
 /// The id is `name` in lower case with each run of other characters than `a-z` and `0-9` as one `_`, an `x` before a
@@ -180,7 +194,10 @@ impl IdSpace {
 /// use henad_graph::sheet::edit::{IdSpace, mint_id};
 ///
 /// assert_eq!(mint_id("Infection rate", IdSpace::Item, |_| false).as_deref(), Ok("infection_rate"));
-/// assert_eq!(mint_id("Infection rate", IdSpace::Item, |id| id == "infection_rate").as_deref(), Ok("infection_rate_2"));
+/// assert_eq!(
+///     mint_id("Infection rate", IdSpace::Item, |id| id == "infection_rate").as_deref(),
+///     Ok("infection_rate_2")
+/// );
 /// assert!(mint_id("Grid width", IdSpace::Item, |_| false).is_err());
 /// ```
 ///
@@ -293,7 +310,7 @@ pub enum LineField {
     Formula(Option<String>),
     /// The mode of a Steer or Move line.
     Mode(Option<LineMode>),
-    /// What a Pick a cell line picks.
+    /// Rule a Pick a cell line picks by.
     Pick(Option<PickRule>),
     /// The property a Pick a cell line ranks cells by.
     RankedBy(Option<String>),
@@ -333,7 +350,7 @@ pub enum SheetEdit {
         width: u32,
         /// Height in cells.
         height: u32,
-        /// What happens at the edges.
+        /// Behaviour of the edges.
         edges: Edges,
     },
     /// Sets or clears the length of one tick.
@@ -401,14 +418,14 @@ pub enum SheetEdit {
         step: Option<f64>,
         /// Unit of the value.
         unit: Option<String>,
-        /// What the parameter means.
+        /// Meaning of the parameter.
         means: Option<String>,
     },
     /// Adds a measure, with an id minted from its name, and returns the id.
     AddMeasure {
         /// Name of the measure, which is also its column in results.
         name: String,
-        /// What the measure counts or sums.
+        /// Quantity the measure counts or sums.
         rule: MeasureRule,
         /// Kind of thing the measure is over.
         over: Option<String>,
@@ -436,7 +453,7 @@ pub enum SheetEdit {
     AddButton {
         /// Name of the button.
         name: String,
-        /// What the button does: [`ButtonStepRule::StartAgain`] or [`ButtonStepRule::RunOnce`].
+        /// Action of the button: [`ButtonStepRule::StartAgain`] or [`ButtonStepRule::RunOnce`].
         rule: ButtonStepRule,
         /// Kind of thing the button acts on: `cells` or an agent kind's id.
         thing: String,
@@ -517,7 +534,7 @@ pub enum SheetEdit {
     SetMarks {
         /// Id of the Number property of the ground.
         property: String,
-        /// How marks combine, `None` for a property that takes no marks.
+        /// Rule by which marks combine, `None` for a property that takes no marks.
         marks: Option<Marks>,
         /// Share left after a tick's fading, blank for a property that does not fade.
         kept_per_tick: Slot,
@@ -619,7 +636,7 @@ pub enum SheetEdit {
     AddSummary {
         /// Id of the line.
         line: String,
-        /// How the summary sums up the agents.
+        /// Kind of the summary over the agents.
         summary: SummaryKind,
     },
     /// Removes the summary at an index of a look at agents. A slot that used it turns blank.
@@ -846,10 +863,17 @@ fn rate_parameter(line: &SheetLine) -> Option<String> {
     }
 }
 
-/// Returns whether a start of `starts` draws random numbers.
-fn starts_draws(starts: &StartsAs) -> bool {
+/// Returns whether a start of `starts`, a start of a property of `document`, draws random numbers.
+///
+/// A start on the ground draws one of the cells its state is painted on when there are two or more.
+fn starts_draws(document: &SheetDocument, starts: &StartsAs) -> bool {
     matches!(starts.rule, StartRule::ByChance | StartRule::Anywhere)
         || matches!(starts.value.value(), Some(SheetValue::Phrase(phrase)) if holds_draw(phrase))
+        || starts.rule == StartRule::OnGround
+            && all_properties(document)
+                .find(|property| Some(property.id.as_str()) == starts.property.as_deref())
+                .and_then(|property| property.starts_as.as_ref())
+                .is_some_and(|painted| painted.single_cells(starts.state.as_deref().unwrap_or("")) > 1)
 }
 
 /// Gives every rate phrase in `value` with no unit the unit of one tick, marked as taken from the tick.
@@ -1199,12 +1223,26 @@ impl Draft {
                 }
             }
         }
-        let touched_starts = std::mem::take(&mut self.touched_starts);
+        let mut touched_starts = std::mem::take(&mut self.touched_starts);
+        // A start on a painted ground property is touched with the ground's start, which decides whether it draws.
+        let on_touched_ground: Vec<String> = all_properties(&self.document)
+            .filter(|property| {
+                property.starts_as.as_ref().is_some_and(|starts| {
+                    starts.rule == StartRule::OnGround
+                        && starts
+                            .property
+                            .as_ref()
+                            .is_some_and(|ground| touched_starts.contains(ground))
+                })
+            })
+            .map(|property| property.id.clone())
+            .collect();
+        touched_starts.extend(on_touched_ground);
         let rekeyed: Vec<String> = all_properties(&self.document)
             .filter(|property| {
                 touched_starts.contains(&property.id)
                     && property.starts_as.as_ref().is_some_and(|starts| match starts.key {
-                        None => starts_draws(starts),
+                        None => starts_draws(&self.document, starts),
                         Some(key) => self.key_count(key) > 1,
                     })
             })

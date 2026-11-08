@@ -89,8 +89,8 @@ Every `--vary` then needs the same number of values.
 
 ### Varying the tick length
 
-A model whose ticks stand for a length of time has a hidden parameter `tick_length`, the length of one tick in its unit of time.
-`--params` lists it, and a sweep varies it like any other parameter.
+A model whose ticks stand for a length of time has a hidden [tick length](../reference/model-files.md#time-scale) parameter, `tick_length`, the length of one tick in its unit of time.
+`--params` lists it and marks it `hidden`, and a sweep varies it like any other parameter.
 The SIR sheet in Henad's repository states its changes as rates per day, so its epidemic should look the same in days at any tick that is short enough:
 
 ``` bash
@@ -102,6 +102,10 @@ cargo run --release -p henad-cli -- --model-file crates/henad-graph/sheets/sir.t
 A curve that still moves when the tick halves says the tick is long for the model's rates.
 At the sheet's rates the gap to the shortest tick roughly halves with each halving, and a tick of a quarter day is close to it.
 A model of chances per tick does not follow the tick length: its curve keeps its shape in ticks and squeezes in days.
+
+The tick length changes how much time one tick covers, so the runs reach different times after the same number of steps.
+Reducers such as `argmax` still report a tick, and a run meant to end at a given time takes `--steps` of that time divided by the tick length.
+`runs.csv` holds each run's `tick_length` beside its other parameters.
 
 ### Sampling the ranges
 
@@ -774,22 +778,6 @@ The manifest also records the sheet's text, and a resume records the text it ran
 The sheet in the manifest is then the one the latest session read.
 Its code is the code of every earlier session.
 In the desktop app, open the folder in the Results tab and press <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> to see the sheet again.
-
-### Sweeping the tick length
-
-A graph model whose ticks stand for a length of time holds that length as a hidden [tick length](../reference/model-files.md#time-scale) parameter, `tick_length`, in the unit its `tick_unit` names.
-`--params` marks it `hidden`, and a sweep varies it like any other parameter:
-
-``` bash
-cargo run --release -p henad-cli -- \
-  --model-file crates/henad-models/tests/fixtures/lowered/rates/sir_rates.toml \
-  --vary tick_length=0.25,0.5,1 --reps 5 --steps 400 --out tick-sweep
-```
-
-The tick length changes how much time one tick covers, so the runs reach different times after the same number of steps.
-`series.csv` then holds a `time` column after `tick`, the tick times the run's tick length, and the curves of the three tick lengths compare on that column.
-Reducers such as `argmax` still report a tick, and a run meant to end at a given time takes `--steps` of that time divided by the tick length.
-`runs.csv` holds each run's `tick_length` beside its other parameters.
 
 ## Reading the results
 

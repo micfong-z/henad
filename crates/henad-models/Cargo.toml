@@ -28,7 +28,8 @@ henad-build = { workspace = true }
 # example models, and henad-explore's tests build them in turn. The package's own tests depend on henad-explore, and do
 # not build from the package.
 henad-explore = { path = "../henad-explore", features = ["testing", "model-files"] }
-# A path alone, as henad-explore's. The graph corpus tests run the host evaluator over the example graphs.
+# A path alone, as henad-explore's. The tests over the graph corpus, the lowered fixtures and the sheets run the host
+# evaluator and lower sheets.
 henad-graph = { path = "../henad-graph" }
 # The normal edge again, with the run-time composer for the tests that compose the shaders and run grid rules.
 henad-compute = { workspace = true, features = ["runtime-wgsl"] }

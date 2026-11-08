@@ -8,8 +8,8 @@
 //! standard sub-table. The form depends on the schema and the value's form alone.
 //!
 //! A *generated comment* sits above each card, holding its heading, and above each line table, holding the line's
-//! sentence from [`Sentences`] with the "otherwise" words of [`CardRelations::otherwise_of`]. A reader ignores comments,
-//! and a comment written by hand is dropped on the next save.
+//! sentence from [`Sentences`] with the "otherwise" words of [`CardRelations::otherwise_of`]. A reader ignores
+//! comments, and a comment written by hand is dropped on the next save.
 //!
 //! The *number rule*: a whole number within 2^53 is an integer (`3`, `1024`), and any other number is the shortest text
 //! that reads back to the same 64-bit float, in plain notation when 10^-4 <= |x| < 10^16 (`0.3`, `0.0005`) and as a

@@ -91,7 +91,8 @@ fn stats_plot(ui: &mut egui::Ui, history: &StatsHistory, time: Option<RunTime>) 
         .show_axes(true)
         .x_axis_label(axis_label(time.map(|time| time.unit)))
         .include_y(0.0)
-        .legend(egui_plot::Legend::default());
+        // In the order the model lists its stats, which for a sheet is the order of its measures.
+        .legend(egui_plot::Legend::default().follow_insertion_order(true));
     show_plot(ui, plot, |plot_ui| {
         for (column, descriptor) in history.descriptors().iter().enumerate() {
             let [r, g, b, _] = descriptor.color();

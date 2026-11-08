@@ -5,6 +5,9 @@
 //! [`crate::gpu::MAX_STEPS_PER_SUBMISSION`] steps each, with one batch outstanding at a time. The display and stats
 //! passes run once per snapshot interval, whatever the batch size. In adaptive mode the batch size tracks a wall-clock
 //! budget per batch, `target_ms`.
+//!
+//! A runner starts uncapped. [`SimCommand::SetUncapped`] and [`SimCommand::SetTargetTps`] cap it at a rate in ticks
+//! per second (TPS), as they cap the CPU runner. A capped batch is shorter than `batch_size` where the rate needs it.
 use henad_core::action::Schedule;
 use henad_core::model::SimState;
 
@@ -162,6 +165,13 @@ impl Default for GpuBatchSettings {
 /// Shortest time between two snapshots of a playing sim, whatever the batch size and the speed of the sim.
 const SNAPSHOT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
+/// Rate in ticks per second of a capped runner that no [`SimCommand::SetTargetTps`] has set.
+const DEFAULT_TARGET_TPS: f64 = 30.0;
+
+/// Whether a stats readback can block until it lands. A browser cannot block, and a run to a tick there samples no
+/// stats on its way.
+const CAN_BLOCK_ON_READBACK: bool = cfg!(not(target_arch = "wasm32"));
+
 /// Refresh cadence for wall-clock TPS and the GPU timestamp readback.
 const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
@@ -174,9 +184,10 @@ use crate::fault::{Fault, FaultSink};
 use crate::gpu::timing::{ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_batch_size, time_per_step_ms, tps_over};
 use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION};
 use crate::runner::{
-    DEFAULT_STOP_TIMEOUT, Driver, Pace, RUN_TO_PUBLISH_INTERVAL, RunnerShutdown, SharedSlot, SimLoop, SnapshotSlot,
+    DEFAULT_STOP_TIMEOUT, Driver, Pace, RUN_TO_PUBLISH_INTERVAL, RunToStride, RunnerShutdown, SharedSlot, SimLoop,
+    SnapshotSlot,
 };
-use crate::snapshot::{Snapshot, SnapshotView};
+use crate::snapshot::{Snapshot, SnapshotView, StatSample};
 use henad_core::send_sync::WasmNotSend;
 
 /// Time to leave an outstanding batch alone before looking again.
@@ -251,6 +262,16 @@ struct Loop {
     fired_through: Option<u64>,
     /// Tick a pending [`SimCommand::RunTo`] stops at.
     run_to_target: Option<u64>,
+    /// Ticks the pending run to a tick samples its stats at.
+    run_to_stride: Option<RunToStride>,
+    /// Stats sampled since the last publish.
+    run_to_samples: Vec<StatSample>,
+    /// Whether a playing run steps as fast as it can, ignoring `target_tps`.
+    uncapped: bool,
+    /// Rate in ticks per second of a capped run.
+    target_tps: f64,
+    /// When the next capped batch falls due.
+    next_step_at: Instant,
     /// Whether the last one-shot snapshot went out before its readback completed, with the previous readback's stats.
     /// Only a browser sets it. A native one-shot snapshot waits for its readback.
     late_stats: bool,
@@ -270,7 +291,9 @@ impl SimLoop for Loop {
             Command::Sim(SimCommand::Play) => {
                 self.run_to_target = None;
                 self.running = true;
-                self.reset_tps_window(Instant::now());
+                let now = Instant::now();
+                self.reset_tps_window(now);
+                self.next_step_at = now;
             }
             Command::Sim(SimCommand::Pause) => {
                 self.run_to_target = None;
@@ -292,16 +315,21 @@ impl SimLoop for Loop {
                     log::warn!("Failed to set param index {index} to {value:?}");
                 }
             }
-            // These have no GPU analogue. The loop paces itself with the batch-size controller instead of
-            // a tick cap, and publishes on a wall-clock cadence. They are accepted, so a host can send the
-            // same `SimCommand` stream to either backend.
-            Command::Sim(
-                SimCommand::SetTargetTps(_)
-                | SimCommand::SetUncapped(_)
-                | SimCommand::SetTicksPerSnapshot(_)
-                // No GPU model has a layout.
-                | SimCommand::SetLayout { .. },
-            ) => {}
+            Command::Sim(SimCommand::SetTargetTps(tps)) => {
+                self.target_tps = tps;
+                // Pulls a deadline set at a lower rate in to one batch from now.
+                let limit = Instant::now() + self.capped_interval(self.capped_batch_size());
+                if self.next_step_at > limit {
+                    self.next_step_at = limit;
+                }
+            }
+            Command::Sim(SimCommand::SetUncapped(uncapped)) => {
+                self.uncapped = uncapped;
+                self.next_step_at = Instant::now();
+            }
+            // These have no GPU analogue. The loop publishes on a wall-clock cadence, and no GPU model has a layout.
+            // They are accepted, so a host can send the same `SimCommand` stream to either backend.
+            Command::Sim(SimCommand::SetTicksPerSnapshot(_) | SimCommand::SetLayout { .. }) => {}
             Command::Sim(SimCommand::Act(index)) => {
                 let mut encoder = self.encoder("henad_gpu_action");
                 if self.state.encode_action(&mut encoder, index) {
@@ -321,6 +349,7 @@ impl SimLoop for Loop {
             }
             Command::Sim(SimCommand::RunTo(target)) => {
                 self.run_to_target = Some(target);
+                self.run_to_stride = Some(RunToStride::new(self.state.tick(), target));
                 self.running = false;
                 self.reset_tps_window(Instant::now());
             }
@@ -377,8 +406,35 @@ impl SimLoop for Loop {
             self.snapshot_now();
             return self.collect_late_stats();
         }
-        self.step_batch();
-        Pace::Now
+        let capped = self.run_to_target.is_none() && !self.uncapped;
+        if capped {
+            let now = Instant::now();
+            if now < self.next_step_at {
+                return Pace::After(self.next_step_at - now);
+            }
+        }
+        let steps = self.step_batch();
+        if let Some(target) = self.run_to_target
+            && CAN_BLOCK_ON_READBACK
+        {
+            self.sample_run_to(target);
+        }
+        if !capped {
+            return Pace::Now;
+        }
+        // Advances from the previous deadline, so the batch's own time does not stretch every period. A run behind
+        // its rate starts again from now.
+        let interval = self.capped_interval(steps);
+        let now = Instant::now();
+        self.next_step_at += interval;
+        if self.next_step_at + interval < now {
+            self.next_step_at = now + interval;
+        }
+        if now >= self.next_step_at {
+            Pace::Now
+        } else {
+            Pace::After(self.next_step_at - now)
+        }
     }
 }
 
@@ -419,7 +475,69 @@ impl Loop {
             schedule: Schedule::default(),
             fired_through: None,
             run_to_target: None,
+            run_to_stride: None,
+            run_to_samples: Vec::new(),
+            uncapped: true,
+            target_tps: DEFAULT_TARGET_TPS,
+            next_step_at: now,
             late_stats: false,
+        }
+    }
+
+    /// Returns the target rate of a capped run, 1 tick per second for a rate that is not positive.
+    fn capped_tps(&self) -> f64 {
+        if self.target_tps.is_finite() && self.target_tps > 0.0 {
+            self.target_tps
+        } else {
+            1.0
+        }
+    }
+
+    /// Returns the number of steps in one capped batch: the steps due in one snapshot interval, at least 1 and at most
+    /// the batch size.
+    fn capped_batch_size(&self) -> u32 {
+        let due = (self.capped_tps() * SNAPSHOT_INTERVAL.as_secs_f64()).ceil();
+        (due.min(f64::from(self.batch_size)) as u32).max(1)
+    }
+
+    /// Returns the wall-clock time `steps` take at the capped rate.
+    fn capped_interval(&self, steps: u32) -> std::time::Duration {
+        std::time::Duration::from_secs_f64(f64::from(steps) / self.capped_tps())
+    }
+
+    /// Reads the stats of a run to `target` at the current tick if it is a sample tick, and publishes them if
+    /// [`RUN_TO_PUBLISH_INTERVAL`] has passed.
+    ///
+    /// The readback blocks, so the stats belong to the tick they are recorded at. The target itself is left to the
+    /// snapshot the next pump takes there.
+    fn sample_run_to(&mut self, target: u64) {
+        let tick = self.state.tick();
+        if tick >= target {
+            return;
+        }
+        let sample_due = self.run_to_stride.as_mut().is_some_and(|stride| stride.take_due(tick));
+        let publish_due = self.last_snapshot_publish.elapsed() >= RUN_TO_PUBLISH_INTERVAL;
+        if !sample_due && !publish_due {
+            return;
+        }
+        // Drains a readback still in flight, so the readback below starts.
+        self.state.poll_stats_readback(&self.ctx.device, true);
+        let mut encoder = self.encoder("henad_gpu_run_to_sample");
+        self.state.encode_snapshot_passes(&mut encoder);
+        self.ctx.queue.submit(Some(encoder.finish()));
+        self.state.begin_stats_readback();
+        self.state.poll_stats_readback(&self.ctx.device, true);
+        self.in_flight = None;
+        if sample_due && !self.state.stats_readback_pending() {
+            self.run_to_samples.push(StatSample {
+                tick,
+                stats: self.state.stats(),
+            });
+        }
+        if publish_due {
+            self.last_snapshot_publish = Instant::now();
+            self.publish_snapshot();
+            self.publish_gpu_stats();
         }
     }
 
@@ -557,26 +675,37 @@ impl Loop {
     /// The timestamp resolve deliberately does not share a command buffer with the writes. See
     /// `TimestampQuery::resolve_after`.
     ///
-    /// A batch stops at a pending run-to target, and a submission ends at each tick an action is due at. The actions
-    /// follow in their own submissions, and the snapshot passes after them.
-    fn step_batch(&mut self) {
+    /// A batch stops at a pending run-to target and at its next sample tick, and a capped batch holds the steps of one
+    /// snapshot interval. A submission ends at each tick an action is due at. The actions follow in their own
+    /// submissions, and the snapshot passes after them.
+    ///
+    /// Returns the number of steps submitted.
+    fn step_batch(&mut self) -> u32 {
         let now = Instant::now();
         let want_timing =
             self.timestamp_query.is_some() && now.duration_since(self.last_stats_publish) >= STATS_INTERVAL;
         let (batch_size_submitted, snapshot_interval) = match self.run_to_target {
             Some(target) => {
-                let remaining = target.saturating_sub(self.state.tick());
-                let steps = u64::from(self.batch_size).min(remaining) as u32;
-                (steps, RUN_TO_PUBLISH_INTERVAL)
+                let tick = self.state.tick();
+                let mut steps = u64::from(self.batch_size).min(target.saturating_sub(tick));
+                if CAN_BLOCK_ON_READBACK
+                    && let Some(to_sample) = self.run_to_stride.and_then(|stride| stride.steps_to_next(tick))
+                {
+                    steps = steps.min(to_sample.max(1));
+                }
+                (steps as u32, RUN_TO_PUBLISH_INTERVAL)
             }
-            None => (self.batch_size, SNAPSHOT_INTERVAL),
+            None if self.uncapped => (self.batch_size, SNAPSHOT_INTERVAL),
+            None => (self.capped_batch_size(), SNAPSHOT_INTERVAL),
         };
         // The batch that reaches the target leaves the snapshot to the blocking snapshot that the next pump takes
-        // at the target.
+        // at the target. Where a readback can block, [`Self::sample_run_to`] publishes a run to a tick.
         let reaches_target = self
             .run_to_target
             .is_some_and(|target| self.state.tick() + u64::from(batch_size_submitted) >= target);
-        let want_snapshot = !reaches_target && now.duration_since(self.last_snapshot_publish) >= snapshot_interval;
+        let sampled = self.run_to_target.is_some() && CAN_BLOCK_ON_READBACK;
+        let want_snapshot =
+            !reaches_target && !sampled && now.duration_since(self.last_snapshot_publish) >= snapshot_interval;
 
         let query_set = if want_timing {
             self.timestamp_query.as_ref().map(TimestampQuery::query_set)
@@ -650,6 +779,7 @@ impl Loop {
         }
 
         self.track(write_submission, batch_size_submitted, now);
+        batch_size_submitted
     }
 
     /// Resets both clocks together. `want_timing` is gated on `last_stats_publish` but divides by
@@ -688,6 +818,7 @@ impl Loop {
             view: SnapshotView::Gpu(self.state.view()),
             stats: self.state.stats(),
             fire_counts: self.state.fire_counts(),
+            run_to_samples: std::mem::take(&mut self.run_to_samples),
         };
         crate::runner::publish(&self.slot, snap);
         // After the lock, so waking the UI can never make it block on us.
@@ -1106,7 +1237,8 @@ mod tests {
         sim.start();
         record(&mut rows);
         sim.handle_command(Command::Sim(SimCommand::RunTo(10)));
-        for _ in 0..10 {
+        // A run to a tick stops a batch at each of its sample ticks, one tick apart here.
+        for _ in 0..50 {
             sim.pump();
             record(&mut rows);
         }
@@ -1244,6 +1376,112 @@ mod tests {
         );
         settle();
         assert_eq!(ticks.load(Ordering::Relaxed), 1003);
+    }
+
+    /// A capped run steps at its rate, far below what the device can do.
+    #[test]
+    fn a_capped_gpu_run_keeps_to_its_rate() {
+        let Some(ctx) = headless_context("henad_capped_test", wgpu::Features::empty()) else {
+            log::warn!("skipping a_capped_gpu_run_keeps_to_its_rate: no adapter");
+            return;
+        };
+        let (mut thread, ticks, _) = action_recorder(ctx);
+        thread.send(SimCommand::SetUncapped(false));
+        thread.send(SimCommand::SetTargetTps(20.0));
+        thread.play();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        thread.pause();
+        settle();
+        let stepped = ticks.load(Ordering::Relaxed);
+        assert!(
+            (1..=20).contains(&stepped),
+            "half a second at 20 TPS stepped {stepped} ticks"
+        );
+    }
+
+    /// Counts encoded steps as its tick, and reports that tick as its one stat once a readback lands.
+    struct TickStat {
+        tick: u64,
+        read: u64,
+    }
+
+    impl SimState for TickStat {
+        fn step(&mut self) {
+            self.tick += 1;
+        }
+        fn tick(&self) -> u64 {
+            self.tick
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            vec![StatEntry::new("Tick", StatValue::Scalar(self.read as f64), [0; 4])]
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    impl GpuSimState for TickStat {
+        fn encode_steps(&mut self, _encoder: &mut wgpu::CommandEncoder, count: u32, _t: Option<&wgpu::QuerySet>) {
+            self.tick += u64::from(count);
+        }
+        fn encode_snapshot_passes(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
+        fn begin_stats_readback(&mut self) {}
+        fn poll_stats_readback(&mut self, _device: &wgpu::Device, _block: bool) -> StatsPoll {
+            self.read = self.tick;
+            StatsPoll::Landed
+        }
+        fn stats_readback_pending(&self) -> bool {
+            false
+        }
+        fn view(&self) -> GpuSnapshot {
+            GpuSnapshot {
+                display: None,
+                agents: None,
+            }
+        }
+    }
+
+    /// A run to a tick that ends between two publishes still hands the host evenly spaced samples, each holding the
+    /// stats of its own tick.
+    #[test]
+    fn a_gpu_run_to_a_tick_samples_its_stats_on_the_way() {
+        let Some(ctx) = headless_context("henad_run_to_samples_test", wgpu::Features::empty()) else {
+            log::warn!("skipping a_gpu_run_to_a_tick_samples_its_stats_on_the_way: no adapter");
+            return;
+        };
+        let settings = GpuBatchSettings {
+            adaptive: false,
+            batch_size: 100,
+            ..GpuBatchSettings::default()
+        };
+        let faults = ctx.faults.clone();
+        let state = TickStat { tick: 0, read: 0 };
+        let mut thread = GpuSimThread::new(ctx, Box::new(state), settings, None, faults);
+        thread.run_to(1000);
+        let mut samples = Vec::new();
+        let mut reached = false;
+        for _ in 0..500 {
+            if let Some(snap) = thread.take_snapshot() {
+                samples.extend(snap.run_to_samples);
+                if snap.tick == 1000 {
+                    reached = true;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(reached, "the run never published its target");
+        let ticks: Vec<u64> = samples.iter().map(|sample| sample.tick).collect();
+        assert_eq!(ticks, (1..500).map(|i| i * 2).collect::<Vec<_>>());
+        for sample in &samples {
+            assert_eq!(sample.stats[0].value().scalar(), sample.tick as f64);
+        }
     }
 
     #[test]

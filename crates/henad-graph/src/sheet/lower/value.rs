@@ -8,7 +8,7 @@ use super::{Builder, Site};
 use crate::types::ValueType;
 use crate::value::{InputValue, Literal, MemberName, PortRef};
 
-/// What a value of a sheet lowers to.
+/// Result a value of a sheet lowers to.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Operand {
     /// An output of a node, of a known type.

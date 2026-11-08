@@ -35,7 +35,8 @@ use super::writer::format_number;
 /// Chance per tick at the largest count above which a tick is long for its rate.
 pub const LONG_TICK_CHANCE: f64 = 0.5;
 
-/// Returns the chance that a rate `rate` holds within a tick `tick` long, both in one unit of time: `1 - e^(-rate tick)`.
+/// Returns the chance that a rate `rate` holds within a tick `tick` long, both in one unit of time:
+/// `1 - e^(-rate tick)`.
 pub fn chance_from_rate(rate: f64, tick: f64) -> f64 {
     -(-rate * tick).exp_m1()
 }
@@ -135,7 +136,7 @@ pub struct RateNote {
     /// Text of the note, such as "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. A rate is
     /// not a chance. Henad turns it into one as 1 − e^(−0.1 × 1 day)."
     pub text: String,
-    /// How long a cell stays in the state it leaves, the note's description, for a line that leaves a named state at a
+    /// Mean time a cell stays in the state it leaves, the note's description, for a line that leaves a named state at a
     /// fixed rate with no "for each", the rate its whole condition and no block around it.
     pub mean_stay: Option<String>,
     /// Chance at the largest count, such as "up to 0.909 with 8", on a tick long for the rate. The editor shows it
@@ -287,23 +288,24 @@ fn old_state(document: &SheetDocument, line: &SheetLine) -> Option<String> {
 
 /// Returns the subject of the note on line `line_id`: what happens when its rate holds.
 fn subject(document: &SheetDocument, relations: &CardRelations<'_>, line_id: &str, line: &SheetLine) -> String {
+    let thing = sentence::thing_word(document, &relations.card().every);
     match line.kind {
         LineKind::Become => {
             let new = line
                 .new_state
                 .as_deref()
                 .map(|state| state_name(document, line.property.as_deref(), state));
-            sentence::become_subject(old_state(document, line).as_deref(), new.as_deref())
+            sentence::become_subject(&thing, old_state(document, line).as_deref(), new.as_deref())
         }
-        LineKind::Set => sentence::SET_SUBJECT.to_owned(),
-        LineKind::When => sentence::when_subject(relations.number(line_id).unwrap_or(0)),
+        LineKind::Set => sentence::set_subject(&thing),
+        LineKind::When => sentence::when_subject(relations.number(line_id).unwrap_or(0), &thing),
         _ => {
             let name = line
                 .name
                 .clone()
                 .or_else(|| super::edit::automatic_name(document, line))
                 .unwrap_or_default();
-            sentence::result_subject(&name)
+            sentence::result_subject(&name, &thing)
         }
     }
 }
@@ -385,6 +387,7 @@ pub fn rate_note(document: &SheetDocument, line_id: &str, values: &BTreeMap<Stri
                         &time_words(mean_stay(rate, dt), unit),
                         &rate_words,
                         &time_words(1.0 / rate, unit),
+                        &sentence::thing_word(document, &relations.card().every),
                     )
                 });
                 (text, stay)
@@ -567,12 +570,14 @@ fn group_note(
         .collect::<Option<_>>()?;
     let rate_refs: Vec<&str> = rate_words.iter().map(String::as_str).collect();
     let tick = time_words(dt, unit);
+    let thing = sentence::thing_word(document, &relations.card().every);
     let text = sentence::competing_note(
         &tick,
         &state,
         &chance_words(leaves, total * dt),
         &share_words,
         &rate_refs,
+        &thing,
     );
     let mean_stay = (total > 0.0).then(|| {
         sentence::mean_stay_note(
@@ -580,6 +585,7 @@ fn group_note(
             &time_words(mean_stay(total, dt), unit),
             &format!("({})", rate_refs.join(" + ")),
             &time_words(1.0 / total, unit),
+            &thing,
         )
     });
     Some(RateNote {

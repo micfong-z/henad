@@ -214,8 +214,8 @@ impl SheetFile {
     /// work it costs past a budget in the model's words.
     ///
     /// The reasons are those of [`ModelEntry::shortfalls`]. A submission past its budget names the looks at agents of
-    /// the heaviest card, as "Line 1, Flockmates: looks at too many birds at 1,000,000 birds. A shorter distance or
-    /// fewer birds would fit.", or the card when it looks at no agents, and starts past the host's budget name the
+    /// the heaviest card, as "Line 1, Flockmates: looks at too many birds at 1,000,000 birds. Use a shorter distance
+    /// or fewer birds.", or the card when it looks at no agents, and starts past the host's budget name the
     /// number started. A reason of another kind, such as a buffer past the device's size, is kept as it is.
     pub fn shortfalls(&self, entry: &ModelEntry, params: &[ParamValue], limits: &wgpu::Limits) -> Vec<String> {
         let found = entry.shortfalls(params, limits);

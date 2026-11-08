@@ -1,7 +1,7 @@
-//! The wording table against the final editor's words, and the sentences of the starters and test sheets.
+//! The wording table against fixed copies of its words, and the sentences of the starters and test sheets.
 //!
-//! The literals of [`every_wording_table_entry_equals_the_final_words`] are copied from the editor's final wording
-//! table, word for word. A template is called with the example the table gives, such as line 2 or "Alive neighbours".
+//! The literals of [`every_wording_table_entry_equals_the_final_words`] hold every word the sheet editor shows, word
+//! for word. A template is called with the example the table gives, such as line 2 or "Alive neighbours".
 
 use henad_core::metadata::TimeUnit;
 
@@ -250,7 +250,7 @@ fn every_wording_table_entry_equals_the_final_words() {
             sentence::use_instead_name("Line 5", "is more than 0"),
         ),
         ("from", fixed(sentence::FROM_WORD)),
-        ("Only cells in this state now change", fixed(sentence::FROM_TOOLTIP)),
+        ("Only cells in this state now change", sentence::from_tooltip("cell")),
         ("Status Alive", sentence::shared_state_name("Status", "Alive", true)),
         ("Alive", sentence::shared_state_name("Status", "Alive", false)),
         // Pickers.
@@ -461,7 +461,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         (
             "None of lines 2 and 3 applies when B in my block is 4 or 5. Those cells keep their Opinion.",
-            sentence::gap_note(&[2, 3], "B in my block", &[4, 5], "Opinion"),
+            sentence::gap_note(&[2, 3], "B in my block", &[4, 5], "Opinion", "cell"),
         ),
         ("4 to 8", sentence::count_values_words(&[4, 5, 6, 7, 8])),
         (
@@ -471,16 +471,17 @@ fn every_wording_table_entry_equals_the_final_words() {
                 &[2, 3],
                 "B in my block",
                 &[("A", &[0, 1, 2, 3, 4]), ("B", &[5, 6, 7, 8, 9])],
+                "cell",
             ),
         ),
         (
             "Lines 2 and 3 change different cells (Dead and Alive), so their order does not matter.",
-            sentence::order_note(&[2, 3], &["Dead", "Alive"]),
+            sentence::order_note(&[2, 3], &["Dead", "Alive"], "cell"),
         ),
         (
             "Lines 2, 3 and 4 change different cells (Susceptible, Infected and Recovered), so their order does not \
              matter.",
-            sentence::order_note(&[2, 3, 4], &["Susceptible", "Infected", "Recovered"]),
+            sentence::order_note(&[2, 3, 4], &["Susceptible", "Infected", "Recovered"], "cell"),
         ),
         (
             "Line 3 already says from Alive, so this When repeats it.",
@@ -509,7 +510,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         ("Only when line 4 holds.", sentence::only_when_note(4, None)),
         (
             "Worked out for every cell, whatever line 4 says. Only lines inside line 4 can use it.",
-            sentence::worked_out_everywhere_note(4),
+            sentence::worked_out_everywhere_note(4, "cell"),
         ),
         ("Nothing inside yet.", fixed(sentence::NOTHING_INSIDE)),
         // "otherwise".
@@ -523,37 +524,56 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         (
             "Line 2 also changes Cover for a cell that is Tree. When both apply, line 2 wins.",
-            sentence::otherwise_tooltip(&[2], "Cover", Some("Tree")),
+            sentence::otherwise_tooltip(&[2], "Cover", Some("Tree"), "cell"),
         ),
         (
             "Lines 2 and 5 also change Cover for a cell that is Tree. When more than one applies, the highest line \
              wins.",
-            sentence::otherwise_tooltip(&[2, 5], "Cover", Some("Tree")),
+            sentence::otherwise_tooltip(&[2, 5], "Cover", Some("Tree"), "cell"),
         ),
         (
             "Line 6 now starts with otherwise. Lines 2 and 5 also change Cover for a cell that is Tree. When more \
              than one applies, the highest line wins.",
-            sentence::otherwise_notice("Line 6", &[2, 5], "Cover", Some("Tree")),
+            sentence::otherwise_notice("Line 6", &[2, 5], "Cover", Some("Tree"), "cell"),
         ),
         // Rates and chances.
         (
             "a Susceptible cell becomes Infected",
-            sentence::become_subject(Some("Susceptible"), Some("Infected")),
+            sentence::become_subject("cell", Some("Susceptible"), Some("Infected")),
         ),
         (
             "an Infected cell becomes Recovered",
-            sentence::become_subject(Some("Infected"), Some("Recovered")),
+            sentence::become_subject("cell", Some("Infected"), Some("Recovered")),
         ),
         (
             "a cell becomes Infected",
-            sentence::become_subject(None, Some("Infected")),
+            sentence::become_subject("cell", None, Some("Infected")),
         ),
-        ("a cell changes", sentence::become_subject(Some("Susceptible"), None)),
-        ("a cell takes the new value", fixed(sentence::SET_SUBJECT)),
-        ("the lines inside line 4 apply to a cell", sentence::when_subject(4)),
+        (
+            "a cell changes",
+            sentence::become_subject("cell", Some("Susceptible"), None),
+        ),
+        (
+            "an ant changes",
+            sentence::become_subject("ant", Some("Searching"), None),
+        ),
+        (
+            "a Searching ant becomes Carrying",
+            sentence::become_subject("ant", Some("Searching"), Some("Carrying")),
+        ),
+        ("a cell takes the new value", sentence::set_subject("cell")),
+        (
+            "the lines inside line 4 apply to a cell",
+            sentence::when_subject(4, "cell"),
+        ),
+        ("Only birds in this state now change", sentence::from_tooltip("bird")),
+        (
+            "None of lines 2 and 3 applies when Near is 4. Those birds keep their Mood.",
+            sentence::gap_note(&[2, 3], "Near", &[4], "Mood", "bird"),
+        ),
         (
             "the result Recovery happens is yes for a cell",
-            sentence::result_subject("Recovery happens"),
+            sentence::result_subject("Recovery happens", "cell"),
         ),
         ("Each tick (1 day)", sentence::each_tick(Some("1 day"))),
         ("Each tick", sentence::each_tick(None)),
@@ -564,7 +584,7 @@ fn every_wording_table_entry_equals_the_final_words() {
             "One tick is now 1 day. Change it on the sheet.",
             sentence::tick_set_notice(TimeUnit::Day),
         ),
-        // Words the plan adds.
+        // Errors on a rate in a button's card, a second agent kind, lines this version cannot run and the ground.
         (
             "A button's card has no duration, so it takes chances, not rates.",
             fixed(sentence::RATE_IN_BUTTON_CARD),
@@ -621,34 +641,33 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         ("line 4", sentence::look_name(&[(4, None)])),
         (
-            "Line 1, Flockmates: looks at too many birds at 1,000,000 birds. A shorter distance or fewer birds would \
-             fit.",
+            "Line 1, Flockmates: looks at too many birds at 1,000,000 birds. Use a shorter distance or fewer birds.",
             sentence::look_costs_too_much("line 1, Flockmates", "birds", 1_000_000),
         ),
         (
-            "Each tick, every bird: too much work at 1,000,000 birds. Fewer birds would fit.",
+            "Each tick, every bird: too much work at 1,000,000 birds. Use fewer birds.",
             sentence::card_costs_too_much("Each tick, every bird", "birds", 1_000_000),
         ),
         (
-            "Line 1: too much work for one walker. A smaller maximum for Steps per tick would fit.",
+            "Line 1: too much work for one walker. Set a smaller maximum for Steps per tick.",
             sentence::line_costs_too_much("line 1", "walker", &sentence::smaller_maximum("Steps per tick")),
         ),
         (
-            "Line 2, Wander: too much work for one walker. A Repeat of fewer times would fit.",
+            "Line 2, Wander: too much work for one walker. Repeat fewer times.",
             sentence::line_costs_too_much("line 2, Wander", "walker", sentence::FEWER_TIMES),
         ),
         (
-            "Each tick, every bird: too much work for one bird. Fewer lines on this card would fit.",
+            "Each tick, every bird: too much work for one bird. Use fewer lines on this card.",
             sentence::line_costs_too_much("Each tick, every bird", "bird", sentence::FEWER_LINES),
         ),
         (
-            "Starting 20,000 persons takes too much work. Fewer persons would fit.",
+            "Starting 20,000 persons takes too much work. Use fewer persons.",
             sentence::start_costs_too_much("persons", 20_000),
         ),
         ("or", fixed(sentence::COMPETING_WORD)),
         (
             "Lines 3 and 4 compete. A cell leaves Infected at the sum of their rates, and each line takes its share.",
-            sentence::competing_tooltip(&[3, 4], "Infected"),
+            sentence::competing_tooltip(&[3, 4], "Infected", "cell"),
         ),
         (
             "This tick is long for this rate. A shorter tick follows the rate more closely.",
@@ -818,14 +837,14 @@ fn every_wording_table_entry_equals_the_final_words() {
 
 /// Returns the entries of the rate and chance notes, each template called with the table's example numbers.
 fn rate_note_entries() -> Vec<(&'static str, String)> {
-    let susceptible = sentence::become_subject(Some("Susceptible"), Some("Infected"));
+    let susceptible = sentence::become_subject("cell", Some("Susceptible"), Some("Infected"));
     vec![
         (
             "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. A rate is not a chance. Henad \
              turns it into one as 1 − e^(−0.1 × 1 day).",
             sentence::rate_note(
                 "1 day",
-                &sentence::become_subject(Some("Infected"), Some("Recovered")),
+                &sentence::become_subject("cell", Some("Infected"), Some("Recovered")),
                 "0.0952",
                 "0.1",
             ),
@@ -868,7 +887,7 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
              separate try: 1 − (1 − 0.2)^n, where n is B neighbours.",
             sentence::chance_for_each_note(
                 None,
-                &sentence::become_subject(None, Some("B")),
+                &sentence::become_subject("cell", None, Some("B")),
                 "B neighbours",
                 "0.2",
                 "0.36",
@@ -877,9 +896,9 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
         (
             "Each tick, a cell becomes B with a chance that grows with n, where p is ... and n is .... Each one \
              counted is a separate try: 1 − (1 − p)^n.",
-            sentence::growing_chance_note(None, &sentence::become_subject(None, Some("B")), "...", "..."),
+            sentence::growing_chance_note(None, &sentence::become_subject("cell", None, Some("B")), "...", "..."),
         ),
-        // The words the plan adds, in the form of the notes above.
+        // The restart notice, the Integer kind, and the notes of competing rates, the long tick and the mean stay.
         (
             "Changes restart the world from tick 0.",
             fixed(sentence::RESTART_NOTICE),
@@ -898,13 +917,14 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
                 "0.0952",
                 &[("Recovered", "0.0476"), ("Dead", "0.0476")],
                 &["0.05", "0.05"],
+                "cell",
             ),
         ),
         ("up to 0.91 with 8", sentence::long_tick_chance("0.91", 8)),
         (
             "On average a cell stays Infected 10.5 days at this tick length. It approaches 1/0.1 = 10 days as the \
              tick shrinks.",
-            sentence::mean_stay_note("Infected", "10.5 days", "0.1", "10 days"),
+            sentence::mean_stay_note("Infected", "10.5 days", "0.1", "10 days", "cell"),
         ),
     ]
 }
@@ -1555,6 +1575,11 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
         sentence::NO_YES_OR_NO_RESULT,
         sentence::NO_STATES,
         sentence::LINES_HELP,
+        sentence::LINES_HELP_AGENTS,
+        sentence::LINES_HELP_AGENTS_EXAMPLE,
+        sentence::AGENT_WALLS_SENTENCE,
+        sentence::AGENT_WRAP_TOOLTIP,
+        sentence::WORLD_HELP_AGENTS,
         sentence::LINES_HELP_HEADING,
         sentence::FOR_EACH_BLANK_WORDS,
         sentence::FROM_WORD,
@@ -1563,6 +1588,11 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
         sentence::NOT_YET_REPEAT_CHANGE,
         sentence::NOT_YET_AGENT_WALLS,
         sentence::NOT_YET_BLOCKED_MOVE_BY,
+        sentence::LINE_TOO_LONG,
+        sentence::LINE_NUMBER_TOO_LARGE,
+        sentence::SHEET_TOO_LARGE,
+        sentence::NAME_RESERVED,
+        sentence::PREVIEW_WAITS,
         sentence::ON_GROUND_CELLS,
         sentence::AHEAD_NEEDS_CELLS,
         sentence::SET_IN_REPEAT,
@@ -1587,6 +1617,8 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
     ];
     let mut texts: Vec<String> = fixed_entries.iter().map(|text| (*text).to_owned()).collect();
     texts.push(sentence::help_dialog_name(sentence::LINES_HELP_HEADING));
+    texts.push(sentence::name_reserved("Count"));
+    texts.push(sentence::empty_field("Health", "a chance"));
     for section in SheetSection::ALL {
         texts.push(sentence::help_dialog_name(section.heading()));
         texts.push(section.help().to_owned());
@@ -1624,9 +1656,7 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
     for text in &texts {
         for word in text.split(|c: char| !c.is_alphanumeric()) {
             assert!(
-                !sentence::FORBIDDEN_WORDS
-                    .iter()
-                    .any(|forbidden| forbidden.eq_ignore_ascii_case(word)),
+                !sentence::is_forbidden_word(word),
                 "{text:?} holds the forbidden word {word:?}"
             );
         }
@@ -2009,6 +2039,46 @@ fn a_comparison_of_a_copy_reads_in_full_sentences() {
         sentence::runs_share_no_measure("Game of Life", "Game of Life (expert)"),
         "Game of Life (expert) and Game of Life share no measure to compare."
     );
+    assert_eq!(
+        sentence::runs_do_not_replay("Boids", "Boids (expert)"),
+        "Boids does not replay exactly. Two runs at one seed can differ, so compare Boids (expert) with Boids in the \
+         plot."
+    );
     assert_eq!(sentence::compare_failed("no adapter"), "Comparison failed: no adapter");
     assert_eq!(sentence::compare_series("Alive", "Game of Life"), "Alive, Game of Life");
+}
+
+/// The notes under a card that runs on agents name the agents, as the card's heading does. Game of Life's card, set to
+/// run on ants, keeps its order note.
+#[test]
+fn the_notes_of_an_agent_card_name_its_agents() {
+    use crate::sheet::relations::CardRelations;
+
+    let ants = document("ants.toml");
+    let mut game = document("game_of_life.toml");
+    game.agents.push(ants.agents[0].clone());
+    let card = game
+        .cards
+        .iter_mut()
+        .find(|card| card.every == "cells")
+        .expect("the cell card");
+    card.every = ants.agents[0].id.clone();
+    let sentences = Sentences::new(&game);
+    let card = game
+        .cards
+        .iter()
+        .find(|card| card.every == "ant")
+        .expect("the ant card");
+    let notes: Vec<String> = CardRelations::new(&game, card)
+        .notes(&sentences, |_| true)
+        .into_iter()
+        .map(|note| note.text)
+        .collect();
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.starts_with("Lines 2 and 3 change different ants (")),
+        "{notes:?}"
+    );
+    assert!(notes.iter().all(|note| !note.contains("cells")), "{notes:?}");
 }

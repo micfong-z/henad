@@ -91,7 +91,7 @@ pub struct NewModelDialog {
     pub name: String,
     /// Whether the author typed in the Name field. Until then the name follows the chosen starter.
     pub name_typed: bool,
-    /// What a blank world is made of.
+    /// Kind of thing a blank world is made of.
     pub made_of: MadeOf,
 }
 

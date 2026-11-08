@@ -190,7 +190,7 @@ impl AppState {
         let current = self.models.get(loaded.id())?;
         match self.carried_setup(loaded, current) {
             Ok(setup) => {
-                let shortfalls = current.shortfalls(setup.values(), &self.runtime.granted);
+                let shortfalls = self.entry_shortfalls(current, setup.values());
                 (!shortfalls.is_empty()).then(|| too_large_message(&shortfalls))
             }
             Err(error) => Some(setup_message(&error)),

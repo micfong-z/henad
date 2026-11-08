@@ -150,7 +150,7 @@ plan checks (`MergeError::CodeChanged`). Compiled against compiled keeps `BuildC
 `two_codes_under_one_label_are_listed_apart` (`src/tests/provenance.rs`),
 `a_search_resume_refuses_changed_code` (`src/tests/search.rs`) and
 `schema_json_names_code_only_for_runtime_models` (`schema.rs`) hold it. Keep them.
-Author text (decision D10): `ManifestModel.author` (`ManifestModelCode`, `#[serde(default,
+Author text: `ManifestModel.author` (`ManifestModelCode`, `#[serde(default,
 skip_serializing_if = "Option::is_none")]`) records `ModelSource::author`, a sheet's canonical
 text in henad-graph's `SHEET_CODE_FORMAT` (`henad-sheet/1`), filled beside `code` in
 `sweep.rs`. It stays outside the code identity, so no resume, merge or build comparison reads it.
@@ -190,13 +190,13 @@ takes a placer: for a graph it returns `ModelFileError::Graph` with the checker'
 otherwise builds the entry through `GridProgram::entry`, or for a graph of agents
 `AgentProgram::compile`'s errors or `AgentProgram::entry`. For a sheet the same errors of the
 lowered graph come as `ModelFileError::Sheet`, each placed at the sheet's line table with no pass
-and no node (decision D46). `graph_entry` also takes an optional `SheetAdditions`: a sheet passes
-its `SheetFile::fault_names` and the probes of its change lines, `sheet_probes(file)` (S31, D48,
-the one place that turns counting off for every sheet when it returns empty probes, and the probes
+and no node. `graph_entry` also takes an optional `SheetAdditions`: a sheet passes
+its `SheetFile::fault_names` and the probes of its change lines, `sheet_probes(file)`
+(the one place that turns counting off for every sheet when it returns empty probes, and the probes
 the app's preview compiles with too). A grid sheet compiles through
 `GridProgram::compile_with_probes`, and a sheet of agents through
 `AgentProgram::compile_with_probes_and_fault_names`, so a capped fold's fault names the sheet's
-lines (D47) and each counted step counts the lines' fires. A
+lines and each counted step counts the lines' fires. A
 grid sheet with no property lowers to a graph with no lane and no pass, whose errors are in IR
 words, so `entry` returns the sheet's own `SHEET_EMPTY` warning, raised to an error at `[world]`,
 before `graph_entry` runs
@@ -233,12 +233,11 @@ edit copies of it by its text.
 `the_header_dispatches_on_the_kind` (a sheet too). `src/tests/sheet_file.rs` holds
 `every_sheet_starter_reads_checks_and_builds_an_entry` (over `sheet::starters()`, the entry's code
 hash the file's), `a_sheet_error_comes_back_placed_at_its_line` (a checker error at
-`[card.line.l2]` and the interim refusal of a rate line at `[card.line.l5]`, neither naming a pass
-or a node, an unknown key, a newer sheet version), `a_sheet_warning_comes_back_placed_at_its_line`,
+`[card.line.l2]` and the refusal of a Repeat line on a grid card at `[card.line.l5]` with
+`sentence::NOT_YET_REPEAT`, neither naming a pass or a node, an unknown key, a newer sheet
+version), `a_sheet_warning_comes_back_placed_at_its_line`,
 `a_result_no_line_reads_gives_no_warning_about_the_graph`,
 `a_sheet_with_no_property_is_refused_in_its_own_words` and `a_sheet_is_held_to_its_size_limit`.
-The rate refusal holds until rates lower. A later milestone that lowers rates plants another
-interim refusal there. Keep them.
 `progress.rs` is the `Progress` trait the host renders. The library never prints. `device.rs`
 (`acquire_headless`) acquires a GPU device with no window or surface, at the WebGPU baseline
 raised by `gpu::limits::raise`. An adapter below the baseline, as a GL adapter can be, gets

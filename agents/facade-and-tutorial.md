@@ -7,9 +7,9 @@ nothing but the `params!` forward and its hidden `__macro_support`: the root ite
 gated `models` (`example-models`), `app` (`app`), `cli` (`cli`), `testing` (`testing`) and
 `rules` (`model-files`: the grid rules, the model files and `compose_wgsl`), `graph`
 (`model-files`, which then also turns on `dep:henad-graph`: henad-graph's root items and its
-public modules, named one by one, `sheet` and `keys` among them, and `KIND_SHEET` from `sheet`
-beside `KIND_GRAPH`), and `henad::prelude`. The `rules` doc names the three kinds a `ModelFile`
-holds, and the `graph` doc names `SheetFile`. Each
+public modules, named one by one, `sheet`, `keys` and `normal` among them, and `KIND_SHEET` from
+`sheet` beside `KIND_GRAPH`), and `henad::prelude`. The `rules` doc names the three kinds a
+`ModelFile` holds, and the `graph` doc names `SheetFile`. Each
 re-export fixes its item's one documented path, and the guides name items by these paths alone.
 `henad::explore` keeps henad-core's planning modules as modules (`spec`,
 `plan`, `search` and the rest), and `henad::authoring` globs henad-core's `authoring::model`

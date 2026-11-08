@@ -26,7 +26,7 @@ use henad_graph::sheet::document::{
     SheetProperty, SheetState, SheetTime, SheetValue, Slot, StartRule, StartsAs, StartsAsRow,
 };
 use henad_graph::sheet::edit::{
-    STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem, suggested_state_color,
+    IdSpace, STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem, is_reserved_name, suggested_state_color,
 };
 use henad_graph::sheet::format_number;
 use henad_graph::sheet::rates::chance_line_numbers;
@@ -55,6 +55,7 @@ use henad_graph::sheet::sentence::{
     starts_low_place, starts_otherwise_name, starts_place, starts_row_place, state_color_name, state_name_field,
     tick_unit_choice, unit_suggestions, value_field_name, value_slider_name, world_side_out_of_range,
 };
+use henad_graph::sheet::sentence::{AGENT_WALLS_SENTENCE, AGENT_WRAP_TOOLTIP, name_reserved};
 use henad_graph::sheet::sentence::{
     ANYWHERE_AT_RANDOM, ARROW_KIND, ARROW_KIND_DESCRIPTION, BY_HEADING_NOTE, COLOR_AGENTS_BY, COLOR_GROUND_BY,
     COUNT_AGENTS_LEAD, COUNT_AGENTS_MEASURE, HEADING_KIND, HEADING_KIND_DESCRIPTION, HEADING_START, NO, PAINTED,
@@ -69,14 +70,14 @@ use super::help::{Help, help_button};
 use super::widgets::{
     DialogOutcome, NewParameterDialog, NumberUse, Picker, PickerChoice, PickerGroup, PickerItem, chip_ui, color_button,
     color_name, color32, commit_area, commit_field, field_message, forget_field, message_ui, new_parameter_modal,
-    set_name, suggestion_field,
+    refusal_text, set_name, suggestion_field,
 };
 use crate::icons::material_design_icons::MDI_INFORMATION;
 use crate::ui::sweep::layout::{add_button, destructive_button, filled_button};
 
 mod agents;
 
-/// A value the world tries for a parameter of the sheet while the model keeps its own (D88).
+/// A value the world tries for a parameter of the sheet while the model keeps its own.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SheetTrial {
     /// Id of the parameter.
@@ -418,7 +419,7 @@ struct NumberField<'a> {
     id: Id,
     /// Value the sheet holds there, `None` where the sheet holds nothing.
     current: Option<&'a Slot>,
-    /// What the number fills.
+    /// Target the number fills.
     target: NumberTarget,
     /// Whether the number is a chance or any other number.
     number_use: NumberUse,
@@ -499,7 +500,14 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(section.heading()).strong());
-                    help_button(ui, Help::Section(section));
+                    let agents = document.world.made_of == MadeOf::Agents;
+                    help_button(
+                        ui,
+                        match section {
+                            SheetSection::World if agents => Help::AgentWorld,
+                            _ => Help::Section(section),
+                        },
+                    );
                 });
                 match section {
                     SheetSection::Purpose => purpose(ui, document, pane.widgets, &mut pending),
@@ -510,7 +518,7 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
                     SheetSection::Events => agents::events(ui, document, pane, &mut pending),
                     SheetSection::Parameters => parameters(ui, document, pane, trials, &mut pending),
                     SheetSection::Measures => measures(ui, document, pane, &mut pending),
-                    SheetSection::Colours => colours(ui, document, pane.widgets, &mut pending),
+                    SheetSection::Colours => colors(ui, document, pane.widgets, &mut pending),
                     SheetSection::Buttons => buttons(ui, document, report, pane, &mut pending),
                     _ => {}
                 }
@@ -551,16 +559,6 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
                 _ => pane.refusal = message,
             }
         }
-    }
-}
-
-/// Returns the reason `error` gives for a refused edit as a sentence.
-fn refusal_text(error: &SheetEditError) -> String {
-    let text = error.to_string();
-    let mut characters = text.chars();
-    match characters.next() {
-        Some(first) => format!("{}{}.", first.to_uppercase(), characters.as_str()),
-        None => text,
     }
 }
 
@@ -615,8 +613,11 @@ fn world(ui: &mut Ui, document: &SheetDocument, pane: &PaneState, pending: &mut 
     if let Some(message) = field_message(ui, width_id).or_else(|| field_message(ui, height_id)) {
         message_ui(ui, &message);
     }
+    let agents = world.made_of == MadeOf::Agents;
     let (words, sentence, tooltip) = match world.edges {
+        Edges::Walls if agents => (WALLS, AGENT_WALLS_SENTENCE, AGENT_WALLS_SENTENCE),
         Edges::Walls => (WALLS, WALLS_SENTENCE, WALLS_SENTENCE),
+        _ if agents => (WRAP_AROUND, WRAP_SENTENCE, AGENT_WRAP_TOOLTIP),
         _ => (WRAP_AROUND, WRAP_SENTENCE, WRAP_TOOLTIP),
     };
     ui.horizontal(|ui| {
@@ -1674,8 +1675,8 @@ fn default_color(index: usize) -> Color {
 ///
 /// # Errors
 ///
-/// Returns the message on an empty or taken name, a States property with fewer than two named states, or two states
-/// of one name.
+/// Returns the message on an empty or taken name, the name of a new property that Henad keeps for itself, a States
+/// property with fewer than two named states, or two states of one name.
 fn check_form(document: &SheetDocument, form: &PropertyForm) -> Result<(), String> {
     let name = form.name.trim();
     if name.is_empty() {
@@ -1687,6 +1688,10 @@ fn check_form(document: &SheetDocument, form: &PropertyForm) -> Result<(), Strin
         .any(|property| property.name.to_lowercase() == name.to_lowercase());
     if taken {
         return Err(property_name_taken(name));
+    }
+    // A rename keeps the id, so only a new property mints one.
+    if form.editing.is_none() && is_reserved_name(name, IdSpace::Item) {
+        return Err(name_reserved(name));
     }
     if form.kind == PropertyType::States {
         let names: Vec<String> = form
@@ -1794,12 +1799,12 @@ fn form_edit(form: PropertyForm) -> EditRun {
             starts_as: start.map(Box::new),
         })?;
         // The first property made colours the cells. A States property does so through its command.
-        let uncoloured = form.thing == CELLS
+        let uncolored = form.thing == CELLS
             && !builder.document().colors.contains_key(CELLS)
             && !properties_of(builder.document(), CELLS)
                 .iter()
                 .any(|property| property.property_type == PropertyType::States);
-        if form.editing.is_none() && uncoloured {
+        if form.editing.is_none() && uncolored {
             builder.apply(SheetEdit::SetColorRule {
                 thing: CELLS.to_owned(),
                 rule: Some(shaded_rule(&id, None)),
@@ -2339,8 +2344,9 @@ fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, pending
         .filter(|property| property.property_type == PropertyType::States)
     {
         ui.weak(&property.name);
-        ui.horizontal_wrapped(|ui| {
-            for state in &property.states {
+        // One row per state. egui wraps no nested group, so a row of groups would run past a narrow pane.
+        for state in &property.states {
+            ui.horizontal(|ui| {
                 swatch(ui, state.color);
                 ui.label(&state.name);
                 let plotted = counts_of(document, &property.id, &state.id);
@@ -2366,9 +2372,8 @@ fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, pending
                         }
                     });
                 }
-                ui.add_space(8.0);
-            }
-        });
+            });
+        }
     }
     if !document.measures.is_empty() {
         ui.weak(PLOTTED);
@@ -2638,12 +2643,12 @@ fn color_rule_edit(thing: &str, property: &SheetProperty, previous: Option<&Colo
 
 /// Draws the Colours section: the property that colours the cells, or in a world of agents the property that colours
 /// the agents and the one that colours the ground. `widgets` is the id the pane's widgets are keyed under.
-fn colours(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Option<Pending>) {
+fn colors(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Option<Pending>) {
     if document.world.made_of != MadeOf::Agents {
-        colours_of(ui, document, CELLS, COLOR_CELLS_BY, widgets, pending);
+        colors_of(ui, document, CELLS, COLOR_CELLS_BY, widgets, pending);
         return;
     }
-    colours_of(
+    colors_of(
         ui,
         document,
         measured_thing(document),
@@ -2653,7 +2658,7 @@ fn colours(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Opt
     );
     if !properties_of(document, GROUND).is_empty() {
         ui.add_space(4.0);
-        colours_of(ui, document, GROUND, COLOR_GROUND_BY, widgets, pending);
+        colors_of(ui, document, GROUND, COLOR_GROUND_BY, widgets, pending);
     }
 }
 
@@ -2662,7 +2667,7 @@ fn colours(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Opt
 ///
 /// With no rule, or a rule over no property of `thing`, the select shows the first States property, or else the first
 /// property that can colour.
-fn colours_of(
+fn colors_of(
     ui: &mut Ui,
     document: &SheetDocument,
     thing: &str,
@@ -3042,7 +3047,8 @@ fn button_form(
 ///
 /// # Errors
 ///
-/// Returns the message on an empty name, or a name another button holds.
+/// Returns the message on an empty name, a name another button holds, or the name of a new button that Henad keeps for
+/// itself.
 fn check_button_form(document: &SheetDocument, form: &ButtonForm) -> Result<(), String> {
     let name = form.name.trim();
     if name.is_empty() {
@@ -3055,6 +3061,9 @@ fn check_button_form(document: &SheetDocument, form: &ButtonForm) -> Result<(), 
         .any(|button| button.name.to_lowercase() == name.to_lowercase());
     if taken {
         return Err(button_name_taken(name));
+    }
+    if form.editing.is_none() && is_reserved_name(name, IdSpace::Button) {
+        return Err(name_reserved(name));
     }
     Ok(())
 }

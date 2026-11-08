@@ -14,13 +14,13 @@ document cloned, every node with its id and key, so the copy runs tick for tick 
 one seed; header and target id and name from the options, header and target description
 `sentence::converted_description` ("Converted from the author model Game of Life. Edit it as a node
 graph."). The copy's code differs from the sheet's, since the id, name and description enter the
-semantic text (D30), and `origin.code` names the sheet's. `ConvertOptions { id, name, file, date }`
+semantic text, and `origin.code` names the sheet's. `ConvertOptions { id, name, file, date }`
 are public fields; `ConvertOptions::new(&SheetDocument, date, taken)` numbers the copy:
 `<id>_expert` and `sentence::expert_copy_name`, then `<id>_expert_<n>` and "(expert n)" through
 `expert_copy_number_name` while `taken(id, name)` says either is used, up to 999 tries, and `file`
 is `<sheet id>.toml`. The library reads no clock and knows no installed model, so the date and
 `taken` come from the caller. `ConvertRefusal::of(&SheetReport)` returns `Errors` before
-`SkippedLines` (D19), and `tooltip()` the two tooltips of the final editor's wording table
+`SkippedLines`, and `tooltip()` the two tooltips of the wording table
 (`CONVERT_NEEDS_FIXES`, `CONVERT_NEEDS_FINISHED_LINES`). A sheet with errors has no `SheetFile`, so
 the app asks `of` on its `ParsedSheet::check`; `convert` itself rechecks and returns
 `ConvertError::Refused(SkippedLines)`. `ConvertError::Unreadable` holds a copy whose canonical text
@@ -28,10 +28,10 @@ does not read back.
 
 The copy's `[editor]` region, written through `EditorRegion`'s typed setters:
 
-- `origin`, a `ModelOrigin` with `kind = "sheet"` (D27), `model` and `name` of the sheet, `file`
-  ending in `.toml` (D28), `hash` the FNV-1a 64 of `SheetFile::to_toml` (`source_hash`), `code` and
+- `origin`, a `ModelOrigin` with `kind = "sheet"`, `model` and `name` of the sheet, `file`
+  ending in `.toml`, `hash` the FNV-1a 64 of `SheetFile::to_toml` (`source_hash`), `code` and
   `copy_code` the code hashes, each 16 lowercase hex digits, and `converted`.
-- `node.<id>.label` only, never `pos` (D68): the result node of each named line
+- `node.<id>.label` only, never `pos`: the result node of each named line
   (`LineMap::result_node`, the fold for a Look around) takes the line's name, a sheet-owned
   `lane.get` at path `cells.<property>` or `agents.<property>` (`property_read`, roots in
   `PROPERTY_ROOTS`, the lowering's `property_path`) takes "my Status" (`my_property_item`), a
@@ -65,10 +65,10 @@ The copy's `[editor]` region, written through `EditorRegion`'s typed setters:
   `new_value_words`, `measure_frame_words`, `button_frame_words` or `color_frame_words` ("colour
   each cell by Status", "colour each bird by Heading" for `by_heading`). An unknown path takes
   `SHEET_PART_WORDS`, never the raw path. Colours: blue for one line, purple shared, gray for
-  the sheet. `line` holds one origin, `lines` several (D29): line ids such as `l2`, or sheet part
+  the sheet. `line` holds one origin, `lines` several: line ids such as `l2`, or sheet part
   paths such as `cells.status.starts_as`, `measure.alive` or `button.clear`.
 - `[[editor.note]]` per `purpose` (titled "Purpose", `SheetSection::Purpose.heading`) and per
-  parameter `means` (titled with the parameter's name), no scope and no position (D24).
+  parameter `means` (titled with the parameter's name), no scope and no position.
 
 **`sheet/changes.rs`** (private, `sheet` re-exports `changes_since_conversion`, `ChangeGroup` and
 `ChangesError`). `changes_since_conversion(&GraphFile, &SheetFile)` refuses a copy with no origin

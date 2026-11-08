@@ -18,7 +18,7 @@ use henad_graph::sheet::sentence::{
     NEW_MEASURE, NEW_PARAMETER, NEW_PARAMETER_HEADING, NUMBER_KIND, PARAMETER_NAME_MISSING, PLOT, PLOT_EMPTY, PLOTTED,
     PROPERTY_NAME_MISSING, REDO, RESTART_NOTICE, SHADE, SHADE_ENDS_EQUAL, SHEET_EMPTY, START_AGAIN_FOR,
     START_AGAIN_TO_SEE, STATES_KIND, TYPE_A_CHANCE, TYPE_ONE_NUMBER, UNDO, USE_A_PARAMETER, WALLS_SENTENCE,
-    WORLD_EMPTY, WORLD_QUESTION, run_once, start_again_for, world_side_out_of_range,
+    WORLD_EMPTY, WORLD_QUESTION, name_reserved, run_once, start_again_for, world_side_out_of_range,
 };
 use henad_graph::sheet::{ParsedSheet, starters};
 use web_time::Instant;
@@ -29,10 +29,10 @@ use crate::tests::support::{
 };
 use crate::ui::editor::EditorModel;
 use crate::ui::editor::preview::{DEBOUNCE, PreviewState, poll_at};
-use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::new_model::create_blank_model;
 use crate::ui::editor::sheet::sheet_pane::slider_step;
 use crate::ui::editor::sheet::widgets::{NewParameterDialog, NumberUse, default_max};
+use crate::ui::editor::sheet::{CARD_PANE, SheetEditor};
 
 /// Returns a harness whose Editor holds a blank model, or `None` to skip on a machine without a device.
 fn blank() -> Option<Harness> {
@@ -552,6 +552,14 @@ fn the_property_form_checks_in_the_order_of_the_page() {
     type_into(&mut harness, "Property name", "status");
     click(&mut harness, DONE);
     assert!(shows(&mut harness, "A property called status already exists."));
+
+    // A name whose id Henad keeps for itself is refused in words, never by its id.
+    type_into(&mut harness, "Property name", "Count");
+    type_into(&mut harness, "State 1 name", "Few");
+    type_into(&mut harness, "State 2 name", "Many");
+    click(&mut harness, DONE);
+    assert!(shows(&mut harness, &name_reserved("Count")));
+    assert!(!shows(&mut harness, "The id 'count' is reserved."));
 }
 
 #[test]
@@ -602,6 +610,9 @@ fn the_new_parameter_dialog_starts_from_the_values_of_the_page() {
     );
     chance.max = "1.5".to_owned();
     assert_eq!(chance.parameter(&[]), Err(CHANCE_LIMITS_OUTSIDE.to_owned()));
+    let mut reserved = NewParameterDialog::new(NumberUse::Number, None, None);
+    reserved.name = "Grid width".to_owned();
+    assert_eq!(reserved.parameter(&[]), Err(name_reserved("Grid width")));
 
     // A typed chance outside 0 to 1 is refused, and a percent reads as its hundredth.
     assert_eq!(NumberUse::Chance.read("1.5"), Err(CHANCE_OUT_OF_RANGE));
@@ -1079,6 +1090,54 @@ fn measures_count_states_average_numbers_and_follow_their_state_colour() {
     click(&mut harness, "Remove measure Average of Food");
     harness.settle();
     assert!(sheet(&harness).document().measures.is_empty());
+}
+
+#[test]
+fn every_plot_box_of_three_states_stays_in_the_sheet_pane_and_takes_a_click() {
+    let Some(mut harness) = blank() else {
+        return;
+    };
+    // A narrow Editor, as a docked tab beside the Viewport and Charts leaves it.
+    harness.screen = egui::vec2(450.0, 1000.0);
+    click(&mut harness, ADD_PROPERTY);
+    type_into(&mut harness, "Property name", "Health");
+    type_into(&mut harness, "State 1 name", "Susceptible");
+    type_into(&mut harness, "State 2 name", "Infected");
+    click(&mut harness, ADD_STATE);
+    type_into(&mut harness, "State 3 name", "Recovered");
+    click(&mut harness, DONE);
+    harness.settle();
+
+    let nodes = harness.settle();
+    let pane_right = nodes
+        .iter()
+        .filter(|node| node.value == CARD_PANE)
+        .find_map(|node| node.bounds)
+        .expect("the Card heading")
+        .left();
+    for state in ["Susceptible", "Infected", "Recovered"] {
+        let name = format!("Plot {state}");
+        let right = nodes
+            .iter()
+            .filter(|node| node.label == name)
+            .find_map(|node| node.bounds)
+            .expect("a Plot box")
+            .right();
+        assert!(
+            right <= pane_right,
+            "{name} ends at {right}, past the sheet pane at {pane_right}"
+        );
+        click(&mut harness, &name);
+        harness.settle();
+        assert!(
+            sheet(&harness)
+                .document()
+                .measures
+                .iter()
+                .any(|measure| measure.name == state),
+            "{name} adds its measure"
+        );
+    }
 }
 
 #[test]

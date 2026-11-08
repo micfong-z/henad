@@ -94,8 +94,8 @@ impl SweepFiles {
 
 /// Returns a writer for the runs of `plan` that holds `runs.csv` and `series.csv` in memory, their headers written.
 ///
-/// `params` are the model's parameters, `measure` fixes the stat and reducer columns, and `time`, the model's time scale,
-/// adds the `time` column to `series.csv`.
+/// `params` are the model's parameters, `measure` fixes the stat and reducer columns, and `time`, the model's time
+/// scale, adds the `time` column to `series.csv`.
 ///
 /// # Errors
 ///

@@ -338,7 +338,7 @@ pub(super) fn move_line(card: &mut SheetCard, line_id: &str, direction: MoveDire
     let siblings = list_mut(card, parent.as_deref()).ok_or_else(missing)?.clone();
     let index = siblings.iter().position(|id| id == line_id).ok_or_else(missing)?;
     let block = holds_lines(card, line_id);
-    let (edge, neighbour) = match direction {
+    let (edge, neighbor) = match direction {
         MoveDirection::Up => (index == 0, index.checked_sub(1)),
         MoveDirection::Down => (index + 1 == siblings.len(), Some(index + 1)),
     };
@@ -364,12 +364,12 @@ pub(super) fn move_line(card: &mut SheetCard, line_id: &str, direction: MoveDire
         outer.insert(at, line_id.to_owned());
         return Ok(());
     }
-    let neighbour_index = neighbour.ok_or_else(missing)?;
-    let neighbour = siblings[neighbour_index].clone();
-    if !block && holds_lines(card, &neighbour) {
+    let neighbor_index = neighbor.ok_or_else(missing)?;
+    let neighbor = siblings[neighbor_index].clone();
+    if !block && holds_lines(card, &neighbor) {
         // A line beside a block moves into it, at its end from below and at its start from above.
         list_mut(card, parent.as_deref()).ok_or_else(missing)?.remove(index);
-        let inner = list_mut(card, Some(&neighbour)).ok_or_else(missing)?;
+        let inner = list_mut(card, Some(&neighbor)).ok_or_else(missing)?;
         match direction {
             MoveDirection::Up => inner.push(line_id.to_owned()),
             MoveDirection::Down => inner.insert(0, line_id.to_owned()),
@@ -378,7 +378,7 @@ pub(super) fn move_line(card: &mut SheetCard, line_id: &str, direction: MoveDire
     }
     list_mut(card, parent.as_deref())
         .ok_or_else(missing)?
-        .swap(index, neighbour_index);
+        .swap(index, neighbor_index);
     Ok(())
 }
 

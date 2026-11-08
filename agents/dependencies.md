@@ -21,10 +21,10 @@ henad-explore to henad-models, for its tests, the one from henad-models to henad
 to henad-models, for their unit tests without the feature. henad-models also takes henad-compute
 again as a dev-dependency, with `runtime-wgsl`, a feature on an edge the normal graph holds, and
 henad-explore with `model-files` beside `testing`. henad-models takes henad-graph as a path-only
-dev-dependency, for `src/tests/graph_corpus.rs`, which runs the host evaluator over the graph
-corpus. henad-graph sits beside henad-models in the graph and depends on neither it nor
-henad-explore, so this dev edge runs against no normal one. Path-only keeps it out of the
-package, which matters: the publish order puts henad-models before henad-graph.
+dev-dependency, for its tests over the graph corpus, the lowered fixtures and the sheets, which
+run the host evaluator and lower sheets. henad-graph sits beside henad-models in the graph and
+depends on neither it nor henad-explore, so this dev edge runs against no normal one. Path-only
+keeps it out of the package, which matters: the publish order puts henad-models before henad-graph.
 henad-app and henad-cli take henad-explore with `model-files`.
 
 henad-graph sits on henad-core and henad-compute, and outside egui. Three normal edges run onto it.

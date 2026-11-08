@@ -752,7 +752,7 @@ impl ConditionItem {
 
 // Blanks and their accessible names
 
-/// What a blank wants. It names the blank, titles its picker and words its skip note.
+/// Kind of value a blank wants. It names the blank, titles its picker and words its skip note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Blank {
@@ -896,11 +896,11 @@ pub enum LineSelect {
     SteerMode,
     /// Whether a Move line moves by an arrow or to a place.
     MoveMode,
-    /// What a Pick a cell line picks: the most, the least or a cell at random.
+    /// Rule a Pick a cell line picks by: the most, the least or a cell at random.
     Pick,
     /// The cell a Look at a cell line looks at.
     WhichCell,
-    /// How the summary at this index of a look at agents sums up the agents, from 0.
+    /// Kind of the summary at this index of a look at agents, the index counted from 0.
     LookSummary(usize),
 }
 
@@ -1031,8 +1031,11 @@ pub fn use_instead_name(prefix: &str, comparison: &str) -> String {
 /// Word "from" of a Become line, between its new state and its old state.
 pub const FROM_WORD: &str = "from";
 
-/// Tooltip of the word "from" of a Become line.
-pub const FROM_TOOLTIP: &str = "Only cells in this state now change";
+/// Returns the tooltip of the word "from" of a Become line on a card of which `thing` names one, such as "Only cells in
+/// this state now change".
+pub fn from_tooltip(thing: &str) -> String {
+    format!("Only {} in this state now change", plural(thing))
+}
 
 /// Returns a state's name as chips and pickers show it: `state`, or "Status Alive" with `property` when another
 /// property has a state of the same name.
@@ -1381,6 +1384,15 @@ pub fn repeated_result_name(name: &str, count: usize) -> String {
     }
 }
 
+/// Returns the error of a field outside the cards left empty, such as "Health has an empty field. Type a chance in
+/// it."
+///
+/// `name` is the name of the property, measure or button that holds the field, or the heading of its section, and
+/// `want` is [`Blank::want`].
+pub fn empty_field(name: &str, want: &str) -> String {
+    format!("{name} has an empty field. Type {want} in it.")
+}
+
 // Notes under a line, in the order a line shows them
 
 /// Returns the skip note of a line whose first empty blank wants `want`, such as "Not run yet: choose a state", where
@@ -1479,41 +1491,47 @@ pub fn count_values_words(values: &[u32]) -> String {
 
 /// Returns the gap note under the last of the Become lines `lines`, which test the count `count`.
 ///
-/// `values` are the values of the count that no line applies to, and `property` is the property those cells keep. For
-/// example "None of lines 2 and 3 applies when B in my block is 4 or 5. Those cells keep their Opinion."
-pub fn gap_note(lines: &[usize], count: &str, values: &[u32], property: &str) -> String {
+/// `values` are the values of the count that no line applies to, `property` is the property those elements keep, and
+/// `thing` names one of what the card runs on. For example "None of lines 2 and 3 applies when B in my block is 4 or
+/// 5. Those cells keep their Opinion."
+pub fn gap_note(lines: &[usize], count: &str, values: &[u32], property: &str, thing: &str) -> String {
     format!(
-        "None of lines {} applies when {count} is {}. Those cells keep their {property}.",
+        "None of lines {} applies when {count} is {}. Those {} keep their {property}.",
         number_list(lines),
-        count_values_words(values)
+        count_values_words(values),
+        plural(thing)
     )
 }
 
 /// Returns the coverage note under the last of the Become lines `lines` that together set every value of the count
-/// `count`, where `ends` holds each end state with the values of the count that give it.
+/// `count`.
 ///
-/// For example "Lines 2 and 3 cover every value of B in my block. A cell ends the tick A when it is 0 to 4 and B when
-/// it is 5 to 9."
-pub fn coverage_note(lines: &[usize], count: &str, ends: &[(&str, &[u32])]) -> String {
+/// `ends` holds each end state with the values of the count that give it, and `thing` names one of what the card runs
+/// on. For example "Lines 2 and 3 cover every value of B in my block. A cell ends the tick A when it is 0 to 4 and B
+/// when it is 5 to 9."
+pub fn coverage_note(lines: &[usize], count: &str, ends: &[(&str, &[u32])], thing: &str) -> String {
     let ends: Vec<String> = ends
         .iter()
         .map(|(state, values)| format!("{state} when it is {}", count_values_words(values)))
         .collect();
     format!(
-        "Lines {} cover every value of {count}. A cell ends the tick {}.",
+        "Lines {} cover every value of {count}. {} ends the tick {}.",
         number_list(lines),
+        upper_first(&with_article(thing)),
         word_list(&ends)
     )
 }
 
-/// Returns the order note under the last of the Become lines `lines`, which change cells in the old states `states`.
+/// Returns the order note under the last of the Become lines `lines`, which change elements in the old states `states`
+/// on a card of which `thing` names one.
 ///
 /// For example "Lines 2 and 3 change different cells (Dead and Alive), so their order does not matter."
-pub fn order_note(lines: &[usize], states: &[&str]) -> String {
+pub fn order_note(lines: &[usize], states: &[&str], thing: &str) -> String {
     let states: Vec<String> = states.iter().map(|state| (*state).to_owned()).collect();
     format!(
-        "Lines {} change different cells ({}), so their order does not matter.",
+        "Lines {} change different {} ({}), so their order does not matter.",
         number_list(lines),
+        plural(thing),
         word_list(&states)
     )
 }
@@ -1567,9 +1585,9 @@ pub fn only_when_note(number: usize, condition: Option<&str>) -> String {
     }
 }
 
-/// Returns the note under a result line inside When line `number`.
-pub fn worked_out_everywhere_note(number: usize) -> String {
-    format!("Worked out for every cell, whatever line {number} says. Only lines inside line {number} can use it.")
+/// Returns the note under a result line inside When line `number` on a card of which `thing` names one.
+pub fn worked_out_everywhere_note(number: usize, thing: &str) -> String {
+    format!("Worked out for every {thing}, whatever line {number} says. Only lines inside line {number} can use it.")
 }
 
 /// Note under a When that holds no line.
@@ -1583,18 +1601,19 @@ pub fn otherwise_words(lines: &[usize]) -> String {
     format!("{OTHERWISE} ({})", otherwise_description(lines))
 }
 
-/// Returns the tooltip of the "otherwise" words, where `lines` holds the higher lines, `property` the property they
-/// change and `state` the state a cell must be in for both to apply.
+/// Returns the tooltip of the "otherwise" words, where `lines` holds the higher lines.
 ///
-/// For example "Line 2 also changes Cover for a cell that is Tree. When both apply, line 2 wins."
-pub fn otherwise_tooltip(lines: &[usize], property: &str, state: Option<&str>) -> String {
+/// `property` is the property the lines change, `state` the state one `thing` must be in for both to apply, and
+/// `thing` names one of what the card runs on. For example "Line 2 also changes Cover for a cell that is Tree. When
+/// both apply, line 2 wins."
+pub fn otherwise_tooltip(lines: &[usize], property: &str, state: Option<&str>, thing: &str) -> String {
     let who = if lines.len() == 1 {
         format!("Line {} also changes", number_list(lines))
     } else {
         format!("Lines {} also change", number_list(lines))
     };
     let for_whom = state
-        .map(|state| format!(" for a cell that is {state}"))
+        .map(|state| format!(" for {} that is {state}", with_article(thing)))
         .unwrap_or_default();
     let wins = if lines.len() == 1 {
         format!("When both apply, line {} wins.", number_list(lines))
@@ -1608,10 +1627,10 @@ pub fn otherwise_tooltip(lines: &[usize], property: &str, state: Option<&str>) -
 ///
 /// `prefix` is the line prefix, such as "Line 6" or "Clear line 2", and the tooltip of [`otherwise_tooltip`] follows
 /// the first sentence.
-pub fn otherwise_notice(prefix: &str, lines: &[usize], property: &str, state: Option<&str>) -> String {
+pub fn otherwise_notice(prefix: &str, lines: &[usize], property: &str, state: Option<&str>, thing: &str) -> String {
     format!(
         "{prefix} now starts with otherwise. {}",
-        otherwise_tooltip(lines, property, state)
+        otherwise_tooltip(lines, property, state, thing)
     )
 }
 
@@ -1625,29 +1644,32 @@ pub fn each_tick(length: Option<&str>) -> String {
     }
 }
 
-/// Returns the subject of a rate note on a Become line from `old_state` to `new_state`.
+/// Returns the subject of a rate note on a Become line from `old_state` to `new_state`, on a card of which `thing`
+/// names one.
 ///
 /// It reads "a Susceptible cell becomes Infected" ("an" before a vowel), "a cell becomes Infected" from any state or
 /// with the old state empty, or "a cell changes" with the new state empty.
-pub fn become_subject(old_state: Option<&str>, new_state: Option<&str>) -> String {
+pub fn become_subject(thing: &str, old_state: Option<&str>, new_state: Option<&str>) -> String {
     match (old_state, new_state) {
-        (_, None) => "a cell changes".to_owned(),
-        (None, Some(new)) => format!("a cell becomes {new}"),
-        (Some(old), Some(new)) => format!("{} {old} cell becomes {new}", indefinite_article(old)),
+        (_, None) => format!("{} changes", with_article(thing)),
+        (None, Some(new)) => format!("{} becomes {new}", with_article(thing)),
+        (Some(old), Some(new)) => format!("{} {old} {thing} becomes {new}", indefinite_article(old)),
     }
 }
 
-/// Subject of a rate note on a Set line.
-pub const SET_SUBJECT: &str = "a cell takes the new value";
-
-/// Returns the subject of a rate note on When line `number`.
-pub fn when_subject(number: usize) -> String {
-    format!("the lines inside line {number} apply to a cell")
+/// Returns the subject of a rate note on a Set line, such as "a cell takes the new value".
+pub fn set_subject(thing: &str) -> String {
+    format!("{} takes the new value", with_article(thing))
 }
 
-/// Returns the subject of a rate note on the result `name`.
-pub fn result_subject(name: &str) -> String {
-    format!("the result {name} is yes for a cell")
+/// Returns the subject of a rate note on When line `number`, such as "the lines inside line 4 apply to a cell".
+pub fn when_subject(number: usize, thing: &str) -> String {
+    format!("the lines inside line {number} apply to {}", with_article(thing))
+}
+
+/// Returns the subject of a rate note on the result `name`, such as "the result Recovery happens is yes for a cell".
+pub fn result_subject(name: &str, thing: &str) -> String {
+    format!("the result {name} is yes for {}", with_article(thing))
 }
 
 /// Returns the notice shown when a rate's unit sets one tick, such as "One tick is now 1 day. Change it on the sheet."
@@ -1787,18 +1809,26 @@ pub fn growing_chance_note(tick: Option<&str>, subject: &str, chance_words: &str
     )
 }
 
-/// Returns the note of a group of competing rate lines that take cells out of `state`.
+/// Returns the note of a group of competing rate lines that take elements out of `state`, on a card of which `thing`
+/// names one.
 ///
 /// `chance` is the chance of leaving, `shares` holds each new state with its share, and `rates` each line's rate, all
 /// formatted. For example "Each tick (1 day), an Infected cell leaves Infected with chance 0.0952: Recovered 0.0476,
 /// Dead 0.0476. A rate is not a chance. Henad turns it into one as 1 − e^(−(0.05 + 0.05) × 1 day)."
-pub fn competing_note(tick: &str, state: &str, chance: &str, shares: &[(&str, &str)], rates: &[&str]) -> String {
+pub fn competing_note(
+    tick: &str,
+    state: &str,
+    chance: &str,
+    shares: &[(&str, &str)],
+    rates: &[&str],
+    thing: &str,
+) -> String {
     let shares: Vec<String> = shares
         .iter()
         .map(|(new_state, share)| format!("{new_state} {share}"))
         .collect();
     format!(
-        "{}, {} {state} cell leaves {state} with chance {chance}: {}. {RATE_IS_NOT_A_CHANCE} Henad turns it into one \
+        "{}, {} {state} {thing} leaves {state} with chance {chance}: {}. {RATE_IS_NOT_A_CHANCE} Henad turns it into one \
          as 1 − e^(−({}) × {tick}).",
         each_tick(Some(tick)),
         indefinite_article(state),
@@ -1812,15 +1842,16 @@ pub fn long_tick_chance(chance: &str, count: u32) -> String {
     format!("up to {chance} with {count}")
 }
 
-/// Returns the description of a rate note on how long a cell stays in `state`.
+/// Returns the description of a rate note on how long one element stays in `state`.
 ///
-/// `stay` is the mean stay at this tick length and `limit` the mean stay as the tick shrinks, both with their unit,
-/// and `rate` the rate. For example "On average a cell stays Infected 10.5 days at this tick length. It approaches
-/// 1/0.1 = 10 days as the tick shrinks."
-pub fn mean_stay_note(state: &str, stay: &str, rate: &str, limit: &str) -> String {
+/// `stay` is the mean stay at this tick length and `limit` the mean stay as the tick shrinks, both with their unit.
+/// `rate` is the rate, and `thing` names one of what the card runs on. For example "On average a cell stays Infected
+/// 10.5 days at this tick length. It approaches 1/0.1 = 10 days as the tick shrinks."
+pub fn mean_stay_note(state: &str, stay: &str, rate: &str, limit: &str, thing: &str) -> String {
     format!(
-        "On average a cell stays {state} {stay} at this tick length. It approaches 1/{rate} = {limit} as the tick \
-         shrinks."
+        "On average {} stays {state} {stay} at this tick length. It approaches 1/{rate} = {limit} as the tick \
+         shrinks.",
+        with_article(thing)
     )
 }
 
@@ -1847,6 +1878,15 @@ pub const NOT_YET_AGENT_WALLS: &str = "Walls around agents that move by an arrow
 
 /// Error on a Move by line in a sheet whose ground blocks some states.
 pub const NOT_YET_BLOCKED_MOVE_BY: &str = "Blocked ground under agents that move by an arrow is not supported yet.";
+
+/// Error on a line too long for Henad to run, such as one that tests against hundreds of values.
+pub const LINE_TOO_LONG: &str = "This line is too long. Use shorter lists in it.";
+
+/// Error on a line whose number is past the largest a line can have.
+pub const LINE_NUMBER_TOO_LARGE: &str = "This line has too large a number.";
+
+/// Error on a sheet too large for Henad to run outside its lines.
+pub const SHEET_TOO_LARGE: &str = "The sheet is too large. Use fewer properties, measures or buttons.";
 
 // Errors on the ground and the places agents move to
 
@@ -1909,10 +1949,10 @@ pub fn look_name(lines: &[(usize, Option<&str>)]) -> String {
 /// Returns the error on looks at agents named `look` that cost too much at `count` agents.
 ///
 /// `things` is the plural of the kind of agent. For example "Line 1, Flockmates: looks at too many birds at 1,000,000
-/// birds. A shorter distance or fewer birds would fit."
+/// birds. Use a shorter distance or fewer birds."
 pub fn look_costs_too_much(look: &str, things: &str, count: u64) -> String {
     format!(
-        "{}: looks at too many {things} at {} {things}. A shorter distance or fewer {things} would fit.",
+        "{}: looks at too many {things} at {} {things}. Use a shorter distance or fewer {things}.",
         upper_first(look),
         whole_number_text(count)
     )
@@ -1921,40 +1961,40 @@ pub fn look_costs_too_much(look: &str, things: &str, count: u64) -> String {
 /// Returns the error on the card headed `heading` that costs too much at `count` agents.
 ///
 /// `things` is the plural of the kind of agent. For example "Each tick, every bird: too much work at 1,000,000 birds.
-/// Fewer birds would fit."
+/// Use fewer birds."
 pub fn card_costs_too_much(heading: &str, things: &str, count: u64) -> String {
     format!(
-        "{heading}: too much work at {} {things}. Fewer {things} would fit.",
+        "{heading}: too much work at {} {things}. Use fewer {things}.",
         whole_number_text(count)
     )
 }
 
 /// Returns the error on the line named `line` whose work for one `thing` in one run of its card passes the limit,
-/// with `fix` the change that would fit.
+/// with `fix` the change that fits.
 ///
-/// `line` is a name as [`look_name`] writes it. For example "Line 1: too much work for one walker. A smaller maximum
-/// for Steps per tick would fit."
+/// `line` is a name as [`look_name`] writes it. For example "Line 1: too much work for one walker. Set a smaller
+/// maximum for Steps per tick."
 pub fn line_costs_too_much(line: &str, thing: &str, fix: &str) -> String {
     format!("{}: too much work for one {thing}. {fix}", upper_first(line))
 }
 
-/// Returns the change to the Repeat over the parameter named `parameter` that would fit: "A smaller maximum for Steps
-/// per tick would fit."
+/// Returns the change to the Repeat over the parameter named `parameter` that fits: "Set a smaller maximum for Steps
+/// per tick."
 pub fn smaller_maximum(parameter: &str) -> String {
-    format!("A smaller maximum for {parameter} would fit.")
+    format!("Set a smaller maximum for {parameter}.")
 }
 
-/// Change to a Repeat of a fixed number of times that would fit.
-pub const FEWER_TIMES: &str = "A Repeat of fewer times would fit.";
+/// Change to a Repeat of a fixed number of times that fits.
+pub const FEWER_TIMES: &str = "Repeat fewer times.";
 
-/// Change to a card or a line other than a Repeat that would fit.
-pub const FEWER_LINES: &str = "Fewer lines on this card would fit.";
+/// Change to a card or a line other than a Repeat that fits.
+pub const FEWER_LINES: &str = "Use fewer lines on this card.";
 
 /// Returns the error on the starts of `count` agents that cost too much, `things` the plural of the kind of agent:
-/// "Starting 1,000,000 birds takes too much work. Fewer birds would fit."
+/// "Starting 1,000,000 birds takes too much work. Use fewer birds."
 pub fn start_costs_too_much(things: &str, count: u64) -> String {
     format!(
-        "Starting {} {things} takes too much work. Fewer {things} would fit.",
+        "Starting {} {things} takes too much work. Use fewer {things}.",
         whole_number_text(count)
     )
 }
@@ -1990,11 +2030,13 @@ fn whole_number_text(count: u64) -> String {
 /// Word that starts the lower of two rate lines that compete, in place of "otherwise".
 pub const COMPETING_WORD: &str = "or";
 
-/// Returns the tooltip of the word of competing rate lines `lines`, which take cells out of `state`.
-pub fn competing_tooltip(lines: &[usize], state: &str) -> String {
+/// Returns the tooltip of the word of competing rate lines `lines`, which take elements out of `state` on a card of
+/// which `thing` names one.
+pub fn competing_tooltip(lines: &[usize], state: &str, thing: &str) -> String {
     format!(
-        "Lines {} compete. A cell leaves {state} at the sum of their rates, and each line takes its share.",
-        number_list(lines)
+        "Lines {} compete. {} leaves {state} at the sum of their rates, and each line takes its share.",
+        number_list(lines),
+        upper_first(&with_article(thing))
     )
 }
 
@@ -2056,6 +2098,18 @@ pub const LINES_HELP: &str = "Every cell follows these lines each tick, from the
 /// Example of the Lines help.
 pub const LINES_HELP_EXAMPLE: &str = "Alive neighbours = count of the 8 cells around me whose Status is Alive";
 
+/// Text of the Lines help beside the card of a kind of agent.
+pub const LINES_HELP_AGENTS: &str = "Every agent of this kind follows these lines each tick, from the top. A line \
+                                     either works out a result, which lines below it can use, or changes one of my \
+                                     properties. Everyone reads the world as it was at the start of the tick, and all \
+                                     changes land together at the end of it. Whatever no line changes stays as it \
+                                     was. When two changes to one property both apply, the higher line wins, and the \
+                                     lower one shows \"otherwise\".";
+
+/// Example of the Lines help beside the card of a kind of agent.
+pub const LINES_HELP_AGENTS_EXAMPLE: &str =
+    "Too close = look at birds within Protected range: total of offset away from them (push)";
+
 /// Label before the example of a help popover.
 pub const HELP_EXAMPLE_LABEL: &str = "Example:";
 
@@ -2090,13 +2144,38 @@ pub const FORBIDDEN_WORDS: [&str; 19] = [
     "compile",
 ];
 
+/// Returns whether `word` is one of [`FORBIDDEN_WORDS`] in any case, or one of them with an ending of a plural or a
+/// verb: "s", "es", "d", "ed" or "ing", and "ies" for a final "y".
+///
+/// ```
+/// use henad_graph::sheet::sentence::is_forbidden_word;
+///
+/// assert!(is_forbidden_word("Nodes"));
+/// assert!(is_forbidden_word("compiled"));
+/// assert!(is_forbidden_word("categories"));
+/// assert!(!is_forbidden_word("portion"));
+/// assert!(!is_forbidden_word("iron"));
+/// ```
+pub fn is_forbidden_word(word: &str) -> bool {
+    let word = word.to_ascii_lowercase();
+    FORBIDDEN_WORDS.iter().any(|forbidden| {
+        let forbidden = forbidden.to_ascii_lowercase();
+        let Some(ending) = word.strip_prefix(forbidden.as_str()) else {
+            return forbidden
+                .strip_suffix('y')
+                .is_some_and(|stem| word.strip_prefix(stem) == Some("ies"));
+        };
+        matches!(ending, "" | "s" | "es" | "d" | "ed" | "ing")
+    })
+}
+
 // The sheet
 
 /// One section of the sheet, with its heading and its help.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SheetSection {
-    /// What the model is for.
+    /// Purpose of the model.
     Purpose,
     /// The grid, its edges and the length of one tick.
     World,
@@ -2251,7 +2330,7 @@ pub const CANCEL: &str = "Cancel";
 /// Placeholder of the Purpose field, which takes the heading as its accessible name.
 pub const PURPOSE_PLACEHOLDER: &str = "What is this model for?";
 
-/// What the world is made of, in the World section and in the New model dialog.
+/// Name of a world of cells, in the World section and in the New model dialog.
 pub const CELLS_ON_A_GRID: &str = "Cells on a grid";
 
 /// Label of the size of the grid.
@@ -2280,6 +2359,20 @@ pub const WRAP_SENTENCE: &str = "The left edge joins the right edge, and the top
 
 /// Sentence under the edges while they are walls, and the tooltip of [`WALLS`].
 pub const WALLS_SENTENCE: &str = "Cells on an edge have fewer cells around them.";
+
+/// Sentence under the edges of a world of agents while they are walls, and the tooltip of [`WALLS`] there.
+pub const AGENT_WALLS_SENTENCE: &str = "An agent near an edge has fewer agents around it.";
+
+/// Tooltip of [`WRAP_AROUND`] in a world of agents.
+pub const AGENT_WRAP_TOOLTIP: &str =
+    "An agent that leaves by one edge comes back at the opposite edge, and agents near opposite edges are neighbours.";
+
+/// Help of the World section of a world of agents, in place of [`SheetSection::help`].
+pub const WORLD_HELP_AGENTS: &str = "The open space the agents live in: its size, what happens at its edges, and how \
+                                     much time one tick stands for. A tick is one step of time, and every agent \
+                                     follows its card once per tick. Leave one tick as one step (no unit) when time \
+                                     has no unit. With Wrap around, an agent that leaves by one edge comes back at the \
+                                     opposite edge.";
 
 /// Tooltip of [`WRAP_AROUND`].
 pub const WRAP_TOOLTIP: &str =
@@ -2320,6 +2413,9 @@ pub const SHEET_EMPTY: &str = "Every cell has the properties listed here. Add th
 ///
 /// The Parameters tab shows it as the tooltip of a slider whose tried value rebuilds the preview at tick 0.
 pub const RESTART_NOTICE: &str = "Changes restart the world from tick 0.";
+
+/// Text of a sheet's preview while it waits for the run of another model, which Offload in the Playback tab ends.
+pub const PREVIEW_WAITS: &str = "Preview waits for the running model. Press Offload in Playback to show this one.";
 
 // The property form
 
@@ -2378,6 +2474,15 @@ pub const PROPERTY_NAME_MISSING: &str = "Type a name for the property.";
 pub fn property_name_taken(name: &str) -> String {
     format!("A property called {name} already exists.")
 }
+
+/// Returns the message on a new property, parameter, event or button named `name`, a name Henad keeps for itself,
+/// such as "Henad uses the name Count itself. Choose another name."
+pub fn name_reserved(name: &str) -> String {
+    format!("Henad uses the name {name} itself. Choose another name.")
+}
+
+/// Message on a refused edit whose name Henad keeps for itself, where the name is not at hand.
+pub const NAME_RESERVED: &str = "Henad uses that name itself. Choose another name.";
 
 /// Message on a States property with fewer than two states.
 pub const TOO_FEW_STATES: &str = "Give the property at least two states.";
@@ -2713,7 +2818,7 @@ pub const EDIT: &str = "Edit";
 /// Label of what a button does.
 pub const BUTTON_DOES: &str = "Does";
 
-/// What a button does that redraws how cells start, and the world's button of the same name.
+/// Action of a button that redraws how cells start, and the world's button of the same name.
 pub const START_AGAIN: &str = "Start again";
 
 /// Choice of [`START_AGAIN`] that redraws every property.
@@ -3342,6 +3447,16 @@ pub fn runs_differ(name: &str, copy: &str, tick: u64, measure: &str, copy_value:
     format!("{copy} first differs from {name} at tick {tick}: {measure} is {copy_value} against {value}.")
 }
 
+/// Returns the line shown once the runs of a copy `copy` and its source `name` differ, when either model does not
+/// replay exactly.
+///
+/// Two runs of such a model at one seed can differ, so no tick of the difference is named.
+pub fn runs_do_not_replay(name: &str, copy: &str) -> String {
+    format!(
+        "{name} does not replay exactly. Two runs at one seed can differ, so compare {copy} with {name} in the plot."
+    )
+}
+
 /// Returns the line shown when a copy and its source share no measure to compare.
 pub fn runs_share_no_measure(name: &str, copy: &str) -> String {
     format!("{copy} and {name} share no measure to compare.")
@@ -3438,6 +3553,11 @@ pub fn word_list(words: &[String]) -> String {
     }
 }
 
+/// Returns `word` after its indefinite article, such as "a cell" or "an ant".
+fn with_article(word: &str) -> String {
+    format!("{} {word}", indefinite_article(word))
+}
+
 /// Returns "an" before a word starting with a vowel, and "a" otherwise.
 fn indefinite_article(word: &str) -> &'static str {
     match word.chars().next().map(|first| first.to_ascii_lowercase()) {
@@ -3496,6 +3616,19 @@ pub(crate) fn plural(name: &str) -> String {
     }
 }
 
+/// Returns the word for one of the kind of thing `every` of `document`, as [`Sentences::thing_word`] does.
+pub(crate) fn thing_word(document: &SheetDocument, every: &str) -> String {
+    match every {
+        "cells" => "cell".to_owned(),
+        "ground" => "ground cell".to_owned(),
+        _ => document
+            .agents
+            .iter()
+            .find(|kind| kind.id == every)
+            .map_or_else(|| every.to_owned(), |kind| drop_ordinary_capital(&kind.name)),
+    }
+}
+
 // Parts of a sentence
 
 /// One part of a line's sentence as the card draws it.
@@ -3510,7 +3643,7 @@ pub enum SentencePart {
     /// A condition word in plain bold text: "when", "with chance" or "at rate", or on a When line "When", "When with
     /// chance" or "When at rate".
     ConditionWord(&'static str),
-    /// The word "from" of a Become line, which has the tooltip [`FROM_TOOLTIP`].
+    /// The word "from" of a Become line, which has the tooltip of [`from_tooltip`].
     From,
     /// A chosen value, drawn as a chip.
     Chip(SentenceChip),
@@ -3570,7 +3703,7 @@ pub struct PlacedPart {
 pub struct PartPlace {
     /// Slot or field of the line, or of a phrase inside it.
     pub target: PlaceTarget,
-    /// What the place takes, the blank it shows while empty, `None` for a select.
+    /// Kind of value the place takes, the blank it shows while empty, `None` for a select.
     pub want: Option<Blank>,
 }
 
@@ -3624,7 +3757,7 @@ pub enum FieldPlace {
     SecondOperand,
     /// The mode of a Steer or Move line.
     Mode,
-    /// What a Pick a cell line picks.
+    /// Rule a Pick a cell line picks by.
     Pick,
     /// The ground property a Pick a cell line ranks cells by.
     RankedBy,
@@ -3634,7 +3767,7 @@ pub enum FieldPlace {
     GroundProperty,
     /// The event a Record line records.
     Event,
-    /// How the summary at this index of a look at agents sums up the agents, from 0.
+    /// Kind of the summary at this index of a look at agents, the index counted from 0.
     LookSummary(usize),
 }
 
@@ -3672,7 +3805,7 @@ impl PlaceTarget {
 /// A chosen value in a line's sentence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SentenceChip {
-    /// What the chip refers to. It picks the chip's colour.
+    /// Kind of thing the chip refers to. It picks the chip's colour.
     pub kind: ChipKind,
     /// Grey word before the name: "my", "my new" or "their", empty for any other chip.
     pub lead: &'static str,
@@ -3691,7 +3824,7 @@ impl SentenceChip {
     }
 }
 
-/// What a chip of a sentence refers to.
+/// Kind of thing a chip of a sentence refers to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ChipKind {
@@ -3908,16 +4041,7 @@ impl<'a> Sentences<'a> {
     /// Returns the word for one of the kind of thing `every`: "cell" for `cells`, "ground cell" for `ground`, and an
     /// agent kind's name, such as "bird".
     pub fn thing_word(&self, every: &str) -> String {
-        match every {
-            "cells" => "cell".to_owned(),
-            "ground" => "ground cell".to_owned(),
-            _ => self
-                .document
-                .agents
-                .iter()
-                .find(|kind| kind.id == every)
-                .map_or_else(|| every.to_owned(), |kind| drop_ordinary_capital(&kind.name)),
-        }
+        thing_word(self.document, every)
     }
 
     /// Returns the heading of `card`: "Each tick, every cell", or for a card that runs once the heading of the card of

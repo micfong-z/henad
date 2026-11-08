@@ -131,7 +131,10 @@ is about not undoing them.
   check and an agents field update's slot check wrap the body in a block, and the counter tallies'
   barriers sit at the top level of `main` (`agents/henad-graph-wgsl.md`). henad-graph's
   `no_step_returns_early` and `each_counter_flushes_once_per_workgroup_after_a_top_level_barrier`
-  hold the text.
+  hold the text, and henad-models'
+  `every_probed_shader_keeps_its_barriers_in_uniform_control_flow` holds every barrier of the probed
+  shaders (the graph starters, and the sheets as a model file compiles them) at the top level of
+  `main` or directly inside `if (params.henad_count_fires != 0u)`.
 - **Uniform layouts and a model's binding slots are generated.** The `build.rs` of henad-compute,
   henad-models and henad-app runs henad-build's `ShaderBuild` over that crate's shaders, and
   `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as

@@ -78,8 +78,8 @@ pub struct SheetEditor {
     code: Option<ModelCode>,
     /// Ids of the lines with a fire count in the last lowering of the sheet.
     ///
-    /// Note that an edit that stops the sheet lowering keeps the ids of the lowering before it, and the cards keep their
-    /// column of counts until the sheet lowers again.
+    /// Note that an edit that stops the sheet lowering keeps the ids of the lowering before it, and the cards keep
+    /// their column of counts until the sheet lowers again.
     counted: BTreeSet<String>,
     /// Start of each property when the preview was last built, `None` before the first build.
     built_starts: Option<Vec<(String, Option<StartsAs>)>>,
@@ -427,7 +427,7 @@ pub fn line_fires(sheet: &SheetEditor, loaded: Option<&ModelEntry>, snapshot: Op
     })
 }
 
-/// What the sheet editor shows besides the sheet, for one frame.
+/// Things the sheet editor shows besides the sheet, for one frame.
 #[derive(Debug)]
 pub struct SheetShown<'a> {
     /// Whether the preview has passed tick 0 or a button was pressed in it.

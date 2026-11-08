@@ -4,7 +4,7 @@
 //! A States property of the ground is a static field of its category. The Number properties that take marks, fade or
 //! change by a button are one field per pair of marks rule and share kept per tick, each property a layer, so the
 //! trails of the ants share one field and one buffer of deposits. A field whose properties keep the largest mark merges
-//! with `max`, and one whose properties add up their marks with `sum` at a resolution of 2^-16 (D49). A share kept per
+//! with `max`, and one whose properties add up their marks with `sum` at a resolution of 2^-16. A share kept per
 //! tick is the field's `finish`, a function `fade_<field>` that multiplies by it. Any other Number property is a static
 //! field of its own. Each event is a `[[counter]]`.
 //!
@@ -19,8 +19,9 @@
 //! *place* is a cell a line names: here, ahead, a picked cell, or the choice between them. A cell is *open* when it
 //! lies on the grid and no blocked state of the ground covers it, and the cell ahead is open only when the agent has a
 //! heading. A place's property is the field read at its cell. Move to takes the agent to the centre of the place of
-//! the first line that applies where that place is open, and its Heading becomes the step to that cell, the shorter
-//! way round a world that wraps. An agent whose place is not open stays where it is.
+//! the first line whose condition holds, when that place is open, and its Heading becomes the step to that cell, the
+//! shorter way round a world that wraps. An agent whose place is not open stays where it is, even where a lower Move
+//! to holds.
 //! Leave deposits its amount at my cell, 0 where its condition fails, and Leaves on one field that cannot both apply
 //! merge into one deposit whose layer and amount are chosen by their conditions. Record adds 1 to the event's counter
 //! where its condition holds.
@@ -28,7 +29,7 @@
 use std::collections::BTreeMap;
 
 use super::card::{CardLowering, Change, ChangeKind};
-use super::colours;
+use super::colors;
 use super::ids::{GROUP_CHANGE, GROUP_GROUND, Owner, SheetKey};
 use super::value::{Operand, PlaceValue};
 use super::{Builder, Site, text};
@@ -536,8 +537,8 @@ pub(super) fn on_ground(
 }
 
 /// Writes the view pass of the ground's colours: the colours of a States property of the ground, the cells in its
-/// shade state shaded by the largest of its shades, or a Number property shaded as [`colours::shade`] does.
-pub(super) fn colours(builder: &mut Builder<'_>) {
+/// shade state shaded by the largest of its shades, or a Number property shaded as [`colors::shade`] does.
+pub(super) fn colors(builder: &mut Builder<'_>) {
     let Some(rule) = builder.document.colors.get("ground").cloned() else {
         return;
     };
@@ -548,10 +549,10 @@ pub(super) fn colours(builder: &mut Builder<'_>) {
         ColorRuleKind::Shaded if rule.scale != Some(ShadeScale::Log) && rule.decades.is_none() => {
             match rule.property.as_deref().and_then(|id| builder.property(id)) {
                 Some((_, property)) if property.property_type == PropertyType::Number => {
-                    let site = colours::color_site(builder);
+                    let site = colors::color_site(builder);
                     builder
                         .read(site.pass, &property.id)
-                        .and_then(|read| colours::shade(builder, &site, &read, &property.id, rule))
+                        .and_then(|read| colors::shade(builder, &site, &read, &property.id, rule))
                 }
                 _ => Err("the colour rule shades no Number property of the ground".to_owned()),
             }
@@ -579,7 +580,7 @@ fn by_state(builder: &mut Builder<'_>, rule: &crate::sheet::document::ColorRule)
         .and_then(|id| builder.property(id))
         .filter(|(_, property)| property.property_type == PropertyType::States)
         .ok_or("the colour rule names no States property of the ground")?;
-    let site = colours::color_site(builder);
+    let site = colors::color_site(builder);
     let read = builder.read(site.pass, &property.id)?;
     let category = ValueType::Category(property.id.clone());
     let read = builder.input_as(&site, &read, &category, false)?;
@@ -1135,7 +1136,8 @@ impl<'a> CardLowering<'_, 'a> {
     /// Writes my Position after the Move to lines among `changes`, and my Heading when it has a lane, and returns the
     /// new position. `site` is the site of the position's write and `current` its value at the start of the tick.
     ///
-    /// A Move to applies only where its place is open, so an agent never enters a blocked cell or leaves the grid.
+    /// The first Move to whose condition holds decides, and it applies only where its place is open, so an agent never
+    /// enters a blocked cell or leaves the grid.
     pub(super) fn write_moves(
         &mut self,
         site: &Site,
@@ -1150,15 +1152,40 @@ impl<'a> CardLowering<'_, 'a> {
             },
             ValueType::Vec2I,
         );
+        let moves: Vec<(&Change<'a>, &PlaceValue)> = changes
+            .iter()
+            .filter_map(|change| match &change.kind {
+                ChangeKind::MoveTo { place } => Some((change, place)),
+                _ => None,
+            })
+            .collect();
+        // A row decides where its condition holds and no higher row's does.
+        let mut decides = Vec::with_capacity(moves.len());
+        let mut above = Operand::Constant(Literal::Bool(false));
+        for (index, (change, _)) in moves.iter().enumerate() {
+            let line_site = self.change_site(change.line)?;
+            let below_none = match &above {
+                Operand::Constant(Literal::Bool(value)) => Operand::Constant(Literal::Bool(!value)),
+                above => {
+                    let input = self.builder.condition_input(&line_site, above)?;
+                    self.builder
+                        .node_value(&line_site, "logic.not", vec![("a", input)], ValueType::Bool)
+                }
+            };
+            decides.push(
+                self.builder
+                    .join(&line_site, "logic.and", &change.condition, &below_none)?,
+            );
+            if index + 1 < moves.len() {
+                above = self.builder.join(&line_site, "logic.or", &above, &change.condition)?;
+            }
+        }
         let mut xy = here.clone();
         let mut moved = Operand::Constant(Literal::Bool(false));
-        for change in changes.iter().rev() {
-            let ChangeKind::MoveTo { place } = &change.kind else {
-                continue;
-            };
+        for ((change, place), decides) in moves.into_iter().zip(decides).rev() {
             let line_site = self.change_site(change.line)?;
             let open = self.place_open(&line_site, place)?;
-            let applies = self.builder.join(&line_site, "logic.and", &change.condition, &open)?;
+            let applies = self.builder.join(&line_site, "logic.and", &decides, &open)?;
             let condition = self.builder.condition_input(&line_site, &applies)?;
             let if_true = self.builder.input_as(&line_site, &place.xy, &ValueType::Vec2I, false)?;
             let if_false = self.builder.input_as(&line_site, &xy, &ValueType::Vec2I, false)?;

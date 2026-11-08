@@ -1,6 +1,6 @@
-//! Tests of the Parameters tab's preview mode (D54, D88): a change rebuilds the preview at tick 0 with the value, or
-//! reaches the running preview at once for a live parameter (L1), the value survives a rebuild after another sheet
-//! edit, Reset and Keep end the trial, and the selected model stays as it was.
+//! Tests of the Parameters tab's preview mode: a change rebuilds the preview at tick 0 with the value, or reaches the
+//! running preview at once for a live parameter, the value survives a rebuild after another sheet edit, Reset and
+//! Keep end the trial, and the selected model stays as it was.
 
 use henad_compute::entry::ModelEntry;
 use henad_core::params::ParamValue;

@@ -1,5 +1,5 @@
-//! The hand-lowered references: round 1's models and the rates design's three SIR models, written by hand as graph
-//! files.
+//! The hand-lowered references: the eight models of `tests/fixtures/lowered/round1/` and the three SIR models of
+//! `tests/fixtures/lowered/rates/`, written by hand as graph files.
 //!
 //! The files sit in `tests/fixtures/lowered/`, apart from `tests/fixtures/graphs/`, whose corpus loaders hold every
 //! file to a stock model. `tests/fixtures/docs/lowered_fixture.md` holds the procedure they were written and checked
@@ -66,7 +66,7 @@ fn every_lowered_fixture_reads() {
 }
 
 /// Code hash of each graph starter and corpus file at `be338ec`, the commit before the `hidden` and `tick_unit` keys,
-/// and of each round 1 fixture as it was committed.
+/// and of each `round1/` fixture as it was committed.
 const CODE_HASHES: [(&str, u64); 18] = [
     ("game_of_life.toml", 0xfa47_7f66_5e31_10fc),
     ("vote.toml", 0x833a_c5c0_973b_caa3),

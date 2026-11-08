@@ -200,7 +200,8 @@ A world of agents runs a card over its kind of agent, such as "Each tick, every 
 - **+ Chance** adds a change made by chance, a yes or no drawn by chance, a random number between two values, or a random direction of a length.
 - **+ Calculate** works out a number, chooses the first of several values whose condition holds, or gives one value for each state of a property.
 - **+ Change** adds a Become, a Set, a Steer of a number or an arrow by a value or towards it, a Keep between that holds a number or an arrow's length inside two bounds, a Move by an arrow or to a cell, a Leave that marks the ground, and a Record that counts an event.
-- **+ Repeat...** adds a Repeat line, whose lines run that many times each tick. Its number of times takes an integer parameter, and **New parameter...** there makes one.
+- **+ Repeat...** adds a Repeat line, whose lines run that many times each tick.
+  Its number of times takes an integer parameter, and **New parameter...** there makes one.
 
 A look at agents starts with one summary, an average.
 The select before each summary changes it to a total, the largest, the smallest or a count, or removes it, and **+** after the summaries adds another.
@@ -235,11 +236,14 @@ A look around, a count or a pick of a cell inside a Repeat shows "A look around,
 Each line has a menu, "Line 2 actions", always drawn at the end of the line:
 
 - **Rename line 2**, on a result line.
-- **Move line 2 up** and **Move line 2 down**, which follow the outline. The first line inside a block moves up out of it, the last moves down out of it, a line beside a block moves into it, and a When moves with all its lines.
+- **Move line 2 up** and **Move line 2 down**, which follow the outline.
+  The first line inside a block moves up out of it, the last moves down out of it, a line beside a block moves into it, and a When moves with all its lines.
 - **Draw new numbers**, on a line that draws by chance, which gives the line new random numbers.
-- **Change to a rate** on a line with a typed chance, and **Change to a chance** on a line with a typed rate, on a card that runs each tick. Both keep the chance per tick.
+- **Change to a rate** on a line with a typed chance, and **Change to a chance** on a line with a typed rate, on a card that runs each tick.
+  Both keep the chance per tick.
 - **Include me in line 2** or **Leave me out of line 2**, on a look at agents.
-- **Delete line 2**. Deleting a When or a Repeat keeps its lines and moves them out one level.
+- **Delete line 2**.
+  Deleting a When or a Repeat keeps its lines and moves them out one level.
 
 A line moved above the result it uses says "Uses Alive neighbours, which is below this line" and does not run, and moving it back runs it again.
 
@@ -251,7 +255,8 @@ Grey notes explain how lines work together:
 
 - Two Become lines from different states say that their order does not matter, as in Game of Life: "Lines 2 and 3 change different cells (Dead and Alive), so their order does not matter."
 - Become lines that test one count and settle every value of it say so, as in the majority vote: "Lines 2 and 3 cover every value of B in my block. A cell ends the tick A when it is 0 to 4 and B when it is 5 to 9."
-- Become lines that test one count and leave some of its values to no line name those values. Those cells keep their state.
+- Become lines that test one count and leave some of its values to no line name those values.
+  Those cells keep their state.
 - A chance with "for each" shows the chance for 1 and 2 of what it counts.
 - A rate shows the chance per tick it gives, as [Rates](#rates) describes.
 
@@ -318,7 +323,9 @@ Press **Show changes** again to hide the list and the badges.
 Press **Compare runs** in the banner to run the copy and the sheet side by side for 200 ticks, at the seed the Parameters tab sets and at the preview's size.
 When both runs finish, a line under the banner says whether the copy matches the sheet at every tick, or names the first tick at which a measure differs, with both values.
 A plot shows each measure of the sheet as a solid line and the copy's as a dashed line, with a vertical line at the first difference.
-An unedited copy matches the sheet at every tick, since the conversion copies every random draw.
+An unedited copy of a model that replays exactly matches the sheet at every tick, since the conversion copies every random draw.
+A model that does not replay exactly, such as bounded confidence or boids, adds up numbers in the order its agents are found, so two of its runs at one seed can differ.
+For such a model the line names no tick, and the plot shows how far the two runs drift apart.
 Press **Close comparison** to stop the runs and close the plot.
 An edit of the copy or the sheet closes the comparison, and **Compare runs** runs both again.
 Compare runs is unavailable in a browser.
@@ -465,7 +472,7 @@ What happens to the run depends on what was running:
 - A run of another model past tick 0 keeps going.
   The Editor reads **Model applied. Press Build to run it.**, and <span class="ui" markdown>:material-restart: Build</span> runs the rule.
 
-Applying the code the run already runs changes nothing, and the Editor reads **Model code unchanged.**
+Applying the code the run already runs changes nothing, and the Editor reads **Model unchanged.**
 
 ### Problems
 

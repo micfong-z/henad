@@ -1,15 +1,18 @@
 //! The graph starters compiled with a probe on every `bool` output of their tick passes: what the probes add to the
-//! storage bindings, and a probed starter stepping as the unprobed one.
+//! storage bindings, a probed starter stepping as the unprobed one, and the barriers of every probed shader, the
+//! sheets' included, in uniform control flow.
 
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_core::params::ParamValue;
+use henad_explore::model_file::sheet_probes;
 use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 use henad_graph::GraphFile;
 use henad_graph::document::{PassStage, World};
+use henad_graph::sheet::SheetFile;
 use henad_graph::types::ValueType;
 use henad_graph::value::PortRef;
-use henad_graph::wgsl::{AgentProgram, GridProgram, Probes};
+use henad_graph::wgsl::{AgentProgram, FaultNames, GeneratedShader, GridProgram, Probes, ShaderRole};
 
 use super::graph_grid_parity::{build_gpu, snapshot, starter_entry, step};
 use super::lanes::GraphLanes;
@@ -147,5 +150,105 @@ fn assert_same(
         format!("{:?}", probed.stats()),
         format!("{:?}", plain.stats()),
         "the stats differ at tick {tick}"
+    );
+}
+
+/// Returns the shaders of `file` compiled with `probes`, and with `faults` naming its radius folds when it is a
+/// sheet's.
+fn probed_shaders(file: &GraphFile, probes: &Probes, faults: Option<&FaultNames>) -> Vec<GeneratedShader> {
+    let name = &file.document().id;
+    match file.document().world {
+        World::Grid(_) => GridProgram::compile_with_probes(file, probes)
+            .unwrap_or_else(|problems| panic!("{name}: {problems:#?}"))
+            .shaders()
+            .to_vec(),
+        World::Agents(_) => match faults {
+            Some(faults) => AgentProgram::compile_with_probes_and_fault_names(file, probes, faults),
+            None => AgentProgram::compile_with_probes(file, probes),
+        }
+        .unwrap_or_else(|problems| panic!("{name}: {problems:#?}"))
+        .shaders()
+        .to_vec(),
+        _ => panic!("{name}: a world no compiler compiles"),
+    }
+}
+
+/// Opening line of the one block other than `main` that may hold a workgroup barrier. Its condition reads a uniform,
+/// so the barrier stays in uniform control flow.
+const COUNTING: &str = "if (params.henad_count_fires != 0u) {";
+
+/// Holds that `main` of `shader`, a shader of `name`, never returns early, and that each `workgroupBarrier()` sits at
+/// the top level of `main` or directly inside a [`COUNTING`] block there.
+fn assert_uniform_barriers(name: &str, shader: &GeneratedShader) {
+    let text = shader.text();
+    let main = &text[text.find("fn main(").expect("a main")..];
+    if *shader.role() != ShaderRole::Display {
+        assert!(
+            !main.contains("return"),
+            "{name} {} returns early:\n{text}",
+            shader.label()
+        );
+    }
+    let mut open: Vec<&str> = Vec::new();
+    for line in main.lines() {
+        if line.contains("workgroupBarrier()") {
+            let uniform = match open.as_slice() {
+                [_] => true,
+                [_, block] => block.trim() == COUNTING,
+                _ => false,
+            };
+            assert!(uniform, "{name} {}: a barrier inside {open:?}\n{text}", shader.label());
+        }
+        for character in line.chars() {
+            match character {
+                '{' => open.push(line),
+                '}' => {
+                    open.pop();
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Every probed shader keeps its barriers in uniform control flow: the graph starters probed on every `bool` output of
+/// their tick passes, and every sheet starter and grid sheet fixture compiled as a model file compiles it, with the
+/// probes of its change lines. naga accepts a barrier after an early return, so only this check holds the rule.
+#[test]
+fn every_probed_shader_keeps_its_barriers_in_uniform_control_flow() {
+    let (mut barriers, mut counting) = (0, 0);
+    let mut check = |name: &str, shaders: &[GeneratedShader]| {
+        for shader in shaders {
+            assert_uniform_barriers(name, shader);
+            barriers += shader.text().matches("workgroupBarrier()").count();
+            counting += shader.text().matches(COUNTING).count();
+        }
+    };
+    let starters = henad_graph::starters::starters()
+        .iter()
+        .chain(henad_graph::starters::agent_starters());
+    for starter in starters {
+        let file = GraphFile::parse(starter.text).unwrap_or_else(|error| panic!("{}: {error}", starter.file_name));
+        check(
+            starter.file_name,
+            &probed_shaders(&file, &every_bool_output(&file), None),
+        );
+    }
+    let fixtures =
+        ["sir_chance.toml", "sird.toml"].map(|name| (name, super::sheet_grid::fixture_text(&format!("sheets/{name}"))));
+    let sheets = henad_graph::sheet::starters()
+        .iter()
+        .map(|starter| (starter.file_name, starter.text.to_owned()))
+        .chain(fixtures);
+    for (name, text) in sheets {
+        let file = SheetFile::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        check(
+            name,
+            &probed_shaders(file.lowered(), sheet_probes(&file), Some(file.fault_names())),
+        );
+    }
+    assert!(
+        barriers > 0 && counting > 0,
+        "the probed shaders hold barriers, some inside a counting block"
     );
 }

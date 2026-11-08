@@ -78,7 +78,10 @@ the set lacks leaves no values. `AppState` also holds the values the next build 
 `schedule`.
 `AppState::build_setup` checks all three through `RunSetup::from_parts`. `AppState::build_refusal`
 returns Build's disabled reason, which Playback shows. It shows a `SetupError` through
-`setup_message`, as it shows `INVALID_SEED` and a shortfall through `too_large_message`.
+`setup_message`, as it shows `INVALID_SEED` and a shortfall through `too_large_message`. Every
+shortfall goes through `AppState::entry_shortfalls`, which takes `SheetFile::shortfalls` when the
+Editor's sheet has the entry's code, so a sheet's work past a budget names its lines and no pass
+(`work_past_the_budget_on_a_sheet_names_its_lines_and_no_pass`).
 `reset_simulation` builds nothing while the check fails, and `open_run` refuses a replay
 `RunSetup::from_replay` refuses. `reset_simulation` builds the checked setup through the private
 `load`, which tears the old run down, pins the setup's entry, records `loaded_values`,
@@ -143,7 +146,7 @@ later run. `src/tests/runaway.rs` holds
 of `support.rs`, whose first build waits on a `Gate` and whose first run's steps a `StepHold`
 holds, on the step's thread or on every worker of its pool. Keep them. A test that builds calls
 `AppState::wait_for_build` before it reads the runner.
-**The Parameters tab's preview mode** (D54, D88, L1). `params_ui` draws `preview_params_ui` instead
+**The Parameters tab's preview mode**. `params_ui` draws `preview_params_ui` instead
 of its rows while `AppState::params_drive_preview` holds: a preview runs or builds and the selection
 is still the one `load_preview` recorded. The selected model's `param_values`, seed and schedule
 stay as they are, and once another model is selected the tab draws that model for the next build.

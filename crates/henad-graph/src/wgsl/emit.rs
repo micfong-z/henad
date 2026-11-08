@@ -1561,7 +1561,7 @@ impl Emitter<'_> {
                 let label = self.accum_label(field);
                 self.deposited.insert(field);
                 let n = node.number();
-                // A deposit of zero, of a negative value or of a NaN would add 0 and issues no atomic. The bits of every
+                // A deposit of zero, of a negative value or of a NaN adds 0 and issues no atomic. The bits of every
                 // value above 0 order as the value. A sum adds the value as a count of its resolution, and the product
                 // by the power of two 2^k is exact.
                 let word = format!("{label}[henad_deposit_layer_n{n} * params.henad_cells + henad_deposit_cell_n{n}]");

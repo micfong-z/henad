@@ -250,15 +250,18 @@ impl BuildJob {
                 };
                 // `run_here` holds the error scopes and the panic catch around the whole build.
                 #[cfg(not(target_arch = "wasm32"))]
-                let thread = match pool {
+                let mut thread = match pool {
                     Some(pool) => GpuSimThread::new_in(pool, ctx, state, gpu_settings, Some(wake), faults),
                     None => GpuSimThread::new(ctx, state, gpu_settings, Some(wake), faults),
                 };
                 #[cfg(target_arch = "wasm32")]
-                let thread = {
+                let mut thread = {
                     drop(pool);
                     GpuSimThread::new(ctx, state, gpu_settings, Some(wake), faults)
                 };
+                // A GPU runner starts uncapped. The Pacing tab's rate applies to it as to a CPU runner.
+                thread.send(SimCommand::SetTargetTps(target_tps));
+                thread.send(SimCommand::SetUncapped(uncapped));
                 Ok(SimRunner::Gpu(thread))
             }
         }

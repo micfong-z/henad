@@ -1,10 +1,10 @@
 # henad-app: the Card pane
 
-`ui/editor/sheet/card_pane.rs` and `picker.rs` draw the cards of a sheet and write their lines
-(S19), with When blocks, moves and the notes of the relations between lines (S22). The rest of the
+`ui/editor/sheet/card_pane.rs` and `picker.rs` draw the cards of a sheet and write their lines,
+with When blocks, moves and the notes of the relations between lines. The rest of the
 sheet editor, the Sheet pane, the toolbar and the New model dialog are in
-`agents/henad-app-sheet.md`. The card writes the lines of a card over `cells`, rates included
-(S25), and of a card over agents (S28, **Agent lines** below).
+`agents/henad-app-sheet.md`. The card writes the lines of a card over `cells`, rates included,
+and of a card over agents (**Agent lines** below).
 
 **Drawing.** `card_pane(ui, sheet, past_start, trials)` draws every card in file order:
 `Sentences::card_heading`, the line count (`line_count`) and, on a card that runs every tick, the
@@ -41,7 +41,7 @@ grey, or amber with a button for the fold offers, `REMOVE_THIS_WHEN` named `remo
 running `DeleteLine` on the When, and `move_into_label` named `move_into_name` running
 `MoveConditionInto`. Both names are the When's line prefix and the button's words ("Line 2: remove
 this When and keep the lines inside", "Line 4: move it into line 5"), since every accessible name
-holds its visible words (D112). A note's button runs one edit.
+holds its visible words. A note's button runs one edit.
 
 **The "otherwise" notice.** `cards_ui` gathers each line that reads "otherwise" on every card, and
 `explain_otherwise` keeps `CardState::explained`, the ids explained this session: on the pane's
@@ -54,16 +54,17 @@ opened.
 
 **Controls.** `part_ui` draws each part. Words are labels, a `ConditionWord` bold with no click, and
 after the first condition word of a Become, Set or When (`takes_condition`) the condition arrow
-(`condition_arrow_ui`, a chevron named `condition_arrow_name`, tooltip `CONDITION_ARROW_TOOLTIP`,
-D104) that opens "Choose when". `From` carries `FROM_TOOLTIP`. A chip (`chip_with_id`), a blank
-(`blank_ui`), a select (`select_ui`, a chevron box named `LineSelect::name`, its words as value),
-`Always` (a grey button named `always_name`), `ForEach` (the words "for each", named
-`for_each_change_name`) and `ForEachBlank` (named `for_each_optional_name`, painted only on a
-hovered or focused row, D99) each take the widget id `CardState::control_id(line, target, tag)`, so
-another frame can open or focus them. After the last item of a list, `add_value_ui` draws "+" named
-`add_value_name`, which opens the list's picker for one item past the end. `CardLine::control`
-returns each control's visible words and name, which the label-in-name tests read. Hovering or
-focusing a result chip or "otherwise" highlights the lines it names on the next frame.
+(`condition_arrow_ui`, a chevron named `condition_arrow_name`, tooltip `CONDITION_ARROW_TOOLTIP`)
+that opens "Choose when". `From` carries `from_tooltip` of the card's thing word. A chip
+(`chip_with_id`), a blank (`blank_ui`), a select (`select_ui`, a chevron box named
+`LineSelect::name`, its words as value), `Always` (a grey button named `always_name`), `ForEach`
+(the words "for each", named `for_each_change_name`) and `ForEachBlank` (named
+`for_each_optional_name`, painted only on a hovered or focused row) each take the widget id
+`CardState::control_id(line, target, tag)`, so another frame can open or focus them. After the last
+item of a list, `add_value_ui` draws "+" named `add_value_name`, which opens the list's picker for
+one item past the end. `CardLine::control` returns each control's visible words and name, which the
+label-in-name tests read. Hovering or focusing a result chip or "otherwise" highlights the lines it
+names on the next frame.
 
 **Pickers** (`picker.rs`). `control_picker` opens a control's picker or select when it is clicked or
 due to open (`CardState::open_next`), and takes the focus for `CardState::focus_next`. A picker's
@@ -79,13 +80,13 @@ picker of a place from its `Blank`: states (`shared_state_name` when two propert
 properties" as "my Food" with "this cell's Food", "Parameters" with value and unit, "New
 parameter...", and the Number box first and focused, or last for the value left of a comparison and
 a "for each" count). A chance reads in `NumberUse::Chance` and a rate in `NumberUse::Rate`, which
-refuse a chance outside 0 to 1 and a negative rate in the box (D75). A typed list in a box of one
+refuse a chance outside 0 to 1 and a negative rate in the box. A typed list in a box of one
 number adds `LIST_IN_ONE_NUMBER`. A list blank offers the list box (`LIST_GROUP`, `LIST_HINT`, "2,
 3" in one go, `read_numbers`), a filled item `REMOVE_FROM_LIST`, a "for each" `for_each_lead` and
-`REMOVE_FOR_EACH`. The Number box opens on a typed number as typed (`typed_text`, D110), and a
+`REMOVE_FOR_EACH`. The Number box opens on a typed number as typed (`typed_text`), and a
 refused text keeps the box focused. The boxes start afresh each time the picker opens.
 `LineContext::results_above` offers the results of lines above, a result inside a When only to the
-lines after it inside that When (D84). `choose_when(context, otherwise)` lists the yes or no results
+lines after it inside that When. `choose_when(context, otherwise)` lists the yes or no results
 as "when [name]", then "Conditions" or "Or a new condition" with `ConditionItem`s and their grey
 lines, "otherwise" in place of "always" when `otherwise_if_always` finds a higher line (the line's
 condition set to always on a copy of the sheet), and "at rate" only on a card that runs each tick
@@ -117,7 +118,7 @@ once, each a `Popup::menu` with the heading and items of `AddButton`. The
 pattern under an item is painted into `allocate_space`, so it stays out of the accessibility tree.
 `new_line` gives each item's line with its blanks empty: a Count's `whose` a comparison "is", a
 Total or average one summary "total", a change from "+ Change" an empty condition, from "+ Chance" a
-chance or a rate phrase. The line menu (`line_menu_ui`, "Line 2 actions", always drawn, D58) holds
+chance or a rate phrase. The line menu (`line_menu_ui`, "Line 2 actions", always drawn) holds
 `rename_line` on a result line, `move_line_up` and `move_line_down` (`MoveLine`, disabled where
 `can_move` finds the outline's edge: only the card's first line stays at the top, and only a
 top-level line with no top-level line after it at the bottom), `DRAW_NEW_NUMBERS` on a line
@@ -128,8 +129,8 @@ top-level line with no top-level line after it at the bottom), `DRAW_NEW_NUMBERS
 opens a field named `rename_field_name` under the line: Enter or leaving it keeps (`RenameResult`),
 Escape cancels, and a taken name shows `result_name_taken` with the field focused again.
 
-**Rates** (S25). The notes read `CardDrawing::values`: `rates::parameter_defaults` with each
-`SheetTrial` of the Params tab in its place while a run of the sheet is loaded (D62). After the
+**Rates**. The notes read `CardDrawing::values`: `rates::parameter_defaults` with each
+`SheetTrial` of the Params tab in its place while a run of the sheet is loaded. After the
 count-as-draw offer, `card_notes` adds `rates::rate_note` in grey with its `mean_stay` as the
 label's hover text and AccessKit description, and its `long_tick` as a second grey note
 (`long_tick_note`, "Up to 0.909 with 8. This tick is long ..."), or `rates::chance_note`, then the
@@ -150,7 +151,7 @@ for each group in the pane's margin, `BRACKET_OFFSET` left of the rows, where no
 reaches (`brackets`, `competing_brackets` in tests). The group note sits under the highest line,
 where `rate_note` puts it. The Sheet pane's Time notice is in `agents/henad-app-sheet.md`.
 
-**Focus** (F5, F7, C13, D103). After `AddLine`, the new line's first blank opens. After a choice,
+**Focus**. After `AddLine`, the new line's first blank opens. After a choice,
 `next_control` finds the control after the edited place (or, for a place whose form changed, the
 first control under its slot path): an empty state blank or old-state blank opens, the empty upper
 number opens after the lower number, and any other control takes the focus without opening. The
@@ -162,7 +163,7 @@ or the focus lands outside the line and its pickers, both sides are filled, or U
 (`CardState::close`). The mark lives in the pane, so a sheet opened with one side empty shows the
 offer at once.
 
-**Fire counts** (S31, X1, D48). `SheetEditor::program` compiles the preview with henad-explore's
+**Fire counts**. `SheetEditor::program` compiles the preview with henad-explore's
 `sheet_probes(file)` through `GraphProgram::compile_with_probes`, the probes Apply builds with.
 `SheetEditor::refresh` keeps the file's code identity in `SheetEditor::code` and the ids of
 `fire_lines().lines()` in `SheetEditor::counted`, the latter kept over an edit that stops the sheet
@@ -185,7 +186,7 @@ then Pause), `a_sheet_shows_no_counts_of_a_run_of_other_code` and
 `an_edit_hides_the_counts_and_a_blank_keeps_the_column` (an edit in place hides the counts, and a
 blank that skips line 2 leaves line 3 its size).
 
-**The Diagram** (`ui/editor/sheet/diagram.rs`, D59, D95). The toggle `DIAGRAM` beside the Card
+**The Diagram** (`ui/editor/sheet/diagram.rs`). The toggle `DIAGRAM` beside the Card
 heading (tooltip `DIAGRAM_TOOLTIP`) sets `SheetEditor::diagram` and closes the card's pickers, and
 the pane then draws `diagram_ui` in place of `card_pane`: `DIAGRAM_NOTE` and `EDIT_AS_NODE_GRAPH`
 (disabled with `ConvertRefusal::tooltip`, `agents/henad-app-editor.md`), then each card's heading
@@ -230,7 +231,7 @@ inside notes and the lead, depths 0, 1 and 2, Delete and Undo),
 `src/tests/sheets/sir_chance.toml`, a copy of henad-graph's test sheet, since `include_str!` stays
 inside its crate.
 
-`src/tests/sheet_rates.rs` (S25, helpers shared from `sheet_card.rs` as `pub(super)`) holds
+`src/tests/sheet_rates.rs` (helpers shared from `sheet_card.rs` as `pub(super)`) holds
 `a_blank_model_builds_the_rates_sir_with_its_lines_and_equals_the_starter` (the time set on the
 sheet, both rates through "New parameter..." in "per day", line 2's "for each" from the grow offer,
 New outbreak's "Choose when" with no rate, then alignment, label-in-name and the words rule),
@@ -244,7 +245,7 @@ chance" on a typed rate, none on New outbreak's typed chance),
 mismatch warning). A label's AccessKit node holds a `TextRun` child with its text, so the tests
 count nodes other than text runs.
 
-**Agent lines** (S28). Every card is editable. A card is over agents when its `every` is not
+**Agent lines**. Every card is editable. A card is over agents when its `every` is not
 `cells`, and the pane passes that as `agents` to `AddButton::items_for`, `tooltip_for` and
 `heading_for`, which return the agent menus (Look around: `CountAgents`, `LookAroundAgents`,
 `PickCell`, `CellHereOrAhead`; Chance: `BecomeWithChance`, `WithChance`, then under

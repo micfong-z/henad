@@ -104,6 +104,11 @@ impl<'a> CardRelations<'a> {
         }
     }
 
+    /// The card the relations are of.
+    pub fn card(&self) -> &'a SheetCard {
+        self.card
+    }
+
     /// Ids of the card's lines in display order, the lines inside a When or Repeat right after the block line.
     pub fn order(&self) -> &[&'a str] {
         &self.order
@@ -216,14 +221,22 @@ impl<'a> CardRelations<'a> {
     ///
     /// A line inside a Repeat joins no group and draws alone each time the Repeat runs it.
     fn group_key(&self, line_id: &str) -> Option<(&'a str, &'a str)> {
+        if self.inside_repeat(line_id) {
+            return None;
+        }
+        competing_key(self.line(line_id)?)
+    }
+
+    /// Returns whether line `line_id` sits inside a Repeat, directly or inside a block within it.
+    fn inside_repeat(&self, line_id: &str) -> bool {
         let mut parent = self.parent(line_id);
         while let Some(id) = parent {
             if self.line(id).is_some_and(|block| block.kind == LineKind::Repeat) {
-                return None;
+                return true;
             }
             parent = self.parent(id);
         }
-        competing_key(self.line(line_id)?)
+        false
     }
 
     /// Returns every test of one value that line `line_id` needs to apply: its own condition, the conditions of the
@@ -273,9 +286,13 @@ impl<'a> CardRelations<'a> {
 
     /// Returns the compare phrase `phrase` as a test of one value, `None` when it reads anything but fixed values of
     /// a property of mine or a result.
+    ///
+    /// A result of a line inside a Repeat gives no test. The Repeat works it out again each time round, so two
+    /// changes can each hold at a different time and both apply.
     fn compare_test(&self, phrase: &SheetLine) -> Option<ValueTest> {
         let operand = match phrase.left.value()? {
             SheetValue::Chip(SheetChip::My(property)) => Operand::My(property.clone()),
+            SheetValue::Chip(SheetChip::Result { line, .. }) if self.inside_repeat(line) => return None,
             SheetValue::Chip(SheetChip::Result { line, part, property }) => Operand::Result {
                 line: line.clone(),
                 part: part.clone(),
@@ -445,11 +462,12 @@ impl<'a> CardRelations<'a> {
     /// and order notes speak only of lines that run.
     pub fn notes(&self, sentences: &Sentences<'_>, runs: impl Fn(&str) -> bool) -> Vec<RelationNote> {
         let mut notes = Vec::new();
-        notes.extend(self.gap_notes(&runs));
-        notes.extend(self.coverage_notes(&runs));
-        notes.extend(self.order_notes(&runs));
+        let thing = sentences.thing_word(&self.card.every);
+        notes.extend(self.gap_notes(&runs, &thing));
+        notes.extend(self.coverage_notes(&runs, &thing));
+        notes.extend(self.order_notes(&runs, &thing));
         notes.extend(self.fold_notes());
-        notes.extend(self.inside_notes(sentences));
+        notes.extend(self.inside_notes(sentences, &thing));
         // A stable sort keeps the kinds of one line in the order they were added.
         notes.sort_by_key(|note| self.index(&note.line).unwrap_or(usize::MAX));
         notes
@@ -458,7 +476,7 @@ impl<'a> CardRelations<'a> {
     /// Returns the gap notes: for two or more top-level Become lines of one property from the same state, each running
     /// and testing one count with a compare or outside condition, with two or more new states, the values of the count
     /// that none of them applies to. The note sits under the last line of the group.
-    fn gap_notes(&self, runs: &impl Fn(&str) -> bool) -> Vec<RelationNote> {
+    fn gap_notes(&self, runs: &impl Fn(&str) -> bool, thing: &str) -> Vec<RelationNote> {
         let mut groups: Vec<((&str, &str), Vec<&str>)> = Vec::new();
         for &id in &self.order {
             let Some(line) = self.line(id) else {
@@ -501,7 +519,13 @@ impl<'a> CardRelations<'a> {
             let property_name = self.property(property).map_or(property, |found| found.name.as_str());
             notes.push(RelationNote {
                 line: last.to_owned(),
-                text: gap_note(&self.numbers(&lines), &self.result_name(count), &gaps, property_name),
+                text: gap_note(
+                    &self.numbers(&lines),
+                    &self.result_name(count),
+                    &gaps,
+                    property_name,
+                    thing,
+                ),
                 kind: RelationNoteKind::Gap,
             });
         }
@@ -512,7 +536,7 @@ impl<'a> CardRelations<'a> {
     /// name a state they change from, run, and test one count or hold always, the state a cell ends the tick in for
     /// each value of the count, when it never depends on the cell's own state and takes two or more states. A cell
     /// no line changes keeps its state. The note sits under the last Become line of the property.
-    fn coverage_notes(&self, runs: &impl Fn(&str) -> bool) -> Vec<RelationNote> {
+    fn coverage_notes(&self, runs: &impl Fn(&str) -> bool, thing: &str) -> Vec<RelationNote> {
         let mut notes = Vec::new();
         for (property, lines) in self.becomes_by_property() {
             let Some(found) = self
@@ -595,7 +619,7 @@ impl<'a> CardRelations<'a> {
                 .collect();
             notes.push(RelationNote {
                 line: last.to_owned(),
-                text: coverage_note(&self.numbers(&lines), &self.result_name(count), &ends),
+                text: coverage_note(&self.numbers(&lines), &self.result_name(count), &ends, thing),
                 kind: RelationNoteKind::Coverage,
             });
         }
@@ -605,7 +629,7 @@ impl<'a> CardRelations<'a> {
     /// Returns the order notes: for a property with two or more Become lines on the card, every one running and
     /// changing from a named state of the property, no two from the same state, a note that their order does not
     /// matter. Lines inside a When count too. The note sits under the last Become line of the property.
-    fn order_notes(&self, runs: &impl Fn(&str) -> bool) -> Vec<RelationNote> {
+    fn order_notes(&self, runs: &impl Fn(&str) -> bool, thing: &str) -> Vec<RelationNote> {
         let mut notes = Vec::new();
         for (property, lines) in self.becomes_by_property() {
             let Some(found) = self.property(property) else {
@@ -635,7 +659,7 @@ impl<'a> CardRelations<'a> {
             let names: Vec<&str> = starts.iter().map(|start| state_name(found, start)).collect();
             notes.push(RelationNote {
                 line: last.to_owned(),
-                text: order_note(&self.numbers(&lines), &names),
+                text: order_note(&self.numbers(&lines), &names, thing),
                 kind: RelationNoteKind::Order,
             });
         }
@@ -703,7 +727,7 @@ impl<'a> CardRelations<'a> {
     /// Returns the notes inside and under a When: under a change or a When inside one, the condition it holds only
     /// under, under a result line inside one, that it is worked out for every cell, and under an empty When, that it
     /// holds nothing.
-    fn inside_notes(&self, sentences: &Sentences<'_>) -> Vec<RelationNote> {
+    fn inside_notes(&self, sentences: &Sentences<'_>, thing: &str) -> Vec<RelationNote> {
         let mut notes = Vec::new();
         for &id in &self.order {
             let Some(line) = self.line(id) else {
@@ -717,7 +741,7 @@ impl<'a> CardRelations<'a> {
                     let condition = (!block.condition.is_blank()).then(|| sentences.slot(&block.condition, None));
                     Some(only_when_note(number, condition.as_deref()))
                 } else {
-                    is_result_kind(line.kind).then(|| worked_out_everywhere_note(number))
+                    is_result_kind(line.kind).then(|| worked_out_everywhere_note(number, thing))
                 };
                 if let Some(text) = text {
                     notes.push(RelationNote {

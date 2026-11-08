@@ -4,8 +4,10 @@
 //! Each model runs once as a sweep of one run through henad-explore's [`SweepRun`], off the UI thread as the Sweep
 //! tab's runs do, at one seed and at the preview's size, for [`COMPARE_TICKS`] ticks. The two series of measures are
 //! plotted together, and the *first difference* is the first tick at which a measure both models hold reads another
-//! value. An unedited copy matches its original at every tick, since the conversion copies every node with its random
-//! key.
+//! value. An unedited copy of a model that replays exactly matches its original at every tick, since the conversion
+//! copies every node with its random key. Two runs of a model that does not replay exactly, such as one that adds up
+//! floating-point numbers in the order agents are found, can differ at one seed, and the comparison names no tick for
+//! it.
 //!
 //! A comparison holds the key of the copy and the original it ran, and the Editor drops it once either changes.
 //! Dropping a [`Comparison`] stops both runs within `STOP_WAIT` (250 ms), and a run held in its step is left
@@ -21,7 +23,8 @@ use henad_core::params::ParamValue;
 use henad_explore::handle::{SweepEvent, SweepOutput, SweepRun, SweepRunOptions};
 use henad_explore::model_file::ModelFile;
 use henad_graph::sheet::sentence::{
-    CLOSE_COMPARISON, compare_failed, compare_running, compare_series, runs_differ, runs_match, runs_share_no_measure,
+    CLOSE_COMPARISON, compare_failed, compare_running, compare_series, runs_differ, runs_do_not_replay, runs_match,
+    runs_share_no_measure,
 };
 
 use super::preview::preview_values;
@@ -66,6 +69,8 @@ pub enum CompareOutcome {
     },
     /// The two models hold no measure of the same name.
     NoSharedMeasure,
+    /// A measure differs, and either model does not replay exactly, so two runs of it at one seed can differ.
+    Inexact,
 }
 
 /// Measures of one finished run: the name of each column and the rows.
@@ -200,6 +205,8 @@ pub struct Comparison {
     sides: [Side; 2],
     /// Error that ended a run, `None` while both run or once both finished.
     pub failure: Option<String>,
+    /// Whether both models replay exactly, so that a difference comes from the copy.
+    replays_exactly: bool,
 }
 
 impl Comparison {
@@ -215,6 +222,7 @@ impl Comparison {
         let original = entry_of(original)?;
         let copy = entry_of(copy)?;
         let fixed = size_values(&original);
+        let replays_exactly = original.metadata().replays_exactly && copy.metadata().replays_exactly;
         let side = |entry: &ModelEntry, run| Side {
             name: entry.name().to_owned(),
             run: Some(run),
@@ -230,6 +238,7 @@ impl Comparison {
             key,
             sides: [original_side, side(&copy, copy_run)],
             failure: None,
+            replays_exactly,
         })
     }
 
@@ -250,9 +259,15 @@ impl Comparison {
     }
 
     /// Returns the result once both runs finished, `None` while either runs or after a failure.
+    ///
+    /// A difference reads [`CompareOutcome::Inexact`] when either model does not replay exactly.
     pub fn outcome(&self) -> Option<CompareOutcome> {
         let [original, copy] = &self.sides;
-        Some(first_difference(original.measures.as_ref()?, copy.measures.as_ref()?))
+        let outcome = first_difference(original.measures.as_ref()?, copy.measures.as_ref()?);
+        Some(match outcome {
+            CompareOutcome::Differ { .. } if !self.replays_exactly => CompareOutcome::Inexact,
+            outcome => outcome,
+        })
     }
 
     /// Returns the line the comparison shows: running, the result, or the failure.
@@ -274,6 +289,7 @@ impl Comparison {
                 runs_differ(&original.name, &copy.name, tick, &measure, &copy_value, &value)
             }
             Some(CompareOutcome::NoSharedMeasure) => runs_share_no_measure(&original.name, &copy.name),
+            Some(CompareOutcome::Inexact) => runs_do_not_replay(&original.name, &copy.name),
         }
     }
 }

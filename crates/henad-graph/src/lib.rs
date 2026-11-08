@@ -1,4 +1,6 @@
-//! Graph models: the node graph a model file of kind `graph` holds, read and written in one canonical form.
+//! Graph models and sheets: the node graph a model file of kind `graph` holds, read and written in one canonical form,
+//! and the author document a model file of kind `sheet` holds, which [`sheet`] reads, checks, edits and lowers to a
+//! graph.
 //!
 //! A graph file holds header keys, a `[graph]` table, one `[[target]]` table, a world table, declaration tables, a
 //! stack of `[[pass]]` tables holding `[[pass.node]]` tables, embedded `[[function]]` tables and a trailing `[editor]`

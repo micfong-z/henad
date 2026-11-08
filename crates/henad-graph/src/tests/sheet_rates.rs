@@ -54,6 +54,12 @@ fn within_one_ulp(a: f32, b: f32) -> bool {
     (a.to_bits() as i64 - b.to_bits() as i64).abs() <= 1
 }
 
+/// Returns whether the uniform word `word`, read as a `u32`, is the `rng.threshold` of the chance `chance` within 2^10
+/// of the 2^32 units of a threshold.
+fn holds_threshold(word: f32, chance: f64) -> bool {
+    (f64::from(word.to_bits()) - chance * 4_294_967_295.0).abs() <= 1024.0
+}
+
 #[test]
 fn rates_give_their_known_chances_per_tick() {
     let day = SheetTime::new(1.0, TimeUnit::Day);
@@ -112,12 +118,13 @@ fn the_rate_uniforms_equal_1_minus_exp() {
             _ => {}
         }
     }
-    // The host writes 1 - e^(-0.1) as one minus its f32 e^(-0.1), a subtraction with no rounding, so the chance
-    // keeps the one step of e^(-0.1) in f32 and no more.
-    let stays = (-0.1f64).exp() as f32;
+    // The recovery rate is the same for every cell, so the host writes its chance 1 - e^(-0.1) as a threshold of
+    // the draw's 32 bits. The chance keeps the one step of e^(-0.1) in f32, about 2^8 units of the threshold.
     assert!(
-        values.iter().any(|&value| within_one_ulp(1.0 - value, stays)),
-        "{values:?} holds no 1 - {stays}"
+        values
+            .iter()
+            .any(|&value| holds_threshold(value, 1.0 - (-0.1f64).exp())),
+        "{values:?} holds no threshold of 1 - e^(-0.1)"
     );
     assert_eq!(tables.len(), 1, "{tables:?}");
     assert_eq!(tables[0].len(), 9);
@@ -469,10 +476,25 @@ fn a_rate_per_week_in_a_model_of_days_is_divided_by_7() {
     let file = lowered(&text);
     let params = [ParamValue::F32(1.0), ParamValue::F32(0.3), ParamValue::F32(0.7)];
     let values = tick_uniforms(&file, &params);
-    let known = (1.0 - (-0.1f64).exp()) as f32;
     assert!(
-        values.iter().any(|value| (value - known).abs() <= 2.0 * f32::EPSILON),
-        "{values:?} holds no {known}"
+        values
+            .iter()
+            .any(|&value| holds_threshold(value, 1.0 - (-0.1f64).exp())),
+        "{values:?} holds no threshold of 1 - e^(-0.1)"
+    );
+}
+
+/// A rate the same for every cell keeps its chance to the 32 bits of a draw. A recovery rate of 2e-8 per day, whose
+/// `1 - e^(-h)` in `f32` is 0, gives a threshold of 2e-8 of the 2^32 units of a draw.
+#[test]
+fn a_small_rate_keeps_its_chance_in_the_threshold() {
+    let file = lowered(sheet_text("sir.toml"));
+    let params = [ParamValue::F32(1.0), ParamValue::F32(0.3), ParamValue::F32(2e-8)];
+    assert_eq!(1.0 - (-2e-8f32).exp(), 0.0, "the direct form loses the chance");
+    let values = tick_uniforms(&file, &params);
+    assert!(
+        values.iter().any(|value| (85..=86).contains(&value.to_bits())),
+        "{values:?} holds no threshold of 2e-8"
     );
 }
 
@@ -571,7 +593,7 @@ fn a_rate_in_an_any_of_keeps_otherwise_and_draws_alone() {
         .iter()
         .filter(|pass| pass.stage == PassStage::Tick)
         .flat_map(|pass| &pass.body.nodes)
-        .filter(|node| node.op == "rand.chance")
+        .filter(|node| matches!(&*node.op, "rand.chance" | "rand.below"))
         .count();
     assert_eq!(draws, 3, "lines 2, 3 and 4 draw alone");
     // The committed SIRD groups its two exits.

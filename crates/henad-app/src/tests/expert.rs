@@ -936,6 +936,30 @@ fn an_unedited_copy_matches_its_sheet_at_every_tick_of_compare_runs() {
     assert!(harness.app.editor.comparison.is_none());
 }
 
+/// An unedited copy of bounded confidence, whose looks add up floating-point numbers in the order the agents are
+/// found, names no tick of a difference, as two runs of the sheet at one seed already differ.
+#[test]
+fn compare_runs_of_a_model_that_does_not_replay_exactly_names_no_first_difference() {
+    use henad_graph::sheet::sentence::{COMPARE_RUNS, runs_do_not_replay};
+
+    use crate::ui::editor::compare::CompareOutcome;
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("bounded_confidence.toml"));
+    harness.click(MODEL_ACTIONS);
+    harness.click(CONVERT_HEADING);
+    harness.click(CONVERT);
+    harness.settle();
+    harness.click(COMPARE_RUNS);
+    let outcome = wait_for_comparison(&mut harness);
+    assert_eq!(outcome, CompareOutcome::Inexact);
+    let text = runs_do_not_replay("Bounded confidence", "Bounded confidence (expert)");
+    let texts = harness.accessible_texts();
+    assert!(texts.contains(&text), "the comparison shows its line: {texts:?}");
+}
+
 #[test]
 fn an_edit_of_the_copy_drops_the_comparison_of_the_copy_before_it() {
     use henad_graph::document::{Category, Variant};

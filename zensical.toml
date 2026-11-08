@@ -189,6 +189,7 @@ nav = [
             { "#102, 2026-11-08" = "developing/agent-record/20261108-102-show-changes-and-compare-runs.md" },
             { "#103, 2026-11-08" = "developing/agent-record/20261108-103-agent-lines.md" },
             { "#104, 2026-11-08" = "developing/agent-record/20261108-104-fire-counts.md" },
+            { "#105, 2026-11-08" = "developing/agent-record/20261108-105-redesign-audit.md" },
         ] },
     ] },
 ]

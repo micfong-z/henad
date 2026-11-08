@@ -37,21 +37,21 @@ moves.
 `sheet/rates.rs` is public (`sheet::rates`): `chance_from_rate`, `rate_from_chance`, `tick_in` (one
 tick in a unit, through `TimeUnit::days`), `chance_per_tick`, `mean_stay`, `parameter_defaults`,
 `chance_words` (the number rule of the final wording table: three significant figures, more until
-the chance prints differently from `r dt n`), `LONG_TICK_CHANCE` (0.5, D2), `largest_count_chance`
+the chance prints differently from `r dt n`), `LONG_TICK_CHANCE` (0.5), `largest_count_chance`
 (`LargestCount` with `is_long` and `words`, "up to 0.909 with 8"; a fixed rate with a "for each" of
 a Count over the cells around, or a Calculate of a fixed number times such a Count), and
 `rate_note(document, line_id, values)`, a `RateNote` (`text`, `mean_stay`, `long_tick`) filled from
-the wording table's templates with the values passed (the defaults, or a run's, D62). The rate is
+the wording table's templates with the values passed (the defaults, or a run's). The rate is
 the line, its condition or an item of an all of in it. A fixed rate gives `rate_note` or
 `rate_for_each_note`, a Calculate of a fixed number times a Count with no "for each" gives
-`worked_out_rate_note` (D106, the formula read through `check::formula::parse`), any other
+`worked_out_rate_note` (the formula read through `check::formula::parse`), any other
 worked-out rate `growing_rate_note` with the Calculate's words. Δt prints in the rate's unit with
 three figures ("0.25 days"). The highest line of a competing group takes `competing_note` and the
 others none, and a group with a "for each", a worked-out rate, two units, or a line whose rate is
 not its whole condition or that a block holds has no note. A line with no `[time]` has none.
-`chance_note` returns the note of a chance with "for each" on the line or in its condition (S19):
+`chance_note` returns the note of a chance with "for each" on the line or in its condition:
 `chance_for_each_note` for a fixed chance, its chance at 1 the chance itself and at 2 by the number
-rule against `2p`, or `growing_chance_note` with words first for a chance that is a result (D106).
+rule against `2p`, or `growing_chance_note` with words first for a chance that is a result.
 `count_as_draw` returns the name of the Count a chance or a rate holds as its value, with the
 `DrawKind`, for the card's note and its button. `conversion` returns the `DrawKind` a typed chance
 or rate can change into (none with no `[time]`, and no rate on a card that runs once),
@@ -84,15 +84,15 @@ and slot any kind holds. The reader takes any line key on any kind. A field the 
 slot holds a `SheetValue`: a `SheetLiteral` (number, percent or bool), a `SheetChip` (`Param`,
 `Result` with `part` and `property`, `My`, `MyNew`, `Their`, `Relation`, `State`), a phrase
 (`Box<SheetLine>`), or a `List` of literals and chips. A formula is the `formula` field of a
-Calculate phrase. The stored forms of the final editor: `{ kind = "always" }` (`LineKind::Always`)
+Calculate phrase. Two stored forms: `{ kind = "always" }` (`LineKind::Always`)
 for a condition that always holds, and `start_state = "any_state"` for a Become from any state, an
 absent key in either being a blank; `test = "outside"` with `low` and `high`, a condition slot's
 alone; `rate_unit_from_tick = true` beside `rate_unit` while the unit came from the tick, read as
-`false` when absent; `{ percent = 30 }` for a number typed as a percent (D110), a literal that
+`false` when absent; `{ percent = 30 }` for a number typed as a percent, a literal that
 stands wherever a number can, in a list included. `SheetLiteral::Percent` keeps the number as typed
 (30), and `SheetLiteral::number` returns the number a literal stands for, a percent's divided by
-100, so S5's ranges and S7's lowering read 30% and 0.3 alike. A parameter's default, min and max
-stay plain numbers. `branches` is a map by state id, so the writer orders it by the property's
+100, so the checker's ranges and the lowering read 30% and 0.3 alike. A parameter's default, min and
+max stay plain numbers. `branches` is a map by state id, so the writer orders it by the property's
 states.
 
 **The reader.** `ParsedSheet::parse` checks `MAX_SHEET_BYTES` before parsing, then the header
@@ -145,26 +145,30 @@ line number, the line word ("line 2", "Clear line 1") or the line prefix ("Line 
 it needs. Beyond the card it holds the sheet (`SheetSection` with each heading, help text and
 example, `SheetSection::shown` for a world of cells or of agents, the World and Time words, the
 property form and its checks, Starts as with `StartsField` and the `starts_*_place` functions, the
-Parameters, Measures, Colours and Buttons words, `SHEET_EMPTY`, and from S26 the Agents, Ground and
-Events words, which round 1 supplies since the final `SPEC.md` has none), the New model and New
+Parameters, Measures, Colours and Buttons words, `SHEET_EMPTY`, and the Agents, Ground and
+Events words), the New model and New
 parameter dialogs (`STARTER_CHOICES` with every starter's description), the top bar, the world tabs
 (`tick_counter`, the tried-value words, `PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the
 conversion. Rows the wording table marks "Not built" are left out. The rate notes are templates
 taking numbers already formatted (`rate_note`, `rate_for_each_note`, `worked_out_rate_note`,
 `growing_rate_note`, `chance_for_each_note`, `growing_chance_note`, `competing_note`,
-`mean_stay_note`), which `sheet::rates` fills. The words the plan adds for its own decisions sit in
-one group (`RATE_IN_BUTTON_CARD`, `ONE_AGENT_KIND`, competing rates, the long tick,
-`chances_per_tick_note`, `long_tick_note`), with the interim refusals (`NOT_YET_REPEAT`,
-`NOT_YET_REPEAT_CHANGE`, `NOT_YET_AGENT_WALLS`, `NOT_YET_BLOCKED_MOVE_BY`), the errors of the ground
-and the places (`ON_GROUND_CELLS`, `AHEAD_NEEDS_CELLS`, `SET_IN_REPEAT`), a property changed two
-ways (`set_already`, `steered_already`, `moved_by_already`, `moved_to_already`) and the words of a
-look at agents (`look_name`, "line 3, Flockmates") and of its cost (`look_costs_too_much`,
-`card_costs_too_much`, `start_costs_too_much`, counts written with thousands commas, and for a pass
-past its cost per element `line_costs_too_much`, `smaller_maximum`, `FEWER_TIMES` and
-`FEWER_LINES`). `plural` is crate-visible for `SheetFile::shortfalls`. Every editor milestone and
-the writer's comments draw their words from here and from no literal of their own. `FORBIDDEN_WORDS`
-lists the words sheet mode never shows. The conversion words sit under the node-graph exemption and
-are outside that test.
+`mean_stay_note`), which `sheet::rates` fills. The groups of `sentence.rs` from "Errors on a rate in
+a button's card" on hold the remaining errors and words (`RATE_IN_BUTTON_CARD`, `ONE_AGENT_KIND`,
+competing rates, the long tick, `chances_per_tick_note`, `long_tick_note`), with the interim
+refusals (`NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHANGE`, `NOT_YET_AGENT_WALLS`,
+`NOT_YET_BLOCKED_MOVE_BY`), the errors of the ground and the places (`ON_GROUND_CELLS`,
+`AHEAD_NEEDS_CELLS`, `SET_IN_REPEAT`), a property changed two ways (`set_already`,
+`steered_already`, `moved_by_already`, `moved_to_already`) and the words of a look at agents
+(`look_name`, "line 3, Flockmates") and of its cost (`look_costs_too_much`, `card_costs_too_much`,
+`start_costs_too_much`, counts written with thousands commas, and for a pass past its cost per
+element `line_costs_too_much`, `smaller_maximum`, `FEWER_TIMES` and `FEWER_LINES`). `plural` is
+crate-visible for `SheetFile::shortfalls`. Every editor milestone and the writer's comments draw
+their words from here and from no literal of their own. `FORBIDDEN_WORDS` lists the words sheet mode
+never shows, and `is_forbidden_word` also matches their endings ("nodes", "compiled"). A note or
+tooltip about what a card runs on takes `thing_word` ("cell", "bird"): the relation notes, the rate
+subjects, `from_tooltip`, the "otherwise" and competing words, with `LINES_HELP_AGENTS`,
+`WORLD_HELP_AGENTS` and the agent edges words for a world of agents. The conversion words sit under
+the node-graph exemption and are outside that test.
 
 `Sentences::new(&document)` holds the sheet's names by id and writes `card_heading` ("Each tick,
 every cell", or "Lines of Clear: run once, every cell, when pressed" for a card that runs once,
@@ -172,14 +176,14 @@ named by the button that runs it) and `line(line_id, otherwise)`, where `otherwi
 numbers of the higher lines that override the line ("otherwise (when line 2 does not apply) become
 ..."). The sentence decides no "otherwise" of its own. The writer passes
 `CardRelations::otherwise_numbers`. A blank reads `...`, an unknown reference reads as its id. Words
-follow the final editor: "Become X from Y" ("from any state"), ", always", "when my Cargo is
+follow the wording table: "Become X from Y" ("from any state"), ", always", "when my Cargo is
 Searching" (no "I am"), "is none of the numbers 2, 3" and "is one of the states" when the left reads
 a States property, "the 3 by 3 block including me", "for each infected neighbour" through
 `for_each_words` (a name whose last word is not a plural reads "for each of B in my block"), a
 percent as typed ("30%"), a Compare line's name hidden while it equals its sentence, a Calculate
 formula's operators as "plus", "minus", "times", "divided by" and "to the power of" with a call's
-parentheses left out and a Calculate inside a slot in parentheses. Agent lines keep round 1's words
-in those conventions, "including me" for `include_me`, an all of inside a slot joined by "and" with
+parentheses left out and a Calculate inside a slot in parentheses. Agent lines keep
+those conventions, "including me" for `include_me`, an all of inside a slot joined by "and" with
 its draws after commas. A state chip that another States property also names reads "Status Alive".
 `literal_words` is public for an editor field that shows a literal, and `read_typed_number` reads a
 typed number back (a trailing "%" makes a percent, "inf" and "nan" are refused), with
@@ -190,7 +194,7 @@ bold `ConditionWord`, `From`, a `Chip` (`ChipKind` and a grey `lead` such as "my
 the words "for each" once on (`FOR_EACH_WORDS`). `Competing` is the "or" (`COMPETING_WORD`) that
 `competing_parts` puts before a lower line of a competing group, in the card alone. One builder
 (`Parts`) writes both forms, so the card and the writer never differ. `placed_parts` returns the
-same parts as `PlacedPart`s, each with the `PartPlace` an edit of it sets (S19): a `target`
+same parts as `PlacedPart`s, each with the `PartPlace` an edit of it sets: a `target`
 (`PlaceTarget::Slot` with its slot path, `ListItem` with the list's slot path and the item's index,
 or `Field` with the phrase's slot path and a `FieldPlace`: `Property`, `NewState`, `StartState`,
 `Test`, `Around`, `RateUnit`, `Summary`, `SummaryValue`, `Operation`, `FirstOperand`,
@@ -199,7 +203,7 @@ or `Field` with the phrase's slot path and a `FieldPlace`: `Property`, `NewState
 key, so a phrase's places compose (`condition.left`). Words, `From`, `Otherwise` and a hand-written
 formula of more than one operation have no place. A Count's `whose` comparison wants a property on
 its left and, while that is empty or a States property, a state on its right, and an empty Calculate
-line reads "[number] [operation] [number]", both values and the select placed. Agent lines (S28)
+line reads "[number] [operation] [number]", both values and the select placed. Agent lines
 place their property (`property_part`), modes, picks and cells as selects, each summary of a look at
 agents (`LineSelect::LookSummary`), a Leave's and a pick's ground property, a Record's event
 (`ChipKind::Event`), every state of a Depending on, Keep between and Random number bounds as the
@@ -219,7 +223,7 @@ reaches a line table. Places are offsets into the text with line ends made `\n`,
 **Starters.** `sheet::starters()` returns the sheet starters as `crate::starters::Starter` values
 (file name and text), embedded with `include_str!` from the crate's `sheets/` directory, since the
 packaging check refuses a path out of the crate: the grid sheets `game_of_life.toml`, `sir.toml`
-("SIR epidemic", rates per day and one tick of 1 day, D5, which entered with the rates' lowering),
+("SIR epidemic", rates per day and one tick of 1 day, which entered with the rates' lowering),
 `vote.toml` ("Majority vote") and `forest_fire.toml`, which entered with the chances' lowering, then
 the agent sheets `random_walk.toml`, `boids.toml` and `bounded_confidence.toml`, which entered with
 the agent lowering, and `ants.toml`, which entered with the ground and holds a note under its last
@@ -241,18 +245,20 @@ start state (`any_state` counts, a blank does not). `can_both_apply(a, b)` is fa
 `a` and a test of `b` read one value and no value passes both. A line's tests: its own condition,
 the condition of each When around it, and a Become's named start state as "my X is S" (a state reads
 as its index). An all of gives each item, nested all of included, and any of, none of, a result
-chip, a draw and a `within` give nothing (gate decision D80). A test reads `my` or a result chip
-(with its part or property) against fixed numbers, percents or states, `outside` included. Two tests
-exclude each other when no tried value passes both: each listed number, its neighbours (+-1 for
-whole values, +-0.5 otherwise), the midpoints, and the ends +-2, with a 1e-9 allowance. Whole means
-a States property, a Count result, or a Look around's `count` part or Count summary.
+chip, a draw and a `within` give nothing. A test reads `my` or a result chip
+(with its part or property) against fixed numbers, percents or states, `outside` included, and a
+result of a line inside a Repeat gives none (`inside_repeat`), as each time round works it out
+again. Two tests exclude each other when no tried value passes both: each listed number, its
+neighbours (+-1 for whole values, +-0.5 otherwise), the midpoints, and the ends +-2, with a 1e-9
+allowance. Whole means a States property, a Count result, or a Look around's `count` part or Count
+summary.
 `otherwise_of(line)` returns the higher colliding lines in display order, `otherwise_numbers` their
 numbers. `competing_groups()` returns two or more Become lines of one property from one named start
 state (not `any_state`), each condition holding exactly one rate and no chance. The rate stands as
 the condition or as an item of an all of, nested all of included. A rate inside an any of or a none
 of keeps the line out of every group, since no share of a hazard is defined there, and a chance
-anywhere does too, as does a Repeat around the line (`group_key`). `otherwise_of` leaves a partner in the line's own group out (decision D1's
-"or").
+anywhere does too, as does a Repeat around the line (`group_key`). `otherwise_of` leaves a partner
+in the line's own group out, since the group's lines read "or".
 `CardRelations::notes(sentences, runs)` returns the card's `RelationNote`s (line, words,
 `RelationNoteKind`), a line's notes in the wording table's order, `runs` saying whether a line runs:
 `Gap` under the last of two or more top-level Become lines of one property from one start state
@@ -261,7 +267,7 @@ more new states, naming the counts from 0 to 8, 4 or 9 (`most_counted`) none pas
 under the last Become line of a States property whose Become lines all sit at the top level, run,
 name a start state, and test one Count or hold always, when for every count each state of the
 property ends the tick in one state (the first passing line from the top, else its own) and two or
-more end states appear; `Order` (D109) under the last Become line of a property whose Become lines,
+more end states appear; `Order` under the last Become line of a property whose Become lines,
 at any depth, all run and start from distinct named states; `WhenRepeats` under a When of "my X is
 S" whose lines are all Become lines of X from S; `OnlyOneInside` under a When around one change that
 holds always (with its id and number, for `MoveConditionInto`), neither for a When holding a When;
@@ -290,16 +296,16 @@ change kind, unknown parameters, states of another property, `their` and relatio
 results from another card or of a change line, parts, places, value types (a slot's expected type
 against a literal, chip or phrase), formulas, keys held twice, Count, Look around and Pick a cell
 inside a Repeat (`LOOK_IN_REPEAT`) or a run-once card, `RATE_IN_BUTTON_CARD`, a rate inside a
-Repeat, and D75's ranges from the wording table (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on
+Repeat, and the ranges from the wording table (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on
 literals, a percent divided by 100, `CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters).
 Agent-only fields with no editor words yet (a Steer or Move mode, a pick rule, `which`, an event,
 `agent_kind`, `include_me`) are errors when absent. Warnings that keep the line running: a draw with
 no key, two result lines with one name, and `SHEET_EMPTY` at `[world]` for a grid sheet with no
-cells property. Skip warnings (D39), one per line, the first problem in the line's sentence order: a
+cells property. Skip warnings, one per line, the first problem in the line's sentence order: a
 blank slot or select reads `not_run_choose` with `Blank::want` or `LineSelect::words` ("Not run yet:
 choose the old state"), Become's property counting as its new state; a result of a line no card
 holds reads the same; a result at or below its user reads `uses_result_below`; a result inside a
-When or Repeat that does not hold the user reads `uses_result_inside` (D84); `my_new` at or above
+When or Repeat that does not hold the user reads `uses_result_inside`; `my_new` at or above
 the last change reads `uses_result_below("my new X")`, and with no change at all as a blank. After
 the slots, in order: a result of a skipped line above reads `not_run_result_unfinished`, a rate with
 no `[time]` reads `NOT_RUN_TICK`, and a change, When or Repeat inside a skipped block, or any line
@@ -308,7 +314,7 @@ parent's number, or else the nearest skipped Repeat's. A result without a name r
 in a note. Outside the cards a blank or unusable value is an error. A value's type walk through
 results stops past `MAX_NESTING`. A rate whose `rate` is a parameter whose Unit names another unit
 (`edit::unit_in_text`) than the line's `rate_unit` warns `unit_mismatch` at the line and keeps
-running in the line's unit (D14). A Record with no event, a Leave or a pick with no ground property
+running in the line's unit. A Record with no event, a Leave or a pick with no ground property
 and a Repeat with no times skip their line in the blank's words. `changes_property` is the rule of
 `my_new`, public for the card's picker.
 
@@ -318,18 +324,18 @@ placed at their tables through `check::span_of`) and reads the lowered document 
 `GraphFile::from_document`. It keeps the `ParsedSheet` (text, places, line ends), the canonical text
 (`to_toml`), the checker's warnings placed (`warnings`, skip warnings included), the lowered
 `GraphFile` (`lowered`), the `LineMap` (`line_map`) and the `FaultNames` of its looks at agents
-(`fault_names`, D47), and the `FireLines` of its change lines (`fire_lines`, S31). `code()` is
-the lowered graph's `code()` (D8): the IR's `name` is `[sheet] name`, both descriptions stay empty,
+(`fault_names`), and the `FireLines` of its change lines (`fire_lines`). `code()` is
+the lowered graph's `code()`: the IR's `name` is `[sheet] name`, both descriptions stay empty,
 and nothing else of the sheet text enters it. The lowered `GraphFile` records the canonical text as
 its author text (`GraphFile::author`, crate-private
 `with_author`) in `SHEET_CODE_FORMAT` (`henad-sheet/1`), and `GraphFile::source` adds it to the
-`ModelSource` every entry of the graph records (AF9, D10). `GraphFile::from_code` and a graph read
+`ModelSource` every entry of the graph records. `GraphFile::from_code` and a graph read
 as a graph carry none (`a_lowered_sheet_records_its_canonical_text_outside_the_code`). `Invalid`
 holds a `SheetErrors`, never empty, since `SheetErrors::new` takes a first error and the rest.
 `SheetFileError::diagnostics` returns every diagnostic, `diagnostic` the first, and `Display` writes
 each on its line. `SheetFile` and `LineMap` write their own `Debug`.
 `SheetFile::place_graph_diagnostic` maps a diagnostic of the lowered graph (its checker, host
-evaluator or compiler) back into the sheet (R2, D46): a node through `LineMap` to its line's table,
+evaluator or compiler) back into the sheet: a node through `LineMap` to its line's table,
 found by the card whose `line_tables` hold the line, a node the sheet owns by the first two segments
 of its slot path (`cells.<property>`, `agents.<property>`, `measure.<id>`, `button.<id>`,
 `card.<id>`, `color.<thing>`), a node the map does not know (a normalisation copy, a planted node)
@@ -339,23 +345,23 @@ to `[sheet]`, and a diagnostic with a pass and no node by the pass id (`tick_<ca
 within reach. henad-explore's `ModelFile` calls it for a sheet's entry errors, and leaves the
 lowered graph's warnings out of a sheet's warnings. For a sheet of agents it compiles the lowered
 graph through `AgentProgram::compile_with_fault_names` with `fault_names`, so a capped fold's fault
-names its author lines. `SheetFile::shortfalls(entry, params, limits)` is X4's one cost mapping: the
+names its author lines. `SheetFile::shortfalls(entry, params, limits)` is the one cost mapping: the
 entry's shortfalls, with the work lines (any line holding "units of work") replaced when the
 heaviest submission or a host run passes its budget. A submission past `SUBMISSION_WORK_BUDGET`
 names each fold of the heaviest step's pass (label `<sheet id>_<pass id>`) by its `FaultNames` words
-through `look_costs_too_much` ("Line 1, Flockmates: looks at too many birds at 1,000,000 birds. A
-shorter distance or fewer birds would fit."), or the card through `card_costs_too_much` when the
+through `look_costs_too_much` ("Line 1, Flockmates: looks at too many birds at 1,000,000 birds. Use a
+shorter distance or fewer birds."), or the card through `card_costs_too_much` when the
 pass holds no fold. A host run past `HOST_WORK_BUDGET` reads `start_costs_too_much`. The population
 is `num_agents`, or `grid_width` times `grid_height`, read from the entry's parameters. The
 checker's per-element cost (V22) is placed at the heaviest node's line by `place_graph_diagnostic`,
 which recognises it by `check::is_pass_cost` (the message's start and its `MAX_PASS_COST` end, built
 in `check/cost.rs` beside the message), rewords it through `SheetFile::cost_words` and drops its
-note: `line_costs_too_much` names the line by `look_name` ("Line 1: too much work for one walker. A
-smaller maximum for Steps per tick would fit."), with `smaller_maximum` for a Repeat over a
+note: `line_costs_too_much` names the line by `look_name` ("Line 1: too much work for one walker. Set a
+smaller maximum for Steps per tick."), with `smaller_maximum` for a Repeat over a
 parameter, `FEWER_TIMES` for a Repeat of a number and `FEWER_LINES` for any other line, or names the
 card by its heading or a button by its name. `SheetFile::lowering_problems(parsed, report)` returns
 the lowering's problems of a sheet that checks, each a `SheetDiagnostic` with its card and line,
-which the card draws under the line (S28). `SheetFile::parse_planted` (`#[cfg(test)]`,
+which the card draws under the line. `SheetFile::parse_planted` (`#[cfg(test)]`,
 crate-private) lowers with a closure run on the lowered document before it is read back, which the
 mapping tests use to plant a node the checker refuses.
 
@@ -379,7 +385,8 @@ the author format (a new waning line in four hunks, a Steer reorder in one, a pa
 two, through a line diff in the test) and `every_readable_mutation_writes_text_that_reads_back` over
 the reader's mutation corpus. Checker tests sit in `src/tests/sheet_mutation.rs` (the 25 cases of
 the author format's mutation run, one test each on a committed sheet edited in the test, each
-asserting error, warning or skip and its table; the rate in a run-once card; D75's ranges;
+asserting error, warning or skip and its table; the rate in a run-once card; the chance and rate
+ranges;
 `the_sheet_checker_never_panics_on_the_mutation_corpus`, whose edits each sheet draws from its own
 seed, so a sheet added to the corpus leaves the others' edits alone) and `src/tests/sheet_check.rs`
 (`every_sheet_checks_clean`, file order, the otherwise rule with exclusive and overlapping tests,
@@ -395,9 +402,9 @@ shader (no `exp`, 1 - e^(-0.1) with e^(-0.1) one f32 step from the true value, t
 table within 3 steps, since its powers are f32 `powi` of the base), the competing thresholds at a
 tick of 7 days, a group with a worked-out rate splitting on the host, the rates SIR conserving its
 cells at half a day, `a_tick_length_override_keeps_the_code_and_the_keys`, the factor of a rate per
-week, every other form of rate, a rate in an any of drawing alone, the notes of the final wording
+week, every other form of rate, a rate in an any of drawing alone, the notes of the wording
 table (`rate_notes_match_the_spec_examples`, `worked_out_rate_notes_match_the_spec_examples`), the
-two conversion commands and their refusals, the D14 warning, and
+two conversion commands and their refusals, the unit mismatch warning, and
 `a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named`. The places of parts are held by
 `every_control_of_a_life_line_is_placed_at_the_slot_or_field_it_shows`,
 `a_new_count_wants_a_property_then_a_state_and_an_empty_calculate_its_two_values`,
@@ -407,19 +414,19 @@ formula inside a slot has no places, and the card edits the values and the opera
 line only. Reader tests sit in `src/tests/sheet_document.rs`, over eleven sheets: the eight
 starters, and three test sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and `ants.toml` are
 the author format's examples, and `random_walk.toml`, `bounded_confidence.toml` and
-`sir_chance.toml` (round 1's SIR with chances per tick, sheet id `sir_chance`) were written from
-round 1's models, as `vote.toml` and `forest_fire.toml` were. The random walk's measure is "Average
-of Position" (`average_of_position`), the name the sheet editor's average gives it (S26).
-`mobile_sir.toml` holds a chance once for each infected person within reach, in a world 1 cell wide
-so every person reaches every other. Every sheet holds `always` and `any_state` written in, Game of
-Life's Clear is a Run once card holding "Become Dead from any state, always", and both SIR sheets
-name their button `new_outbreak`, "New outbreak". The written sheets' keys were minted at random.
-Their text is the writer's canonical text, comments included. The bounded confidence colour rule is
-`shaded` over `opinion` with no colours, since the schema holds no ramp. The test helper `sheets()`
-lists the starters from `starters()`, then the test sheets, so every starter is among the sheets the
-tests read. `starters_returns_the_grid_sheets_then_the_agent_sheets` holds the list and each
-starter's world, and `the_sheets_written_from_round_1_read_their_values` a value of each written
-sheet. `every_sheet_reads` (places on every line table, the ants' chip in
+`sir_chance.toml` (SIR with chances per tick, sheet id `sir_chance`) were written from the models
+of henad-models' `tests/fixtures/lowered/round1/`, as `vote.toml` and `forest_fire.toml` were. The
+random walk's measure is "Average of Position" (`average_of_position`), the name the sheet editor's
+average gives it. `mobile_sir.toml` holds a chance once for each infected person within reach, in a
+world 1 cell wide so every person reaches every other. Every sheet holds `always` and `any_state`
+written in, Game of Life's Clear is a Run once card holding "Become Dead from any state, always",
+and both SIR sheets name their button `new_outbreak`, "New outbreak". The written sheets' keys were
+minted at random. Their text is the writer's canonical text, comments included. The bounded
+confidence colour rule is `shaded` over `opinion` with no colours, since the schema holds no ramp.
+The test helper `sheets()` lists the starters from `starters()`, then the test sheets, so every
+starter is among the sheets the tests read. `starters_returns_the_grid_sheets_then_the_agent_sheets`
+holds the list and each starter's world, and `the_sheets_written_from_round_1_read_their_values` a
+value of each written sheet. `every_sheet_reads` (places on every line table, the ants' chip in
 `[[card.line.l7.row.condition.items]]`, and a depth at most half the limit),
 `every_table_reads_its_values`, `a_sheet_with_an_unknown_key_is_refused_on_the_key` (also with
 `\r\n` line ends), `a_newer_sheet_version_is_refused_on_its_key`,

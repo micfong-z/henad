@@ -26,7 +26,7 @@ pub(crate) fn file_menu(ui: &mut egui::Ui, app: &mut AppState) {
     ui.menu_button(format!("{MDI_FILE_OUTLINE}  File"), |ui| {
         if ui
             .button(format!("{MDI_FILE_DOCUMENT_PLUS_OUTLINE}  {NEW_MODEL_BUTTON}"))
-            .on_hover_text("Start model from an example in Editor")
+            .on_hover_text("Start new model in Editor")
             .clicked()
         {
             editor::sheet::new_model::open_new_model(app);

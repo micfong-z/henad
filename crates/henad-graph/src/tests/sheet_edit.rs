@@ -1,5 +1,5 @@
 //! The sheet edit commands: the author format's three typical edits built by commands, the outline moves, renames and
-//! new ids, line numbers, id minting, automatic names, the commands of the final editor's offers, deletes that leave
+//! new ids, line numbers, id minting, automatic names, the commands behind the card's offers, deletes that leave
 //! skipped lines, and random command sequences over every sheet.
 
 use std::collections::BTreeSet;
@@ -14,8 +14,8 @@ use crate::keys::KeyStream;
 use crate::sheet::check;
 use crate::sheet::document::{
     Around, BlockedState, ButtonStepRule, CardRuns, ChipRelation, CompareTest, Edges, LineKind, LookSummary, Marks,
-    MeasureRule, ParameterType, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetTime, SheetValue,
-    Slot, StartRule, StartsAs, StartsAsRow, SummaryKind,
+    MeasureRule, PaintedShape, ParameterType, PropertyType, ShapeKind, SheetChip, SheetDocument, SheetLine,
+    SheetLiteral, SheetTime, SheetValue, Slot, StartRule, StartsAs, StartsAsRow, SummaryKind,
 };
 use crate::sheet::edit::{
     IdSpace, LineField, MoveDirection, STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem,
@@ -1425,6 +1425,82 @@ fn a_starts_as_commit_is_one_edit_and_keeps_its_key() {
         .and_then(|cells| cells[0].starts_as.as_ref()?.key);
     assert!(key.is_some() && key != held, "{key:?}");
     assert!(!check::check(builder.document()).has_errors());
+}
+
+/// Returns the key of the one draw of the start of the ants' Position in `document`, lowered.
+fn ant_start_draw_key(document: &SheetDocument) -> crate::value::ConfigValue {
+    let file = crate::sheet::SheetFile::parse(&write(document))
+        .unwrap_or_else(|error| panic!("the sheet does not lower: {error}"));
+    let start = file
+        .lowered()
+        .document()
+        .passes
+        .iter()
+        .find(|pass| pass.id == "start_ant")
+        .expect("the start of the ants");
+    let mut draws = start.body.nodes.iter().filter(|node| node.op == "rand.float");
+    let draw = draws.next().expect("the start draws a nest cell");
+    assert!(draws.next().is_none(), "the start draws once");
+    draw.config["key"].clone()
+}
+
+/// A start on a ground state painted on two cells draws one of them. The checker warns while it holds no key, a
+/// second nest cell painted by a command gives it one, and its draws then keep their key across a new id of Position.
+#[test]
+fn a_start_on_two_painted_cells_takes_a_key() {
+    let mut builder = builder_of("ants.toml");
+    let mut painted = builder
+        .document()
+        .ground
+        .as_ref()
+        .and_then(|ground| ground.properties.first()?.starts_as.clone())
+        .expect("the ants' ground is painted");
+    let mut nest = PaintedShape::new(ShapeKind::Cell, "nest");
+    nest.center = Some([0.125, 0.875]);
+    painted.shapes.push(nest);
+    let mut unkeyed = builder.document().clone();
+    if let Some(ground) = unkeyed.ground.as_mut() {
+        ground.properties[0].starts_as = Some(painted.clone());
+    }
+    let warnings = check::check(&unkeyed)
+        .warnings()
+        .map(|warning| warning.diagnostic.message.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        warnings
+            .iter()
+            .any(|message| message.contains("the start of property 'position' draws and holds no key")),
+        "{warnings:#?}"
+    );
+    run(
+        &mut builder,
+        SheetEdit::SetStartsAs {
+            property: "ground".to_owned(),
+            starts_as: Some(Box::new(painted)),
+        },
+    );
+    let position = |document: &SheetDocument, id: &str| {
+        document
+            .agents
+            .iter()
+            .flat_map(|kind| &kind.properties)
+            .find(|property| property.id == id)
+            .and_then(|property| property.starts_as.as_ref()?.key)
+    };
+    assert!(position(builder.document(), "position").is_some());
+    let report = check::check(builder.document());
+    assert!(!report.has_errors());
+    assert_eq!(report.warnings().count(), 0);
+    let key = ant_start_draw_key(builder.document());
+    run(
+        &mut builder,
+        SheetEdit::ChangeId {
+            item: SheetItem::Property("position".to_owned()),
+            id: "place".to_owned(),
+        },
+    );
+    assert!(position(builder.document(), "place").is_some());
+    assert_eq!(ant_start_draw_key(builder.document()), key);
 }
 
 /// Returns a number below `bound` from `rng`.

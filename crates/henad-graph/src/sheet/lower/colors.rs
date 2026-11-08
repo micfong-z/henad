@@ -52,7 +52,7 @@ const HEADING_PALETTE: (&str, [[u8; 4]; 8]) = (
 /// Writes the view pass of the colour rule of the sheet's kind of thing, when the rule needs one.
 pub(super) fn lower(builder: &mut Builder<'_>) {
     if builder.is_ground() {
-        super::ground::colours(builder);
+        super::ground::colors(builder);
         return;
     }
     let thing = builder.thing_id();

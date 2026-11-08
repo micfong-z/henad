@@ -3,7 +3,9 @@
 //! A rate `r` per unit of time holds within one tick with `1 - e^(-r dt)`, where `dt` is the length of one tick in the
 //! rate's unit: the hidden parameter [`TICK_LENGTH`], counted in the tick's unit, and a literal factor when the rate's
 //! unit differs (a rate per week in a model of days is multiplied by 1/7). A value that reads only parameters and
-//! literals is the same for every element. The host computes it once per build, and the device reads it.
+//! literals is the same for every element. The host computes it once per build, and the device reads it. Such a rate
+//! with no count takes its chance from the series `h (1 - h (1/2 - h/6))` below a hazard of 2^-10, since `1 - e^(-h)`
+//! in `f32` rounds to a multiple of 2^-24, and draws through `rng.threshold` and `rand.below` at 2^-32.
 //!
 //! A rate for each of a count `n` holds with `1 - e^(-r dt n)`. When `n` counts the cells around and `r` is the same
 //! for every element, that is `1 - q^n` with `q = e^(-r dt)`, through a `math.powi` whose `max_exponent` is the number
@@ -26,6 +28,10 @@ use super::value::Operand;
 use crate::sheet::document::{LineKind, SheetLine, SheetValue};
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, Literal, PortRef};
+
+/// Hazard below which [`CardLowering::rate`] computes a chance by its series, where `1 - e^(-h)` in `f32` loses the
+/// digits of `h`.
+const SMALL_HAZARD: f32 = 1.0 / 1024.0;
 
 /// Id of the hidden parameter that holds the length of one tick, in the tick's unit.
 pub(super) const TICK_LENGTH: &str = "tick_length";
@@ -82,6 +88,29 @@ impl<'a> CardLowering<'_, 'a> {
         self.builder.input_as(site, &value, &ValueType::F32, false)
     }
 
+    /// Returns `1 - e^(-hazard)` written at `site` with no cancellation: the series `h (1 - h (1/2 - h/6))` below
+    /// [`SMALL_HAZARD`], and [`Self::chance_of`] from there up.
+    fn exact_chance_of(&mut self, site: &Site, hazard: InputValue) -> Result<InputValue, String> {
+        let direct = self.chance_of(site, hazard.clone())?;
+        let sixth = self.float(site, "math.div", vec![("a", hazard.clone()), ("b", number(6.0))])?;
+        let half = self.float(site, "math.sub", vec![("a", number(0.5)), ("b", sixth)])?;
+        let second = self.float(site, "math.mul", vec![("a", hazard.clone()), ("b", half)])?;
+        let first = self.float(site, "math.sub", vec![("a", number(1.0)), ("b", second)])?;
+        let series = self.float(site, "math.mul", vec![("a", hazard.clone()), ("b", first)])?;
+        let small = self.builder.node_value(
+            site,
+            "cmp.lt",
+            vec![("a", hazard), ("b", number(SMALL_HAZARD))],
+            ValueType::Bool,
+        );
+        let small = self.builder.condition_input(site, &small)?;
+        self.float(
+            site,
+            "logic.select",
+            vec![("cond", small), ("if_true", series), ("if_false", direct)],
+        )
+    }
+
     /// Returns `1 - e^(-hazard)` written at `site`.
     fn chance_of(&mut self, site: &Site, hazard: InputValue) -> Result<InputValue, String> {
         let negated = self.float(site, "math.neg", vec![("a", hazard)])?;
@@ -122,6 +151,10 @@ impl<'a> CardLowering<'_, 'a> {
     }
 
     /// Returns the outcome of the rate phrase or rate line `line` lowered at `site`, drawn once.
+    ///
+    /// A rate the same for every element with no count is a chance the host computes once per build with no
+    /// cancellation, compared as a `u32` threshold with all 32 bits of the draw. Every other rate is drawn by
+    /// `rand.chance`, whose chance is resolved to 2^-24.
     pub(super) fn rate(&mut self, site: &Site, line: &'a SheetLine) -> Result<Operand, String> {
         let rate = self.slot(&site.at("rate"), &line.rate)?;
         let uniform = matches!(rate, Operand::Number(_) | Operand::Constant(_) | Operand::Param(..));
@@ -131,6 +164,15 @@ impl<'a> CardLowering<'_, 'a> {
             "math.mul",
             vec![("a", scaled), ("b", InputValue::Param(TICK_LENGTH.to_owned()))],
         )?;
+        if uniform && line.tries.is_blank() {
+            let probability = self.exact_chance_of(site, hazard)?;
+            let threshold = self
+                .builder
+                .node_value(site, "rng.threshold", vec![("p", probability)], ValueType::U32);
+            let threshold = self.builder.input_as(site, &threshold, &ValueType::U32, false)?;
+            let node = self.draw(site, "rand.below", vec![("threshold", threshold)])?;
+            return Ok(Operand::Link(PortRef { node, port: None }, ValueType::Bool));
+        }
         let probability = if line.tries.is_blank() {
             self.chance_of(site, hazard)?
         } else {

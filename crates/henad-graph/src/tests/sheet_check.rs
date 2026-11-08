@@ -909,3 +909,19 @@ fn a_when_offers_to_fold_into_its_lines_and_notes_what_holds_inside_it() {
             .contains(&("l6".to_owned(), "Only when line 2 holds: my Status is Dead.".to_owned()))
     );
 }
+
+/// A by-chance start with its chance left empty is an error that names the property, in the sheet's words.
+#[test]
+fn an_empty_start_chance_names_its_property() {
+    let mut sir = document(sheet_text("sir.toml"));
+    let cells = sir.cells.as_mut().expect("cells");
+    let start = cells[0].starts_as.as_mut().expect("a start");
+    start.rows[0].chance = Slot::Blank;
+    let errors: Vec<String> = check::check(&sir)
+        .diagnostics
+        .into_iter()
+        .filter(|diagnostic| diagnostic.diagnostic.severity == DiagnosticSeverity::Error)
+        .map(|diagnostic| diagnostic.diagnostic.message)
+        .collect();
+    assert_eq!(errors, [sentence::empty_field("Health", "a chance")]);
+}

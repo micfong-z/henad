@@ -101,7 +101,7 @@ word the slot, and the update writes the field at the slot. Its slot check wraps
 block, as a grid step's bounds check does. A rerun that writes
 some layers of a field is refused at compile, since a field uploads whole.
 
-**Live and reload-only parameters** (`wgsl/live.rs`, L1, D53, D88). `GridProgram::entry` and
+**Live and reload-only parameters** (`wgsl/live.rs`). `GridProgram::entry` and
 `AgentProgram::entry` mark each of the graph's own parameters through `own_params(params,
 &live::reload_only(&evaluator))`: reload-only (`on_reload`) where the host reads it at build, live
 otherwise. The sizes in front (`grid_width`, `grid_height`, `num_agents`, `world_width`,
@@ -122,7 +122,7 @@ stats, which read the engine's values. A live one is set on the running engine w
 the new rate and apart from a run that kept 0.3), and the testing kit's `ApplyModes`, which every
 sheet entry passes.
 
-**Fault names** (`wgsl/fault_names.rs`, D47). `FaultNames` is a table from a node id, as the file
+**Fault names** (`wgsl/fault_names.rs`). `FaultNames` is a table from a node id, as the file
 writes it, to the words that name it in the document the graph was lowered from, such as "line 3,
 Flockmates" for a radius fold a sheet lowered. It writes its own `Debug` (the number of names).
 `AgentProgram::compile_with_fault_names(file, &names)` compiles as `compile` does, through the
@@ -188,10 +188,13 @@ count for each element where its output holds. Tests in `tests/probes.rs`:
 `a_probe_on_each_transition_row_counts_as_the_host_does` (the Game of Life starter with its step
 written as two `cat.transition` rows, every tick for 50 ticks and after 64 steps),
 `a_probe_over_agents_counts_as_the_host_does` and the refusals. henad-models' `graph_probes.rs`
-holds every starter probed on its `bool` outputs within 8 storage bindings and the SIR starter
-stepping as it does with no probe.
+holds every starter probed on its `bool` outputs within 8 storage bindings, the SIR starter
+stepping as it does with no probe, and
+`every_probed_shader_keeps_its_barriers_in_uniform_control_flow` (those starters and every sheet
+starter and grid sheet fixture with `sheet_probes`: no early return, and each `workgroupBarrier()` at
+the top level of `main` or directly inside `if (params.henad_count_fires != 0u)`).
 
-**Lane buffers and packing** (`wgsl/pack.rs`, row K, D50). `LaneLayout` places each lane of a
+**Lane buffers and packing** (`wgsl/pack.rs`). `LaneLayout` places each lane of a
 compiled graph in a lane buffer, one `LaneGroup` each, and the lane buffers come first among the
 spec's buffers, before the tick buffer of a grid and the fields, deposits and colours of agents. A
 grid's `GridBufferSpec`s, `GraphHooks::lane_buffers` (its `buffer_lens`, seed and rerun uploads),

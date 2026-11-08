@@ -32,7 +32,7 @@ mod agents;
 mod buttons;
 mod calculate;
 mod card;
-mod colours;
+mod colors;
 mod draw;
 mod fuse;
 mod ground;
@@ -108,8 +108,8 @@ pub(super) fn lower(document: &SheetDocument, report: &SheetReport) -> Result<Lo
     start::lower(&mut builder);
     builder.on_ground(start::lower);
     card::lower_tick(&mut builder);
-    colours::lower(&mut builder);
-    builder.on_ground(colours::lower);
+    colors::lower(&mut builder);
+    builder.on_ground(colors::lower);
     measures::lower(&mut builder);
     builder.on_ground(measures::lower);
     buttons::lower(&mut builder);
@@ -156,7 +156,7 @@ fn moves_to_cells(document: &SheetDocument) -> bool {
         .any(|line| line.kind == LineKind::Move && line.mode == Some(LineMode::To))
 }
 
-/// Where a node is written: its pass, owner, slot path and region.
+/// Place a node is written at: its pass, owner, slot path and region.
 #[derive(Debug, Clone)]
 struct Site {
     /// Index of the pass in [`Builder::passes`].
@@ -583,7 +583,7 @@ impl<'a> Builder<'a> {
         let mut renumbered: HashMap<NodeId, NodeId> = HashMap::new();
         let mut map = LineMap::default();
         let numbering = |numberer: &mut Numberer, owner: &Owner| match owner {
-            Owner::Line { id, number } => numberer.next_of_line(id, *number),
+            Owner::Line { number, .. } => numberer.next_of_line(*number),
             Owner::Sheet(_) => numberer.next_of_sheet(),
         };
         for pass in &self.passes {

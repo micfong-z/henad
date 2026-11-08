@@ -20,7 +20,7 @@ use crate::value::{ConfigValue, InputValue, PortRef};
 /// Name of the output of a formula's expression node.
 const OUTPUT: &str = "out";
 
-/// What a formula's references read: the lowering of a card's lines, or of a pass that reads my properties alone.
+/// Source a formula's references read: the lowering of a card's lines, or of a pass that reads my properties alone.
 pub(super) trait Scope<'a> {
     /// The lowering.
     fn builder(&mut self) -> &mut Builder<'a>;

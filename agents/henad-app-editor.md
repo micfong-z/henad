@@ -10,7 +10,7 @@ dialog of `henad-app-sheet.md`), New grid rule, New node graph (`NEW_NODE_GRAPH`
 too, a menu of henad-graph's `starters()` then `agent_starters()`, labelled by each starter's model
 name), Open model, Save model and Apply, then the code view, the graph editor or the sheet editor.
 The File menu holds New model, New grid rule, New node graph, Open model and Save model, and the
-Model tab New model beside New grid rule and Edit model (D71). `EMPTY_EDITOR` names New model, New
+Model tab New model beside New grid rule and Edit model. `EMPTY_EDITOR` names New model, New
 node graph, New grid rule and Open model. `EditorModel` is `Empty` (the
 default), `Rule(String)` (a grid rule's text as typed, which may be empty or not read),
 `Graph(Box<GraphEditor>)` or `Sheet(Box<SheetEditor>)`, so two models are never held at once.
@@ -240,7 +240,7 @@ compiles the view file while `viewing` holds, and drops a view the document no l
 
 ## The expert mode
 
-`ui/editor/expert.rs` (C1, C7, D17, D19, D68, D96). Convert to node graph in the sheet toolbar's
+`ui/editor/expert.rs`. Convert to node graph in the sheet toolbar's
 Model actions menu and Edit as node graph beside the Diagram send `EditorRequest::Convert`, and
 `open_convert` opens the dialog (`EditorPanel::convert` holds the sheet's name) unless
 `convert_refusal` (`ConvertRefusal::of` the report, or `Errors` for a sheet that does not lower)
@@ -271,11 +271,11 @@ hash differs, or the counterpart no longer lowers) and `NotFound`. `header_ui` d
 takes the copy as its counterpart) in every state but `NotFound`. The sheet's link line
 (`counterpart_copy`) sends `OpenCopy`. The graph side panel ends with `origin_ui` under
 `FROM_AUTHOR_MODEL` (model, file, converted date, then each `[[editor.note]]` title and text, the
-sheet's purpose and each parameter's meaning, C10, D24) when the file records a `ModelOrigin`. Nodes
-added after conversion join no frame (D22). The app draws and renames no frame, so a frame's title
-stays as the conversion wrote it (D25).
+sheet's purpose and each parameter's meaning) when the file records a `ModelOrigin`. Nodes
+added after conversion join no frame. The app draws and renames no frame, so a frame's title
+stays as the conversion wrote it.
 
-**Show changes** (C8, D20). `CopyBanner::changes` holds a `CopyChanges` in the `Edited` state,
+**Show changes**. `CopyBanner::changes` holds a `CopyChanges` in the `Edited` state,
 empty otherwise: the `ChangeGroup`s of `changes_since_conversion` and the name of each removed node,
 the display name of its kind in the original's lowered graph (`CopyChanges::new`). The banner
 offers the `SHOW_CHANGES` toggle only for an edited copy with a change to list (`shows_changes`).
@@ -290,7 +290,7 @@ holds no such node). `marks_of` gives the open canvas a `ChangeMark` per
 added or changed node (`CanvasContext::marks`): a 2-point stroke and a header badge, green for
 `NODE_ADDED` and yellow for `NODE_CHANGED`, an issue's colour taking the stroke first.
 
-**Compare runs** (C9, D20). The banner offers `COMPARE_RUNS` in the `Unedited` and `Edited` states
+**Compare runs**. The banner offers `COMPARE_RUNS` in the `Unedited` and `Edited` states
 (`compares_runs`), disabled in a browser with `COMPARE_NEEDS_NATIVE`, since a GPU model runs in no
 sweep there. `compare::start_comparison` reads the original's canonical text (`original_text`) and
 the copy's, builds both entries through `ModelFile`, and `Comparison::start` runs each as a sweep of
@@ -301,11 +301,13 @@ repaint waker) for `COMPARE_TICKS` (200) ticks at the Parameters tab's seed or
 the stat columns, `RunFinished` the series) and draws `comparison_ui` under the banner while the
 Editor shows a graph: its line (`compare_running`, `runs_match`, `runs_differ` with both values in
 `format_precise`, or in every digit when that prints both the same, `runs_share_no_measure`,
-`compare_failed`), Close comparison
+`runs_do_not_replay` for `CompareOutcome::Inexact`, `compare_failed`), Close comparison
 (`EditorRequest::CloseComparison`) and one `show_plot` of every measure, the original solid and the
 copy dashed in the same data colour, with a vertical line at the first difference.
 `first_difference` compares the measures both runs hold by name, tick by tick, two non-numbers
-counting as equal. Each run sits in a `Side` whose drop stops it within `STOP_WAIT`, so closing,
+counting as equal, and `Comparison::outcome` turns a difference into `Inexact` when either entry's
+`metadata().replays_exactly` is false (bounded confidence and boids add floats in the order agents
+are found, so two runs at one seed differ). Each run sits in a `Side` whose drop stops it within `STOP_WAIT`, so closing,
 replacing or loading never joins a run's thread without a bound (`agents/sim-runner.md`).
 `EditorPanel::comparison` survives a swap to the sheet and is cleared by every load.
 `Comparison::key` holds the copy's load and code revision and the hash of the original's text when
@@ -313,7 +315,7 @@ the runs started (`BannerKey`, `expert::current_copy_key`), and `header_ui` drop
 once the Editor shows that copy with another key. A placement keeps the code revision and the
 comparison.
 
-**Categories** (C11). `world.rs`'s Categories section draws each variant's colour as the sheet's
+**Categories**. `world.rs`'s Categories section draws each variant's colour as the sheet's
 `color_button` (the twelve palette colours, named "Colour of waned: Purple" by `variant_color_name`
 through `sentence::color_button_name`), which runs `SetVariantColor`, Add variant gives the new
 variant `next_variant_color` (the first of `STATE_COLORS` its category lacks, gray once all are
@@ -340,10 +342,11 @@ link that opens its node), `an_unedited_copy_offers_no_show_changes`,
 `add_category_on_a_converted_sir_adds_a_state_with_its_colour_and_the_copy_still_checks` (and no
 Show changes after it), `an_unedited_copy_matches_its_sheet_at_every_tick_of_compare_runs`,
 `compare_runs_names_the_first_tick_at_which_a_highlife_edit_differs` (hidden in sheet mode, shown
-again on the copy) and `an_edit_of_the_copy_drops_the_comparison_of_the_copy_before_it` (a move
+again on the copy), `compare_runs_of_a_model_that_does_not_replay_exactly_names_no_first_difference`
+(bounded confidence) and `an_edit_of_the_copy_drops_the_comparison_of_the_copy_before_it` (a move
 keeps it). `compare.rs` holds the unit tests of `first_difference` and `difference_texts`.
 
-**Display names, origin ports and frame titles** (C4, C5, C6, D21). `graph/display.rs` holds
+**Display names, origin ports and frame titles**. `graph/display.rs` holds
 `DISPLAY_NAMES`, a `DisplayName` (kind, name, category, description) for each of the catalogue's
 114 kinds, and `display_name(kind)`. A node's header (`node_titles`) shows its label, or else the
 display name, with the raw kind in grey under it, after the display name when the node has a label
@@ -370,8 +373,9 @@ waits for the running model."), and otherwise `build_preview` compiles `preview_
 `preview_values` (defaults, `grid_width` and `grid_height` at most `PREVIEW_SIDE`, 256,
 `num_agents` at most `PREVIEW_AGENTS`, 16384, `PreviewRun::Grid` or `Agents`) with the Parameters
 tab's tried values in place (`with_tried`, `agents/henad-app.md`), refuses a
-shortfall or a `SetupError` as `Refused`, and calls `AppState::load_preview` with
-`EditorModel::preview_plays`: a graph's preview plays, and a sheet's waits at tick 0 for Play (D52).
+shortfall (`AppState::entry_shortfalls`) or a `SetupError` as `Refused`, and calls
+`AppState::load_preview` with `EditorModel::preview_plays`: a graph's preview plays, and a sheet's
+waits at tick 0 for Play.
 `AppState::preview` (`PreviewRun`, the size) marks a loaded preview, and `load` clears it.
 `load_preview` plays the run only when asked and the preview is still loaded after `load_setup`: a
 build that fails inline (a browser, or a test with `AppState::inline_builds`) or whose thread does

@@ -254,7 +254,7 @@ impl std::error::Error for SweepStartError {
 /// Handle on a running sweep or search.
 ///
 /// Dropping the handle aborts the sweep. On native it then waits for the sweep's thread to write its files, and
-/// [`Self::stop`] waits within a timeout instead.
+/// `stop` waits within a timeout instead.
 #[derive(Debug)]
 pub struct SweepRun {
     plan: Arc<Plan>,

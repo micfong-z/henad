@@ -299,8 +299,8 @@ pub mod graph {
     pub use henad_graph::sheet::KIND_SHEET;
     pub use henad_graph::{
         CODE_FORMAT, FORMAT, FORMAT_VERSION, GraphFile, GraphFileError, KIND_GRAPH, LIBRARY, catalogue, check,
-        document, draw, edit, editor, file, host, ids, keys, limits, model_text, node, sheet, starters, types, value,
-        wgsl,
+        document, draw, edit, editor, file, host, ids, keys, limits, model_text, node, normal, sheet, starters, types,
+        value, wgsl,
     };
 }
 

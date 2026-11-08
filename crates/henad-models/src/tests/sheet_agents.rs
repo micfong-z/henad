@@ -1,6 +1,6 @@
 //! The agent sheet starters built and stepped on a baseline device: each runs, binds within the baseline's storage
 //! buffers and meets the testing kit, a capped fold's fault names its author lines, and each holds a band against the
-//! round 1 graph lowered by hand on seeds 1 to 3, with a planted rule error outside it.
+//! graph lowered by hand in `tests/fixtures/lowered/round1/` on seeds 1 to 3, with a planted rule error outside it.
 
 use henad_compute::entry::{ModelEntry, ModelSet};
 use henad_compute::gpu::GpuContext;
@@ -13,13 +13,13 @@ use henad_graph::sheet::{SheetFile, starters};
 use super::graph_ants_parity::graph_buffer;
 use super::graph_grid_parity::{build_gpu, snapshot, stat, step};
 
-/// Hand-lowered round 1 random walk.
+/// Hand-lowered random walk of `tests/fixtures/lowered/round1/`.
 const HAND_WALK: &str = include_str!("../../tests/fixtures/lowered/round1/random_walk.toml");
-/// Hand-lowered round 1 boids.
+/// Hand-lowered boids of `tests/fixtures/lowered/round1/`.
 const HAND_BOIDS: &str = include_str!("../../tests/fixtures/lowered/round1/boids.toml");
-/// Hand-lowered round 1 bounded confidence.
+/// Hand-lowered bounded confidence of `tests/fixtures/lowered/round1/`.
 const HAND_OPINIONS: &str = include_str!("../../tests/fixtures/lowered/round1/bounded_confidence.toml");
-/// Hand-lowered round 1 ants.
+/// Hand-lowered ants of `tests/fixtures/lowered/round1/`.
 const HAND_ANTS: &str = include_str!("../../tests/fixtures/lowered/round1/ants.toml");
 
 /// Seeds every band runs at.

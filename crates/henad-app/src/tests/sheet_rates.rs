@@ -334,7 +334,7 @@ fn the_sird_lines_3_and_4_read_or_with_one_bracket_and_one_group_note() {
         "the group's note replaces the lines' own notes"
     );
     assert!(
-        shows(&mut harness, &competing_tooltip(&[3, 4], "Infected")),
+        shows(&mut harness, &competing_tooltip(&[3, 4], "Infected", "cell")),
         "the word or describes the group"
     );
     seen.look(&mut harness);

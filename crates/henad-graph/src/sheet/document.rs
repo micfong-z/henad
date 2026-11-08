@@ -97,7 +97,7 @@ pub struct SheetHeader {
     pub id: String,
     /// Name of the model.
     pub name: String,
-    /// What the model is for, in the author's words.
+    /// Purpose of the model, in the author's words.
     pub purpose: Option<String>,
     /// Number of the next line id to mint. Every line id is below it.
     pub next_line: u32,
@@ -120,13 +120,13 @@ impl SheetHeader {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SheetWorld {
-    /// What the world is made of.
+    /// Kind of thing the world is made of.
     pub made_of: MadeOf,
     /// Width in cells.
     pub width: u32,
     /// Height in cells.
     pub height: u32,
-    /// What happens at the world's edges.
+    /// Behaviour of the world's edges.
     pub edges: Edges,
 }
 
@@ -191,11 +191,11 @@ pub struct SheetProperty {
     pub property_type: PropertyType,
     /// States of a States property, in order.
     pub states: Vec<SheetState>,
-    /// How agents' marks on a Number property of the ground combine.
+    /// Rule by which agents' marks on a Number property of the ground combine.
     pub marks: Option<Marks>,
     /// Share of a Number property of the ground left after a tick's fading.
     pub kept_per_tick: Slot,
-    /// How the property starts, `None` for a property with no start, such as a heading.
+    /// Start of the property, `None` for a property with no start, such as a heading.
     pub starts_as: Option<StartsAs>,
     /// The author's comment on the property.
     pub note: Option<String>,
@@ -274,7 +274,7 @@ pub enum Marks {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct StartsAs {
-    /// How the property starts.
+    /// Start of the property.
     pub rule: StartRule,
     /// Key of the start's draws.
     pub key: Option<u32>,
@@ -320,6 +320,20 @@ impl StartsAs {
             && self.base.as_deref() != Some(state)
             && shapes.clone().all(|shape| shape.shape == ShapeKind::Cell)
             && shapes.any(|shape| shape.center.is_some())
+    }
+
+    /// Returns the number of placed cells this start paints `state` on, 0 unless
+    /// [`Self::paints_single_cells`] holds.
+    ///
+    /// An agent that starts on `state` draws one of them when there are two or more.
+    pub(crate) fn single_cells(&self, state: &str) -> usize {
+        if !self.paints_single_cells(state) {
+            return 0;
+        }
+        self.shapes
+            .iter()
+            .filter(|shape| shape.state == state && shape.center.is_some())
+            .count()
     }
 }
 
@@ -467,7 +481,7 @@ pub struct SheetEvent {
     pub id: String,
     /// Name of the event.
     pub name: String,
-    /// What the event means, in the author's words.
+    /// Meaning of the event, in the author's words.
     pub means: Option<String>,
 }
 
@@ -502,9 +516,9 @@ pub struct SheetParameter {
     pub step: Option<f64>,
     /// Unit of the value, free text such as `per day`.
     pub unit: Option<String>,
-    /// How the value is shown.
+    /// Display format of the value.
     pub format: Option<ParameterFormat>,
-    /// What the parameter means, in the author's words.
+    /// Meaning of the parameter, in the author's words.
     pub means: Option<String>,
 }
 
@@ -561,7 +575,7 @@ pub struct SheetMeasure {
     pub name: String,
     /// Colour of the measure's plot as red, green, blue and alpha bytes.
     pub color: Color,
-    /// What the measure counts or sums.
+    /// Quantity the measure counts or sums.
     pub rule: MeasureRule,
     /// Kind of thing the measure is over.
     pub over: Option<String>,
@@ -612,7 +626,7 @@ pub enum MeasureRule {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ColorRule {
-    /// How the things are coloured.
+    /// Colouring of the things.
     pub rule: ColorRuleKind,
     /// States property whose state colours a thing.
     pub property: Option<String>,
@@ -753,7 +767,7 @@ impl SheetButton {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ButtonStep {
-    /// What the step does.
+    /// Action of the step.
     pub rule: ButtonStepRule,
     /// Kind of thing whose every property starts again.
     pub thing: Option<String>,
@@ -864,7 +878,7 @@ pub struct SheetLine {
     pub include_me: Option<bool>,
     /// Whether a Pick a cell line picks only open cells.
     pub open_only: Option<bool>,
-    /// What a Pick a cell line picks.
+    /// Rule a Pick a cell line picks by.
     pub pick: Option<PickRule>,
     /// Property a Pick a cell line ranks cells by.
     pub ranked_by: Option<String>,
@@ -1169,7 +1183,7 @@ pub struct LookSummary {
     pub id: String,
     /// Name of the summary.
     pub name: String,
-    /// How the values are summarised.
+    /// Summary taken over the values.
     pub summary: Option<SummaryKind>,
     /// Value read from each neighbour.
     pub value: Slot,

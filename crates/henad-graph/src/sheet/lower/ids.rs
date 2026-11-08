@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use super::table::NodeOwner;
 use crate::sheet::limits::{MAX_NODES_PER_LINE, MAX_SHEET_NODES};
+use crate::sheet::sentence::{LINE_NUMBER_TOO_LARGE, LINE_TOO_LONG, SHEET_TOO_LARGE};
 
 /// Place of a node the sheet owns in the walk that numbers them, inside its pass.
 ///
@@ -84,19 +85,18 @@ impl Numberer {
     ///
     /// # Errors
     ///
-    /// Returns the message for a line past [`MAX_NODES_PER_LINE`] nodes, or a line number whose ids pass `u32`.
-    pub(super) fn next_of_line(&mut self, line_id: &str, number: u32) -> Result<u32, String> {
+    /// Returns the message for a line past [`MAX_NODES_PER_LINE`] nodes, or a line number whose ids pass `u32`. The
+    /// message is placed at the line, and names it by neither its id nor its number.
+    pub(super) fn next_of_line(&mut self, number: u32) -> Result<u32, String> {
         let count = self.line_counts.entry(number).or_insert(0);
         *count += 1;
         if *count as usize > MAX_NODES_PER_LINE {
-            return Err(format!(
-                "line {line_id} lowers to more than {MAX_NODES_PER_LINE} nodes, the most one line can lower to"
-            ));
+            return Err(LINE_TOO_LONG.to_owned());
         }
         number
             .checked_mul(1000)
             .and_then(|base| base.checked_add(*count))
-            .ok_or_else(|| format!("line {line_id} has a number too large for the ids of its nodes"))
+            .ok_or_else(|| LINE_NUMBER_TOO_LARGE.to_owned())
     }
 
     /// Returns the id number of the next node the sheet owns.
@@ -107,9 +107,7 @@ impl Numberer {
     pub(super) fn next_of_sheet(&mut self) -> Result<u32, String> {
         self.sheet_count += 1;
         if self.sheet_count as usize > MAX_SHEET_NODES {
-            return Err(format!(
-                "the sheet lowers to more than {MAX_SHEET_NODES} nodes outside its lines, the most a sheet can lower to"
-            ));
+            return Err(SHEET_TOO_LARGE.to_owned());
         }
         Ok(self.sheet_count)
     }

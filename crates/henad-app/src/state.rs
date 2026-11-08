@@ -490,7 +490,7 @@ impl AppState {
     }
 
     /// Returns whether the Parameters tab draws the preview's parameters and sends a change to it: a preview runs or
-    /// builds, and the selection has not changed since it loaded (D54).
+    /// builds, and the selection has not changed since it loaded.
     ///
     /// The selected model's values, seed and schedule stay as they are. Once another model is selected, the tab draws
     /// that model's parameters for the next build, as Build builds it.
@@ -659,7 +659,7 @@ impl AppState {
 
         let entry = self.lookup(&replay.model).map_err(|error| lookup_message(&error))?;
         RunSetup::from_replay(entry, &replay).map_err(|error| setup_message(&error))?;
-        let shortfalls = entry.shortfalls(&replay.params, &self.runtime.granted);
+        let shortfalls = self.entry_shortfalls(entry, &replay.params);
         if !shortfalls.is_empty() {
             return Err(too_large_message(&shortfalls));
         }
@@ -696,7 +696,7 @@ impl AppState {
         let entry = self.lookup(id).map_err(|error| lookup_message(&error))?;
         RunSetup::from_parts(entry, setup.values(), setup.seed(), setup.schedule().clone())
             .map_err(|error| setup_message(&error))?;
-        let shortfalls = entry.shortfalls(setup.values(), &self.runtime.granted);
+        let shortfalls = self.entry_shortfalls(entry, setup.values());
         if !shortfalls.is_empty() {
             return Err(too_large_message(&shortfalls));
         }
@@ -1032,9 +1032,22 @@ impl AppState {
 
     /// Reasons this machine cannot build the selection. Always empty for a CPU model.
     pub fn selection_shortfalls(&self) -> Vec<String> {
-        self.selected_entry().map_or_else(Vec::new, |entry| {
-            entry.shortfalls(&self.param_values, &self.runtime.granted)
-        })
+        self.selected_entry()
+            .map_or_else(Vec::new, |entry| self.entry_shortfalls(entry, &self.param_values))
+    }
+
+    /// Reasons this machine cannot build `entry` at `values`.
+    ///
+    /// When the Editor's sheet builds `entry`, work past a budget is named by the sheet's lines, as
+    /// [`henad_graph::sheet::SheetFile::shortfalls`] words it, and no lowered pass is named.
+    pub fn entry_shortfalls(&self, entry: &ModelEntry, values: &[ParamValue]) -> Vec<String> {
+        let limits = &self.runtime.granted;
+        match self.editor.model.sheet().and_then(|sheet| sheet.file()) {
+            Some(file) if entry.source().code_hash() == Some(file.code().hash()) => {
+                file.shortfalls(entry, values, limits)
+            }
+            _ => entry.shortfalls(values, limits),
+        }
     }
 
     /// Returns the reason Build cannot build the selection, or `None` when it can.

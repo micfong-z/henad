@@ -9,9 +9,10 @@ use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 
 use crate::runner::{
-    DEFAULT_STOP_TIMEOUT, Driver, Pace, RUN_TO_PUBLISH_INTERVAL, RunnerShutdown, SharedSlot, SimLoop, SnapshotSlot,
+    DEFAULT_STOP_TIMEOUT, Driver, Pace, RUN_TO_PUBLISH_INTERVAL, RunToStride, RunnerShutdown, SharedSlot, SimLoop,
+    SnapshotSlot,
 };
-use crate::snapshot::{CpuLayers, FireCounts, GridSnapshot, PointSnapshot, Snapshot, SnapshotView};
+use crate::snapshot::{CpuLayers, FireCounts, GridSnapshot, PointSnapshot, Snapshot, SnapshotView, StatSample};
 use std::time::Duration;
 use web_time::Instant;
 
@@ -149,6 +150,10 @@ struct Loop {
     fired_through: Option<u64>,
     /// Tick a pending [`SimCommand::RunTo`] stops at.
     run_to_target: Option<u64>,
+    /// Ticks the pending run to a tick samples its stats at.
+    run_to_stride: Option<RunToStride>,
+    /// Stats sampled since the last publish.
+    run_to_samples: Vec<StatSample>,
 }
 
 impl SimLoop for Loop {
@@ -223,6 +228,7 @@ impl SimLoop for Loop {
             }
             SimCommand::RunTo(target) => {
                 self.run_to_target = Some(target);
+                self.run_to_stride = Some(RunToStride::new(self.state.tick(), target));
                 self.running = false;
                 self.reset_tps_window();
             }
@@ -300,6 +306,8 @@ impl Loop {
             schedule: Schedule::default(),
             fired_through: None,
             run_to_target: None,
+            run_to_stride: None,
+            run_to_samples: Vec::new(),
         };
         (sim, slot)
     }
@@ -323,6 +331,13 @@ impl Loop {
         let steps = u64::from(uncapped_steps_for(self.engine_ms, 1)).min(remaining);
         for _ in 0..steps {
             self.timed_step();
+            let tick = self.state.tick();
+            if self.run_to_stride.as_mut().is_some_and(|stride| stride.take_due(tick)) {
+                self.run_to_samples.push(StatSample {
+                    tick,
+                    stats: self.state.stats(),
+                });
+            }
         }
         if steps == remaining {
             self.run_to_target = None;
@@ -417,7 +432,8 @@ impl Loop {
         // Actions and setting changes also publish, and must not move the nodes of a paused network.
         let relax = self.layout_on && (self.ticked || self.relax_paused);
         self.ticked = false;
-        let snap = build_snapshot(spare, &mut *self.state, self.actual_tps, engine_ms, self.serial, relax);
+        let mut snap = build_snapshot(spare, &mut *self.state, self.actual_tps, engine_ms, self.serial, relax);
+        snap.run_to_samples = std::mem::take(&mut self.run_to_samples);
         crate::runner::publish(&self.slot, snap);
         // After the lock, so waking the UI can never make it block on us.
         if let Some(wake) = &self.wake {
@@ -645,6 +661,7 @@ fn build_snapshot(
         view,
         stats: state.stats(),
         fire_counts: FireCounts::default(),
+        run_to_samples: Vec::new(),
     }
 }
 
@@ -1118,6 +1135,70 @@ mod pacing_timing_tests {
         );
         settle();
         assert_eq!(ticks.load(Ordering::Relaxed), 20_000);
+    }
+
+    /// Counts steps, and reports its tick as its one stat.
+    struct TickStat(u64);
+
+    impl SimState for TickStat {
+        fn step(&mut self) {
+            self.0 += 1;
+        }
+        fn tick(&self) -> u64 {
+            self.0
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            vec![StatEntry::new(
+                "Tick",
+                henad_core::view::StatValue::Scalar(self.0 as f64),
+                [0; 4],
+            )]
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    /// A run to a tick that ends between two publishes still hands the host evenly spaced samples, each holding the
+    /// stats of its own tick.
+    #[test]
+    fn a_run_to_a_tick_samples_its_stats_on_the_way() {
+        let mut thread = SimThread::new(Box::new(TickStat(0)), 1.0, None, FaultSink::new());
+        thread.run_to(1000);
+        let mut samples = Vec::new();
+        let reached = wait_until_mut(|| match thread.take_snapshot() {
+            Some(snap) => {
+                samples.extend(snap.run_to_samples);
+                snap.tick == 1000
+            }
+            None => false,
+        });
+        assert!(reached, "the run never published its target");
+        let ticks: Vec<u64> = samples.iter().map(|sample| sample.tick).collect();
+        assert_eq!(ticks, (1..500).map(|i| i * 2).collect::<Vec<_>>());
+        for sample in &samples {
+            assert_eq!(sample.stats[0].value().scalar(), sample.tick as f64);
+        }
+    }
+
+    /// Polls `condition` until it holds, and returns whether it held before [`DEADLINE`].
+    fn wait_until_mut(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            if condition() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]

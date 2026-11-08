@@ -42,7 +42,10 @@ the file and a note naming the diagnostic's pass and node. A graph on a grid the
 henad-graph's `GridProgram`, and a graph of agents through its `AgentProgram`. Checker, host and
 compiler errors come as `ModelFileError::Graph`. A sheet (`kind = "sheet"`) needs no code of its
 own here: henad-explore places each of its warnings and errors at the sheet's line table and clears
-the pass and node (decision D46), so `located` prints the author line and no note.
+the pass and node, so `located` prints the author line and no note. `with_model_files` returns
+each `ModelFile` beside the set, and `run_single` takes the file of its entry: the device check
+runs a sheet's `SheetFile::shortfalls`, so work past a budget names the sheet's lines and no pass
+(`a_sheet_past_the_work_budget_is_refused_at_its_lines`). A sweep's plan keeps the entry's words.
 `--print-lowered` (`Mode::PrintLowered`, checked first) takes exactly one `--model-file`
 (`parse_args` refuses another count with exit 2), requires it, conflicts with a model id, `--list`,
 `--params`, `--info`, `--json`, the exports, `--stats-every`, `--merge`, every sweep flag and every

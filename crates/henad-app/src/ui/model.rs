@@ -129,7 +129,7 @@ fn editor_buttons(ui: &mut egui::Ui, app: &mut AppState) {
             egui::Button::new(format!("{MDI_FILE_DOCUMENT_PLUS_OUTLINE} {}", editor::NEW_MODEL_BUTTON)),
             editor::NEW_MODEL_BUTTON,
         )
-        .on_hover_text("Start model from an example in Editor");
+        .on_hover_text("Start new model in Editor");
         if model.clicked() {
             editor::sheet::new_model::open_new_model(app);
         }

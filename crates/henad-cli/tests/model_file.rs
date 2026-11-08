@@ -742,6 +742,40 @@ fn a_sheet_model_file_runs_and_prints_its_problems_at_its_lines() {
     }
 }
 
+/// A boids sheet whose look-around covers a small world with more birds than one fold may meet is refused before it
+/// builds, with the lines of its looks in the sheet's words and no pass of the lowered graph.
+#[test]
+fn a_sheet_past_the_work_budget_is_refused_at_its_lines() {
+    if !has_device() {
+        return;
+    }
+    let sheet = argument(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../henad-graph/sheets/boids.toml"));
+    let output = run(&[
+        "--model-file",
+        &sheet,
+        "--steps",
+        "5",
+        "--set",
+        "num_agents=70000",
+        "--set",
+        "world_width=200",
+        "--set",
+        "world_height=200",
+        "--set",
+        "visual_range=200",
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let message = stderr(&output);
+    assert!(
+        message.contains("Lines 1 and 2, Flockmates and Too close: looks at too many birds at 70,000 birds."),
+        "{message}"
+    );
+    let words = message.replace(&sheet, "");
+    for word in ["node", "pass", "units of work"] {
+        assert!(!words.contains(word), "{message}");
+    }
+}
+
 #[test]
 fn print_lowered_prints_the_graph_a_sheet_lowers_to() {
     let sheet = argument(&life_sheet());

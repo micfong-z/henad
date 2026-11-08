@@ -40,8 +40,8 @@ no build, and its `ModelCode` holds a format, the canonical text and the FNV-1a 
 code. `with_author` records the text of the author document a runtime model was built from (a
 sheet's canonical text), read by `author()`. The author text stays outside `code_hash()` and
 outside equality: `PartialEq` is written by hand over the type path, the build, the origin and the
-code, destructuring every field so a new field has to be placed (decision D51,
-`model_source_equality_ignores_the_author_text`, keep it). The app compares sources with `==`,
+code, destructuring every field so a new field has to be placed
+(`model_source_equality_ignores_the_author_text`, keep it). The app compares sources with `==`,
 and a note edit then reinstalls nothing. `same_author` compares the author texts alone.
 `diagnostic.rs` holds `CodeDiagnostic` (severity, message, file, byte span, line and character
 column counted from 1, notes, and the optional `pass` and `node` id a graph model's checker sets),

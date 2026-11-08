@@ -312,6 +312,8 @@ It stands as a line of its own, as the condition of a change or a When, or insid
 A rate `r` per unit holds within one tick with the chance 1 − e^(−r Δt), where Δt is one tick counted in the rate's unit, and for each of a count `n` with the chance 1 − e^(−r Δt n).
 A rate in another unit than the tick's is multiplied by the ratio of the two units, so a rate per week in a model of days is divided by 7.
 A value that reads only parameters and typed numbers is the same for every cell, and the host computes it once per build.
+Such a rate with no count keeps its chance to 2^-32, so a rate as small as 1e-8 per tick still holds at its own chance.
+Every other rate and every chance is resolved to 2^-24: a chance per tick below about 1e-6 runs measurably off its value, a chance below 2^-24 runs at 2^-24, and such a rate below about 3e-8 per tick never holds.
 A rate for each of the cells around reads e^(−r Δt k) for each count `k` from a table the host computes, and the device computes no exponential.
 A rate worked out for each cell, or for each of a count of agents, takes one exponential per element.
 
@@ -335,11 +337,13 @@ A sheet whose `[world]` is `made_of = "agents"` holds one kind of agent, its `co
 Its Position starts anywhere at random, an Arrow as a random direction, and its Heading follows the direction of its last move.
 Its card can look at the agents within a distance, count them or sum up what it sees, then steer a property, keep a value between two limits, and move by an arrow, and a Repeat adds up its moves and steers.
 A Become or Set inside a Repeat applies when its condition holds at any time round.
+When two such changes of one property both apply, the higher line wins, whichever time round each one held.
 
 The agents can walk on a ground of cells, one per unit of the world.
 A ground property holds states painted at the start, or a number that agents mark with Leave, keeping the largest mark or adding the marks up, and that fades by its share kept per tick.
 A card can pick the open cell around an agent with the most or least of a ground property, or one at random, look at the cell here or ahead, read a property of a place, move to a place, leave a mark and record an event that a measure counts.
-Cells in a blocked state of the ground are not open, and an agent whose move to a place finds that place not open stays where it is.
+Cells in a blocked state of the ground are not open.
+The first Move to whose condition holds decides, and an agent whose place there is not open stays where it is.
 The looks and picks of a card over one neighbourhood share one walk of the cells around.
 Agents that move to places can live in a world with walls, and other worlds wrap at their edges.
 
@@ -372,8 +376,9 @@ Its message keeps the wording of the graph's checks, since it points to a fault 
 
 The code of a sheet is the code of the graph it lowers to, the graph's semantic text in the format `henad-graph/1`.
 A sweep's manifest records that text as `model.code`, so a results folder replays without reading the sheet.
-The sheet's name, its ids, the names of its states and parameters, its parameter defaults, its colours and the keys of its draws enter the code through the graph.
-A comment, a note, the `purpose` and the name of a result line stay outside it, and so does a new order of two lines that cannot change the result.
+The sheet's name, the ids of its parameters, states, properties, cards, lines and buttons, the names of its states, parameters and measures, its parameter defaults, bounds and steps, its colours and the keys of its draws enter the code through the graph.
+A comment, a note, the `purpose`, a parameter's unit and meaning, a measure's id and the name of a result line stay outside it, and so does a new order of two lines that cannot change the result, such as two Steers of one property.
+The draws of a button's press also depend on the button's place among the sheet's buttons, so a button added or deleted above it changes the numbers its presses draw, while the keys of its lines stay the same.
 A [resume](cli.md#resuming) of a sheet's sweep is refused when the code differs, as for any model file.
 
 ### A sheet converted to a graph model

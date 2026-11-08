@@ -24,8 +24,7 @@ impl SimRunner {
 
     /// Sends a command to the sim thread.
     ///
-    /// The GPU backend ignores the pacing and layout commands (`SetTargetTps`, `SetUncapped`, `SetTicksPerSnapshot`
-    /// and `SetLayout`), and paces itself by its batch size.
+    /// The GPU backend ignores `SetTicksPerSnapshot` and `SetLayout`, and sizes its batches itself.
     pub fn send(&mut self, cmd: SimCommand) {
         match self {
             Self::Cpu(t) => t.send(cmd),

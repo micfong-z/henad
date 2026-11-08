@@ -13,8 +13,8 @@
 //! loaded run is a preview. Otherwise it waits for that run to end, and a Build started after the edit replaces the
 //! waiting preview. An edit that leaves the document invalid leaves the running preview alone.
 //!
-//! A *tried value* is a value of a parameter that the Parameters tab sets in the preview while the model keeps its own
-//! (D88). The preview runs with it and every rebuild of the preview keeps it, until the value the model keeps changes,
+//! A *tried value* is a value of a parameter that the Parameters tab sets in the preview while the model keeps its own.
+//! The preview runs with it and every rebuild of the preview keeps it, until the value the model keeps changes,
 //! Reset or Keep ends it, or the Editor loads another document.
 
 use std::time::Duration;
@@ -240,7 +240,7 @@ fn build_preview(app: &mut AppState) {
     };
     let (mut values, run) = preview_values(&entry);
     with_tried(&entry, &mut values, app.editor.preview.tried_values());
-    let shortfalls = entry.shortfalls(&values, &app.runtime.granted);
+    let shortfalls = app.entry_shortfalls(&entry, &values);
     if !shortfalls.is_empty() {
         let problem = CodeDiagnostic::error(too_large_message(&shortfalls));
         app.editor.preview.state = PreviewState::Refused(vec![problem]);

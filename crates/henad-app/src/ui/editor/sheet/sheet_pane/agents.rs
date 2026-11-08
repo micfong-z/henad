@@ -11,14 +11,14 @@ use henad_graph::limits::MAX_AGENTS;
 use henad_graph::sheet::document::{
     AgentKind, Marks, PropertyType, SheetDocument, SheetLiteral, SheetProperty, SheetValue, Slot,
 };
-use henad_graph::sheet::edit::{IdSpace, SheetEdit, SheetItem, mint_id};
+use henad_graph::sheet::edit::{IdSpace, SheetEdit, SheetItem, is_reserved_name, mint_id};
 use henad_graph::sheet::sentence::{
     ADD_EVENT, ADD_GROUND_PROPERTY_NAME, AGENT_COUNT_LABEL, AGENT_COUNT_NAME, AGENT_MAX_LABEL, AGENT_MAX_NAME,
     AGENT_MAX_TOOLTIP, AGENT_NAME_FIELD, AGENT_NAME_MISSING, CANCEL, DONE, EVENT_NAME_FIELD, EVENT_NAME_MISSING,
     EVENT_NAME_PLACEHOLDER, EVENTS_EMPTY, GROUND_EMPTY, KEPT_LEAD, KEPT_OUT_OF_RANGE, KEPT_TAIL, MARKS_ADD_UP,
     MARKS_LABEL, MARKS_LARGEST, MARKS_NONE, MARKS_TOOLTIP, NAME_LABEL, NEW_EVENT, REMOVE_ROW_LABEL, add_property_name,
     blocked_lead, blocked_state_name, delete_event_name, event_name_name, event_name_taken, integer_up_to, kept_place,
-    marks_name, read_typed_number,
+    marks_name, name_reserved, read_typed_number,
 };
 
 use super::{
@@ -429,6 +429,8 @@ fn event_form(
                 form.message = Some(EVENT_NAME_MISSING.to_owned());
             } else if event_taken(document, &name, None) {
                 form.message = Some(event_name_taken(&name));
+            } else if is_reserved_name(&name, IdSpace::Item) {
+                form.message = Some(name_reserved(&name));
             } else {
                 *pending = Some(Pending::from_form(
                     FormKind::Event,

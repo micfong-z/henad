@@ -21,7 +21,7 @@ use crate::sheet::sentence::{
     RATE_IN_BUTTON_CARD,
 };
 
-/// What a blank wants. Its words fill the skip note.
+/// Kind of value a blank wants. Its words fill the skip note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Want {
     /// A blank of a chip or a value.
@@ -86,7 +86,7 @@ pub(super) struct LineAt<'a> {
     runs_once: bool,
 }
 
-/// Where a value is checked.
+/// Place a value is checked in.
 #[derive(Debug, Clone)]
 pub(super) struct Context<'a> {
     /// Table a problem is placed at.
@@ -135,7 +135,7 @@ impl<'a> Context<'a> {
     }
 }
 
-/// What the walk of one line found that decides whether it runs.
+/// Findings of the walk of one line that decide whether it runs.
 #[derive(Debug, Default)]
 pub(super) struct LineState {
     /// Note of the first problem that keeps the line from running.
@@ -393,6 +393,39 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Returns the name the sheet shows for `place`: the name of its property, measure or button, or the heading of
+    /// the section it sits in.
+    fn place_name(&self, place: &Place) -> String {
+        let document = self.document;
+        let named = match place {
+            Place::Property(thing, index) => declarations::properties_of_thing(document, *thing)
+                .get(*index)
+                .map(|property| property.name.clone()),
+            Place::Measure(index) => document.measures.get(*index).map(|measure| measure.name.clone()),
+            Place::Button(index) => document.buttons.get(*index).map(|button| button.name.clone()),
+            _ => None,
+        };
+        named.unwrap_or_else(|| {
+            match place {
+                Place::World => "World",
+                Place::Time => "Time",
+                Place::Parameter(_) => "Parameters",
+                Place::Measure(_) => "Measures",
+                Place::Button(_) => "Buttons",
+                Place::Color(_) => "Colours",
+                _ => "The sheet",
+            }
+            .to_owned()
+        })
+    }
+
+    /// Records a blank `slot` that wants `want`: a skip note for a slot in a line, and the error of an empty field for
+    /// a slot outside the cards.
+    fn blank(&mut self, context: &Context<'_>, state: &mut LineState, want: Want) {
+        let error = sentence::empty_field(&self.place_name(&context.place), want.words());
+        self.unusable(context, state, || sentence::not_run_choose(want.words()), &error);
+    }
+
     /// Records a problem of a value that keeps its line from running: a skip note for a value in a line, and the error
     /// `error` for a value outside the cards.
     fn unusable(&mut self, context: &Context<'_>, state: &mut LineState, note: impl FnOnce() -> String, error: &str) {
@@ -418,12 +451,7 @@ impl<'a> Checker<'a> {
     ) -> Option<ValueType> {
         match slot.value() {
             None => {
-                self.unusable(
-                    context,
-                    state,
-                    || sentence::not_run_choose(want.words()),
-                    &format!("a value is blank, where it wants {}", want.words()),
-                );
+                self.blank(context, state, want);
                 None
             }
             Some(value) => self.value(value, context, want, expect, governing, state),
@@ -1313,12 +1341,7 @@ pub(super) enum Draw {
 
 /// Records the skip note of a blank that wants `want`, or the error of a blank outside the cards.
 fn state_skip(checker: &mut Checker<'_>, context: &Context<'_>, state: &mut LineState, want: Want) {
-    checker.unusable(
-        context,
-        state,
-        || sentence::not_run_choose(want.words()),
-        &format!("a value is blank, where it wants {}", want.words()),
-    );
+    checker.blank(context, state, want);
 }
 
 /// Returns the kind of thing the cells around a thing of `thing` belong to: `cells` on a grid, `ground` under agents.

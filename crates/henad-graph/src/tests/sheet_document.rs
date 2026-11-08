@@ -1,11 +1,11 @@
 //! The sheet reader over the starters and the test sheets, its refusals, its blanks and a mutation corpus.
 //!
-//! The starters in the crate's `sheets/` directory are round 1's Game of Life, Majority vote, forest fire, random walk,
-//! boids from the author format's examples, and bounded confidence. The test sheets under `sheets/` here are round 1's
-//! SIR with rates and ants from the author format's examples, its SIR with chances written from round 1's models, and
-//! a sheet of chances once for each infected person nearby. Every sheet holds the stored
-//! forms of the final editor: every condition that always holds written `{ kind = "always" }`, every Become from any
-//! state written `start_state = "any_state"`, Game of Life's Clear a button that runs a card once, and the SIR buttons
+//! The starters in the crate's `sheets/` directory are Game of Life, Majority vote, forest fire, random walk and
+//! bounded confidence written from the models of henad-models' `tests/fixtures/lowered/round1/`, and SIR with rates,
+//! boids and ants from the author format's examples. The test sheets under `sheets/` here hold SIR with chances written
+//! from the same `round1/` models, and a sheet of chances once for each infected person nearby. Every sheet holds two
+//! stored forms: every condition that always holds written `{ kind = "always" }`, and every Become from any state
+//! written `start_state = "any_state"`. Game of Life's Clear is a button that runs a card once, and the SIR buttons are
 //! named New outbreak.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};

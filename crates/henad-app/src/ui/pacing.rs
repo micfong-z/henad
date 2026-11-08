@@ -1,4 +1,5 @@
-//! The Pacing panel: a CPU model's speed limit and snapshot cadence, a network's layout, and a GPU model's batching.
+//! The Pacing panel: a model's speed limit, a CPU model's snapshot cadence, a network's layout, and a GPU model's
+//! batching.
 
 use crate::sim_runner::SimRunner;
 use crate::state::AppState;
@@ -8,8 +9,8 @@ use henad_compute::runner::MAX_VIEW_BUDGET_MS;
 const LAYOUT_BUDGET_MAX_MS: f32 = 50.0;
 
 pub fn pacing_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    // A GPU model paces itself by its batch size and ignores the TPS cap and the snapshot cadence. Its controls
-    // replace the CPU controls, which would have no effect on it.
+    // A GPU model ignores the snapshot cadence. Its batching controls take the place of the cadence.
+    tps_controls(ui, app);
     if app.is_gpu() {
         gpu_batching_controls(ui, app);
     } else {
@@ -17,7 +18,8 @@ pub fn pacing_ui(ui: &mut egui::Ui, app: &mut AppState) {
     }
 }
 
-fn cpu_pacing_controls(ui: &mut egui::Ui, app: &mut AppState) {
+/// Draws the speed limit, which both runners keep to.
+fn tps_controls(ui: &mut egui::Ui, app: &mut AppState) {
     let uncapped_changed = ui.checkbox(&mut app.uncapped, "Unlimited TPS").changed();
 
     if !app.uncapped {
@@ -36,7 +38,9 @@ fn cpu_pacing_controls(ui: &mut egui::Ui, app: &mut AppState) {
     if uncapped_changed {
         app.send_command(SimCommand::SetUncapped(app.uncapped));
     }
+}
 
+fn cpu_pacing_controls(ui: &mut egui::Ui, app: &mut AppState) {
     let mut max = app.ticks_per_snapshot as i32;
     if ui
         .add(

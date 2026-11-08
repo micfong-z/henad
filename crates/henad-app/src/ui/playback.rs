@@ -8,16 +8,25 @@ use crate::ui::results::table::INEXACT_REPLAY;
 use crate::ui::time_axis::{counter_text, elapsed_text};
 use crate::ui::{add_progress_bar, mcs};
 
+/// Sets `name` as the accessible name of the icon button `id`.
+fn icon_name(ui: &egui::Ui, id: egui::Id, name: &str) {
+    ui.ctx().accesskit_node_builder(id, |node| node.set_label(name));
+}
+
 pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let has_thread = app.sim_thread.is_some();
 
     ui.horizontal(|ui| {
-        let icon = if app.sim_running { MDI_PAUSE } else { MDI_PLAY };
+        let (icon, name) = if app.sim_running {
+            (MDI_PAUSE, "Pause")
+        } else {
+            (MDI_PLAY, "Play")
+        };
 
-        if ui
-            .add_enabled(has_thread, egui::Button::new(icon))
-            .on_hover_text("Play / Pause")
-            .clicked()
+        let play = ui.add_enabled(has_thread, egui::Button::new(icon));
+        // The button shows an icon alone, so the screen reader takes its name from here.
+        icon_name(ui, play.id, name);
+        if play.on_hover_text("Play / Pause").clicked()
             && let Some(thread) = &mut app.sim_thread
         {
             if app.sim_running {
@@ -29,10 +38,9 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
             app.run_to_target = None;
         }
 
-        if ui
-            .add_enabled(has_thread, egui::Button::new(MDI_SKIP_NEXT))
-            .on_hover_text("Step")
-            .clicked()
+        let step = ui.add_enabled(has_thread, egui::Button::new(MDI_SKIP_NEXT));
+        icon_name(ui, step.id, "Step");
+        if step.on_hover_text("Step").clicked()
             && let Some(thread) = &mut app.sim_thread
         {
             thread.step_once();

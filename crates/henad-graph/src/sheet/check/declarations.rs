@@ -158,7 +158,7 @@ enum Namespace {
 
 /// Ids claimed so far, each with what holds it, by namespace and id.
 struct Claims<'a> {
-    /// What holds each id, such as "parameter".
+    /// Kind of item holding each id, such as "parameter".
     seen: HashMap<(Namespace, &'a str), &'static str>,
 }
 
@@ -268,6 +268,21 @@ fn thing_properties(document: &SheetDocument) -> Vec<(Thing, &[SheetProperty])> 
         out.push((Thing::Ground, &ground.properties));
     }
     out
+}
+
+/// Returns the properties of the kind of thing `thing`, empty for a kind the sheet does not have.
+pub(super) fn properties_of_thing(document: &SheetDocument, thing: Thing) -> &[SheetProperty] {
+    match thing {
+        Thing::Cells => document.cells.as_deref().unwrap_or_default(),
+        Thing::Agents(index) => document
+            .agents
+            .get(index)
+            .map_or(&[], |kind| kind.properties.as_slice()),
+        Thing::Ground => document
+            .ground
+            .as_ref()
+            .map_or(&[], |ground| ground.properties.as_slice()),
+    }
 }
 
 /// Returns the id of the kind of thing `thing`.
@@ -414,13 +429,19 @@ fn check_start<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, thing
                 checker.error(format!("property '{id}': on the ground starts a Position"), place);
             }
             let ground = start.property.as_deref().unwrap_or("");
-            if checker.property_of(ground, "ground").is_none() {
-                checker.error(
+            match checker.property_of(ground, "ground") {
+                None => checker.error(
                     format!("property '{id}' starts on '{ground}', which is no ground property"),
                     place,
-                );
-            } else {
-                check_state_field(checker, ground, start.state.as_deref(), "state", place);
+                ),
+                Some(property) => {
+                    check_state_field(checker, ground, start.state.as_deref(), "state", place);
+                    // An agent draws one of the cells when its state is painted on two or more.
+                    draws = property
+                        .starts_as
+                        .as_ref()
+                        .is_some_and(|painted| painted.single_cells(start.state.as_deref().unwrap_or("")) > 1);
+                }
             }
         }
     }

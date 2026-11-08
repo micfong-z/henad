@@ -51,19 +51,20 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   own colour with a gray 600 outline, gray 100 while hovered or focused. "Choose a colour" offers
   the twelve `henad_graph::sheet::edit::PALETTE_COLORS`, named by `COLOR_NAMES` (Black, Dark grey,
   Grey, White, Red, Orange, Yellow, Brown, Green, Dark green, Blue and Purple). They are data
-  colours a state is drawn in, taken from the final editor's MCS entries, so they live in the sheet
+  colours a state is drawn in, taken from MCS entries, so they live in the sheet
   and not in `ui/mcs.rs`. New states take them in the neutral order of `STATE_COLORS`. A colour
   that is not in the palette, as in a starter, is named by the nearest one. "+ Add property" is
   the primary action, blue 700, while the sheet holds no property. A refused number field shows
   its message in the theme's error colour under its row. A parameter's Unit is free text with
-  "per second" to "per year" offered under the field, never a select (D89). A Number property's
+  "per second" to "per year" offered under the field, never a select. A Number property's
   shading shows a swatch of its hue from MCS step 900 to step 200 (`ShadeHue::ends`, data colours
   of the sheet like the state palette). The sheet toolbar's Undo and Redo show their icon and word.
 - **The words rule of sheet mode.** The Editor tab in sheet mode and the text a sheet puts in the
   world tabs (names, measures, buttons, the tick counter) never show a word of
-  `henad_graph::sheet::sentence::FORBIDDEN_WORDS` ("node", "seed", "compile" and the rest). The
+  `henad_graph::sheet::sentence::FORBIDDEN_WORDS` ("node", "seed", "compile" and the rest), nor one
+with a plural or verb ending (`is_forbidden_word`). The
   Model, Performance and System tabs are outside it, and so are the world tabs' own controls
-  (Seed, Build, Unlimited TPS) and the controls that open or create a node graph (D96): New node
+  (Seed, Build, Unlimited TPS) and the controls that open or create a node graph: New node
   graph, Convert to node graph, Edit as node graph, the conversion dialog and the sheet's line
   "Converted to node graph: X". The tests' `opens_a_node_graph` matches those controls by their
   whole names, and a test leaves the dialog out by place with `Harness::accessible_texts_outside`.

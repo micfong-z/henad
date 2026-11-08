@@ -441,7 +441,7 @@ henad-core     traits, types, provenance and the shared WGSL as text
 henad-build    the shader bindings and the build stamps a build script generates
 henad-compute  engines, runners, model entries and sets, include_shaders!, grid rules
 henad-models   the ten example models, and a path dev-dependency of henad-explore
-henad-graph    graph models: IR, checker, host evaluator, WGSL compiler, edits and starters
+henad-graph    graph models and sheets: IR, checker, host evaluator, WGSL compiler, edits, starters
 henad-explore  sweeps, searches, the testing kit and model files
 henad-cli      headless bench and sweeps as a library, its binary on henad-models
 henad-app      egui UI as a library, its binary on henad-models

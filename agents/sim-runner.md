@@ -57,6 +57,22 @@ browser the readback cannot block, and the stats land on a later pump. A loop to
 one-shot snapshot's readback is still out (`late_stats`) waits for it and publishes that tick
 again first. Otherwise the build's zeros stay in the history as tick 0's row. Either driver runs a
 run-to through the same `pump`, and the frame driver cuts it at `PUMP_BUDGET_MS` like any other.
+A run-to samples its stats at up to `runner::MAX_RUN_TO_SAMPLES` evenly spaced ticks before the
+target (`RunToStride`), and each publish carries those since the last in `Snapshot::run_to_samples`.
+`runner::publish` moves the samples of a publish the host never took into the next, and the app
+pushes each into the history before the snapshot's own row. Otherwise a run that ends inside one
+publish interval leaves the Charts tab only its first and last tick. The CPU loop samples after
+the step that reaches a sample tick. The GPU loop cuts a batch at each sample tick and reads the
+stats back blocking, publishing from there once `RUN_TO_PUBLISH_INTERVAL` has passed. In a browser
+the readback cannot block, so a GPU run-to samples nothing and publishes as before.
+`a_run_to_a_tick_samples_its_stats_on_the_way` and `a_gpu_run_to_a_tick_samples_its_stats_on_the_way`
+pin both.
+
+The GPU loop starts uncapped and keeps to `SetTargetTps` once `SetUncapped(false)` arrives, as the
+CPU loop does. A capped batch holds the steps of one 16 ms snapshot interval at the rate, at least
+one and at most `batch_size`, and the next falls due that many ticks' time after the last. The app
+sends both commands after every GPU build, so the Pacing tab's Unlimited TPS and Target TPS apply
+to a sheet as to a CPU model. `a_capped_gpu_run_keeps_to_its_rate` pins it.
 `a_replay_of_a_planned_run_matches_its_sweep_row` and `a_gpu_schedule_matches_export_stats`
 (henad-explore) pin the live loop's rule to a sweep's and to `--export-stats`. Keep them.
 
@@ -80,7 +96,7 @@ and stops each with `SweepRun::stop(STOP_WAIT)` when dropped, never through the 
 
 `SimCommand::SetParam` reaches either loop between two pumps, and the state's `set_param` decides.
 A live edit on a GPU engine writes its uniform blocks with `queue.write_buffer` before the next
-batch is encoded, so the tick and the buffers stay and every later step reads the value (L1). A
+batch is encoded, so the tick and the buffers stay and every later step reads the value. A
 reload-only edit is rejected and logged, and the host rebuilds for it. The app's Parameters tab
 does so for the Editor's preview (`agents/henad-app.md`). A sweep sets every value at build and
 never sends an edit, so its runs are unchanged.

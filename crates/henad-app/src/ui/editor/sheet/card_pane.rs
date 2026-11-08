@@ -21,7 +21,7 @@
 //! Count's state after its property, a Become's old state after its new state) and the empty upper number of a range
 //! after its lower number.
 //!
-//! A card over agents offers the agent lines of round 1 under the same add buttons, and "+ Repeat..." after them: looks
+//! A card over agents offers the lines of agents under the same add buttons, and "+ Repeat..." after them: looks
 //! at the agents within a distance with their summaries, picks and looks at cells of the ground, random numbers and
 //! directions, Choose and Depending on, Steer, Keep between, Move, Leave and Record. A summary of a look at agents
 //! names itself after what it sums up, and "+" after the summaries adds another. A problem the lowering finds in a
@@ -52,15 +52,15 @@ use henad_graph::sheet::relations::{CardRelations, RelationNote, RelationNoteKin
 use henad_graph::sheet::sentence::{
     ADD_AT_END_NOTE, ALWAYS, ALWAYS_TOOLTIP, ANY_STATE_ID, AddButton, AddItem, BLANK_MODEL_CARD, BLANK_TEXT,
     BUTTON_CARD_EMPTY, Blank, CONDITION_ARROW_TOOLTIP, ChipKind, DELETE_WHEN_TOOLTIP, DRAW_NEW_NUMBERS, DrawKind,
-    FOR_EACH_BLANK_WORDS, FOR_EACH_WORDS, FROM_TOOLTIP, FROM_WORD, FieldPlace, LAW, LineSelect, ONE_SIDED_RANGE,
-    PartPlace, PlaceTarget, PlacedPart, REMOVE_THIS_WHEN, SHARED_DRAW_GROUP, SentenceChip, SentencePart, Sentences,
+    FOR_EACH_BLANK_WORDS, FOR_EACH_WORDS, FROM_WORD, FieldPlace, LAW, LineSelect, ONE_SIDED_RANGE, PartPlace,
+    PlaceTarget, PlacedPart, REMOVE_THIS_WHEN, SHARED_DRAW_GROUP, SentenceChip, SentencePart, Sentences,
     UNIT_PLACEHOLDER, add_inside_label, add_inside_name, add_value_name, always_name, card_header,
     condition_arrow_name, count_used_as_draw, delete_line, for_each_change_name, for_each_optional_name,
-    for_each_optional_tooltip, for_each_words, line_actions_name, line_count, line_list_name, line_name, line_prefix,
-    line_word, move_into_label, move_into_name, move_line_down, move_line_up, operation_words, otherwise_notice,
-    otherwise_tooltip, otherwise_words, remove_when_name, rename_field_name, rename_line, result_below_tooltip,
-    result_inside_tooltip, result_name_taken, sentence_text, use_for_each_label, use_for_each_name, use_instead_label,
-    use_instead_name, uses_result_below, uses_result_inside,
+    for_each_optional_tooltip, for_each_words, from_tooltip, line_actions_name, line_count, line_list_name, line_name,
+    line_prefix, line_word, move_into_label, move_into_name, move_line_down, move_line_up, operation_words,
+    otherwise_notice, otherwise_tooltip, otherwise_words, remove_when_name, rename_field_name, rename_line,
+    result_below_tooltip, result_inside_tooltip, result_name_taken, sentence_text, use_for_each_label,
+    use_for_each_name, use_instead_label, use_instead_name, uses_result_below, uses_result_inside,
 };
 use henad_graph::sheet::sentence::{
     CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, RANDOM_VALUE_GROUP, add_choose_row_name, add_for_each_label,
@@ -78,7 +78,7 @@ use super::picker::{
 use super::sheet_pane::SheetTrial;
 use super::widgets::{
     CHIP_PADDING, DialogOutcome, NewParameterDialog, NumberUse, allocate_control, blank_shapes, blank_ui, chip_with_id,
-    message_ui, new_parameter_modal, set_name,
+    message_ui, new_parameter_modal, refusal_text, set_name,
 };
 use super::{LineFires, SheetEditor, accessible_group};
 use crate::icons::material_design_icons::{MDI_CHEVRON_DOWN, MDI_DOTS_HORIZONTAL, MDI_INFORMATION};
@@ -205,7 +205,7 @@ struct PlaceRef {
 
 // Edits
 
-/// What happens to the focus after an edit of the card.
+/// Move of the focus after an edit of the card.
 #[derive(Debug, Clone)]
 enum After {
     /// The focus stays where it is.
@@ -216,7 +216,7 @@ enum After {
         line: String,
         /// Target of the control the edit came from.
         target: PlaceTarget,
-        /// What the place wanted.
+        /// Kind of value the place wanted.
         want: Option<Blank>,
     },
     /// The new line's first blank opens. The line's id is the last id the edit made.
@@ -240,7 +240,7 @@ type CardRun = Box<dyn FnOnce(&mut SheetBuilder) -> Result<Vec<String>, SheetEdi
 struct CardEdit {
     /// The commands.
     run: CardRun,
-    /// What happens to the focus after it.
+    /// Move of the focus after it.
     after: After,
     /// Whether a refusal belongs under the rename field.
     rename: bool,
@@ -345,7 +345,7 @@ fn run_card_edit(sheet: &mut SheetEditor, past_start: bool, edit: CardEdit) {
                     // The field keeps its text and takes the focus again for another name.
                     renaming.focused = false;
                 }
-                _ => state.refusal = Some(error.to_string()),
+                _ => state.refusal = Some(refusal_text(&error)),
             }
             return;
         }
@@ -553,7 +553,7 @@ struct CardsShown<'a> {
     counted: &'a BTreeSet<String>,
 }
 
-/// What every line of one card reads while the card is drawn.
+/// Values every line of one card reads while the card is drawn.
 struct CardDrawing<'a> {
     /// The sheet.
     document: &'a SheetDocument,
@@ -593,7 +593,8 @@ fn card_ui(
         ui.label(RichText::new(drawing.sentences.card_heading(card)).strong());
         ui.weak(line_count(lines.len()));
         if each_tick {
-            help_button(ui, Help::Lines);
+            let agents = !matches!(card.every.as_str(), "cells" | "ground");
+            help_button(ui, if agents { Help::AgentLines } else { Help::Lines });
         }
     });
     if each_tick {
@@ -1283,7 +1284,8 @@ pub fn card_lines(
                         .line(line_id)
                         .and_then(|line| state_of(document, line.property.as_deref(), line.start_state.as_deref()))
                         .unwrap_or(BLANK_TEXT);
-                    let tooltip = competing_tooltip(&numbers, state);
+                    let thing = sentences.thing_word(&card.every);
+                    let tooltip = competing_tooltip(&numbers, state, &thing);
                     placed = competing_parts(placed, numbers);
                     let others = group.iter().filter(|id| **id != line_id).map(|id| (*id).to_owned());
                     (others.collect(), tooltip)
@@ -1461,9 +1463,10 @@ fn otherwise_words_of(
         .and_then(|id| property_of(document, id));
     let state = line.and_then(|line| state_of(document, line.property.as_deref(), line.start_state.as_deref()));
     let property_name = property.map_or(BLANK_TEXT, |property| property.name.as_str());
+    let thing = Sentences::new(document).thing_word(&relations.card().every);
     (
-        otherwise_tooltip(numbers, property_name, state),
-        otherwise_notice(prefix, numbers, property_name, state),
+        otherwise_tooltip(numbers, property_name, state, &thing),
+        otherwise_notice(prefix, numbers, property_name, state, &thing),
     )
 }
 
@@ -1657,7 +1660,7 @@ fn tries_path(line: &SheetLine) -> Option<String> {
     })
 }
 
-/// What the parts of one line gather while they are drawn.
+/// Results the parts of one line gather while they are drawn.
 struct LineDrawing<'a> {
     /// Ids of the lines that a hovered or focused "otherwise" or result chip names.
     hovered: &'a mut Vec<String>,
@@ -1893,7 +1896,7 @@ fn end_filling(ui: &Ui, state: &mut CardState, line_id: &str, rect: Rect, gather
 
 /// The part being drawn: its line, its index and its place.
 struct PartDrawing<'a> {
-    /// What the picker of the part reads.
+    /// Values the picker of the part reads.
     context: &'a LineContext<'a>,
     /// The line.
     line: &'a CardLine,
@@ -1934,7 +1937,10 @@ fn part_ui(
             return;
         }
         SentencePart::From => {
-            ui.add(Label::new(FROM_WORD).extend()).on_hover_text(FROM_TOOLTIP);
+            let context = drawing.context;
+            let thing = context.sentences.thing_word(&context.relations.card().every);
+            ui.add(Label::new(FROM_WORD).extend())
+                .on_hover_text(from_tooltip(&thing));
             return;
         }
         SentencePart::Chip(chip) => {

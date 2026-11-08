@@ -30,7 +30,7 @@ use henad_core::provenance::{ModelCode, ModelSource};
 use henad_explore::model_file::ModelFile;
 use henad_graph::model_text::read_header;
 use henad_graph::sheet::document::SheetDocument;
-use henad_graph::sheet::sentence::{SHEET_EMPTY, WORLD_EMPTY};
+use henad_graph::sheet::sentence::{PREVIEW_WAITS as SHEET_PREVIEW_WAITS, SHEET_EMPTY, WORLD_EMPTY};
 use henad_graph::sheet::{KIND_SHEET, ParsedSheet, SHEET_CODE_FORMAT};
 use henad_graph::starters::{Starter, agent_starters, starters};
 use henad_graph::{GraphFile, KIND_GRAPH};
@@ -270,7 +270,7 @@ impl ApplyOutcome {
             Self::Applied => ("Model applied.", false),
             Self::AwaitingRebuild => ("Model applied. Press Rebuild to run it from tick 0.", false),
             Self::Installed => ("Model applied. Press Build to run it.", false),
-            Self::Unchanged => ("Model code unchanged.", false),
+            Self::Unchanged => ("Model unchanged.", false),
             Self::Refused(_) => ("Model not applied. Fix the problems below.", true),
             Self::Unread(_) => ("Model file has problems. Fix them, then press Apply.", true),
             Self::Faulted(_) => ("Model build failed. Fix the problem below.", true),
@@ -654,7 +654,7 @@ fn header_buttons(ui: &mut egui::Ui, compute: bool, empty: bool, request: &mut O
         Button::new(format!("{MDI_FILE_DOCUMENT_PLUS_OUTLINE} {NEW_MODEL_BUTTON}")),
         NEW_MODEL_BUTTON,
     )
-    .on_hover_text("Start model from an example");
+    .on_hover_text("Start new model");
     if model.clicked() {
         *request = Some(EditorRequest::NewModel);
     }
@@ -860,30 +860,35 @@ fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel) {
                 .iter()
                 .filter(|diagnostic| !known.iter().any(|known| known.message == diagnostic.message))
             {
-                ui.colored_label(ui.visuals().error_fg_color, diagnostic_text(diagnostic));
+                ui.colored_label(ui.visuals().error_fg_color, &diagnostic.message);
             }
         }
         None => {
             ui.weak("Press Apply to check and install the model.");
         }
     }
+    // The message alone. The line and column of a problem point into the sheet's text, which sheet mode never shows.
     for diagnostic in live {
         let color = if diagnostic.severity == henad_core::diagnostic::DiagnosticSeverity::Error {
             ui.visuals().error_fg_color
         } else {
             ui.visuals().warn_fg_color
         };
-        ui.colored_label(color, diagnostic_text(diagnostic));
+        ui.colored_label(color, &diagnostic.message);
     }
 }
 
 /// Draws the state of the preview: its size while it runs, and the problems that stopped it. `plays` is whether the
-/// preview plays once built, as a graph's does, rather than waiting at tick 0 for Play.
+/// preview plays once built, as a graph's does, rather than waiting at tick 0 for Play as a sheet's does.
+///
+/// A sheet's problems are listed without their line and column, which point into the sheet's text.
 fn preview_ui(ui: &mut egui::Ui, state: &PreviewState, plays: bool) {
+    let sheet = !plays;
     let (line, problems) = match state {
         PreviewState::Idle => return,
         PreviewState::Waiting => {
-            ui.label(format!("{MDI_INFORMATION} {PREVIEW_WAITS}"));
+            let waits = if sheet { SHEET_PREVIEW_WAITS } else { PREVIEW_WAITS };
+            ui.label(format!("{MDI_INFORMATION} {waits}"));
             return;
         }
         PreviewState::Running(run) => {
@@ -895,7 +900,12 @@ fn preview_ui(ui: &mut egui::Ui, state: &PreviewState, plays: bool) {
     };
     ui.colored_label(ui.visuals().error_fg_color, line);
     for problem in problems {
-        ui.colored_label(ui.visuals().error_fg_color, diagnostic_text(problem));
+        let text = if sheet {
+            problem.message.clone()
+        } else {
+            diagnostic_text(problem)
+        };
+        ui.colored_label(ui.visuals().error_fg_color, text);
     }
 }
 

@@ -218,6 +218,7 @@ mod named_only {
         henad::graph::sheet::edit::SheetBuilder,
         henad::graph::sheet::edit::SheetEdit,
         henad::graph::keys::KeyStream,
+        henad::graph::normal::Origin,
         henad::graph::sheet::document::SheetDocument,
         henad::graph::sheet::SheetWriteError,
         henad::graph::sheet::sentence::Sentences<'static>,

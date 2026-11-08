@@ -36,6 +36,51 @@ pub const PUMP_BUDGET_MS: f64 = 6.0;
 /// It is longer than the interval while playing, since each publish copies the whole view.
 pub const RUN_TO_PUBLISH_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Most ticks a run to a tick samples its stats at before its target.
+///
+/// The samples travel in [`Snapshot::run_to_samples`]. Each sample on the device waits for a stats readback, so the
+/// count stays small whatever the length of the run.
+pub const MAX_RUN_TO_SAMPLES: u64 = 500;
+
+/// Evenly spaced ticks at which a run to a tick samples its stats, at most [`MAX_RUN_TO_SAMPLES`] of them.
+///
+/// The target itself is never a sample tick. The publish at the target covers it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RunToStride {
+    /// Number of ticks between two samples.
+    stride: u64,
+    /// Next tick to sample at.
+    next: u64,
+    /// Tick the run stops at.
+    target: u64,
+}
+
+impl RunToStride {
+    /// Returns the sample ticks of a run from `tick` to `target`.
+    pub(crate) fn new(tick: u64, target: u64) -> Self {
+        let stride = target.saturating_sub(tick).div_ceil(MAX_RUN_TO_SAMPLES).max(1);
+        Self {
+            stride,
+            next: tick.saturating_add(stride),
+            target,
+        }
+    }
+
+    /// Returns the number of steps from `tick` to the next sample tick, or `None` once no sample tick is left.
+    pub(crate) fn steps_to_next(&self, tick: u64) -> Option<u64> {
+        (self.next < self.target).then(|| self.next.saturating_sub(tick))
+    }
+
+    /// Returns whether `tick` is due for a sample, and moves on to the next sample tick when it is.
+    pub(crate) fn take_due(&mut self, tick: u64) -> bool {
+        if tick < self.next || tick >= self.target {
+            return false;
+        }
+        self.next = tick.saturating_add(self.stride);
+        true
+    }
+}
+
 /// Longest time one publish may spend preparing its view, including a network's layout.
 ///
 /// In a browser, the view is prepared inside the frame pump, so going past the pump's budget stalls the frame.
@@ -170,8 +215,16 @@ pub fn claim_spare(slot: &SharedSlot) -> Option<Snapshot> {
 }
 
 /// Passes a freshly built snapshot to the slot.
-pub fn publish(slot: &SharedSlot, snapshot: Snapshot) {
+///
+/// The samples of a publish the host has not taken move to the front of `snapshot`'s samples.
+pub fn publish(slot: &SharedSlot, mut snapshot: Snapshot) {
     if let Ok(mut slot) = slot.lock() {
+        if let Some(untaken) = slot.fresh.as_mut()
+            && !untaken.run_to_samples.is_empty()
+        {
+            untaken.run_to_samples.append(&mut snapshot.run_to_samples);
+            std::mem::swap(&mut untaken.run_to_samples, &mut snapshot.run_to_samples);
+        }
         slot.spare = slot.fresh.replace(snapshot);
     }
 }

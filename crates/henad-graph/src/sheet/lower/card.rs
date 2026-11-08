@@ -2,14 +2,14 @@
 //!
 //! Lines lower in display order, each into its own block of node ids. A Count and a Look around over the cells lower
 //! as [`super::look`] describes, a chance and a random number as [`super::draw`] does, a rate and a competing group as
-//! [`super::rates`] does, and a Calculate to one expression node ([`super::calculate`]). A Yes or no line is the comparisons and logic nodes it names, a Choose a
-//! `logic.select` chain from its last row up, and a Depending on a `cat.switch` over my state. A When line's condition
-//! is joined by `logic.and` into the condition of every change inside it. The changes of each property lower after the
-//! card's lines, as the [module](super) describes. On a card of agents, a look at agents within a distance lowers as
-//! [`super::agents`] describes, the changes that steer, hold and move as [`super::motion`] does, and a Repeat as
-//! [`super::repeat`] does. The lines that pick, look at, move to, mark and record on the ground lower as
-//! [`super::ground`] and [`super::pick`] describe, and the looks and picks over one neighbourhood share a fold, as
-//! [`super::fuse`] does.
+//! [`super::rates`] does, and a Calculate to one expression node ([`super::calculate`]). A Yes or no line is the
+//! comparisons and logic nodes it names, a Choose a `logic.select` chain from its last row up, and a Depending on a
+//! `cat.switch` over my state. A When line's condition is joined by `logic.and` into the condition of every change
+//! inside it. The changes of each property lower after the card's lines, as the [module](super) describes. On a card of
+//! agents, a look at agents within a distance lowers as [`super::agents`] describes, the changes that steer, hold and
+//! move as [`super::motion`] does, and a Repeat as [`super::repeat`] does. The lines that pick, look at, move to, mark
+//! and record on the ground lower as [`super::ground`] and [`super::pick`] describe, and the looks and picks over one
+//! neighbourhood share a fold, as [`super::fuse`] does.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -215,21 +215,21 @@ pub(super) struct Change<'a> {
     pub(super) line: &'a str,
     /// Number `k` of the line id `l<k>`.
     pub(super) number: u32,
-    /// What the line changes the property to.
+    /// Value the line changes the property to.
     pub(super) kind: ChangeKind,
     /// Condition under which the change applies, the conditions of the When lines around it joined in.
     pub(super) condition: Operand,
 }
 
-/// What a change gives its property.
+/// Value a change gives its property.
 #[derive(Debug, Clone)]
 pub(super) enum ChangeKind {
     /// A Become: a state, from one state or, with `None`, from any state.
     Become {
         /// State the line changes from, `None` for any state.
-        from: Option<String>,
+        old_state: Option<String>,
         /// State the line changes to.
-        to: String,
+        new_state: String,
     },
     /// A Set: a value.
     Set {
@@ -489,24 +489,26 @@ impl<'a> CardLowering<'_, 'a> {
                 if property.property_type != PropertyType::States {
                     return Err(format!("'{}' has no states to become", property.id));
                 }
-                let to = line
+                let new_state = line
                     .new_state
                     .clone()
                     .ok_or_else(|| "a Become needs a state".to_owned())?;
-                let from = match line.start_state.as_deref() {
+                let old_state = match line.start_state.as_deref() {
                     Some(ANY_STATE_ID) => None,
                     Some(state) => Some(state.to_owned()),
                     None => return Err("a Become needs the state it changes from".to_owned()),
                 };
                 if let Some(group) = self.group_of(id) {
                     let placeholder = self.group_line(group, &site, id, line)?;
-                    self.add_change(index, id, ChangeKind::Become { from, to }, placeholder)?;
+                    let kind = ChangeKind::Become { old_state, new_state };
+                    self.add_change(index, id, kind, placeholder)?;
                     self.finish_group(group)?;
                 } else {
                     let own = self.slot(&site.at("condition"), &line.condition)?;
                     let condition = self.inherit(&site, id, own)?;
                     let condition = self.any_time(&site, id, condition)?;
-                    self.add_change(index, id, ChangeKind::Become { from, to }, condition)?;
+                    let kind = ChangeKind::Become { old_state, new_state };
+                    self.add_change(index, id, kind, condition)?;
                 }
             }
             LineKind::Set => {
@@ -1013,16 +1015,16 @@ impl<'a> CardLowering<'_, 'a> {
             self.builder.input_as(site, current, &lane_type, false)?,
         )];
         for change in changes {
-            let ChangeKind::Become { from, to } = &change.kind else {
+            let ChangeKind::Become { old_state, new_state } = &change.kind else {
                 return Err(format!("line {}: a Set changes a States property", change.line));
             };
-            let froms: Vec<&str> = match from {
-                Some(from) => vec![from.as_str()],
+            let old_states: Vec<&str> = match old_state {
+                Some(old_state) => vec![old_state.as_str()],
                 None => property.states.iter().map(|state| state.id.as_str()).collect(),
             };
             let when = self.builder.condition_input(site, &change.condition)?;
-            for state in froms {
-                let rule = if from.is_some() {
+            for state in old_states {
+                let rule = if old_state.is_some() {
                     change.line.to_owned()
                 } else {
                     format!("{}_{state}", change.line)
@@ -1031,7 +1033,7 @@ impl<'a> CardLowering<'_, 'a> {
                 rules.push(ConfigValue::Table(BTreeMap::from([
                     ("id".to_owned(), text(&rule)),
                     ("from".to_owned(), text(state)),
-                    ("to".to_owned(), text(to)),
+                    ("to".to_owned(), text(new_state)),
                     ("phase".to_owned(), ConfigValue::Integer(0)),
                 ])));
                 inputs.push((format!("rule.{rule}.when"), when.clone()));

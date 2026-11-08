@@ -222,7 +222,8 @@ The simulation steps as fast as it can until it reaches that tick, then pauses.
 **Target TPS** in the <span class="ui" markdown>:material-speedometer: Pacing</span> tab does not slow it down.
 While it runs, the row turns into a progress bar reading **Running to tick** and the target.
 The viewport and statistics refresh about ten times a second.
-After Run to tick, the <span class="ui" markdown>:material-chart-line: Charts</span> tab holds only the snapshots the app received on the way, so a fast run can draw as a straight line.
+On the way, the run samples the statistics at up to 500 evenly spaced ticks, and the <span class="ui" markdown>:material-chart-line: Charts</span> tab draws every sample, however fast the run.
+In the browser a GPU model's run samples nothing on the way, and its chart holds only the snapshots the app received.
 
 <span class="ui" markdown>Cancel</span> stops the run at the current tick.
 Pressing <span class="ui" markdown>:material-play:</span> or <span class="ui" markdown>:material-skip-next:</span> also ends it, and <span class="ui" markdown>:material-play:</span> carries on at the paced speed.
@@ -256,7 +257,8 @@ In a browser the build runs inside the frame, and the page waits for it.
 ## :material-speedometer: Pacing tab
 
 The <span class="ui" markdown>:material-speedometer: Pacing</span> tab controls how fast the simulation runs.
-The controls for CPU and GPU models are different due to the different ways they run.
+**Unlimited TPS** and **Target TPS** apply to every model.
+The controls below them differ for CPU and GPU models, which run in different ways.
 
 === "CPU model"
 
@@ -288,6 +290,7 @@ The controls for CPU and GPU models are different due to the different ways they
 === "GPU model"
 
     The GPU is also needed to render the UI, so more complex pacing controls are required.
+    **Unlimited TPS** and **Target TPS** work as they do for a CPU model, and a capped run steps no more ticks in a batch than its rate allows.
 
     ![Pacing for a GPU model](../assets/app/pacing-gpu.png){ width="370" }
 

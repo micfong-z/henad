@@ -399,6 +399,56 @@ fn a_become_inside_a_repeat_applies_when_any_time_holds() {
     );
 }
 
+/// Returns a sheet of walkers whose card repeats 4 times a Random number Roll (`l2`), then line `first`, which becomes
+/// A when Roll is less than 0.5, and line `second`, which becomes B when Roll is at least 0.5.
+fn repeat_roll(first: &str, second: &str) -> String {
+    format!(
+        "format = \"henad-model\"\nformat_version = 1\nkind = \"sheet\"\n\n[sheet]\nversion = 1\nid = \"repeat_roll\"\n\
+         name = \"Repeat roll\"\nnext_line = 5\n\n[world]\nmade_of = \"agents\"\nwidth = 100\nheight = 100\n\
+         edges = \"wrap\"\n\n[[agents]]\nid = \"walker\"\nname = \"Walker\"\ncount = 100\nmax_count = 100\n\n\
+         [[agents.property]]\nid = \"position\"\nname = \"Position\"\ntype = \"position\"\n\n\
+         [agents.property.starts_as]\nrule = \"anywhere\"\nkey = 11\n\n[[agents.property]]\nid = \"status\"\n\
+         name = \"Status\"\ntype = \"states\"\nstates = [\n  {{ id = \"s\", name = \"S\", color = \"#E8E8F0\" }},\n  \
+         {{ id = \"a\", name = \"A\", color = \"#3DD58C\" }},\n  {{ id = \"b\", name = \"B\", color = \"#E43748\" }},\n]\n\n\
+         [agents.property.starts_as]\nrule = \"value\"\nvalue = {{ state = \"s\" }}\n\n[[card]]\nid = \"walker_tick\"\n\
+         every = \"walker\"\nruns = \"each_tick\"\nlines = [\"l1\"]\n\n[card.line.l1]\nkind = \"repeat\"\ntimes = 4\n\
+         lines = [\"l2\", \"{first}\", \"{second}\"]\n\n[card.line.l2]\nkind = \"random_number\"\nname = \"Roll\"\n\
+         key = 201\nlow = 0\nhigh = 1\n\n[card.line.{first}]\nkind = \"become\"\nproperty = \"status\"\n\
+         new_state = \"a\"\nstart_state = \"s\"\n\n[card.line.{first}.condition]\nkind = \"compare\"\n\
+         test = \"less_than\"\nleft = {{ result = \"l2\" }}\nright = 0.5\n\n[card.line.{second}]\nkind = \"become\"\n\
+         property = \"status\"\nnew_state = \"b\"\nstart_state = \"s\"\n\n[card.line.{second}.condition]\n\
+         kind = \"compare\"\ntest = \"at_least\"\nleft = {{ result = \"l2\" }}\nright = 0.5\n"
+    )
+}
+
+/// Two Becomes inside a Repeat that test a Random number drawn inside it can each hold at a different time round, so
+/// they can both apply. The lower reads "otherwise", and the rows of the transition keep display order whatever the
+/// line ids.
+#[test]
+fn becomes_that_test_a_number_drawn_inside_a_repeat_keep_display_order() {
+    for (first, second) in [("l3", "l4"), ("l4", "l3")] {
+        let text = repeat_roll(first, second);
+        let file = lowered(&text);
+        let transition = pass_nodes(&file, "tick_walker_tick")
+            .iter()
+            .find(|node| node.op == "cat.transition")
+            .expect("the transition of Status");
+        let targets: Vec<&str> = transition.config["rules"]
+            .as_array()
+            .expect("rules")
+            .iter()
+            .filter_map(|rule| rule.as_table()?.get("to")?.as_str())
+            .collect();
+        assert_eq!(targets, ["a", "b"], "{first} above {second}");
+        let document = crate::sheet::ParsedSheet::parse(&text)
+            .expect("the sheet reads")
+            .into_document();
+        let relations = crate::sheet::relations::CardRelations::new(&document, &document.cards[0]);
+        assert!(relations.can_both_apply(first, second));
+        assert_eq!(relations.otherwise_numbers(second), [3], "{first} above {second}");
+    }
+}
+
 /// [`StartsAs::paints_single_cells`](crate::sheet::document::StartsAs::paints_single_cells) holds for each state of the
 /// ants' ground that agents can start on, and a start on each such state lowers while a start on any other is refused.
 #[test]
@@ -647,6 +697,57 @@ fn a_button_that_starts_ants_and_ground_again_reruns_two_passes() {
     assert!((0..trail.len()).all(|cell| trail.get(cell) == Some(HostValue::F32(0.0))));
     let cargo = lanes.column("cargo").expect("the cargo lane");
     assert!((0..50).all(|ant| cargo.get(ant) == Some(HostValue::Category(0))));
+}
+
+/// Text of the test sheet of ants on a nest in a corner, moving to the cell ahead, else to a random open cell around.
+const MOVE_TO_FIRST: &str = include_str!("sheets/move_to_first.toml");
+
+/// Returns the positions of the ants of `text` after one host tick from the nest, where `text` is the sheet
+/// [`MOVE_TO_FIRST`] or an edit of it.
+fn positions_after_one_tick(text: &str) -> Vec<[f32; 2]> {
+    let file = lowered(text);
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let world = HostWorld::Agents {
+        count: 100,
+        width: 20.0,
+        height: 20.0,
+    };
+    let mut lanes: HostLanes = evaluator.init(world, &[], Some(3)).expect("the init runs");
+    evaluator
+        .run_pass("tick_ant_tick", &mut lanes, &[], &RunContext::tick(Some(3), 0), &mut 0)
+        .expect("a tick runs");
+    let positions = lanes.column("position").expect("the position lane");
+    (0..100).map(|ant| vector(positions.get(ant))).collect()
+}
+
+/// The first Move to whose condition holds decides. Ants with no heading at the first tick find the cell ahead not
+/// open, so the higher Move to keeps every ant on the nest, and a lower Move to a random open cell around moves none
+/// of them. Without the higher line, every ant moves.
+#[test]
+fn the_first_move_to_whose_condition_holds_decides() {
+    assert!(
+        positions_after_one_tick(MOVE_TO_FIRST)
+            .iter()
+            .all(|position| *position == [0.5, 0.5]),
+        "an ant moved below a Move to that holds"
+    );
+    let alone = edited(
+        MOVE_TO_FIRST,
+        "lines = [\"l1\", \"l2\", \"l3\", \"l4\"]",
+        "lines = [\"l1\", \"l2\", \"l4\"]",
+    );
+    let alone = edited(
+        &alone,
+        "[card.line.l3]\nkind = \"move\"\nmode = \"to\"\nvalue = { result = \"l1\" }\n\n[card.line.l3.condition]\n\
+         kind = \"always\"\n\n",
+        "",
+    );
+    assert!(
+        positions_after_one_tick(&alone)
+            .iter()
+            .all(|position| *position != [0.5, 0.5]),
+        "an ant stayed on the nest with an open cell around"
+    );
 }
 
 /// Ants whose Next cell takes the cell ahead with no test that it is open, from a nest beside a rock, never stand on

@@ -392,7 +392,8 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
 
     // The model files and the spec are read before the device is acquired, so the device is sized to every model the
     // command line can name.
-    let (models, file_ids) = with_model_files(models, &args.model_file, !args.json)?;
+    let (models, files) = with_model_files(models, &args.model_file, !args.json)?;
+    let file_ids: Vec<String> = files.iter().map(|file| file.id().to_owned()).collect();
     let models = &*models;
     let spec = args.explore.spec.as_deref().map(load_spec).transpose()?;
 
@@ -467,13 +468,16 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
             let provenance = provenance(host, arguments);
             return explore::run(args, entry, gpu_ctx.as_ref(), spec, provenance);
         }
-        _ => return run_single(entry, args, mode, gpu_ctx.as_ref(), runtime).map(|()| 0),
+        _ => {
+            let file = files.iter().find(|file| file.id() == entry.id());
+            return run_single(entry, file, args, mode, gpu_ctx.as_ref(), runtime).map(|()| 0);
+        }
     }
     Ok(0)
 }
 
 /// Returns `models` with the model of each file in `paths` in place of the model with its id, or added after the
-/// others, and the id of each file's model in the order of `paths`.
+/// others, and each file in the order of `paths`.
 ///
 /// When `notes` is set, a note on stderr names each model a file replaces. The set is cloned only when `paths` is not
 /// empty.
@@ -486,14 +490,15 @@ fn with_model_files<'a>(
     models: &'a ModelSet,
     paths: &[PathBuf],
     notes: bool,
-) -> Result<(Cow<'a, ModelSet>, Vec<String>)> {
+) -> Result<(Cow<'a, ModelSet>, Vec<ModelFile>)> {
     if paths.is_empty() {
         return Ok((Cow::Borrowed(models), Vec::new()));
     }
     let mut loaded = models.clone();
     let mut ids: Vec<String> = Vec::with_capacity(paths.len());
+    let mut files = Vec::with_capacity(paths.len());
     for path in paths {
-        let entry = load_model_file(path)?;
+        let (file, entry) = load_model_file(path)?;
         let id = entry.id().to_owned();
         if let Some(earlier) = ids.iter().position(|earlier| *earlier == id) {
             bail!(
@@ -509,11 +514,12 @@ fn with_model_files<'a>(
             );
         }
         ids.push(id);
+        files.push(file);
     }
-    Ok((Cow::Owned(loaded), ids))
+    Ok((Cow::Owned(loaded), files))
 }
 
-/// Reads the model file at `path` and returns the entry of its model.
+/// Reads the model file at `path` and returns the file and the entry of its model.
 ///
 /// A graph's or a sheet's warnings go to stderr first, each as `path:line:column: warning: message`.
 ///
@@ -522,9 +528,10 @@ fn with_model_files<'a>(
 /// Returns an error when the file cannot be read, does not hold a model file, or holds a model that does not compile.
 /// The error lists each problem as `path:line:column: error: message`, with its notes on the lines below and the pass
 /// and node of a graph's problem in a last note.
-fn load_model_file(path: &Path) -> Result<ModelEntry> {
+fn load_model_file(path: &Path) -> Result<(ModelFile, ModelEntry)> {
     let file = read_model_file(path)?;
-    file.entry().map_err(|error| load_error(&error, path))
+    let entry = file.entry().map_err(|error| load_error(&error, path))?;
+    Ok((file, entry))
 }
 
 /// Prints the canonical text of the graph that the model file at `path` builds as on stdout, and returns exit status
@@ -614,8 +621,11 @@ fn load_spec(path: &Path) -> Result<LoadedSpec> {
 }
 
 /// Runs one configuration of `entry` for `--export-stats`, `--export` or a benchmark, as `mode` says.
+///
+/// `file` is the model file that `entry` came from, if any. A sheet's work past a budget is then named by its lines.
 fn run_single(
     entry: &ModelEntry,
+    file: Option<&ModelFile>,
     args: &Args,
     mode: Mode,
     gpu_ctx: Option<&GpuContext>,
@@ -636,7 +646,11 @@ fn run_single(
     // The limits are checked ahead of the factory. An oversized run is then rejected with an error that lists its
     // shortfalls, instead of failing at whichever binding the device happened to reject first.
     if let Some(ctx) = gpu_ctx {
-        let shortfalls = entry.shortfalls(&params, &ctx.device.limits());
+        let limits = ctx.device.limits();
+        let shortfalls = match file.and_then(ModelFile::sheet) {
+            Some(sheet) => sheet.shortfalls(entry, &params, &limits),
+            None => entry.shortfalls(&params, &limits),
+        };
         if !shortfalls.is_empty() {
             bail!("'{}' does not fit this device: {}", entry.id(), shortfalls.join("; "));
         }
@@ -714,8 +728,8 @@ fn print_models<'a>(entries: impl Iterator<Item = &'a ModelEntry>) {
 /// Returns the text `--params` prints, one line per parameter with the id `--set` accepts, its kind, default and
 /// bounds.
 ///
-/// Each line holds `key=value` fields, and a hidden parameter the bare word `hidden` after them. `scripts/bench_matrix.py`
-/// parses the fields to find a model's axes and defaults.
+/// Each line holds `key=value` fields, and a hidden parameter the bare word `hidden` after them.
+/// `scripts/bench_matrix.py` parses the fields to find a model's axes and defaults.
 fn params_text(entry: &ModelEntry) -> String {
     let mut text = format!("parameters for {} ({}):\n", entry.id(), entry.name());
     for (index, desc) in entry.param_descriptors().iter().enumerate() {

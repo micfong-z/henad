@@ -56,7 +56,7 @@ const NUMBER_BOX_ID: &str = "henad_card_number_box";
 /// Salt of the id the list box's text is kept under, below the picker's id.
 const LIST_BOX_ID: &str = "henad_card_list_box";
 
-/// What a choice in a picker puts in its place.
+/// Value a choice in a picker puts in its place.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Choice {
     /// A value: a result, a property, a parameter or a typed number.
@@ -95,7 +95,7 @@ pub struct PickerItem {
     pub name: Option<String>,
     /// Grey words under the item, out of its name.
     pub detail: Option<String>,
-    /// What choosing the item puts in the place.
+    /// Value choosing the item puts in the place.
     pub choice: Choice,
 }
 
@@ -393,9 +393,9 @@ pub fn read_numbers(text: &str) -> Option<Vec<SheetLiteral>> {
     numbers.filter(|numbers| !numbers.is_empty())
 }
 
-// What a line can use
+// Things a line can use
 
-/// Where a picker sits: the sheet, the card and the line of the place it fills.
+/// Place of a picker: the sheet, the card and the line of the place it fills.
 #[derive(Debug)]
 pub struct LineContext<'a> {
     /// The sheet.
@@ -1144,11 +1144,11 @@ pub enum SelectOption {
     Unit(TimeUnit),
     /// The mode of a Steer or Move line.
     Mode(LineMode),
-    /// What a Pick a cell line picks.
+    /// Rule a Pick a cell line picks by.
     Pick(PickRule),
     /// The cell a Look at a cell line looks at.
     Which(CellWhich),
-    /// How the summary at an index of a look at agents sums the agents up, as `(index, kind)`.
+    /// Kind of the summary at an index of a look at agents, as `(index, kind)`.
     LookSummary(usize, SummaryKind),
     /// "Remove this summary" in the select of the summary at an index.
     RemoveSummary(usize),
