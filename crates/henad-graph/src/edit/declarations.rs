@@ -341,9 +341,7 @@ impl GraphBuilder {
     /// Returns the position of the lane `id`.
     fn lane_position(&self, id: &str) -> Result<usize, EditError> {
         self.document
-            .lanes
-            .iter()
-            .position(|lane| lane.id == id)
+            .lane_position(id)
             .ok_or_else(|| EditError::Missing(format!("the file declares no lane '{id}'")))
     }
 
@@ -383,10 +381,8 @@ impl GraphBuilder {
     /// Returns the position of the variant `name` of `category`.
     fn variant_position(&self, category: &str, name: &str) -> Result<usize, EditError> {
         self.document
-            .categories
-            .iter()
-            .find(|known| known.id == category)
-            .and_then(|known| known.variants.iter().position(|variant| variant.name == name))
+            .category(category)
+            .and_then(|known| known.variant_position(name))
             .ok_or_else(|| EditError::Missing(format!("the file declares no variant '{category}.{name}'")))
     }
 
@@ -410,9 +406,7 @@ impl GraphBuilder {
     fn name_bare_counter_links(&mut self, category: &str) {
         let Some(only) = self
             .document
-            .categories
-            .iter()
-            .find(|known| known.id == category)
+            .category(category)
             .and_then(|known| match known.variants.as_slice() {
                 [only] => Some(only.name.clone()),
                 _ => None,
@@ -594,9 +588,7 @@ impl GraphBuilder {
     /// Returns the position of the parameter `id`.
     fn param_position(&self, id: &str) -> Result<usize, EditError> {
         self.document
-            .params
-            .iter()
-            .position(|param| param.id() == id)
+            .param_position(id)
             .ok_or_else(|| EditError::Missing(format!("the file declares no parameter '{id}'")))
     }
 

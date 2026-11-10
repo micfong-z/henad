@@ -21,7 +21,7 @@ use crate::sheet::relations::CardRelations;
 use crate::sheet::{ParsedSheet, SheetFile, sentence};
 use crate::value::{ConfigValue, InputValue, Literal};
 use crate::wgsl::GridProgram;
-use crate::wgsl::uniform::{FieldShape, FieldSource};
+use crate::wgsl::uniform::{MemberShape, MemberSource};
 
 /// Returns `text` with `old` replaced by `new` once, where `text` must hold `old` exactly once.
 fn edited(text: &str, old: &str, new: &str) -> String {
@@ -105,13 +105,13 @@ fn the_rate_uniforms_equal_1_minus_exp() {
     };
     let mut values = Vec::new();
     let mut tables = Vec::new();
-    for field in &tick.uniform().fields {
-        match (&field.source, field.shape) {
-            (FieldSource::Slot { .. }, _) => values.push(word(field.offset)),
-            (FieldSource::Table { .. }, FieldShape::Table { len }) => {
+    for member in &tick.uniform().members {
+        match (&member.source, member.shape) {
+            (MemberSource::Slot { .. }, _) => values.push(word(member.offset)),
+            (MemberSource::Table { .. }, MemberShape::Table { len }) => {
                 tables.push(
                     (0..len as usize)
-                        .map(|k| word(field.offset + 4 * k))
+                        .map(|k| word(member.offset + 4 * k))
                         .collect::<Vec<f32>>(),
                 );
             }
@@ -159,12 +159,12 @@ fn tick_uniforms(file: &SheetFile, params: &[ParamValue]) -> Vec<f32> {
         )
         .expect("the uniform block");
     tick.uniform()
-        .fields
+        .members
         .iter()
-        .filter(|field| matches!(field.source, FieldSource::Slot { .. }))
-        .map(|field| {
+        .filter(|member| matches!(member.source, MemberSource::Slot { .. }))
+        .map(|member| {
             f32::from_le_bytes(
-                bytes[field.offset..field.offset + 4]
+                bytes[member.offset..member.offset + 4]
                     .try_into()
                     .unwrap_or_else(|_| unreachable!("four bytes")),
             )

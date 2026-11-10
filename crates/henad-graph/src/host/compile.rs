@@ -1,655 +1,26 @@
-//! Compilation of a pass into a program of the host evaluator: one instruction per node, in an order every input
+//! Compilation of a pass into a [`Program`] of the host evaluator: one instruction per node, in an order every input
 //! precedes, with every value in a numbered slot of one frame.
 //!
-//! A *slot* holds one value of the frame an element evaluates in. A *block* is a list of instructions. The top of a
-//! pass splits into three blocks: the *prelude* of values that are the same for every element, run once, the
-//! *element block*, run per element, and the *post block* of values computed from reducers, run once after the
-//! elements. A region's body is a block of its own, run per iteration. A pure value of a body that reads no iteration
-//! and no element runs in the prelude instead.
+//! A pure value of a region body that reads no iteration and no element runs in the prelude instead.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use henad_core::authoring::primitives::space::Boundary;
+
 use super::HostError;
+use super::program::{
+    CompareOp, DrawForm, Instruction, LogicOp, Operation, Program, RadiusFold, Repeat, RepeatAccumulator, StencilFold,
+    SumSpec, TransitionRule,
+};
 use super::value::{BinaryOp, Conversion, HostValue, UnaryOp, extreme_of};
 use crate::catalogue::{Effect, NodeDef, OutputRate, effective_config, lookup, transition_rule_ids};
 use crate::check::literal_of;
-use crate::document::{Domain, FieldCombine, GraphDocument, Pass};
+use crate::document::{FieldCombine, GraphDocument, Pass};
 use crate::ids::NodeId;
 use crate::node::{Combine, Node};
 use crate::reader::read_u64;
 use crate::types::Rate;
 use crate::value::{ConfigValue, InputValue, PortRef};
-
-/// A pass compiled for the host evaluator.
-#[derive(Debug, Clone)]
-pub(crate) struct Program {
-    /// Id of the pass.
-    pub pass: String,
-    /// Elements the pass runs over.
-    pub domain: Option<Domain>,
-    /// Number of slots of the frame.
-    pub slots: usize,
-    /// Slots that hold a constant, with its value.
-    pub constants: Vec<(usize, HostValue)>,
-    /// Slots that hold a parameter, with the parameter's position in the document.
-    pub params: Vec<(usize, usize)>,
-    /// Node key of each counter-based draw, by draw number.
-    pub draw_keys: Vec<u32>,
-    /// Instructions run once before the elements.
-    pub prelude: Vec<Instruction>,
-    /// Instructions run per element.
-    pub element: Vec<Instruction>,
-    /// Instructions run once after the elements.
-    pub post: Vec<Instruction>,
-    /// Number of reducer tallies.
-    pub tallies: usize,
-    /// Slot each tally lands in after the elements, by tally number.
-    pub tally_slots: Vec<usize>,
-    /// Each float sum, by sum number.
-    pub sums: Vec<SumSpec>,
-    /// Positions of the lanes and field layers the pass writes, in the order of [`super::HostLanes`].
-    pub written: Vec<usize>,
-    /// Positions among the deposit columns of the layers the pass deposits into.
-    pub deposited: Vec<usize>,
-    /// Whether the pass sets a colour per element.
-    pub colors: bool,
-    /// Outputs of the prelude and the post block, by node and port, with their slots.
-    pub uniform_outputs: Vec<(NodeId, String, usize)>,
-    /// Slot of every output by node and port.
-    pub outputs: BTreeMap<(NodeId, String), usize>,
-    /// Slot of every inner output of a region by node and port.
-    pub inner_outputs: BTreeMap<(NodeId, String), usize>,
-}
-
-impl Program {
-    /// Returns the slot of output `port` of node `node`.
-    #[cfg(test)]
-    pub fn output_slot(&self, node: NodeId, port: &str) -> Option<usize> {
-        self.outputs.get(&(node, port.to_owned())).copied()
-    }
-}
-
-/// One node of a program.
-#[derive(Debug, Clone)]
-pub(crate) struct Instruction {
-    /// Node the instruction comes from.
-    pub node: NodeId,
-    /// Slot of the node's first output. Unused for a node without one.
-    pub out: usize,
-    /// What the node does.
-    pub operation: Operation,
-}
-
-/// Comparison of a comparison kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CompareOp {
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-}
-
-/// Operation of a logic kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LogicOp {
-    And,
-    Or,
-    Xor,
-    Not,
-}
-
-/// What a counter-based draw makes of its bits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DrawForm {
-    /// `random_float(bits, max)`.
-    Float,
-    /// `bits < threshold`.
-    Below,
-    /// `random_float(bits, 1.0) < p`.
-    Chance,
-    /// The bits as they are.
-    Bits,
-    /// `bits % 3 - 1`.
-    Choice3,
-}
-
-/// One rule of a `cat.transition`.
-#[derive(Debug, Clone)]
-pub(crate) struct TransitionRule {
-    /// Variant the rule leaves.
-    pub from: u32,
-    /// Variant the rule enters, unless `to_input` is set.
-    pub to: Option<u32>,
-    /// Slot of the `rule.<id>.to` input, when written.
-    pub to_input: Option<usize>,
-    /// Slot of the `rule.<id>.when` input.
-    pub when: usize,
-    /// Phase of the rule.
-    pub phase: i64,
-    /// Position of the rule's id among the node's `fired.<id>` outputs.
-    pub fired: usize,
-}
-
-/// One accumulator of a Repeat.
-#[derive(Debug, Clone)]
-pub(crate) struct RepeatAccumulator {
-    /// Slot of the `init.<acc>` input, when written.
-    pub init: Option<usize>,
-    /// Value before the first iteration when `init` is unwritten.
-    pub identity: HostValue,
-    /// Slot of the inner output `prev.<acc>`.
-    pub prev: usize,
-    /// Slot of the value the iterations change.
-    pub running: usize,
-    /// Slot of the output `<acc>`.
-    pub out: usize,
-}
-
-/// A Repeat and its body.
-#[derive(Debug, Clone)]
-pub(crate) struct Repeat {
-    /// Iteration bound `max`.
-    pub max: u32,
-    /// Slot of `count`.
-    pub count: usize,
-    /// Slot of `when`.
-    pub when: usize,
-    /// Slot of the inner output `k`.
-    pub k: usize,
-    /// Slot of the inner output `total`.
-    pub total: usize,
-    /// Accumulators in `config.acc` order.
-    pub accumulators: Vec<RepeatAccumulator>,
-    /// Body, run per iteration.
-    pub body: Vec<Instruction>,
-}
-
-/// One float sum of `stat.sum` or `stat.mean`.
-#[derive(Debug, Clone)]
-pub(crate) struct SumSpec {
-    /// Slot the result lands in after the elements.
-    pub slot: usize,
-    /// Whether each chunk sums in `f64`, where it otherwise sums in `f32`.
-    pub wide_chunks: bool,
-    /// Whether the result is the mean, the sum times `1 / max(n, 1)`.
-    pub mean: bool,
-    /// Whether the summed values are `vec2f`, `None` when only the values tell, which a sum over no element reads as
-    /// a scalar.
-    pub vector: Option<bool>,
-}
-
-/// A stencil fold and its body.
-#[derive(Debug, Clone)]
-pub(crate) struct StencilFold {
-    /// Stencil in table order.
-    pub offsets: Vec<(i32, i32)>,
-    /// Whether a position past the edge of the domain grid is skipped, `None` for the domain grid's own boundary.
-    pub bounded: Option<bool>,
-    /// Slot of `at`, `None` for the element's own cell.
-    pub at: Option<usize>,
-    /// Slot of `when`.
-    pub when: usize,
-    /// Slots of the inner outputs `k`, `offset`, `xy`, `cell` and `diagonal`.
-    pub inner: [usize; 5],
-    /// Accumulators in `config.acc` order.
-    pub accumulators: Vec<RepeatAccumulator>,
-    /// Body, run per position.
-    pub body: Vec<Instruction>,
-}
-
-/// A radius fold and its body.
-#[derive(Debug, Clone)]
-pub(crate) struct RadiusFold {
-    /// Position of the position lane among the lanes.
-    pub position_lane: usize,
-    /// Slots of `center`, `radius`, `cell_size` and `when`.
-    pub center: usize,
-    pub radius: usize,
-    pub cell_size: usize,
-    pub when: usize,
-    /// Whether the agent itself is left out.
-    pub exclude_self: bool,
-    /// Slots of the inner outputs `k`, `other`, `delta` and `dist_sq`.
-    pub inner: [usize; 4],
-    /// Accumulators in `config.acc` order.
-    pub accumulators: Vec<RepeatAccumulator>,
-    /// Body, run per agent visited.
-    pub body: Vec<Instruction>,
-}
-
-/// What an instruction does. Every operand is a slot.
-#[derive(Debug, Clone)]
-pub(crate) enum Operation {
-    World,
-    Grid,
-    CellXy,
-    LaneGetAt {
-        lane: usize,
-        at: usize,
-    },
-    FieldGet {
-        first: usize,
-        layers: u32,
-        layer: usize,
-        at: Option<usize>,
-        zero: HostValue,
-    },
-    FieldSet {
-        first: usize,
-        layers: u32,
-        layer: usize,
-        value: usize,
-    },
-    Deposit {
-        first: usize,
-        layers: u32,
-        layer: usize,
-        at: usize,
-        value: usize,
-        combine: FieldCombine,
-    },
-    CounterAdd {
-        counter: usize,
-        amount: usize,
-    },
-    CounterTotal {
-        counter: usize,
-    },
-    Clamp {
-        x: usize,
-        lo: usize,
-        hi: usize,
-    },
-    Midpoint {
-        a: usize,
-        b: usize,
-    },
-    VecMake {
-        x: usize,
-        y: usize,
-    },
-    VecSplit {
-        v: usize,
-        y_out: usize,
-    },
-    VecScale {
-        v: usize,
-        s: usize,
-    },
-    VecDot {
-        a: usize,
-        b: usize,
-    },
-    VecLength {
-        v: usize,
-    },
-    FromAngle {
-        angle: usize,
-        length: usize,
-    },
-    Wrap {
-        v: usize,
-        world: usize,
-    },
-    Delta {
-        a: usize,
-        b: usize,
-        world: usize,
-        squared: bool,
-    },
-    CellIndex {
-        xy: usize,
-        valid_out: usize,
-    },
-    CellOf {
-        p: usize,
-        xy_out: usize,
-        valid_out: usize,
-    },
-    CellXyOf {
-        cell: usize,
-    },
-    Offset {
-        xy: usize,
-        by: usize,
-        bounded: Option<bool>,
-        cell_out: usize,
-        valid_out: usize,
-    },
-    HeadingOctant {
-        v: usize,
-    },
-    StepCode {
-        d: usize,
-    },
-    StepOffset {
-        code: usize,
-    },
-    Choice3 {
-        bits: usize,
-    },
-    Reservoir {
-        bits: usize,
-        count: usize,
-    },
-    StreamFloat {
-        max: usize,
-        when: usize,
-    },
-    GridFold(Box<StencilFold>),
-    RadiusFold(Box<RadiusFold>),
-    Sum {
-        value: usize,
-        sum: usize,
-    },
-    Index,
-    Tick,
-    PressSeed,
-    LaneGet {
-        lane: usize,
-    },
-    LaneSet {
-        lane: usize,
-        value: usize,
-    },
-    Binary {
-        op: BinaryOp,
-        a: usize,
-        b: usize,
-    },
-    Shift {
-        a: usize,
-        b: usize,
-        left: bool,
-    },
-    Unary {
-        op: UnaryOp,
-        a: usize,
-    },
-    Powi {
-        base: usize,
-        exponent: usize,
-        max: u32,
-    },
-    Pow {
-        base: usize,
-        exponent: usize,
-    },
-    Compare {
-        op: CompareOp,
-        a: usize,
-        b: usize,
-    },
-    Logic {
-        op: LogicOp,
-        a: usize,
-        b: Option<usize>,
-    },
-    Select {
-        cond: usize,
-        if_true: usize,
-        if_false: usize,
-    },
-    Pick {
-        index: usize,
-        values: Vec<HostValue>,
-    },
-    Switch {
-        select: usize,
-        cases: Vec<Option<usize>>,
-        default: Option<usize>,
-    },
-    Transition {
-        state: usize,
-        rules: Vec<TransitionRule>,
-        fired: Vec<usize>,
-    },
-    Convert {
-        target: Conversion,
-        a: usize,
-    },
-    U32ToCat {
-        a: usize,
-        last: u32,
-    },
-    CatToU32 {
-        a: usize,
-    },
-    Draw {
-        form: DrawForm,
-        draw: usize,
-        input: usize,
-    },
-    Threshold {
-        p: usize,
-    },
-    Hash {
-        x: usize,
-    },
-    ToFloat {
-        bits: usize,
-        max: usize,
-    },
-    Below {
-        bits: usize,
-        threshold: usize,
-    },
-    LaneSeed {
-        salt: u64,
-    },
-    StreamBits {
-        when: usize,
-    },
-    Repeat(Box<Repeat>),
-    Put {
-        running: usize,
-        combine: Combine,
-        value: Option<usize>,
-        when: usize,
-    },
-    GridCount {
-        lane: usize,
-        offsets: Vec<(i64, i64)>,
-        value: usize,
-        when: usize,
-    },
-    LifeLike {
-        cell: usize,
-        count: usize,
-        birth: u16,
-        survive: u16,
-        dead: u32,
-        alive: u32,
-    },
-    CountWhere {
-        pred: usize,
-        tally: usize,
-    },
-    CountBy {
-        value: usize,
-        first_tally: usize,
-        variants: u32,
-    },
-    Color {
-        index: usize,
-        len: u32,
-    },
-    Ramp {
-        value: usize,
-        low: usize,
-        high: usize,
-        len: u32,
-    },
-}
-
-impl Operation {
-    /// Returns the slots the operation reads, its region body included.
-    #[expect(clippy::too_many_lines, reason = "one arm per operation reads best as one table")]
-    pub(crate) fn operands(&self) -> Vec<usize> {
-        match self {
-            Self::Index
-            | Self::Tick
-            | Self::PressSeed
-            | Self::LaneGet { .. }
-            | Self::LaneSeed { .. }
-            | Self::World
-            | Self::Grid
-            | Self::CellXy
-            | Self::CounterTotal { .. } => Vec::new(),
-            Self::FieldGet { layer, at, .. } => std::iter::once(*layer).chain(*at).collect(),
-            Self::Deposit { layer, at, value, .. } => vec![*layer, *at, *value],
-            Self::Clamp { x, lo, hi } => vec![*x, *lo, *hi],
-            Self::Midpoint { a, b }
-            | Self::VecDot { a, b }
-            | Self::FieldSet { layer: a, value: b, .. }
-            | Self::Reservoir { bits: a, count: b }
-            | Self::Offset { xy: a, by: b, .. }
-            | Self::Wrap { v: a, world: b }
-            | Self::VecScale { v: a, s: b }
-            | Self::FromAngle { angle: a, length: b }
-            | Self::StreamFloat { max: a, when: b }
-            | Self::VecMake { x: a, y: b }
-            | Self::Binary { a, b, .. }
-            | Self::Shift { a, b, .. }
-            | Self::Compare { a, b, .. } => vec![*a, *b],
-            Self::Delta { a, b, world, .. } => vec![*a, *b, *world],
-            Self::LaneGetAt { at: a, .. }
-            | Self::CounterAdd { amount: a, .. }
-            | Self::VecSplit { v: a, .. }
-            | Self::VecLength { v: a }
-            | Self::HeadingOctant { v: a }
-            | Self::CellIndex { xy: a, .. }
-            | Self::CellOf { p: a, .. }
-            | Self::CellXyOf { cell: a }
-            | Self::StepCode { d: a }
-            | Self::StepOffset { code: a }
-            | Self::Choice3 { bits: a }
-            | Self::Sum { value: a, .. } => vec![*a],
-            Self::GridFold(fold) => {
-                let mut found: Vec<usize> = fold.at.into_iter().chain([fold.when]).collect();
-                found.extend(fold.accumulators.iter().filter_map(|accumulator| accumulator.init));
-                found.extend(
-                    fold.body
-                        .iter()
-                        .flat_map(|instruction| instruction.operation.operands()),
-                );
-                found
-            }
-            Self::RadiusFold(fold) => {
-                let mut found = vec![fold.center, fold.radius, fold.cell_size, fold.when];
-                found.extend(fold.accumulators.iter().filter_map(|accumulator| accumulator.init));
-                found.extend(
-                    fold.body
-                        .iter()
-                        .flat_map(|instruction| instruction.operation.operands()),
-                );
-                found
-            }
-            Self::LaneSet { value, .. } | Self::CountBy { value, .. } => vec![*value],
-            Self::Unary { a, .. } | Self::Convert { a, .. } | Self::U32ToCat { a, .. } | Self::CatToU32 { a } => {
-                vec![*a]
-            }
-            Self::Powi { base, exponent, .. } | Self::Pow { base, exponent } => vec![*base, *exponent],
-            Self::Logic { a, b, .. } => std::iter::once(*a).chain(*b).collect(),
-            Self::Select {
-                cond,
-                if_true,
-                if_false,
-            } => vec![*cond, *if_true, *if_false],
-            Self::Pick { index, .. } | Self::Color { index, .. } => vec![*index],
-            Self::Switch { select, cases, default } => std::iter::once(*select)
-                .chain(cases.iter().flatten().copied())
-                .chain(*default)
-                .collect(),
-            Self::Transition { state, rules, .. } => std::iter::once(*state)
-                .chain(
-                    rules
-                        .iter()
-                        .flat_map(|rule| std::iter::once(rule.when).chain(rule.to_input)),
-                )
-                .collect(),
-            Self::Draw { input, .. } => vec![*input],
-            Self::Threshold { p } => vec![*p],
-            Self::Hash { x } => vec![*x],
-            Self::ToFloat { bits, max } => vec![*bits, *max],
-            Self::Below { bits, threshold } => vec![*bits, *threshold],
-            Self::StreamBits { when } => vec![*when],
-            Self::Repeat(repeat) => {
-                let mut found = vec![repeat.count, repeat.when];
-                found.extend(repeat.accumulators.iter().filter_map(|accumulator| accumulator.init));
-                found.extend(
-                    repeat
-                        .body
-                        .iter()
-                        .flat_map(|instruction| instruction.operation.operands()),
-                );
-                found
-            }
-            Self::Put { value, when, .. } => std::iter::once(*when).chain(*value).collect(),
-            Self::GridCount { value, when, .. } => vec![*value, *when],
-            Self::LifeLike { cell, count, .. } => vec![*cell, *count],
-            Self::CountWhere { pred, .. } => vec![*pred],
-            Self::Ramp { value, low, high, .. } => vec![*value, *low, *high],
-        }
-    }
-
-    /// Returns whether the operation computes a value from its operands and the run's context alone, the same for
-    /// every element and every iteration when its operands are, and cannot fault in a checked file.
-    ///
-    /// A draw is not one, since it reads the iteration word of the region around it.
-    fn is_pure(&self) -> bool {
-        matches!(
-            self,
-            Self::PressSeed
-                | Self::LaneSeed { .. }
-                | Self::Binary { .. }
-                | Self::Shift { .. }
-                | Self::Unary { .. }
-                | Self::Powi { .. }
-                | Self::Pow { .. }
-                | Self::Compare { .. }
-                | Self::Logic { .. }
-                | Self::Select { .. }
-                | Self::Pick { .. }
-                | Self::Switch { .. }
-                | Self::Convert { .. }
-                | Self::U32ToCat { .. }
-                | Self::CatToU32 { .. }
-                | Self::Threshold { .. }
-                | Self::Hash { .. }
-                | Self::ToFloat { .. }
-                | Self::Below { .. }
-                | Self::World
-                | Self::Grid
-                | Self::Clamp { .. }
-                | Self::Midpoint { .. }
-                | Self::VecMake { .. }
-                | Self::VecScale { .. }
-                | Self::VecDot { .. }
-                | Self::VecLength { .. }
-                | Self::FromAngle { .. }
-                | Self::Wrap { .. }
-                | Self::Delta { .. }
-                | Self::HeadingOctant { .. }
-                | Self::StepCode { .. }
-                | Self::StepOffset { .. }
-                | Self::Choice3 { .. }
-                | Self::Reservoir { .. }
-        )
-    }
-
-    /// Returns the body of a region's operation for writing.
-    fn body_mut(&mut self) -> Option<&mut Vec<Instruction>> {
-        match self {
-            Self::Repeat(repeat) => Some(&mut repeat.body),
-            Self::GridFold(fold) => Some(&mut fold.body),
-            Self::RadiusFold(fold) => Some(&mut fold.body),
-            _ => None,
-        }
-    }
-}
 
 /// Moves every instruction of a region body in `program`'s element block that is pure and reads only values the same
 /// for every element and iteration to the end of the prelude, nested bodies included, in body order.
@@ -717,6 +88,8 @@ struct Compiler<'a> {
     defs: Vec<&'static NodeDef>,
     /// Enclosing region of each node, by position, `None` at the top of the pass.
     parents: Vec<Option<usize>>,
+    /// Regions around each node, by position, innermost first.
+    ancestors: Vec<Vec<usize>>,
     /// Slot of each output by node and port.
     outputs: BTreeMap<(NodeId, String), usize>,
     /// Slot of each inner output of a region by node and port.
@@ -756,13 +129,15 @@ pub(crate) fn compile(document: &GraphDocument, pass: &Pass) -> Result<Program, 
             .ok_or_else(|| unsupported(pass, Some(node.id), format!("the kind `{}` has no host form", node.op)))?;
         defs.push(def);
     }
-    let parents = nodes.iter().map(|node| positions.get(&node.region?).copied()).collect();
+    let parents: Vec<Option<usize>> = nodes.iter().map(|node| positions.get(&node.region?).copied()).collect();
+    let ancestors = (0..nodes.len()).map(|position| ancestors(&parents, position)).collect();
     let mut compiler = Compiler {
         document,
         pass,
         positions,
         defs,
         parents,
+        ancestors,
         outputs: BTreeMap::new(),
         inner_outputs: BTreeMap::new(),
         only_outputs: BTreeMap::new(),
@@ -783,65 +158,72 @@ pub(crate) fn compile(document: &GraphDocument, pass: &Pass) -> Result<Program, 
     let order = compiler.order()?;
     let top = order.get(&None).cloned().unwrap_or_default();
     let timings = compiler.timings(&top)?;
-    let mut program = Program {
-        pass: pass.id.clone(),
-        domain: pass.domain,
-        slots: 0,
-        constants: Vec::new(),
-        params: Vec::new(),
-        draw_keys: Vec::new(),
-        prelude: Vec::new(),
-        element: Vec::new(),
-        post: Vec::new(),
-        tallies: 0,
-        tally_slots: Vec::new(),
-        sums: Vec::new(),
-        written: Vec::new(),
-        deposited: Vec::new(),
-        colors: false,
-        uniform_outputs: Vec::new(),
-        outputs: BTreeMap::new(),
-        inner_outputs: BTreeMap::new(),
-    };
+    let (mut prelude, mut element, mut post) = (Vec::new(), Vec::new(), Vec::new());
+    let mut uniform_outputs = Vec::new();
     for (&position, timing) in top.iter().zip(&timings) {
         let instruction = compiler.instruction(position, &order)?;
-        let node = &nodes[position];
+        let id = nodes[position].id;
         if *timing != Timing::Element || compiler.defs[position].has_effect(Effect::Reduce) {
-            for (key, slot) in &compiler.outputs {
-                if key.0 == node.id {
-                    program.uniform_outputs.push((node.id, key.1.clone(), *slot));
-                }
+            let node_outputs = compiler
+                .outputs
+                .range((id, String::new())..)
+                .take_while(|((node, _), _)| *node == id);
+            for ((_, port), slot) in node_outputs {
+                uniform_outputs.push((id, port.clone(), *slot));
             }
         }
         match timing {
-            Timing::Prelude => program.prelude.push(instruction),
-            Timing::Element => program.element.push(instruction),
-            Timing::Post => program.post.push(instruction),
+            Timing::Prelude => prelude.push(instruction),
+            Timing::Element => element.push(instruction),
+            Timing::Post => post.push(instruction),
         }
     }
-    program.slots = compiler.slots;
-    program.constants = compiler.constants;
-    program.params = compiler.params.into_iter().map(|(param, slot)| (slot, param)).collect();
-    program.draw_keys = compiler.draw_keys;
-    program.tallies = compiler.tallies;
-    program.tally_slots = compiler.tally_slots;
-    program.sums = compiler.sums;
-    program.written = compiler.written.into_iter().collect();
-    program.deposited = compiler.deposited.into_iter().collect();
-    program.colors = compiler.colors;
-    program.outputs = compiler.outputs;
-    program.inner_outputs = compiler.inner_outputs;
+    let mut program = Program {
+        pass: pass.id.clone(),
+        domain: pass.domain,
+        slots: compiler.slots,
+        constants: compiler.constants,
+        params: compiler.params.into_iter().map(|(param, slot)| (slot, param)).collect(),
+        draw_keys: compiler.draw_keys,
+        prelude,
+        element,
+        post,
+        tallies: compiler.tallies,
+        tally_slots: compiler.tally_slots,
+        sums: compiler.sums,
+        written: compiler.written.into_iter().collect(),
+        deposited: compiler.deposited.into_iter().collect(),
+        colors: compiler.colors,
+        uniform_outputs,
+        outputs: compiler.outputs,
+        inner_outputs: compiler.inner_outputs,
+    };
     hoist_uniform_body_values(&mut program);
     Ok(program)
 }
 
-/// Returns whether a stencil's boundary word skips positions past the edge, `None` for the domain grid's own.
-fn boundary_of(word: &str) -> Option<bool> {
+/// Returns the boundary a stencil's boundary word names, `None` for the domain grid's own.
+fn boundary_of(word: &str) -> Option<Boundary> {
     match word {
-        "torus" => Some(false),
-        "bounded" => Some(true),
+        "torus" => Some(Boundary::Torus),
+        "bounded" => Some(Boundary::Bounded),
         _ => None,
     }
+}
+
+/// Returns the regions around the node at `position`, innermost first, where `parents` holds the enclosing region of
+/// each node.
+fn ancestors(parents: &[Option<usize>], position: usize) -> Vec<usize> {
+    let mut path = Vec::new();
+    let mut current = parents[position];
+    while let Some(region) = current {
+        if region == position || path.contains(&region) {
+            break;
+        }
+        path.push(region);
+        current = parents[region];
+    }
+    path
 }
 
 /// Returns the error for a pass the host cannot run.
@@ -899,20 +281,6 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    /// Returns the regions around the node at `position`, innermost first.
-    fn ancestors(&self, position: usize) -> Vec<usize> {
-        let mut path = Vec::new();
-        let mut current = self.parents[position];
-        while let Some(region) = current {
-            if region == position || path.contains(&region) {
-                break;
-            }
-            path.push(region);
-            current = self.parents[region];
-        }
-        path
-    }
-
     /// Returns the order of the members of every scope: the top of the pass under `None` and each region's body under
     /// its position. Every member follows the members whose values it or its body reads, ties broken by node id, and
     /// the pass's stream draws follow `draw_order`.
@@ -929,13 +297,12 @@ impl<'a> Compiler<'a> {
             }
         }
         let mut edges: BTreeMap<Option<usize>, BTreeSet<(usize, usize)>> = BTreeMap::new();
-        let ancestors: Vec<Vec<usize>> = (0..nodes.len()).map(|position| self.ancestors(position)).collect();
         for (position, node) in nodes.iter().enumerate() {
             for link in links(node) {
                 let Some(&source) = self.positions.get(&link.node) else {
                     continue;
                 };
-                if let Some(edge) = self.scope_edge(&ancestors, source, position) {
+                if let Some(edge) = self.scope_edge(source, position) {
                     edges.entry(edge.0).or_default().insert((edge.1, edge.2));
                 }
             }
@@ -962,12 +329,8 @@ impl<'a> Compiler<'a> {
     /// Returns the scope and the two members of it that a link from `source` to `target` orders, as
     /// `(scope, before, after)`, or `None` when the link orders no two members of one scope: a read of an enclosing
     /// region's inner output, or a read of a node in an outer scope.
-    fn scope_edge(
-        &self,
-        ancestors: &[Vec<usize>],
-        source: usize,
-        target: usize,
-    ) -> Option<(Option<usize>, usize, usize)> {
+    fn scope_edge(&self, source: usize, target: usize) -> Option<(Option<usize>, usize, usize)> {
+        let ancestors = &self.ancestors;
         if ancestors[target].contains(&source) {
             return None;
         }
@@ -1098,7 +461,7 @@ impl<'a> Compiler<'a> {
         let mut found: Vec<&PortRef> = links(&nodes[position]).collect();
         if self.defs[position].is_region {
             for (inner, node) in nodes.iter().enumerate() {
-                if inner != position && self.ancestors(inner).contains(&position) {
+                if inner != position && self.ancestors[inner].contains(&position) {
                     found.extend(links(node));
                 }
             }
@@ -1117,7 +480,7 @@ impl<'a> Compiler<'a> {
             )
         };
         let source = *self.positions.get(&link.node).ok_or_else(broken)?;
-        if self.ancestors(reader).contains(&source) {
+        if self.ancestors[reader].contains(&source) {
             let port = link.port.as_ref().ok_or_else(broken)?;
             return self
                 .inner_outputs
@@ -1158,9 +521,7 @@ impl<'a> Compiler<'a> {
             InputValue::Param(id) => {
                 let param = self
                     .document
-                    .params
-                    .iter()
-                    .position(|param| param.id() == id)
+                    .param_position(&id)
                     .ok_or_else(|| unsupported(self.pass, Some(node.id), format!("binds the parameter '{id}'")))?;
                 if let Some(&slot) = self.params.get(&param) {
                     slot
@@ -1196,10 +557,8 @@ impl<'a> Compiler<'a> {
     /// Returns the position of the variant `name` of `category`.
     fn variant(&self, position: usize, category: &str, name: &str) -> Result<u32, HostError> {
         self.document
-            .categories
-            .iter()
-            .find(|known| known.id == category)
-            .and_then(|known| known.variants.iter().position(|variant| variant.name == name))
+            .category(category)
+            .and_then(|known| known.variant_position(name))
             .and_then(|index| u32::try_from(index).ok())
             .ok_or_else(|| {
                 unsupported(
@@ -1213,25 +572,19 @@ impl<'a> Compiler<'a> {
     /// Returns the number of variants of `category`.
     fn variant_count(&self, category: &str) -> u32 {
         self.document
-            .categories
-            .iter()
-            .find(|known| known.id == category)
+            .category(category)
             .map_or(0, |known| u32::try_from(known.variants.len()).unwrap_or(u32::MAX))
     }
 
     /// Returns the position of the lane `id`.
     fn lane(&self, position: usize, id: &str) -> Result<usize, HostError> {
-        self.document
-            .lanes
-            .iter()
-            .position(|lane| lane.id == id)
-            .ok_or_else(|| {
-                unsupported(
-                    self.pass,
-                    Some(self.pass.body.nodes[position].id),
-                    format!("names the lane '{id}'"),
-                )
-            })
+        self.document.lane_position(id).ok_or_else(|| {
+            unsupported(
+                self.pass,
+                Some(self.pass.body.nodes[position].id),
+                format!("names the lane '{id}'"),
+            )
+        })
     }
 
     /// Returns the number of colours of the palette `id`, a `[[palette]]` table or a category.
@@ -1313,9 +666,7 @@ impl<'a> Compiler<'a> {
                     value: self.required(position, "value")?,
                     combine: self
                         .document
-                        .fields
-                        .iter()
-                        .find(|field| field.id == field_id)
+                        .field(&field_id)
                         .and_then(|field| field.combine)
                         .unwrap_or(FieldCombine::Max),
                 }
@@ -1327,17 +678,6 @@ impl<'a> Compiler<'a> {
             "stat.counter" => Operation::CounterTotal {
                 counter: self.counter(position, &text("counter"))?,
             },
-            "math.neg" | "math.floor" | "math.sqrt" | "math.recip" | "math.log2" | "math.log10" => Operation::Unary {
-                op: match def.id {
-                    "math.neg" => UnaryOp::Neg,
-                    "math.floor" => UnaryOp::Floor,
-                    "math.sqrt" => UnaryOp::Sqrt,
-                    "math.recip" => UnaryOp::Recip,
-                    "math.log2" => UnaryOp::Log2,
-                    _ => UnaryOp::Log10,
-                },
-                a: self.required(position, "a")?,
-            },
             "math.clamp" => Operation::Clamp {
                 x: self.required(position, "x")?,
                 lo: self.required(position, "lo")?,
@@ -1346,15 +686,6 @@ impl<'a> Compiler<'a> {
             "math.midpoint" => Operation::Midpoint {
                 a: self.required(position, "a")?,
                 b: self.required(position, "b")?,
-            },
-            "conv.to_f64" | "conv.to_vec2f" | "conv.to_vec2i" | "conv.to_vec2u" => Operation::Convert {
-                target: match def.id {
-                    "conv.to_f64" => Conversion::ToF64,
-                    "conv.to_vec2f" => Conversion::ToVec2F,
-                    "conv.to_vec2i" => Conversion::ToVec2I,
-                    _ => Conversion::ToVec2U,
-                },
-                a: self.required(position, "a")?,
             },
             "vec.make" => Operation::VecMake {
                 x: self.required(position, "x")?,
@@ -1404,7 +735,7 @@ impl<'a> Compiler<'a> {
             "space.offset" => Operation::Offset {
                 xy: self.required(position, "xy")?,
                 by: self.required(position, "by")?,
-                bounded: boundary_of(&text("boundary")),
+                boundary: boundary_of(&text("boundary")),
                 cell_out: self.output_slot(id, "cell")?,
                 valid_out: self.output_slot(id, "valid")?,
             },
@@ -1417,19 +748,6 @@ impl<'a> Compiler<'a> {
             "space.step_offset" => Operation::StepOffset {
                 code: self.required(position, "code")?,
             },
-            "rand.bits" | "rand.choice3" => {
-                self.draw_keys.push(u32::try_from(integer("key")).unwrap_or(0));
-                let always = self.constant(HostValue::Bool(true));
-                Operation::Draw {
-                    form: if def.id == "rand.bits" {
-                        DrawForm::Bits
-                    } else {
-                        DrawForm::Choice3
-                    },
-                    draw: self.draw_keys.len() - 1,
-                    input: always,
-                }
-            }
             "rng.choice3" => Operation::Choice3 {
                 bits: self.required(position, "bits")?,
             },
@@ -1470,45 +788,10 @@ impl<'a> Compiler<'a> {
                     value: self.required(position, "value")?,
                 }
             }
-            "math.add" | "math.sub" | "math.mul" | "math.div" | "math.rem" | "math.min" | "math.max" | "bits.xor"
-            | "bits.and" | "bits.or" => {
-                let op = match def.id {
-                    "math.add" => BinaryOp::Add,
-                    "math.sub" => BinaryOp::Sub,
-                    "math.mul" => BinaryOp::Mul,
-                    "math.div" => BinaryOp::Div,
-                    "math.rem" => BinaryOp::Rem,
-                    "math.min" => BinaryOp::Min,
-                    "math.max" => BinaryOp::Max,
-                    "bits.xor" => BinaryOp::Xor,
-                    "bits.and" => BinaryOp::And,
-                    _ => BinaryOp::Or,
-                };
-                Operation::Binary {
-                    op,
-                    a: self.required(position, "a")?,
-                    b: self.required(position, "b")?,
-                }
-            }
             "bits.shl" | "bits.shr" => Operation::Shift {
                 a: self.required(position, "a")?,
                 b: self.required(position, "b")?,
                 left: def.id == "bits.shl",
-            },
-            "bits.not" | "math.abs" | "math.ceil" | "math.trunc" | "math.round" | "math.exp" | "math.log"
-            | "math.sin" | "math.cos" => Operation::Unary {
-                op: match def.id {
-                    "bits.not" => UnaryOp::Not,
-                    "math.abs" => UnaryOp::Abs,
-                    "math.ceil" => UnaryOp::Ceil,
-                    "math.trunc" => UnaryOp::Trunc,
-                    "math.round" => UnaryOp::Round,
-                    "math.exp" => UnaryOp::Exp,
-                    "math.log" => UnaryOp::Log,
-                    "math.sin" => UnaryOp::Sin,
-                    _ => UnaryOp::Cos,
-                },
-                a: self.required(position, "a")?,
             },
             "math.powi" => Operation::Powi {
                 base: self.required(position, "base")?,
@@ -1518,32 +801,6 @@ impl<'a> Compiler<'a> {
             "math.pow" => Operation::Pow {
                 base: self.required(position, "base")?,
                 exponent: self.required(position, "exponent")?,
-            },
-            "cmp.eq" | "cmp.ne" | "cmp.lt" | "cmp.le" | "cmp.gt" | "cmp.ge" => Operation::Compare {
-                op: match def.id {
-                    "cmp.eq" => CompareOp::Eq,
-                    "cmp.ne" => CompareOp::Ne,
-                    "cmp.lt" => CompareOp::Lt,
-                    "cmp.le" => CompareOp::Le,
-                    "cmp.gt" => CompareOp::Gt,
-                    _ => CompareOp::Ge,
-                },
-                a: self.required(position, "a")?,
-                b: self.required(position, "b")?,
-            },
-            "logic.and" | "logic.or" | "logic.xor" | "logic.not" => Operation::Logic {
-                op: match def.id {
-                    "logic.and" => LogicOp::And,
-                    "logic.or" => LogicOp::Or,
-                    "logic.xor" => LogicOp::Xor,
-                    _ => LogicOp::Not,
-                },
-                a: self.required(position, "a")?,
-                b: if def.id == "logic.not" {
-                    None
-                } else {
-                    Some(self.required(position, "b")?)
-                },
             },
             "logic.select" => Operation::Select {
                 cond: self.required(position, "cond")?,
@@ -1573,9 +830,7 @@ impl<'a> Compiler<'a> {
                 let category = text("category");
                 let names: Vec<String> = self
                     .document
-                    .categories
-                    .iter()
-                    .find(|known| known.id == category)
+                    .category(&category)
                     .map(|known| known.variants.iter().map(|variant| variant.name.clone()).collect())
                     .unwrap_or_default();
                 let mut cases = Vec::with_capacity(names.len());
@@ -1589,14 +844,6 @@ impl<'a> Compiler<'a> {
                 }
             }
             "cat.transition" => self.transition(position, &config)?,
-            "conv.to_f32" | "conv.to_u32" | "conv.to_i32" => Operation::Convert {
-                target: match def.id {
-                    "conv.to_f32" => Conversion::ToF32,
-                    "conv.to_u32" => Conversion::ToU32,
-                    _ => Conversion::ToI32,
-                },
-                a: self.required(position, "a")?,
-            },
             "conv.u32_to_cat" => Operation::U32ToCat {
                 a: self.required(position, "a")?,
                 last: self.variant_count(&text("category")).saturating_sub(1),
@@ -1604,19 +851,6 @@ impl<'a> Compiler<'a> {
             "conv.cat_to_u32" => Operation::CatToU32 {
                 a: self.required(position, "a")?,
             },
-            "rand.float" | "rand.below" | "rand.chance" => {
-                let (form, input) = match def.id {
-                    "rand.float" => (DrawForm::Float, "max"),
-                    "rand.below" => (DrawForm::Below, "threshold"),
-                    _ => (DrawForm::Chance, "p"),
-                };
-                self.draw_keys.push(u32::try_from(integer("key")).unwrap_or(0));
-                Operation::Draw {
-                    form,
-                    draw: self.draw_keys.len() - 1,
-                    input: self.required(position, input)?,
-                }
-            }
             "rng.threshold" => Operation::Threshold {
                 p: self.required(position, "p")?,
             },
@@ -1712,9 +946,7 @@ impl<'a> Compiler<'a> {
                 let category = text("category");
                 let names: Vec<String> = self
                     .document
-                    .categories
-                    .iter()
-                    .find(|known| known.id == category)
+                    .category(&category)
                     .map(|known| known.variants.iter().map(|variant| variant.name.clone()).collect())
                     .unwrap_or_default();
                 let first_tally = self.tallies;
@@ -1741,12 +973,23 @@ impl<'a> Compiler<'a> {
                 high: self.required(position, "high")?,
                 len: self.palette_len(&text("palette")),
             },
-            other => {
-                return Err(unsupported(
-                    self.pass,
-                    Some(id),
-                    format!("the kind `{other}` has no host form"),
-                ));
+            kind => {
+                if let Some((form, input)) = DrawForm::of_kind(kind) {
+                    self.draw_keys.push(u32::try_from(integer("key")).unwrap_or(0));
+                    let input = match input {
+                        Some(name) => self.required(position, name)?,
+                        None => self.constant(HostValue::Bool(true)),
+                    };
+                    Operation::Draw {
+                        form,
+                        draw: self.draw_keys.len() - 1,
+                        input,
+                    }
+                } else {
+                    self.operator(position, kind)?.ok_or_else(|| {
+                        unsupported(self.pass, Some(id), format!("the kind `{kind}` has no host form"))
+                    })?
+                }
             }
         };
         Ok(Instruction {
@@ -1754,6 +997,46 @@ impl<'a> Compiler<'a> {
             out,
             operation,
         })
+    }
+
+    /// Returns the operation of the node at `position` of the unary, binary, comparison, logic or conversion kind
+    /// `kind`, `None` for another kind.
+    fn operator(&mut self, position: usize, kind: &str) -> Result<Option<Operation>, HostError> {
+        Ok(Some(if let Some(op) = UnaryOp::of_kind(kind) {
+            Operation::Unary {
+                op,
+                a: self.required(position, "a")?,
+            }
+        } else if let Some(op) = BinaryOp::of_kind(kind) {
+            Operation::Binary {
+                op,
+                a: self.required(position, "a")?,
+                b: self.required(position, "b")?,
+            }
+        } else if let Some(op) = CompareOp::of_kind(kind) {
+            Operation::Compare {
+                op,
+                a: self.required(position, "a")?,
+                b: self.required(position, "b")?,
+            }
+        } else if let Some(op) = LogicOp::of_kind(kind) {
+            Operation::Logic {
+                op,
+                a: self.required(position, "a")?,
+                b: if op == LogicOp::Not {
+                    None
+                } else {
+                    Some(self.required(position, "b")?)
+                },
+            }
+        } else if let Some(target) = Conversion::of_kind(kind) {
+            Operation::Convert {
+                target,
+                a: self.required(position, "a")?,
+            }
+        } else {
+            return Ok(None);
+        }))
     }
 
     /// Returns the slot of output `port` of node `id`.
@@ -1895,16 +1178,14 @@ impl<'a> Compiler<'a> {
         let accumulators = self.accumulators(position)?;
         let fold = StencilFold {
             offsets,
-            bounded: boundary_of(boundary),
+            boundary: boundary_of(boundary),
             at: self.input(position, "at")?,
             when: self.required(position, "when")?,
-            inner: [
-                self.inner_slot(id, "k")?,
-                self.inner_slot(id, "offset")?,
-                self.inner_slot(id, "xy")?,
-                self.inner_slot(id, "cell")?,
-                self.inner_slot(id, "diagonal")?,
-            ],
+            k: self.inner_slot(id, "k")?,
+            offset: self.inner_slot(id, "offset")?,
+            xy: self.inner_slot(id, "xy")?,
+            cell: self.inner_slot(id, "cell")?,
+            diagonal: self.inner_slot(id, "diagonal")?,
             accumulators,
             body: self.block(position, order)?,
         };
@@ -1937,12 +1218,10 @@ impl<'a> Compiler<'a> {
                 .get("exclude_self")
                 .and_then(ConfigValue::as_bool)
                 .unwrap_or(true),
-            inner: [
-                self.inner_slot(id, "k")?,
-                self.inner_slot(id, "other")?,
-                self.inner_slot(id, "delta")?,
-                self.inner_slot(id, "dist_sq")?,
-            ],
+            k: self.inner_slot(id, "k")?,
+            other: self.inner_slot(id, "other")?,
+            delta: self.inner_slot(id, "delta")?,
+            dist_sq: self.inner_slot(id, "dist_sq")?,
             accumulators,
             body: self.block(position, order)?,
         };
@@ -2014,55 +1293,13 @@ impl<'a> Compiler<'a> {
             .and_then(ConfigValue::as_integer)
             .and_then(|max| u32::try_from(max).ok())
             .unwrap_or(0);
-        let declared = node
-            .accumulators()
-            .map_err(|reason| unsupported(self.pass, Some(id), reason))?;
-        let inner = |compiler: &Self, port: &str| {
-            compiler
-                .inner_outputs
-                .get(&(id, port.to_owned()))
-                .copied()
-                .ok_or_else(|| unsupported(compiler.pass, Some(id), format!("has no inner output `{port}`")))
-        };
-        let mut accumulators = Vec::with_capacity(declared.len());
-        for accumulator in &declared {
-            let identity = match accumulator.combine {
-                Combine::Min => extreme_of(&accumulator.value_type, true),
-                Combine::Max => extreme_of(&accumulator.value_type, false),
-                Combine::And => Some(HostValue::Bool(true)),
-                _ => HostValue::zero_of(&accumulator.value_type),
-            }
-            .ok_or_else(|| {
-                unsupported(
-                    self.pass,
-                    Some(id),
-                    format!(
-                        "holds the accumulator '{}' of a type with no host value",
-                        accumulator.name
-                    ),
-                )
-            })?;
-            let running = self.slot();
-            self.running
-                .insert((id, accumulator.name.clone()), (running, accumulator.combine));
-            accumulators.push(RepeatAccumulator {
-                init: self.input(position, &format!("init.{}", accumulator.name))?,
-                identity,
-                prev: inner(self, &format!("prev.{}", accumulator.name))?,
-                running,
-                out: self
-                    .outputs
-                    .get(&(id, accumulator.name.clone()))
-                    .copied()
-                    .ok_or_else(|| unsupported(self.pass, Some(id), format!("has no output `{}`", accumulator.name)))?,
-            });
-        }
+        let accumulators = self.accumulators(position)?;
         let repeat = Repeat {
             max,
             count: self.required(position, "count")?,
             when: self.required(position, "when")?,
-            k: inner(self, "k")?,
-            total: inner(self, "total")?,
+            k: self.inner_slot(id, "k")?,
+            total: self.inner_slot(id, "total")?,
             accumulators,
             body: self.block(position, order)?,
         };

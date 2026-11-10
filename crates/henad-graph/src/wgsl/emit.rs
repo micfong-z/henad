@@ -18,13 +18,13 @@ use henad_core::params::ParamKind;
 
 use super::pack::{LaneGroup, LaneLayout};
 use super::probes::ProbeSlot;
-use super::uniform::{FieldShape, FieldSource, UniformBlock, WgslType};
+use super::uniform::{MemberShape, MemberSource, UniformBlock, WgslType};
 use super::{NodeRange, WORKGROUP_SIZE};
 use crate::catalogue::effective_config;
 use crate::check::CheckReport;
 use crate::document::{Domain, FieldCombine, GraphDocument, Pass, PassEnabled};
 use crate::host::HostEvaluator;
-use crate::host::compile::{
+use crate::host::program::{
     CompareOp, DrawForm, Instruction, LogicOp, Operation, Program, RadiusFold, Repeat, RepeatAccumulator, StencilFold,
 };
 use crate::host::value::{BinaryOp, Conversion, HostValue, UnaryOp};
@@ -41,7 +41,7 @@ pub(crate) enum Role {
     Display,
     /// The reduce pass, one invocation per cell.
     Reduce,
-    /// A pass of the action at this position of the document's actions.
+    /// A pass of an action.
     Action,
     /// The snapshot colour pass of an agents world, which runs the view passes over agents and writes each agent's
     /// colour.
@@ -121,7 +121,8 @@ pub(crate) struct AgentPlan {
     pub fields: Vec<FieldPlan>,
     /// Number of the document's counters, which take the words after the fault word of `counters`.
     pub counters: usize,
-    /// Words of the `counters` buffer: the fault word, the document's counters, then the reduce leaf's tallies.
+    /// Words of the `counters` buffer: the fault word, the tick, the document's counters, the reduce leaf's tallies,
+    /// then the counts of the probes.
     pub counter_words: usize,
     /// Each radius fold that can fault, as its pass id and node. At position `p`, its fault code past its visit cap is
     /// `2 * p + 1`, and past its cell cap `2 * p + 2`.
@@ -178,13 +179,21 @@ pub(crate) struct Emitted {
     pub bindings: Vec<ShaderBinding>,
     /// Uniform block bound as `params`.
     pub uniform: UniformBlock,
-    /// Number of counters of a reduce shader, at least 1.
+    /// Number of tallies of a reduce shader, at least 1 on a grid.
     pub counters: usize,
-    /// Number of `f32` lanes a reduce leaf of an agents world sums, each by the document position of its pass and the
-    /// number of its sum, in lane order. A `vec2f` sum takes two lanes in a row.
-    pub sum_lanes: Vec<(usize, usize)>,
+    /// Lanes of `f32` sums of a reduce shader, in lane order. A `vec2f` sum takes two lanes in a row.
+    pub sum_lanes: Vec<SumLane>,
     /// Bytes of the shader's `var<workgroup>` declarations.
     pub workgroup_bytes: u64,
+}
+
+/// One `f32` lane of the sums of a reduce shader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SumLane {
+    /// Document position of the stats pass that sums into the lane.
+    pub pass: usize,
+    /// Number of the sum among the pass's sums.
+    pub sum: usize,
 }
 
 /// Text with the byte ranges each node wrote in it.
@@ -265,7 +274,7 @@ enum SlotName {
 ///
 /// A port segment starts with a letter and holds no `__`, so a run of two underscores marks the dot and a run of
 /// three a segment that ends in `_` before it. Two values never share a name.
-pub(crate) fn value_name(node: NodeId, port: &str) -> String {
+fn value_name(node: NodeId, port: &str) -> String {
     format!("n{}_{}", node.number(), port.replace('.', "__"))
 }
 
@@ -319,11 +328,6 @@ pub(crate) fn defined(instruction: &Instruction) -> Vec<usize> {
     slots
 }
 
-/// Returns the packed RGBA of `color`, the word the point view reads.
-pub(crate) fn packed_color(color: Color) -> u32 {
-    u32::from_le_bytes(color)
-}
-
 /// Shared modules and helpers a shader uses.
 #[derive(Default)]
 struct Uses {
@@ -334,8 +338,6 @@ struct Uses {
     threshold: bool,
     /// `henad::space` functions besides the stencil's.
     space: BTreeSet<&'static str>,
-    /// `henad::rng` functions besides `pcg_hash` and `random_float`.
-    rng: BTreeSet<&'static str>,
     /// The helper `henad_step` of a stencil fold or an offset.
     step: bool,
     /// The neighbour index, its walk and the fault word.
@@ -360,7 +362,7 @@ struct Emitter<'a> {
     uses: Uses,
     /// Palettes the shader colours from, by constant name.
     palettes: BTreeMap<String, Vec<Color>>,
-    fields: Vec<(String, FieldShape, FieldSource)>,
+    members: Vec<(String, MemberShape, MemberSource)>,
     problems: Vec<CodeDiagnostic>,
     /// Counters before the current pass's tallies.
     tally_offset: usize,
@@ -370,8 +372,8 @@ struct Emitter<'a> {
     fields_written: BTreeSet<usize>,
     /// Fields some pass of the shader deposits into.
     deposited: BTreeSet<usize>,
-    /// Lanes of a reduce leaf, by the document position of the pass and the number of the sum, with the first lane.
-    sum_lanes: Vec<(usize, usize)>,
+    /// Lanes of the sums of a reduce shader, in lane order.
+    sum_lanes: Vec<SumLane>,
     /// Lanes some pass reads at another element, which a pass over agents bounds-checks.
     reads_other: BTreeSet<usize>,
     /// Palettes the colour pass reads as packed RGBA words, by constant name.
@@ -387,21 +389,109 @@ struct Emitter<'a> {
 /// State of the emission of one pass's body.
 struct Block<'a> {
     /// Position of the pass among the shader's passes.
-    k: usize,
+    pass_index: usize,
     position: usize,
     pass: &'a Pass,
     names: Vec<SlotName>,
     types: Vec<Option<WgslType>>,
     /// Slots whose values the host evaluates, by the name of their uniform member and its source.
-    host: BTreeMap<usize, (FieldShape, FieldSource)>,
+    host: BTreeMap<usize, (MemberShape, MemberSource)>,
     /// Host slots the body reads.
     used_host: BTreeSet<usize>,
     /// Node each slot belongs to.
     owners: BTreeMap<usize, NodeId>,
-    /// Iteration word of the innermost region being written.
-    iteration: String,
+    /// Iteration word of the innermost region being written, or of a test's region around the pass, `None` outside
+    /// every region.
+    iteration: Option<String>,
     /// Stores of field writes, run at the end of the pass, each as its line.
     deferred: Vec<String>,
+}
+
+impl<'a> Block<'a> {
+    /// Returns the block of the pass `pass` at `position` of the document, at `pass_index` among the shader's passes,
+    /// with every slot of its `program` named and typed, and the prelude instructions the shader computes because they
+    /// read the tick.
+    fn new<'p>(
+        input: &EmitInput<'_>,
+        pass_index: usize,
+        position: usize,
+        pass: &'a Pass,
+        program: &'p Program,
+    ) -> (Self, Vec<&'p Instruction>) {
+        let report = input.report.passes.get(position);
+        let mut names = vec![SlotName::Unnamed; program.slots];
+        let mut types: Vec<Option<WgslType>> = vec![None; program.slots];
+        let mut owners = BTreeMap::new();
+        for ((node, port), slot) in program.outputs.iter().chain(&program.inner_outputs) {
+            names[*slot] = SlotName::Value(value_name(*node, port));
+            owners.insert(*slot, *node);
+            let port_type = report.and_then(|report| {
+                let inner = || report.inner_outputs.get(node)?.get(port);
+                report
+                    .outputs
+                    .get(node)
+                    .and_then(|ports| ports.get(port))
+                    .or_else(inner)
+            });
+            types[*slot] = port_type
+                .and_then(|port_type| port_type.value_type.as_ref())
+                .and_then(WgslType::of);
+        }
+        for (slot, value) in &program.constants {
+            names[*slot] = literal(*value).map_or(SlotName::HostOnly, SlotName::Literal);
+            types[*slot] = WgslType::of_value(*value);
+        }
+        let mut host = BTreeMap::new();
+        for (slot, param) in &program.params {
+            let descriptor = &input.document.params[*param];
+            let wgsl = match descriptor.kind() {
+                ParamKind::F32 { .. } => WgslType::F32,
+                ParamKind::Bool { .. } => WgslType::Bool,
+                _ => WgslType::U32,
+            };
+            names[*slot] = SlotName::Value(format!("henad_param_{}", descriptor.id()));
+            types[*slot] = Some(wgsl);
+            host.insert(
+                *slot,
+                (MemberShape::Value(wgsl), MemberSource::Slot { position, slot: *slot }),
+            );
+        }
+        name_running(&program.element, &mut names, &mut types);
+        // A prelude value that reads the tick changes within a submission, and the shader computes it.
+        let mut on_device: BTreeSet<usize> = BTreeSet::new();
+        let mut device_prelude = Vec::new();
+        for instruction in &program.prelude {
+            let reads_device = matches!(instruction.operation, Operation::Tick)
+                || instruction
+                    .operation
+                    .operands()
+                    .iter()
+                    .any(|slot| on_device.contains(slot));
+            if reads_device {
+                on_device.extend(defined(instruction));
+                device_prelude.push(instruction);
+            } else {
+                for slot in defined(instruction) {
+                    if let Some(wgsl) = types.get(slot).copied().flatten() {
+                        host.insert(slot, (MemberShape::Value(wgsl), MemberSource::Slot { position, slot }));
+                    }
+                }
+            }
+        }
+        let block = Self {
+            pass_index,
+            position,
+            pass,
+            names,
+            types,
+            host,
+            used_host: BTreeSet::new(),
+            owners,
+            iteration: input.outer_iteration.map(|word| format!("{word}u")),
+            deferred: Vec::new(),
+        };
+        (block, device_prelude)
+    }
 }
 
 /// Returns the shader of `role` that runs the passes at `positions` of the document, each bound through `sides`.
@@ -425,16 +515,16 @@ pub(crate) fn emit(
         reads_tick: matches!(role, Role::Step { writes_tick: true }) && input.agents.is_none(),
         uses: Uses::default(),
         palettes: BTreeMap::new(),
-        fields: vec![
+        members: vec![
             (
                 "henad_width".to_owned(),
-                FieldShape::Value(WgslType::U32),
-                FieldSource::Width,
+                MemberShape::Value(WgslType::U32),
+                MemberSource::Width,
             ),
             (
                 "henad_height".to_owned(),
-                FieldShape::Value(WgslType::U32),
-                FieldSource::Height,
+                MemberShape::Value(WgslType::U32),
+                MemberSource::Height,
             ),
         ],
         problems: Vec::new(),
@@ -449,7 +539,7 @@ pub(crate) fn emit(
         fire_slots: Vec::new(),
     };
     if input.agents.is_some() {
-        emitter.agent_fields(role);
+        emitter.agent_members(role);
     }
     let mut programs = Vec::with_capacity(positions.len());
     for &position in positions {
@@ -464,8 +554,8 @@ pub(crate) fn emit(
         }
     }
     let mut body = Text::default();
-    for (k, (position, pass, program)) in programs.into_iter().enumerate() {
-        let block = emitter.block(k, position, pass, program);
+    for (pass_index, (position, pass, program)) in programs.into_iter().enumerate() {
+        let block = emitter.block(pass_index, position, pass, program);
         body.append(block);
     }
     if role == Role::Display && positions.is_empty() && input.agents.is_none() {
@@ -490,42 +580,46 @@ impl Emitter<'_> {
         self.problems.push(problem);
     }
 
-    /// Returns the name of uniform member `base` of the pass at position `k` among the shader's passes.
-    fn field_name(&self, k: usize, base: &str) -> String {
+    /// Returns the name of uniform member `base` of the pass at `pass_index` among the shader's passes.
+    fn member_name(&self, pass_index: usize, base: &str) -> String {
         if self.shared {
-            format!("henad_p{k}_{base}")
+            format!("henad_p{pass_index}_{base}")
         } else {
             base.to_owned()
         }
     }
 
     /// Adds the uniform member `name` unless the block has it.
-    fn field(&mut self, name: &str, shape: FieldShape, source: FieldSource) {
-        if !self.fields.iter().any(|(known, ..)| known == name) {
-            self.fields.push((name.to_owned(), shape, source));
+    fn member(&mut self, name: &str, shape: MemberShape, source: MemberSource) {
+        if !self.members.iter().any(|(known, ..)| known == name) {
+            self.members.push((name.to_owned(), shape, source));
         }
     }
 
     /// Adds the uniform members every shader of an agents world reads in its template.
-    fn agent_fields(&mut self, role: Role) {
+    fn agent_members(&mut self, role: Role) {
         if role == Role::Display {
-            self.field(
+            self.member(
                 "henad_texture",
-                FieldShape::Value(WgslType::Vec2U),
-                FieldSource::Texture,
+                MemberShape::Value(WgslType::Vec2U),
+                MemberSource::Texture,
             );
         } else {
-            self.field("henad_groups_x", FieldShape::Value(WgslType::U32), FieldSource::GroupsX);
-            self.field(
+            self.member(
+                "henad_groups_x",
+                MemberShape::Value(WgslType::U32),
+                MemberSource::GroupsX,
+            );
+            self.member(
                 "henad_agents",
-                FieldShape::Value(WgslType::U32),
-                FieldSource::Count(Domain::Agents),
+                MemberShape::Value(WgslType::U32),
+                MemberSource::Count(Domain::Agents),
             );
         }
-        self.field(
+        self.member(
             "henad_cells",
-            FieldShape::Value(WgslType::U32),
-            FieldSource::Count(Domain::Cells),
+            MemberShape::Value(WgslType::U32),
+            MemberSource::Count(Domain::Cells),
         );
     }
 
@@ -579,10 +673,10 @@ impl Emitter<'_> {
         }
         match domain {
             Domain::Agents => {
-                self.field(
+                self.member(
                     "henad_agents",
-                    FieldShape::Value(WgslType::U32),
-                    FieldSource::Count(Domain::Agents),
+                    MemberShape::Value(WgslType::U32),
+                    MemberSource::Count(Domain::Agents),
                 );
                 "params.henad_agents".to_owned()
             }
@@ -684,86 +778,8 @@ impl Emitter<'_> {
     }
 
     /// Returns the body of one pass, in a block of its own.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the naming, the uniform members and the body of one pass read in order"
-    )]
-    fn block(&mut self, k: usize, position: usize, pass: &Pass, program: &Program) -> Text {
-        let report = self.input.report.passes.get(position);
-        let mut names = vec![SlotName::Unnamed; program.slots];
-        let mut types: Vec<Option<WgslType>> = vec![None; program.slots];
-        let mut owners = BTreeMap::new();
-        for ((node, port), slot) in program.outputs.iter().chain(&program.inner_outputs) {
-            names[*slot] = SlotName::Value(value_name(*node, port));
-            owners.insert(*slot, *node);
-            let port_type = report.and_then(|report| {
-                let inner = || report.inner_outputs.get(node)?.get(port);
-                report
-                    .outputs
-                    .get(node)
-                    .and_then(|ports| ports.get(port))
-                    .or_else(inner)
-            });
-            types[*slot] = port_type
-                .and_then(|port_type| port_type.value_type.as_ref())
-                .and_then(WgslType::of);
-        }
-        for (slot, value) in &program.constants {
-            names[*slot] = literal(*value).map_or(SlotName::HostOnly, SlotName::Literal);
-            types[*slot] = WgslType::of_value(*value);
-        }
-        let mut host = BTreeMap::new();
-        for (slot, param) in &program.params {
-            let descriptor = &self.input.document.params[*param];
-            let wgsl = match descriptor.kind() {
-                ParamKind::F32 { .. } => WgslType::F32,
-                ParamKind::Bool { .. } => WgslType::Bool,
-                _ => WgslType::U32,
-            };
-            names[*slot] = SlotName::Value(format!("henad_param_{}", descriptor.id()));
-            types[*slot] = Some(wgsl);
-            host.insert(
-                *slot,
-                (FieldShape::Value(wgsl), FieldSource::Slot { position, slot: *slot }),
-            );
-        }
-        name_running(&program.element, &mut names, &mut types);
-        // A prelude value that reads the tick changes within a submission, and the shader computes it.
-        let mut on_device: BTreeSet<usize> = BTreeSet::new();
-        let mut device_prelude = Vec::new();
-        for instruction in &program.prelude {
-            let reads_device = matches!(instruction.operation, Operation::Tick)
-                || instruction
-                    .operation
-                    .operands()
-                    .iter()
-                    .any(|slot| on_device.contains(slot));
-            if reads_device {
-                on_device.extend(defined(instruction));
-                device_prelude.push(instruction);
-            } else {
-                for slot in defined(instruction) {
-                    if let Some(wgsl) = types.get(slot).copied().flatten() {
-                        host.insert(slot, (FieldShape::Value(wgsl), FieldSource::Slot { position, slot }));
-                    }
-                }
-            }
-        }
-        let mut block = Block {
-            k,
-            position,
-            pass,
-            names,
-            types,
-            host,
-            used_host: BTreeSet::new(),
-            owners,
-            iteration: self
-                .input
-                .outer_iteration
-                .map_or_else(|| "0u".to_owned(), |word| format!("{word}u")),
-            deferred: Vec::new(),
-        };
+    fn block(&mut self, pass_index: usize, position: usize, pass: &Pass, program: &Program) -> Text {
+        let (mut block, device_prelude) = Block::new(self.input, pass_index, position, pass, program);
         if !program.post.is_empty() && self.role != Role::Reduce {
             self.refuse(
                 &pass.id,
@@ -805,62 +821,15 @@ impl Emitter<'_> {
         if matches!(self.role, Role::Step { .. }) {
             self.probe_tallies(&mut block, indent, &mut inner);
         }
-        for &lane in &written {
-            let Some(wgsl) = self.input.lanes.get(lane).and_then(|plan| plan.wgsl) else {
-                continue;
-            };
-            let id = &self.input.lanes[lane].id;
-            let value = if wgsl == WgslType::Bool {
-                format!("u32(henad_write_{id})")
-            } else {
-                format!("henad_write_{id}")
-            };
-            if let Some(field) = self.input.lanes[lane].merged {
-                let label = self
-                    .input
-                    .agents
-                    .map(|plan| plan.fields[field].label())
-                    .unwrap_or_default();
-                inner.push(&format!("{indent}{label}[henad_slot] = {value};\n"));
-                continue;
-            }
-            let line = self.store(lane, "henad_index", &value, indent);
-            inner.push(&line);
-        }
+        let stores = self.staged_stores(&written, indent);
+        inner.push(&stores);
         for line in std::mem::take(&mut block.deferred) {
             inner.push(&format!("{indent}{line}\n"));
         }
         self.tally_offset += program.tallies;
         let mut text = Text::default();
-        let enabled = match &pass.enabled {
-            PassEnabled::Param(_) => {
-                let name = self.field_name(k, "henad_enabled");
-                self.field(
-                    &name,
-                    FieldShape::Value(WgslType::U32),
-                    FieldSource::Enabled { position },
-                );
-                Some(name)
-            }
-            PassEnabled::Literal(_) => None,
-        };
+        let condition = self.condition(pass_index, position, pass);
         text.text.push_str(&format!("    // Pass '{}'.\n", pass.id));
-        // A pass of an agents world runs over its own domain, and a shader can run more invocations than it has.
-        let guard = match (self.input.agents, self.role, pass.domain) {
-            (Some(_), Role::Step { .. } | Role::Reduce | Role::Action | Role::Color, Some(Domain::Agents)) => {
-                Some("henad_index < params.henad_agents")
-            }
-            (Some(_), Role::Step { .. } | Role::Reduce | Role::Action | Role::Color, Some(Domain::Cells)) => {
-                Some("henad_index < params.henad_cells")
-            }
-            _ => None,
-        };
-        let condition = match (&enabled, guard) {
-            (Some(name), Some(guard)) => Some(format!("params.{name} != 0u && {guard}")),
-            (Some(name), None) => Some(format!("params.{name} != 0u")),
-            (None, Some(guard)) => Some(guard.to_owned()),
-            (None, None) => None,
-        };
         match &condition {
             Some(condition) => text.push(&format!("    if ({condition}) {{\n")),
             None => text.push("    {\n"),
@@ -878,9 +847,9 @@ impl Emitter<'_> {
             let SlotName::Value(value) = &block.names[slot] else {
                 continue;
             };
-            let member = self.field_name(k, value);
-            self.field(&member, shape, source);
-            let read = if shape == FieldShape::Value(WgslType::Bool) {
+            let member = self.member_name(pass_index, value);
+            self.member(&member, shape, source);
+            let read = if shape == MemberShape::Value(WgslType::Bool) {
                 format!("params.{member} != 0u")
             } else {
                 format!("params.{member}")
@@ -896,6 +865,73 @@ impl Emitter<'_> {
         text
     }
 
+    /// Returns the lines that store the staged write `henad_write_<lane>` of each lane of `written` at the element: a
+    /// merged lane into its field at the slot, every other lane into its buffer.
+    fn staged_stores(&mut self, written: &[usize], indent: &str) -> String {
+        let mut lines = String::new();
+        for &lane in written {
+            let Some(wgsl) = self.input.lanes.get(lane).and_then(|plan| plan.wgsl) else {
+                continue;
+            };
+            let id = &self.input.lanes[lane].id;
+            let value = if wgsl == WgslType::Bool {
+                format!("u32(henad_write_{id})")
+            } else {
+                format!("henad_write_{id}")
+            };
+            if let Some(field) = self.input.lanes[lane].merged {
+                let label = self
+                    .input
+                    .agents
+                    .map(|plan| plan.fields[field].label())
+                    .unwrap_or_default();
+                lines.push_str(&format!("{indent}{label}[henad_slot] = {value};\n"));
+                continue;
+            }
+            lines.push_str(&self.store(lane, "henad_index", &value, indent));
+        }
+        lines
+    }
+
+    /// Returns the condition the body of `pass`, at `position` of the document and at `pass_index` among the
+    /// shader's passes, runs under: its enabled flag, when a parameter turns it off, and its [`Self::guard`].
+    fn condition(&mut self, pass_index: usize, position: usize, pass: &Pass) -> Option<String> {
+        let enabled = match &pass.enabled {
+            PassEnabled::Param(_) => {
+                let name = self.member_name(pass_index, "henad_enabled");
+                self.member(
+                    &name,
+                    MemberShape::Value(WgslType::U32),
+                    MemberSource::Enabled { position },
+                );
+                Some(name)
+            }
+            PassEnabled::Literal(_) => None,
+        };
+        match (enabled, self.guard(pass)) {
+            (Some(name), Some(guard)) => Some(format!("params.{name} != 0u && {guard}")),
+            (Some(name), None) => Some(format!("params.{name} != 0u")),
+            (None, Some(guard)) => Some(guard.to_owned()),
+            (None, None) => None,
+        }
+    }
+
+    /// Returns the test that keeps the invocations of a linear pass of an agents world within the domain of `pass`,
+    /// `None` for a shader of a grid, a display or a merge, and for a pass with no domain.
+    ///
+    /// A pass of an agents world runs over its own domain, and a shader can run more invocations than it has.
+    fn guard(&self, pass: &Pass) -> Option<&'static str> {
+        if self.input.agents.is_none()
+            || !matches!(self.role, Role::Step { .. } | Role::Reduce | Role::Action | Role::Color)
+        {
+            return None;
+        }
+        match pass.domain? {
+            Domain::Agents => Some("henad_index < params.henad_agents"),
+            Domain::Cells => Some("henad_index < params.henad_cells"),
+        }
+    }
+
     /// Writes the tally of each probe of the pass of `block`: under the counting block, 1 into the probe's slot of
     /// `henad_fire_tally` for an element at which the probe's output holds.
     fn probe_tallies(&mut self, block: &mut Block<'_>, indent: &str, text: &mut Text) {
@@ -909,10 +945,10 @@ impl Emitter<'_> {
         if probes.is_empty() {
             return;
         }
-        self.field(
+        self.member(
             "henad_count_fires",
-            FieldShape::Value(WgslType::U32),
-            FieldSource::CountFires,
+            MemberShape::Value(WgslType::U32),
+            MemberSource::CountFires,
         );
         for probe in probes {
             let fired = self.slot(block, probe.slot, probe.node);
@@ -1100,13 +1136,13 @@ impl Emitter<'_> {
                     );
                 }
                 let exponent = self.slot(block, *exponent, node);
-                let member = self.field_name(block.k, &format!("henad_powers_n{}", node.number()));
-                self.field(
+                let member = self.member_name(block.pass_index, &format!("henad_powers_n{}", node.number()));
+                self.member(
                     &member,
-                    FieldShape::Table {
+                    MemberShape::Table {
                         len: max.saturating_add(1),
                     },
-                    FieldSource::Table {
+                    MemberSource::Table {
                         position: block.position,
                         base: *base,
                         max: *max,
@@ -1215,7 +1251,7 @@ impl Emitter<'_> {
                     let mut first = true;
                     for rule in rules.iter().filter(|rule| rule.phase == phase) {
                         let when = self.slot(block, rule.when, node);
-                        let to = match (rule.to_input, rule.to) {
+                        let variant = match (rule.to_input, rule.to) {
                             (Some(slot), _) => self.slot(block, slot, node),
                             (None, Some(variant)) => format!("{variant}u"),
                             (None, None) => {
@@ -1229,7 +1265,7 @@ impl Emitter<'_> {
                             "{indent}    {keyword} ({start} == {}u && {when}) {{\n",
                             rule.from
                         ));
-                        lines.push_str(&format!("{indent}        {name} = {to};\n"));
+                        lines.push_str(&format!("{indent}        {name} = {variant};\n"));
                         if let Some(fired_name) = fired_names.get(rule.fired) {
                             lines.push_str(&format!("{indent}        {fired_name} = true;\n"));
                         }
@@ -1275,18 +1311,18 @@ impl Emitter<'_> {
             }
             Operation::Draw { form, draw, input } => {
                 let input = self.slot(block, *input, node);
-                let key = self.field_name(block.k, &format!("henad_key_n{}", node.number()));
-                self.field(
+                let key = self.member_name(block.pass_index, &format!("henad_key_n{}", node.number()));
+                self.member(
                     &key,
-                    FieldShape::Value(WgslType::U32),
-                    FieldSource::Key {
+                    MemberShape::Value(WgslType::U32),
+                    MemberSource::Key {
                         position: block.position,
                         draw: *draw,
                     },
                 );
                 let tick = if self.role == Role::Action {
-                    let press = self.field_name(block.k, "henad_press");
-                    self.field(&press, FieldShape::Value(WgslType::U32), FieldSource::Press);
+                    let press = self.member_name(block.pass_index, "henad_press");
+                    self.member(&press, MemberShape::Value(WgslType::U32), MemberSource::Press);
                     format!("params.{press}")
                 } else {
                     self.reads_tick = true;
@@ -1299,7 +1335,10 @@ impl Emitter<'_> {
                 } else {
                     "henad_index"
                 };
-                let bits = format!("draw_core(params.{key}, {element}, {tick}, {}, 0u)", block.iteration);
+                let bits = format!(
+                    "draw_core(params.{key}, {element}, {tick}, {}, 0u)",
+                    block.iteration.as_deref().unwrap_or("0u")
+                );
                 let expression = match form {
                     DrawForm::Float => {
                         self.uses.random_float = true;
@@ -1376,7 +1415,7 @@ impl Emitter<'_> {
                 lines.push_str(&format!("{indent}if ({when}) {{\n"));
                 for (k, (dx, dy)) in offsets.iter().enumerate() {
                     let at = format!("henad_at_{k}");
-                    let load = self.load(*lane, &format!("u32({at}.y) * params.henad_width + u32({at}.x)"));
+                    let load = self.load(*lane, &cell_index(&at));
                     let equal = if compared.is_some_and(WgslType::is_vector) {
                         format!("all({load} == {value})")
                     } else {
@@ -1432,7 +1471,11 @@ impl Emitter<'_> {
             }
             Operation::Color { index, len } if self.role == Role::Color => {
                 let index = self.slot(block, *index, node);
-                match self.packed_palette_of(block, node) {
+                let packed = self
+                    .palette_id(block, node)
+                    .and_then(|id| self.packed_palette(&id))
+                    .map(|(constant, _)| constant);
+                match packed {
                     Some(constant) if *len > 0 => {
                         lines.push_str(&format!(
                             "{indent}henad_color = {constant}[min({index}, {}u)];\n",
@@ -1447,7 +1490,7 @@ impl Emitter<'_> {
                     self.refuse(&pass_id, Some(node), "colours outside a view pass");
                 }
                 let index = self.slot(block, *index, node);
-                let palette = self.palette_of(block, node);
+                let palette = self.palette_id(block, node).and_then(|id| self.palette(&id));
                 match palette {
                     Some(constant) if *len > 0 => {
                         let colors = format!("henad_colors_n{}", node.number());
@@ -1471,7 +1514,7 @@ impl Emitter<'_> {
                 ));
             }
             Operation::World => {
-                self.field("henad_world", FieldShape::Value(WgslType::Vec2F), FieldSource::World);
+                self.member("henad_world", MemberShape::Value(WgslType::Vec2F), MemberSource::World);
                 let_out!("params.henad_world".to_owned());
             }
             Operation::Grid => let_out!("vec2<u32>(params.henad_width, params.henad_height)".to_owned()),
@@ -1681,9 +1724,7 @@ impl Emitter<'_> {
                 let xy = self.slot(block, *xy, node);
                 let valid = self.target(block, *valid_out, node);
                 lines.push_str(&format!("{indent}let {valid} = {};\n", inside(&xy, signed)));
-                let_out!(format!(
-                    "select(4294967295u, u32({xy}.y) * params.henad_width + u32({xy}.x), {valid})"
-                ));
+                let_out!(cell_or_none(&xy, &valid));
             }
             Operation::CellOf { p, xy_out, valid_out } => {
                 let p = self.slot(block, *p, node);
@@ -1691,9 +1732,7 @@ impl Emitter<'_> {
                 let valid = self.target(block, *valid_out, node);
                 lines.push_str(&format!("{indent}let {xy} = vec2<i32>(i32({p}.x), i32({p}.y));\n"));
                 lines.push_str(&format!("{indent}let {valid} = {};\n", inside(&xy, true)));
-                let_out!(format!(
-                    "select(4294967295u, u32({xy}.y) * params.henad_width + u32({xy}.x), {valid})"
-                ));
+                let_out!(cell_or_none(&xy, &valid));
             }
             Operation::CellXyOf { cell } => {
                 let cell = self.slot(block, *cell, node);
@@ -1704,22 +1743,19 @@ impl Emitter<'_> {
             Operation::Offset {
                 xy,
                 by,
-                bounded,
+                boundary,
                 cell_out,
                 valid_out,
             } => {
                 let (xy, by) = (self.slot(block, *xy, node), self.slot(block, *by, node));
                 let cell = self.target(block, *cell_out, node);
                 let valid = self.target(block, *valid_out, node);
-                let bounded = self.bounded(*bounded);
+                let bounded = self.bounded(*boundary);
                 self.uses.step = true;
                 let step = format!("henad_step_n{}", node.number());
                 lines.push_str(&format!("{indent}let {step} = henad_step({xy}, {by}, {bounded});\n"));
                 lines.push_str(&format!("{indent}let {valid} = {step}.z != 0i;\n"));
-                lines.push_str(&format!(
-                    "{indent}let {cell} = select(4294967295u, u32({step}.y) * params.henad_width + u32({step}.x), \
-                     {valid});\n"
-                ));
+                lines.push_str(&format!("{indent}let {cell} = {};\n", cell_or_none(&step, &valid)));
                 let_out!(format!("{step}.xy"));
             }
             Operation::HeadingOctant { v } => {
@@ -1768,9 +1804,15 @@ impl Emitter<'_> {
                 let vector = Self::type_of(block, *value).is_some_and(WgslType::is_vector);
                 let value = self.slot(block, *value, node);
                 let lane = self.sum_lanes.len();
-                self.sum_lanes.push((block.position, *sum));
+                self.sum_lanes.push(SumLane {
+                    pass: block.position,
+                    sum: *sum,
+                });
                 if vector {
-                    self.sum_lanes.push((block.position, *sum));
+                    self.sum_lanes.push(SumLane {
+                        pass: block.position,
+                        sum: *sum,
+                    });
                     lines.push_str(&format!(
                         "{indent}henad_sum_{lane} = henad_sum_{lane} + {value}.x;\n{indent}henad_sum_{} = \
                          henad_sum_{} + {value}.y;\n",
@@ -1805,14 +1847,10 @@ impl Emitter<'_> {
         let inner = format!("{indent}    ");
         head.push_str(&self.remember_accumulators(block, node, &repeat.accumulators, &inner));
         let iteration = format!("henad_iteration_n{}", node.number());
-        let word = if block.iteration == "0u" && self.input.outer_iteration.is_none() {
-            k.clone()
-        } else {
-            format!("{} * {max}u + {k}", block.iteration)
-        };
+        let word = iteration_word(block, &k, max);
         head.push_str(&format!("{inner}let {iteration} = {word};\n"));
         text.node_line(&pass_id, node, &head);
-        let outer = std::mem::replace(&mut block.iteration, iteration);
+        let outer = block.iteration.replace(iteration);
         for instruction in &repeat.body {
             self.instruction(block, instruction, &inner, text);
         }
@@ -1838,14 +1876,18 @@ impl Emitter<'_> {
             .unwrap_or_default()
     }
 
-    /// Returns the WGSL `bool` of whether a stencil skips the positions past the edge, `bounded` or the domain grid's
-    /// own boundary when it is `None`.
-    fn bounded(&self, bounded: Option<bool>) -> &'static str {
-        let own = matches!(
-            self.input.document.world,
-            crate::document::World::Grid(grid) if grid.boundary == Boundary::Bounded
-        );
-        if bounded.unwrap_or(own) { "true" } else { "false" }
+    /// Returns the WGSL `bool` of whether a stencil skips the positions past the edge of `boundary`, or of the domain
+    /// grid's own boundary when it is `None`.
+    fn bounded(&self, boundary: Option<Boundary>) -> &'static str {
+        let own = match self.input.document.world {
+            crate::document::World::Grid(grid) => grid.boundary,
+            _ => Boundary::Torus,
+        };
+        if boundary.unwrap_or(own) == Boundary::Bounded {
+            "true"
+        } else {
+            "false"
+        }
     }
 
     /// Writes the head of a region's accumulators: one `var` each, seeded from its `init` or its identity.
@@ -1901,7 +1943,7 @@ impl Emitter<'_> {
             self.uses.own_cell = true;
             "vec2<i32>(henad_own_cell)".to_owned()
         };
-        let bounded = self.bounded(fold.bounded);
+        let bounded = self.bounded(fold.boundary);
         self.uses.step = true;
         let radix = fold.offsets.len();
         let offsets: Vec<String> = fold
@@ -1909,12 +1951,11 @@ impl Emitter<'_> {
             .iter()
             .map(|(dx, dy)| format!("vec2<i32>({dx}i, {dy}i)"))
             .collect();
-        let [k_slot, offset_slot, xy_slot, cell_slot, diagonal_slot] = fold.inner;
-        let k = self.target(block, k_slot, node);
-        let offset = self.target(block, offset_slot, node);
-        let xy = self.target(block, xy_slot, node);
-        let cell = self.target(block, cell_slot, node);
-        let diagonal = self.target(block, diagonal_slot, node);
+        let k = self.target(block, fold.k, node);
+        let offset = self.target(block, fold.offset, node);
+        let xy = self.target(block, fold.xy, node);
+        let cell = self.target(block, fold.cell, node);
+        let diagonal = self.target(block, fold.diagonal, node);
         head.push_str(&format!(
             "{indent}var henad_offsets_n{n} = array<vec2<i32>, {radix}>({});\n",
             offsets.join(", ")
@@ -1933,22 +1974,16 @@ impl Emitter<'_> {
             "{inner}if (henad_at_n{n}.z == 0i) {{\n{inner}    continue;\n{inner}}}\n"
         ));
         head.push_str(&format!("{inner}let {xy} = henad_at_n{n}.xy;\n"));
-        head.push_str(&format!(
-            "{inner}let {cell} = u32({xy}.y) * params.henad_width + u32({xy}.x);\n"
-        ));
+        head.push_str(&format!("{inner}let {cell} = {};\n", cell_index(&xy)));
         head.push_str(&format!(
             "{inner}let {diagonal} = {offset}.x != 0i && {offset}.y != 0i;\n"
         ));
         head.push_str(&self.remember_accumulators(block, node, &fold.accumulators, &inner));
         let iteration = format!("henad_iteration_n{n}");
-        let word = if block.iteration == "0u" && self.input.outer_iteration.is_none() {
-            k.clone()
-        } else {
-            format!("{} * {radix}u + {k}", block.iteration)
-        };
+        let word = iteration_word(block, &k, radix);
         head.push_str(&format!("{inner}let {iteration} = {word};\n"));
         text.node_line(&pass_id, node, &head);
-        let outer = std::mem::replace(&mut block.iteration, iteration);
+        let outer = block.iteration.replace(iteration);
         for instruction in &fold.body {
             self.instruction(block, instruction, &inner, text);
         }
@@ -1991,27 +2026,26 @@ impl Emitter<'_> {
         self.uses.counters = true;
         self.uses.space.insert("axis_delta");
         self.uses.space.insert("TORUS");
-        self.field("henad_world", FieldShape::Value(WgslType::Vec2F), FieldSource::World);
-        self.field(
+        self.member("henad_world", MemberShape::Value(WgslType::Vec2F), MemberSource::World);
+        self.member(
             "henad_hash_grid",
-            FieldShape::Value(WgslType::Vec2U),
-            FieldSource::HashGrid,
+            MemberShape::Value(WgslType::Vec2U),
+            MemberSource::HashGrid,
         );
-        self.field(
+        self.member(
             "henad_hash_cell",
-            FieldShape::Value(WgslType::Vec2F),
-            FieldSource::HashCell,
+            MemberShape::Value(WgslType::Vec2F),
+            MemberSource::HashCell,
         );
-        self.field(
+        self.member(
             "henad_hash_inv",
-            FieldShape::Value(WgslType::Vec2F),
-            FieldSource::HashInverse,
+            MemberShape::Value(WgslType::Vec2F),
+            MemberSource::HashInverse,
         );
-        let [k_slot, other_slot, delta_slot, dist_slot] = fold.inner;
-        let k = self.target(block, k_slot, node);
-        let other = self.target(block, other_slot, node);
-        let delta = self.target(block, delta_slot, node);
-        let dist = self.target(block, dist_slot, node);
+        let k = self.target(block, fold.k, node);
+        let other = self.target(block, fold.other, node);
+        let delta = self.target(block, fold.delta, node);
+        let dist = self.target(block, fold.dist_sq, node);
         let position = format!("henad_there_n{n}");
         let load = if let Some(lane) = self.input.agents.and_then(|plan| plan.position_lane) {
             self.load(lane, &format!("henad_other_n{n}"))
@@ -2091,7 +2125,7 @@ impl Emitter<'_> {
         let iteration = format!("henad_iteration_n{n}");
         head.push_str(&format!("{inner}let {iteration} = henad_other_n{n};\n"));
         text.node_line(&pass_id, node, &head);
-        let outer = std::mem::replace(&mut block.iteration, iteration);
+        let outer = block.iteration.replace(iteration);
         for instruction in &fold.body {
             self.instruction(block, instruction, &inner, text);
         }
@@ -2103,46 +2137,41 @@ impl Emitter<'_> {
         );
     }
 
-    /// Returns the constant of the packed RGBA words of the palette that the `view.color` node `node` names, declaring
-    /// it once.
-    fn packed_palette_of(&mut self, block: &Block<'_>, node: NodeId) -> Option<String> {
+    /// Returns the id of the palette that the `view.color` node `node` of the pass of `block` names.
+    fn palette_id(&self, block: &Block<'_>, node: NodeId) -> Option<String> {
         let found = block.pass.body.nodes.iter().find(|candidate| candidate.id == node)?;
-        let def = crate::catalogue::lookup(&found.op, self.input.document.library)?;
-        let config = effective_config(def, found);
-        let id = config.get("palette").and_then(ConfigValue::as_str)?;
-        let constant = self.palette(id)?;
-        let colors = self.palettes.remove(&constant)?;
-        let packed = constant.replacen("henad_", "henad_packed_", 1);
-        self.packed.insert(packed.clone(), colors);
-        Some(packed)
+        let definition = crate::catalogue::lookup(&found.op, self.input.document.library)?;
+        let config = effective_config(definition, found);
+        config.get("palette").and_then(ConfigValue::as_str).map(str::to_owned)
+    }
+
+    /// Returns the first category lane of the document, with its category, among the lanes over `domain`, or among
+    /// every lane when `domain` is `None`.
+    fn first_category_lane(&self, domain: Option<Domain>) -> Option<(usize, String)> {
+        self.input
+            .document
+            .lanes
+            .iter()
+            .enumerate()
+            .find_map(|(position, lane)| match &lane.value_type {
+                crate::types::ValueType::Category(category) if domain.is_none_or(|domain| lane.domain == domain) => {
+                    Some((position, category.clone()))
+                }
+                _ => None,
+            })
     }
 
     /// Returns the colour pass of an agents world with no view pass over agents: the first category lane over agents
     /// coloured by its category, or white.
     fn default_agent_color(&mut self) -> String {
         let document = self.input.document;
-        let lane = document
-            .lanes
-            .iter()
-            .enumerate()
-            .find_map(|(position, lane)| match &lane.value_type {
-                crate::types::ValueType::Category(category) if lane.domain == Domain::Agents => {
-                    Some((position, category.clone()))
-                }
-                _ => None,
-            });
-        let Some((position, category)) = lane else {
+        let Some((position, category)) = self.first_category_lane(Some(Domain::Agents)) else {
             return "    // No view pass over agents and no category lane: every agent is white.\n".to_owned();
         };
-        let Some(constant) = self.palette(&category) else {
+        let Some((packed, len)) = self.packed_palette(&category) else {
             return String::new();
         };
-        let Some(colors) = self.palettes.remove(&constant) else {
-            return String::new();
-        };
-        let last = colors.len() - 1;
-        let packed = constant.replacen("henad_", "henad_packed_", 1);
-        self.packed.insert(packed.clone(), colors);
+        let last = len - 1;
         let load = self.load(position, "henad_index");
         format!(
             "    // No view pass over agents: the lane '{}' coloured by its category.\n    if (henad_index < \
@@ -2151,46 +2180,43 @@ impl Emitter<'_> {
         )
     }
 
-    /// Returns the constant of the palette that the `view.color` node `node` names, declaring it once.
-    fn palette_of(&mut self, block: &Block<'_>, node: NodeId) -> Option<String> {
-        let found = block.pass.body.nodes.iter().find(|candidate| candidate.id == node)?;
-        let def = crate::catalogue::lookup(&found.op, self.input.document.library)?;
-        let config = effective_config(def, found);
-        let id = config.get("palette").and_then(ConfigValue::as_str)?;
-        self.palette(id)
-    }
-
-    /// Returns the constant of the palette `id`, a `[[palette]]` table or a category, declaring it once.
-    fn palette(&mut self, id: &str) -> Option<String> {
+    /// Returns the name of the palette `id`, a `[[palette]]` table or a category, after its kind, with its colours.
+    /// `None` for an unknown id or a palette with no colour.
+    fn palette_colors(&self, id: &str) -> Option<(String, Vec<Color>)> {
         let document = self.input.document;
-        let (constant, colors) = if let Some(palette) = document.palettes.iter().find(|palette| palette.id == id) {
-            (format!("henad_palette_{id}"), palette.colors.clone())
+        let (name, colors) = if let Some(palette) = document.palettes.iter().find(|palette| palette.id == id) {
+            (format!("palette_{id}"), palette.colors.clone())
         } else {
             let category = document.categories.iter().find(|category| category.id == id)?;
             (
-                format!("henad_category_{id}"),
+                format!("category_{id}"),
                 category.variants.iter().map(|variant| variant.color).collect(),
             )
         };
-        if colors.is_empty() {
-            return None;
-        }
+        (!colors.is_empty()).then_some((name, colors))
+    }
+
+    /// Returns the constant of the palette `id`, declaring it once.
+    fn palette(&mut self, id: &str) -> Option<String> {
+        let (name, colors) = self.palette_colors(id)?;
+        let constant = format!("henad_{name}");
         self.palettes.insert(constant.clone(), colors);
         Some(constant)
+    }
+
+    /// Returns the constant of the packed RGBA words of the palette `id`, declaring it once, with its number of colours.
+    fn packed_palette(&mut self, id: &str) -> Option<(String, usize)> {
+        let (name, colors) = self.palette_colors(id)?;
+        let constant = format!("henad_packed_{name}");
+        let len = colors.len();
+        self.packed.insert(constant.clone(), colors);
+        Some((constant, len))
     }
 
     /// Returns the view of a document with no view pass: the first category lane coloured by its category, or black.
     fn default_view(&mut self) -> String {
         let document = self.input.document;
-        let lane = document
-            .lanes
-            .iter()
-            .enumerate()
-            .find_map(|(position, lane)| match &lane.value_type {
-                crate::types::ValueType::Category(category) => Some((position, category.clone())),
-                _ => None,
-            });
-        let Some((position, category)) = lane else {
+        let Some((position, category)) = self.first_category_lane(None) else {
             return "    // No view pass and no category lane: every cell is black.\n".to_owned();
         };
         let Some(constant) = self.palette(&category) else {
@@ -2202,6 +2228,52 @@ impl Emitter<'_> {
             "    // No view pass: the lane '{}' coloured by its category.\n    var henad_colors = {constant};\n    henad_color = henad_colors[min({load}, {last}u)];\n",
             document.lanes[position].id
         )
+    }
+
+    /// Adds a binding for each lane buffer some pass of the shader reads or writes: one read-write buffer when a pass
+    /// writes it, a read-only one otherwise, and the `_in` and `_out` pair of a dual buffer the shader writes.
+    fn bind_lanes(&self, bindings: &mut Bindings) {
+        for (lane, element) in self.bound_lanes() {
+            let (read, write) = self.lane_bindings(lane);
+            let writes = self
+                .input
+                .layout
+                .group_of(lane)
+                .is_some_and(|group| self.group_written(group));
+            if read == write {
+                bindings.storage(&read, !writes, element);
+            } else {
+                bindings.storage(&read, true, element);
+                bindings.storage(&write, false, element);
+            }
+        }
+    }
+
+    /// Returns the declaration of the workgroup array `henad_fire_tally`, empty when the shader counts no probe.
+    fn fire_tally_declaration(&self) -> String {
+        let fired = self.fire_slots.len();
+        if fired == 0 {
+            return String::new();
+        }
+        format!("var<workgroup> henad_fire_tally: array<atomic<u32>, {fired}>;\n\n")
+    }
+
+    /// Returns `body` inside the bounds check of a grid's cell, after the lines that name the cell and its index.
+    fn grid_cell_block(&self, body: Text) -> Text {
+        let mut text = Text::default();
+        text.push("    if (henad_id.x < params.henad_width && henad_id.y < params.henad_height) {\n");
+        let mut inner = Text::default();
+        if self.uses.neighbors {
+            inner.push("    henad_cell = henad_id.xy;\n");
+        }
+        if self.uses.own_cell {
+            inner.push("    let henad_own_cell = henad_id.xy;\n");
+        }
+        inner.push("    let henad_index = henad_id.y * params.henad_width + henad_id.x;\n");
+        inner.append(body);
+        text.append(inner.indented());
+        text.push("    }\n");
+        text
     }
 
     /// Writes the head of a shader into `text`: its comment, imports, uniform block, bindings, palettes and helpers.
@@ -2219,7 +2291,6 @@ impl Emitter<'_> {
         if self.uses.random_float {
             rng.push("random_float");
         }
-        rng.extend(self.uses.rng.iter().copied());
         if !rng.is_empty() {
             text.text
                 .push_str(&format!("#import henad::rng::{{{}}}\n", rng.join(", ")));
@@ -2274,7 +2345,8 @@ impl Emitter<'_> {
         for (constant, colors) in &self.packed {
             let words: Vec<String> = colors
                 .iter()
-                .map(|color| format!("{:#010x}u", packed_color(*color)))
+                // Packed RGBA, the word the point view reads.
+                .map(|color| format!("{:#010x}u", u32::from_le_bytes(*color)))
                 .collect();
             text.text.push_str(&format!(
                 "const {constant} = array<u32, {}>({});\n\n",
@@ -2332,46 +2404,8 @@ impl Emitter<'_> {
         };
         let tallies = self.tally_offset;
         let tally_base = FIRST_COUNTER + plan.counters;
-        let mut bindings: Vec<ShaderBinding> = Vec::new();
-        let mut declarations = String::new();
-        let storage = |read_only: bool| BindingKind::Storage { read_only };
-        let bind = |bindings: &mut Vec<ShaderBinding>, declarations: &mut String, name: &str, kind, wgsl: &str| {
-            declarations.push_str(&format!("@group(0) @binding({}) {wgsl};\n", bindings.len()));
-            bindings.push(ShaderBinding::new(name.to_owned(), kind));
-        };
-        for (lane, element) in self.bound_lanes() {
-            let (read, write) = self.lane_bindings(lane);
-            let writes = self
-                .input
-                .layout
-                .group_of(lane)
-                .is_some_and(|group| self.group_written(group));
-            if read == write {
-                let access = if writes { "read_write" } else { "read" };
-                bind(
-                    &mut bindings,
-                    &mut declarations,
-                    &read,
-                    storage(!writes),
-                    &format!("var<storage, {access}> {read}: array<{element}>"),
-                );
-            } else {
-                bind(
-                    &mut bindings,
-                    &mut declarations,
-                    &read,
-                    storage(true),
-                    &format!("var<storage, read> {read}: array<{element}>"),
-                );
-                bind(
-                    &mut bindings,
-                    &mut declarations,
-                    &write,
-                    storage(false),
-                    &format!("var<storage, read_write> {write}: array<{element}>"),
-                );
-            }
-        }
+        let mut bindings = Bindings::default();
+        self.bind_lanes(&mut bindings);
         let merged = match self.role {
             Role::Merge(field) => Some(field),
             _ => None,
@@ -2380,25 +2414,10 @@ impl Emitter<'_> {
             let read = self.fields_read.contains(&index);
             let written = self.fields_written.contains(&index) || merged == Some(index);
             if read || written {
-                let access = if written { "read_write" } else { "read" };
-                let label = field.label();
-                bind(
-                    &mut bindings,
-                    &mut declarations,
-                    &label,
-                    storage(!written),
-                    &format!("var<storage, {access}> {label}: array<{}>", field.wgsl.stored()),
-                );
+                bindings.storage(&field.label(), !written, field.wgsl.stored());
             }
             if self.deposited.contains(&index) || merged == Some(index) {
-                let label = field.accum_label();
-                bind(
-                    &mut bindings,
-                    &mut declarations,
-                    &label,
-                    storage(false),
-                    &format!("var<storage, read_write> {label}: array<atomic<u32>>"),
-                );
+                bindings.storage(&field.accum_label(), false, "atomic<u32>");
             }
         }
         // The tick lives in the counters, read with an atomic load, and the step's last pass advances it.
@@ -2407,71 +2426,30 @@ impl Emitter<'_> {
             self.uses.counters = true;
         }
         if self.uses.hash {
-            bind(
-                &mut bindings,
-                &mut declarations,
-                "cell_start",
-                storage(true),
-                "var<storage, read> cell_start: array<u32>",
-            );
-            bind(
-                &mut bindings,
-                &mut declarations,
-                "sorted",
-                storage(true),
-                "var<storage, read> sorted: array<u32>",
-            );
+            bindings.storage("cell_start", true, "u32");
+            bindings.storage("sorted", true, "u32");
         }
         if self.uses.counters || (self.role == Role::Reduce && tallies > 0) {
-            bind(
-                &mut bindings,
-                &mut declarations,
+            bindings.storage(
                 "counters",
-                storage(false),
-                &format!(
-                    "var<storage, read_write> counters: array<atomic<u32>, {}>",
-                    plan.counter_words.max(1)
-                ),
+                false,
+                &format!("atomic<u32>, {}", plan.counter_words.max(1)),
             );
         }
         if self.role == Role::Reduce && !self.sum_lanes.is_empty() {
-            bind(
-                &mut bindings,
-                &mut declarations,
-                "partials",
-                storage(false),
-                "var<storage, read_write> partials: array<f32>",
-            );
+            bindings.storage("partials", false, "f32");
         }
         if self.role == Role::Color {
-            bind(
-                &mut bindings,
-                &mut declarations,
-                AGENT_COLORS,
-                storage(false),
-                &format!("var<storage, read_write> {AGENT_COLORS}: array<u32>"),
-            );
+            bindings.storage(AGENT_COLORS, false, "u32");
         }
         if self.role == Role::Display {
-            bind(
-                &mut bindings,
-                &mut declarations,
-                "output",
-                BindingKind::StorageTexture,
-                "var output: texture_storage_2d<rgba8unorm, write>",
-            );
+            bindings.texture();
         }
-        let uniform = UniformBlock::new(std::mem::take(&mut self.fields));
-        bind(
-            &mut bindings,
-            &mut declarations,
-            "params",
-            BindingKind::Uniform,
-            "var<uniform> params: HenadParams",
-        );
+        let uniform = UniformBlock::new(std::mem::take(&mut self.members));
+        bindings.uniform("params", "HenadParams");
 
         let mut text = Text::default();
-        self.header(&mut text, &uniform, &declarations);
+        self.header(&mut text, &uniform, &bindings.declarations);
         if self.role == Role::Reduce && tallies > 0 {
             text.text.push_str(&format!(
                 "var<workgroup> henad_partial: array<atomic<u32>, {tallies}>;\n\n"
@@ -2484,11 +2462,7 @@ impl Emitter<'_> {
             ));
         }
         let fired = self.fire_slots.len();
-        if fired > 0 {
-            text.text.push_str(&format!(
-                "var<workgroup> henad_fire_tally: array<atomic<u32>, {fired}>;\n\n"
-            ));
-        }
+        text.text.push_str(&self.fire_tally_declaration());
         let tick_line = if self.reads_tick {
             format!("    let henad_tick = atomicLoad(&counters[{TICK_WORD}u]);\n")
         } else {
@@ -2661,7 +2635,7 @@ impl Emitter<'_> {
         Emitted {
             text: text.text,
             ranges: text.ranges,
-            bindings,
+            bindings: bindings.list,
             uniform,
             counters: tallies,
             sum_lanes: self.sum_lanes,
@@ -2679,143 +2653,48 @@ impl Emitter<'_> {
             return self.assemble_agents(body);
         }
         let counters = self.tally_offset.max(1);
-        let mut bindings: Vec<ShaderBinding> = Vec::new();
-        let mut declarations = String::new();
-        let storage = |read_only: bool| BindingKind::Storage { read_only };
-        let bind = |bindings: &mut Vec<ShaderBinding>, declarations: &mut String, name: &str, kind, wgsl: &str| {
-            declarations.push_str(&format!("@group(0) @binding({}) {wgsl};\n", bindings.len()));
-            bindings.push(ShaderBinding::new(name.to_owned(), kind));
-        };
-        for (lane, element) in self.bound_lanes() {
-            let (read, write) = self.lane_bindings(lane);
-            let writes = self
-                .input
-                .layout
-                .group_of(lane)
-                .is_some_and(|group| self.group_written(group));
-            if read == write {
-                let access = if writes { "read_write" } else { "read" };
-                bind(
-                    &mut bindings,
-                    &mut declarations,
-                    &read,
-                    storage(!writes),
-                    &format!("var<storage, {access}> {read}: array<{element}>"),
-                );
-            } else {
-                bind(
-                    &mut bindings,
-                    &mut declarations,
-                    &read,
-                    storage(true),
-                    &format!("var<storage, read> {read}: array<{element}>"),
-                );
-                bind(
-                    &mut bindings,
-                    &mut declarations,
-                    &write,
-                    storage(false),
-                    &format!("var<storage, read_write> {write}: array<{element}>"),
-                );
-            }
-        }
+        let mut bindings = Bindings::default();
+        self.bind_lanes(&mut bindings);
         let writes_tick = matches!(self.role, Role::Step { writes_tick: true });
         let tick_read = if writes_tick { "henad_tick_in" } else { "henad_tick" };
         if self.reads_tick || writes_tick {
-            bind(
-                &mut bindings,
-                &mut declarations,
-                tick_read,
-                storage(true),
-                &format!("var<storage, read> {tick_read}: array<u32>"),
-            );
+            bindings.storage(tick_read, true, "u32");
         }
         if writes_tick {
-            bind(
-                &mut bindings,
-                &mut declarations,
-                "henad_tick_out",
-                storage(false),
-                "var<storage, read_write> henad_tick_out: array<u32>",
-            );
+            bindings.storage("henad_tick_out", false, "u32");
         }
         let fired = self.fire_slots.len();
         if fired > 0 {
             // The reduce tallies come first, and the step adds to the probes' words after them.
-            bind(
-                &mut bindings,
-                &mut declarations,
-                "counters",
-                storage(false),
-                "var<storage, read_write> counters: array<atomic<u32>>",
-            );
+            bindings.storage("counters", false, "atomic<u32>");
         }
-        let uniform = UniformBlock::new(std::mem::take(&mut self.fields));
-        bind(
-            &mut bindings,
-            &mut declarations,
-            "params",
-            BindingKind::Uniform,
-            "var<uniform> params: HenadParams",
-        );
+        let uniform = UniformBlock::new(std::mem::take(&mut self.members));
+        bindings.uniform("params", "HenadParams");
         match self.role {
             Role::Display => {
-                bind(
-                    &mut bindings,
-                    &mut declarations,
-                    "output",
-                    BindingKind::StorageTexture,
-                    "var output: texture_storage_2d<rgba8unorm, write>",
-                );
-                bind(
-                    &mut bindings,
-                    &mut declarations,
-                    "dims",
-                    BindingKind::Uniform,
-                    "var<uniform> dims: Dims",
-                );
+                bindings.texture();
+                bindings.uniform("dims", "Dims");
             }
             Role::Reduce => {
-                bind(
-                    &mut bindings,
-                    &mut declarations,
-                    "counters",
-                    storage(false),
-                    &format!("var<storage, read_write> counters: array<atomic<u32>, {counters}>"),
-                );
+                bindings.storage("counters", false, &format!("atomic<u32>, {counters}"));
                 if !self.sum_lanes.is_empty() {
-                    bind(
-                        &mut bindings,
-                        &mut declarations,
-                        "partials",
-                        storage(false),
-                        "var<storage, read_write> partials: array<f32>",
-                    );
+                    bindings.storage("partials", false, "f32");
                 }
             }
             Role::Step { .. } | Role::Action | Role::Color | Role::Merge(_) => {}
         }
 
         let mut text = Text::default();
-        self.header(&mut text, &uniform, &declarations);
+        self.header(&mut text, &uniform, &bindings.declarations);
         if self.role == Role::Reduce {
             text.text.push_str(&format!(
                 "var<workgroup> henad_partial: array<atomic<u32>, {counters}>;\n\n"
             ));
         }
-        if fired > 0 {
-            text.text.push_str(&format!(
-                "var<workgroup> henad_fire_tally: array<atomic<u32>, {fired}>;\n\n"
-            ));
-        }
+        text.text.push_str(&self.fire_tally_declaration());
         text.text.push_str(&format!(
             "@compute @workgroup_size({WORKGROUP_SIZE}, {WORKGROUP_SIZE})\n"
         ));
-        let cell_line = if self.uses.neighbors {
-            "    henad_cell = henad_id.xy;\n"
-        } else {
-            ""
-        };
         let tick_line = if self.reads_tick || writes_tick {
             format!("    let henad_tick = {tick_read}[0];\n")
         } else {
@@ -2841,16 +2720,7 @@ impl Emitter<'_> {
                     .push_str(&self.fire_zero_lines("henad_local", WORKGROUP_SIZE * WORKGROUP_SIZE));
                 // The bounds check guards a block. An early return would leave the end of `main` in non-uniform
                 // control flow.
-                text.push("    if (henad_id.x < params.henad_width && henad_id.y < params.henad_height) {\n");
-                let mut inner = Text::default();
-                inner.push(cell_line);
-                if self.uses.own_cell {
-                    inner.push("    let henad_own_cell = henad_id.xy;\n");
-                }
-                inner.push("    let henad_index = henad_id.y * params.henad_width + henad_id.x;\n");
-                inner.append(body);
-                text.append(inner.indented());
-                text.push("    }\n");
+                text.append(self.grid_cell_block(body));
                 text.text
                     .push_str(&self.fire_flush_lines("henad_local", WORKGROUP_SIZE * WORKGROUP_SIZE));
                 text.push("}\n");
@@ -2886,16 +2756,8 @@ impl Emitter<'_> {
                     text.text.push_str(&format!("    var henad_sum_{lane} = 0.0f;\n"));
                 }
                 text.push(&tick_line);
-                text.push("    if (henad_id.x < params.henad_width && henad_id.y < params.henad_height) {\n");
-                let mut inner = Text::default();
-                inner.push(cell_line);
-                if self.uses.own_cell {
-                    inner.push("    let henad_own_cell = henad_id.xy;\n");
-                }
-                inner.push("    let henad_index = henad_id.y * params.henad_width + henad_id.x;\n");
-                inner.append(body);
-                text.append(inner.indented());
-                text.push("    }\n    workgroupBarrier();\n");
+                text.append(self.grid_cell_block(body));
+                text.push("    workgroupBarrier();\n");
                 text.text.push_str(&format!("    for (var henad_c = henad_local; henad_c < {counters}u; henad_c = henad_c + {}u) {{\n        let henad_count = atomicLoad(&henad_partial[henad_c]);\n        if (henad_count > 0u) {{\n            atomicAdd(&counters[henad_c], henad_count);\n        }}\n    }}\n", WORKGROUP_SIZE * WORKGROUP_SIZE));
                 if lanes > 0 {
                     // Every invocation reaches each `block_sum`, out of the cell's bounds check, since it barriers.
@@ -2917,7 +2779,7 @@ impl Emitter<'_> {
         Emitted {
             text: text.text,
             ranges: text.ranges,
-            bindings,
+            bindings: bindings.list,
             uniform,
             counters,
             workgroup_bytes: if self.role == Role::Reduce {
@@ -2935,15 +2797,53 @@ impl Emitter<'_> {
     }
 }
 
+/// Bindings of a shader in `@binding` order, with their WGSL declarations.
+#[derive(Default)]
+struct Bindings {
+    list: Vec<ShaderBinding>,
+    /// One `@group(0) @binding(N)` line per binding.
+    declarations: String,
+}
+
+impl Bindings {
+    /// Adds the binding `name` of `kind`, declared as `wgsl`.
+    fn bind(&mut self, name: &str, kind: BindingKind, wgsl: &str) {
+        self.declarations
+            .push_str(&format!("@group(0) @binding({}) {wgsl};\n", self.list.len()));
+        self.list.push(ShaderBinding::new(name.to_owned(), kind));
+    }
+
+    /// Adds the storage buffer `name`, an array of `element`, read-only when `read_only` holds.
+    fn storage(&mut self, name: &str, read_only: bool, element: &str) {
+        let access = if read_only { "read" } else { "read_write" };
+        self.bind(
+            name,
+            BindingKind::Storage { read_only },
+            &format!("var<storage, {access}> {name}: array<{element}>"),
+        );
+    }
+
+    /// Adds the uniform `name` of the struct `type_name`.
+    fn uniform(&mut self, name: &str, type_name: &str) {
+        self.bind(name, BindingKind::Uniform, &format!("var<uniform> {name}: {type_name}"));
+    }
+
+    /// Adds the display texture `output`.
+    fn texture(&mut self) {
+        self.bind(
+            "output",
+            BindingKind::StorageTexture,
+            "var output: texture_storage_2d<rgba8unorm, write>",
+        );
+    }
+}
+
 /// Names the running value of every accumulator of every region in `block` after the accumulator's output, which
 /// takes the running value once the loop ends.
 fn name_running(block: &[Instruction], names: &mut [SlotName], types: &mut [Option<WgslType>]) {
     for instruction in block {
-        let (accumulators, body) = match &instruction.operation {
-            Operation::Repeat(repeat) => (&repeat.accumulators, &repeat.body),
-            Operation::GridFold(fold) => (&fold.accumulators, &fold.body),
-            Operation::RadiusFold(fold) => (&fold.accumulators, &fold.body),
-            _ => continue,
+        let Some((accumulators, body)) = super::region(&instruction.operation) else {
+            continue;
         };
         for accumulator in accumulators {
             if let Some(name) = names.get(accumulator.out).cloned() {
@@ -2953,6 +2853,28 @@ fn name_running(block: &[Instruction], names: &mut [SlotName], types: &mut [Opti
         }
         name_running(body, names, types);
     }
+}
+
+/// Returns the iteration word of iteration `k` of a region of `radix` iterations in `block`: `k` itself outside every
+/// region, or the word of the region around it times `radix` plus `k`.
+fn iteration_word(block: &Block<'_>, k: &str, radix: impl std::fmt::Display) -> String {
+    match &block.iteration {
+        Some(outer) => format!("{outer} * {radix}u + {k}"),
+        None => k.to_owned(),
+    }
+}
+
+/// WGSL word of a cell index that names no cell, the host's index of a position off the grid.
+const NO_CELL: &str = "4294967295u";
+
+/// Returns the WGSL index of the cell `xy` in row order.
+fn cell_index(xy: &str) -> String {
+    format!("u32({xy}.y) * params.henad_width + u32({xy}.x)")
+}
+
+/// Returns the WGSL index of the cell `xy` where `valid` holds, and [`NO_CELL`] otherwise.
+fn cell_or_none(xy: &str, valid: &str) -> String {
+    format!("select({NO_CELL}, {}, {valid})", cell_index(xy))
 }
 
 /// Returns the WGSL `bool` of whether the cell `xy`, a `vec2<i32>` when `signed` and a `vec2<u32>` otherwise, lies on

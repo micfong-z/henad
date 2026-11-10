@@ -1,16 +1,19 @@
-//! Uniform blocks of generated shaders: the fields a shader reads, their layout, and the bytes the host writes.
+//! Uniform blocks of generated shaders: the members a shader reads, their layout, and the bytes the host writes.
 //!
-//! A *field* is one member of a shader's `HenadParams` struct. Its value comes from the host: the grid's size, a value
+//! A *member* is one member of a shader's `HenadParams` struct. Its value comes from the host: the grid's size, a value
 //! of the pass's prelude that the host evaluates, a draw's key word, the press count, a table of powers, whether a
 //! pass bound to a parameter runs, or whether a step counts its probes. Members follow WGSL's layout rules for the
 //! uniform address space: a scalar takes 4 bytes, a `vec2` takes 8 bytes at an 8-byte offset, and a table takes 16
 //! bytes per four entries at a 16-byte offset.
 
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
+
 use henad_core::spatial_hash::HashGrid;
 
 use crate::document::Domain;
 use crate::draw::key_word;
-use crate::host::compile::Program;
+use crate::host::program::Program;
 use crate::host::value::HostValue;
 use crate::host::{HostEvaluator, HostWorld, RunContext, run};
 
@@ -109,9 +112,9 @@ impl WgslType {
     }
 }
 
-/// Where the value of a uniform field comes from.
+/// Where the value of a uniform member comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FieldSource {
+pub(crate) enum MemberSource {
     /// Columns of the grid.
     Width,
     /// Rows of the grid.
@@ -157,16 +160,16 @@ pub(crate) struct Dispatch {
     pub counting: bool,
 }
 
-/// Shape of a uniform field.
+/// Shape of a uniform member.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FieldShape {
+pub(crate) enum MemberShape {
     /// One value of this type.
     Value(WgslType),
     /// `len` `f32` entries packed four to a `vec4<f32>`.
     Table { len: u32 },
 }
 
-impl FieldShape {
+impl MemberShape {
     /// Returns the alignment and the size of the member in bytes.
     fn align_size(self) -> (usize, usize) {
         match self {
@@ -187,13 +190,13 @@ impl FieldShape {
 
 /// One member of a shader's uniform block.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct UniformField {
+pub(crate) struct UniformMember {
     /// Name of the member.
     pub name: String,
     /// Shape of the member.
-    pub shape: FieldShape,
+    pub shape: MemberShape,
     /// Where its value comes from.
-    pub source: FieldSource,
+    pub source: MemberSource,
     /// Byte offset of the member in the block.
     pub offset: usize,
 }
@@ -202,26 +205,26 @@ pub(crate) struct UniformField {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct UniformBlock {
     /// Members in offset order.
-    pub fields: Vec<UniformField>,
+    pub members: Vec<UniformMember>,
     /// Size of the block in bytes, a multiple of 16.
     pub size: usize,
 }
 
 impl UniformBlock {
-    /// Returns the block of `fields`, laid out in order with the tables last.
-    pub(crate) fn new(mut fields: Vec<(String, FieldShape, FieldSource)>) -> Self {
+    /// Returns the block of `members`, laid out in order with the tables last.
+    pub(crate) fn new(mut members: Vec<(String, MemberShape, MemberSource)>) -> Self {
         // Tables last, so no member follows an array. Vectors before them keep the scalars packed.
-        fields.sort_by_key(|(_, shape, _)| match shape {
-            FieldShape::Value(value) if value.is_vector() => 1,
-            FieldShape::Value(_) => 0,
-            FieldShape::Table { .. } => 2,
+        members.sort_by_key(|(_, shape, _)| match shape {
+            MemberShape::Value(value) if value.is_vector() => 1,
+            MemberShape::Value(_) => 0,
+            MemberShape::Table { .. } => 2,
         });
         let mut offset: usize = 0;
-        let mut laid = Vec::with_capacity(fields.len());
-        for (name, shape, source) in fields {
+        let mut laid = Vec::with_capacity(members.len());
+        for (name, shape, source) in members {
             let (align, size) = shape.align_size();
             offset = offset.next_multiple_of(align);
-            laid.push(UniformField {
+            laid.push(UniformMember {
                 name,
                 shape,
                 source,
@@ -230,7 +233,7 @@ impl UniformBlock {
             offset += size;
         }
         Self {
-            fields: laid,
+            members: laid,
             size: offset.next_multiple_of(16).max(16),
         }
     }
@@ -238,8 +241,8 @@ impl UniformBlock {
     /// Returns the WGSL declaration of the struct `HenadParams`.
     pub(crate) fn declaration(&self) -> String {
         let mut text = String::from("struct HenadParams {\n");
-        for field in &self.fields {
-            text.push_str(&format!("    {}: {},\n", field.name, field.shape.wgsl()));
+        for member in &self.members {
+            text.push_str(&format!("    {}: {},\n", member.name, member.shape.wgsl()));
         }
         text.push_str("}\n");
         text
@@ -266,29 +269,29 @@ impl UniformBlock {
             cell_w: 1.0,
             cell_h: 1.0,
         });
-        let mut frames: Vec<(usize, Vec<HostValue>)> = Vec::new();
+        let mut frames: BTreeMap<usize, Vec<HostValue>> = BTreeMap::new();
         let mut bytes = vec![0u8; self.size];
-        for field in &self.fields {
-            let words: Vec<u32> = match &field.source {
-                FieldSource::Width => vec![width],
-                FieldSource::Height => vec![height],
-                FieldSource::Count(domain) => {
+        for member in &self.members {
+            let words: Vec<u32> = match &member.source {
+                MemberSource::Width => vec![width],
+                MemberSource::Height => vec![height],
+                MemberSource::Count(domain) => {
                     vec![
                         world
                             .elements(*domain)
                             .map_or(0, |count| u32::try_from(count).unwrap_or(u32::MAX)),
                     ]
                 }
-                FieldSource::GroupsX => vec![dispatch.groups_x],
-                FieldSource::World => world.extent().iter().map(|side| side.to_bits()).collect(),
-                FieldSource::HashGrid => vec![hash.grid_w, hash.grid_h],
-                FieldSource::HashCell => vec![hash.cell_w.to_bits(), hash.cell_h.to_bits()],
-                FieldSource::HashInverse => vec![(1.0 / hash.cell_w).to_bits(), (1.0 / hash.cell_h).to_bits()],
-                FieldSource::Texture => dispatch.texture.to_vec(),
-                FieldSource::CountFires => vec![u32::from(dispatch.counting)],
-                FieldSource::Press => vec![context.press],
-                FieldSource::Enabled { position } => vec![u32::from(evaluator.is_enabled(*position, params))],
-                FieldSource::Key { position, draw } => {
+                MemberSource::GroupsX => vec![dispatch.groups_x],
+                MemberSource::World => world.extent().iter().map(|side| side.to_bits()).collect(),
+                MemberSource::HashGrid => vec![hash.grid_w, hash.grid_h],
+                MemberSource::HashCell => vec![hash.cell_w.to_bits(), hash.cell_h.to_bits()],
+                MemberSource::HashInverse => vec![(1.0 / hash.cell_w).to_bits(), (1.0 / hash.cell_h).to_bits()],
+                MemberSource::Texture => dispatch.texture.to_vec(),
+                MemberSource::CountFires => vec![u32::from(dispatch.counting)],
+                MemberSource::Press => vec![context.press],
+                MemberSource::Enabled { position } => vec![u32::from(evaluator.is_enabled(*position, params))],
+                MemberSource::Key { position, draw } => {
                     let key = program_of(evaluator, *position)?
                         .draw_keys
                         .get(*draw)
@@ -296,11 +299,11 @@ impl UniformBlock {
                         .unwrap_or_default();
                     vec![key_word(key, context.phase, context.seed)]
                 }
-                FieldSource::Slot { position, slot } => {
+                MemberSource::Slot { position, slot } => {
                     let frame = frame_of(&mut frames, evaluator, *position, world, params, context)?;
                     value_words(frame.get(*slot).copied().unwrap_or(HostValue::U32(0)))
                 }
-                FieldSource::Table { position, base, max } => {
+                MemberSource::Table { position, base, max } => {
                     let frame = frame_of(&mut frames, evaluator, *position, world, params, context)?;
                     let base = frame.get(*base).and_then(|value| value.as_f32()).unwrap_or(0.0);
                     (0..=*max)
@@ -309,7 +312,7 @@ impl UniformBlock {
                 }
             };
             for (k, word) in words.iter().enumerate() {
-                let start = field.offset + 4 * k;
+                let start = member.offset + 4 * k;
                 if let Some(target) = bytes.get_mut(start..start + 4) {
                     target.copy_from_slice(&word.to_le_bytes());
                 }
@@ -330,24 +333,21 @@ fn program_of(evaluator: &HostEvaluator, position: usize) -> Result<&Program, St
 
 /// Returns the prelude frame of the pass at `position`, evaluating it once per block.
 fn frame_of<'a>(
-    frames: &'a mut Vec<(usize, Vec<HostValue>)>,
+    frames: &'a mut BTreeMap<usize, Vec<HostValue>>,
     evaluator: &HostEvaluator,
     position: usize,
     world: HostWorld,
     params: &[HostValue],
     context: &RunContext,
 ) -> Result<&'a [HostValue], String> {
-    let index = if let Some(index) = frames.iter().position(|(known, _)| *known == position) {
-        index
-    } else {
-        {
+    match frames.entry(position) {
+        Entry::Occupied(entry) => Ok(entry.into_mut()),
+        Entry::Vacant(entry) => {
             let program = program_of(evaluator, position)?;
             let frame = run::prelude(program, params, context, world).map_err(|error| error.to_string())?;
-            frames.push((position, frame));
-            frames.len() - 1
+            Ok(entry.insert(frame))
         }
-    };
-    Ok(&frames[index].1)
+    }
 }
 
 /// Returns the words a uniform member holds for `value`: a `bool` as 0 or 1, a vector as two words.

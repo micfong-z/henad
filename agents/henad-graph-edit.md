@@ -31,9 +31,9 @@ literals, `action`, `runs` and the canvas scope `pass.<id>`. A remove with refer
 (declarations, one pass or function of the copied nodes, their placement, no stats, empty `runs`).
 `Paste` mints ids and keys, keeps wires inside the copy, drops the rest and drops a binding of a
 parameter the target lacks. The copied text also holds each frame of the canvas that holds a copied
-node (`EditorRegion::frames_holding`, every key kept, members cut to the copied nodes), and `Paste`
+node (`EditorRegion::copy_of`, every key kept, members cut to the copied nodes), and `Paste`
 adds a frame of its own on the target canvas for each, around the pasted ids
-(`copy_carries_frame_membership`). Category rename and remove and the edits of a `[[palette]]`
+(`EditorRegion::push_renamed_frames`, `copy_carries_frame_membership`). Category rename and remove and the edits of a `[[palette]]`
 are not written yet.
 
 **Function edits** (`edit/functions.rs`). `AddFunction` (no ports, empty body), `RenameFunction`

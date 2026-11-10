@@ -15,8 +15,10 @@
 use std::ops::Range;
 
 use henad_compute::gpu::ShaderBinding;
+use henad_core::diagnostic::CodeDiagnostic;
 
-use crate::document::Domain;
+use super::GeneratedShader;
+use crate::document::{Domain, GraphDocument};
 use crate::host::value::words_per_value;
 use crate::limits::{MAX_PACKED_BUFFER_BYTES, MAX_STORAGE_BINDINGS};
 use crate::types::ValueType;
@@ -236,6 +238,11 @@ impl LaneLayout {
         self.places.get(position).copied().flatten()
     }
 
+    /// Returns the buffer and segment of the lane `id` of `document`, the document the layout places.
+    pub(crate) fn place_of(&self, document: &GraphDocument, id: &str) -> Option<LaneBuffer> {
+        self.place(document.lanes.iter().position(|lane| lane.id == id)?)
+    }
+
     /// Returns the lane buffer that holds the lane at `position`.
     pub(crate) fn group_of(&self, position: usize) -> Option<&LaneGroup> {
         self.groups.get(self.place(position)?.buffer)
@@ -251,7 +258,7 @@ thread_local! {
 
 /// Returns whether every shader of `bindings`, each the bindings of one shader, binds at most
 /// [`MAX_STORAGE_BINDINGS`] storage buffers.
-pub(crate) fn within_budget<'a>(bindings: impl IntoIterator<Item = &'a [ShaderBinding]>) -> bool {
+fn within_budget<'a>(bindings: impl IntoIterator<Item = &'a [ShaderBinding]>) -> bool {
     bindings
         .into_iter()
         .all(|shader| storage_bindings(shader) <= MAX_STORAGE_BINDINGS as usize)
@@ -275,11 +282,10 @@ pub(crate) fn storage_bindings(bindings: &[ShaderBinding]) -> usize {
 /// # Errors
 ///
 /// Returns the problems of the first emission that fails.
-pub(crate) fn choose<T, E>(
+pub(crate) fn choose(
     lanes: &[LaneEntry<'_>],
-    mut emit: impl FnMut(&LaneLayout) -> Result<T, E>,
-    bindings: impl Fn(&T) -> Vec<&[ShaderBinding]>,
-) -> Result<(LaneLayout, T), E> {
+    mut emit: impl FnMut(&LaneLayout) -> Result<Vec<GeneratedShader>, Vec<CodeDiagnostic>>,
+) -> Result<(LaneLayout, Vec<GeneratedShader>), Vec<CodeDiagnostic>> {
     let mut layout = LaneLayout::unpacked(lanes);
     let mut shaders = emit(&layout)?;
     #[cfg(test)]
@@ -287,7 +293,7 @@ pub(crate) fn choose<T, E>(
         return Ok((layout, shaders));
     }
     for packing in [Packing::Plain, Packing::PlainAndDual] {
-        if within_budget(bindings(&shaders)) {
+        if within_budget(shaders.iter().map(GeneratedShader::bindings)) {
             break;
         }
         let next = LaneLayout::packed(lanes, packing);

@@ -78,15 +78,11 @@ impl HostValue {
             Literal::Vec2I(pair) => Self::Vec2I(*pair),
             Literal::Vec2F(pair) => Self::Vec2F(*pair),
             Literal::Category(name) => {
-                let category = document.categories.iter().find(|category| category.id == name.owner)?;
-                let position = category
-                    .variants
-                    .iter()
-                    .position(|variant| variant.name == name.member)?;
+                let position = document.category(&name.owner)?.variant_position(&name.member)?;
                 Self::Category(u32::try_from(position).ok()?)
             }
             Literal::Layer(name) => {
-                let field = document.fields.iter().find(|field| field.id == name.owner)?;
+                let field = document.field(&name.owner)?;
                 let position = field.layers.iter().position(|layer| *layer == name.member)?;
                 Self::Layer(u32::try_from(position).ok()?)
             }
@@ -347,6 +343,25 @@ pub(crate) enum BinaryOp {
     Or,
 }
 
+impl BinaryOp {
+    /// Returns the operation of the binary kind `kind`, `None` for another kind.
+    pub(crate) fn of_kind(kind: &str) -> Option<Self> {
+        Some(match kind {
+            "math.add" => Self::Add,
+            "math.sub" => Self::Sub,
+            "math.mul" => Self::Mul,
+            "math.div" => Self::Div,
+            "math.rem" => Self::Rem,
+            "math.min" => Self::Min,
+            "math.max" => Self::Max,
+            "bits.xor" => Self::Xor,
+            "bits.and" => Self::And,
+            "bits.or" => Self::Or,
+            _ => return None,
+        })
+    }
+}
+
 /// Applies `op` to `a` and `b`, per component on vectors, or returns `None` for two values it does not take.
 pub(crate) fn binary(op: BinaryOp, a: HostValue, b: HostValue) -> Option<HostValue> {
     use HostValue::{F32, F64, I32, U32, U64, Vec2D, Vec2F, Vec2I, Vec2U};
@@ -474,6 +489,30 @@ pub(crate) enum UnaryOp {
     Log10,
 }
 
+impl UnaryOp {
+    /// Returns the operation of the unary kind `kind`, `None` for another kind.
+    pub(crate) fn of_kind(kind: &str) -> Option<Self> {
+        Some(match kind {
+            "math.abs" => Self::Abs,
+            "math.ceil" => Self::Ceil,
+            "math.trunc" => Self::Trunc,
+            "math.round" => Self::Round,
+            "math.exp" => Self::Exp,
+            "math.log" => Self::Log,
+            "math.sin" => Self::Sin,
+            "math.cos" => Self::Cos,
+            "bits.not" => Self::Not,
+            "math.neg" => Self::Neg,
+            "math.floor" => Self::Floor,
+            "math.sqrt" => Self::Sqrt,
+            "math.recip" => Self::Recip,
+            "math.log2" => Self::Log2,
+            "math.log10" => Self::Log10,
+            _ => return None,
+        })
+    }
+}
+
 /// Applies `op` to `a`, per component on vectors, or returns `None` for a value it does not take.
 pub(crate) fn unary(op: UnaryOp, a: HostValue) -> Option<HostValue> {
     let float = |x: f32| -> f32 {
@@ -555,6 +594,22 @@ pub(crate) enum Conversion {
     ToVec2U,
 }
 
+impl Conversion {
+    /// Returns the target of the conversion kind `kind`, `None` for another kind.
+    pub(crate) fn of_kind(kind: &str) -> Option<Self> {
+        Some(match kind {
+            "conv.to_f32" => Self::ToF32,
+            "conv.to_u32" => Self::ToU32,
+            "conv.to_i32" => Self::ToI32,
+            "conv.to_f64" => Self::ToF64,
+            "conv.to_vec2f" => Self::ToVec2F,
+            "conv.to_vec2i" => Self::ToVec2I,
+            "conv.to_vec2u" => Self::ToVec2U,
+            _ => return None,
+        })
+    }
+}
+
 /// Largest `f32` below 2^32, the top of the range WGSL clamps an `f32` to before converting it to a `u32`.
 const LARGEST_F32_BELOW_2_POW_32: f32 = f32::from_bits(0x4f7f_ffff);
 
@@ -564,6 +619,18 @@ const LARGEST_F32_BELOW_2_POW_31: f32 = f32::from_bits(0x4eff_ffff);
 /// Returns `x` clamped to `top` from above, and a NaN as it is. `f32::min` would turn a NaN into `top`.
 fn clamp_above(x: f32, top: f32) -> f32 {
     if x > top { top } else { x }
+}
+
+/// Returns `x` converted to a `u32` as WGSL converts it: clamped to the `f32` values a `u32` holds, then truncated
+/// toward zero. A NaN gives 0.
+fn f32_to_u32(x: f32) -> u32 {
+    clamp_above(x, LARGEST_F32_BELOW_2_POW_32) as u32
+}
+
+/// Returns `x` converted to an `i32` as WGSL converts it: clamped to the `f32` values an `i32` holds, then truncated
+/// toward zero. A NaN gives 0.
+pub(crate) fn f32_to_i32(x: f32) -> i32 {
+    clamp_above(x, LARGEST_F32_BELOW_2_POW_31) as i32
 }
 
 /// Converts `a` as the conversion kinds define it, or returns `None` for a value the kind does not take.
@@ -577,12 +644,12 @@ pub(crate) fn convert(target: Conversion, a: HostValue) -> Option<HostValue> {
         (Conversion::ToF32, HostValue::Bool(x)) => HostValue::F32(f32::from(u8::from(x))),
         (Conversion::ToF32, HostValue::U64(x)) => HostValue::F32(x as f32),
         (Conversion::ToF32, HostValue::F64(x)) => HostValue::F32(x as f32),
-        (Conversion::ToU32, HostValue::F32(x)) => HostValue::U32(clamp_above(x, LARGEST_F32_BELOW_2_POW_32) as u32),
+        (Conversion::ToU32, HostValue::F32(x)) => HostValue::U32(f32_to_u32(x)),
         (Conversion::ToU32, HostValue::I32(x)) => HostValue::U32(x as u32),
         (Conversion::ToU32, HostValue::Bool(x)) => HostValue::U32(u32::from(x)),
         (Conversion::ToU32, HostValue::U64(x)) => HostValue::U32(x as u32),
         (Conversion::ToU32, HostValue::F64(x)) => HostValue::U32(x as u32),
-        (Conversion::ToI32, HostValue::F32(x)) => HostValue::I32(clamp_above(x, LARGEST_F32_BELOW_2_POW_31) as i32),
+        (Conversion::ToI32, HostValue::F32(x)) => HostValue::I32(f32_to_i32(x)),
         (Conversion::ToI32, HostValue::U32(x)) => HostValue::I32(x as i32),
         (Conversion::ToI32, HostValue::Bool(x)) => HostValue::I32(i32::from(x)),
         (Conversion::ToU32, HostValue::Cell(x) | HostValue::Agent(x)) => HostValue::U32(x),
@@ -592,15 +659,9 @@ pub(crate) fn convert(target: Conversion, a: HostValue) -> Option<HostValue> {
         (Conversion::ToF64, HostValue::U64(x)) => HostValue::F64(x as f64),
         (Conversion::ToVec2F, HostValue::Vec2I([x, y])) => HostValue::Vec2F([x as f32, y as f32]),
         (Conversion::ToVec2F, HostValue::Vec2U([x, y])) => HostValue::Vec2F([x as f32, y as f32]),
-        (Conversion::ToVec2I, HostValue::Vec2F([x, y])) => HostValue::Vec2I([
-            clamp_above(x, LARGEST_F32_BELOW_2_POW_31) as i32,
-            clamp_above(y, LARGEST_F32_BELOW_2_POW_31) as i32,
-        ]),
+        (Conversion::ToVec2I, HostValue::Vec2F([x, y])) => HostValue::Vec2I([f32_to_i32(x), f32_to_i32(y)]),
         (Conversion::ToVec2I, HostValue::Vec2U([x, y])) => HostValue::Vec2I([x as i32, y as i32]),
-        (Conversion::ToVec2U, HostValue::Vec2F([x, y])) => HostValue::Vec2U([
-            clamp_above(x, LARGEST_F32_BELOW_2_POW_32) as u32,
-            clamp_above(y, LARGEST_F32_BELOW_2_POW_32) as u32,
-        ]),
+        (Conversion::ToVec2U, HostValue::Vec2F([x, y])) => HostValue::Vec2U([f32_to_u32(x), f32_to_u32(y)]),
         (Conversion::ToVec2U, HostValue::Vec2I([x, y])) => HostValue::Vec2U([x as u32, y as u32]),
         _ => return None,
     })

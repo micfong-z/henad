@@ -1,6 +1,7 @@
 //! Functions the GPU agent engine calls for a graph model: its sizes, its seed, its uniform blocks, its reruns, its stat
 //! values and its faults, each run by the host evaluator.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use henad_compute::gpu::{AgentHooks, AgentPassId, AgentRun, AgentUploads};
@@ -11,9 +12,11 @@ use henad_core::params::ParamValue;
 use henad_core::view::StatValue;
 
 use super::agents::AGENT_PARAMS;
+use super::compiled_at;
+use super::emit::SumLane;
 use super::emit::{FAULT_WORD, FIRST_COUNTER};
-use super::hooks::{ActionPlan, stat_value};
-use super::uniform::{Dispatch, UniformBlock};
+use super::hooks::{ActionPlan, PassUniform, StatSource, pass_sums, stat_value, tick32};
+use super::uniform::Dispatch;
 use crate::document::Domain;
 use crate::host::value::HostValue;
 use crate::host::{HostEvaluator, HostLanes, HostWorld, RunContext, run};
@@ -33,24 +36,6 @@ pub(crate) enum BufferSource {
     Cleared { per_cell: usize },
     /// The packed colour of each agent.
     Colors,
-}
-
-/// Stats pass of the reduce leaf, with its first tally among the leaf's.
-#[derive(Debug, Clone)]
-pub(crate) struct ReducePass {
-    /// Document position of the pass.
-    pub position: usize,
-    /// First tally of the pass among the leaf's tallies.
-    pub first_tally: usize,
-}
-
-/// Slot of a stat value in its stats pass.
-#[derive(Debug, Clone)]
-pub(crate) struct StatSlot {
-    /// Document position of the stats pass.
-    pub position: usize,
-    /// Slot of the value in the pass's program.
-    pub slot: usize,
 }
 
 /// Radius fold of a step pass, whose walk [`AgentGraphHooks::step_cost`] charges.
@@ -81,7 +66,7 @@ fn walk_side(radius: f32, cell: f32, side: u32) -> u64 {
 }
 
 /// Plan the hooks of a graph of agents read.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct AgentGraphHooks {
     pub evaluator: Arc<HostEvaluator>,
     /// Default population.
@@ -93,13 +78,11 @@ pub(crate) struct AgentGraphHooks {
     /// What each buffer holds, in buffer order.
     pub buffers: Vec<BufferSource>,
     /// Uniform block of every pass.
-    pub uniforms: Vec<(AgentPassId, UniformBlock)>,
+    pub uniforms: Vec<PassUniform<AgentPassId>>,
     /// Source of each stat value, `None` for a stat no stats pass gives, which reads 0.
-    pub stats: Vec<Option<StatSlot>>,
-    /// Stats passes of the reduce leaf, in order.
-    pub reduce: Vec<ReducePass>,
+    pub stats: Vec<Option<StatSource>>,
     /// Lanes of the reduce leaf, each by the document position of its pass and the number of its sum.
-    pub sum_lanes: Vec<(usize, usize)>,
+    pub sum_lanes: Vec<SumLane>,
     /// First word of the leaf's tallies in the counters.
     pub tally_base: usize,
     /// Number of the document's counters, after the fault word and the tick.
@@ -112,11 +95,6 @@ pub(crate) struct AgentGraphHooks {
     pub walks: Vec<Vec<WalkCharge>>,
     /// Actions, in document order.
     pub actions: Vec<ActionPlan>,
-}
-
-/// Returns `tick` as the 32-bit word a graph reads, wrapping as the shader's tick buffer does.
-fn tick32(tick: u64) -> u32 {
-    tick as u32
 }
 
 /// Returns the world of `geom`.
@@ -143,38 +121,12 @@ impl AgentGraphHooks {
         }
     }
 
-    /// Returns the uniform block of pass `id`, or `Err` with the fault of a prelude the host cannot evaluate.
-    fn block_bytes(
-        &self,
-        id: AgentPassId,
-        ctx: PassCtx<'_>,
-        run: AgentRun,
-        params: &[ParamValue],
-    ) -> Result<Vec<u8>, String> {
-        let Some((_, block)) = self.uniforms.iter().find(|(known, _)| *known == id) else {
-            return Ok(vec![0; 16]);
-        };
-        let dispatch = Dispatch {
-            groups_x: ctx.groups_x,
-            hash: ctx.geom.index,
-            texture: [ctx.geom.display.0, ctx.geom.display.1],
-            counting: run.counting,
-        };
-        block.bytes(
-            &self.evaluator,
-            world_of(ctx.geom),
-            &self.own(params),
-            &Self::context(id, run),
-            &dispatch,
-        )
-    }
-
     /// Returns the size of `pass`'s uniform block.
     fn block_size(&self, id: AgentPassId) -> usize {
         self.uniforms
             .iter()
-            .find(|(known, _)| *known == id)
-            .map_or(16, |(_, block)| block.size)
+            .find(|uniform| uniform.id == id)
+            .map_or(16, |uniform| uniform.block.size)
     }
 
     /// Returns the words of buffer `source` for `lanes`, the init's result over `geom`.
@@ -267,7 +219,7 @@ impl AgentHooks for AgentGraphHooks {
             width: extent.w.max(1.0),
             height: extent.h.max(1.0),
         };
-        let Some(Ok(program)) = self.evaluator.program_at(position) else {
+        let Some(program) = compiled_at(&self.evaluator, position) else {
             return 1.0;
         };
         run::prelude(program, &self.own(params), &RunContext::tick(None, 0), world)
@@ -303,7 +255,22 @@ impl AgentHooks for AgentGraphHooks {
         run: AgentRun,
         params: &[ParamValue],
     ) -> Result<Vec<u8>, String> {
-        self.block_bytes(pass, ctx, run, params)
+        let Some(uniform) = self.uniforms.iter().find(|uniform| uniform.id == pass) else {
+            return Ok(vec![0; 16]);
+        };
+        let dispatch = Dispatch {
+            groups_x: ctx.groups_x,
+            hash: ctx.geom.index,
+            texture: [ctx.geom.display.0, ctx.geom.display.1],
+            counting: run.counting,
+        };
+        uniform.block.bytes(
+            &self.evaluator,
+            world_of(ctx.geom),
+            &self.own(params),
+            &Self::context(pass, run),
+            &dispatch,
+        )
     }
 
     fn run_stats(
@@ -320,22 +287,16 @@ impl AgentHooks for AgentGraphHooks {
         let own_counters: Vec<u32> = (0..self.counters)
             .map(|k| counters.get(FIRST_COUNTER + k).copied().unwrap_or(0))
             .collect();
-        let mut frames: Vec<(usize, Option<Vec<HostValue>>)> = Vec::new();
+        let mut frames: BTreeMap<usize, Option<Vec<HostValue>>> = BTreeMap::new();
         self.stats
             .iter()
             .map(|source| {
                 let Some(source) = source else {
                     return StatValue::Scalar(0.0);
                 };
-                let index = if let Some(index) = frames.iter().position(|(known, _)| *known == source.position) {
-                    index
-                } else {
-                    let frame = self.finish(source.position, &own, sums, counters, &own_counters, world, &context);
-                    frames.push((source.position, frame));
-                    frames.len() - 1
-                };
-                frames[index]
-                    .1
+                frames
+                    .entry(source.position)
+                    .or_insert_with(|| self.finish(source, &own, sums, counters, &own_counters, world, &context))
                     .as_ref()
                     .and_then(|frame| frame.get(source.slot).copied())
                     .map_or(StatValue::Scalar(f64::NAN), stat_value)
@@ -355,12 +316,16 @@ impl AgentHooks for AgentGraphHooks {
             return Ok(Vec::new());
         };
         // The action's pass evaluates its block now, so a fault refuses the press before anything runs.
-        if let Some((id, block)) = self.uniforms.iter().find(|(id, _)| *id == AgentPassId::Action(action)) {
-            block.bytes(
+        if let Some(uniform) = self
+            .uniforms
+            .iter()
+            .find(|uniform| uniform.id == AgentPassId::Action(action))
+        {
+            uniform.block.bytes(
                 &self.evaluator,
                 world_of(geom),
                 &self.own(params),
-                &Self::context(*id, run),
+                &Self::context(uniform.id, run),
                 &Dispatch::default(),
             )?;
         }
@@ -407,12 +372,10 @@ impl AgentHooks for AgentGraphHooks {
         walks
             .iter()
             .map(|walk| {
-                let radius = match self.evaluator.program_at(walk.position) {
-                    Some(Ok(program)) => run::prelude(program, &own, &RunContext::tick(None, 0), world)
-                        .ok()
-                        .and_then(|frame| frame.get(walk.radius)?.as_f32()),
-                    _ => None,
-                };
+                let radius = compiled_at(&self.evaluator, walk.position).and_then(|program| {
+                    let frame = run::prelude(program, &own, &RunContext::tick(None, 0), world).ok()?;
+                    frame.get(walk.radius)?.as_f32()
+                });
                 // A radius the host cannot read walks every cell.
                 let cells = radius.map_or(index_cells, |radius| {
                     walk_side(radius, grid.cell_w, grid.grid_w) * walk_side(radius, grid.cell_h, grid.grid_h)
@@ -445,12 +408,12 @@ impl AgentHooks for AgentGraphHooks {
 }
 
 impl AgentGraphHooks {
-    /// Returns the frame of the stats pass at `position` after its post block, with the graph's parameter values `own`,
+    /// Returns the frame of the stats pass of `source` after its post block, with the graph's parameter values `own`,
     /// from the reduce leaf's `sums` and the engine's `counters`.
     #[expect(clippy::too_many_arguments, reason = "each argument is one input of the post block")]
     fn finish(
         &self,
-        position: usize,
+        source: &StatSource,
         own: &[HostValue],
         sums: &[f32],
         counters: &[u32],
@@ -458,34 +421,21 @@ impl AgentGraphHooks {
         world: HostWorld,
         context: &RunContext,
     ) -> Option<Vec<HostValue>> {
-        let Some(Ok(program)) = self.evaluator.program_at(position) else {
-            return None;
-        };
-        let first_tally = self.reduce.iter().find(|pass| pass.position == position)?.first_tally;
+        let position = source.position;
+        let program = compiled_at(&self.evaluator, position)?;
         let tallies = (0..program.tallies)
-            .map(|k| u64::from(counters.get(self.tally_base + first_tally + k).copied().unwrap_or(0)))
-            .collect();
-        let pass_sums = (0..program.sums.len())
-            .map(|sum| {
-                let lanes: Vec<usize> = self
-                    .sum_lanes
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (known, number))| *known == position && *number == sum)
-                    .map(|(lane, _)| lane)
-                    .collect();
-                let value = |k: usize| {
-                    lanes
-                        .get(k)
-                        .and_then(|&lane| sums.get(lane))
-                        .map_or(0.0, |&x| f64::from(x))
-                };
-                ([value(0), value(1)], lanes.len() > 1)
+            .map(|k| {
+                u64::from(
+                    counters
+                        .get(self.tally_base + source.first_tally + k)
+                        .copied()
+                        .unwrap_or(0),
+                )
             })
             .collect();
         let readback = run::Readback {
             tallies,
-            sums: pass_sums,
+            sums: pass_sums(&self.sum_lanes, position, program.sums.len(), sums),
             counters: own_counters.to_vec(),
         };
         run::finish(program, own, context, world, Some(&readback)).ok()

@@ -410,9 +410,43 @@ impl GraphBuilder {
             outputs.insert(source.clone(), port);
         }
 
-        let library = self.document.library;
-        let document = self.document.clone();
+        // Each moved node reads the function's input in place of a value from outside, and each node left behind reads
+        // the call in place of a moved node's output, as (position in the body, input, new link).
+        let body = self.body(scope)?;
+        let mut rewired: Vec<(usize, String, PortRef)> = Vec::new();
+        for (position, reader) in body.nodes.iter().enumerate() {
+            for (port, value) in &reader.inputs {
+                let InputValue::Link(link) = value else { continue };
+                let new_link = if wrapped.contains(&reader.id) {
+                    if wrapped.contains(&link.node) {
+                        continue;
+                    }
+                    entering_key(&self.document, &body.nodes, link)
+                        .and_then(|source| input_nodes.get(&source))
+                        .map(|input| PortRef {
+                            node: *input,
+                            port: Some("value".to_owned()),
+                        })
+                } else {
+                    let Some(source) = body.node(link.node).filter(|source| wrapped.contains(&source.id)) else {
+                        continue;
+                    };
+                    named_output(&self.document, source, link)
+                        .and_then(|named| outputs.get(&named))
+                        .map(|port| PortRef {
+                            node: call,
+                            port: Some(port.clone()),
+                        })
+                };
+                if let Some(new_link) = new_link {
+                    rewired.push((position, port.clone(), new_link));
+                }
+            }
+        }
         let body = self.body_mut(scope)?;
+        for (position, port, new_link) in rewired {
+            body.nodes[position].inputs.insert(port, InputValue::Link(new_link));
+        }
         let (mut moved, kept): (Vec<Node>, Vec<Node>) = std::mem::take(&mut body.nodes)
             .into_iter()
             .partition(|node| wrapped.contains(&node.id));
@@ -420,34 +454,6 @@ impl GraphBuilder {
         for node in &mut moved {
             if tops.contains(&node.id) {
                 node.region = None;
-            }
-            for value in node.inputs.values_mut() {
-                let InputValue::Link(link) = value else { continue };
-                if wrapped.contains(&link.node) {
-                    continue;
-                }
-                let source = entering_key(&document, library, &body.nodes, link);
-                if let Some(input) = source.and_then(|source| input_nodes.get(&source)) {
-                    *value = InputValue::Link(PortRef {
-                        node: *input,
-                        port: Some("value".to_owned()),
-                    });
-                }
-            }
-        }
-        for reader in &mut body.nodes {
-            for value in reader.inputs.values_mut() {
-                let InputValue::Link(link) = value else { continue };
-                let Some(source) = moved.iter().find(|node| node.id == link.node) else {
-                    continue;
-                };
-                let port = named_output(&document, library, source, link).and_then(|named| outputs.get(&named));
-                if let Some(port) = port {
-                    *value = InputValue::Link(PortRef {
-                        node: call,
-                        port: Some(port.clone()),
-                    });
-                }
             }
         }
         body.nodes.push(call_node);
@@ -508,7 +514,6 @@ impl GraphBuilder {
         wrapped: &BTreeSet<NodeId>,
     ) -> Result<Vec<(PortRef, ValueType)>, EditError> {
         let body = self.body(scope)?;
-        let library = self.document.library;
         let types = body_report(report, scope);
         let mut entering: Vec<(PortRef, ValueType)> = Vec::new();
         for reader in body.nodes.iter().filter(|node| wrapped.contains(&node.id)) {
@@ -517,7 +522,7 @@ impl GraphBuilder {
                 if wrapped.contains(&link.node) {
                     continue;
                 }
-                let source = entering_key(&self.document, library, &body.nodes, link).ok_or_else(|| {
+                let source = entering_key(&self.document, &body.nodes, link).ok_or_else(|| {
                     EditError::Invalid(format!(
                         "node {} reads {link}, which names no output. Fix the problems of node {} first",
                         reader.id, reader.id
@@ -873,9 +878,9 @@ fn port_name(port: Option<&str>, taken: &[String]) -> String {
 
 /// Returns the output `link` reads among `nodes`, with its port named: an outer output, or an inner output of a
 /// region, which a link always names.
-fn entering_key(document: &GraphDocument, library: u32, nodes: &[Node], link: &PortRef) -> Option<PortRef> {
+fn entering_key(document: &GraphDocument, nodes: &[Node], link: &PortRef) -> Option<PortRef> {
     let source = nodes.iter().find(|node| node.id == link.node)?;
-    named_output(document, library, source, link).or_else(|| link.port.as_ref().map(|_| link.clone()))
+    named_output(document, source, link).or_else(|| link.port.as_ref().map(|_| link.clone()))
 }
 
 /// Returns `function` and every function it calls in `document`, each once, `function` first.

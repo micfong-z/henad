@@ -11,8 +11,9 @@ use std::collections::BTreeSet;
 
 use crate::document::{PassEnabled, PassStage};
 use crate::host::HostEvaluator;
-use crate::host::compile::{Instruction, Operation, Program};
+use crate::host::program::{Instruction, Operation, Program};
 
+use super::compiled_at;
 use super::emit::defined;
 
 /// Returns whether each parameter of the document `evaluator` runs is reload-only, in the document's order.
@@ -29,7 +30,7 @@ pub(crate) fn reload_only(evaluator: &HostEvaluator) -> Vec<bool> {
         {
             read.extend(position_of(id));
         }
-        let Some(Ok(program)) = evaluator.program_at(position) else {
+        let Some(program) = compiled_at(evaluator, position) else {
             continue;
         };
         if pass.stage == PassStage::Init {
@@ -86,11 +87,8 @@ fn flattened(block: &[Instruction]) -> Vec<&Instruction> {
     let mut found = Vec::new();
     for instruction in block {
         found.push(instruction);
-        match &instruction.operation {
-            Operation::Repeat(repeat) => found.extend(flattened(&repeat.body)),
-            Operation::GridFold(fold) => found.extend(flattened(&fold.body)),
-            Operation::RadiusFold(fold) => found.extend(flattened(&fold.body)),
-            _ => {}
+        if let Some((_, body)) = super::region(&instruction.operation) {
+            found.extend(flattened(body));
         }
     }
     found

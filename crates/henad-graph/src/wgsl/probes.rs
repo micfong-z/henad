@@ -7,10 +7,10 @@
 
 use henad_core::diagnostic::CodeDiagnostic;
 
+use super::compiled_at;
 use crate::check::CheckReport;
 use crate::document::{GraphDocument, PassEnabled, PassStage};
 use crate::host::HostEvaluator;
-use crate::host::compile::Program;
 use crate::ids::NodeId;
 use crate::types::ValueType;
 use crate::value::PortRef;
@@ -59,19 +59,6 @@ pub(crate) struct ProbeSlot {
     pub node: NodeId,
 }
 
-/// Returns the slot of `output` in `program`, the node's only output when it names no port.
-pub(crate) fn output_slot(program: &Program, output: &PortRef) -> Option<(String, usize)> {
-    if let Some(port) = &output.port {
-        return program
-            .outputs
-            .get(&(output.node, port.clone()))
-            .map(|slot| (port.clone(), *slot));
-    }
-    let mut ports = program.outputs.iter().filter(|((node, _), _)| *node == output.node);
-    let only = ports.next().map(|((_, port), slot)| (port.clone(), *slot));
-    if ports.next().is_some() { None } else { only }
-}
-
 /// Returns each probe of `probes` resolved in `document`, whose host evaluator is `evaluator` and whose check is
 /// `report`, leaving out a probe whose pass `enabled = false` turns off, since that pass never runs.
 ///
@@ -94,10 +81,10 @@ pub(crate) fn resolve(
             .enumerate()
             .filter(|(_, pass)| pass.stage == PassStage::Tick)
             .find_map(|(position, pass)| {
-                let Some(Ok(program)) = evaluator.program_at(position) else {
-                    return None;
-                };
-                output_slot(program, output).map(|(port, slot)| (position, pass, port, slot))
+                let program = compiled_at(evaluator, position)?;
+                program
+                    .port_slot(output)
+                    .map(|(port, slot)| (position, pass, port, slot))
             });
         let Some((position, pass, port, slot)) = located else {
             problems.push(CodeDiagnostic::error(format!(

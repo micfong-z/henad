@@ -4,10 +4,11 @@ use henad_core::authoring::primitives::rng::{mix_seed, pcg_hash, random_float, r
 use henad_core::authoring::primitives::space::{Boundary, axis_delta, heading_octant, wrap_coord};
 use henad_core::spatial_hash::SpatialHash;
 
-use super::compile::{
+use super::program::{
     CompareOp, DrawForm, Instruction, LogicOp, Operation, Program, RadiusFold, Repeat, RepeatAccumulator, StencilFold,
+    SumSpec,
 };
-use super::value::{BinaryOp, HostValue, binary, convert, order, shift, unary};
+use super::value::{BinaryOp, HostValue, binary, convert, f32_to_i32, order, shift, unary};
 use super::{HostError, HostLanes, HostWorld, LaneColumn, PassOutcome, RunContext};
 use crate::draw::{draw_bits, fold32, iteration_word, key_word, press_word};
 use crate::ids::NodeId;
@@ -32,7 +33,8 @@ struct Machine<'a> {
     width: u32,
     /// Rows of the grid, for a stencil.
     height: u32,
-    bounded: bool,
+    /// Boundary of the domain grid, for a stencil.
+    boundary: Boundary,
     element: u32,
     /// Iteration word of the innermost region running, `None` outside every region.
     iteration: Option<u32>,
@@ -40,12 +42,16 @@ struct Machine<'a> {
     world: HostWorld,
     /// Deposits staged by the pass, by position among the deposit columns.
     deposits: Vec<Option<LaneColumn>>,
+    /// Counters at the start of the pass, which a counter total reads.
+    start_counters: Vec<u32>,
     /// Counters after the pass's additions.
     counters: Vec<u32>,
     /// State of each float sum.
     sums: Vec<SumState>,
     /// Number of elements of the pass.
     elements: usize,
+    /// Positions at the start of the pass, copied at the first radius fold.
+    positions: Option<Vec<[f32; 2]>>,
     /// Index of the positions at the start of the pass, built at the first radius fold, with its cell size.
     index: Option<(u32, SpatialHash)>,
 }
@@ -91,10 +97,6 @@ pub(super) fn run(
 /// # Errors
 ///
 /// Returns the errors of [`run`].
-#[expect(
-    clippy::too_many_lines,
-    reason = "the staging, the elements and the commit read in order"
-)]
 pub(super) fn run_counting(
     program: &Program,
     lanes: &mut HostLanes,
@@ -111,19 +113,7 @@ pub(super) fn run_counting(
         })?,
         None => 0,
     };
-    let (width, height, boundary) = lanes.world().domain_grid();
-    let bounded = boundary == Boundary::Bounded;
-    let mut frame = vec![HostValue::Bool(false); program.slots];
-    for (slot, value) in &program.constants {
-        frame[*slot] = *value;
-    }
-    for (slot, param) in &program.params {
-        frame[*slot] = *params.get(*param).ok_or_else(|| HostError::Fault {
-            pass: program.pass.clone(),
-            node: None,
-            reason: format!("no value for parameter {param}"),
-        })?;
-    }
+    let mut frame = frame(program, params)?;
     let mut staged: Vec<Option<LaneColumn>> = vec![None; lanes.columns.len()];
     for &lane in &program.written {
         let fault = |reason: &str| HostError::Fault {
@@ -152,33 +142,9 @@ pub(super) fn run_counting(
             })?);
         }
     }
-    let world = *lanes.world();
-    let mut machine = Machine {
-        program,
-        lanes,
-        staged,
-        context,
-        key_words: program
-            .draw_keys
-            .iter()
-            .map(|&key| key_word(key, context.phase, context.seed))
-            .collect(),
-        press_seed: press_word(context.seed, context.press),
-        tallies: vec![0; program.tallies],
-        colors: Vec::new(),
-        stream,
-        width,
-        height,
-        bounded,
-        element: 0,
-        iteration: None,
-        world,
-        deposits,
-        counters: lanes.counters.iter().map(|(_, value)| *value).collect(),
-        sums: vec![SumState::default(); program.sums.len()],
-        elements,
-        index: None,
-    };
+    let mut machine = Machine::new(program, lanes, context, stream, elements);
+    machine.staged = staged;
+    machine.deposits = deposits;
     machine.execute(&program.prelude, &mut frame)?;
     for element in 0..elements {
         machine.element = u32::try_from(element).unwrap_or(u32::MAX);
@@ -189,11 +155,7 @@ pub(super) fn run_counting(
             }
         }
     }
-    for (tally, slot) in machine.tallies.iter().zip(&program.tally_slots) {
-        if let Some(target) = frame.get_mut(*slot) {
-            *target = HostValue::U64(*tally);
-        }
-    }
+    write_tallies(&mut frame, &program.tally_slots, &machine.tallies);
     machine.finish_sums(&mut frame);
     machine.execute(&program.post, &mut frame)?;
     let colors = machine.colors;
@@ -275,71 +237,22 @@ pub(crate) fn finish(
         columns: Vec::new(),
         lanes: 0,
         deposits: Vec::new(),
-        counters: readback.map_or_else(Vec::new, |readback| {
-            readback.counters.iter().map(|value| (String::new(), *value)).collect()
-        }),
-    };
-    let mut frame = vec![HostValue::Bool(false); program.slots];
-    for (slot, value) in &program.constants {
-        frame[*slot] = *value;
-    }
-    for (slot, param) in &program.params {
-        frame[*slot] = *params.get(*param).ok_or_else(|| HostError::Fault {
-            pass: program.pass.clone(),
-            node: None,
-            reason: format!("no value for parameter {param}"),
-        })?;
-    }
-    let mut stream = 0;
-    let (width, height, boundary) = world.domain_grid();
-    let mut machine = Machine {
-        program,
-        lanes: &lanes,
-        staged: Vec::new(),
-        context,
-        key_words: program
-            .draw_keys
-            .iter()
-            .map(|&key| key_word(key, context.phase, context.seed))
-            .collect(),
-        press_seed: press_word(context.seed, context.press),
-        tallies: vec![0; program.tallies],
-        colors: Vec::new(),
-        stream: &mut stream,
-        width,
-        height,
-        bounded: boundary == Boundary::Bounded,
-        element: 0,
-        iteration: None,
-        world,
-        deposits: Vec::new(),
         counters: Vec::new(),
-        sums: vec![SumState::default(); program.sums.len()],
-        elements: 0,
-        index: None,
     };
+    let mut frame = frame(program, params)?;
+    let mut stream = 0;
+    let mut machine = Machine::new(program, &lanes, context, &mut stream, 0);
+    if let Some(readback) = readback {
+        machine.start_counters.clone_from(&readback.counters);
+    }
     machine.execute(&program.prelude, &mut frame)?;
     if let Some(readback) = readback {
-        for (slot, count) in program.tally_slots.iter().zip(&readback.tallies) {
-            if let Some(target) = frame.get_mut(*slot) {
-                *target = HostValue::U64(*count);
-            }
-        }
-        let elements = program
-            .domain
-            .and_then(|domain| world.elements(domain))
-            .unwrap_or(0)
-            .max(1) as f64;
+        write_tallies(&mut frame, &program.tally_slots, &readback.tallies);
+        let elements = program.domain.and_then(|domain| world.elements(domain)).unwrap_or(0);
         for (number, spec) in program.sums.iter().enumerate() {
-            let ([x, y], vector) = readback.sums.get(number).copied().unwrap_or(([0.0, 0.0], false));
-            let scale = if spec.mean { 1.0 / elements } else { 1.0 };
-            let value = if spec.vector.unwrap_or(vector) {
-                HostValue::Vec2D([x * scale, y * scale])
-            } else {
-                HostValue::F64(x * scale)
-            };
+            let (total, vector) = readback.sums.get(number).copied().unwrap_or(([0.0, 0.0], false));
             if let Some(target) = frame.get_mut(spec.slot) {
-                *target = value;
+                *target = sum_value(spec, total, vector, elements);
             }
         }
         machine.execute(&program.post, &mut frame)?;
@@ -373,44 +286,79 @@ pub(super) fn probe(
     iteration: Option<u32>,
     stream: &mut u64,
 ) -> Result<Vec<HostValue>, HostError> {
+    let mut frame = frame(program, params)?;
+    let mut machine = Machine::new(program, lanes, context, stream, 1);
+    machine.staged = vec![None; lanes.columns.len()];
+    machine.deposits = vec![None; lanes.deposits.len()];
+    machine.element = element;
+    machine.iteration = iteration;
+    machine.execute(&program.prelude, &mut frame)?;
+    machine.execute(&program.element, &mut frame)?;
+    Ok(frame)
+}
+
+/// Returns a frame of `program` that holds its constants and the values of its parameters in `params`.
+///
+/// # Errors
+///
+/// Returns [`HostError::Fault`] for a parameter that `params` lacks.
+fn frame(program: &Program, params: &[HostValue]) -> Result<Vec<HostValue>, HostError> {
     let mut frame = vec![HostValue::Bool(false); program.slots];
     for (slot, value) in &program.constants {
         frame[*slot] = *value;
     }
     for (slot, param) in &program.params {
-        frame[*slot] = params.get(*param).copied().unwrap_or(HostValue::Bool(false));
+        frame[*slot] = *params.get(*param).ok_or_else(|| HostError::Fault {
+            pass: program.pass.clone(),
+            node: None,
+            reason: format!("no value for parameter {param}"),
+        })?;
     }
-    let (width, height, boundary) = lanes.world().domain_grid();
-    let bounded = boundary == Boundary::Bounded;
-    let mut machine = Machine {
-        program,
-        lanes,
-        staged: vec![None; lanes.columns.len()],
-        context,
-        key_words: program
-            .draw_keys
-            .iter()
-            .map(|&key| key_word(key, context.phase, context.seed))
-            .collect(),
-        press_seed: press_word(context.seed, context.press),
-        tallies: vec![0; program.tallies],
-        colors: Vec::new(),
-        stream,
-        width,
-        height,
-        bounded,
-        element,
-        iteration,
-        world: *lanes.world(),
-        deposits: vec![None; lanes.deposits.len()],
-        counters: lanes.counters.iter().map(|(_, value)| *value).collect(),
-        sums: vec![SumState::default(); program.sums.len()],
-        elements: 1,
-        index: None,
-    };
-    machine.execute(&program.prelude, &mut frame)?;
-    machine.execute(&program.element, &mut frame)?;
     Ok(frame)
+}
+
+impl<'a> Machine<'a> {
+    /// Returns a machine that runs `program` over `elements` elements of `lanes`, at element 0 outside every region,
+    /// with no lane staged and no deposit column.
+    fn new(
+        program: &'a Program,
+        lanes: &'a HostLanes,
+        context: &'a RunContext,
+        stream: &'a mut u64,
+        elements: usize,
+    ) -> Self {
+        let world = *lanes.world();
+        let (width, height, boundary) = world.domain_grid();
+        let start_counters: Vec<u32> = lanes.counters.iter().map(|(_, value)| *value).collect();
+        Self {
+            program,
+            lanes,
+            staged: Vec::new(),
+            context,
+            key_words: program
+                .draw_keys
+                .iter()
+                .map(|&key| key_word(key, context.phase, context.seed))
+                .collect(),
+            press_seed: press_word(context.seed, context.press),
+            tallies: vec![0; program.tallies],
+            colors: Vec::new(),
+            stream,
+            width,
+            height,
+            boundary,
+            element: 0,
+            iteration: None,
+            world,
+            deposits: Vec::new(),
+            counters: start_counters.clone(),
+            start_counters,
+            sums: vec![SumState::default(); program.sums.len()],
+            elements,
+            positions: None,
+            index: None,
+        }
+    }
 }
 
 impl Machine<'_> {
@@ -540,10 +488,9 @@ impl Machine<'_> {
                 return Ok(());
             }
             Operation::CounterTotal { counter } => HostValue::U64(u64::from(
-                self.lanes
-                    .counters
+                *self
+                    .start_counters
                     .get(*counter)
-                    .map(|(_, value)| *value)
                     .ok_or_else(|| self.fault(node, "reads a counter the world does not hold"))?,
             )),
             Operation::Clamp { x, lo, hi } => {
@@ -620,7 +567,7 @@ impl Machine<'_> {
             }
             Operation::CellOf { p, xy_out, valid_out } => {
                 let [px, py] = vector(self, *p)?;
-                let (x, y) = (clamp_to_i32(px), clamp_to_i32(py));
+                let (x, y) = (f32_to_i32(px), f32_to_i32(py));
                 let cell = self.cell_at(i64::from(x), i64::from(y));
                 frame[*xy_out] = HostValue::Vec2I([x, y]);
                 frame[*valid_out] = HostValue::Bool(cell.is_some());
@@ -635,13 +582,14 @@ impl Machine<'_> {
             Operation::Offset {
                 xy,
                 by,
-                bounded,
+                boundary,
                 cell_out,
                 valid_out,
             } => {
                 let [x, y] = frame[*xy].as_vec2i().ok_or_else(|| mismatch(self))?;
                 let [dx, dy] = frame[*by].as_vec2i().ok_or_else(|| mismatch(self))?;
-                let (nx, ny, cell) = self.step_cell(i64::from(x), i64::from(y), i64::from(dx), i64::from(dy), *bounded);
+                let (nx, ny, cell) =
+                    self.step_cell(i64::from(x), i64::from(y), i64::from(dx), i64::from(dy), *boundary);
                 frame[*cell_out] = HostValue::Cell(cell.unwrap_or(u32::MAX));
                 frame[*valid_out] = HostValue::Bool(cell.is_some());
                 HostValue::Vec2I([nx, ny])
@@ -982,13 +930,12 @@ impl Machine<'_> {
         u32::try_from(y * width + x).ok()
     }
 
-    /// Returns the position `(x + dx, y + dy)`, wrapped on a torus, and its cell, `None` off the grid. `bounded` is
+    /// Returns the position `(x + dx, y + dy)`, wrapped on a torus, and its cell, `None` off the grid. `boundary` is
     /// `None` for the domain grid's own boundary.
-    fn step_cell(&self, x: i64, y: i64, dx: i64, dy: i64, bounded: Option<bool>) -> (i32, i32, Option<u32>) {
+    fn step_cell(&self, x: i64, y: i64, dx: i64, dy: i64, boundary: Option<Boundary>) -> (i32, i32, Option<u32>) {
         let (mut nx, mut ny) = (x + dx, y + dy);
-        let bounded = bounded.unwrap_or(self.bounded);
         let (width, height) = (i64::from(self.width), i64::from(self.height));
-        if !bounded && width > 0 && height > 0 {
+        if boundary.unwrap_or(self.boundary) == Boundary::Torus && width > 0 && height > 0 {
             nx = nx.rem_euclid(width);
             ny = ny.rem_euclid(height);
         }
@@ -1039,15 +986,14 @@ impl Machine<'_> {
             let outer = self.iteration;
             let radix = u32::try_from(fold.offsets.len()).unwrap_or(u32::MAX);
             for (k, &(dx, dy)) in fold.offsets.iter().enumerate() {
-                let (nx, ny, cell) = self.step_cell(x, y, i64::from(dx), i64::from(dy), fold.bounded);
+                let (nx, ny, cell) = self.step_cell(x, y, i64::from(dx), i64::from(dy), fold.boundary);
                 let Some(cell) = cell else { continue };
                 let k = u32::try_from(k).unwrap_or(u32::MAX);
-                let [k_slot, offset, xy, cell_slot, diagonal] = fold.inner;
-                frame[k_slot] = HostValue::U32(k);
-                frame[offset] = HostValue::Vec2I([dx, dy]);
-                frame[xy] = HostValue::Vec2I([nx, ny]);
-                frame[cell_slot] = HostValue::Cell(cell);
-                frame[diagonal] = HostValue::Bool(dx != 0 && dy != 0);
+                frame[fold.k] = HostValue::U32(k);
+                frame[fold.offset] = HostValue::Vec2I([dx, dy]);
+                frame[fold.xy] = HostValue::Vec2I([nx, ny]);
+                frame[fold.cell] = HostValue::Cell(cell);
+                frame[fold.diagonal] = HostValue::Bool(dx != 0 && dy != 0);
                 Self::remember(&fold.accumulators, frame);
                 self.iteration = Some(iteration_word(outer, radix, k));
                 let result = self.execute(&fold.body, frame);
@@ -1074,14 +1020,18 @@ impl Machine<'_> {
         let radius = frame[fold.radius].as_f32().ok_or_else(mismatch)?;
         let cell_size = frame[fold.cell_size].as_f32().ok_or_else(mismatch)?;
         let [world_w, world_h] = self.world.extent();
-        let column = self
-            .lanes
-            .columns
-            .get(fold.position_lane)
-            .ok_or_else(|| self.fault(node, "reads a position lane the world does not hold"))?;
-        let positions: Vec<[f32; 2]> = (0..column.len())
-            .map(|index| column.get(index).and_then(HostValue::as_vec2f).unwrap_or([0.0, 0.0]))
-            .collect();
+        if self.positions.is_none() {
+            let column = self
+                .lanes
+                .columns
+                .get(fold.position_lane)
+                .ok_or_else(|| self.fault(node, "reads a position lane the world does not hold"))?;
+            let positions = (0..column.len())
+                .map(|index| column.get(index).and_then(HostValue::as_vec2f).unwrap_or([0.0, 0.0]))
+                .collect();
+            self.positions = Some(positions);
+        }
+        let positions = self.positions.as_deref().unwrap_or_default();
         if self.index.as_ref().is_none_or(|(bits, _)| *bits != cell_size.to_bits()) {
             let xs: Vec<f32> = positions.iter().map(|position| position[0]).collect();
             let ys: Vec<f32> = positions.iter().map(|position| position[1]).collect();
@@ -1093,7 +1043,7 @@ impl Machine<'_> {
             let Some((_, index)) = &self.index else {
                 return Err(self.fault(node, "has no index"));
             };
-            walk(index, cx, cy, radius, &positions, world_w, world_h)
+            walk(index, cx, cy, radius, positions, world_w, world_h)
         };
         let visits = match visits {
             Ok(visits) => visits,
@@ -1116,11 +1066,10 @@ impl Machine<'_> {
             if fold.exclude_self && other == self.element {
                 continue;
             }
-            let [k_slot, other_slot, delta, dist] = fold.inner;
-            frame[k_slot] = HostValue::U32(k);
-            frame[other_slot] = HostValue::Agent(other);
-            frame[delta] = HostValue::Vec2F([dx, dy]);
-            frame[dist] = HostValue::F32(dist_sq);
+            frame[fold.k] = HostValue::U32(k);
+            frame[fold.other] = HostValue::Agent(other);
+            frame[fold.delta] = HostValue::Vec2F([dx, dy]);
+            frame[fold.dist_sq] = HostValue::F32(dist_sq);
             Self::remember(&fold.accumulators, frame);
             let outer = self.iteration;
             self.iteration = Some(other);
@@ -1135,20 +1084,12 @@ impl Machine<'_> {
 
     /// Writes each float sum's result into its slot.
     fn finish_sums(&mut self, frame: &mut [HostValue]) {
-        let count = self.elements.max(1) as f64;
         for (spec, state) in self.program.sums.iter().zip(&mut self.sums) {
             if state.in_chunk > 0 {
                 close_chunk(state, spec.wide_chunks);
             }
-            let scale = if spec.mean { 1.0 / count } else { 1.0 };
-            let [x, y] = state.total;
-            let value = if spec.vector.unwrap_or(state.vector) {
-                HostValue::Vec2D([x * scale, y * scale])
-            } else {
-                HostValue::F64(x * scale)
-            };
             if let Some(target) = frame.get_mut(spec.slot) {
-                *target = value;
+                *target = sum_value(spec, state.total, state.vector, self.elements);
             }
         }
     }
@@ -1164,7 +1105,7 @@ impl Machine<'_> {
         let mut count = 0;
         for (dx, dy) in offsets {
             let (mut nx, mut ny) = (x + dx, y + dy);
-            if self.bounded {
+            if self.boundary == Boundary::Bounded {
                 if nx < 0 || ny < 0 || nx >= width || ny >= height {
                     continue;
                 }
@@ -1188,31 +1129,42 @@ impl Machine<'_> {
             .as_bool()
             .ok_or_else(|| self.fault(node, "has a `when` that is no bool"))?;
         let total = if when { count.min(repeat.max) } else { 0 };
-        for accumulator in &repeat.accumulators {
-            frame[accumulator.running] = match accumulator.init {
-                Some(slot) => frame[slot],
-                None => accumulator.identity,
-            };
-        }
+        Self::seed(&repeat.accumulators, frame);
         frame[repeat.total] = HostValue::U32(total);
         let outer = self.iteration;
         for k in 0..total {
             frame[repeat.k] = HostValue::U32(k);
-            for accumulator in &repeat.accumulators {
-                frame[accumulator.prev] = frame[accumulator.running];
-            }
+            Self::remember(&repeat.accumulators, frame);
             self.iteration = Some(iteration_word(outer, repeat.max, k));
             let result = self.execute(&repeat.body, frame);
-            if result.is_err() {
-                self.iteration = outer;
-                return result;
-            }
+            self.iteration = outer;
+            result?;
         }
-        self.iteration = outer;
-        for accumulator in &repeat.accumulators {
-            frame[accumulator.out] = frame[accumulator.running];
-        }
+        Self::publish(&repeat.accumulators, frame);
         Ok(())
+    }
+}
+
+/// Writes each count of `counts` into the slot of `slots` at its position, as a `u64`.
+fn write_tallies(frame: &mut [HostValue], slots: &[usize], counts: &[u64]) {
+    for (slot, count) in slots.iter().zip(counts) {
+        if let Some(target) = frame.get_mut(*slot) {
+            *target = HostValue::U64(*count);
+        }
+    }
+}
+
+/// Returns the result of the float sum `spec` with the total `total` over `elements` elements: the total, or its mean
+/// for a mean, as a `vec2<f64>` when the sum is of vectors and as an `f64` otherwise.
+///
+/// `vector` tells whether a `vec2f` value was summed, for a sum whose `spec` leaves it open.
+fn sum_value(spec: &SumSpec, total: [f64; 2], vector: bool, elements: usize) -> HostValue {
+    let scale = if spec.mean { 1.0 / elements.max(1) as f64 } else { 1.0 };
+    let [x, y] = total;
+    if spec.vector.unwrap_or(vector) {
+        HostValue::Vec2D([x * scale, y * scale])
+    } else {
+        HostValue::F64(x * scale)
     }
 }
 
@@ -1228,12 +1180,6 @@ fn close_chunk(state: &mut SumState, wide: bool) {
     state.chunk = [0.0, 0.0];
     state.narrow = [0.0, 0.0];
     state.in_chunk = 0;
-}
-
-/// Returns `x` truncated toward zero to an `i32`, clamped to the `f32` values an `i32` holds, as WGSL converts.
-fn clamp_to_i32(x: f32) -> i32 {
-    let top = f32::from_bits(0x4eff_ffff);
-    (if x > top { top } else { x }) as i32
 }
 
 /// Reason a walk of [`walk`] stops before its end.

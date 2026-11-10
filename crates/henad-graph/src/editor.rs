@@ -4,6 +4,7 @@
 //! through a round trip, unknown keys included, and a key that does not fit reads as absent through the accessors.
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 use crate::ids::NodeId;
 use crate::model_text::toml_string;
@@ -205,7 +206,7 @@ impl EditorRegion {
 
     /// Placement of node `id`, `None` when the region holds none. A key that does not fit takes its default.
     pub fn node_layout(&self, id: NodeId) -> Option<NodeLayout> {
-        let entry = self.table.get("node")?.as_table()?.get(&id.to_string())?.as_table()?;
+        let entry = self.node_entry(id)?;
         let point = |key: &str| entry.get(key).and_then(point);
         Some(NodeLayout {
             pos: point("pos").unwrap_or_default(),
@@ -223,8 +224,17 @@ impl EditorRegion {
     /// Note that [`Self::node_layout`] returns a layout at `[0, 0]` for a node that has a label or another key and no
     /// position, as a converted copy's labelled nodes do. A node with no position here is unplaced.
     pub fn node_pos(&self, id: NodeId) -> Option<[f64; 2]> {
-        let entry = self.table.get("node")?.as_table()?.get(&id.to_string())?.as_table()?;
-        entry.get("pos").and_then(point)
+        self.node_entry(id)?.get("pos").and_then(point)
+    }
+
+    /// Returns the `node.<id>` table of node `id`, `None` when the region holds none.
+    fn node_entry(&self, id: NodeId) -> Option<&toml::Table> {
+        self.table.get("node")?.as_table()?.get(&id.to_string())?.as_table()
+    }
+
+    /// Returns the `node.<id>` table of node `id` for writing, added empty when the region holds none.
+    fn node_entry_mut(&mut self, id: NodeId) -> &mut toml::Table {
+        table_entry(table_entry(&mut self.table, "node"), &id.to_string())
     }
 
     /// Origin of the function `id`, `None` when the region records none or a key does not fit.
@@ -302,13 +312,6 @@ impl EditorRegion {
         let Some(frames) = self.table.get("frame").and_then(toml::Value::as_array) else {
             return Vec::new();
         };
-        let text = |frame: &toml::Table, key: &str| {
-            frame
-                .get(key)
-                .and_then(toml::Value::as_str)
-                .unwrap_or_default()
-                .to_owned()
-        };
         frames
             .iter()
             .filter_map(toml::Value::as_table)
@@ -333,12 +336,6 @@ impl EditorRegion {
         let Some(notes) = self.table.get("note").and_then(toml::Value::as_array) else {
             return Vec::new();
         };
-        let text = |note: &toml::Table, key: &str| {
-            note.get(key)
-                .and_then(toml::Value::as_str)
-                .unwrap_or_default()
-                .to_owned()
-        };
         notes
             .iter()
             .filter_map(toml::Value::as_table)
@@ -358,10 +355,7 @@ impl EditorRegion {
             table.insert("scope".to_owned(), toml::Value::String(note.scope.clone()));
         }
         if let Some(pos) = note.pos {
-            table.insert(
-                "pos".to_owned(),
-                toml::Value::Array(vec![toml::Value::Float(pos[0]), toml::Value::Float(pos[1])]),
-            );
+            table.insert("pos".to_owned(), point_value(pos));
         }
         if !note.title.is_empty() {
             table.insert("title".to_owned(), toml::Value::String(note.title.clone()));
@@ -378,22 +372,13 @@ impl EditorRegion {
 
     /// Sets the position of node `id` to `pos`, keeping its other placement keys.
     pub fn set_node_pos(&mut self, id: NodeId, pos: [f64; 2]) {
-        let nodes = table_entry(&mut self.table, "node");
-        let entry = table_entry(nodes, &id.to_string());
-        entry.insert(
-            "pos".to_owned(),
-            toml::Value::Array(vec![toml::Value::Float(pos[0]), toml::Value::Float(pos[1])]),
-        );
+        self.node_entry_mut(id).insert("pos".to_owned(), point_value(pos));
     }
 
     /// Sets the position of the output half of the region `id` to `pos`, keeping its other placement keys.
     pub fn set_output_pos(&mut self, id: NodeId, pos: [f64; 2]) {
-        let nodes = table_entry(&mut self.table, "node");
-        let entry = table_entry(nodes, &id.to_string());
-        entry.insert(
-            "output_pos".to_owned(),
-            toml::Value::Array(vec![toml::Value::Float(pos[0]), toml::Value::Float(pos[1])]),
-        );
+        self.node_entry_mut(id)
+            .insert("output_pos".to_owned(), point_value(pos));
     }
 
     /// Sets the placement of node `id` to `layout`, writing `collapsed`, `label` and `output_pos` only when they are
@@ -403,7 +388,7 @@ impl EditorRegion {
         if let Some(pos) = layout.output_pos {
             self.set_output_pos(id, pos);
         }
-        let entry = table_entry(table_entry(&mut self.table, "node"), &id.to_string());
+        let entry = self.node_entry_mut(id);
         if layout.collapsed {
             entry.insert("collapsed".to_owned(), toml::Value::Boolean(true));
         }
@@ -414,8 +399,8 @@ impl EditorRegion {
 
     /// Sets the label of node `id` to `label`, keeping its other placement keys.
     pub fn set_node_label(&mut self, id: NodeId, label: &str) {
-        let entry = table_entry(table_entry(&mut self.table, "node"), &id.to_string());
-        entry.insert("label".to_owned(), toml::Value::String(label.to_owned()));
+        self.node_entry_mut(id)
+            .insert("label".to_owned(), toml::Value::String(label.to_owned()));
     }
 
     /// Removes the placement of node `id`, and removes the node from every frame.
@@ -502,9 +487,53 @@ impl EditorRegion {
         frames.extend(copies);
     }
 
+    /// Returns the region of a copy of `nodes` of the canvas `scope`: their placements, and each frame that holds one
+    /// of them with only those members, every other key kept.
+    pub(crate) fn copy_of(&self, scope: &str, nodes: &[NodeId]) -> Self {
+        let mut copy = Self::default();
+        if let Some(placed) = self.table.get("node").and_then(toml::Value::as_table) {
+            let mut kept = toml::Table::new();
+            for node in nodes {
+                if let Some(entry) = placed.get(&node.to_string()) {
+                    kept.insert(node.to_string(), entry.clone());
+                }
+            }
+            copy.table.insert("node".to_owned(), toml::Value::Table(kept));
+        }
+        for frame in self.frames_holding(scope, nodes) {
+            push_table(&mut copy.table, "frame", frame);
+        }
+        copy
+    }
+
+    /// Adds a frame on the canvas `scope` for each frame of `source`, every key kept, around the members that
+    /// `renamed` maps, each renamed. A frame with no such member is left out.
+    pub(crate) fn push_renamed_frames(&mut self, source: &Self, scope: &str, renamed: &BTreeMap<NodeId, NodeId>) {
+        let Some(frames) = source.table.get("frame").and_then(toml::Value::as_array) else {
+            return;
+        };
+        for frame in frames.iter().filter_map(toml::Value::as_table) {
+            let members = renamed_members(frame, renamed);
+            if members.is_empty() {
+                continue;
+            }
+            let mut pasted = frame.clone();
+            pasted.insert("scope".to_owned(), toml::Value::String(scope.to_owned()));
+            pasted.insert("members".to_owned(), toml::Value::Array(members));
+            push_table(&mut self.table, "frame", pasted);
+        }
+    }
+
+    /// Writes `version = 1` when the region records no version.
+    pub(crate) fn ensure_version(&mut self) {
+        if self.table.get("version").is_none() {
+            self.table.insert("version".to_owned(), toml::Value::Integer(1));
+        }
+    }
+
     /// Returns the frames of the canvas `scope` that hold a node of `nodes`, each holding only those nodes, as tables
     /// with every key kept.
-    pub(crate) fn frames_holding(&self, scope: &str, nodes: &[NodeId]) -> Vec<toml::Table> {
+    fn frames_holding(&self, scope: &str, nodes: &[NodeId]) -> Vec<toml::Table> {
         let Some(frames) = self.table.get("frame").and_then(toml::Value::as_array) else {
             return Vec::new();
         };
@@ -533,11 +562,6 @@ impl EditorRegion {
                 Some(kept)
             })
             .collect()
-    }
-
-    /// Adds `frame`, a frame table with every key kept, after the frames of the region.
-    pub(crate) fn push_frame_table(&mut self, frame: toml::Table) {
-        push_table(&mut self.table, "frame", frame);
     }
 
     /// Renames the canvas scope `from`, such as `pass.seed`, to `to` in views, frames and notes.
@@ -669,6 +693,33 @@ fn frame_lines(frame: &toml::Table) -> Vec<String> {
         .flatten()
         .filter_map(|line| line.as_str().map(str::to_owned))
         .collect()
+}
+
+/// Returns the member ids of the frame table `frame` that `renamed` maps, each renamed.
+fn renamed_members(frame: &toml::Table, renamed: &BTreeMap<NodeId, NodeId>) -> Vec<toml::Value> {
+    frame
+        .get("members")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|member| member.as_str()?.parse::<NodeId>().ok())
+        .filter_map(|member| renamed.get(&member))
+        .map(|member| toml::Value::String(member.to_string()))
+        .collect()
+}
+
+/// Returns the string at `key` of `table`, empty when the key is absent or holds no string.
+fn text(table: &toml::Table, key: &str) -> String {
+    table
+        .get(key)
+        .and_then(toml::Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Returns `pos` as the `[x, y]` array of floats that [`point`] reads.
+fn point_value(pos: [f64; 2]) -> toml::Value {
+    toml::Value::Array(vec![toml::Value::Float(pos[0]), toml::Value::Float(pos[1])])
 }
 
 /// Returns `value` as a point when it is an array of two numbers.

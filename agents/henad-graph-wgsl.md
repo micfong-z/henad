@@ -83,8 +83,8 @@ plan's faults), or `2p + 2` before the walk when `walk_cells` of its bounds pass
 A grid's reduce shader sums floats as the agents leaf does: `var henad_sum_<k>` before the cell's
 bounds check, `block_sum(henad_local, ...)` after the counters, and the total of workgroup
 `wid.y * ceil(width / 16) + wid.x` at `partials[block * lanes + k]`. `GeneratedShader`'s
-`grid_sum_lanes` maps the lanes back, `GridProgram::spec` sets `GpuGridSpec::sums`, and
-`GraphHooks::stats_with_sums` (forwarded by `SharedHooks`) feeds each total to `run::finish`.
+`sum_lanes` maps the lanes back, `GridProgram::spec` sets `GpuGridSpec::sums`, and
+`GraphHooks::stats_with_sums` feeds each total to `run::finish`.
 The reduce pass's workgroup bytes add 1024 for `block_sum`'s scratch.
 `replays_exactly` is false when a tick pass's radius fold holds a `carry`, a float `sum`, or reads
 its `k` or any `prev.<acc>`. The entry prepends `num_agents` (1 to `max_count`), `world_width` and
@@ -112,7 +112,7 @@ and `cell_size` are computed from through the prelude and the element, regions f
 `emit::defined` and `operands` until nothing new is found). The neighbour index and the work
 budget follow a fold's reach, both fixed at build. Every other parameter reaches the shaders only
 through the uniform blocks, where the host evaluates the prelude (`math.powi`'s table included,
-since `FieldSource::Table` recomputes the powers from its base at each write) or the reruns and the
+since `MemberSource::Table` recomputes the powers from its base at each write) or the reruns and the
 stats, which read the engine's values. A live one is set on the running engine without a rebuild
 (`agents/henad-compute.md`). The flags change no shader and stay out of the schema hash. Tests:
 `each_sheet_starter_marks_what_its_build_reads_reload_only` and `the_sir_starters_rates_are_live`
@@ -176,7 +176,7 @@ of `var<workgroup> henad_fire_tally`. `main` zeroes the slots before a barrier, 
 at its end the invocation `slot % 256` adds each non-zero slot to word `fire_base + i` of
 `counters`, both inside `if (params.henad_count_fires != 0u)` at the top level of `main`. The flag
 is a uniform, so the branch is uniform and a step outside the counted step pays one test.
-`henad_count_fires` (`FieldSource::CountFires`, `Dispatch::counting`) comes from
+`henad_count_fires` (`MemberSource::CountFires`, `Dispatch::counting`) comes from
 `GridPassCtx::counting` or `AgentRun::counting`. The counts follow the reduce tallies: on a grid at
 the reduce shader's counters (at least 1), the spec's `counters` growing by one word per probe, and
 over agents after the fault word, the tick, the document's counters and the leaf's tallies, in

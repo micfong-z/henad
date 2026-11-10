@@ -56,30 +56,31 @@ use std::sync::Arc;
 use henad_compute::entry::{EntryDeclarations, ModelEntry};
 use henad_compute::gpu::compose::{MAX_FILE_BYTES, WgslFile, compose_wgsl};
 use henad_compute::gpu::{
-    BufferSide, GpuGridSpec, GridActionSpec, GridBufferSpec, GridPassId, GridPassSpec, ShaderBinding, ShaderSpec,
-    SideRow, SideTable,
+    AgentPassId, BufferSide, GpuGridSpec, GridActionSpec, GridBufferSpec, GridPassId, GridPassSpec, ShaderBinding,
+    ShaderSpec, SideRow, SideTable,
 };
 use henad_core::action::ActionDescriptor;
+use henad_core::authoring::model::gpu_agent_model::Domain as EngineDomain;
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::helpers::u32_param;
-use henad_core::metadata::TimeScale;
+use henad_core::metadata::{Structure, TimeScale};
 use henad_core::params::ParamDescriptor;
 use henad_core::provenance::ModelSource;
 use henad_core::topology::TopologyHint;
 use henad_core::view::StatDescriptor;
 
 use crate::check::CheckReport;
-use crate::document::{Domain, GraphDocument, PassEnabled, PassStage, World};
+use crate::document::{Action, Domain, GraphDocument, PassEnabled, PassStage, World};
 use crate::draw::DRAW_WGSL;
 use crate::file::GraphFile;
 use crate::host::HostEvaluator;
-use crate::host::compile::{Instruction, Operation};
+use crate::host::program::{Instruction, Operation, Program, RepeatAccumulator};
 #[cfg(test)]
 use crate::host::{HostWorld, RunContext};
 use crate::ids::NodeId;
 
-use emit::{EmitInput, Emitted, LanePlan, Role};
-use hooks::{ActionPlan, GraphHooks, PassUniform, StatSource};
+use emit::{EmitInput, Emitted, LanePlan, Role, SumLane};
+use hooks::{GraphHooks, PassUniform, StatSource, action_plans};
 use pack::{LaneEntry, LaneLayout};
 use uniform::{UniformBlock, WgslType};
 
@@ -134,15 +135,22 @@ pub struct GeneratedShader {
     sides: SideTable,
     cost: u64,
     counters: usize,
-    /// Document position and sum number of each float lane of a grid's reduce shader, a `vec2f` sum taking two.
-    /// Empty for every other shader, and for a shader of an agents world, whose sums are in `agent`.
-    grid_sum_lanes: Vec<(usize, usize)>,
-    /// Pass of the spec the shader is, for its uniform block.
-    pass_id: GridPassId,
+    /// Document position and sum number of each float lane of a reduce shader, a `vec2f` sum taking two. Empty for
+    /// every other shader.
+    sum_lanes: Vec<SumLane>,
+    /// Pass of the spec the shader is.
+    pass: EnginePass,
     /// Bytes of the shader's `var<workgroup>` declarations.
     workgroup_bytes: u64,
-    /// What the agents engine reads of a shader of an agents world, `None` for a grid.
-    agent: Option<agents::AgentShader>,
+}
+
+/// Pass of an engine's spec that a generated shader is, for its uniform block.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum EnginePass {
+    /// A pass of the grid engine.
+    Grid(GridPassId),
+    /// A pass of the agents engine, run over `domain`.
+    Agents { pass: AgentPassId, domain: EngineDomain },
 }
 
 /// Prints the role, the label, the passes and the byte lengths of the texts.
@@ -191,11 +199,7 @@ impl GeneratedShader {
 
     /// Returns the pass and node that wrote the byte at `offset` of [`Self::text`], or `None` for the template's text.
     pub fn node_at(&self, offset: usize) -> Option<(&str, NodeId)> {
-        self.ranges
-            .iter()
-            .filter(|range| range.range.contains(&offset))
-            .min_by_key(|range| range.range.len())
-            .map(|range| (range.pass.as_str(), range.node))
+        innermost(&self.ranges, offset).map(|range| (range.pass.as_str(), range.node))
     }
 
     /// Cost of one invocation in work units, the checker's cost of the passes it runs.
@@ -203,10 +207,12 @@ impl GeneratedShader {
         self.cost
     }
 
-    /// What the agents engine reads of the shader, `None` for a shader of a grid.
-    #[cfg(test)]
-    pub(crate) fn agent(&self) -> Option<&agents::AgentShader> {
-        self.agent.as_ref()
+    /// Invocation domain of a shader of an agents world, `None` for a shader of a grid.
+    pub(crate) fn domain(&self) -> Option<EngineDomain> {
+        match self.pass {
+            EnginePass::Agents { domain, .. } => Some(domain),
+            EnginePass::Grid(_) => None,
+        }
     }
 
     /// Uniform block of the shader.
@@ -216,7 +222,6 @@ impl GeneratedShader {
     }
 
     /// Bindings of the shader in `@binding` order.
-    #[cfg(test)]
     pub(crate) fn bindings(&self) -> &[ShaderBinding] {
         &self.bindings
     }
@@ -232,10 +237,10 @@ impl GeneratedShader {
         self.counters
     }
 
-    /// Document position and sum number of each float lane of a grid's reduce shader.
+    /// Document position and sum number of each float lane of a reduce shader.
     #[cfg(test)]
-    pub(crate) fn grid_sum_lanes(&self) -> &[(usize, usize)] {
-        &self.grid_sum_lanes
+    pub(crate) fn sum_lanes(&self) -> &[SumLane] {
+        &self.sum_lanes
     }
 
     /// Returns the shader's uniform block for a grid of `world` with the document's parameters `params` in `context`.
@@ -278,98 +283,127 @@ pub struct GridProgram {
 }
 
 struct GridParts {
-    id: String,
-    name: String,
-    description: String,
-    source: ModelSource,
+    declarations: ProgramDeclarations,
     params: Vec<ParamDescriptor>,
-    time: Option<TimeScale>,
-    stats: Vec<StatDescriptor>,
-    actions: Vec<ActionDescriptor>,
     palette: Option<Vec<[u8; 4]>>,
     buffers: Vec<GridBufferSpec>,
     layout: LaneLayout,
     shaders: Vec<GeneratedShader>,
-    hooks: Arc<GraphHooks>,
+    hooks: GraphHooks,
     counters: usize,
     /// Words of `counters` that hold the counts of the probes.
     fire_counters: Range<usize>,
+}
+
+/// Declarations a compiled graph on a grid and one of agents read alike from the document.
+struct ProgramDeclarations {
+    /// Id of the model, the id of the graph's target.
+    id: String,
+    name: String,
+    description: String,
+    source: ModelSource,
+    time: Option<TimeScale>,
+    stats: Vec<StatDescriptor>,
+    actions: Vec<ActionDescriptor>,
+    /// Cost of the enabled init passes.
     init_cost: u64,
+    /// Cost of the init passes each action reruns, in the order of the actions.
     rerun_costs: Vec<u64>,
+}
+
+impl ProgramDeclarations {
+    /// Returns the declarations of `document`, compiled from `file`, with the pass costs of its check `report`.
+    ///
+    /// The target's name and description stand in for the graph's own when they are set.
+    fn read(file: &GraphFile, document: &GraphDocument, report: &CheckReport) -> Self {
+        let target = &document.target;
+        let name = if target.name.is_empty() {
+            &document.name
+        } else {
+            &target.name
+        };
+        let description = if target.description.is_empty() {
+            &document.description
+        } else {
+            &target.description
+        };
+        let cost_at = |position: usize| report.passes.get(position).map_or(0, |pass| pass.cost);
+        let init_cost = document
+            .passes
+            .iter()
+            .zip(&report.passes)
+            .filter(|(pass, _)| pass.stage == PassStage::Init && pass.enabled != PassEnabled::Literal(false))
+            .map(|(_, pass)| pass.cost)
+            .fold(0u64, u64::saturating_add);
+        let rerun_costs = document
+            .actions
+            .iter()
+            .map(|action| {
+                rerun_positions(document, action)
+                    .map(cost_at)
+                    .fold(0u64, u64::saturating_add)
+            })
+            .collect();
+        Self {
+            id: target.id.clone(),
+            name: name.clone(),
+            description: description.clone(),
+            source: file.source(),
+            time: document.time.clone(),
+            stats: document
+                .stats
+                .iter()
+                .map(|stat| StatDescriptor::owned(stat.label.clone(), stat.color))
+                .collect(),
+            actions: document
+                .actions
+                .iter()
+                .map(|action| ActionDescriptor::owned(action.id.clone(), action.label.clone()))
+                .collect(),
+            init_cost,
+            rerun_costs,
+        }
+    }
+
+    /// Returns the declarations of the entry with the parameters `params`, of a spec of `topology` and `structure`.
+    fn entry_declarations(
+        &self,
+        params: Vec<ParamDescriptor>,
+        topology: TopologyHint,
+        structure: Structure,
+    ) -> EntryDeclarations {
+        let mut declarations = EntryDeclarations::new(
+            self.id.clone(),
+            self.name.clone(),
+            self.description.clone(),
+            params,
+            topology,
+            structure,
+        );
+        declarations.stats = self.stats.clone();
+        declarations.actions = self.actions.clone();
+        declarations.time = self.time.clone();
+        declarations
+    }
+}
+
+/// Returns the positions in `document` of the init passes that `action` reruns, in the order of its runs.
+fn rerun_positions<'a>(document: &'a GraphDocument, action: &'a Action) -> impl Iterator<Item = usize> + 'a {
+    action.runs.iter().filter_map(|run| {
+        document
+            .passes
+            .iter()
+            .position(|pass| pass.id == *run && pass.stage == PassStage::Init)
+    })
 }
 
 /// Prints the id and the shaders.
 impl fmt::Debug for GridProgram {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GridProgram")
-            .field("id", &self.parts.id)
+            .field("id", &self.parts.declarations.id)
             .field("shaders", &self.parts.shaders)
             .finish_non_exhaustive()
-    }
-}
-
-/// Hooks that forward every call to a shared [`GraphHooks`], since a spec owns its hooks.
-struct SharedHooks(Arc<GraphHooks>);
-
-impl henad_compute::gpu::GridHooks for SharedHooks {
-    fn dims(&self, params: &[henad_core::params::ParamValue]) -> (u32, u32) {
-        self.0.dims(params)
-    }
-
-    fn buffer_lens(&self, width: u32, height: u32) -> Vec<usize> {
-        self.0.buffer_lens(width, height)
-    }
-
-    fn step_dims(&self, width: u32, height: u32) -> (u32, u32) {
-        self.0.step_dims(width, height)
-    }
-
-    fn seed_buffers(
-        &self,
-        width: u32,
-        height: u32,
-        params: &[henad_core::params::ParamValue],
-        seed: Option<u64>,
-    ) -> Vec<Vec<u32>> {
-        self.0.seed_buffers(width, height, params, seed)
-    }
-
-    fn pass_params_bytes(
-        &self,
-        pass: GridPassId,
-        ctx: henad_compute::gpu::GridPassCtx,
-        params: &[henad_core::params::ParamValue],
-    ) -> Vec<u8> {
-        self.0.pass_params_bytes(pass, ctx, params)
-    }
-
-    fn rerun(
-        &self,
-        action: usize,
-        ctx: henad_compute::gpu::GridPassCtx,
-        params: &[henad_core::params::ParamValue],
-        stream: &mut u64,
-    ) -> Result<henad_compute::gpu::RerunUploads, String> {
-        self.0.rerun(action, ctx, params, stream)
-    }
-
-    fn stats(
-        &self,
-        counts: &[u32],
-        ctx: henad_compute::gpu::GridPassCtx,
-        params: &[henad_core::params::ParamValue],
-    ) -> Vec<henad_core::view::StatValue> {
-        self.0.stats(counts, ctx, params)
-    }
-
-    fn stats_with_sums(
-        &self,
-        counts: &[u32],
-        sums: &[f32],
-        ctx: henad_compute::gpu::GridPassCtx,
-        params: &[henad_core::params::ParamValue],
-    ) -> Vec<henad_core::view::StatValue> {
-        self.0.stats_with_sums(counts, sums, ctx, params)
     }
 }
 
@@ -395,14 +429,13 @@ impl GridProgram {
     ///
     /// Returns the problems of [`Self::compile`], and a problem for each probe that names no `bool` output of a tick
     /// pass.
-    #[expect(clippy::too_many_lines, reason = "every declaration of the entry is read here once")]
     pub fn compile_with_probes(file: &GraphFile, probes: &Probes) -> Result<Self, Vec<CodeDiagnostic>> {
         let report = file.check();
         if report.has_errors() {
             return Err(report.errors().cloned().collect());
         }
-        let evaluator = HostEvaluator::new(file).map_err(|error| error.diagnostics())?;
         let document = file.document();
+        let evaluator = HostEvaluator::from_document(document).map_err(|error| error.diagnostics())?;
         let World::Grid(grid) = document.world else {
             return Err(vec![CodeDiagnostic::error(
                 "the graph models agents, and `GridProgram` compiles graphs on a grid. Compile it with \
@@ -434,9 +467,12 @@ impl GridProgram {
 
         let uniforms = shaders
             .iter()
-            .map(|shader| PassUniform {
-                id: shader.pass_id,
-                block: shader.uniform.clone(),
+            .filter_map(|shader| match shader.pass {
+                EnginePass::Grid(id) => Some(PassUniform {
+                    id,
+                    block: shader.uniform.clone(),
+                }),
+                EnginePass::Agents { .. } => None,
             })
             .collect();
         let reduce = shaders.iter().find(|shader| shader.role == ShaderRole::Reduce);
@@ -446,22 +482,13 @@ impl GridProgram {
             "the probes' counts follow the reduce tallies"
         );
         let counters = fire_counters.end;
-        let sum_lanes = reduce.map(|shader| shader.grid_sum_lanes.clone()).unwrap_or_default();
-        let stats = stat_sources(document, &evaluator, reduce);
-        let actions = document
-            .actions
-            .iter()
-            .map(|action| ActionPlan {
-                id: action.id.clone(),
-                reruns: action.runs.iter().any(|run| {
-                    document
-                        .passes
-                        .iter()
-                        .any(|pass| pass.id == *run && pass.stage == PassStage::Init)
-                }),
-            })
-            .collect();
-        let hooks = Arc::new(GraphHooks {
+        let sum_lanes = reduce.map(|shader| shader.sum_lanes.clone()).unwrap_or_default();
+        let stats = stat_sources(
+            document,
+            &evaluator,
+            reduce.map(GeneratedShader::passes).unwrap_or_default(),
+        );
+        let hooks = GraphHooks {
             evaluator: Arc::clone(&evaluator),
             width: grid.width.clamp(1, MAX_GRID_SIDE),
             height: grid.height.clamp(1, MAX_GRID_SIDE),
@@ -471,41 +498,8 @@ impl GridProgram {
             uniforms,
             stats,
             sum_lanes,
-            actions,
-        });
-
-        let cost_of = |id: &str| -> u64 {
-            document
-                .passes
-                .iter()
-                .zip(&report.passes)
-                .find(|(pass, _)| pass.id == id)
-                .map_or(0, |(_, pass)| pass.cost)
+            actions: action_plans(document),
         };
-        let init_cost = document
-            .passes
-            .iter()
-            .zip(&report.passes)
-            .filter(|(pass, _)| pass.stage == PassStage::Init && pass.enabled != PassEnabled::Literal(false))
-            .map(|(_, pass)| pass.cost)
-            .fold(0u64, u64::saturating_add);
-        let rerun_costs = document
-            .actions
-            .iter()
-            .map(|action| {
-                action
-                    .runs
-                    .iter()
-                    .filter(|run| {
-                        document
-                            .passes
-                            .iter()
-                            .any(|pass| pass.id == **run && pass.stage == PassStage::Init)
-                    })
-                    .map(|run| cost_of(run))
-                    .fold(0u64, u64::saturating_add)
-            })
-            .collect();
 
         let mut params = vec![
             u32_param(
@@ -526,35 +520,10 @@ impl GridProgram {
             .on_reload(),
         ];
         params.extend(own_params(&document.params, &live::reload_only(&evaluator)));
-        let target = &document.target;
-        let name = if target.name.is_empty() {
-            &document.name
-        } else {
-            &target.name
-        };
-        let description = if target.description.is_empty() {
-            &document.description
-        } else {
-            &target.description
-        };
         Ok(Self {
             parts: Arc::new(GridParts {
-                id: target.id.clone(),
-                name: name.clone(),
-                description: description.clone(),
-                source: file.source(),
+                declarations: ProgramDeclarations::read(file, document, &report),
                 params,
-                time: document.time.clone(),
-                stats: document
-                    .stats
-                    .iter()
-                    .map(|stat| StatDescriptor::owned(stat.label.clone(), stat.color))
-                    .collect(),
-                actions: document
-                    .actions
-                    .iter()
-                    .map(|action| ActionDescriptor::owned(action.id.clone(), action.label.clone()))
-                    .collect(),
                 palette: display_palette(document),
                 buffers,
                 layout,
@@ -562,15 +531,13 @@ impl GridProgram {
                 hooks,
                 counters,
                 fire_counters,
-                init_cost,
-                rerun_costs,
             }),
         })
     }
 
     /// Id of the model, the id of the graph's target.
     pub fn id(&self) -> &str {
-        &self.parts.id
+        &self.parts.declarations.id
     }
 
     /// Every shader, step passes first, then the display and reduce passes, then each action's passes.
@@ -580,20 +547,13 @@ impl GridProgram {
 
     /// Returns the buffer and segment that hold the lane `id` on the device, `None` for a lane the graph lacks.
     pub fn lane_buffer(&self, id: &str) -> Option<LaneBuffer> {
-        let position = self
-            .parts
-            .hooks
-            .evaluator
-            .document()
-            .lanes
-            .iter()
-            .position(|lane| lane.id == id)?;
-        self.parts.layout.place(position)
+        self.parts.layout.place_of(self.parts.hooks.evaluator.document(), id)
     }
 
     /// Returns the spec the GPU grid engine runs.
     pub fn spec(&self) -> GpuGridSpec {
         let parts = &*self.parts;
+        let declarations = &parts.declarations;
         let of_role = |role: ShaderRole| parts.shaders.iter().filter(move |shader| shader.role == role);
         let steps: Vec<GridPassSpec> = of_role(ShaderRole::Step).map(GeneratedShader::pass_spec).collect();
         let display = of_role(ShaderRole::Display)
@@ -605,19 +565,19 @@ impl GridProgram {
             .map(GeneratedShader::pass_spec)
             .unwrap_or_else(|| unreachable!("the compiler writes one reduce shader"));
         let mut spec = GpuGridSpec::new(
-            parts.id.clone(),
+            declarations.id.clone(),
             WORKGROUP_SIZE,
             parts.buffers.clone(),
             steps,
             display,
             reduce,
-            parts.stats.clone(),
-            Box::new(SharedHooks(Arc::clone(&parts.hooks))),
+            declarations.stats.clone(),
+            Box::new(parts.hooks.clone()),
         );
-        spec.actions = parts
+        spec.actions = declarations
             .actions
             .iter()
-            .zip(&parts.rerun_costs)
+            .zip(&declarations.rerun_costs)
             .map(|(action, rerun_cost)| {
                 let id = action.id().to_owned();
                 let passes = of_role(ShaderRole::Action(id.clone()))
@@ -631,7 +591,7 @@ impl GridProgram {
         spec.counters = parts.counters;
         spec.fire_counters = parts.fire_counters.clone();
         spec.sums = parts.hooks.sum_lanes.len();
-        spec.init_cost = parts.init_cost;
+        spec.init_cost = declarations.init_cost;
         spec
     }
 
@@ -640,19 +600,12 @@ impl GridProgram {
     pub fn entry(&self) -> ModelEntry {
         let parts = &*self.parts;
         let spec = Arc::new(self.spec());
-        let mut declarations = EntryDeclarations::new(
-            parts.id.clone(),
-            parts.name.clone(),
-            parts.description.clone(),
-            parts.params.clone(),
-            TopologyHint::GRID,
-            spec.structure(),
-        );
-        declarations.stats = parts.stats.clone();
-        declarations.actions = parts.actions.clone();
-        declarations.time = parts.time.clone();
+        let mut declarations =
+            parts
+                .declarations
+                .entry_declarations(parts.params.clone(), TopologyHint::GRID, spec.structure());
         declarations.palette = parts.palette.clone().map(Cow::Owned);
-        ModelEntry::from_gpu_grid_spec(declarations, parts.source.clone(), spec)
+        ModelEntry::from_gpu_grid_spec(declarations, parts.declarations.source.clone(), spec)
     }
 }
 
@@ -687,13 +640,18 @@ pub(crate) struct Compiled {
 pub(crate) fn any_instruction(block: &[Instruction], test: &impl Fn(&Operation) -> bool) -> bool {
     block.iter().any(|instruction| {
         test(&instruction.operation)
-            || match &instruction.operation {
-                Operation::Repeat(repeat) => any_instruction(&repeat.body, test),
-                Operation::GridFold(fold) => any_instruction(&fold.body, test),
-                Operation::RadiusFold(fold) => any_instruction(&fold.body, test),
-                _ => false,
-            }
+            || region(&instruction.operation).is_some_and(|(_, body)| any_instruction(body, test))
     })
+}
+
+/// Returns the accumulators and the body of a region's `operation`, `None` for an operation of no region.
+fn region(operation: &Operation) -> Option<(&[RepeatAccumulator], &[Instruction])> {
+    match operation {
+        Operation::Repeat(repeat) => Some((&repeat.accumulators, &repeat.body)),
+        Operation::GridFold(fold) => Some((&fold.accumulators, &fold.body)),
+        Operation::RadiusFold(fold) => Some((&fold.accumulators, &fold.body)),
+        _ => None,
+    }
 }
 
 /// One shader the compiler writes, before it writes it.
@@ -758,51 +716,15 @@ pub(crate) fn compile_shaders(
             .filter(move |(_, pass)| pass.stage == stage && pass.enabled != PassEnabled::Literal(false))
             .map(|(position, _)| position)
     };
-    let program = |position: usize| evaluator.program_at(position)?.as_ref().ok();
-    for action in &document.actions {
-        for run in &action.runs {
-            if document
-                .passes
-                .iter()
-                .any(|pass| pass.id == *run && pass.stage == PassStage::Tick)
-            {
-                problems.push(CodeDiagnostic::error(format!(
-                    "the action '{}' reruns the tick pass '{run}', and the GPU runs an action's reruns on the host, \
-                     which runs init passes alone",
-                    action.id
-                ))
-                .with_pass(run.clone()));
-            }
-        }
-    }
+    let program = |position: usize| compiled_at(evaluator, position);
+    refuse_tick_reruns(document, &mut problems);
     let ticks: Vec<usize> = runs(PassStage::Tick).collect();
     let gpu_passes: Vec<usize> = [PassStage::Tick, PassStage::View, PassStage::Stats, PassStage::Action]
         .into_iter()
         .flat_map(runs)
         .collect();
-    let tick_buffer = gpu_passes.iter().any(|&position| {
-        program(position).is_some_and(|program| {
-            let on_tick = document.passes[position].stage == PassStage::Tick;
-            [&program.prelude, &program.element].into_iter().any(|block| {
-                any_instruction(block, &|operation| {
-                    matches!(operation, Operation::Tick) || (on_tick && matches!(operation, Operation::Draw { .. }))
-                })
-            })
-        })
-    });
-    // A dual lane's writer is the one tick pass that writes it. A lane whose writer never runs is plain.
-    let dual: Vec<(usize, usize)> = document
-        .lanes
-        .iter()
-        .enumerate()
-        .filter(|(_, lane)| report.dual_lanes.contains(&lane.id))
-        .filter_map(|(lane, _)| {
-            ticks
-                .iter()
-                .position(|&position| program(position).is_some_and(|program| program.written.contains(&lane)))
-                .map(|step| (lane, step))
-        })
-        .collect();
+    let tick_buffer = reads_tick(document, evaluator, &gpu_passes);
+    let dual = dual_writers(document, report, evaluator, &ticks);
     let step_count = if ticks.is_empty() && tick_buffer {
         1
     } else {
@@ -834,29 +756,13 @@ pub(crate) fn compile_shaders(
             largest_count: cells,
         })
         .collect();
-    let cost_of = |positions: &[usize]| {
-        positions
-            .iter()
-            .filter_map(|&position| report.passes.get(position))
-            .map(|pass| pass.cost)
-            .fold(0u64, u64::saturating_add)
-    };
+    let cost_of = |positions: &[usize]| summed_cost(report, positions);
     let views: Vec<usize> = runs(PassStage::View).collect();
     let stats: Vec<usize> = runs(PassStage::Stats).collect();
     let emit_all = |layout: &LaneLayout| -> Result<Vec<GeneratedShader>, Vec<CodeDiagnostic>> {
         let buffer_count = layout.groups.len() + usize::from(tick_buffer);
         let step_sides = |step: usize| {
-            let mut rows = vec![SideRow::new(BufferSide::Current, BufferSide::Current); buffer_count];
-            for &(lane, writer) in &dual {
-                let Some(place) = layout.place(lane) else {
-                    continue;
-                };
-                rows[place.buffer()] = match step.cmp(&writer) {
-                    std::cmp::Ordering::Less => SideRow::new(BufferSide::Current, BufferSide::Current),
-                    std::cmp::Ordering::Equal => SideRow::new(BufferSide::Current, BufferSide::Next),
-                    std::cmp::Ordering::Greater => SideRow::new(BufferSide::Next, BufferSide::Next),
-                };
-            }
+            let mut rows = dual_rows(layout, &dual, step, buffer_count);
             if tick_buffer && step + 1 == step_count {
                 rows[layout.groups.len()] = SideRow::new(BufferSide::Current, BufferSide::Next);
             }
@@ -947,8 +853,8 @@ pub(crate) fn compile_shaders(
             cost,
         } in plans
         {
-            let emitted = match emit::emit(&input, emit_role, &positions, &sides) {
-                Ok(emitted) => emitted,
+            let (emitted, composed) = match write_shader(&input, emit_role, &positions, &sides, &label) {
+                Ok(written) => written,
                 Err(found) => {
                     problems.extend(found);
                     continue;
@@ -963,17 +869,6 @@ pub(crate) fn compile_shaders(
                 sum_lanes,
                 workgroup_bytes,
             } = emitted;
-            if text.len() > MAX_FILE_BYTES {
-                problems.push(oversized(&label, text.len(), &ranges));
-                continue;
-            }
-            let composed = match compose(&label, &text, &ranges) {
-                Ok(composed) => composed,
-                Err(found) => {
-                    problems.extend(found);
-                    continue;
-                }
-            };
             shaders.push(GeneratedShader {
                 role,
                 passes: positions
@@ -989,10 +884,9 @@ pub(crate) fn compile_shaders(
                 sides,
                 cost,
                 counters,
-                grid_sum_lanes: sum_lanes,
-                pass_id,
+                sum_lanes,
+                pass: EnginePass::Grid(pass_id),
                 workgroup_bytes,
-                agent: None,
             });
         }
         if problems.is_empty() {
@@ -1007,9 +901,7 @@ pub(crate) fn compile_shaders(
         }
         return Err(problems);
     }
-    let (layout, shaders) = pack::choose(&entries, emit_all, |shaders: &Vec<GeneratedShader>| {
-        shaders.iter().map(|shader| shader.bindings.as_slice()).collect()
-    })?;
+    let (layout, shaders) = pack::choose(&entries, emit_all)?;
     Ok(Compiled {
         shaders,
         layout,
@@ -1022,15 +914,8 @@ pub(crate) fn compile_shaders(
 pub(crate) fn rerun_writers(document: &GraphDocument, evaluator: &HostEvaluator) -> Vec<Vec<usize>> {
     let mut writers = vec![Vec::new(); document.lanes.len()];
     for (action_index, action) in document.actions.iter().enumerate() {
-        for run in &action.runs {
-            let Some(position) = document
-                .passes
-                .iter()
-                .position(|pass| pass.id == *run && pass.stage == PassStage::Init)
-            else {
-                continue;
-            };
-            let Some(Ok(program)) = evaluator.program_at(position) else {
+        for position in rerun_positions(document, action) {
+            let Some(program) = compiled_at(evaluator, position) else {
                 continue;
             };
             for &lane in &program.written {
@@ -1043,6 +928,128 @@ pub(crate) fn rerun_writers(document: &GraphDocument, evaluator: &HostEvaluator)
         }
     }
     writers
+}
+
+/// Records a problem in `problems` for each run of an action of `document` that names a tick pass.
+fn refuse_tick_reruns(document: &GraphDocument, problems: &mut Vec<CodeDiagnostic>) {
+    for action in &document.actions {
+        for run in &action.runs {
+            if document
+                .passes
+                .iter()
+                .any(|pass| pass.id == *run && pass.stage == PassStage::Tick)
+            {
+                problems.push(
+                    CodeDiagnostic::error(format!(
+                        "the action '{}' reruns the tick pass '{run}', and the GPU runs an action's reruns on the \
+                         host, which runs init passes alone",
+                        action.id
+                    ))
+                    .with_pass(run.clone()),
+                );
+            }
+        }
+    }
+}
+
+/// Returns whether a pass of `document` at `positions` reads the tick on the GPU, or draws in a tick pass.
+fn reads_tick(document: &GraphDocument, evaluator: &HostEvaluator, positions: &[usize]) -> bool {
+    positions.iter().any(|&position| {
+        let Some(program) = compiled_at(evaluator, position) else {
+            return false;
+        };
+        let on_tick = document.passes[position].stage == PassStage::Tick;
+        [&program.prelude, &program.element].into_iter().any(|block| {
+            any_instruction(block, &|operation| {
+                matches!(operation, Operation::Tick) || (on_tick && matches!(operation, Operation::Draw { .. }))
+            })
+        })
+    })
+}
+
+/// Returns each dual lane of `document` by position, with the position among `ticks` of the tick pass that writes it.
+///
+/// A dual lane's writer is the one tick pass that writes it. A lane whose writer never runs is plain.
+fn dual_writers(
+    document: &GraphDocument,
+    report: &CheckReport,
+    evaluator: &HostEvaluator,
+    ticks: &[usize],
+) -> Vec<(usize, usize)> {
+    document
+        .lanes
+        .iter()
+        .enumerate()
+        .filter(|(_, lane)| report.dual_lanes.contains(&lane.id))
+        .filter_map(|(lane, _)| {
+            ticks
+                .iter()
+                .position(|&position| {
+                    compiled_at(evaluator, position).is_some_and(|program| program.written.contains(&lane))
+                })
+                .map(|step| (lane, step))
+        })
+        .collect()
+}
+
+/// Returns the side row of each of `buffer_count` buffers at the step `step`, the lane buffers of `layout` holding a
+/// lane of `dual` read and written as the lane's writer step requires, and every other buffer in place.
+fn dual_rows(layout: &LaneLayout, dual: &[(usize, usize)], step: usize, buffer_count: usize) -> Vec<SideRow> {
+    let mut rows = vec![SideRow::new(BufferSide::Current, BufferSide::Current); buffer_count];
+    for &(lane, writer) in dual {
+        let Some(place) = layout.place(lane) else {
+            continue;
+        };
+        rows[place.buffer()] = match step.cmp(&writer) {
+            std::cmp::Ordering::Less => SideRow::new(BufferSide::Current, BufferSide::Current),
+            std::cmp::Ordering::Equal => SideRow::new(BufferSide::Current, BufferSide::Next),
+            std::cmp::Ordering::Greater => SideRow::new(BufferSide::Next, BufferSide::Next),
+        };
+    }
+    rows
+}
+
+/// Returns the sum of the checker's costs in `report` of the passes at `positions`.
+fn summed_cost(report: &CheckReport, positions: &[usize]) -> u64 {
+    positions
+        .iter()
+        .filter_map(|&position| report.passes.get(position))
+        .map(|pass| pass.cost)
+        .fold(0u64, u64::saturating_add)
+}
+
+/// Writes the shader `label` of `role` over the passes at `positions`, bound through `sides`, and composes it.
+///
+/// # Errors
+///
+/// Returns the problems of the emission, of a text past [`MAX_FILE_BYTES`], or of the composition.
+fn write_shader(
+    input: &EmitInput<'_>,
+    role: Role,
+    positions: &[usize],
+    sides: &SideTable,
+    label: &str,
+) -> Result<(Emitted, String), Vec<CodeDiagnostic>> {
+    let emitted = emit::emit(input, role, positions, sides)?;
+    if emitted.text.len() > MAX_FILE_BYTES {
+        return Err(vec![oversized(label, emitted.text.len(), &emitted.ranges)]);
+    }
+    let composed = compose(label, &emitted.text, &emitted.ranges)?;
+    Ok((emitted, composed))
+}
+
+/// Returns the program of the pass at `position` of the document `evaluator` runs, `None` for a pass the host cannot
+/// compile.
+fn compiled_at(evaluator: &HostEvaluator, position: usize) -> Option<&Program> {
+    evaluator.program_at(position)?.as_ref().ok()
+}
+
+/// Returns the innermost range of `ranges` that holds the byte at `offset`.
+fn innermost(ranges: &[NodeRange], offset: usize) -> Option<&NodeRange> {
+    ranges
+        .iter()
+        .filter(|range| range.range.contains(&offset))
+        .min_by_key(|range| range.range.len())
 }
 
 /// Returns the cells of the default grid of `document`, 1 for a document of agents.
@@ -1133,12 +1140,7 @@ pub(crate) fn compose(label: &str, text: &str, ranges: &[NodeRange]) -> Result<S
                 problem.span = None;
                 problem.line = None;
                 problem.column = None;
-                let node = place.and_then(|offset| {
-                    ranges
-                        .iter()
-                        .filter(|range| range.range.contains(&offset))
-                        .min_by_key(|range| range.range.len())
-                });
+                let node = place.and_then(|offset| innermost(ranges, offset));
                 if let Some(range) = node {
                     problem = problem.with_pass(range.pass.clone()).with_node(range.node.to_string());
                 }
@@ -1148,20 +1150,21 @@ pub(crate) fn compose(label: &str, text: &str, ranges: &[NodeRange]) -> Result<S
     })
 }
 
-/// Returns the source of each `[[stat]]`: the stats pass that holds its node, the slot of its port, and the pass's
-/// first counter in the reduce shader.
+/// Returns the source of each `[[stat]]` of `document`: the first of the stats passes `reduce_passes`, in the order
+/// of the reduce shader, that holds its node, the slot of its port, and the pass's first tally in the reduce shader.
+/// `None` for a stat no pass of them holds.
 fn stat_sources(
     document: &GraphDocument,
     evaluator: &HostEvaluator,
-    reduce: Option<&GeneratedShader>,
-) -> Vec<StatSource> {
-    let mut first_counters = Vec::new();
-    let mut counter = 0;
-    for id in reduce.map(GeneratedShader::passes).unwrap_or_default() {
+    reduce_passes: &[String],
+) -> Vec<Option<StatSource>> {
+    let mut first_tallies = Vec::new();
+    let mut tally = 0;
+    for id in reduce_passes {
         if let Some(position) = document.passes.iter().position(|pass| pass.id == *id) {
-            first_counters.push((position, counter));
-            if let Some(Ok(program)) = evaluator.program_at(position) {
-                counter += program.tallies;
+            first_tallies.push((position, tally));
+            if let Some(program) = compiled_at(evaluator, position) {
+                tally += program.tallies;
             }
         }
     }
@@ -1169,27 +1172,14 @@ fn stat_sources(
         .stats
         .iter()
         .map(|stat| {
-            let found = first_counters.iter().find_map(|&(position, first)| {
-                let Some(Ok(program)) = evaluator.program_at(position) else {
-                    return None;
-                };
-                let slot = if let Some(port) = &stat.from.port {
-                    program.outputs.get(&(stat.from.node, port.clone())).copied()
-                } else {
-                    let mut ports = program.outputs.iter().filter(|((node, _), _)| *node == stat.from.node);
-                    let only = ports.next().map(|(_, slot)| *slot);
-                    if ports.next().is_some() { None } else { only }
-                }?;
+            first_tallies.iter().find_map(|&(position, first_tally)| {
+                let program = compiled_at(evaluator, position)?;
+                let (_, slot) = program.port_slot(&stat.from)?;
                 Some(StatSource {
-                    position: Some(position),
+                    position,
                     slot,
-                    first_counter: first,
+                    first_tally,
                 })
-            });
-            found.unwrap_or(StatSource {
-                position: None,
-                slot: 0,
-                first_counter: 0,
             })
         })
         .collect()

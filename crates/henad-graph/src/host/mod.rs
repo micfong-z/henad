@@ -10,6 +10,7 @@
 //! the init passes, and the action stream across presses.
 
 pub(crate) mod compile;
+pub(crate) mod program;
 pub(crate) mod run;
 pub(crate) mod value;
 
@@ -31,7 +32,7 @@ use crate::value::PortRef;
 
 pub use value::{HostValue, LaneColumn};
 
-use compile::Program;
+use program::Program;
 
 /// Elements of a world: the cells of a grid or the agents of a population.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -599,9 +600,7 @@ impl HostEvaluator {
             PassEnabled::Literal(enabled) => *enabled,
             PassEnabled::Param(id) => self
                 .document
-                .params
-                .iter()
-                .position(|param| param.id() == id)
+                .param_position(id)
                 .and_then(|param| params.get(param))
                 .and_then(|value| value.as_bool())
                 .unwrap_or(true),
@@ -800,9 +799,7 @@ impl HostEvaluator {
             .outputs()
             .iter()
             .zip(counts.iter_mut())
-            .filter_map(|(output, count)| {
-                crate::wgsl::probes::output_slot(program, output).map(|(_, slot)| (slot, count))
-            })
+            .filter_map(|(output, count)| program.port_slot(output).map(|(_, slot)| (slot, count)))
             .collect();
         run::run_counting(program, lanes, &values, context, stream, &mut fires).map_err(|error| self.located(error))
     }

@@ -479,7 +479,6 @@ impl GraphBuilder {
         wrapped: &BTreeSet<NodeId>,
         names: &BTreeMap<PortRef, String>,
     ) -> Result<(), EditError> {
-        let library = self.document.library;
         let body = self.body(scope)?;
         let mut rewired = Vec::new();
         for reader in &body.nodes {
@@ -489,7 +488,7 @@ impl GraphBuilder {
             for (port, value) in &reader.inputs {
                 let InputValue::Link(link) = value else { continue };
                 let Some(source) = body.node(link.node) else { continue };
-                let named = named_output(&self.document, library, source, link);
+                let named = named_output(&self.document, source, link);
                 if let Some(name) = named.and_then(|named| names.get(&named)) {
                     rewired.push((reader.id, port.clone(), name.clone()));
                 }
@@ -515,7 +514,6 @@ impl GraphBuilder {
         body: &NodeBody,
         wrapped: &BTreeSet<NodeId>,
     ) -> Result<Vec<LeavingOutput>, EditError> {
-        let library = self.document.library;
         let mut sources: BTreeSet<PortRef> = BTreeSet::new();
         for reader in body.nodes.iter().filter(|node| !wrapped.contains(&node.id)) {
             for value in reader.inputs.values() {
@@ -524,7 +522,7 @@ impl GraphBuilder {
                     continue;
                 }
                 let Some(source) = body.node(link.node) else { continue };
-                if let Some(named) = named_output(&self.document, library, source, link) {
+                if let Some(named) = named_output(&self.document, source, link) {
                     sources.insert(named);
                 }
             }
@@ -576,7 +574,7 @@ impl GraphBuilder {
     /// Returns the start value of a `carry` accumulator of `value_type`: zero, or the first variant of a category.
     fn start_value(&self, value_type: &ValueType) -> Option<Literal> {
         if let ValueType::Category(id) = value_type {
-            let category = self.document.categories.iter().find(|known| known.id == *id)?;
+            let category = self.document.category(id)?;
             let first = category.variants.first()?;
             return Some(Literal::Category(MemberName {
                 owner: id.clone(),
@@ -599,11 +597,10 @@ pub(super) fn body_report<'a>(report: &'a CheckReport, scope: &Scope) -> Option<
 /// output of a bare link. An inner output, an unknown port or an unknown kind returns `None`.
 pub(super) fn named_output(
     document: &crate::document::GraphDocument,
-    library: u32,
     source: &Node,
     link: &PortRef,
 ) -> Option<PortRef> {
-    let def = lookup(&source.op, library)?;
+    let def = lookup(&source.op, document.library)?;
     let outputs = def.resolved_outputs(source, document);
     let port = match &link.port {
         Some(port) => outputs.iter().find(|output| output.name == *port)?.name.clone(),

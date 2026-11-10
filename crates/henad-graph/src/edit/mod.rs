@@ -609,6 +609,10 @@ impl GraphBuilder {
     }
 
     /// Runs `command` on the builder in place. The caller keeps a copy to restore on an error.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "every command is named, so a new command is a compile error until it has an arm"
+    )]
     fn run(&mut self, command: EditCommand) -> Result<Vec<NodeId>, EditError> {
         match command {
             EditCommand::AddNode { scope, op, region, pos } => self.add(&scope, &op, region, pos).map(|id| vec![id]),
@@ -707,7 +711,31 @@ impl GraphBuilder {
             | EditCommand::MakeFunction { .. }
             | EditCommand::Ungroup { .. }
             | EditCommand::ImportFunction { .. }) => self.run_function(command),
-            other => self.run_declaration(other).map(|()| Vec::new()),
+            command @ (EditCommand::AddCategory(_)
+            | EditCommand::AddPalette(_)
+            | EditCommand::AddLane(_)
+            | EditCommand::RenameLane { .. }
+            | EditCommand::RemoveLane(_)
+            | EditCommand::AddVariant { .. }
+            | EditCommand::RenameVariant { .. }
+            | EditCommand::SetVariantColor { .. }
+            | EditCommand::RemoveVariant { .. }
+            | EditCommand::AddParam(_)
+            | EditCommand::RenameParam { .. }
+            | EditCommand::RemoveParam(_)
+            | EditCommand::AddStat(_)
+            | EditCommand::RenameStat { .. }
+            | EditCommand::RemoveStat(_)
+            | EditCommand::AddAction(_)
+            | EditCommand::RenameAction { .. }
+            | EditCommand::RemoveAction(_)
+            | EditCommand::AddPass(_)
+            | EditCommand::RenamePass { .. }
+            | EditCommand::RemovePass(_)
+            | EditCommand::MovePass { .. }
+            | EditCommand::SetPassEnabled { .. }
+            | EditCommand::SetParam(_)
+            | EditCommand::SetWorld(_)) => self.run_declaration(command).map(|()| Vec::new()),
         }
     }
 
@@ -800,11 +828,7 @@ impl GraphBuilder {
             .map(|after| after.max(self.editor.next_id().unwrap_or(0)))
             .and_then(NodeId::new)
             .ok_or_else(|| EditError::Invalid("the file has no node number left".to_owned()))?;
-        if self.editor.table().get("version").is_none() {
-            self.editor
-                .table_mut()
-                .insert("version".to_owned(), toml::Value::Integer(1));
-        }
+        self.editor.ensure_version();
         self.editor.set_next_id(next.number().saturating_add(1));
         Ok(next)
     }

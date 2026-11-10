@@ -141,8 +141,8 @@ block, `e` is `henad_index`, `t` the tick buffer's word in a tick pass and the p
 action, and `i` the loop's `henad_iteration_n<id>`.
 
 **The host evaluator** (`host/`). `HostEvaluator::new(&GraphFile)` checks the file (errors give
-`HostError::Checked`) and compiles every pass once (`compile.rs`). A pass the host cannot run
-compiles to an error that `run_pass` returns, and only an init pass or a rerun pass with one
+`HostError::Checked`) and compiles every pass once (`compile.rs`) into a `Program`
+(`program.rs`), which the WGSL compiler reads too. A pass the host cannot run compiles to an error that `run_pass` returns, and only an init pass or a rerun pass with one
 refuses the whole file. `init(world, params, seed)` runs the enabled init passes in stack order
 on the init stream (`grid_init_rng` or `agent_init_rng`, continuing across passes) and returns
 `HostLanes`. `rerun(action, press, ..., stream)` runs the init passes of the action's `runs` in

@@ -76,7 +76,7 @@ fn case_palette(document: &GraphDocument) -> Option<String> {
 }
 
 /// Returns the value at `port` in the frame of `program` that `run::finish` left.
-fn port_value(program: &crate::host::compile::Program, frame: &[HostValue], port: &PortRef) -> Option<HostValue> {
+fn port_value(program: &crate::host::program::Program, frame: &[HostValue], port: &PortRef) -> Option<HostValue> {
     let slot = if let Some(name) = &port.port {
         program.outputs.get(&(port.node, name.clone())).copied()
     } else {
@@ -143,7 +143,7 @@ fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase
     let (words, labels) = lane_buffers(&compiled, &lanes, 0);
     // A reduce shader that sums floats writes one partial per lane per workgroup of 16 by 16 cells.
     let groups = (case.width.div_ceil(16), case.height.div_ceil(16));
-    let sum_lanes = shader.grid_sum_lanes();
+    let sum_lanes = shader.sum_lanes();
     let named = [(
         "partials",
         vec![0; (groups.0 * groups.1) as usize * sum_lanes.len().max(1)],
@@ -204,7 +204,7 @@ fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase
                 let mine: Vec<usize> = sum_lanes
                     .iter()
                     .enumerate()
-                    .filter(|(_, (known, number))| *known == position && *number == sum)
+                    .filter(|(_, lane)| lane.pass == position && lane.sum == sum)
                     .map(|(lane, _)| lane)
                     .collect();
                 let total = |k: usize| mine.get(k).map_or(0.0, |&lane| lane_total(lane));
@@ -265,7 +265,7 @@ fn case_index(
         .element
         .iter()
         .find_map(|instruction| match &instruction.operation {
-            crate::host::compile::Operation::RadiusFold(fold) => Some(fold),
+            crate::host::program::Operation::RadiusFold(fold) => Some(fold),
             _ => None,
         })?;
     let frame = run::prelude(program, params, &RunContext::tick(None, 0), world).ok()?;
@@ -322,7 +322,7 @@ fn run_agent_pass_case(
         .iter()
         .find(|shader| shader.passes().iter().any(|pass| pass == "case"))
         .unwrap_or_else(|| panic!("{what}: no shader runs the pass `case`"));
-    let agent = shader.agent().expect("a shader of an agents world");
+    let domain = shader.domain().expect("a shader of an agents world");
     let world = HostWorld::Agents {
         count: agents,
         width: case.width as f32,
@@ -364,7 +364,7 @@ fn run_agent_pass_case(
         .collect();
     let labels: Vec<String> = compiled.buffers.iter().map(|buffer| buffer.label.to_string()).collect();
     let display = shader.role() == &ShaderRole::Display;
-    let count = invocations(agent.domain, agents, cells);
+    let count = invocations(domain, agents, cells);
     let groups = if display {
         (grid_width.div_ceil(16), grid_height.div_ceil(16))
     } else {
@@ -379,7 +379,7 @@ fn run_agent_pass_case(
             .expect("a counter of the case");
         counters[FIRST_COUNTER + position] = *value;
     }
-    let lanes_of_leaf = agent.sum_lanes.len().max(1);
+    let lanes_of_leaf = shader.sum_lanes().len().max(1);
     let mut named: Vec<(&str, Vec<u32>)> = vec![
         ("counters", counters),
         ("partials", vec![0; groups.0 as usize * lanes_of_leaf]),
@@ -531,11 +531,11 @@ fn run_agent_pass_case(
         };
         let sums = (0..program.sums.len())
             .map(|sum| {
-                let mine: Vec<usize> = agent
-                    .sum_lanes
+                let mine: Vec<usize> = shader
+                    .sum_lanes()
                     .iter()
                     .enumerate()
-                    .filter(|(_, (known, number))| *known == position && *number == sum)
+                    .filter(|(_, lane)| lane.pass == position && lane.sum == sum)
                     .map(|(lane, _)| lane)
                     .collect();
                 let total = |k: usize| mine.get(k).map_or(0.0, |&lane| lane_total(lane));

@@ -106,6 +106,26 @@ impl GraphDocument {
             passes: Vec::new(),
         }
     }
+
+    /// Returns the category `id`.
+    pub(crate) fn category(&self, id: &str) -> Option<&Category> {
+        self.categories.iter().find(|category| category.id == id)
+    }
+
+    /// Returns the position of the lane `id` among the lanes.
+    pub(crate) fn lane_position(&self, id: &str) -> Option<usize> {
+        self.lanes.iter().position(|lane| lane.id == id)
+    }
+
+    /// Returns the field `id`.
+    pub(crate) fn field(&self, id: &str) -> Option<&Field> {
+        self.fields.iter().find(|field| field.id == id)
+    }
+
+    /// Returns the position of the parameter `id` among the parameters.
+    pub(crate) fn param_position(&self, id: &str) -> Option<usize> {
+        self.params.iter().position(|param| param.id() == id)
+    }
 }
 
 /// The `[[target]]` table, always on the GPU backend.
@@ -224,6 +244,11 @@ impl Category {
             id: id.to_owned(),
             variants,
         }
+    }
+
+    /// Returns the position of the variant `name` among the variants.
+    pub(crate) fn variant_position(&self, name: &str) -> Option<usize> {
+        self.variants.iter().position(|variant| variant.name == name)
     }
 }
 
