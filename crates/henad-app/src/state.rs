@@ -18,7 +18,7 @@ use henad_explore::output::memory::SweepFiles;
 use crate::options::{AppOpening, Product};
 use crate::sim_runner::SimRunner;
 use crate::ui::agent_layer::AgentLayer;
-use crate::ui::dock::Tab;
+use crate::ui::dock::{Layout, Tab};
 use crate::ui::edge_layer::EdgeStyle;
 use crate::ui::editor::EditorPanel;
 use crate::ui::export::Recording;
@@ -133,6 +133,9 @@ pub struct AppState {
     pub run_to_input: u64,
     /// Tab brought to the front once the dock has drawn.
     pub focus_request: Option<Tab>,
+    /// Layout the dock shows, copied from the app's workspace before the dock draws. The Sheet pane keys its stored
+    /// width on it.
+    pub layout: Layout,
     /// Runner of the live simulation. `None` while a build runs, until [`Self::poll_build`] takes the build's runner.
     pub sim_thread: Option<SimRunner>,
     /// Build of the live simulation on its own thread. Always `None` in a browser, where builds run inline.
@@ -344,6 +347,7 @@ impl AppState {
             run_to_target: None,
             run_to_input: 0,
             focus_request: None,
+            layout: Layout::default(),
             sim_thread: None,
             building: None,
             #[cfg(test)]

@@ -40,7 +40,7 @@ mod ui;
 mod web;
 
 use eframe::egui_wgpu;
-use egui_dock::{DockArea, DockState, Style};
+use egui_dock::{DockArea, Style};
 
 use crate::init::{setup_custom_fonts, setup_custom_styles};
 
@@ -57,7 +57,7 @@ pub use crate::web::{init_web_logger, start_web};
 
 use crate::sim_runner::SimRunner;
 use crate::state::AppState;
-use crate::ui::dock::{Tab, default_dock_state, focus_tab};
+use crate::ui::dock::Workspace;
 use henad_compute::fault::{FaultSink, install_panic_hook};
 use henad_compute::runner::CAN_SPAWN_THREADS;
 use henad_compute::runtime_info::{RuntimeInfo, supports_compute};
@@ -87,7 +87,7 @@ use crate::state::FrameTimings;
 const SWEEP_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 struct HenadApp {
-    dock: DockState<Tab>,
+    workspace: Workspace,
     state: AppState,
 }
 
@@ -141,7 +141,7 @@ impl HenadApp {
             state.open(opening);
         }
         Self {
-            dock: default_dock_state(),
+            workspace: Workspace::default(),
             state,
         }
     }
@@ -225,7 +225,7 @@ impl eframe::App for HenadApp {
         let frame_start = web_time::Instant::now();
         self.state.timings.frame_render_ms = 0.0;
 
-        ui::menu_bar::menu_bar_panel(ui, &mut self.dock, &mut self.state);
+        ui::menu_bar::menu_bar_panel(ui, &mut self.workspace, &mut self.state);
         ui::fault::fault_modal(ui.ctx(), &mut self.state);
         ui::rebuild::rebuild_modal(ui.ctx(), &mut self.state);
         ui::editor::sheet::new_model::new_model_modal(ui.ctx(), &mut self.state);
@@ -236,15 +236,17 @@ impl eframe::App for HenadApp {
         dock_style.tab_bar.corner_radius = egui::CornerRadius::ZERO;
         // `egui_dock` draws an overflowing tab bar's scroll bar as a pill. The wheel still scrolls the bar without it.
         dock_style.tab_bar.show_scroll_bar_on_overflow = false;
-        DockArea::new(&mut self.dock)
+        self.state.layout = self.workspace.layout();
+        DockArea::new(self.workspace.dock_mut())
             .style(dock_style)
             .show_close_buttons(true)
             .show_leaf_close_all_buttons(true)
             .show_inside(ui, &mut self.state);
 
-        // Applied after the dock has drawn. The panels draw while it is borrowed.
+        // Applied after the dock has drawn. The panels draw while it is borrowed. A request for the Editor can switch
+        // layouts.
         if let Some(tab) = self.state.focus_request.take() {
-            focus_tab(&mut self.dock, tab);
+            self.workspace.focus(tab);
             ui.ctx().request_repaint();
         }
 

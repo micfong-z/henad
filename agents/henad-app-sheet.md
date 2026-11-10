@@ -22,8 +22,9 @@ through `SheetFile::place_graph_diagnostic`. `place` does the same for a problem
 `EditorModel::place` calls for a sheet and passes through for any other model:
 `EditorPanel::show_fault` (a fault of the applied code before tick 0) and `show_preview_fault`
 (`Preview::show_problem`) both place their fault. A fault carries no node or pass, so it lands at
-`[sheet]`. `sheet_ui` draws the Sheet pane as a resizable `Panel::left` (`henad_sheet_pane`, 40% of
-the tab's width by default, each pane at least 160 points) and the Card pane in the `CentralPanel`,
+`[sheet]`. `sheet_ui` draws the Sheet pane as a resizable `Panel::left` (`sheet_pane_id`, one id per
+dock `Layout` from `SheetShown::layout`, so each layout keeps its own stored width, 40% of the tab's
+width by default, each pane at least 160 points) and the Card pane in the `CentralPanel`,
 each under a heading ("Sheet", "Card", `SHEET_PANE` and `CARD_PANE`) in a `ScrollArea` of its own
 (`henad_sheet_pane_scroll`, `henad_card_pane_scroll`). The world stays in the dock's Viewport,
 Playback, Pacing, Parameters and Charts tabs.

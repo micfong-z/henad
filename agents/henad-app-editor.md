@@ -10,7 +10,9 @@ dialog of `henad-app-sheet.md`), New grid rule, New node graph (`NEW_NODE_GRAPH`
 too, a menu of henad-graph's `starters()` then `agent_starters()`, labelled by each starter's model
 name), Open model, Save model and Apply, then the code view, the graph editor or the sheet editor.
 The File menu holds New model, New grid rule, New node graph, Open model and Save model, and the
-Model tab New model beside New grid rule and Edit model. `EMPTY_EDITOR` names New model, New
+Model tab New model beside New grid rule and Edit model. Every site that loads a model into the
+Editor sets `focus_request` to `Tab::Editor`, which switches to the Editor layout while the View
+menu's checkbox holds (`henad-app.md`). `EMPTY_EDITOR` names New model, New
 node graph, New grid rule and Open model. `EditorModel` is `Empty` (the
 default), `Rule(String)` (a grid rule's text as typed, which may be empty or not read),
 `Graph(Box<GraphEditor>)` or `Sheet(Box<SheetEditor>)`, so two models are never held at once.

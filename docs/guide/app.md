@@ -20,8 +20,7 @@ Henad uses a docking UI powered by [egui_dock](https://github.com/anhosh/egui_do
 You can resize each panel, collapse or expand them, move them around, and even drag a tab into its own window.
 
 In the menu bar, <span class="ui" markdown>:material-view-dashboard-outline: View</span> lists all 13 tabs and highlights the open ones, and is the only way to reopen a tab you closed.
-Click <span class="ui" markdown>:material-restart: Reset layout</span> at the bottom to put everything back to the default layout, in case the workspace gets too messy.
-The default layout leaves the <span class="ui" markdown>:material-code-braces: Editor</span> closed.
+Under the tabs it switches between two [layouts](#layouts).
 
 <span class="ui" markdown>:material-file-outline: File</span> holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-graph-outline: New node graph</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, which fill the [Editor](#editor-tab) or save its model.
 
@@ -45,6 +44,33 @@ An app built on Henad shows its own name there, and adds a **Built on** row with
 | <span class="ui" markdown>:material-application-export: Export</span>    | Writing results to a file               |
 | <span class="ui" markdown>:material-gauge: Performance</span>            | Performance metrics                     |
 | <span class="ui" markdown>:material-chip: System</span>                  | Backend information                     |
+
+### Layouts
+
+Henad has two layouts, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> lists them under the tabs.
+
+**Default layout**
+: For running a model, sweeping and reading results.
+  The <span class="ui" markdown>:material-code-braces: Editor</span> is closed.
+
+**Editor layout**
+: For writing a model and trying it.
+  The <span class="ui" markdown>:material-code-braces: Editor</span> takes most of the window, with <span class="ui" markdown>:material-flask-outline: Sweep</span> and <span class="ui" markdown>:material-chart-box-outline: Results</span> behind it.
+  A column on the right holds the <span class="ui" markdown>:material-cube-outline: Viewport</span>, then <span class="ui" markdown>:material-play-circle-outline: Playback</span> with <span class="ui" markdown>:material-speedometer: Pacing</span> behind it, then <span class="ui" markdown>:material-chart-line: Charts</span> with <span class="ui" markdown>:material-tune: Parameters</span>, <span class="ui" markdown>:material-table: Statistics</span> and <span class="ui" markdown>:material-cog-outline: Model</span> behind it.
+  Performance, System and Export are closed.
+
+Henad starts in the default layout.
+Each layout keeps your changes while the other one shows.
+A tab you move or close in one stays moved or closed after a visit to the other.
+Henad forgets both when it quits.
+
+Henad switches to the Editor layout whenever a model opens in the Editor, whether from the File menu, the Model tab, the Results tab or the New model dialog.
+Untick **Open models in the Editor layout** under the two layouts to open the Editor in the layout that shows instead.
+In the default layout it then opens to the right of the Viewport.
+Henad never switches back by itself, so select **Default layout** when you turn to sweeps.
+
+Click <span class="ui" markdown>:material-restart: Reset layout</span> at the bottom to put the layout that shows back as it started, in case the workspace gets too messy.
+The other layout keeps your changes.
 
 ## :material-cog-outline: Model tab
 
@@ -1015,7 +1041,9 @@ A banner at the top appears when there are potential compatibility issues with t
 ## :material-code-braces: Editor tab
 
 The <span class="ui" markdown>:material-code-braces: Editor</span> tab holds one model file and runs its model without a restart: a sheet, a grid rule written as text, or a node graph.
-It is closed in the default layout, and opens to the right of the <span class="ui" markdown>:material-cube-outline: Viewport</span> when you press <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> or <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab or <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> in the Results tab, or select it in the View menu.
+It is closed in the default layout.
+When a model opens in it, from <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> or <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab or <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> in the Results tab, Henad switches to the [Editor layout](#layouts) with the Editor in front.
+Select it in the View menu to open it in the layout that shows, to the right of the <span class="ui" markdown>:material-cube-outline: Viewport</span> in the default layout.
 
 ### Sheets
 

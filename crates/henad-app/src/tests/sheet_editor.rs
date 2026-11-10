@@ -26,7 +26,7 @@ use web_time::Instant;
 
 use crate::state::{AppState, PreviewRun};
 use crate::tests::support::{Harness, Node, forbidden_words, step_past, tick_zero_stat, top, wait_for_snapshot};
-use crate::ui::dock::Tab;
+use crate::ui::dock::{Layout, Tab};
 use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState, poll_at};
 use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::card_pane::{CardLine, LineNote, NoteColor, card_lines};
@@ -745,6 +745,41 @@ fn every_line_of_the_life_starter_reads_its_sentence_by_accessible_name() {
     ] {
         assert!(texts.iter().any(|known| known == text), "{text} is missing");
     }
+}
+
+/// A width the Sheet pane takes in one layout leaves the other layout alone, since egui stores the width in points.
+#[test]
+fn each_layout_keeps_a_width_of_its_own_for_the_sheet_pane() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let sheet_width = |nodes: &[Node]| {
+        nodes
+            .iter()
+            .find(|node| node.role == egui::accesskit::Role::Group && node.label == "Sheet")
+            .and_then(|node| node.bounds)
+            .expect("the Sheet pane")
+            .width()
+    };
+    harness.screen = egui::vec2(600.0, 1000.0);
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    let narrow = sheet_width(&harness.settle());
+
+    harness.app.layout = Layout::Editor;
+    harness.screen = egui::vec2(1400.0, 1000.0);
+    let wide = sheet_width(&harness.settle());
+    let share = 0.4 * harness.screen.x;
+    assert!(
+        wide > narrow + 100.0 && (wide - share).abs() < 20.0,
+        "the Editor layout took the width of the default layout: {wide} against {narrow}, not about {share}"
+    );
+
+    harness.app.layout = Layout::Default;
+    let back = sheet_width(&harness.settle());
+    assert!(
+        (back - narrow).abs() < 1.0,
+        "the default layout lost its width: {back} against {narrow}"
+    );
 }
 
 #[test]

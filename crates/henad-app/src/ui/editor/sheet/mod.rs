@@ -46,6 +46,7 @@ use henad_graph::sheet::{ParsedSheet, SheetFile};
 use super::graph::history::History;
 use super::graph::{CompiledProgram, GraphProgram, LOADS};
 use crate::icons::material_design_icons::{MDI_DOTS_HORIZONTAL, MDI_REDO, MDI_UNDO};
+use crate::ui::dock::Layout;
 use crate::ui::sweep::layout::add_button;
 
 /// Heading of the pane that lists what the model holds.
@@ -59,6 +60,14 @@ const SHEET_PANE_SHARE: f32 = 0.4;
 
 /// Narrowest width in points of each pane.
 const PANE_MIN_WIDTH: f32 = 160.0;
+
+/// Returns the id of the Sheet pane in `layout`, one per layout.
+///
+/// egui stores the pane's width in points under the id. With one id for both layouts, a width dragged in the narrow
+/// default layout would carry over to the Editor layout.
+fn sheet_pane_id(layout: Layout) -> egui::Id {
+    egui::Id::new("henad_sheet_pane").with(layout)
+}
 
 /// A sheet model in the Editor.
 pub struct SheetEditor {
@@ -443,6 +452,8 @@ pub struct SheetShown<'a> {
     pub refusal: Option<ConvertRefusal>,
     /// Fire counts of the run of the sheet on its latest snapshot, `None` while the run counts none.
     pub fires: Option<&'a LineFires>,
+    /// Layout the dock shows. The Sheet pane keeps a width of its own in each layout.
+    pub layout: Layout,
 }
 
 /// Request of the sheet editor that the Editor runs once the tab has drawn.
@@ -491,7 +502,7 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'
             }
         });
     let width = ui.available_width();
-    Panel::left("henad_sheet_pane")
+    Panel::left(sheet_pane_id(shown.layout))
         .resizable(true)
         .default_size(width * SHEET_PANE_SHARE)
         .min_size(PANE_MIN_WIDTH)

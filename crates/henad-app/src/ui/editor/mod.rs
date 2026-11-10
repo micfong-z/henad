@@ -478,6 +478,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let past_start = app.sheet_preview_past_start();
     let trials = sheet_trials(app);
     let fires = sheet_fires(app);
+    let layout = app.layout;
     let panel = &mut app.editor;
     let empty = panel.model.is_empty();
     // The New model dialog takes the keys of Undo and Redo while it is open.
@@ -537,6 +538,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 copy: copy.as_deref(),
                 refusal,
                 fires: fires.as_ref(),
+                layout,
             };
             if let Some(sheet_request) = sheet::sheet_ui(ui, sheet, &shown) {
                 request = Some(match sheet_request {

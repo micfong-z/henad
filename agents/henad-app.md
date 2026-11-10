@@ -42,14 +42,36 @@ viewport and `metadata.rs` builds the run details. `files/` holds the file dialo
 bytes to a save dialog (several files go into one picked folder on native and download one by one in
 a browser), and `open.rs` reads picked files, or takes a picked folder on native. Each outcome
 carries a `SaveTarget` or `OpenTarget`, and `AppState::poll_saves` and `poll_opens` route it to
-the panel that asked. `dock.rs` holds the tab definitions, the default layout and the dispatch to
-each panel. Sweep and Results stack behind Viewport. `Tab::Editor` is the last variant, since
-egui keys a tab's stored state on the discriminant, and sits after Parameters in `Tab::ALL`, the
-View menu's order. The default layout leaves it closed, and `focus_tab` and `toggle_tab` open it
-through `open_tab`, in a leaf of its own split to the right of the Viewport's leaf, with the
-Viewport brought to the front of its stack. The menu bar's File menu holds New model, New grid
-rule, New node graph, Open model and Save model. `lib.rs` draws the New model dialog beside the
-fault and Rebuild model modals.
+the panel that asked. `dock.rs` holds the tab definitions, the two layouts and the dispatch to each
+panel. `Tab::Editor` is the last variant, since egui keys a tab's stored state on the discriminant,
+and sits after Parameters in `Tab::ALL`, the View menu's order. A `Layout` is `Default` or `Editor`,
+and `Layout::dock_state` builds its tree. `default_dock_state` stacks Sweep and Results behind
+Viewport and leaves the Editor closed. `editor_dock_state` splits the width at `EDITOR_LEAF_SHARE`
+(0.625): the Editor in front of Sweep and Results on the left, and a column of the Viewport
+(`VIEWPORT_LEAF_SHARE`, 0.46), Playback in front of Pacing (`PLAYBACK_LEAF_SHARE`, 0.3 of the rest)
+and Charts in front of Parameters, Statistics and Model, with Performance, System and Export closed.
+The four tabs of the bottom stack need about 480 points, so a wider Editor leaf cuts the Model tab
+at 1280 points. `HenadApp` holds a `Workspace`: one `DockState` per layout for the session (nothing
+stored, the app starts in the default layout), the layout that shows and `editor_layout_on_open`,
+the View menu's checkbox (`menu_bar::EDITOR_LAYOUT_ON_OPEN`, "Open models in the Editor layout", on
+at start). `Workspace::toggle` and `focus` open a closed tab through `open_tab`: the Editor of the
+default layout in a leaf of its own split to the right of the Viewport's leaf (`EDITOR_SPLIT`) with
+the Viewport brought to the front of its stack, the Editor of the Editor layout in front of the leaf
+of Sweep or Results (else in a leaf of its own on the left at `EDITOR_LEAF_SHARE`), and any other
+tab into the focused leaf. `Workspace::focus` of the Editor switches to the Editor layout first
+while the checkbox holds, and every site that opens a model in the Editor sets `focus_request` to
+the Editor. Nothing switches back. The View menu (`menu_bar::view_menu`) lists the tabs of the
+layout that shows, then "Default layout" and "Editor layout" as radio buttons, the checkbox and
+Reset layout (`Workspace::reset`, the layout that shows alone). Both layouts draw under one
+`DockArea` id, so a tab body keeps its egui id across a switch, and `HenadApp::ui` copies the layout
+into `AppState::layout` before the dock draws for the Sheet pane's stored width
+(`henad-app-sheet.md`). `dock.rs` holds the eight tests of the default layout, their Editor layout
+counterparts and the `Workspace` tests (`a_switch_keeps_the_changes_of_each_layout`,
+`a_request_for_the_editor_switches_layouts_only_while_the_checkbox_is_on`,
+`reset_layout_resets_the_layout_that_shows_alone`), and `menu_bar.rs`
+`the_view_menu_switches_layouts_by_name`. The menu bar's File menu holds New model, New grid rule,
+New node graph, Open model and Save model. `lib.rs` draws the New model dialog beside the fault and
+Rebuild model modals.
 `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer drawn over the grid layer,
 and `painted.rs` carries a paint callback's wgpu handles past `CallbackTrait`'s `Send + Sync`
 bound. `edge_layer.rs` (with `edges.wgsl`) draws a network's
@@ -206,7 +228,7 @@ and the second call rebuilds. Where the frame drives the sim (`!CAN_SPAWN_THREAD
 keeps repainting while a run-to is pending. `AppState::open_run(Replay, OpenAt)` builds one sweep
 run from a `henad_core::explore::replay::Replay`. It selects the model, sets the params, seed
 and schedule, rebuilds, sends `RunTo` for `OpenAt::Tick`, and sets `focus_request` to the
-Viewport. `HenadApp::ui` applies that request through `dock::focus_tab` after
+Viewport. `HenadApp::ui` applies that request through `Workspace::focus` after
 `DockArea::show_inside`. The panels draw while the dock is borrowed. `OpenedRun` names the run in
 Playback. A live param edit, an action press, or a build from other values or of other code
 (`same_code`) than the `OpenedRun::entry` it was opened with marks it modified
