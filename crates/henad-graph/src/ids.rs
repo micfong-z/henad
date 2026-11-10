@@ -3,6 +3,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::limits::MAX_ID_BYTES;
+
 /// Stable id of a node, written `n<k>` with `k >= 1` and no leading zero.
 ///
 /// Ids order by `k`, the natural order the canonical text sorts nodes in.
@@ -49,13 +51,18 @@ impl FromStr for NodeId {
 ///
 /// An id holds no double underscore, which keeps generated WGSL names injective.
 pub fn is_id(text: &str) -> bool {
+    is_model_id(text) && !text.contains("__")
+}
+
+/// Returns whether `text` follows the model id grammar: a lowercase ASCII letter, then lowercase letters, digits and
+/// underscores, within [`MAX_ID_BYTES`].
+pub(crate) fn is_model_id(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.first().is_some_and(u8::is_ascii_lowercase)
-        && bytes.len() <= 64
+        && bytes.len() <= MAX_ID_BYTES
         && bytes
             .iter()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
-        && !text.contains("__")
 }
 
 /// Returns whether `text` follows the port segment grammar `[A-Za-z][A-Za-z0-9_]{0,63}`, with no double underscore.
@@ -64,7 +71,7 @@ pub fn is_id(text: &str) -> bool {
 pub fn is_port_segment(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.first().is_some_and(u8::is_ascii_alphabetic)
-        && bytes.len() <= 64
+        && bytes.len() <= MAX_ID_BYTES
         && bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
         && !text.contains("__")
 }

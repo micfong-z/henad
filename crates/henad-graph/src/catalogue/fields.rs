@@ -318,11 +318,6 @@ const LAYER: InputSocket = InputSocket {
     default: InputDefault::FirstLayer,
 };
 
-const IN_STATS: ContextSet = ContextSet {
-    stats: true,
-    ..ContextSet::NONE
-};
-
 /// Sum of four `f32` values that is exact in either precision.
 const FOUR_VALUES: &[super::CaseValue] = &[F32(1.5), F32(2.25), F32(0.25), F32(4.0)];
 
@@ -546,7 +541,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         group: "Statistics",
         label: "Counter total",
         semantics: "The run total of the counter `counter`, as a `u64` at the tick rate.",
-        contexts: IN_STATS,
+        contexts: ContextSet::STATS,
         config: &[config("counter", ConfigType::CounterId)],
         outputs: &[pinned("total", SocketType::Fixed(TypeClass::U64), Rate::Tick)],
         cases: &[pass_case(
@@ -568,7 +563,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         group: "Statistics",
         label: "Sum",
         semantics: "Sum of `value` over the elements of the pass, an `f64` from an `f32` or a `vec2d` from a `vec2f`. The elements fold in index order in chunks of 8192: each chunk sums from `+0.0` in `chunk_acc`, a value widened first for `f64`, and the chunk sums fold left in `f64` from `+0.0`. The GPU folds a tree of `f32` partial sums, so parity is approximate.",
-        contexts: IN_STATS,
+        contexts: ContextSet::STATS,
         type_var: &[TypeClass::F32, TypeClass::Vec2F],
         config: &[CHUNK_ACC],
         inputs: &[input_up_to("value", SocketType::Var, Rate::Element)],
@@ -636,7 +631,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         group: "Statistics",
         label: "Mean",
         semantics: "`stat.sum` of `value` times `1.0 / max(n, 1)` in `f64`, where `n` is the number of elements of the pass, the form the stock statistics use.",
-        contexts: IN_STATS,
+        contexts: ContextSet::STATS,
         type_var: &[TypeClass::F32, TypeClass::Vec2F],
         config: &[CHUNK_ACC],
         inputs: &[input_up_to("value", SocketType::Var, Rate::Element)],

@@ -6,13 +6,19 @@
 
 use std::collections::BTreeMap;
 
-use crate::catalogue::TypeClass;
+use crate::catalogue::NUMERIC;
 use crate::ids::NodeId;
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue};
 
 /// Kind of the finite counting loop.
 pub const OP_REGION_REPEAT: &str = "region.repeat";
+/// Kind of the neighborhood fold, a region over the cells of a stencil.
+pub const OP_GRID_FOLD: &str = "grid.fold";
+/// Kind of the radius fold, a region over the agents within a radius.
+pub const OP_RADIUS_FOLD: &str = "agent.radius_fold";
+/// Kind of the counter total, read in a stats pass.
+pub const OP_STAT_COUNTER: &str = "stat.counter";
 /// Kind of the body node that feeds an accumulator of a region.
 pub const OP_REGION_PUT: &str = "region.put";
 /// Kind of the call of an embedded function, whose interface ports are all bare.
@@ -52,6 +58,16 @@ impl Node {
             inputs: BTreeMap::new(),
             region: None,
         }
+    }
+
+    /// Returns the string the configuration key `key` holds, `None` for an absent key or another value.
+    pub(crate) fn config_str(&self, key: &str) -> Option<&str> {
+        self.config.get(key).and_then(ConfigValue::as_str)
+    }
+
+    /// Returns the integer the configuration key `key` holds, `None` for an absent key or another value.
+    pub(crate) fn config_integer(&self, key: &str) -> Option<i64> {
+        self.config.get(key).and_then(ConfigValue::as_integer)
     }
 
     /// Returns the accumulators the node's `config.acc` list declares, in list order.
@@ -181,16 +197,6 @@ impl Combine {
     /// Returns whether the rule applies to values of `value_type`: `sum`, `min` and `max` to numbers and vectors,
     /// `count` to `u32`, `or` and `and` to `bool`, and `carry` to every type.
     pub fn applies_to(self, value_type: &ValueType) -> bool {
-        const NUMERIC: [TypeClass; 8] = [
-            TypeClass::U32,
-            TypeClass::I32,
-            TypeClass::F32,
-            TypeClass::Vec2U,
-            TypeClass::Vec2I,
-            TypeClass::Vec2F,
-            TypeClass::U64,
-            TypeClass::F64,
-        ];
         match self {
             Self::Sum | Self::Min | Self::Max => NUMERIC.iter().any(|class| class.holds(value_type)),
             Self::Count => *value_type == ValueType::U32,

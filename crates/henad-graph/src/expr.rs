@@ -7,10 +7,9 @@
 use std::collections::BTreeMap;
 
 use crate::catalogue::{component_of, expression_inputs, name_list, vector_of};
-use crate::ids::NodeId;
 use crate::node::Node;
 use crate::types::ValueType;
-use crate::value::{ConfigValue, InputValue, Literal, PortRef};
+use crate::value::{InputValue, Literal, PortRef};
 
 /// Returns whether an expression's input can have the type `value_type`.
 pub(crate) fn takes_type(value_type: &ValueType) -> bool {
@@ -47,9 +46,7 @@ pub(crate) struct Expansion {
 /// output unset, and for ids past `u32::MAX`.
 pub(crate) fn expand(node: &Node, next: &mut u32) -> Result<Expansion, String> {
     let text = node
-        .config
-        .get("text")
-        .and_then(ConfigValue::as_str)
+        .config_str("text")
         .ok_or_else(|| "has no `config.text`".to_owned())?;
     let outputs = name_list(node, "outputs");
     let mut builder = Builder {
@@ -135,6 +132,21 @@ enum Token {
     Comma,
     Dot,
     Separator,
+}
+
+impl Token {
+    /// Returns the kind a comparison token expands into, `None` for a token that is no comparison.
+    fn comparison(&self) -> Option<&'static str> {
+        match self {
+            Self::Less => Some("cmp.lt"),
+            Self::LessEqual => Some("cmp.le"),
+            Self::Greater => Some("cmp.gt"),
+            Self::GreaterEqual => Some("cmp.ge"),
+            Self::Equal => Some("cmp.eq"),
+            Self::NotEqual => Some("cmp.ne"),
+            _ => None,
+        }
+    }
 }
 
 /// Returns the tokens of `text`.
@@ -307,24 +319,12 @@ impl Parser {
     fn comparison(&mut self, depth: usize) -> Result<Tree, String> {
         let left = self.sum(depth)?;
         let op = match self.peek() {
-            Some(
-                token @ (Token::Less
-                | Token::LessEqual
-                | Token::Greater
-                | Token::GreaterEqual
-                | Token::Equal
-                | Token::NotEqual),
-            ) => token.clone(),
+            Some(token) if token.comparison().is_some() => token.clone(),
             _ => return Ok(left),
         };
         self.at += 1;
         let right = self.sum(depth)?;
-        if matches!(
-            self.peek(),
-            Some(
-                Token::Less | Token::LessEqual | Token::Greater | Token::GreaterEqual | Token::Equal | Token::NotEqual
-            )
-        ) {
+        if self.peek().is_some_and(|token| token.comparison().is_some()) {
             return Err("chains two comparisons, which need `and` between them".to_owned());
         }
         Ok(Tree::Binary(op, Box::new(left), Box::new(right)))
@@ -440,11 +440,7 @@ struct Builder<'a> {
 impl Builder<'_> {
     /// Adds a node of kind `op` with `inputs`, and returns a link to its output `port`.
     fn add(&mut self, op: &str, inputs: Vec<(&str, InputValue)>, port: &str) -> Result<InputValue, String> {
-        let id = NodeId::new(*self.next).ok_or_else(|| "runs out of node ids".to_owned())?;
-        *self.next = self
-            .next
-            .checked_add(1)
-            .ok_or_else(|| "runs out of node ids".to_owned())?;
+        let id = crate::normal::mint_id(self.next)?;
         let mut node = Node::new(id, op);
         node.region = self.node.region;
         for (name, value) in inputs {
@@ -585,16 +581,7 @@ impl Builder<'_> {
     /// Returns the expansion of a binary operator.
     fn binary(&mut self, token: &Token, left: &Tree, right: &Tree) -> Result<Operand, String> {
         let (left, right) = (self.build(left)?, self.build(right)?);
-        let comparison = match token {
-            Token::Less => Some("cmp.lt"),
-            Token::LessEqual => Some("cmp.le"),
-            Token::Greater => Some("cmp.gt"),
-            Token::GreaterEqual => Some("cmp.ge"),
-            Token::Equal => Some("cmp.eq"),
-            Token::NotEqual => Some("cmp.ne"),
-            _ => None,
-        };
-        if let Some(op) = comparison {
+        if let Some(op) = token.comparison() {
             let [(a, a_type), (b, b_type)] = Self::pair(&left, &right)?;
             if a_type != b_type {
                 return Err(format!("compares {a_type} with {b_type}"));
@@ -642,16 +629,6 @@ impl Builder<'_> {
         for argument in arguments {
             operands.push(self.build(argument)?);
         }
-        let arity = |count: usize| {
-            if operands.len() == count {
-                Ok(())
-            } else {
-                Err(format!(
-                    "calls `{name}` with {} arguments, and it takes {count}",
-                    operands.len()
-                ))
-            }
-        };
         let unary = match name {
             "abs" => Some("math.abs"),
             "floor" => Some("math.floor"),
@@ -669,8 +646,8 @@ impl Builder<'_> {
             _ => None,
         };
         if let Some(op) = unary {
-            arity(1)?;
-            let (value, value_type) = match operands.remove(0) {
+            let [operand] = fixed_operands(name, operands)?;
+            let (value, value_type) = match operand {
                 Operand::Whole(number) => Self::literal(&Operand::Whole(number), &ValueType::F32)?,
                 other => Self::settle(other)?,
             };
@@ -678,9 +655,7 @@ impl Builder<'_> {
         }
         match name {
             "min" | "max" | "pow" | "dot" => {
-                arity(2)?;
-                let right = operands.remove(1);
-                let left = operands.remove(0);
+                let [left, right] = fixed_operands(name, operands)?;
                 let [(a, a_type), (b, _)] = Self::pair(&left, &right)?;
                 Ok(match name {
                     "min" => Operand::Value(self.add("math.min", vec![("a", a), ("b", b)], "out")?, a_type),
@@ -690,10 +665,7 @@ impl Builder<'_> {
                 })
             }
             "clamp" => {
-                arity(3)?;
-                let hi = operands.remove(2);
-                let lo = operands.remove(1);
-                let x = operands.remove(0);
+                let [x, lo, hi] = fixed_operands(name, operands)?;
                 let (x, x_type) = Self::settle(x)?;
                 let (lo, _) = Self::literal(&lo, &x_type)?;
                 let (hi, _) = Self::literal(&hi, &x_type)?;
@@ -703,10 +675,8 @@ impl Builder<'_> {
                 ))
             }
             "if" => {
-                arity(3)?;
-                let if_false = operands.remove(2);
-                let if_true = operands.remove(1);
-                let (cond, _) = Self::literal(&operands.remove(0), &ValueType::Bool)?;
+                let [cond, if_true, if_false] = fixed_operands(name, operands)?;
+                let (cond, _) = Self::literal(&cond, &ValueType::Bool)?;
                 let [(if_true, value_type), (if_false, _)] = Self::pair(&if_true, &if_false)?;
                 Ok(Operand::Value(
                     self.add(
@@ -718,9 +688,7 @@ impl Builder<'_> {
                 ))
             }
             "vec" => {
-                arity(2)?;
-                let y = operands.remove(1);
-                let x = operands.remove(0);
+                let [x, y] = fixed_operands(name, operands)?;
                 let [(x, scalar), (y, _)] = Self::pair(&x, &y)?;
                 let vector = vector_of(&scalar).ok_or_else(|| format!("makes a vector of {scalar}"))?;
                 Ok(Operand::Value(
@@ -729,8 +697,8 @@ impl Builder<'_> {
                 ))
             }
             "length" => {
-                arity(1)?;
-                let (value, _) = Self::literal(&operands.remove(0), &ValueType::Vec2F)?;
+                let [vector] = fixed_operands(name, operands)?;
+                let (value, _) = Self::literal(&vector, &ValueType::Vec2F)?;
                 Ok(Operand::Value(
                     self.add("vec.length", vec![("v", value)], "out")?,
                     ValueType::F32,
@@ -739,4 +707,14 @@ impl Builder<'_> {
             _ => Err(format!("calls `{name}`, which no expression knows")),
         }
     }
+}
+
+/// Returns `operands` as an array, for a call of `name` that takes `N` arguments.
+///
+/// # Errors
+///
+/// Returns the message for a call with another number of arguments.
+fn fixed_operands<const N: usize>(name: &str, operands: Vec<Operand>) -> Result<[Operand; N], String> {
+    <[Operand; N]>::try_from(operands)
+        .map_err(|operands| format!("calls `{name}` with {} arguments, and it takes {N}", operands.len()))
 }

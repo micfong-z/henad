@@ -13,7 +13,8 @@ use super::{
 use crate::limits::MAX_POWI_EXPONENT;
 use crate::types::Rate;
 
-const NUMERIC: &[TypeClass] = &[
+/// Classes of the numbers and vectors.
+pub(crate) const NUMERIC: &[TypeClass] = &[
     TypeClass::U32,
     TypeClass::I32,
     TypeClass::F32,

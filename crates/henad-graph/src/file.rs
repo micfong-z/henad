@@ -192,18 +192,26 @@ impl GraphFile {
     /// [`GraphFileError::Toml`] for text that is not a graph file. Each diagnostic is placed in `text` when it has a
     /// place.
     pub fn parse(text: &str) -> Result<Self, GraphFileError> {
-        Self::parse_within(text, true)
-    }
-
-    /// Reads the graph file held in `text` as [`Self::parse`] does, holding the text and its canonical text to
-    /// [`MAX_FILE_BYTES`] when `bounded` is set.
-    fn parse_within(text: &str, bounded: bool) -> Result<Self, GraphFileError> {
-        if bounded && text.len() > MAX_FILE_BYTES {
-            return Err(GraphFileError::Format(Box::new(CodeDiagnostic::error(format!(
+        if text.len() > MAX_FILE_BYTES {
+            return Err(format_error(format!(
                 "the file holds {} bytes, and a graph file holds at most {MAX_FILE_BYTES}",
                 text.len()
-            )))));
+            )));
         }
+        let file = Self::read(text)?;
+        // Every file this reads has a canonical text that reads back.
+        let canonical = canonical_text(&file.document, file.editor.as_ref()).len();
+        if canonical > MAX_FILE_BYTES {
+            return Err(format_error(format!(
+                "the file's canonical text holds {canonical} bytes, and a graph file holds at most {MAX_FILE_BYTES}"
+            )));
+        }
+        Ok(file)
+    }
+
+    /// Reads the graph file held in `text` as [`Self::parse`] does, with no limit on the size of the text or of its
+    /// canonical text.
+    fn read(text: &str) -> Result<Self, GraphFileError> {
         let (read, line_ends) = LineEnds::normalize(text);
         let place =
             |diagnostic: CodeDiagnostic, span: Range<usize>| diagnostic.at(text, line_ends.original_range(span));
@@ -219,17 +227,6 @@ impl GraphFile {
                 GraphFileError::Format(Box::new(place(CodeDiagnostic::error(message), span)))
             }
         })?;
-        // Every file this reads has a canonical text that reads back.
-        let canonical = if bounded {
-            canonical_text(&file.document, file.editor.as_ref()).len()
-        } else {
-            0
-        };
-        if canonical > MAX_FILE_BYTES {
-            return Err(GraphFileError::Format(Box::new(CodeDiagnostic::error(format!(
-                "the file's canonical text holds {canonical} bytes, and a graph file holds at most {MAX_FILE_BYTES}"
-            )))));
-        }
         Ok(Self {
             document: file.document,
             editor: file.editor,
@@ -248,10 +245,10 @@ impl GraphFile {
     /// [`Self::parse`] for its text.
     pub fn from_code(code: &ModelCode) -> Result<Self, GraphFileError> {
         if code.format() != CODE_FORMAT {
-            return Err(GraphFileError::Format(Box::new(CodeDiagnostic::error(format!(
+            return Err(format_error(format!(
                 "Recorded under {}, and this build runs {CODE_FORMAT}",
                 code.format()
-            )))));
+            )));
         }
         Self::parse(code.text())
     }
@@ -275,7 +272,7 @@ impl GraphFile {
     ///
     /// Returns the errors of [`Self::parse`] but the two of size, when the canonical text does not read back.
     pub(crate) fn from_normalised(document: &GraphDocument) -> Result<Self, GraphFileError> {
-        Self::parse_within(&canonical_text(document, None), false)
+        Self::read(&canonical_text(document, None))
     }
 
     /// Semantic document of the file.
@@ -406,4 +403,9 @@ pub(crate) fn canonical_text(document: &GraphDocument, editor: Option<&EditorReg
         text.push_str(&editor.to_text());
     }
     text
+}
+
+/// Returns a [`GraphFileError::Format`] of an error with `message` and no place.
+fn format_error(message: String) -> GraphFileError {
+    GraphFileError::Format(Box::new(CodeDiagnostic::error(message)))
 }

@@ -296,7 +296,7 @@ pub(super) const BOUNDARY: ConfigKey = ConfigKey {
     default: Some(ConfigDefault::Word("domain")),
 };
 
-const SCALARS: &[TypeClass] = &[TypeClass::U32, TypeClass::I32, TypeClass::F32, TypeClass::F64];
+const COMPONENTS: &[TypeClass] = &[TypeClass::U32, TypeClass::I32, TypeClass::F32, TypeClass::F64];
 const VECTORS: &[TypeClass] = &[TypeClass::Vec2U, TypeClass::Vec2I, TypeClass::Vec2F, TypeClass::Vec2D];
 
 pub(super) static KINDS: &[NodeDef] = &[
@@ -378,7 +378,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         group: "Vectors",
         label: "Make vector",
         semantics: "The vector `(x, y)`: a `vec2u` of two `u32`, a `vec2i` of two `i32`, a `vec2f` of two `f32`, and a `vec2d` of two `f64` on the host.",
-        type_var: SCALARS,
+        type_var: COMPONENTS,
         inputs: &[input("x", SocketType::Var), input("y", SocketType::Var)],
         outputs: &[output("out", SocketType::Vector)],
         cases: &[

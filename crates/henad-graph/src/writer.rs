@@ -293,7 +293,7 @@ fn default_put_value(body: &NodeBody, node: &Node, port: &str) -> Option<InputVa
     if node.op != OP_REGION_PUT || port != "value" {
         return None;
     }
-    let name = node.config.get("acc")?.as_str()?;
+    let name = node.config_str("acc")?;
     let accumulators = body.node(node.region?)?.accumulators().ok()?;
     let accumulator = accumulators.iter().find(|accumulator| accumulator.name == name)?;
     (accumulator.combine == Combine::Count).then_some(InputValue::Literal(Literal::U32(1)))

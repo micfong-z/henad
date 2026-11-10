@@ -112,9 +112,24 @@ impl GraphDocument {
         self.categories.iter().find(|category| category.id == id)
     }
 
+    /// Returns the palette `id`.
+    pub(crate) fn palette(&self, id: &str) -> Option<&Palette> {
+        self.palettes.iter().find(|palette| palette.id == id)
+    }
+
+    /// Returns the lane `id`.
+    pub(crate) fn lane(&self, id: &str) -> Option<&Lane> {
+        self.lanes.iter().find(|lane| lane.id == id)
+    }
+
     /// Returns the position of the lane `id` among the lanes.
     pub(crate) fn lane_position(&self, id: &str) -> Option<usize> {
         self.lanes.iter().position(|lane| lane.id == id)
+    }
+
+    /// Returns the first lane whose role is [`LaneRole::Position`].
+    pub(crate) fn position_lane(&self) -> Option<&Lane> {
+        self.lanes.iter().find(|lane| lane.role == Some(LaneRole::Position))
     }
 
     /// Returns the field `id`.
@@ -122,9 +137,24 @@ impl GraphDocument {
         self.fields.iter().find(|field| field.id == id)
     }
 
+    /// Returns the counter `id`.
+    pub(crate) fn counter(&self, id: &str) -> Option<&Counter> {
+        self.counters.iter().find(|counter| counter.id == id)
+    }
+
+    /// Returns the parameter `id`.
+    pub(crate) fn param(&self, id: &str) -> Option<&ParamDescriptor> {
+        self.params.iter().find(|param| param.id() == id)
+    }
+
     /// Returns the position of the parameter `id` among the parameters.
     pub(crate) fn param_position(&self, id: &str) -> Option<usize> {
         self.params.iter().position(|param| param.id() == id)
+    }
+
+    /// Returns the function `id`.
+    pub(crate) fn function(&self, id: &str) -> Option<&Function> {
+        self.functions.iter().find(|function| function.id == id)
     }
 }
 
@@ -220,7 +250,7 @@ impl Default for AgentsWorld {
     fn default() -> Self {
         Self {
             count: 1000,
-            max_count: 10_000_000,
+            max_count: crate::limits::MAX_AGENTS,
             width: 1000.0,
             height: 1000.0,
         }

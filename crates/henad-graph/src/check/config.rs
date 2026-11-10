@@ -7,7 +7,7 @@ use henad_core::params::ParamKind;
 
 use super::Checker;
 use super::view::BodyView;
-use crate::catalogue::{ConfigKey, ConfigType, NodeDef};
+use crate::catalogue::{ConfigKey, ConfigType, NodeDef, OutputSocket};
 use crate::ids::is_port_segment;
 use crate::limits::{
     MAX_ACCUMULATORS, MAX_EXPRESSION_BYTES, MAX_EXPRESSION_PORTS, MAX_PICK_VALUES, MAX_TRANSITION_RULES,
@@ -45,7 +45,7 @@ pub(super) fn check_node(checker: &mut Checker<'_>, view: &BodyView<'_>, positio
             }
             None => {}
             Some(value) => {
-                if let Err(reason) = check_value(view, node, key, value) {
+                if let Err(reason) = check_value(view, def, node, key, value) {
                     view.error(
                         checker,
                         position,
@@ -65,7 +65,13 @@ pub(super) fn check_node(checker: &mut Checker<'_>, view: &BodyView<'_>, positio
     clippy::too_many_lines,
     reason = "one arm per configuration type reads best as one table"
 )]
-fn check_value(view: &BodyView<'_>, node: &Node, key: &ConfigKey, value: &ConfigValue) -> Result<(), String> {
+fn check_value(
+    view: &BodyView<'_>,
+    def: &NodeDef,
+    node: &Node,
+    key: &ConfigKey,
+    value: &ConfigValue,
+) -> Result<(), String> {
     let document = view.document;
     let word = |what: &str| {
         value
@@ -95,26 +101,15 @@ fn check_value(view: &BodyView<'_>, node: &Node, key: &ConfigKey, value: &Config
         }
         ConfigType::LaneId => {
             let text = word("lane id")?;
-            if document.lanes.iter().any(|lane| lane.id == text) {
-                Ok(())
-            } else {
-                Err(format!("names the lane '{text}', and the file declares no such lane"))
-            }
+            declared("lane", text, document.lane(text).is_some())
         }
         ConfigType::CategoryId => {
             let text = word("category id")?;
-            if document.categories.iter().any(|category| category.id == text) {
-                Ok(())
-            } else {
-                Err(format!(
-                    "names the category '{text}', and the file declares no such category"
-                ))
-            }
+            declared("category", text, document.category(text).is_some())
         }
         ConfigType::PaletteId => {
             let text = word("palette id")?;
-            let known = document.palettes.iter().any(|palette| palette.id == text)
-                || document.categories.iter().any(|category| category.id == text);
+            let known = document.palette(text).is_some() || document.category(text).is_some();
             if known {
                 Ok(())
             } else {
@@ -125,11 +120,8 @@ fn check_value(view: &BodyView<'_>, node: &Node, key: &ConfigKey, value: &Config
         }
         ConfigType::VariantName => {
             let text = word("variant name")?;
-            let category = node.config.get("category").and_then(ConfigValue::as_str);
-            let found = document
-                .categories
-                .iter()
-                .find(|known| Some(known.id.as_str()) == category);
+            let category = node.config_str("category");
+            let found = category.and_then(|id| document.category(id));
             match found {
                 // A broken `config.category` has its own diagnostic.
                 None => Ok(()),
@@ -142,36 +134,20 @@ fn check_value(view: &BodyView<'_>, node: &Node, key: &ConfigKey, value: &Config
         }
         ConfigType::CountList { max } => check_counts(value, max),
         ConfigType::Literals => check_literals(view, value),
-        ConfigType::Accumulators => check_accumulators(node, &def_inner_outputs(node)),
+        ConfigType::Accumulators => check_accumulators(node, def.inner_outputs),
         ConfigType::AccumulatorName => word("accumulator name").map(|_| ()),
         ConfigType::TransitionRules => check_rules(view, node, value),
         ConfigType::FieldId => {
             let text = word("field id")?;
-            if document.fields.iter().any(|field| field.id == text) {
-                Ok(())
-            } else {
-                Err(format!("names the field '{text}', and the file declares no such field"))
-            }
+            declared("field", text, document.field(text).is_some())
         }
         ConfigType::CounterId => {
             let text = word("counter id")?;
-            if document.counters.iter().any(|counter| counter.id == text) {
-                Ok(())
-            } else {
-                Err(format!(
-                    "names the counter '{text}', and the file declares no such counter"
-                ))
-            }
+            declared("counter", text, document.counter(text).is_some())
         }
         ConfigType::FunctionId => {
             let text = word("function id")?;
-            if document.functions.iter().any(|function| function.id == text) {
-                Ok(())
-            } else {
-                Err(format!(
-                    "names the function '{text}', and the file declares no such function"
-                ))
-            }
+            declared("function", text, document.function(text).is_some())
         }
         ConfigType::InterfacePort => {
             let text = word("port name")?;
@@ -214,11 +190,15 @@ fn check_value(view: &BodyView<'_>, node: &Node, key: &ConfigKey, value: &Config
     }
 }
 
-/// Returns the names of the inner outputs of the region `node` is, which its accumulators cannot take.
-fn def_inner_outputs(node: &Node) -> Vec<&'static str> {
-    crate::catalogue::lookup(&node.op, crate::LIBRARY)
-        .map(|def| def.inner_outputs.iter().map(|output| output.name).collect())
-        .unwrap_or_default()
+/// Returns the clause saying `text` names a `what` the file does not declare, or `Ok` when `known`.
+fn declared(what: &str, text: &str, known: bool) -> Result<(), String> {
+    if known {
+        Ok(())
+    } else {
+        Err(format!(
+            "names the {what} '{text}', and the file declares no such {what}"
+        ))
+    }
 }
 
 /// Returns the clause saying how `value` breaks a list of `{ name, type }` inputs, or `Ok` when it fits.
@@ -327,7 +307,9 @@ fn check_literals(view: &BodyView<'_>, value: &ConfigValue) -> Result<(), String
 }
 
 /// Returns the clause saying how the accumulators of `node` break the region rules, or `Ok` when they fit.
-fn check_accumulators(node: &Node, reserved: &[&'static str]) -> Result<(), String> {
+///
+/// `inner_outputs` are the region's inner outputs, whose names no accumulator takes.
+fn check_accumulators(node: &Node, inner_outputs: &[OutputSocket]) -> Result<(), String> {
     let accumulators = node.accumulators().map_err(|reason| format!("is broken: {reason}"))?;
     if accumulators.len() > MAX_ACCUMULATORS {
         return Err(format!(
@@ -343,7 +325,7 @@ fn check_accumulators(node: &Node, reserved: &[&'static str]) -> Result<(), Stri
                 "names the accumulator '{name}', outside the grammar of a port name"
             ));
         }
-        if reserved.contains(&name) {
+        if inner_outputs.iter().any(|output| output.name == name) {
             return Err(format!(
                 "names an accumulator '{name}', which an inner output of the region holds"
             ));
@@ -371,12 +353,8 @@ fn check_rules(view: &BodyView<'_>, node: &Node, value: &ConfigValue) -> Result<
             rules.len()
         ));
     }
-    let category = node.config.get("category").and_then(ConfigValue::as_str);
-    let variants = view
-        .document
-        .categories
-        .iter()
-        .find(|known| Some(known.id.as_str()) == category);
+    let category = node.config_str("category");
+    let variants = category.and_then(|id| view.document.category(id));
     let mut ids = BTreeSet::new();
     for rule in rules {
         let table = rule
@@ -486,7 +464,7 @@ pub(super) fn check_literal(view: &BodyView<'_>, literal: &Literal) -> Result<()
     let document = view.document;
     match literal {
         Literal::Category(name) => {
-            let Some(category) = document.categories.iter().find(|category| category.id == name.owner) else {
+            let Some(category) = document.category(&name.owner) else {
                 return Err(format!(
                     "names the category '{}', and the file declares no such category",
                     name.owner
@@ -502,7 +480,7 @@ pub(super) fn check_literal(view: &BodyView<'_>, literal: &Literal) -> Result<()
             }
         }
         Literal::Layer(name) => {
-            let Some(field) = document.fields.iter().find(|field| field.id == name.owner) else {
+            let Some(field) = document.field(&name.owner) else {
                 return Err(format!(
                     "names the field '{}', and the file declares no such field",
                     name.owner
@@ -518,7 +496,7 @@ pub(super) fn check_literal(view: &BodyView<'_>, literal: &Literal) -> Result<()
             }
         }
         Literal::ChoiceOption(name) => {
-            let Some(param) = document.params.iter().find(|param| param.id() == name.owner) else {
+            let Some(param) = document.param(&name.owner) else {
                 return Err(format!(
                     "names the parameter '{}', and the file declares no such parameter",
                     name.owner

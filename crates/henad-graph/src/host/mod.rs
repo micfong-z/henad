@@ -369,12 +369,7 @@ impl fmt::Debug for PassOutcome {
 impl PassOutcome {
     /// Returns the value at `port`, a reference such as `n2.S`, or `n3` for a node's only output.
     pub fn value(&self, port: &PortRef) -> Option<HostValue> {
-        let outputs = self.values.get(&port.node)?;
-        match &port.port {
-            Some(name) => outputs.get(name).copied(),
-            None if outputs.len() == 1 => outputs.values().next().copied(),
-            None => None,
-        }
+        port.output_in(self.values.get(&port.node)?).copied()
     }
 }
 
@@ -538,13 +533,8 @@ impl HostEvaluator {
     /// Returns `error` with a node that normalisation added replaced by the node as written that holds it: the
     /// outermost call it was inlined through, or the expression it expands.
     fn located(&self, error: HostError) -> HostError {
-        let written = |node: Option<NodeId>| {
-            node.map(|id| {
-                self.origins
-                    .get(&id)
-                    .map_or(id, |origin| origin.calls.first().copied().unwrap_or(origin.node))
-            })
-        };
+        let written =
+            |node: Option<NodeId>| node.map(|id| self.origins.get(&id).map_or(id, crate::normal::Origin::written));
         match error {
             HostError::Unsupported { pass, node, reason } => HostError::Unsupported {
                 pass,

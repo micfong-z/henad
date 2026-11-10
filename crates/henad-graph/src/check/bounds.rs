@@ -10,7 +10,8 @@ use henad_core::params::ParamKind;
 use super::Checker;
 use super::view::BodyView;
 use crate::catalogue::NodeCost;
-use crate::value::{ConfigValue, InputValue, Literal};
+use crate::node::OP_REGION_REPEAT;
+use crate::value::{InputValue, Literal};
 
 /// Depth of links the bound follows. A deeper chain has no bound.
 const MAX_BOUND_DEPTH: usize = 64;
@@ -22,7 +23,7 @@ pub(super) fn warn_counts(checker: &mut Checker<'_>, view: &BodyView<'_>) {
         if view.defs[position].is_none_or(|def| def.cost != NodeCost::Repeat) {
             continue;
         }
-        let Some(max) = node.config.get("max").and_then(ConfigValue::as_integer) else {
+        let Some(max) = node.config_integer("max") else {
             continue;
         };
         let Some(count) = node.inputs.get("count") else {
@@ -57,7 +58,7 @@ fn value_bound(
     match value {
         InputValue::Literal(Literal::U32(number)) => Some(u64::from(*number)),
         InputValue::Param(id) => {
-            let param = view.document.params.iter().find(|param| param.id() == id)?;
+            let param = view.document.param(id)?;
             match param.kind() {
                 ParamKind::U32 { max, .. } => Some(u64::from(*max)),
                 ParamKind::Choice { options, .. } => Some(options.len().saturating_sub(1) as u64),
@@ -99,13 +100,13 @@ fn node_bound(
             (None, None) => None,
         },
         ("math.clamp", _) => input("hi"),
-        ("region.repeat", Some("k")) => repeat_max(node).map(|max| max.saturating_sub(1)),
-        ("region.repeat", Some("total")) => repeat_max(node),
+        (OP_REGION_REPEAT, Some("k")) => repeat_max(node).map(|max| max.saturating_sub(1)),
+        (OP_REGION_REPEAT, Some("total")) => repeat_max(node),
         _ => None,
     }
 }
 
 /// Returns the bound `config.max` of a Repeat.
 fn repeat_max(node: &crate::node::Node) -> Option<u64> {
-    u64::try_from(node.config.get("max")?.as_integer()?).ok()
+    u64::try_from(node.config_integer("max")?).ok()
 }

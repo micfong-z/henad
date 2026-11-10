@@ -12,7 +12,7 @@ use henad_core::explore::fingerprint::fnv1a64;
 use super::declarations::node_place;
 use super::regions::{LeavingOutput, Selection, body_report, named_output};
 use super::{EditCommand, EditError, GraphBuilder, Scope};
-use crate::catalogue::{Effect, lookup};
+use crate::catalogue::{Effect, NodeDef, lookup};
 use crate::check::CheckReport;
 use crate::document::{Function, FunctionPort, GraphDocument};
 use crate::editor::{FunctionOrigin, NodeLayout};
@@ -28,17 +28,6 @@ const PORT_GAP: f64 = 280.0;
 
 /// Height in canvas points of the row of one new `fn.input` or `fn.output` node.
 const PORT_ROW: f64 = 90.0;
-
-/// Effects no function body holds, with the words a refusal names them by.
-const SINKS: [(Effect, &str); 7] = [
-    (Effect::WritesLane, "a lane write"),
-    (Effect::WritesField, "a field write"),
-    (Effect::Deposits, "a deposit"),
-    (Effect::Counts, "a counter"),
-    (Effect::View, "a colour"),
-    (Effect::Reduce, "a reducer"),
-    (Effect::DrawsStream, "a stream draw"),
-];
 
 /// Side of a function's interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -477,7 +466,7 @@ impl GraphBuilder {
         let body = self.body(scope)?;
         for node in body.nodes.iter().filter(|node| wrapped.contains(&node.id)) {
             let def = lookup(&node.op, self.document.library);
-            if let Some((_, what)) = def.and_then(|def| SINKS.iter().find(|(effect, _)| def.has_effect(*effect))) {
+            if let Some(what) = def.and_then(NodeDef::sink) {
                 return Err(EditError::Invalid(format!(
                     "node {} is {what}, and a function holds none. Leave it out of the selection",
                     node.id

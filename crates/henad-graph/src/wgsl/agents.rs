@@ -388,9 +388,7 @@ impl AgentProgram {
             .iter()
             .flat_map(|(pass, node)| {
                 // The node as written: the outermost call of a copy, or the node itself.
-                let written = evaluator
-                    .origin(*node)
-                    .map_or(*node, |origin| origin.calls.first().copied().unwrap_or(origin.node));
+                let written = evaluator.origin(*node).map_or(*node, crate::normal::Origin::written);
                 if let Some(name) = names.and_then(|names| names.get(written)) {
                     return [
                         format!(
@@ -467,8 +465,24 @@ impl AgentProgram {
                 world.max_count.max(1),
             )
             .on_reload(),
-            f32_param("world_width", "World Width", world.width, 1.0, 10_000.0, Some(50.0)).on_reload(),
-            f32_param("world_height", "World Height", world.height, 1.0, 10_000.0, Some(50.0)).on_reload(),
+            f32_param(
+                "world_width",
+                "World Width",
+                world.width,
+                1.0,
+                crate::limits::MAX_WORLD_SIDE,
+                Some(50.0),
+            )
+            .on_reload(),
+            f32_param(
+                "world_height",
+                "World Height",
+                world.height,
+                1.0,
+                crate::limits::MAX_WORLD_SIDE,
+                Some(50.0),
+            )
+            .on_reload(),
         ];
         params.extend(own_params(&document.params, &live::reload_only(&evaluator)));
         let reduce_domain = reduce.and_then(GeneratedShader::domain).unwrap_or(EngineDomain::Agents);

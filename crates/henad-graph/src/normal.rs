@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use henad_core::authoring::primitives::rng::mix_seed;
 
-use crate::catalogue::{Effect, lookup};
+use crate::catalogue::{Effect, called_function, lookup};
 use crate::document::{Function, GraphDocument};
 use crate::draw::fold32;
 use crate::expr;
@@ -30,6 +30,13 @@ pub struct Origin {
     pub function: Option<String>,
     /// Node as written that the copy comes from: the node of a function body, or the expression node.
     pub node: NodeId,
+}
+
+impl Origin {
+    /// Returns the node as written the copy comes from: the outermost call, or [`Self::node`] when there is none.
+    pub(crate) fn written(&self) -> NodeId {
+        self.calls.first().copied().unwrap_or(self.node)
+    }
 }
 
 /// One pass after normalisation.
@@ -77,18 +84,26 @@ pub(crate) fn normalise_body(
     body: &NodeBody,
     next: &mut u32,
 ) -> Result<NormalPass, NormalError> {
-    let mut pending: VecDeque<Entry> = body.nodes.iter().map(|node| (node.clone(), None, Vec::new())).collect();
+    let mut pending: VecDeque<Entry> = body
+        .nodes
+        .iter()
+        .map(|node| Entry {
+            node: node.clone(),
+            origin: None,
+            keys: Vec::new(),
+        })
+        .collect();
     let mut done: Vec<Entry> = Vec::with_capacity(pending.len());
     let mut replaced: BTreeMap<NodeId, BTreeMap<String, InputValue>> = BTreeMap::new();
     let mut added = 0usize;
     while let Some(entry) = pending.pop_front() {
-        let (node, origin, keys) = &entry;
+        let Entry { node, origin, keys } = &entry;
         if node.op != OP_FUNCTION_CALL && node.op != OP_EXPRESSION {
             done.push(entry);
             continue;
         }
         let fail = |reason: String| NormalError {
-            node: written_id(&entry),
+            node: entry.written_id(),
             reason,
         };
         let (copies, outputs) = if node.op == OP_EXPRESSION {
@@ -101,11 +116,16 @@ pub(crate) fn normalise_body(
             let copies: Vec<Entry> = expansion
                 .nodes
                 .into_iter()
-                .map(|copy| (copy, Some(origin.clone()), keys.clone()))
+                .map(|copy| Entry {
+                    node: copy,
+                    origin: Some(origin.clone()),
+                    keys: keys.clone(),
+                })
                 .collect();
             (copies, expansion.outputs)
         } else {
-            let function = called(document, node).ok_or_else(|| fail("calls no declared function".to_owned()))?;
+            let function =
+                called_function(node, document).ok_or_else(|| fail("calls no declared function".to_owned()))?;
             let mut calls = origin.as_ref().map(|origin| origin.calls.clone()).unwrap_or_default();
             calls.push(origin.as_ref().map_or(node.id, |origin| origin.node));
             if calls.len() > MAX_CALL_DEPTH {
@@ -124,7 +144,7 @@ pub(crate) fn normalise_body(
     }
     let mut nodes = Vec::with_capacity(done.len());
     let mut origins = BTreeMap::new();
-    for (mut node, origin, keys) in done {
+    for Entry { mut node, origin, keys } in done {
         for value in node.inputs.values_mut() {
             resolve(value, &replaced);
         }
@@ -156,14 +176,25 @@ pub(crate) fn normalise_body(
     })
 }
 
-/// A node being normalised, its origin when it is a copy, and the keys of the calls around it, outermost first.
-type Entry = (Node, Option<Origin>, Vec<u32>);
+/// A node being normalised.
+struct Entry {
+    node: Node,
+    /// Origin of the node when it is a copy.
+    origin: Option<Origin>,
+    /// Keys of the calls around the node, outermost first.
+    keys: Vec<u32>,
+}
+
+impl Entry {
+    /// Returns the id as written of the node: its own, or the outermost call it came through.
+    fn written_id(&self) -> NodeId {
+        self.origin.as_ref().map_or(self.node.id, Origin::written)
+    }
+}
 
 /// Returns the key of a draw or a call, 0 when it has none.
 fn key_of(node: &Node) -> u32 {
-    node.config
-        .get("key")
-        .and_then(ConfigValue::as_integer)
+    node.config_integer("key")
         .and_then(|key| u32::try_from(key).ok())
         .unwrap_or(0)
 }
@@ -177,12 +208,7 @@ fn resolve(value: &mut InputValue, replaced: &BTreeMap<NodeId, BTreeMap<String, 
         let Some(outputs) = replaced.get(&link.node) else {
             return;
         };
-        let found = match &link.port {
-            Some(port) => outputs.get(port),
-            None if outputs.len() == 1 => outputs.values().next(),
-            None => None,
-        };
-        match found {
+        match link.output_in(outputs) {
             Some(found) => *value = found.clone(),
             None => return,
         }
@@ -194,16 +220,15 @@ pub fn compose_key(call: u32, key: u32) -> u32 {
     fold32(mix_seed((u64::from(call) << 32) | u64::from(key)))
 }
 
-/// Returns the id as written of a node being normalised: its own, or the outermost call it came through.
-fn written_id(entry: &Entry) -> NodeId {
-    entry.1.as_ref().map_or(entry.0.id, |origin| {
-        origin.calls.first().copied().unwrap_or(origin.node)
-    })
-}
-
-/// Returns the function `node` calls.
-fn called<'a>(document: &'a GraphDocument, node: &Node) -> Option<&'a Function> {
-    crate::catalogue::called_function(node, document)
+/// Returns the id `*next` and moves `*next` past it.
+///
+/// # Errors
+///
+/// Returns the message for a `*next` of 0 or of `u32::MAX`.
+pub(crate) fn mint_id(next: &mut u32) -> Result<NodeId, String> {
+    let id = NodeId::new(*next).ok_or_else(|| "runs out of node ids".to_owned())?;
+    *next = next.checked_add(1).ok_or_else(|| "runs out of node ids".to_owned())?;
+    Ok(id)
 }
 
 /// Returns the copies of `function`'s body for the call `call`, and the value of each output.
@@ -219,11 +244,7 @@ fn inline(
     let mut inputs: BTreeMap<NodeId, InputValue> = BTreeMap::new();
     for node in nodes {
         if node.op == OP_FUNCTION_INPUT {
-            let port = node
-                .config
-                .get("port")
-                .and_then(ConfigValue::as_str)
-                .unwrap_or_default();
+            let port = node.config_str("port").unwrap_or_default();
             let value = call
                 .inputs
                 .get(port)
@@ -231,9 +252,7 @@ fn inline(
                 .ok_or_else(|| format!("leaves the input `{port}` of '{}' unwritten", function.id))?;
             inputs.insert(node.id, value);
         } else if node.op != OP_FUNCTION_OUTPUT {
-            let id = NodeId::new(*next).ok_or_else(|| "runs out of node ids".to_owned())?;
-            *next = next.checked_add(1).ok_or_else(|| "runs out of node ids".to_owned())?;
-            fresh.insert(node.id, id);
+            fresh.insert(node.id, mint_id(next)?);
         }
     }
     let map_value = |value: &InputValue| -> InputValue {
@@ -257,11 +276,7 @@ fn inline(
     let mut outputs = BTreeMap::new();
     for node in nodes {
         if node.op == OP_FUNCTION_OUTPUT {
-            let port = node
-                .config
-                .get("port")
-                .and_then(ConfigValue::as_str)
-                .unwrap_or_default();
+            let port = node.config_str("port").unwrap_or_default();
             if let Some(value) = node.inputs.get("value") {
                 outputs.insert(port.to_owned(), map_value(value));
             }
@@ -282,7 +297,11 @@ fn inline(
             function: Some(function.id.clone()),
             node: node.id,
         };
-        copies.push((copy, Some(origin), keys.to_vec()));
+        copies.push(Entry {
+            node: copy,
+            origin: Some(origin),
+            keys: keys.to_vec(),
+        });
     }
     Ok((copies, outputs))
 }

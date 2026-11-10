@@ -19,11 +19,7 @@ use crate::value::ConfigValue;
 ///
 /// An order the file does not name gives the row-major Moore table.
 pub fn stencil_offsets(node: &Node) -> Vec<(i32, i32)> {
-    let order = node
-        .config
-        .get("order")
-        .and_then(ConfigValue::as_str)
-        .unwrap_or("moore_row_major");
+    let order = node.config_str("order").unwrap_or("moore_row_major");
     let center = node
         .config
         .get("include_center")
@@ -322,15 +318,6 @@ const FOUR_AGENTS: &[super::CaseValue] = &[
 /// Values of `w` of the four agents of [`neighbours`].
 const FOUR_WEIGHTS: &[super::CaseValue] = &[U32(1), U32(10), U32(100), U32(1000)];
 
-/// The places a stencil fold may sit: tick, view and stats passes, and the body of a Repeat.
-const STENCIL_CONTEXTS: ContextSet = ContextSet {
-    tick: true,
-    view: true,
-    stats: true,
-    region: true,
-    ..ContextSet::NONE
-};
-
 /// The input `at` of a stencil fold: a column and row, the element's own cell over cells, required over agents.
 const AT_CELL: InputSocket = InputSocket {
     name: "at",
@@ -346,7 +333,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         label: "Neighborhood fold",
         semantics: "Runs the body once per stencil position around the column and row `at` of the domain grid, in the table order of `order`: `moore_row_major` (rows outer, as `henad::space::MOORE_ROW_MAJOR`), `moore_column_major` (columns outer) or `von_neumann` (up, left, right, down), with the centre first when `include_center` holds. `at` is the element's own cell in a pass over cells, and is required in a pass over agents. `boundary` is `torus`, where a position wraps, `bounded`, where a position off the grid is skipped, or `domain`, the grid's `boundary` on a grid topology and the torus on an agents topology. Inner outputs: `k`, the table position, which counts skipped positions too; `offset`, the step; `xy`, the position after wrapping; `cell`, its cell; `diagonal`, whether both steps are nonzero; and `prev.<acc>`. Accumulators are those of `region.repeat`. With `when` false, or with every position skipped, every accumulator returns its initial value. A draw in the body reads `k` as its iteration word, and a fold nested in a Repeat combines them in mixed radix with the table length.",
         is_region: true,
-        contexts: STENCIL_CONTEXTS,
+        contexts: ContextSet::STENCILS,
         config: &[
             ConfigKey {
                 name: "order",

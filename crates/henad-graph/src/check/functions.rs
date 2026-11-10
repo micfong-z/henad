@@ -5,20 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::Checker;
 use super::view::{BodyView, BodyViews, Owner};
-use crate::catalogue::Effect;
 use crate::node::{OP_EXPRESSION, OP_FUNCTION_CALL, OP_FUNCTION_INPUT, OP_FUNCTION_OUTPUT};
-use crate::value::ConfigValue;
-
-/// Effects no function body holds, with the words a message names them by.
-const SINKS: [(Effect, &str); 7] = [
-    (Effect::WritesLane, "a lane write"),
-    (Effect::WritesField, "a field write"),
-    (Effect::Deposits, "a deposit"),
-    (Effect::Counts, "a counter"),
-    (Effect::View, "a colour"),
-    (Effect::Reduce, "a reducer"),
-    (Effect::DrawsStream, "a stream draw"),
-];
 
 /// Reports the problems of the pass body `view` that functions and expressions cause: an expression that does not
 /// expand, and a function's input or output outside a function body.
@@ -59,7 +46,7 @@ pub(super) fn inlinable(views: &BodyViews<'_>, clean: &BTreeMap<String, bool>) -
             view.nodes
                 .iter()
                 .filter(|node| node.op == OP_FUNCTION_CALL)
-                .filter_map(|node| node.config.get("function").and_then(ConfigValue::as_str))
+                .filter_map(|node| node.config_str("function"))
                 .collect(),
         );
     }
@@ -98,7 +85,7 @@ fn check_body(checker: &mut Checker<'_>, view: &BodyView<'_>) {
     let mut outputs: BTreeMap<&str, usize> = BTreeMap::new();
     for (position, node) in view.nodes.iter().enumerate() {
         if let Some(def) = view.defs[position]
-            && let Some((_, what)) = SINKS.iter().find(|(effect, _)| def.has_effect(*effect))
+            && let Some(what) = def.sink()
         {
             view.error(
                 checker,
@@ -112,7 +99,7 @@ fn check_body(checker: &mut Checker<'_>, view: &BodyView<'_>) {
             );
         }
         if node.op == OP_FUNCTION_OUTPUT
-            && let Some(port) = node.config.get("port").and_then(ConfigValue::as_str)
+            && let Some(port) = node.config_str("port")
             && let Some(first) = outputs.insert(port, position)
         {
             {

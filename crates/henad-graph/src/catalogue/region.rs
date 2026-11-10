@@ -514,14 +514,6 @@ macro_rules! count_case {
     };
 }
 
-const STENCIL_CONTEXTS: ContextSet = ContextSet {
-    tick: true,
-    view: true,
-    stats: true,
-    region: true,
-    ..ContextSet::NONE
-};
-
 const COUNT_CONFIG: &[ConfigKey] = &[
     config("lane", ConfigType::LaneId),
     ConfigKey {
@@ -721,7 +713,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         group: "Grid",
         label: "Count neighbors",
         semantics: "Number of stencil positions around the element whose `lane` value equals `value`. `neighborhood` is `moore`, 8 positions, or `von_neumann`, 4, and `include_center` adds the element itself. On a torus each position counts, so a grid narrower than the stencil reaches one cell twice. Past a bounded edge a position is skipped. With `when` false the count is 0. The read sees the start of the pass, and makes the lane dual when its pass also writes it.",
-        contexts: STENCIL_CONTEXTS,
+        contexts: ContextSet::STENCILS,
         domain: Some(Domain::Cells),
         type_var: &[TypeClass::Category, TypeClass::U32],
         config: COUNT_CONFIG,

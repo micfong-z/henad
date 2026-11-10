@@ -10,8 +10,10 @@
 use std::collections::BTreeMap;
 
 use super::Checker;
+use super::body::sources_first;
 use super::view::BodyView;
 use crate::catalogue::{Effect, NodeDef, OutputRate};
+use crate::node::OP_STAT_COUNTER;
 use crate::types::Rate;
 use crate::value::InputValue;
 
@@ -82,28 +84,18 @@ fn top_of(view: &BodyView<'_>, position: usize) -> Option<usize> {
 /// is left out with every node after it.
 fn top_order(view: &BodyView<'_>, incoming: &[Vec<TopLink<'_>>]) -> Vec<usize> {
     let count = view.nodes.len();
-    let mut waiting: Vec<usize> = incoming.iter().map(Vec::len).collect();
+    let waiting: Vec<usize> = incoming.iter().map(Vec::len).collect();
     let mut readers: Vec<Vec<usize>> = vec![Vec::new(); count];
     for (top, links) in incoming.iter().enumerate() {
         for link in links {
             readers[link.source].push(top);
         }
     }
-    let mut ready: Vec<usize> = (0..count)
+    let ready: Vec<usize> = (0..count)
         .rev()
         .filter(|&position| view.parents[position].is_none() && waiting[position] == 0)
         .collect();
-    let mut order = Vec::with_capacity(count);
-    while let Some(position) = ready.pop() {
-        order.push(position);
-        for &reader in &readers[position] {
-            waiting[reader] -= 1;
-            if waiting[reader] == 0 {
-                ready.push(reader);
-            }
-        }
-    }
-    order
+    sources_first(ready, waiting, &readers)
 }
 
 /// Returns whether a node of `def` runs per element whatever it reads.
@@ -126,7 +118,7 @@ fn check_reducers(checker: &mut Checker<'_>, view: &BodyView<'_>, order: &[usize
     for &position in order {
         // A kind this build does not define has a diagnostic of its own.
         let Some(def) = view.defs[position] else { continue };
-        counted[position] = def.id == "stat.counter";
+        counted[position] = def.id == OP_STAT_COUNTER;
         let reduced = incoming[position]
             .iter()
             .find(|link| reduces(link.source) || timings[link.source] == Timing::Post);

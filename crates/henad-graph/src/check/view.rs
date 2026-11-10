@@ -74,21 +74,7 @@ impl<'a> BodyView<'a> {
             Owner::Pass(pass) => pass.body.nodes.as_slice(),
             Owner::Function(function) => function.body.nodes.as_slice(),
         };
-        let mut positions = BTreeMap::new();
-        for (position, node) in nodes.iter().enumerate() {
-            positions.entry(node.id).or_insert(position);
-        }
-        let mut view = Self {
-            document,
-            owner,
-            nodes,
-            places,
-            positions,
-            defs: nodes.iter().map(|node| lookup(&node.op, document.library)).collect(),
-            parents: vec![None; nodes.len()],
-            depths: vec![0; nodes.len()],
-            origins: None,
-        };
+        let mut view = Self::unchecked(document, owner, nodes, places, None);
         view.report_unknown_kinds(checker);
         view.build_region_tree(checker);
         view
@@ -107,46 +93,33 @@ impl<'a> BodyView<'a> {
         places: &'a BodyPlaces,
         origins: &'a BTreeMap<NodeId, Origin>,
     ) -> Self {
+        let mut view = Self::unchecked(document, Owner::Pass(pass), nodes, places, Some(origins));
+        view.build_region_tree(checker);
+        view
+    }
+
+    /// Returns the view of `nodes` with an empty region tree, reporting nothing.
+    fn unchecked(
+        document: &'a GraphDocument,
+        owner: Owner<'a>,
+        nodes: &'a [Node],
+        places: &'a BodyPlaces,
+        origins: Option<&'a BTreeMap<NodeId, Origin>>,
+    ) -> Self {
         let mut positions = BTreeMap::new();
         for (position, node) in nodes.iter().enumerate() {
             positions.entry(node.id).or_insert(position);
         }
-        let mut view = Self {
+        Self {
             document,
-            owner: Owner::Pass(pass),
+            owner,
             nodes,
             places,
             positions,
             defs: nodes.iter().map(|node| lookup(&node.op, document.library)).collect(),
             parents: vec![None; nodes.len()],
             depths: vec![0; nodes.len()],
-            origins: Some(origins),
-        };
-        let before = checker.diagnostics.len();
-        view.build_region_tree(checker);
-        let mut kept = Vec::with_capacity(checker.diagnostics.len());
-        for (index, diagnostic) in checker.diagnostics.drain(..).enumerate() {
-            let copied = diagnostic.notes.iter().any(|note| note.starts_with("in node "));
-            if index < before || copied {
-                kept.push(diagnostic);
-            }
-        }
-        checker.diagnostics = kept;
-        view
-    }
-
-    /// Returns a copy of the view, for a pass checked as written.
-    pub fn clone_view(&self) -> Self {
-        Self {
-            document: self.document,
-            owner: self.owner,
-            nodes: self.nodes,
-            places: self.places,
-            positions: self.positions.clone(),
-            defs: self.defs.clone(),
-            parents: self.parents.clone(),
-            depths: self.depths.clone(),
-            origins: self.origins,
+            origins,
         }
     }
 
@@ -181,7 +154,7 @@ impl<'a> BodyView<'a> {
             let Some(region) = node.region else { continue };
             let place = self.region_place(position);
             match self.positions.get(&region) {
-                None => self.error(
+                None => self.region_error(
                     checker,
                     position,
                     format!(
@@ -190,7 +163,7 @@ impl<'a> BodyView<'a> {
                     ),
                     place,
                 ),
-                Some(&parent) if self.defs[parent].is_some_and(|def| !def.is_region) => self.error(
+                Some(&parent) if self.defs[parent].is_some_and(|def| !def.is_region) => self.region_error(
                     checker,
                     position,
                     format!("node {} names the region {region}, which is no region", node.id),
@@ -216,7 +189,7 @@ impl<'a> BodyView<'a> {
                         current = self.parents[position];
                     }
                     WALKING => {
-                        self.error(
+                        self.region_error(
                             checker,
                             position,
                             format!("the regions around node {} form a cycle", self.nodes[position].id),
@@ -237,7 +210,7 @@ impl<'a> BodyView<'a> {
         for position in 0..self.nodes.len() {
             let is_region = self.defs[position].is_some_and(|def| def.is_region);
             if is_region && self.depths[position] >= MAX_REGION_DEPTH {
-                self.error(
+                self.region_error(
                     checker,
                     position,
                     format!(
@@ -248,6 +221,15 @@ impl<'a> BodyView<'a> {
                     self.table_place(position),
                 );
             }
+        }
+    }
+
+    /// Adds a region tree error about the node at `position`, skipped at a node as written of a normalised pass.
+    ///
+    /// The pass as written reported its own region tree problems already.
+    fn region_error(&self, checker: &mut Checker<'_>, position: usize, message: String, place: Option<Range<usize>>) {
+        if self.origins.is_none() || self.origin(position).is_some() {
+            self.error(checker, position, message, place);
         }
     }
 
@@ -334,7 +316,7 @@ impl<'a> BodyView<'a> {
     fn add(&self, checker: &mut Checker<'_>, position: usize, diagnostic: CodeDiagnostic, place: Option<Range<usize>>) {
         let mut diagnostic = match self.origin(position) {
             Some(origin) => {
-                let written = origin.calls.first().copied().unwrap_or(origin.node);
+                let written = origin.written();
                 let note = match &origin.function {
                     Some(function) => format!("in node {} of the function '{function}'", origin.node),
                     None => format!("in node {} as expanded", origin.node),

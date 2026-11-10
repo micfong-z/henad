@@ -87,12 +87,24 @@ fn link_order(view: &BodyView<'_>) -> Vec<usize> {
             *waits += 1;
         }
     }
-    let mut ready: Vec<usize> = (0..count).rev().filter(|&position| waiting[position] == 0).collect();
-    let mut order = Vec::with_capacity(count);
+    let ready: Vec<usize> = (0..count).rev().filter(|&position| waiting[position] == 0).collect();
+    let mut order = sources_first(ready, waiting, &readers);
     let mut placed = vec![false; count];
+    for &position in &order {
+        placed[position] = true;
+    }
+    order.extend((0..count).filter(|&position| !placed[position]));
+    order
+}
+
+/// Returns the positions each after its sources, in the order a stack of ready positions releases them.
+///
+/// `ready` is the starting stack, popped from its end, and `waiting` counts the sources of each position. A position
+/// joins the stack once its last source is released, so a position on a cycle is never released.
+pub(super) fn sources_first(mut ready: Vec<usize>, mut waiting: Vec<usize>, readers: &[Vec<usize>]) -> Vec<usize> {
+    let mut order = Vec::with_capacity(waiting.len());
     while let Some(position) = ready.pop() {
         order.push(position);
-        placed[position] = true;
         for &reader in &readers[position] {
             waiting[reader] -= 1;
             if waiting[reader] == 0 {
@@ -100,7 +112,6 @@ fn link_order(view: &BodyView<'_>) -> Vec<usize> {
             }
         }
     }
-    order.extend((0..count).filter(|&position| !placed[position]));
     order
 }
 
@@ -128,15 +139,9 @@ fn check_cycles(checker: &mut Checker<'_>, view: &BodyView<'_>) {
     }
     // Peeling nodes with no source left and then nodes with no reader left leaves the nodes on or between cycles.
     let mut gone = vec![false; count];
-    let mut ready: Vec<usize> = (0..count).filter(|&position| waiting[position] == 0).collect();
-    while let Some(position) = ready.pop() {
+    let ready: Vec<usize> = (0..count).filter(|&position| waiting[position] == 0).collect();
+    for position in sources_first(ready, waiting, &readers) {
         gone[position] = true;
-        for &reader in &readers[position] {
-            waiting[reader] -= 1;
-            if waiting[reader] == 0 {
-                ready.push(reader);
-            }
-        }
     }
     let mut ready: Vec<usize> = (0..count)
         .filter(|&position| !gone[position] && waited_by[position] == 0)
@@ -286,10 +291,7 @@ impl BodyWalk<'_, '_, '_, '_> {
                     format!(
                         "{} reads the lane '{}' of type {lane_type}, which it cannot compare",
                         self.view.name(position),
-                        node.config
-                            .get("lane")
-                            .and_then(ConfigValue::as_str)
-                            .unwrap_or_default(),
+                        node.config_str("lane").unwrap_or_default(),
                     ),
                     self.view.config_place(position, "lane"),
                 );
@@ -305,7 +307,7 @@ impl BodyWalk<'_, '_, '_, '_> {
 
     /// Returns the type of the lane `config.lane` of the node at `position`.
     fn lane_type(&self, position: usize) -> Option<ValueType> {
-        let id = self.view.nodes[position].config.get("lane")?.as_str()?;
+        let id = self.view.nodes[position].config_str("lane")?;
         let lanes = &self.view.document.lanes;
         lanes
             .iter()
@@ -315,19 +317,17 @@ impl BodyWalk<'_, '_, '_, '_> {
 
     /// Returns the category type `config.category` of the node at `position` names.
     fn config_category(&self, position: usize) -> Option<ValueType> {
-        let id = self.view.nodes[position].config.get("category")?.as_str()?;
+        let id = self.view.nodes[position].config_str("category")?;
         self.view
             .document
-            .categories
-            .iter()
-            .any(|category| category.id == id)
-            .then(|| ValueType::Category(id.to_owned()))
+            .category(id)
+            .map(|_| ValueType::Category(id.to_owned()))
     }
 
     /// Returns the accumulator of the enclosing region that `config.acc` of the node at `position` names.
     fn put_accumulator(&self, position: usize) -> Option<Accumulator> {
         let view = self.view;
-        let name = view.nodes[position].config.get("acc")?.as_str()?;
+        let name = view.nodes[position].config_str("acc")?;
         let region = view.parents[position]?;
         view.nodes[region]
             .accumulators()
@@ -346,8 +346,8 @@ impl BodyWalk<'_, '_, '_, '_> {
             SocketType::Field => self.field(position).map(|field| field.value_type.clone()),
             SocketType::FieldLayer => self.field(position).map(|field| ValueType::Layer(field.id.clone())),
             SocketType::LaneElement => {
-                let id = self.view.nodes[position].config.get("lane")?.as_str()?;
-                let lane = self.view.document.lanes.iter().find(|lane| lane.id == id)?;
+                let id = self.view.nodes[position].config_str("lane")?;
+                let lane = self.view.document.lane(id)?;
                 Some(match lane.domain {
                     crate::document::Domain::Cells => ValueType::Cell,
                     crate::document::Domain::Agents => ValueType::Agent,
@@ -360,8 +360,8 @@ impl BodyWalk<'_, '_, '_, '_> {
 
     /// Returns the field `config.field` of the node at `position` names.
     fn field(&self, position: usize) -> Option<&crate::document::Field> {
-        let id = self.view.nodes[position].config.get("field")?.as_str()?;
-        self.view.document.fields.iter().find(|field| field.id == id)
+        let id = self.view.nodes[position].config_str("field")?;
+        self.view.document.field(id)
     }
 
     /// Returns the type of the function port `config.port` of a `fn.input` or `fn.output` at `position` names.
@@ -370,7 +370,7 @@ impl BodyWalk<'_, '_, '_, '_> {
             return None;
         };
         let node = &self.view.nodes[position];
-        let name = node.config.get("port")?.as_str()?;
+        let name = node.config_str("port")?;
         let ports = if node.op == crate::node::OP_FUNCTION_OUTPUT {
             &function.outputs
         } else {
@@ -517,7 +517,7 @@ impl BodyWalk<'_, '_, '_, '_> {
                 }
             }
             InputValue::Param(id) => {
-                let Some(param) = view.document.params.iter().find(|param| param.id() == id) else {
+                let Some(param) = view.document.param(id) else {
                     view.error(
                         self.checker,
                         position,
@@ -620,7 +620,7 @@ impl BodyWalk<'_, '_, '_, '_> {
         let view = self.view;
         let node = &view.nodes[position];
         if def.has_effect(Effect::View)
-            && let Some(palette) = node.config.get("palette").and_then(ConfigValue::as_str)
+            && let Some(palette) = node.config_str("palette")
         {
             // A category value takes the category's colours, and a number needs a palette.
             match var {
@@ -633,7 +633,7 @@ impl BodyWalk<'_, '_, '_, '_> {
                     ),
                     view.config_place(position, "palette"),
                 ),
-                Some(ValueType::U32) if !view.document.palettes.iter().any(|known| known.id == palette) => view.error(
+                Some(ValueType::U32) if view.document.palette(palette).is_none() => view.error(
                     self.checker,
                     position,
                     format!(
@@ -768,7 +768,7 @@ fn check_accumulator_puts(checker: &mut Checker<'_>, view: &BodyView<'_>) {
             }
             continue;
         };
-        let Some(name) = node.config.get("acc").and_then(ConfigValue::as_str) else {
+        let Some(name) = node.config_str("acc") else {
             continue;
         };
         let accumulators = view.nodes[region].accumulators().unwrap_or_default();
@@ -805,17 +805,7 @@ fn warn_unreached(checker: &mut Checker<'_>, view: &BodyView<'_>) {
     let count = view.nodes.len();
     let mut reached = vec![false; count];
     let mut pending: Vec<usize> = (0..count)
-        .filter(|&position| {
-            view.defs[position].is_some_and(|def| {
-                def.has_effect(Effect::WritesLane)
-                    || def.has_effect(Effect::WritesField)
-                    || def.has_effect(Effect::Deposits)
-                    || def.has_effect(Effect::Counts)
-                    || def.has_effect(Effect::View)
-                    || def.has_effect(Effect::Reduce)
-                    || def.has_effect(Effect::DrawsStream)
-            })
-        })
+        .filter(|&position| view.defs[position].is_some_and(|def| def.sink().is_some()))
         .collect();
     // A node a `[[stat]]` reads is kept, as a reducer is.
     for stat in &view.document.stats {

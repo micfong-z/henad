@@ -125,12 +125,7 @@ fn function_sizes<'a>(checker: &mut Checker<'_>, views: &BodyViews<'a>) -> BTree
     let mut waiting = vec![0usize; count];
     for (position, view) in views.functions.iter().enumerate().take(count) {
         for node in view.nodes.iter().filter(|node| node.op == OP_FUNCTION_CALL) {
-            if let Some(&callee) = node
-                .config
-                .get("function")
-                .and_then(ConfigValue::as_str)
-                .and_then(|id| positions.get(id))
-            {
+            if let Some(&callee) = node.config_str("function").and_then(|id| positions.get(id)) {
                 callers[callee].push(position);
                 waiting[position] += 1;
             }
@@ -211,9 +206,7 @@ fn node_cost(view: &BodyView<'_>, position: usize, body: u64, sizes: &BTreeMap<&
     let node = &view.nodes[position];
     if node.op == OP_FUNCTION_CALL {
         let callee = node
-            .config
-            .get("function")
-            .and_then(ConfigValue::as_str)
+            .config_str("function")
             .and_then(|id| sizes.get(id))
             .map_or(0, |size| size.cost);
         return callee.saturating_add(1);
@@ -232,9 +225,7 @@ fn node_cost(view: &BodyView<'_>, position: usize, body: u64, sizes: &BTreeMap<&
         NodeCost::Repeat => {
             // A broken `max` has its own diagnostic, and costs the largest loop a file can write.
             let max = node
-                .config
-                .get("max")
-                .and_then(ConfigValue::as_integer)
+                .config_integer("max")
                 .and_then(|max| u64::try_from(max).ok())
                 .unwrap_or(u64::from(crate::limits::MAX_REPEAT_ITERATIONS));
             max.saturating_mul(body.saturating_add(1)).saturating_add(1)
@@ -246,7 +237,7 @@ fn node_cost(view: &BodyView<'_>, position: usize, body: u64, sizes: &BTreeMap<&
         NodeCost::RadiusFold => body.saturating_add(8),
         NodeCost::Expression => crate::expr::expanded_nodes(node)
             .iter()
-            .filter_map(|expanded| crate::catalogue::lookup(&expanded.op, crate::LIBRARY))
+            .filter_map(|expanded| crate::catalogue::lookup(&expanded.op, view.document.library))
             .map(|def| match def.cost {
                 NodeCost::Units(units) => u64::from(units),
                 _ => 1,
@@ -272,9 +263,7 @@ fn body_size(view: &BodyView<'_>, sizes: &BTreeMap<&str, FunctionSize>) -> Funct
         size.nodes = size.nodes.saturating_add(own);
         if node.op == OP_FUNCTION_CALL {
             let callee = node
-                .config
-                .get("function")
-                .and_then(ConfigValue::as_str)
+                .config_str("function")
                 .and_then(|id| sizes.get(id))
                 .map_or(0, |callee| callee.nodes);
             size.nodes = size.nodes.saturating_add(callee);

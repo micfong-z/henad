@@ -14,12 +14,9 @@ use crate::check::{CheckReport, PassReport, PortType};
 use crate::file::GraphFile;
 use crate::ids::{NodeId, is_port_segment};
 use crate::limits::{MAX_ACCUMULATORS, MAX_REGION_DEPTH};
-use crate::node::{Accumulator, Combine, Node, NodeBody, OP_REGION_PUT, OP_REGION_REPEAT};
+use crate::node::{Accumulator, Combine, Node, NodeBody, OP_GRID_FOLD, OP_REGION_PUT, OP_REGION_REPEAT};
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, Literal, MemberName, PortRef};
-
-/// Kind of the neighborhood fold, the one region besides a Repeat that a Repeat may hold or sit in.
-const OP_GRID_FOLD: &str = "grid.fold";
 
 /// Distance in canvas points between the wrapped nodes and the halves of a new Repeat.
 const WRAP_GAP: f64 = 60.0;

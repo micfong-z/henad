@@ -15,15 +15,20 @@ mod passes;
 mod schedule;
 mod view;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
 
-use crate::file::{BodyPlaces, GraphFile, NodePlaces};
+use crate::document::GraphDocument;
+use crate::file::{BodyPlaces, GraphFile, NodePlaces, Placer};
 use crate::ids::NodeId;
 use crate::limits::{MAX_NODES_IN_FILE, MAX_NODES_PER_BODY};
+use crate::node::OP_FUNCTION_CALL;
+use crate::normal::{NormalPass, first_free_id, normalise_body};
 use crate::types::{Rate, ValueType};
+use crate::value::InputValue;
+use view::{BodyView, BodyViews, Owner};
 
 /// Result of checking a graph file.
 #[derive(Debug, Clone, Default)]
@@ -89,10 +94,6 @@ pub struct PortType {
 }
 
 /// Returns the report of `file`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the rules run in an order the later ones depend on"
-)]
 pub fn check(file: &GraphFile) -> CheckReport {
     let mut checker = Checker {
         file,
@@ -104,43 +105,14 @@ pub fn check(file: &GraphFile) -> CheckReport {
     report.duplicate_ids = declarations::check_node_ids(&mut checker);
 
     let document = file.document();
-    let total = document
-        .passes
-        .iter()
-        .map(|pass| pass.body.nodes.len())
-        .chain(document.functions.iter().map(|function| function.body.nodes.len()))
-        .fold(0usize, usize::saturating_add);
-    if total > MAX_NODES_IN_FILE {
-        checker.error(
-            format!("the file holds {total} nodes, and a file holds at most {MAX_NODES_IN_FILE}"),
-            Some(file.places().id.clone()),
-        );
-    }
-    let views = view::BodyViews::new(&mut checker);
-    let places = file.places();
-    let bodies = views
-        .passes
-        .iter()
-        .zip(&places.passes)
-        .chain(views.functions.iter().zip(&places.functions));
-    for (body, body_places) in bodies {
-        if body.nodes.len() > MAX_NODES_PER_BODY {
-            checker.error(
-                format!(
-                    "the table holds {} nodes, and a pass or a function holds at most {MAX_NODES_PER_BODY}",
-                    body.nodes.len()
-                ),
-                Some(body_places.table.clone()),
-            );
-        }
-    }
-    let sized = total <= MAX_NODES_IN_FILE;
+    let file_sized = check_file_size(&mut checker);
+    let views = BodyViews::new(&mut checker);
+    check_body_sizes(&mut checker, &views);
     let mut clean = BTreeMap::new();
     let mut function_ports = Vec::new();
     for function_view in &views.functions {
-        if sized
-            && function_view.nodes.len() <= MAX_NODES_PER_BODY
-            && let view::Owner::Function(function) = function_view.owner
+        if walks(file_sized, function_view)
+            && let Owner::Function(function) = function_view.owner
         {
             let (is_clean, ports) = functions::check_function(&mut checker, function_view);
             clean.insert(function.id.clone(), is_clean);
@@ -152,43 +124,15 @@ pub fn check(file: &GraphFile) -> CheckReport {
     // The size once inlined is known before anything is inlined. A file past it is checked as written alone, so a
     // small file cannot make the checker build an expansion that large.
     let costs = cost::check(&mut checker, &views);
-    let sized = sized && costs.inlinable;
+    let sized = file_sized && costs.inlinable;
     passes::check_keys(&mut checker, &views);
-    // Each pass is checked after normalisation when every call it makes reaches clean functions and every expression
-    // expands. Otherwise the pass as written is checked, a call standing for its function's ports.
-    let mut next = crate::normal::first_free_id(document);
-    let normal: Vec<Option<(crate::normal::NormalPass, BodyPlaces)>> = views
+    let normal = normalise_passes(&mut checker, &views, &inlinable, sized);
+    let checked: Vec<BodyView<'_>> = views
         .passes
-        .iter()
-        .zip(&places.passes)
-        .map(|(view, body_places)| {
-            let pass = view.pass()?;
-            if !sized || view.nodes.len() > MAX_NODES_PER_BODY {
-                return None;
-            }
-            functions::check_pass(&mut checker, view);
-            let calls_clean = pass.body.nodes.iter().all(|node| {
-                node.op != crate::node::OP_FUNCTION_CALL
-                    || node
-                        .config
-                        .get("function")
-                        .and_then(crate::value::ConfigValue::as_str)
-                        .is_some_and(|id| inlinable.contains(id))
-            });
-            if !calls_clean {
-                return None;
-            }
-            let normal = crate::normal::normalise_body(document, &pass.body, &mut next).ok()?;
-            let normal_places = normal_places(view, body_places, &normal);
-            Some((normal, normal_places))
-        })
-        .collect();
-    let checked: Vec<view::BodyView<'_>> = views
-        .passes
-        .iter()
+        .into_iter()
         .zip(&normal)
         .map(|(written, normal)| match (written.pass(), normal) {
-            (Some(pass), Some((normal, normal_places))) => view::BodyView::normalised(
+            (Some(pass), Some((normal, normal_places))) => BodyView::normalised(
                 &mut checker,
                 document,
                 pass,
@@ -196,25 +140,10 @@ pub fn check(file: &GraphFile) -> CheckReport {
                 normal_places,
                 &normal.origins,
             ),
-            _ => written.clone_view(),
+            _ => written,
         })
         .collect();
-    let mut pass_ports = Vec::with_capacity(document.passes.len());
-    for (index, pass_view) in checked.iter().enumerate() {
-        let ports = if !sized || pass_view.nodes.len() > MAX_NODES_PER_BODY {
-            body::BodyPorts::default()
-        } else {
-            let mut ports = body::check(&mut checker, pass_view);
-            schedule::check(&mut checker, pass_view);
-            agents::check_pass(&mut checker, pass_view);
-            if let Some(Some((normal, _))) = normal.get(index) {
-                replaced_ports(&mut ports, normal, document);
-            }
-            ports
-        };
-        passes::check_pass(&mut checker, index, pass_view);
-        pass_ports.push(ports);
-    }
+    let pass_ports = check_pass_bodies(&mut checker, &checked, &normal, sized);
     report.dual_lanes = passes::check_lanes(&mut checker, &checked);
     passes::check_stats(&mut checker, &checked, &pass_ports);
     agents::check_passes(&mut checker, &checked);
@@ -250,20 +179,129 @@ pub fn check(file: &GraphFile) -> CheckReport {
     report
 }
 
+/// Returns whether a body is walked: the file is within the node limits and the body holds at most
+/// [`MAX_NODES_PER_BODY`] nodes.
+fn walks(sized: bool, view: &BodyView<'_>) -> bool {
+    sized && view.nodes.len() <= MAX_NODES_PER_BODY
+}
+
+/// Reports a file past [`MAX_NODES_IN_FILE`], and returns whether the file is within it.
+fn check_file_size(checker: &mut Checker<'_>) -> bool {
+    let document = checker.file.document();
+    let total = document
+        .passes
+        .iter()
+        .map(|pass| pass.body.nodes.len())
+        .chain(document.functions.iter().map(|function| function.body.nodes.len()))
+        .fold(0usize, usize::saturating_add);
+    if total > MAX_NODES_IN_FILE {
+        checker.error(
+            format!("the file holds {total} nodes, and a file holds at most {MAX_NODES_IN_FILE}"),
+            Some(checker.file.places().id.clone()),
+        );
+    }
+    total <= MAX_NODES_IN_FILE
+}
+
+/// Reports each pass or function past [`MAX_NODES_PER_BODY`].
+fn check_body_sizes(checker: &mut Checker<'_>, views: &BodyViews<'_>) {
+    let places = checker.file.places();
+    let bodies = views
+        .passes
+        .iter()
+        .zip(&places.passes)
+        .chain(views.functions.iter().zip(&places.functions));
+    for (body, body_places) in bodies {
+        if body.nodes.len() > MAX_NODES_PER_BODY {
+            checker.error(
+                format!(
+                    "the table holds {} nodes, and a pass or a function holds at most {MAX_NODES_PER_BODY}",
+                    body.nodes.len()
+                ),
+                Some(body_places.table.clone()),
+            );
+        }
+    }
+}
+
+/// Returns each pass normalised with the places of its nodes, or `None` for a pass checked as written.
+///
+/// Each walked pass has its calls checked first. A pass is checked after normalisation when every call it makes
+/// reaches an `inlinable` function and every expression expands. Otherwise the pass as written is checked, a call
+/// standing for its function's ports.
+fn normalise_passes(
+    checker: &mut Checker<'_>,
+    views: &BodyViews<'_>,
+    inlinable: &BTreeSet<String>,
+    sized: bool,
+) -> Vec<Option<(NormalPass, BodyPlaces)>> {
+    let document = checker.file.document();
+    let places = checker.file.places();
+    let mut next = first_free_id(document);
+    views
+        .passes
+        .iter()
+        .zip(&places.passes)
+        .map(|(view, body_places)| {
+            let pass = view.pass()?;
+            if !walks(sized, view) {
+                return None;
+            }
+            functions::check_pass(checker, view);
+            let calls_clean = pass.body.nodes.iter().all(|node| {
+                node.op != OP_FUNCTION_CALL || node.config_str("function").is_some_and(|id| inlinable.contains(id))
+            });
+            if !calls_clean {
+                return None;
+            }
+            let normal = normalise_body(document, &pass.body, &mut next).ok()?;
+            let normal_places = normal_places(view, body_places, &normal);
+            Some((normal, normal_places))
+        })
+        .collect()
+}
+
+/// Checks the body of each walked pass of `checked` and the rules of every pass, and returns each pass's ports.
+fn check_pass_bodies(
+    checker: &mut Checker<'_>,
+    checked: &[BodyView<'_>],
+    normal: &[Option<(NormalPass, BodyPlaces)>],
+    sized: bool,
+) -> Vec<body::BodyPorts> {
+    let document = checker.file.document();
+    let mut pass_ports = Vec::with_capacity(checked.len());
+    for (index, pass_view) in checked.iter().enumerate() {
+        let ports = if walks(sized, pass_view) {
+            let mut ports = body::check(checker, pass_view);
+            schedule::check(checker, pass_view);
+            agents::check_pass(checker, pass_view);
+            if let Some(Some((normal, _))) = normal.get(index) {
+                replaced_ports(&mut ports, normal, document);
+            }
+            ports
+        } else {
+            body::BodyPorts::default()
+        };
+        passes::check_pass(checker, index, pass_view);
+        pass_ports.push(ports);
+    }
+    pass_ports
+}
+
 pub(crate) use config::literal_of;
 pub(crate) use cost::is_pass_cost;
 
 /// Returns the places of the nodes of a normalised pass: a node as written keeps its own, and a node normalisation
 /// added takes the table of the node as written it comes from.
-fn normal_places(view: &view::BodyView<'_>, places: &BodyPlaces, normal: &crate::normal::NormalPass) -> BodyPlaces {
-    let place_of = |id: crate::ids::NodeId| places.nodes.get(*view.positions.get(&id)?);
+fn normal_places(view: &BodyView<'_>, places: &BodyPlaces, normal: &NormalPass) -> BodyPlaces {
+    let place_of = |id: NodeId| places.nodes.get(*view.positions.get(&id)?);
     let nodes = normal
         .body
         .nodes
         .iter()
         .map(|node| {
             if let Some(origin) = normal.origins.get(&node.id) {
-                let written = origin.calls.first().copied().unwrap_or(origin.node);
+                let written = origin.written();
                 place_of(written).map_or_else(
                     || NodePlaces::at(places.table.clone()),
                     |found| NodePlaces::at(found.table.clone()),
@@ -282,36 +320,23 @@ fn normal_places(view: &view::BodyView<'_>, places: &BodyPlaces, normal: &crate:
 }
 
 /// Adds to `ports` the outputs of each call and expression normalisation replaced, typed as the values they take.
-fn replaced_ports(
-    ports: &mut body::BodyPorts,
-    normal: &crate::normal::NormalPass,
-    document: &crate::document::GraphDocument,
-) {
+fn replaced_ports(ports: &mut body::BodyPorts, normal: &NormalPass, document: &GraphDocument) {
     for (node, outputs) in &normal.replaced {
         let mut record = BTreeMap::new();
         for (port, value) in outputs {
             let port_type = match value {
-                crate::value::InputValue::Literal(literal) => Some(PortType {
+                InputValue::Literal(literal) => Some(PortType {
                     value_type: Some(literal.value_type()),
                     rate: Rate::Constant,
                 }),
-                crate::value::InputValue::Param(id) => {
-                    document
-                        .params
-                        .iter()
-                        .find(|param| param.id() == id)
-                        .map(|param| PortType {
-                            value_type: Some(config::param_type(param.kind())),
-                            rate: Rate::Parameter,
-                        })
-                }
-                crate::value::InputValue::Link(link) => {
-                    ports.outputs.get(&link.node).and_then(|found| match &link.port {
-                        Some(name) => found.get(name).cloned(),
-                        None if found.len() == 1 => found.values().next().cloned(),
-                        None => None,
-                    })
-                }
+                InputValue::Param(id) => document.param(id).map(|param| PortType {
+                    value_type: Some(config::param_type(param.kind())),
+                    rate: Rate::Parameter,
+                }),
+                InputValue::Link(link) => ports
+                    .outputs
+                    .get(&link.node)
+                    .and_then(|found| link.output_in(found).cloned()),
             };
             if let Some(port_type) = port_type {
                 record.insert(port.clone(), port_type);
@@ -324,7 +349,7 @@ fn replaced_ports(
 /// State of one check.
 struct Checker<'a> {
     file: &'a GraphFile,
-    placer: crate::file::Placer<'a>,
+    placer: Placer<'a>,
     diagnostics: Vec<CodeDiagnostic>,
 }
 

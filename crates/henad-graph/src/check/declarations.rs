@@ -7,20 +7,17 @@ use henad_core::params::ParamKind;
 
 use super::Checker;
 use crate::document::{Domain, LaneRole, PassStage, Topology, World};
-use crate::ids::{NodeId, is_id, is_port_segment};
+use crate::ids::{NodeId, is_id, is_model_id, is_port_segment};
 use crate::limits::{
     MAX_ACTIONS, MAX_AGENTS, MAX_CATEGORIES, MAX_COUNTERS, MAX_DESCRIPTION_BYTES, MAX_FIELDS, MAX_FUNCTIONS,
     MAX_GRID_SIDE, MAX_ID_BYTES, MAX_LABEL_BYTES, MAX_LANES_PER_DOMAIN, MAX_LAYERS_PER_FIELD, MAX_PALETTE_COLORS,
-    MAX_PALETTES, MAX_PARAMS, MAX_PASSES, MAX_STATS, MAX_VARIANTS,
+    MAX_PALETTES, MAX_PARAMS, MAX_PASSES, MAX_STATS, MAX_VARIANTS, MAX_WORLD_SIDE,
 };
 use crate::types::ValueType;
 use crate::value::Literal;
 
 /// Parameter ids the prepended world parameters hold.
 const RESERVED_PARAM_IDS: [&str; 5] = ["grid_width", "grid_height", "num_agents", "world_width", "world_height"];
-
-/// Largest side of an agents world, in world units.
-const MAX_WORLD_SIDE: f32 = 10000.0;
 
 /// Checks every declaration table of the file.
 pub(super) fn check(checker: &mut Checker<'_>) {
@@ -36,17 +33,6 @@ pub(super) fn check(checker: &mut Checker<'_>) {
     check_actions(checker);
     check_functions(checker);
     check_pass_ids(checker);
-}
-
-/// Returns whether `text` follows the model id grammar: a lowercase ASCII letter, then lowercase letters, digits and
-/// underscores, within the id limit.
-fn is_model_id(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    bytes.first().is_some_and(u8::is_ascii_lowercase)
-        && bytes.len() <= MAX_ID_BYTES
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
 }
 
 /// Reports `id` when it breaks the id grammar or repeats an id of its kind.
@@ -168,7 +154,7 @@ fn check_world(checker: &mut Checker<'_>) {
             for (key, side) in [("width", agents.width), ("height", agents.height)] {
                 if !(1.0..=MAX_WORLD_SIDE).contains(&side) {
                     checker.error(
-                        format!("the world's `{key}` is {side}, outside 1 to 10000"),
+                        format!("the world's `{key}` is {side}, outside 1 to {MAX_WORLD_SIDE}"),
                         place.clone(),
                     );
                 }
@@ -240,7 +226,7 @@ fn check_palettes(checker: &mut Checker<'_>) {
     for (index, palette) in document.palettes.iter().enumerate() {
         let place = places.get(index).cloned();
         check_id(checker, "palette", &palette.id, &mut seen, place.clone());
-        if document.categories.iter().any(|category| category.id == palette.id) {
+        if document.category(&palette.id).is_some() {
             checker.error(
                 format!(
                     "the palette '{}' takes the id of a category, and a palette's id is its own",
@@ -269,10 +255,10 @@ fn check_initial(checker: &Checker<'_>, value_type: &ValueType, initial: &Litera
         return Err(format!("is {found}, and the type is {value_type}"));
     }
     if let Literal::Category(name) = initial {
-        let categories = &checker.file.document().categories;
-        let known = categories
-            .iter()
-            .find(|category| category.id == name.owner)
+        let known = checker
+            .file
+            .document()
+            .category(&name.owner)
             .is_some_and(|category| category.variants.iter().any(|variant| variant.name == name.member));
         if !known {
             return Err(format!("names the variant '{name}', which the file does not declare"));
@@ -285,10 +271,10 @@ fn check_initial(checker: &Checker<'_>, value_type: &ValueType, initial: &Litera
 fn check_declared(checker: &Checker<'_>, value_type: &ValueType) -> Result<(), String> {
     let document = checker.file.document();
     match value_type {
-        ValueType::Category(id) if !document.categories.iter().any(|category| category.id == *id) => Err(format!(
+        ValueType::Category(id) if document.category(id).is_none() => Err(format!(
             "needs the category '{id}', and the file declares no such category"
         )),
-        ValueType::Layer(id) if !document.fields.iter().any(|field| field.id == *id) => {
+        ValueType::Layer(id) if document.field(id).is_none() => {
             Err(format!("needs the field '{id}', and the file declares no such field"))
         }
         _ => Ok(()),
@@ -390,7 +376,7 @@ fn check_fields(checker: &mut Checker<'_>) {
     for (index, field) in document.fields.iter().enumerate() {
         let place = places.get(index).cloned();
         check_id(checker, "field", &field.id, &mut seen, place.clone());
-        if document.lanes.iter().any(|lane| lane.id == field.id) {
+        if document.lane(&field.id).is_some() {
             checker.error(
                 format!("the field '{}' takes the id of a lane", field.id),
                 place.clone(),
@@ -448,7 +434,7 @@ fn check_fields(checker: &mut Checker<'_>) {
             );
         }
         if let Some(finish) = &field.finish
-            && !document.functions.iter().any(|function| function.id == *finish)
+            && document.function(finish).is_none()
         {
             checker.error(
                 format!(
@@ -505,7 +491,7 @@ fn check_params(checker: &mut Checker<'_>) {
         if RESERVED_PARAM_IDS.contains(&id) || id.starts_with("henad_") {
             checker.error(format!("the parameter id '{id}' is reserved"), place.clone());
         }
-        if document.lanes.iter().any(|lane| lane.id == id) || document.fields.iter().any(|field| field.id == id) {
+        if document.lane(id).is_some() || document.field(id).is_some() {
             checker.error(
                 format!("the parameter '{id}' takes the id of a lane or a field"),
                 place.clone(),

@@ -86,6 +86,8 @@ pub const MAX_DESCRIPTION_BYTES: usize = 4096;
 pub const MAX_GRID_SIDE: u32 = 16384;
 /// Number of agents of a population.
 pub const MAX_AGENTS: u32 = 10_000_000;
+/// Longest side of an agents world, in world units.
+pub const MAX_WORLD_SIDE: f32 = 10_000.0;
 
 // Bindings
 /// Number of storage buffers one generated shader binds before the compiler packs lanes, the WebGPU default of

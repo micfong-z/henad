@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::str::FromStr;
 
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -21,14 +22,11 @@ use crate::document::{
 };
 use crate::editor::EditorRegion;
 use crate::file::{BodyPlaces, NodePlaces, Places};
-use crate::ids::{NodeId, is_port_segment};
+use crate::ids::is_port_segment;
 use crate::model_text::{ModelHeader, ParamTable};
 use crate::node::{Node, NodeBody, OP_FUNCTION_CALL};
 use crate::types::ValueType;
 use crate::value::{Color, ConfigValue, InputValue, Literal, MemberName, PortRef};
-
-/// Value of a graph file's `kind` key.
-const KIND: &str = crate::file::KIND_GRAPH;
 
 /// Problem that stops a read.
 pub(crate) enum ReadProblem {
@@ -65,7 +63,7 @@ pub(crate) fn read(text: &str) -> Result<ReadFile, ReadProblem> {
     // The header first, so that a file of another version reads as one even when its keys are new.
     let header = ModelHeader::read(text)?;
     header
-        .check(&[KIND])
+        .check(&[crate::file::KIND_GRAPH])
         .map_err(|problem| Placed(problem.message, problem.span))?;
     check_library(&header)?;
     let file: FileTable = toml::from_str(text)?;
@@ -704,8 +702,9 @@ fn read_palette(table: PaletteTable) -> Result<Palette, Placed> {
     })
 }
 
-/// Returns the type a type string declares.
-fn read_type(text: &Spanned<String>) -> Result<ValueType, Placed> {
+/// Returns the value `text` reads as, such as the type a type string declares, placed at `text` when it does not
+/// read.
+fn parsed<T: FromStr<Err = String>>(text: &Spanned<String>) -> Result<T, Placed> {
     text.get_ref().parse().map_err(|message| Placed(message, text.span()))
 }
 
@@ -724,7 +723,7 @@ fn default_initial(value_type: &ValueType, categories: &[Category]) -> Option<Li
 }
 
 fn read_lane(table: LaneTable, categories: &[Category]) -> Result<Lane, Placed> {
-    let value_type = read_type(&table.value_type)?;
+    let value_type = parsed(&table.value_type)?;
     let storage = match (&value_type, table.storage) {
         (ValueType::U32 | ValueType::Category(_), Some(storage)) => Some(match storage.into_inner() {
             StorageName::U8 => LaneStorage::U8,
@@ -762,7 +761,7 @@ fn read_lane(table: LaneTable, categories: &[Category]) -> Result<Lane, Placed> 
 
 /// Reads the `[[field]]` table `table`, which spans `span` of the file.
 fn read_field(table: FieldTable, span: Range<usize>, categories: &[Category]) -> Result<Field, Placed> {
-    let value_type = read_type(&table.value_type)?;
+    let value_type = parsed(&table.value_type)?;
     let initial = match &table.initial {
         Some(raw) => Some(read_literal(raw)?),
         None => default_initial(&value_type, categories),
@@ -837,11 +836,7 @@ fn read_params(
 
 fn read_stat(table: StatTable) -> Result<Stat, Placed> {
     Ok(Stat {
-        from: table
-            .from
-            .get_ref()
-            .parse()
-            .map_err(|message| Placed(message, table.from.span()))?,
+        from: parsed(&table.from)?,
         color: read_color(&table.color)?,
         label: table.label,
     })
@@ -855,7 +850,7 @@ fn read_function(table: Spanned<FunctionTable>) -> Result<(Function, BodyPlaces)
             .into_iter()
             .map(|port| {
                 Ok(FunctionPort {
-                    value_type: read_type(&port.value_type)?,
+                    value_type: parsed(&port.value_type)?,
                     port: port.port,
                 })
             })
@@ -903,7 +898,7 @@ fn read_pass(table: Spanned<PassTable>) -> Result<(Pass, BodyPlaces), Placed> {
             _ => return Err(not_enabled(raw.span())),
         },
     };
-    let draw_order = table.draw_order.iter().map(read_node_id).collect::<Result<_, _>>()?;
+    let draw_order = table.draw_order.iter().map(parsed).collect::<Result<_, _>>()?;
     let (body, nodes) = read_body(table.nodes)?;
     Ok((
         Pass {
@@ -933,10 +928,6 @@ fn not_enabled(span: Range<usize>) -> Placed {
     )
 }
 
-fn read_node_id(text: &Spanned<String>) -> Result<NodeId, Placed> {
-    text.get_ref().parse().map_err(|message| Placed(message, text.span()))
-}
-
 /// Returns the body the tables hold, its nodes in natural id order with their places in the same order.
 fn read_body(tables: Vec<Spanned<NodeTable>>) -> Result<(NodeBody, Vec<NodePlaces>), Placed> {
     let mut read = Vec::with_capacity(tables.len());
@@ -952,7 +943,7 @@ fn read_body(tables: Vec<Spanned<NodeTable>>) -> Result<(NodeBody, Vec<NodePlace
 fn read_node(table: Spanned<NodeTable>) -> Result<(Node, NodePlaces), Placed> {
     let span = table.span();
     let table = table.into_inner();
-    let mut node = Node::new(read_node_id(&table.id)?, table.op.get_ref().clone());
+    let mut node = Node::new(parsed(&table.id)?, table.op.get_ref().clone());
     let mut places = NodePlaces {
         table: span,
         id: table.id.span(),
@@ -967,7 +958,7 @@ fn read_node(table: Spanned<NodeTable>) -> Result<(Node, NodePlaces), Placed> {
     if let Some(inputs) = &table.inputs {
         read_inputs(inputs, &mut node, &mut places)?;
     }
-    node.region = table.region.as_ref().map(read_node_id).transpose()?;
+    node.region = table.region.as_ref().map(parsed).transpose()?;
     Ok((node, places))
 }
 
@@ -1000,10 +991,7 @@ fn read_config_value(value: &Spanned<RawValue>) -> Result<ConfigValue, Placed> {
         RawValue::Integer(number) => ConfigValue::Integer(*number),
         RawValue::Float(number) => {
             if !number.is_finite() {
-                return Err(Placed(
-                    "a float in a graph file must be finite".to_owned(),
-                    value.span(),
-                ));
+                return Err(not_finite(value.span()));
             }
             ConfigValue::Float(*number)
         }
@@ -1126,10 +1114,7 @@ fn read_number(value: &Spanned<RawValue>) -> Result<f64, Placed> {
     if number.is_finite() {
         Ok(number)
     } else {
-        Err(Placed(
-            "a float in a graph file must be finite".to_owned(),
-            value.span(),
-        ))
+        Err(not_finite(value.span()))
     }
 }
 
@@ -1237,6 +1222,11 @@ fn read_literal(table: &Spanned<RawValue>) -> Result<Literal, Placed> {
         "option" => member().map(Literal::ChoiceOption),
         _ => Err(not_literal(table.span())),
     }
+}
+
+/// Returns the refusal of a float that is not finite.
+fn not_finite(span: Range<usize>) -> Placed {
+    Placed("a float in a graph file must be finite".to_owned(), span)
 }
 
 /// Returns the refusal of a value that is no literal.

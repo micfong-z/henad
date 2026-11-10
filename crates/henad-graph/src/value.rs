@@ -22,6 +22,17 @@ pub struct PortRef {
     pub port: Option<String>,
 }
 
+impl PortRef {
+    /// Returns the entry of `outputs` the reference names: the port it names, or the only entry when it names none.
+    pub(crate) fn output_in<'a, T>(&self, outputs: &'a BTreeMap<String, T>) -> Option<&'a T> {
+        match &self.port {
+            Some(name) => outputs.get(name),
+            None if outputs.len() == 1 => outputs.values().next(),
+            None => None,
+        }
+    }
+}
+
 impl fmt::Display for PortRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.port {

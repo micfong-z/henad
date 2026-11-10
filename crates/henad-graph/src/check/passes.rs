@@ -10,15 +10,13 @@ use super::view::{BodyView, BodyViews};
 use crate::catalogue::Effect;
 use crate::document::{Domain, PassEnabled, PassStage, Topology};
 use crate::types::{Rate, ValueType};
-use crate::value::ConfigValue;
 
 /// Returns the lanes the nodes of `view` with `effect` name in `config.lane`, in node order.
 fn lanes_with_effect<'a>(view: &'a BodyView<'_>, effect: Effect) -> impl Iterator<Item = (usize, &'a str)> {
     view.nodes.iter().enumerate().filter_map(move |(position, node)| {
         view.defs[position]
             .filter(|def| def.has_effect(effect))
-            .and_then(|_| node.config.get("lane"))
-            .and_then(ConfigValue::as_str)
+            .and_then(|_| node.config_str("lane"))
             .map(|lane| (position, lane))
     })
 }
@@ -73,7 +71,7 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, index: usize, view: &BodyVie
         (None, _) => {}
     }
     if let PassEnabled::Param(id) = &pass.enabled {
-        let param = document.params.iter().find(|param| param.id() == id);
+        let param = document.param(id);
         if !param.is_some_and(|param| matches!(param.kind(), ParamKind::Bool { .. })) {
             checker.error(
                 format!(
@@ -171,10 +169,10 @@ fn check_lane_domains(checker: &mut Checker<'_>, view: &BodyView<'_>) {
     let Some(pass) = view.pass() else { return };
     let Some(domain) = pass.domain else { return };
     for (position, node) in view.nodes.iter().enumerate() {
-        let Some(id) = node.config.get("lane").and_then(ConfigValue::as_str) else {
+        let Some(id) = node.config_str("lane") else {
             continue;
         };
-        if let Some(lane) = view.document.lanes.iter().find(|lane| lane.id == id)
+        if let Some(lane) = view.document.lane(id)
             && lane.domain != domain
         {
             view.error(
@@ -210,10 +208,7 @@ pub(super) fn check_lanes(checker: &mut Checker<'_>, passes: &[BodyView<'_>]) ->
             }
         }
         // A radius fold reads the position lane at other agents.
-        let position = document
-            .lanes
-            .iter()
-            .find(|lane| lane.role == Some(crate::document::LaneRole::Position));
+        let position = document.position_lane();
         let folds = (0..view.nodes.len())
             .any(|index| view.defs[index].is_some_and(|def| def.has_effect(Effect::ReadsOtherPosition)));
         if let Some(position) = position
@@ -334,7 +329,7 @@ pub(super) fn check_keys(checker: &mut Checker<'_>, views: &BodyViews<'_>) {
             if !draws && node.op != crate::node::OP_FUNCTION_CALL {
                 continue;
             }
-            let Some(key) = node.config.get("key").and_then(ConfigValue::as_integer) else {
+            let Some(key) = node.config_integer("key") else {
                 continue;
             };
             if let Some(first) = keys.get(&key) {
@@ -377,12 +372,7 @@ pub(super) fn check_stats(checker: &mut Checker<'_>, passes: &[BodyView<'_>], po
         let Some(outputs) = ports.outputs.get(&stat.from.node) else {
             continue;
         };
-        let port = match &stat.from.port {
-            Some(name) => outputs.get(name),
-            None if outputs.len() == 1 => outputs.values().next(),
-            None => None,
-        };
-        let Some(port) = port else {
+        let Some(port) = stat.from.output_in(outputs) else {
             checker.error(
                 format!(
                     "the stat '{}' reads {}, which names no output of the node",

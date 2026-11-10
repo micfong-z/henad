@@ -43,7 +43,7 @@ are not written yet.
 or each reader and `[[stat]]` of each call's output, `SetFunctionPortType`, `RemoveFunctionPort`,
 refused while a body node names the port or a reader reads it, an input leaving every call).
 `MakeFunction { scope, nodes, id }` takes a selection as `WrapInRepeat` does (`selection`, top
-nodes of one region, their subtrees): refused for a sink (`SINKS`, as the checker's), a put into a
+nodes of one region, their subtrees): refused for a sink (`NodeDef::sink`), a put into a
 region outside the selection, a `fn.input`/`fn.output`, or a node a `[[stat]]` reads. Each value
 read from outside (a named outer output, or an inner output of a region around the selection) is
 an input typed by the checker, each output a node outside reads is an output, nodes keep their ids

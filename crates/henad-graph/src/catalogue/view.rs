@@ -152,10 +152,6 @@ in.index = "n1"
     leave_lane!("x")
 );
 
-const IN_STATS: ContextSet = ContextSet {
-    stats: true,
-    ..ContextSet::NONE
-};
 const IN_VIEW: ContextSet = ContextSet {
     view: true,
     ..ContextSet::NONE
@@ -170,7 +166,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         group: "Statistics",
         label: "Count where",
         semantics: "Number of elements of the pass where `pred` holds, as a `u64` at the tick rate.",
-        contexts: IN_STATS,
+        contexts: ContextSet::STATS,
         inputs: &[input_up_to("pred", BOOL_TYPE, Rate::Element)],
         outputs: &[pinned("count", SocketType::Fixed(TypeClass::U64), Rate::Tick)],
         effects: &[Effect::Reduce],
@@ -192,7 +188,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         group: "Statistics",
         label: "Count by category",
         semantics: "Number of elements per variant of `category`, one `u64` output per variant at the tick rate, named after the variant. An output no `[[stat]]` table binds is pruned.",
-        contexts: IN_STATS,
+        contexts: ContextSet::STATS,
         config: &[config("category", ConfigType::CategoryId)],
         inputs: &[input_up_to("value", SocketType::ConfigCategory, Rate::Element)],
         config_ports: ConfigPorts::VariantCounts,

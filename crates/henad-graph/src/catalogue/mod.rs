@@ -20,12 +20,13 @@ mod view;
 use std::collections::BTreeMap;
 
 use crate::document::{Domain, GraphDocument};
-use crate::node::{Combine, Node};
+use crate::node::{Combine, Node, OP_STAT_COUNTER};
 use crate::types::{Rate, ValueType};
 use crate::value::{ConfigValue, InputValue, Literal};
 
 pub use cases::{CaseContext, CaseForm, CaseScope, CaseValue, KnownAnswer, NodeCase, PassCase};
 pub use folds::stencil_offsets;
+pub(crate) use math::NUMERIC;
 
 /// Every definition of the catalogue, grouped as the palette groups them.
 static GROUPS: [&[NodeDef]; 14] = [
@@ -433,6 +434,19 @@ impl ContextSet {
         stats: false,
         region: false,
     };
+    /// Tick, view and stats passes, and region bodies: where a stencil fold may sit.
+    pub(crate) const STENCILS: Self = Self {
+        tick: true,
+        view: true,
+        stats: true,
+        region: true,
+        ..Self::NONE
+    };
+    /// Stats passes alone.
+    pub(crate) const STATS: Self = Self {
+        stats: true,
+        ..Self::NONE
+    };
 }
 
 /// What a kind does besides returning its outputs.
@@ -466,6 +480,17 @@ pub enum Effect {
     /// Reads the position lane at other agents, which can make the position lane dual.
     ReadsOtherPosition,
 }
+
+/// Effects no function body holds, with the words a message names them by.
+const SINK_EFFECTS: [(Effect, &str); 7] = [
+    (Effect::WritesLane, "a lane write"),
+    (Effect::WritesField, "a field write"),
+    (Effect::Deposits, "a deposit"),
+    (Effect::Counts, "a counter"),
+    (Effect::View, "a colour"),
+    (Effect::Reduce, "a reducer"),
+    (Effect::DrawsStream, "a stream draw"),
+];
 
 /// Backends that can run a kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -637,12 +662,22 @@ impl NodeDef {
         self.effects.contains(&effect)
     }
 
+    /// Returns the words a message names the kind's first sink effect by, `None` for a kind with no sink effect.
+    ///
+    /// A sink effect is one no function body holds.
+    pub(crate) fn sink(&self) -> Option<&'static str> {
+        SINK_EFFECTS
+            .iter()
+            .find(|(effect, _)| self.has_effect(*effect))
+            .map(|(_, words)| *words)
+    }
+
     /// Returns whether the kind's outputs are ready only after every element of its pass.
     ///
     /// A reducer's result is one such output. So is `stat.counter`'s total, which the host learns from the readback
     /// that follows the elements, since a tick pass on the device counts into it.
     pub(crate) fn is_ready_after_elements(&self) -> bool {
-        self.has_effect(Effect::Reduce) || self.id == "stat.counter"
+        self.has_effect(Effect::Reduce) || self.id == OP_STAT_COUNTER
     }
 
     /// Returns the inputs of `node` in the order the canonical text writes them: the fixed ports, then the ports
@@ -725,27 +760,17 @@ impl NodeDef {
 
     /// Returns the outputs of `node` that nodes outside a region body can read, fixed ports first.
     pub fn resolved_outputs(&self, node: &Node, document: &GraphDocument) -> Vec<ResolvedOutput> {
-        let mut outputs: Vec<ResolvedOutput> = self
-            .outputs
-            .iter()
-            .map(|socket| ResolvedOutput {
-                name: socket.name.to_owned(),
-                value_type: Some(socket.value_type),
-                declared: None,
-                rate: socket.rate,
-            })
-            .collect();
+        let mut outputs: Vec<ResolvedOutput> = self.outputs.iter().map(fixed_output).collect();
         match self.config_ports {
             ConfigPorts::None | ConfigPorts::CategoryCases => {}
             ConfigPorts::FunctionInterface => {
                 if let Some(function) = called_function(node, document) {
                     for port in &function.outputs {
-                        outputs.push(ResolvedOutput {
-                            name: port.port.clone(),
-                            value_type: None,
-                            declared: Some(port.value_type.clone()),
-                            rate: OutputRate::Join,
-                        });
+                        outputs.push(declared_output(
+                            port.port.clone(),
+                            port.value_type.clone(),
+                            OutputRate::Join,
+                        ));
                     }
                 }
             }
@@ -761,12 +786,11 @@ impl NodeDef {
             }
             ConfigPorts::Accumulators => {
                 for accumulator in node.accumulators().unwrap_or_default() {
-                    outputs.push(ResolvedOutput {
-                        name: accumulator.name,
-                        value_type: None,
-                        declared: Some(accumulator.value_type),
-                        rate: OutputRate::Pinned(Rate::Element),
-                    });
+                    outputs.push(declared_output(
+                        accumulator.name,
+                        accumulator.value_type,
+                        OutputRate::Pinned(Rate::Element),
+                    ));
                 }
             }
             ConfigPorts::TransitionRules => {
@@ -796,24 +820,14 @@ impl NodeDef {
     /// Returns the outputs of a region node that its body reads: the fixed inner outputs, then `prev.<acc>` per
     /// accumulator.
     pub fn resolved_inner_outputs(&self, node: &Node) -> Vec<ResolvedOutput> {
-        let mut outputs: Vec<ResolvedOutput> = self
-            .inner_outputs
-            .iter()
-            .map(|socket| ResolvedOutput {
-                name: socket.name.to_owned(),
-                value_type: Some(socket.value_type),
-                declared: None,
-                rate: socket.rate,
-            })
-            .collect();
+        let mut outputs: Vec<ResolvedOutput> = self.inner_outputs.iter().map(fixed_output).collect();
         if self.config_ports == ConfigPorts::Accumulators {
             for accumulator in node.accumulators().unwrap_or_default() {
-                outputs.push(ResolvedOutput {
-                    name: format!("prev.{}", accumulator.name),
-                    value_type: None,
-                    declared: Some(accumulator.value_type),
-                    rate: OutputRate::Pinned(Rate::Pair),
-                });
+                outputs.push(declared_output(
+                    format!("prev.{}", accumulator.name),
+                    accumulator.value_type,
+                    OutputRate::Pinned(Rate::Pair),
+                ));
             }
         }
         outputs
@@ -835,8 +849,8 @@ impl NodeDef {
 
 /// Returns the first layer of the field `config.field` of `node` names in `document`, as a literal.
 pub(crate) fn first_layer_of(node: &Node, document: &GraphDocument) -> Option<Literal> {
-    let id = node.config.get("field")?.as_str()?;
-    let field = document.fields.iter().find(|field| field.id == id)?;
+    let id = node.config_str("field")?;
+    let field = document.field(id)?;
     Some(Literal::Layer(crate::value::MemberName {
         owner: field.id.clone(),
         member: field.layers.first()?.clone(),
@@ -854,10 +868,30 @@ fn declared_input(name: &str, value_type: ValueType) -> ResolvedInput {
     }
 }
 
+/// Returns the output of the fixed socket `socket`.
+fn fixed_output(socket: &OutputSocket) -> ResolvedOutput {
+    ResolvedOutput {
+        name: socket.name.to_owned(),
+        value_type: Some(socket.value_type),
+        declared: None,
+        rate: socket.rate,
+    }
+}
+
+/// Returns an output of a port that configuration makes, of `value_type`, at `rate`.
+fn declared_output(name: String, value_type: ValueType, rate: OutputRate) -> ResolvedOutput {
+    ResolvedOutput {
+        name,
+        value_type: None,
+        declared: Some(value_type),
+        rate,
+    }
+}
+
 /// Returns the function `config.function` of `node` names in `document`.
 pub(crate) fn called_function<'a>(node: &Node, document: &'a GraphDocument) -> Option<&'a crate::document::Function> {
-    let id = node.config.get("function")?.as_str()?;
-    document.functions.iter().find(|function| function.id == id)
+    let id = node.config_str("function")?;
+    document.function(id)
 }
 
 /// Returns the `{ name, type }` inputs of an expression node, in list order, leaving out a broken entry.
@@ -890,10 +924,8 @@ pub(crate) fn name_list(node: &Node, key: &str) -> Vec<String> {
 
 /// Returns the variant names of the category that `config.category` of `node` names, in numbering order.
 fn config_category_variants(node: &Node, document: &GraphDocument) -> Vec<String> {
-    node.config
-        .get("category")
-        .and_then(ConfigValue::as_str)
-        .and_then(|id| document.categories.iter().find(|category| category.id == id))
+    node.config_str("category")
+        .and_then(|id| document.category(id))
         .map(|category| category.variants.iter().map(|variant| variant.name.clone()).collect())
         .unwrap_or_default()
 }

@@ -8,16 +8,11 @@ use henad_core::params::ParamKind;
 use super::Checker;
 use super::view::BodyView;
 use crate::catalogue::Effect;
-use crate::document::{Domain, FieldCombine, GraphDocument, LaneRole, PassStage};
+use crate::document::{Domain, FieldCombine, GraphDocument, PassStage};
 use crate::ids::NodeId;
-use crate::value::{ConfigValue, InputValue, Literal};
+use crate::node::{OP_FUNCTION_CALL, OP_GRID_FOLD, OP_RADIUS_FOLD, OP_REGION_REPEAT};
+use crate::value::{InputValue, Literal};
 
-/// Kind of the radius fold.
-const RADIUS_FOLD: &str = "agent.radius_fold";
-/// Kind of the stencil fold.
-const GRID_FOLD: &str = "grid.fold";
-/// Kind of the finite loop.
-const REPEAT: &str = "region.repeat";
 /// Deepest structure the source of a `cell_size` is compared to.
 const MAX_SOURCE_DEPTH: usize = 32;
 
@@ -28,11 +23,7 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, view: &BodyView<'_>) {
     let mut set_layers: BTreeMap<(&str, Option<String>), usize> = BTreeMap::new();
     for (position, node) in view.nodes.iter().enumerate() {
         let Some(def) = view.defs[position] else { continue };
-        let field = node
-            .config
-            .get("field")
-            .and_then(ConfigValue::as_str)
-            .and_then(|id| document.fields.iter().find(|field| field.id == id));
+        let field = node.config_str("field").and_then(|id| document.field(id));
         if def.has_effect(Effect::Deposits)
             && let Some(field) = field
             && field.is_static
@@ -123,7 +114,7 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, view: &BodyView<'_>) {
 fn largest_deposit(document: &GraphDocument, input: Option<&InputValue>) -> Option<f32> {
     match input? {
         InputValue::Literal(Literal::F32(value)) => Some(*value),
-        InputValue::Param(id) => match document.params.iter().find(|param| param.id() == id)?.kind() {
+        InputValue::Param(id) => match document.param(id)?.kind() {
             ParamKind::F32 { max, .. } => Some(*max),
             _ => None,
         },
@@ -162,12 +153,15 @@ fn check_get_at(checker: &mut Checker<'_>, view: &BodyView<'_>, position: usize)
 fn check_nesting(checker: &mut Checker<'_>, view: &BodyView<'_>, position: usize) {
     let Some(parent) = view.parents[position] else { return };
     let (inner, outer) = (view.nodes[position].op.as_str(), view.nodes[parent].op.as_str());
-    let allowed = matches!((outer, inner), (REPEAT, REPEAT | GRID_FOLD) | (GRID_FOLD, REPEAT));
+    let allowed = matches!(
+        (outer, inner),
+        (OP_REGION_REPEAT, OP_REGION_REPEAT | OP_GRID_FOLD) | (OP_GRID_FOLD, OP_REGION_REPEAT)
+    );
     // A region of an unknown kind or a broken region tree has its own diagnostic.
     if allowed || view.defs[parent].is_none_or(|def| !def.is_region) {
         return;
     }
-    let reason = if inner == RADIUS_FOLD || outer == RADIUS_FOLD {
+    let reason = if inner == OP_RADIUS_FOLD || outer == OP_RADIUS_FOLD {
         "a radius fold visits as many agents as it meets, and holds no region and sits in none"
     } else {
         "a Repeat holds a Repeat or a neighborhood fold, and a neighborhood fold holds a Repeat"
@@ -206,14 +200,13 @@ pub(super) fn check_finishes(checker: &mut Checker<'_>, functions: &[BodyView<'_
                 continue;
             };
             for (position, node) in view.nodes.iter().enumerate() {
-                let config = |key: &str| node.config.get(key).and_then(ConfigValue::as_str);
-                if node.op == crate::node::OP_FUNCTION_CALL
-                    && let Some(callee) = config("function")
+                if node.op == OP_FUNCTION_CALL
+                    && let Some(callee) = node.config_str("function")
                     && !reached.contains(&callee)
                 {
                     reached.push(callee);
                 }
-                if node.op == "field.get" && config("field") == Some(field.id.as_str()) {
+                if node.op == "field.get" && node.config_str("field") == Some(field.id.as_str()) {
                     view.error(
                         checker,
                         position,
@@ -235,11 +228,7 @@ pub(super) fn check_finishes(checker: &mut Checker<'_>, functions: &[BodyView<'_
 /// composes (V18).
 pub(super) fn check_passes(checker: &mut Checker<'_>, views: &[BodyView<'_>]) {
     let document = checker.file.document();
-    let position_lane = document
-        .lanes
-        .iter()
-        .find(|lane| lane.role == Some(LaneRole::Position))
-        .map(|lane| lane.id.as_str());
+    let position_lane = document.position_lane().map(|lane| lane.id.as_str());
     // V12: a radius fold reads the index built from the positions at the start of the tick.
     let mut written_in: Option<String> = None;
     let mut sources: Vec<(usize, usize, String)> = Vec::new();
@@ -249,7 +238,7 @@ pub(super) fn check_passes(checker: &mut Checker<'_>, views: &[BodyView<'_>]) {
             continue;
         }
         for (position, node) in view.nodes.iter().enumerate() {
-            if node.op != RADIUS_FOLD {
+            if node.op != OP_RADIUS_FOLD {
                 continue;
             }
             if let Some(writer) = &written_in {
@@ -267,9 +256,10 @@ pub(super) fn check_passes(checker: &mut Checker<'_>, views: &[BodyView<'_>]) {
                 sources.push((index, position, source_key(view, source, 0)));
             }
         }
-        let writes_position = view.nodes.iter().any(|node| {
-            node.op == "lane.set" && node.config.get("lane").and_then(ConfigValue::as_str) == position_lane
-        });
+        let writes_position = view
+            .nodes
+            .iter()
+            .any(|node| node.op == "lane.set" && node.config_str("lane") == position_lane);
         if writes_position && written_in.is_none() {
             written_in = Some(pass.id.clone());
         }
@@ -327,7 +317,7 @@ fn check_composed_keys(checker: &mut Checker<'_>, views: &[BodyView<'_>]) {
             if view.defs[position].is_none_or(|def| !def.has_effect(Effect::DrawsCounter)) {
                 continue;
             }
-            let Some(key) = node.config.get("key").and_then(ConfigValue::as_integer) else {
+            let Some(key) = node.config_integer("key") else {
                 continue;
             };
             let copied = view.origin(position).is_some_and(|origin| !origin.calls.is_empty());
