@@ -274,6 +274,25 @@ Any other deposit is not checked against it, so a model whose cells can take tha
 A resolution that is not a power of two, such as 0.001, is refused at its line, with the nearest allowed value in the message.
 A power of two keeps the products of the deposit and the merge exact on every device, including one that compiles with fast math.
 
+## Results across devices
+
+A graph model or a sheet on a grid replays exactly with one seed on one device.
+A model of agents replays exactly too, unless a look at the agents around adds up floats or depends on the order of its visits.
+In a graph, that look is an `agent.radius_fold` in a tick pass whose body holds a `carry`, adds up a float accumulator with `sum`, or reads the fold's `k` or a `prev.<acc>`.
+The device's index lists the agents of each cell in the order its atomic writes resolve, and that order can change between two runs.
+A float sum over the same agents in another order can round to another result, and two runs at one seed can then differ.
+The boids sheet and node graph starter, and the bounded confidence sheet, average over the agents around them and do not replay exactly.
+Every other sheet and node graph starter replays exactly.
+
+A sweep's manifest records `replays_exactly` as `false` for such a model.
+In the desktop app, [**Compare runs**](../guide/editor.md#converting-to-a-node-graph) names no tick of a difference for it, and reads "Bounded confidence does not replay exactly. Two runs at one seed can differ, so compare Bounded confidence (expert) with Bounded confidence in the plot." for the bounded confidence sheet.
+The [Results tab](../guide/app.md#opening-a-run) shows "This model does not replay exactly. The opened run might differ from the recorded run." beside <span class="ui" markdown>:material-play-box-outline: Open</span>, and the Playback tab shows it under the opened run's name.
+
+In a model that replays exactly, a computation over whole numbers alone gives the same result on every device, and the same as the host evaluator.
+Float results can differ in their last places between devices, and between two shapes of one computation on one device, such as a Repeat and the same body written out in copies.
+A device may fuse a multiply with an add, or reorder float operations.
+A whole number worked out from floats, such as a count of agents within a distance or a state chosen by comparing two floats, can differ wherever those floats differ.
+
 ## Sheets
 
 A file of kind `sheet` holds a sheet: the model in the order a reader meets it, with its world, its properties, its parameters, measures, colours and buttons, and a card of lines for each kind of thing.
@@ -337,7 +356,12 @@ A sheet whose `[world]` is `made_of = "agents"` holds one kind of agent, its `co
 Its Position starts anywhere at random, an Arrow as a random direction, and its Heading follows the direction of its last move.
 Its card can look at the agents within a distance, count them or sum up what it sees, then steer a property, keep a value between two limits, and move by an arrow, and a Repeat adds up its moves and steers.
 A Become or Set inside a Repeat applies when its condition holds at any time round.
-When two such changes of one property both apply, the higher line wins, whichever time round each one held.
+Among the changes of one property inside one Repeat, each time round tries them from the top, and the first whose condition holds decides for that time round.
+The first time round with a decision is final, so a lower line that held at an earlier time round wins over a higher line that held later.
+For example, "Become A from S, with chance 0.1" above "otherwise become B from S, with chance 0.5", repeated 4 times, decides a time round for A with chance 0.1 and for B with chance 0.9 × 0.5 = 0.45.
+Then 0.1 × (1 + 0.45 + 0.45² + 0.45³) = 0.174 of the agents in S become A, 0.45 × (1 + 0.45 + 0.45² + 0.45³) = 0.785 become B, and the other 0.041 stay in S.
+A Become from a state never decides for an agent in another state.
+Between a change inside a Repeat and a change of the same property outside it, or inside another Repeat, the higher line wins.
 
 The agents can walk on a ground of cells, one per unit of the world.
 A ground property holds states painted at the start, or a number that agents mark with Leave, keeping the largest mark or adding the marks up, and that fades by its share kept per tick.
@@ -357,6 +381,7 @@ Agents that move to places can live in a world with walls, and other worlds wrap
 The looks at agents of one card share one walk of the agents around each agent, at the largest of their distances, and the neighbour index takes its size from the largest distance as the parameters stand.
 A look past the most agents one agent can visit stops the run with a message that names the look's line, such as "line 1, Flockmates".
 A program asks `SheetFile::shortfalls` whether a population fits the work one run may take, and a model that does not fit is named the same way.
+A larger world spreads the same agents thinner and a look meets fewer of them, so a population refused in the declared world can fit in a wider and taller one.
 
 This version refuses a second kind of agent, walls around agents that move by an arrow, a blocked ground under agents that move by an arrow, the cell ahead of agents that move by an arrow, a start on a ground state painted larger than one cell, and Keep between, When, Repeat, Leave, Record and Move to inside a Repeat, each at its table.
 A card changes a property by Set or by Steer, and moves by an arrow or to a place.

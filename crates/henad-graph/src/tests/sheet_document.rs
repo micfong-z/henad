@@ -45,6 +45,34 @@ pub(crate) fn sheet_text(file_name: &str) -> &'static str {
         .unwrap_or_else(|| panic!("no sheet {file_name}"))
 }
 
+/// The copies of `sir_chance.toml` and `sird.toml` in henad-models' `tests/fixtures/sheets/` and henad-app's
+/// `src/tests/sheets/` equal the test sheets here byte for byte.
+///
+/// The copies are read at run time, as [`super::corpus::fixtures`] reads henad-models' graphs, since a packaged crate
+/// has no path out of itself. A crate absent from the checkout is skipped.
+#[test]
+fn the_copies_of_the_test_sheets_equal_their_source() {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    for (crate_name, directory) in [
+        ("henad-models", "tests/fixtures/sheets"),
+        ("henad-app", "src/tests/sheets"),
+    ] {
+        let crate_root = workspace.join(crate_name);
+        if !crate_root.join("Cargo.toml").is_file() {
+            continue;
+        }
+        for name in ["sir_chance.toml", "sird.toml"] {
+            let path = crate_root.join(directory).join(name);
+            let copy = std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            assert!(
+                copy == sheet_text(name).as_bytes(),
+                "{} differs from henad-graph's src/tests/sheets/{name}, so copy the source again",
+                path.display()
+            );
+        }
+    }
+}
+
 /// Reads `text`, which must read.
 fn read(text: &str) -> ParsedSheet {
     ParsedSheet::parse(text).unwrap_or_else(|error| panic!("the sheet does not read: {error}"))

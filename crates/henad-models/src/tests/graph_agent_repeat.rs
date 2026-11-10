@@ -853,11 +853,12 @@ fn a_float_repeat_over_agents_replays_on_the_device() {
 /// The float body of [`FLOAT_LOOP`] over agents equals its hand-chained copies bit for bit on the device, and both
 /// equal the host.
 ///
-/// Note that this fails on an Apple M4 Pro, as the grid version in henad-graph does. wgpu compiles Metal shaders with
-/// fast math on, and the device rounds the loop and the copies, whose `k` are literals, otherwise. Records #66, #67
-/// and #70 hold the probes.
+/// Note that this probes a device and gates nothing, as the grid version in henad-graph does. A device may fuse a
+/// multiply with an add, or reorder float operations, and then rounds the loop and the copies, whose `k` are literals,
+/// differently, or differently from the host. That happens on Apple Metal, which compiles with fast math, and on
+/// lavapipe on aarch64, where LLVM contracts the multiply and the add.
 #[test]
-#[ignore = "fails on Metal, which compiles with fast math; records #66, #67 and #70"]
+#[ignore = "probes a device that may fuse a multiply with an add or reorder float operations"]
 fn a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit() {
     let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
         log::warn!("skipping a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit: no adapter");

@@ -405,13 +405,21 @@ impl EditorPanel {
         self.reset_scroll = true;
     }
 
-    /// Brings an outcome that waited up to date. `loaded` is the source of the loaded model, and `rebuild_pending`
-    /// whether the Rebuild model dialog is open.
+    /// Brings an outcome that waited up to date. `loaded` is the source of the loaded model, `next_build` the source of
+    /// the model Playback's Build builds now, and `rebuild_pending` whether the Rebuild model dialog is open.
     ///
     /// An outcome that waited for Rebuild or Build reads as applied once the loaded model runs the applied code, from
     /// the start of its build. One that waited for Rebuild waits for Build once the dialog closes without a rebuild.
     /// An outcome that read as applied waits for Build once nothing is loaded, as after Cancel or Offload.
-    pub fn settle_outcome(&mut self, loaded: Option<&ModelSource>, rebuild_pending: bool) {
+    ///
+    /// An outcome that waits for Build is dropped once Build builds another model, as while it replays the preview of
+    /// the Editor's sheet. `next_build` is `None` then.
+    pub fn settle_outcome(
+        &mut self,
+        loaded: Option<&ModelSource>,
+        next_build: Option<&ModelSource>,
+        rebuild_pending: bool,
+    ) {
         let waiting = matches!(
             self.outcome,
             Some(ApplyOutcome::AwaitingRebuild | ApplyOutcome::Installed)
@@ -422,6 +430,9 @@ impl EditorPanel {
             || (self.outcome == Some(ApplyOutcome::Applied) && loaded.is_none())
         {
             self.outcome = Some(ApplyOutcome::Installed);
+        }
+        if self.outcome == Some(ApplyOutcome::Installed) && next_build != self.applied.as_ref() {
+            self.outcome = None;
         }
     }
 }
@@ -463,17 +474,11 @@ pub enum EditorRequest {
 pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let compute = app.gpu_ctx.is_some();
     let mut request = None;
-    // A preview runs no applied code, and an outcome that read as applied waits for Build behind it.
-    let loaded = app
-        .loaded_entry()
-        .filter(|_| app.preview().is_none())
-        .map(|entry| entry.source().clone());
-    let rebuild_pending = app.pending_rebuild.is_some();
+    settle_outcome(app);
     let past_start = app.sheet_preview_past_start();
     let trials = sheet_trials(app);
     let fires = sheet_fires(app);
     let panel = &mut app.editor;
-    panel.settle_outcome(loaded.as_ref(), rebuild_pending);
     let empty = panel.model.is_empty();
     // The New model dialog takes the keys of Undo and Redo while it is open.
     let keys = panel.new_model.is_none();
@@ -623,6 +628,23 @@ fn header_ui(
 fn sheet_fires(app: &AppState) -> Option<sheet::LineFires> {
     let sheet = app.editor.model.sheet()?;
     sheet::line_fires(sheet, app.loaded_entry(), app.snapshot.as_ref())
+}
+
+/// Brings the outcome of the last Apply up to date with the loaded model, the model Build builds and the Rebuild model
+/// dialog, as [`EditorPanel::settle_outcome`] does.
+fn settle_outcome(app: &mut AppState) {
+    // A preview runs no applied code, and an outcome that read as applied waits for Build behind it.
+    let loaded = app
+        .loaded_entry()
+        .filter(|_| app.preview().is_none())
+        .map(|entry| entry.source().clone());
+    let next_build = app
+        .selected_entry()
+        .filter(|_| !app.build_replays_preview())
+        .map(|entry| entry.source().clone());
+    let rebuild_pending = app.pending_rebuild.is_some();
+    app.editor
+        .settle_outcome(loaded.as_ref(), next_build.as_ref(), rebuild_pending);
 }
 
 /// Returns each value the preview of the Editor's sheet tries, as the Sheet pane shows it beside its parameter. Empty

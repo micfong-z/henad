@@ -286,19 +286,23 @@ the Heading: `logic.select(vec.length(sum) > 0, sum, heading)`. `my_new X` is th
 `lane.set`. A Random direction, as a line or phrase, is a `rand.float` to 2 pi keyed by its site and
 `vec.from_angle`.
 
-Repeat (`repeat.rs`, Move by, Steer, Become and Set lines inside, answer 11a: `sum` and `or`
-accumulators only): one `region.repeat` owned by the Repeat line, `count` a whole number literal or
+Repeat (`repeat.rs`, Move by, Steer, Become and Set lines inside, `sum`, `or` and `min`
+accumulators): one `region.repeat` owned by the Repeat line, `count` a whole number literal or
 a Whole number parameter from 0 (`u32`), `max` that number or the parameter's maximum (an error past
 `MAX_REPEAT_ITERATIONS` naming the parameter), a `sum` accumulator `change_<property>` for each
-property a Move by or Steer inside it changes, and a `bool` `or` accumulator `<line>_applies` per
-Become or Set inside, in line id order (found by a scan of the lines inside that run). Each total is
+property a Move by or Steer inside it changes, and one accumulator per Become or Set inside, in
+line id order (found by a scan of the lines inside that run). Each total is
 one change of its property owned by the Repeat line, added when the Repeat lowers, and each line
-inside writes its term as a `region.put` under its condition (`put_in_repeat`). A Become or Set
-writes its condition, lowered inside the region, as a `region.put` of its `or` accumulator
-(`any_time`), and its change reads the total: it applies when it held at any time, and the higher of
-two such changes wins whichever time round each held, where the first time could decide instead
-(record #92 item 7, an open choice for the maintainer). A Set's value is
-lowered outside the region, once per tick, and a value that reads a line inside the Repeat is
+inside writes its term as a `region.put` under its condition (`put_in_repeat`). A lone Become or
+Set writes its condition, lowered inside the region, as a `region.put` of a `bool` `or` accumulator
+`<line>_applies` and reads it (`any_time`). Two Becomes or two Sets of one property in one Repeat
+that `can_both_apply` compete (`contests`): each puts `k` into a `u32` `min` `<line>_first` under
+its condition, and its change holds where `cmp.lt(<line>_first, u32::MAX)` and, per lower
+competitor, `cmp.ge(<lower>_first, <line>_first)` (path `change`), so the rows' display order picks
+the line that first held at the earliest time round, the higher on a tie. A Become from a state
+below one from any state puts only where my state, `cmp.eq` outside the region, is that state. A
+change outside meets these by display order. Tests in `src/tests/sheet_repeat.rs`. A Set's value
+is lowered outside the region, once per tick, and a value that reads a line inside the Repeat is
 refused (`SET_IN_REPEAT`, `reads_inside` over chips, phrases and formulas). Lines inside a Repeat
 take its region through `line_site`. A Keep between, When, Repeat, Leave, Record or Move to inside a
 Repeat is refused (`NOT_YET_REPEAT_CHANGE`).
@@ -424,7 +428,8 @@ condition that is a link (a constant `always` has no node): a Set's after `any_t
 "otherwise" Set, which applies where its higher Sets do not and no output holds), and
 `change_condition` of a Steer, Keep between, Move by, Leave and Record. A Move to records nothing,
 since its open test decides. `fires_when` records nothing for a line with a `repeat_of`, wherever
-its condition was lowered, and the region filter of `Builder::fire_lines` stays behind it.
+its condition was lowered, and the region filter of `Builder::fire_lines` stays behind it. A Become
+inside a Repeat counts through its transition row, outside the region.
 `FireLines` (`table.rs`, re-exported from `sheet`) holds the `Probes` and the line id of each,
 `counts_by_line` summing a line's rows into a `BTreeMap` and returning an empty one for counts of
 another length. `SheetFile::fire_lines` returns it. The probes leave the lowered document and the
@@ -435,7 +440,8 @@ code alone. Tests in `src/tests/sheet_fires.rs`:
 `the_sird_competing_lines_count_separately` (each count equal to the cells that changed by its line,
 30 host ticks), `probes_leave_the_sheet_code_and_the_lowered_text_alone`,
 `counts_by_line_adds_the_rows_of_a_line_and_drops_counts_of_another_length`,
-`a_change_inside_a_repeat_has_no_count` (a Move by with a blank condition in a Repeat inside a When)
+`a_move_by_inside_a_repeat_has_no_count` (a blank condition in a Repeat inside a When),
+`a_become_inside_a_repeat_counts_the_agents_it_changed` (and a Set none)
 and `a_fire_count_reads_as_its_number_and_its_description`. henad-models' `sheet_grid.rs` holds the
 device: `the_life_sheet_blinker_fires_lines_2_and_3_twice_each_tick_on_the_device` and
 `the_forest_fire_counts_equal_the_host_every_tick_for_50_ticks` (the model file's entry).

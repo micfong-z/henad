@@ -24,7 +24,10 @@ An interface change to one ships only in a breaking release. User shaders import
 `space::offsets`, `space::for_each_neighbor`, `rng::mix_seed` and `rng::next_index` are Rust
 only. `next_index`'s redraw needs a 64-bit product, and WGSL has no 64-bit integers.
 `docs/reference/primitives.md` is the index, marks each Rust-only and WGSL-only entry, and
-records what is deliberately absent.
+records what is deliberately absent. `rng::pcg4d` (JCGT `pcg4d`, twin `henad::rng::pcg4d`) has
+two callers, henad-graph's draw core and the seed of a grid rule's `rng` in
+henad-compute's template, and both run two rounds over four counters. Its words are pinned in
+henad-graph (`the_draw_core_keeps_its_words`), since the graph library's case words hang on them.
 `SimState` (`model.rs`) is the _runner_
 interface the sim thread drives, not an authoring API — that split is why the traits live under
 `authoring/model/` and this one does not. `provenance.rs` holds `BuildInfo`, the identity of one

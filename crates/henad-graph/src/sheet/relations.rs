@@ -221,22 +221,23 @@ impl<'a> CardRelations<'a> {
     ///
     /// A line inside a Repeat joins no group and draws alone each time the Repeat runs it.
     fn group_key(&self, line_id: &str) -> Option<(&'a str, &'a str)> {
-        if self.inside_repeat(line_id) {
+        if self.repeat_of(line_id).is_some() {
             return None;
         }
         competing_key(self.line(line_id)?)
     }
 
-    /// Returns whether line `line_id` sits inside a Repeat, directly or inside a block within it.
-    fn inside_repeat(&self, line_id: &str) -> bool {
+    /// Returns the Repeat line that holds line `line_id`, directly or inside a block within it, `None` for a line
+    /// outside every Repeat.
+    pub fn repeat_of(&self, line_id: &str) -> Option<&'a str> {
         let mut parent = self.parent(line_id);
         while let Some(id) = parent {
             if self.line(id).is_some_and(|block| block.kind == LineKind::Repeat) {
-                return true;
+                return Some(id);
             }
             parent = self.parent(id);
         }
-        false
+        None
     }
 
     /// Returns every test of one value that line `line_id` needs to apply: its own condition, the conditions of the
@@ -292,7 +293,7 @@ impl<'a> CardRelations<'a> {
     fn compare_test(&self, phrase: &SheetLine) -> Option<ValueTest> {
         let operand = match phrase.left.value()? {
             SheetValue::Chip(SheetChip::My(property)) => Operand::My(property.clone()),
-            SheetValue::Chip(SheetChip::Result { line, .. }) if self.inside_repeat(line) => return None,
+            SheetValue::Chip(SheetChip::Result { line, .. }) if self.repeat_of(line).is_some() => return None,
             SheetValue::Chip(SheetChip::Result { line, part, property }) => Operand::Result {
                 line: line.clone(),
                 part: part.clone(),

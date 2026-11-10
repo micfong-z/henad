@@ -524,17 +524,26 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         (
             "Line 2 also changes Cover for a cell that is Tree. When both apply, line 2 wins.",
-            sentence::otherwise_tooltip(&[2], "Cover", Some("Tree"), "cell"),
+            sentence::otherwise_tooltip(&[2], "Cover", Some("Tree"), "cell", false),
         ),
         (
             "Lines 2 and 5 also change Cover for a cell that is Tree. When more than one applies, the highest line \
              wins.",
-            sentence::otherwise_tooltip(&[2, 5], "Cover", Some("Tree"), "cell"),
+            sentence::otherwise_tooltip(&[2, 5], "Cover", Some("Tree"), "cell", false),
+        ),
+        (
+            "Line 2 also changes Status for an agent that is S. When both apply at the same time, line 2 wins.",
+            sentence::otherwise_tooltip(&[2], "Status", Some("S"), "agent", true),
+        ),
+        (
+            "Lines 2 and 5 also change Status for an agent that is S. When more than one applies at the same time, \
+             the highest line wins.",
+            sentence::otherwise_tooltip(&[2, 5], "Status", Some("S"), "agent", true),
         ),
         (
             "Line 6 now starts with otherwise. Lines 2 and 5 also change Cover for a cell that is Tree. When more \
              than one applies, the highest line wins.",
-            sentence::otherwise_notice("Line 6", &[2, 5], "Cover", Some("Tree"), "cell"),
+            sentence::otherwise_notice("Line 6", &[2, 5], "Cover", Some("Tree"), "cell", false),
         ),
         // Rates and chances.
         (
@@ -687,6 +696,15 @@ fn every_wording_table_entry_equals_the_final_words() {
              When two changes to one property both apply, the higher line wins, and the lower one shows \
              \"otherwise\".",
             fixed(sentence::LINES_HELP),
+        ),
+        (
+            "Every agent of this kind follows these lines each tick, from the top. A line either works out a result, \
+             which lines below it can use, or changes one of my properties. Everyone reads the world as it was at the \
+             start of the tick, and all changes land together at the end of it. Whatever no line changes stays as it \
+             was. When two changes to one property both apply, the higher line wins, and the lower one shows \
+             \"otherwise\". Inside a Repeat, the first time a change applies decides, so a lower line that applies \
+             earlier wins.",
+            fixed(sentence::LINES_HELP_AGENTS),
         ),
         (
             "Alive neighbours = count of the 8 cells around me whose Status is Alive",

@@ -3,7 +3,8 @@
 //! The draws take raw bits so the same function serves both backends, and every draw except [`next_index`]
 //! has a WGSL twin. The generators differ. WGSL has no 64-bit integers, and a shader advances with
 //! [`pcg_hash`] over `u32` where a CPU kernel runs [`xorshift64`] over `u64`. [`pcg_hash`] is here
-//! as well, for a GPU port that seeds a state buffer the shader draws from.
+//! as well, for a GPU port that seeds a state buffer the shader draws from, and so is [`pcg4d`], a hash of four
+//! counters that seeds such a state from a seed word, an element and a tick.
 //!
 //! Every draw needs its own [`next_bits`]. Two draws off one word are correlated, and nothing will
 //! say so.
@@ -37,6 +38,44 @@ pub fn pcg_hash(input: u32) -> u32 {
     let state = input.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
     let word = ((state >> ((state >> 28).wrapping_add(4))) ^ state).wrapping_mul(277_803_737);
     (word >> 22) ^ word
+}
+
+/// Returns the `pcg4d` hash of `input`, from Jarzynski and Olano's "Hash Functions for GPU Rendering" (JCGT, 2020),
+/// with every operation wrapping.
+///
+/// Each word takes `v * 1664525 + 1013904223`, then four cross additions run (`x += y * w`, `y += z * x`,
+/// `z += x * y`, `w += y * z`), each word takes `v ^ (v >> 16)`, and the four additions run again.
+///
+/// The twin of `henad::rng::pcg4d`, bit for bit. Two rounds over a vector of counters, such as a seed word, a cell
+/// index and a tick, derive random words from the counters alone, with no state carried from one tick to the next.
+///
+/// # Examples
+///
+/// ```
+/// use henad_core::authoring::primitives::rng::pcg4d;
+///
+/// assert_eq!(pcg4d([0, 0, 0, 0]), [251_852_841, 760_645_481, 850_445_371, 3_542_436_074]);
+/// let word = pcg4d(pcg4d([7, 42, 3, 0]))[0];
+/// assert_ne!(word, pcg4d(pcg4d([7, 42, 4, 0]))[0]);
+/// ```
+///
+/// See also: [`pcg_hash`].
+#[inline]
+pub fn pcg4d(input: [u32; 4]) -> [u32; 4] {
+    let mut v = input.map(|word| word.wrapping_mul(1_664_525).wrapping_add(1_013_904_223));
+    pcg4d_cross_add(&mut v);
+    v = v.map(|word| word ^ (word >> 16));
+    pcg4d_cross_add(&mut v);
+    v
+}
+
+/// Adds the cross products of one half of [`pcg4d`] into `v`, in order.
+#[inline]
+fn pcg4d_cross_add(v: &mut [u32; 4]) {
+    v[0] = v[0].wrapping_add(v[1].wrapping_mul(v[3]));
+    v[1] = v[1].wrapping_add(v[2].wrapping_mul(v[0]));
+    v[2] = v[2].wrapping_add(v[0].wrapping_mul(v[1]));
+    v[3] = v[3].wrapping_add(v[1].wrapping_mul(v[2]));
 }
 
 /// Scrambles a user-supplied seed into a usable RNG state.

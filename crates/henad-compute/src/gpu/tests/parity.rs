@@ -14,7 +14,7 @@ use crate::gpu::primitives::pipeline::compute_pipeline;
 use crate::shader_bindings::henad::space as codes;
 use crate::shader_bindings::tests::parity::{
     Case, OP_AXIS_DELTA, OP_BELOW, OP_CELL_INDEX, OP_CHOICE3, OP_DIST_SQ, OP_HEADING_OCTANT, OP_NEIGHBOR_COUNT,
-    OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_PCG_HASH, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT, OP_WRAP_COORD,
+    OP_NEIGHBOR_OFFSET, OP_OFFSET_CELL, OP_PCG_HASH, OP_PCG4D, OP_RANDOM_FLOAT, OP_RESERVOIR_ACCEPT, OP_WRAP_COORD,
     OP_WRAP_INDEX, Out, SHADER_STRING, WgpuBindGroup0,
 };
 
@@ -271,6 +271,23 @@ fn rng_checks(out: &mut Vec<Check>) {
             expected: ints([rng::pcg_hash(bits).cast_signed(), 0, 0, 0]),
             call: format!("pcg_hash({bits})"),
         });
+
+        for input in [
+            [bits, 0, 0, 0],
+            [0, bits, 0, 0],
+            [0, 0, bits, 0],
+            [0, 0, 0, bits],
+            [bits; 4],
+            [bits, 7, 3, 0],
+        ] {
+            let mut case = blank(OP_PCG4D);
+            case.u = input;
+            out.push(Check {
+                case,
+                expected: ints(rng::pcg4d(input).map(u32::cast_signed)),
+                call: format!("pcg4d({input:?})"),
+            });
+        }
 
         let mut case = blank(OP_CHOICE3);
         case.u = [bits, 0, 0, 0];

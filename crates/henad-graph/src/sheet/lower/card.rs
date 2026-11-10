@@ -421,18 +421,7 @@ impl<'a> CardLowering<'_, 'a> {
 
     /// Returns the id of the Repeat line that holds line `id`, at any depth.
     pub(super) fn repeat_of(&self, id: &str) -> Option<&'a str> {
-        let mut parent = self.relations.parent(id);
-        while let Some(block) = parent {
-            if self
-                .relations
-                .line(block)
-                .is_some_and(|line| line.kind == LineKind::Repeat)
-            {
-                return Some(block);
-            }
-            parent = self.relations.parent(block);
-        }
-        None
+        self.relations.repeat_of(id)
     }
 
     /// Lowers line `id`.
@@ -549,8 +538,9 @@ impl<'a> CardLowering<'_, 'a> {
     /// Records `condition`, the condition under which line `id` changes an element, as the line's fire when it is the
     /// output of a node. A condition that always holds has no node and gives the line no count.
     ///
-    /// A line inside a Repeat has no count, wherever its condition is lowered. The Repeat may run the line several
-    /// times in one tick, or not at all.
+    /// A line inside a Repeat records nothing here, wherever its condition is lowered. The Repeat may run the line
+    /// several times in one tick, or not at all. A Become inside a Repeat still counts the elements it changed, through
+    /// its row of the transition that [`Self::write_changes`] writes outside the Repeat.
     pub(super) fn fires_when(&mut self, id: &str, condition: &Operand) {
         if self.repeat_of(id).is_some() {
             return;

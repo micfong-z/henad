@@ -42,12 +42,15 @@ the set already holds while the run differs, so the modal opens again after Canc
 model past tick 0 keeps going, as does the run after Cancel (`ApplyOutcome::Installed`, "Model
 applied. Press Build to run it."). `EditorPanel::settle_outcome` moves between the two, to `Applied`
 once the loaded model runs the applied source, and from `Applied` to `Installed` once nothing is
-loaded, as after Cancel of a build or Offload. `load` commits the loaded entry when the build
-starts, and the outcome reads `Applied` from then on. New grid rule loads `life_starter()`, the
-canonical text of `GridRule::life()`, and Edit model, shown for a runtime entry whose code is in
-`GridRule::CODE_FORMAT`, its canonical text. Edit model and the Results tab's Open in Editor read
-through `editable_model(author, code)`, which returns an `EditableModel` (the sheet of a
-`henad-sheet/1` author text, else the graph or the grid rule of the code), and
+loaded, as after Cancel of a build or Offload. `editor_ui` also passes it the source Build builds
+now, the selected entry's, or `None` while `build_replays_preview` holds, and an `Installed` outcome
+that source no longer matches is dropped to `None` ("Press Apply to check and install the model."):
+after another selection, or once a sheet's preview loads after Offload. `load` commits the loaded
+entry when the build starts, and the outcome reads `Applied` from then on. New grid rule loads
+`life_starter()`, the canonical text of `GridRule::life()`, and Edit model, shown for a runtime
+entry whose code is in `GridRule::CODE_FORMAT`, its canonical text. Edit model and the Results tab's
+Open in Editor read through `editable_model(author, code)`, which returns an `EditableModel` (the
+sheet of a `henad-sheet/1` author text, else the graph or the grid rule of the code), and
 `EditorPanel::load_model` loads it from no file. `can_edit` is `editable_model(...).is_some()`. Open
 model and Save model go through `OpenTarget::Model` and `SaveTarget::Model`, a `.toml` file on
 native and a picked file or a download in a browser. Opening loads the text and applies nothing.
@@ -68,6 +71,10 @@ since the engine's own assert would end a browser's page. `src/tests/editor.rs` 
 `new_grid_rule_starts_from_the_life_starter`,
 `applying_an_edit_installs_and_rebuilds_from_tick_zero`,
 `applying_beside_another_run_past_tick_zero_waits_for_build`,
+`a_sheet_applied_beside_another_run_drops_the_build_line_once_its_preview_loads`,
+`a_graph_applied_beside_another_run_keeps_the_build_line_over_its_preview`,
+`a_grid_rule_applied_beside_another_run_keeps_the_build_line_after_offload`,
+`selecting_another_model_drops_the_build_line`,
 `applying_again_after_cancel_asks_to_rebuild_again`,
 `applying_during_another_build_replaces_it_and_cancel_waits_for_build`,
 `a_code_edit_that_fails_validation_keeps_the_running_model`,
@@ -385,11 +392,12 @@ not start has already offloaded it. `EditorPanel::load`, `load_graph` and `load_
 run at tick 0 and no Rebuild model modal. A preview is never the selection: `selection_is_loaded`
 and `code_pending` are false, `select_model` does not restore its values, the next build's fields
 stay, and `settle_outcome` sees no loaded source, so "Model applied." becomes "Press Build to run
-it." behind a preview. A code fault of a preview (any tick) goes to `Preview::show_problem`
-(`Faulted`, placed by `EditorModel::place`) through `show_fault` while `holds_preview_model` holds,
-and the modal keeps the rest, the fault of a preview that outlived its graph included. Playback's
-`preview_line` names the preview and its size, with the hover `preview_hover`: `PREVIEW_APPLY`, or
-`PREVIEW_ORPHANED` once the Editor holds no graph or sheet.
+it." behind a graph's preview, and is dropped behind a sheet's preview that Build replays. A code
+fault of a preview (any tick) goes to `Preview::show_problem` (`Faulted`, placed by
+`EditorModel::place`) through `show_fault` while `holds_preview_model` holds, and the modal keeps
+the rest, the fault of a preview that outlived its graph included. Playback's `preview_line` names
+the preview and its size, with the hover `preview_hover`: `PREVIEW_APPLY`, or `PREVIEW_ORPHANED`
+once the Editor holds no graph or sheet.
 
 `src/tests/graph_editor.rs` holds the state tests (starters, open by kind, Apply installs at full
 size, the Rebuild model modal past tick 0, refused edits, undo, coalescing, dropped wires, pass

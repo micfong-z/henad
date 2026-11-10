@@ -27,13 +27,14 @@ line 1"), `word` (`line_word`, for tool names), the plain `sentence`, its `parts
 from `Sentences::placed_parts` with `otherwise_numbers`, the ids and tooltip of its "otherwise",
 `red_chips` (a result chip whose line sits at or below this one, or whose direct When does not hold
 this line), `swatches`, `otherwise_notice` (`otherwise_notice`, beside the tooltip from
-`otherwise_words_of`), `notes` (the report's diagnostics at that card and line, the skip notes
-first, red for an error or a skip note that names a red chip, amber otherwise) and `skips`, the
-number of skip notes. `sheet_outcome_ui` in `editor/mod.rs` lists every problem the card does not
-draw (`draws_diagnostic`). `line_ui` draws a row in a `horizontal_wrapped`, a group of role `Group`
-named `CardLine::label` with bounds from `accessible_group`, then the line's menu, the rename field
-and the notes. `card_notes` adds to the report's notes, in the order of the wording table: the
-one-side offer after the skip notes, then `count_used_as_draw` with its button
+`otherwise_words_of`, both saying "at the same time" when a higher line sits in the line's own
+Repeat, as `CardRelations::repeat_of` finds it), `notes` (the report's diagnostics at that card and
+line, the skip notes first, red for an error or a skip note that names a red chip, amber otherwise)
+and `skips`, the number of skip notes. `sheet_outcome_ui` in `editor/mod.rs` lists every problem
+the card does not draw (`draws_diagnostic`). `line_ui` draws a row in a `horizontal_wrapped`, a
+group of role `Group` named `CardLine::label` with bounds from `accessible_group`, then the line's
+menu, the rename field and the notes. `card_notes` adds to the report's notes, in the order of the
+wording table: the one-side offer after the skip notes, then `count_used_as_draw` with its button
 (`rates::count_as_draw`, `UseCountForEach`, after which the emptied chance or rate opens its
 picker), then the grey rate or chance note, then the grow offer (both in **Rates** below), then the
 line's relation notes (`relation_line_note`):
@@ -229,7 +230,8 @@ inside notes and the lead, depths 0, 1 and 2, Delete and Undo),
 `a_when_that_repeats_its_lines_offers_to_remove_itself` and
 `moving_a_line_above_its_result_skips_it_and_moving_it_back_runs_it`. The chance SIR is read from
 `src/tests/sheets/sir_chance.toml`, a copy of henad-graph's test sheet, since `include_str!` stays
-inside its crate.
+inside its crate. henad-graph's `the_copies_of_the_test_sheets_equal_their_source` holds it and
+`sird.toml` equal to the source.
 
 `src/tests/sheet_rates.rs` (helpers shared from `sheet_card.rs` as `pub(super)`) holds
 `a_blank_model_builds_the_rates_sir_with_its_lines_and_equals_the_starter` (the time set on the

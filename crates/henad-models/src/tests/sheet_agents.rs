@@ -26,7 +26,7 @@ const HAND_ANTS: &str = include_str!("../../tests/fixtures/lowered/round1/ants.t
 const SEEDS: [u64; 3] = [1, 2, 3];
 
 /// Returns the agent sheet starters with their file names.
-fn agent_sheets() -> Vec<(&'static str, &'static str)> {
+pub(super) fn agent_sheets() -> Vec<(&'static str, &'static str)> {
     starters()
         .iter()
         .filter(|starter| starter.text.contains("made_of = \"agents\""))

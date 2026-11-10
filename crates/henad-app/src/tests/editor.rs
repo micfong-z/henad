@@ -1,5 +1,5 @@
 //! Tests of the Editor tab: a grid rule's model file applied to the running app, the problems of a text that is
-//! refused, and a fault of the applied code.
+//! refused, a fault of the applied code, and the line of an Apply beside another model's run.
 
 use std::sync::Arc;
 
@@ -9,17 +9,23 @@ use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::runtime_grid::{GridRule, LIFE_STEP};
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::params::ParamValue;
+use henad_core::provenance::ModelSource;
 use henad_explore::model_file::ModelFile;
+use henad_graph::sheet::sentence::PREVIEW_WAITS as SHEET_PREVIEW_WAITS;
+use henad_graph::sheet::starters;
+use web_time::Instant;
 
 use crate::state::AppState;
-use crate::tests::support::{set_of, step_past};
+use crate::tests::support::{accessible_texts, set_of, step_past};
 use crate::ui::dock::Tab;
 use crate::ui::editor::code_view::{cursor_index, move_cursor};
+use crate::ui::editor::preview::{DEBOUNCE, PreviewState, poll_at};
 use crate::ui::editor::{
     ApplyOutcome, EditableModel, EditorModel, NO_COMPUTE, apply, edit_model, editable_model, editor_ui, life_starter,
-    move_cursor_to, new_grid_rule, receive_open,
+    move_cursor_to, new_graph_model, new_grid_rule, open_text, receive_open,
 };
 use crate::ui::files::{DialogFile, OpenResult};
+use crate::ui::playback::press_build;
 
 /// Line of the Life starter's step that a rule edit extends.
 const BIRTH_LINE: &str = "    if (alive == 3u || (cell == ALIVE && alive == 2u)) {";
@@ -60,6 +66,11 @@ fn rule_text(entry: &ModelEntry) -> Option<String> {
         Some(EditableModel::Rule(text)) => Some(text),
         _ => None,
     }
+}
+
+/// Returns the source of the selected model, which Playback's Build builds when no preview of a sheet runs.
+fn selected_source(app: &AppState) -> Option<ModelSource> {
+    app.selected_entry().map(|entry| entry.source().clone())
 }
 
 /// Returns the problems of the last Apply, which refused the text.
@@ -158,8 +169,9 @@ fn applying_an_edit_installs_and_rebuilds_from_tick_zero() {
         app.snapshot.as_ref().is_none_or(|snapshot| snapshot.tick == 0),
         "the rebuild starts at tick 0"
     );
+    let next_build = selected_source(&app);
     app.editor
-        .settle_outcome(Some(&highlife), app.pending_rebuild.is_some());
+        .settle_outcome(Some(&highlife), next_build.as_ref(), app.pending_rebuild.is_some());
     assert_eq!(
         app.editor.outcome,
         Some(ApplyOutcome::Applied),
@@ -183,17 +195,41 @@ fn applying_an_edit_installs_and_rebuilds_from_tick_zero() {
     );
 }
 
-#[test]
-fn applying_beside_another_run_past_tick_zero_waits_for_build() {
-    let Some(mut app) = app_with_starter() else {
-        return;
-    };
+/// Builds the example SIR model on a 64 by 64 grid and steps it past tick 0.
+fn run_sir_past_tick_zero(app: &mut AppState) {
     app.select_model("sir");
     for (index, size) in [(0, 64), (1, 64)] {
         app.param_values[index] = ParamValue::U32(size);
     }
     app.reset_simulation();
-    step_past(&mut app, 0);
+    step_past(app, 0);
+}
+
+/// Polls the Editor's preview once now and once after the debounce, as two frames that far apart would.
+fn settle_preview(app: &mut AppState) {
+    let ctx = egui::Context::default();
+    let now = Instant::now();
+    poll_at(&ctx, app, now);
+    poll_at(&ctx, app, now + DEBOUNCE);
+}
+
+/// Draws one frame of the Editor tab over `app`, and returns the value of every accessible node, or its name where it
+/// has no value.
+fn editor_texts(app: &mut AppState) -> Vec<String> {
+    accessible_texts(|ui| editor_ui(ui, app), |node| node.value().or_else(|| node.label()))
+}
+
+/// Returns whether one of `texts` holds `line`.
+fn shows(texts: &[String], line: &str) -> bool {
+    texts.iter().any(|text| text.contains(line))
+}
+
+#[test]
+fn applying_beside_another_run_past_tick_zero_waits_for_build() {
+    let Some(mut app) = app_with_starter() else {
+        return;
+    };
+    run_sir_past_tick_zero(&mut app);
 
     apply(&mut app);
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Installed));
@@ -204,11 +240,139 @@ fn applying_beside_another_run_past_tick_zero_waits_for_build() {
     app.reset_simulation();
     assert_eq!(app.loaded_id(), Some("life_rule"));
     let loaded = app.loaded_entry().map(|entry| entry.source().clone());
+    let next_build = selected_source(&app);
     app.editor
-        .settle_outcome(loaded.as_ref(), app.pending_rebuild.is_some());
+        .settle_outcome(loaded.as_ref(), next_build.as_ref(), app.pending_rebuild.is_some());
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     app.wait_for_build();
     assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+}
+
+#[test]
+fn a_sheet_applied_beside_another_run_drops_the_build_line_once_its_preview_loads() {
+    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+        return;
+    };
+    run_sir_past_tick_zero(&mut app);
+    let life = starters()
+        .iter()
+        .find(|starter| starter.file_name == "game_of_life.toml")
+        .expect("the Game of Life sheet");
+    open_text(&mut app.editor, life.text.to_owned(), None);
+    settle_preview(&mut app);
+    assert_eq!(app.editor.preview.state, PreviewState::Waiting);
+
+    apply(&mut app);
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Installed));
+    assert_eq!(app.loaded_id(), Some("sir"), "the other model's run keeps going");
+    let installed = ApplyOutcome::Installed.summary().0;
+    let texts = editor_texts(&mut app);
+    assert!(
+        shows(&texts, SHEET_PREVIEW_WAITS) && shows(&texts, installed),
+        "{texts:?}"
+    );
+
+    // Offload ends the run, and the sheet's preview takes its place. Build then replays the preview.
+    app.offload_simulation();
+    assert!(
+        shows(&editor_texts(&mut app), installed),
+        "Build still builds the sheet"
+    );
+    settle_preview(&mut app);
+    assert!(app.build_replays_preview());
+    let texts = editor_texts(&mut app);
+    assert!(
+        !shows(&texts, installed),
+        "the Editor names Build, which replays the preview"
+    );
+    assert_eq!(app.editor.outcome, None);
+    assert!(shows(
+        &texts,
+        "Press Play to run it, or Apply to run the model at its own size."
+    ));
+
+    apply(&mut app);
+    assert_eq!(app.preview(), None, "Apply replaced the preview");
+    assert_eq!(app.loaded_id(), Some("game_of_life"));
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
+    app.wait_for_build();
+    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+}
+
+#[test]
+fn a_graph_applied_beside_another_run_keeps_the_build_line_over_its_preview() {
+    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+        return;
+    };
+    run_sir_past_tick_zero(&mut app);
+    new_graph_model(&mut app, "sir.toml");
+    settle_preview(&mut app);
+    assert_eq!(app.editor.preview.state, PreviewState::Waiting);
+
+    apply(&mut app);
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Installed));
+    app.offload_simulation();
+    settle_preview(&mut app);
+    assert!(app.preview().is_some(), "the graph's preview loads once the run ends");
+    let installed = ApplyOutcome::Installed.summary().0;
+    assert!(
+        shows(&editor_texts(&mut app), installed),
+        "Build builds the applied graph behind its preview"
+    );
+
+    press_build(&mut app);
+    assert_eq!(app.preview(), None, "Build replaced the preview");
+    assert_eq!(app.loaded_id(), Some("node_sir"));
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Installed));
+    editor_texts(&mut app);
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
+    app.wait_for_build();
+    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+}
+
+#[test]
+fn a_grid_rule_applied_beside_another_run_keeps_the_build_line_after_offload() {
+    let Some(mut app) = app_with_starter() else {
+        return;
+    };
+    run_sir_past_tick_zero(&mut app);
+    apply(&mut app);
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Installed));
+
+    app.offload_simulation();
+    settle_preview(&mut app);
+    assert_eq!(app.preview(), None, "a grid rule has no preview");
+    let installed = ApplyOutcome::Installed.summary().0;
+    assert!(
+        shows(&editor_texts(&mut app), installed),
+        "Build builds the applied rule"
+    );
+
+    press_build(&mut app);
+    assert_eq!(app.loaded_id(), Some("life_rule"));
+    editor_texts(&mut app);
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
+    app.wait_for_build();
+    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+}
+
+#[test]
+fn selecting_another_model_drops_the_build_line() {
+    let Some(mut app) = app_with_starter() else {
+        return;
+    };
+    run_sir_past_tick_zero(&mut app);
+    apply(&mut app);
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Installed));
+
+    // Build now builds SIR again.
+    app.select_model("sir");
+    let installed = ApplyOutcome::Installed.summary().0;
+    assert!(!shows(&editor_texts(&mut app), installed));
+    assert_eq!(app.editor.outcome, None);
+    app.select_model("life_rule");
+    editor_texts(&mut app);
+    assert_eq!(app.editor.outcome, None, "a dropped line stays dropped");
 }
 
 #[test]
@@ -228,7 +392,9 @@ fn applying_again_after_cancel_asks_to_rebuild_again() {
 
     // Cancel in the Rebuild model dialog.
     app.pending_rebuild = None;
-    app.editor.settle_outcome(Some(&life), app.pending_rebuild.is_some());
+    let next_build = selected_source(&app);
+    app.editor
+        .settle_outcome(Some(&life), next_build.as_ref(), app.pending_rebuild.is_some());
     assert_eq!(
         app.editor.outcome,
         Some(ApplyOutcome::Installed),
@@ -281,7 +447,9 @@ fn applying_during_another_build_replaces_it_and_cancel_waits_for_build() {
         !app.is_building() && app.sim_thread.is_none() && app.loaded_id().is_none(),
         "Cancel left a build or a run"
     );
-    app.editor.settle_outcome(None, app.pending_rebuild.is_some());
+    let next_build = selected_source(&app);
+    app.editor
+        .settle_outcome(None, next_build.as_ref(), app.pending_rebuild.is_some());
     assert_eq!(
         app.editor.outcome,
         Some(ApplyOutcome::Installed),
@@ -290,8 +458,9 @@ fn applying_during_another_build_replaces_it_and_cancel_waits_for_build() {
 
     app.reset_simulation();
     let loaded = app.loaded_entry().map(|entry| entry.source().clone());
+    let next_build = selected_source(&app);
     app.editor
-        .settle_outcome(loaded.as_ref(), app.pending_rebuild.is_some());
+        .settle_outcome(loaded.as_ref(), next_build.as_ref(), app.pending_rebuild.is_some());
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied), "Build runs the rule");
     app.wait_for_build();
     assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");

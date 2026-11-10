@@ -110,9 +110,9 @@ impl LineMap {
 /// Each probe names a Boolean output of the tick pass that holds for an element where its line applies: the fired
 /// output of a Become's row of the property's `cat.transition`, or the condition of a Set, Steer, Keep between, Move
 /// by, Leave or Record line. A Become from any state has one row and one probe for each state, and its count is the
-/// sum of theirs. A line with no probe shows no count: a line that works out a value, a change other than a Become
-/// whose condition always holds, a Set that a higher Set of its property can override, a Move to, and any change
-/// inside a Repeat.
+/// sum of theirs. A Become inside a Repeat counts through its row too. A line with no probe shows no count: a line
+/// that works out a value, a change other than a Become whose condition always holds, a Set that a higher Set of its
+/// property can override, a Move to, and a Set, Steer or Move by inside a Repeat.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FireLines {
     /// Probes of the lowered graph, in the order of their counts.

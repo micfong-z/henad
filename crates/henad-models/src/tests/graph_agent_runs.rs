@@ -1,12 +1,13 @@
 //! Every agents graph of the corpus built and stepped on a device: the testing kit over their entries, the work
-//! budgets at their largest population, a step of a Repeat on the device against the host evaluator, and the fault of
-//! a radius fold past its visit cap.
+//! budgets of the graphs and the agent sheet starters at their largest population in their largest world, the largest
+//! population each admits in its declared world, a step of a Repeat on the device against the host evaluator, and the
+//! fault of a radius fold past its visit cap.
 
 use henad_compute::entry::{ModelEntry, ModelSet};
 use henad_compute::fault::FaultKind;
 use henad_compute::gpu::stepping::sample_stats;
-use henad_compute::gpu::{HOST_WORK_BUDGET, SUBMISSION_WORK_BUDGET};
-use henad_core::params::ParamValue;
+use henad_compute::gpu::{HOST_WORK_BUDGET, PassKind, SUBMISSION_WORK_BUDGET};
+use henad_core::params::{ParamKind, ParamValue};
 use henad_explore::model_file::ModelFile;
 use henad_explore::testing::{CheckSettings, TestDeviceRequest, assert_set_conforms, headless_test_device};
 use henad_graph::GraphFile;
@@ -15,6 +16,7 @@ use henad_graph::host::{HostEvaluator, HostWorld, RunContext};
 
 use super::graph_grid_parity::{build_gpu, step};
 use super::lanes::GraphLanes;
+use super::sheet_agents::agent_sheets;
 
 /// Returns every agents file of the corpus with its name: the agent starters, then the agents fixtures.
 fn agent_corpus() -> Vec<(String, GraphFile)> {
@@ -67,39 +69,231 @@ fn every_agent_corpus_entry_conforms() {
     assert_set_conforms(&models, &settings);
 }
 
-/// Every agents file of the corpus at its largest population, in its declared world, stays within the work budgets
-/// of one submission and of the host, and its entry reports no shortfall on a device that holds its buffers.
-#[test]
-fn every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets() {
-    for (name, file) in agent_corpus() {
-        let World::Agents(world) = file.document().world else {
-            unreachable!("the corpus holds agents files alone");
-        };
+/// Limits of a device that holds every buffer and binding of the agents files, so that the work budgets are the only
+/// bounds a population meets.
+fn roomy_limits() -> wgpu::Limits {
+    wgpu::Limits {
+        max_storage_buffer_binding_size: u64::MAX,
+        max_buffer_size: u64::MAX,
+        max_storage_buffers_per_shader_stage: 16,
+        ..wgpu::Limits::default()
+    }
+}
+
+/// Returns every agents file of the corpus, then every agent sheet starter, each with its directory and file name and
+/// the entry it builds through a [`ModelFile`].
+fn budget_corpus() -> Vec<(String, ModelEntry)> {
+    let starters: Vec<&str> = henad_graph::starters::agent_starters()
+        .iter()
+        .map(|starter| starter.file_name)
+        .collect();
+    let graphs = agent_corpus().into_iter().map(|(name, file)| {
         let entry = entry_of(&name, &file);
-        let mut params: Vec<ParamValue> = entry
-            .param_descriptors()
-            .iter()
-            .map(|descriptor| descriptor.kind().default_value())
-            .collect();
-        params[0] = ParamValue::U32(world.max_count);
-        let limits = wgpu::Limits {
-            max_storage_buffer_binding_size: u64::MAX,
-            max_buffer_size: u64::MAX,
-            max_storage_buffers_per_shader_stage: 16,
-            ..wgpu::Limits::default()
+        let directory = if starters.contains(&name.as_str()) {
+            "starters"
+        } else {
+            "graphs"
         };
+        (format!("{directory}/{name}"), entry)
+    });
+    let sheets = agent_sheets().into_iter().map(|(name, text)| {
+        let entry = ModelFile::parse(text)
+            .and_then(|file| file.entry())
+            .unwrap_or_else(|error| panic!("sheets/{name}: {error}"));
+        (format!("sheets/{name}"), entry)
+    });
+    graphs.chain(sheets).collect()
+}
+
+/// World a budget test runs a file in.
+#[derive(Clone, Copy, Debug)]
+enum BudgetWorld {
+    /// The world the file declares, its width and height parameters at their defaults.
+    Declared,
+    /// The largest world the file's parameters allow, its width and height parameters at their maxima.
+    Largest,
+}
+
+/// Returns the declared and the largest population of `entry`: the default and the maximum of its `num_agents`.
+fn population_range(name: &str, entry: &ModelEntry) -> (u32, u32) {
+    let descriptor = entry
+        .param_descriptors()
+        .iter()
+        .find(|descriptor| descriptor.id() == "num_agents")
+        .unwrap_or_else(|| panic!("{name} has no num_agents parameter"));
+    match descriptor.kind() {
+        ParamKind::U32 { default, max, .. } => (*default, *max),
+        kind => panic!("{name}: num_agents is {kind:?}"),
+    }
+}
+
+/// Returns the parameters of `entry` at their defaults, with `num_agents` at `population` and the world width and
+/// height as `world` sets them.
+fn budget_params(name: &str, entry: &ModelEntry, population: u32, world: BudgetWorld) -> Vec<ParamValue> {
+    let mut sides = 0;
+    let params = entry
+        .param_descriptors()
+        .iter()
+        .map(|descriptor| match (descriptor.id(), descriptor.kind(), world) {
+            ("num_agents", _, _) => ParamValue::U32(population),
+            ("world_width" | "world_height", ParamKind::F32 { max, .. }, BudgetWorld::Largest) => {
+                sides += 1;
+                ParamValue::F32(*max)
+            }
+            (_, kind, _) => kind.default_value(),
+        })
+        .collect();
+    if matches!(world, BudgetWorld::Largest) {
+        assert_eq!(
+            sides, 2,
+            "{name} has no world_width and world_height parameters of type f32"
+        );
+    }
+    params
+}
+
+/// Agents files whose init on the host passes [`HOST_WORK_BUDGET`] in the largest world their parameters allow, at
+/// every population. Each lays a ground of one cell per unit of the world, and its init runs over every cell.
+const GROUND_INIT_PAST_THE_HOST_BUDGET: [&str; 3] = ["starters/ants.toml", "graphs/gpu_ants.toml", "sheets/ants.toml"];
+
+/// Every agents file of the corpus and every agent sheet starter at its largest population, in the largest world its
+/// parameters allow, stays within the work budget of one submission. A population bound that no world reaches would
+/// be a slider whose upper end is always refused.
+///
+/// Every file but those of [`GROUND_INIT_PAST_THE_HOST_BUDGET`] also stays within the host budget there, and its entry
+/// reports no shortfall on a device that holds its buffers. Each of those reports the host budget's refusal of its
+/// init alone, the same at its declared population as at its largest.
+#[test]
+fn every_agent_file_at_its_largest_population_in_its_largest_world_fits_the_work_budgets() {
+    let limits = roomy_limits();
+    let mut ground_refused = Vec::new();
+    for (name, entry) in budget_corpus() {
+        let (declared, largest) = population_range(&name, &entry);
+        let params = budget_params(&name, &entry, largest, BudgetWorld::Largest);
         let demand = entry.demand(&params, &limits).expect("a GPU entry has a demand");
         let submission = demand.submission_work();
         assert!(
             submission > 0 && submission <= SUBMISSION_WORK_BUDGET,
             "{name}: {submission} units in one submission"
         );
-        for run in &demand.host {
-            assert!(run.work <= HOST_WORK_BUDGET, "{name}: {} units on the host", run.work);
-        }
         let found = entry.shortfalls(&params, &limits);
-        assert!(found.is_empty(), "{name}: {found:?}");
+        if !GROUND_INIT_PAST_THE_HOST_BUDGET.contains(&name.as_str()) {
+            for run in &demand.host {
+                assert!(run.work <= HOST_WORK_BUDGET, "{name}: {} units on the host", run.work);
+            }
+            assert!(found.is_empty(), "{name}: {found:?}");
+            continue;
+        }
+        let [line] = found.as_slice() else {
+            panic!("{name}: {found:?}");
+        };
+        let budget = format!(
+            "units of work on the host, past the budget of {}",
+            grouped(HOST_WORK_BUDGET)
+        );
+        assert!(
+            line.contains("_init' would run ") && line.ends_with(&budget),
+            "{name}: {line}"
+        );
+        let at_declared = entry.shortfalls(&budget_params(&name, &entry, declared, BudgetWorld::Largest), &limits);
+        assert_eq!(at_declared, found, "{name} at {declared}");
+        ground_refused.push(name);
     }
+    assert_eq!(ground_refused, GROUND_INIT_PAST_THE_HOST_BUDGET);
+}
+
+/// Every agents file of the corpus and every agent sheet starter, in its declared world with every other parameter at
+/// its default, is admitted at its declared population, and the largest population it admits equals its pin. A file
+/// admitted at its `max_count` pins that. One agent past a smaller pin is refused by the submission budget alone, and
+/// the refusal names the heaviest step pass.
+///
+/// The largest population is found by bisection over [`ModelEntry::shortfalls`], which runs no device. A change of a
+/// pass's charge moves a pin.
+#[test]
+fn every_agent_file_in_its_declared_world_admits_its_pinned_largest_population() {
+    const LARGEST_ADMITTED: [(&str, u32); 9] = [
+        ("starters/boids.toml", 201_012),
+        ("starters/ants.toml", 5_000_000),
+        ("starters/random_walk.toml", 1_000_000),
+        ("graphs/gpu_ants.toml", 5_000_000),
+        ("graphs/gpu_boids.toml", 195_355),
+        ("sheets/random_walk.toml", 1_000_000),
+        ("sheets/boids.toml", 201_012),
+        ("sheets/bounded_confidence.toml", 552_857),
+        ("sheets/ants.toml", 5_000_000),
+    ];
+    let limits = roomy_limits();
+    let corpus = budget_corpus();
+    let found: Vec<(&str, u32)> = corpus
+        .iter()
+        .map(|(name, entry)| {
+            let admits =
+                |population| entry.shortfalls(&budget_params(name, entry, population, BudgetWorld::Declared), &limits);
+            let (declared, largest) = population_range(name, entry);
+            let at_declared = admits(declared);
+            assert!(at_declared.is_empty(), "{name} at {declared}: {at_declared:?}");
+            if admits(largest).is_empty() {
+                return (name.as_str(), largest);
+            }
+            // `low` is admitted and `high` refused throughout.
+            let (mut low, mut high) = (declared, largest);
+            while high - low > 1 {
+                let middle = low + (high - low) / 2;
+                if admits(middle).is_empty() {
+                    low = middle;
+                } else {
+                    high = middle;
+                }
+            }
+            (name.as_str(), low)
+        })
+        .collect();
+    assert_eq!(found, LARGEST_ADMITTED);
+    for ((name, entry), (_, pinned)) in corpus.iter().zip(LARGEST_ADMITTED) {
+        let (_, largest) = population_range(name, entry);
+        if pinned == largest {
+            continue;
+        }
+        let params = budget_params(name, entry, pinned + 1, BudgetWorld::Declared);
+        let demand = entry.demand(&params, &limits).expect("a GPU entry has a demand");
+        let heaviest = demand
+            .passes
+            .iter()
+            .rev()
+            .filter(|pass| pass.kind == PassKind::Step)
+            .max_by_key(|pass| pass.work)
+            .unwrap_or_else(|| panic!("{name} has a step pass"));
+        let refused = entry.shortfalls(&params, &limits);
+        let [line] = refused.as_slice() else {
+            panic!("{name} at {}: {refused:?}", pinned + 1);
+        };
+        let budget = format!("past the budget of {}", grouped(SUBMISSION_WORK_BUDGET));
+        let pass = format!(
+            "and pass '{}' is the heaviest at {} per step",
+            heaviest.label,
+            grouped(heaviest.work)
+        );
+        assert!(
+            line.starts_with("one submission would run ") && line.ends_with(&format!("{budget}, {pass}")),
+            "{name} at {}: {line}",
+            pinned + 1
+        );
+    }
+}
+
+/// Returns `units` in decimal digits with a comma between each group of three, as [`Demand::shortfalls`] writes them.
+///
+/// [`Demand::shortfalls`]: henad_compute::gpu::Demand::shortfalls
+fn grouped(units: u64) -> String {
+    let digits = units.to_string();
+    let mut text = String::new();
+    for (position, digit) in digits.chars().enumerate() {
+        if position > 0 && (digits.len() - position).is_multiple_of(3) {
+            text.push(',');
+        }
+        text.push(digit);
+    }
+    text
 }
 
 /// Largest distance in world units between a float of a lane on the device and on the host, the shorter way round the

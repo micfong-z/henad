@@ -159,6 +159,9 @@ fn an_agent_graph_past_the_submission_budget_is_refused_at_a_large_population() 
 
 /// A graph whose radius fold holds a `carry`, sums floats, or reads its `k` or a `prev.<acc>` declares that it does
 /// not replay, and one whose fold only counts, or that has no fold, replays.
+///
+/// Among the starters and the sheet starters, the boids and bounded confidence models average over the agents around
+/// them and are the only ones that do not replay, as the model files reference says.
 #[test]
 fn the_replay_flag_follows_the_radius_folds() {
     for (name, text) in super::corpus::all() {
@@ -169,6 +172,17 @@ fn the_replay_flag_follows_the_radius_folds() {
         let program = AgentProgram::compile(&file).unwrap_or_else(|problems| panic!("{name}: {problems:#?}"));
         let expected = !name.contains("boids");
         assert_eq!(program.replays_exactly(), expected, "{name}");
+    }
+    for starter in crate::sheet::starters() {
+        let name = starter.file_name;
+        let sheet = crate::sheet::SheetFile::parse(starter.text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let file = sheet.lowered();
+        if !matches!(file.document().world, crate::document::World::Agents(_)) {
+            continue;
+        }
+        let program = AgentProgram::compile(file).unwrap_or_else(|problems| panic!("{name}: {problems:#?}"));
+        let expected = !matches!(name, "boids.toml" | "bounded_confidence.toml");
+        assert_eq!(program.replays_exactly(), expected, "sheet {name}");
     }
     let fold = |accumulator: &str, combine: &str, value: &str| {
         let zero = if accumulator == "f32" { "0.0" } else { "0" };

@@ -11,6 +11,9 @@
 //!
 //! The fire counts of the change lines are held to a planted blinker's known answer and, for the forest fire, to the
 //! host evaluator's counts every tick.
+//!
+//! The SIRD with its death rate for each infected neighbour holds a competing group of a fixed rate and a rate for each
+//! of a count, and is held to the host evaluator every tick.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -608,6 +611,69 @@ fn host_press(evaluator: &HostEvaluator, lanes: &mut HostLanes, params: &[ParamV
     }
 }
 
+/// Side of the worlds of the comparisons of the host and the device.
+const ALIKE_SIDE: u32 = 64;
+
+/// Last tick of the comparisons of the host and the device.
+const ALIKE_TICKS: u32 = 50;
+
+/// Seeds of the comparisons of the host and the device.
+const ALIKE_SEEDS: [u64; 2] = [3, 11];
+
+/// Steps the grid sheet `text`, named `name` in messages, at the parameters `overrides` sets, on the host evaluator
+/// and on the device, and asserts equal lanes every tick from 0 to [`ALIKE_TICKS`] on [`ALIKE_SIDE`] by
+/// [`ALIKE_SIDE`] cells, from the start both draw at each seed of [`ALIKE_SEEDS`], across a press of New outbreak
+/// after [`OUTBREAK_TICK`] when the sheet has it.
+///
+/// Returns the lanes at the last tick of each seed, each with the lane id.
+fn assert_steps_alike(
+    ctx: &GpuContext,
+    name: &str,
+    text: &str,
+    overrides: &[(&str, f32)],
+) -> Vec<Vec<(String, Vec<u32>)>> {
+    let file = sheet_file(text);
+    let lowered = file.lowered();
+    let entry = entry_of(text);
+    let params = device_params(&entry, ALIKE_SIDE, overrides);
+    let buffers = lane_buffers(lowered);
+    let evaluator = HostEvaluator::new(lowered).unwrap_or_else(|error| panic!("{name}: {error}"));
+    let mut last = Vec::new();
+    for seed in ALIKE_SEEDS {
+        let mut state = build_gpu(&entry, &params, Some(seed), ctx);
+        let mut lanes = evaluator
+            .init(host_world(ALIKE_SIDE), &params[2..], Some(seed))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let start = host_words(&lanes, lowered);
+        let mut changed = false;
+        let mut host = start.clone();
+        for tick in 0..=ALIKE_TICKS {
+            if tick == OUTBREAK_TICK
+                && let Some(outbreak) = entry.action_index("new_outbreak")
+            {
+                let before = host_words(&lanes, lowered);
+                press(ctx, &mut *state, outbreak);
+                host_press(&evaluator, &mut lanes, &params[2..], seed, "new_outbreak", tick);
+                assert!(
+                    host_words(&lanes, lowered) != before,
+                    "{name} at seed {seed}: New outbreak changed no cell"
+                );
+            }
+            host = host_words(&lanes, lowered);
+            changed |= host != start;
+            assert!(
+                device_words(&*state, &buffers) == host,
+                "{name} at seed {seed}: the lanes differ at tick {tick}"
+            );
+            step(ctx, &mut *state, 1);
+            host_tick(&evaluator, &mut lanes, &params[2..], seed, tick);
+        }
+        assert!(changed, "{name} at seed {seed}: no cell changed");
+        last.push(host);
+    }
+    last
+}
+
 /// Every grid sheet steps to equal lanes on the host evaluator and on the device every tick for 50 ticks at 64 by 64
 /// cells, from the start both draw at two seeds, across a press of New outbreak after tick 10 on the sheets that have
 /// it.
@@ -616,7 +682,6 @@ fn every_grid_sheet_steps_alike_on_the_host_and_the_device() {
     let Some(ctx) = device("every_grid_sheet_steps_alike_on_the_host_and_the_device") else {
         return;
     };
-    let side = 64;
     let sheets = grid_sheets();
     assert_eq!(
         sheets.len(),
@@ -624,42 +689,64 @@ fn every_grid_sheet_steps_alike_on_the_host_and_the_device() {
         "Game of Life, the rates SIR, Vote, the forest fire, the chance SIR and the SIRD"
     );
     for (name, text) in &sheets {
-        let file = sheet_file(text);
-        let lowered = file.lowered();
-        let entry = entry_of(text);
-        let params = device_params(&entry, side, active_params(name));
-        let buffers = lane_buffers(lowered);
-        let evaluator = HostEvaluator::new(lowered).unwrap_or_else(|error| panic!("{name}: {error}"));
-        for seed in [3, 11] {
-            let mut state = build_gpu(&entry, &params, Some(seed), &ctx);
-            let mut lanes = evaluator
-                .init(host_world(side), &params[2..], Some(seed))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let start = host_words(&lanes, lowered);
-            let mut changed = false;
-            for tick in 0..=50u32 {
-                if tick == OUTBREAK_TICK
-                    && let Some(outbreak) = entry.action_index("new_outbreak")
-                {
-                    let before = host_words(&lanes, lowered);
-                    press(&ctx, &mut *state, outbreak);
-                    host_press(&evaluator, &mut lanes, &params[2..], seed, "new_outbreak", tick);
-                    assert!(
-                        host_words(&lanes, lowered) != before,
-                        "{name} at seed {seed}: New outbreak changed no cell"
-                    );
-                }
-                let host = host_words(&lanes, lowered);
-                changed |= host != start;
-                assert!(
-                    device_words(&*state, &buffers) == host,
-                    "{name} at seed {seed}: the lanes differ at tick {tick}"
-                );
-                step(&ctx, &mut *state, 1);
-                host_tick(&evaluator, &mut lanes, &params[2..], seed, tick);
-            }
-            assert!(changed, "{name} at seed {seed}: no cell changed");
-        }
+        assert_steps_alike(&ctx, name, text, active_params(name));
+    }
+}
+
+/// Returns the SIRD sheet with line 4's death rate for each infected neighbour, so that an Infected cell leaves by a
+/// competing group of a fixed rate and a rate for each of a count.
+fn sird_dying_for_each_infected_neighbour() -> String {
+    let text = sheet_text("sird.toml");
+    let old = "rate = { param = \"death_rate\" }\nrate_unit = \"day\"\n";
+    assert!(text.contains(old), "the SIRD's line 4 holds no {old:?}");
+    text.replacen(old, &format!("{old}tries = {{ result = \"l1\" }}\n"), 1)
+}
+
+/// Returns whether the tick shader of the grid sheet `text` calls `exp`.
+fn tick_shader_calls_exp(text: &str) -> bool {
+    let program = GridProgram::compile(sheet_file(text).lowered()).unwrap_or_else(|problems| panic!("{problems:#?}"));
+    program
+        .shaders()
+        .iter()
+        .find(|shader| shader.label() == "tick_cell_tick")
+        .expect("the tick shader")
+        .text()
+        .contains("exp(")
+}
+
+/// The SIRD with line 4's death rate for each infected neighbour, where Infected cells leave by a competing group of
+/// a fixed rate and a rate for each of a count, steps to equal lanes on the host evaluator and on the device every
+/// tick, as [`every_grid_sheet_steps_alike_on_the_host_and_the_device`] steps every grid sheet, and both lines of the
+/// group change cells.
+///
+/// The group's hazard depends on the count, so its `e^(-h dt)` and its shares are worked out per cell in the tick
+/// shader, where the stock SIRD's come from the host. Note that `exp` and a division can differ from the host's in
+/// their last places on another device. A draw that falls between the host's threshold and the device's would then
+/// decide a cell differently.
+#[test]
+fn a_competing_group_with_a_rate_for_each_steps_alike_on_the_host_and_the_device() {
+    let Some(ctx) = device("a_competing_group_with_a_rate_for_each_steps_alike_on_the_host_and_the_device") else {
+        return;
+    };
+    let text = sird_dying_for_each_infected_neighbour();
+    let file = sheet_file(&text);
+    let document = file.document();
+    let relations = henad_graph::sheet::relations::CardRelations::new(document, &document.cards[0]);
+    assert_eq!(relations.competing_groups(), [["l3", "l4"]]);
+    assert!(
+        tick_shader_calls_exp(&text),
+        "the group's chance is worked out per cell"
+    );
+    assert!(
+        !tick_shader_calls_exp(&sheet_text("sird.toml")),
+        "the stock SIRD's chance comes from the host"
+    );
+    for (seed, lanes) in ALIKE_SEEDS.iter().zip(assert_steps_alike(&ctx, "the SIRD", &text, &[])) {
+        let counts = state_counts(lane(&lanes, "health"), 4);
+        assert!(
+            counts[2] > 0 && counts[3] > 0,
+            "at seed {seed} both lines of the group change cells: {counts:?}"
+        );
     }
 }
 

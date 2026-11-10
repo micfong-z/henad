@@ -116,7 +116,7 @@ pub(crate) fn step_template(params: &[(&str, FieldType)], constants: &[String], 
     };
     let mut text = String::from(
         "// Engine template of a grid rule. The rule's own text follows it.\n\
-         #import henad::rng::{pcg_hash as henad_pcg_hash}\n\
+         #import henad::rng::{pcg4d as henad_pcg4d}\n\
          #import henad::space::{offset_cell as henad_offset_cell, TORUS as HENAD_TORUS, BOUNDED as HENAD_BOUNDED}\n\n\
          struct Params {\n",
     );
@@ -174,7 +174,7 @@ pub(crate) fn step_template(params: &[(&str, FieldType)], constants: &[String], 
          }}\n    \
          henad_cell = henad_id.xy;\n    \
          let henad_index = henad_id.y * params.width + henad_id.x;\n    \
-         var henad_rng = henad_pcg_hash(params.seed ^ henad_pcg_hash(henad_index ^ henad_pcg_hash(henad_tick)));\n    \
+         var henad_rng = henad_pcg4d(henad_pcg4d(vec4<u32>(params.seed, henad_index, henad_tick, 0u))).x;\n    \
          state_out[henad_index] = min(step_cell(state_in[henad_index], &henad_rng), NUM_STATES - 1u);\n\
          }}\n\n\
          // The rule's own text starts on the next line.\n"

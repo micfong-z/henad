@@ -112,12 +112,12 @@ fn a_repeat_body_equals_its_hand_chained_copies_on_the_device() {
 /// Both halves of the body of [`a_repeat_body_equals_its_hand_chained_copies_on_the_device`], the float half
 /// `prev * 1.1 + k` included, equal bit for bit on the device and on the host.
 ///
-/// Note that this fails on an Apple M4 Pro. wgpu compiles Metal shaders with fast math on, and the device contracts,
-/// reassociates and folds the float half differently in the loop and in the copies, whose `k` are literals. The integer
-/// half holds. Compiled with `MTLMathMode.safe`, the same shaders equal each other and the host. Records #66 and #67
-/// hold the probes.
+/// Note that this probes a device and gates nothing. A device may fuse a multiply with an add, or reorder float
+/// operations, and then rounds the float half differently in the loop and in the copies, whose `k` are literals, or
+/// differently from the host. That happens on Apple Metal, which compiles with fast math, and on lavapipe on aarch64,
+/// where LLVM contracts the multiply and the add. The integer half holds on every device.
 #[test]
-#[ignore = "fails on Metal, which compiles with fast math; records #66 and #67"]
+#[ignore = "probes a device that may fuse a multiply with an add or reorder float operations"]
 fn a_float_repeat_body_equals_its_hand_chained_copies_on_the_device() {
     let Some(device) = device_for("a_float_repeat_body_equals_its_hand_chained_copies_on_the_device") else {
         return;

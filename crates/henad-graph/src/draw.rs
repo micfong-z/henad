@@ -5,16 +5,18 @@
 //! iteration word, and `s` the sub-draw of a node that takes more than one word.
 //!
 //! The core is [`draw_core`], two rounds of [`pcg4d`] over `[k, e, t, (i << 4) | (s >> 2)]`, of which sub-draw `s`
-//! takes word `s & 3`. Its WGSL twin is one function too, so a change of core is one edit on each side.
+//! takes word `s & 3`. [`pcg4d`] is the hash of henad-core's random primitives, and the WGSL twin imports it from
+//! `henad::rng`.
 //!
 //! The *phase* is a word that keeps the stages' draws apart: [`PHASE_INIT`] in the init stage, [`PHASE_TICK`] in the
 //! tick stage, and [`action_phase`] of the action's position in an action, a rerun included. `t` is the tick in a tick
 //! pass, the press count in an action, and 0 in an init pass. Inside a region, `i` is the iteration `k`, and nested
 //! regions combine their iterations in mixed radix: `i = i_outer * max + k`, with `max` the inner region's bound.
 
+pub use henad_core::authoring::primitives::rng::pcg4d;
 use henad_core::authoring::primitives::rng::{mix_seed, pcg_hash};
 
-/// WGSL module `henad_graph::draw`, the twin of [`pcg4d`] and [`draw_core`] that a generated shader imports.
+/// WGSL module `henad_graph::draw`, the twin of [`draw_core`] that a generated shader imports.
 pub const DRAW_WGSL: &str = include_str!("draw.wgsl");
 
 /// Phase word of the init stage.
@@ -63,26 +65,6 @@ pub fn key_word(key: u32, phase: u32, seed: Option<u64>) -> u32 {
     pcg_hash(pcg_hash(key ^ pcg_hash(phase)) ^ fold32(run_word(seed)))
 }
 
-/// Returns the JCGT `pcg4d` hash of `input`, with every operation wrapping.
-///
-/// Each word takes `v * 1664525 + 1013904223`, then four cross additions run (`x += y * w`, `y += z * x`, `z += x * y`,
-/// `w += y * z`), each word takes `v ^ (v >> 16)`, and the four additions run again.
-pub fn pcg4d(input: [u32; 4]) -> [u32; 4] {
-    let mut v = input.map(|x| x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223));
-    cross_add(&mut v);
-    v = v.map(|x| x ^ (x >> 16));
-    cross_add(&mut v);
-    v
-}
-
-/// Adds the products of `pcg4d`'s rounds into `v`, in order.
-fn cross_add(v: &mut [u32; 4]) {
-    v[0] = v[0].wrapping_add(v[1].wrapping_mul(v[3]));
-    v[1] = v[1].wrapping_add(v[2].wrapping_mul(v[0]));
-    v[2] = v[2].wrapping_add(v[0].wrapping_mul(v[1]));
-    v[3] = v[3].wrapping_add(v[1].wrapping_mul(v[2]));
-}
-
 /// Returns the bits of sub-draw `sub_draw` at key word `key_word`, element `element`, tick `tick` and iteration word
 /// `iteration`.
 ///
@@ -109,4 +91,26 @@ pub fn press_word(seed: Option<u64>, press: u32) -> u32 {
         word = word.wrapping_mul(PRESS_MULTIPLIER).wrapping_add(PRESS_INCREMENT);
     }
     word
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{draw_core, pcg4d};
+
+    /// The core's words are pinned, since the `rand.*` case words and the library lock are drawn from them.
+    #[test]
+    fn the_draw_core_keeps_its_words() {
+        assert_eq!(
+            pcg4d([0, 0, 0, 0]),
+            [251_852_841, 760_645_481, 850_445_371, 3_542_436_074]
+        );
+        assert_eq!(
+            pcg4d([1, 2, 3, 4]),
+            [908_250_390, 4_044_648_920, 3_775_961_919, 45_698_095]
+        );
+        assert_eq!(draw_core(0, 0, 0, 0, 0), 629_284_576);
+        assert_eq!(draw_core(1, 2, 3, 4, 5), 1_535_565_428);
+        assert_eq!(draw_core(0xDEAD_BEEF, 1023, 77, 6, 3), 1_008_266_312);
+        assert_eq!(draw_core(u32::MAX, u32::MAX, u32::MAX, 0, 63), 904_119_187);
+    }
 }

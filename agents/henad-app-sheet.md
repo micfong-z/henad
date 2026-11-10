@@ -315,7 +315,12 @@ same seed (the preview's seed is `None`, the model's default), so the world star
 started before, paused. Build is enabled then whatever the selected model's `build_refusal`, with
 the tooltip `BUILD_SHEET_TOOLTIP`. Once the Model tab selects another model, Build builds that
 model with its usual tooltip and refusal, as behind a graph's preview. After Apply the run is the
-selected model's, and Build builds it as for any model, at the Seed field's seed.
+selected model's, and Build builds it as for any model, at the Seed field's seed. While Build
+replays the preview, `settle_outcome` drops an `Installed` outcome ("Model applied. Press Build to
+run it."), as after Apply beside another model's run past tick 0 and then Offload, which loads the
+waiting preview. The list then reads the preview's line and "Press Apply to check and install the
+model.", and Apply builds the sheet at its own size
+(`a_sheet_applied_beside_another_run_drops_the_build_line_once_its_preview_loads`).
 `AppState::runs_editor_sheet` holds for the sheet's preview or the source the Editor applied, and
 Playback's `tick_counter` then reads `henad_graph::sheet::sentence::tick_counter` ("Tick 4 (a tick
 is one step of time)", or "Tick 4 (4 days)" through `time_axis::elapsed_text` once the entry has a

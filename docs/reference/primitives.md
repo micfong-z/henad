@@ -32,7 +32,7 @@ Each entry below gives the Rust signature, and calls out the WGSL signature wher
 |---|---|
 | [Space](#space) | [`Boundary`](#boundary), [`wrap_index`](#wrap_index), [`wrap_coord`](#wrap_coord), [`cell_index`](#cell_index), [`offset_cell`](#offset_cell), [`axis_delta`](#axis_delta), [`dist_sq`](#dist_sq), [`heading_octant`](#heading_octant) |
 | [Neighbourhoods](#neighbourhoods) | [`MOORE_ROW_MAJOR`](#moore_row_major), [`MOORE_COLUMN_MAJOR`](#moore_column_major), [`VON_NEUMANN`](#von_neumann), [`offsets`](#offsets), [`for_each_neighbor`](#for_each_neighbor), [`neighbor_count`](#neighbor_count), [`neighbor_offset`](#neighbor_offset) |
-| [Random](#random) | [`xorshift64`](#xorshift64), [`pcg_hash`](#pcg_hash), [`mix_seed`](#mix_seed), [`next_bits`](#next_bits), [`random_float`](#random_float), [`next_float`](#next_float), [`next_index`](#next_index), [`below`](#below), [`choice3`](#choice3), [`reservoir_accept`](#reservoir_accept) |
+| [Random](#random) | [`xorshift64`](#xorshift64), [`pcg_hash`](#pcg_hash), [`pcg4d`](#pcg4d), [`mix_seed`](#mix_seed), [`next_bits`](#next_bits), [`random_float`](#random_float), [`next_float`](#next_float), [`next_index`](#next_index), [`below`](#below), [`choice3`](#choice3), [`reservoir_accept`](#reservoir_accept) |
 
 ## Space
 
@@ -398,7 +398,24 @@ The Rust twin, bit-equal to the WGSL version.
 A GPU port calls it to seed a state buffer that the shader then draws from.
 The authoring prelude brings it in.
 
-See also: [`next_bits`](#next_bits).
+See also: [`next_bits`](#next_bits), [`pcg4d`](#pcg4d).
+
+### `pcg4d`
+
+```rust
+fn pcg4d(input: [u32; 4]) -> [u32; 4]
+```
+
+```wgsl
+fn pcg4d(input: vec4<u32>) -> vec4<u32>
+```
+
+The `pcg4d` hash of Jarzynski and Olano's "Hash Functions for GPU Rendering", over four words at once, bit-equal between the two languages.
+Two rounds over a vector of counters, such as a seed word, a cell index and a tick, derive a random word from the counters alone.
+A grid rule's `rng` starts from `pcg4d(pcg4d(vec4(seed, index, tick, 0))).x`, and a node model's draws come from the same two rounds.
+Import the Rust function from `henad::authoring::primitives::rng`.
+
+See also: [`pcg_hash`](#pcg_hash).
 
 ### `mix_seed`
 

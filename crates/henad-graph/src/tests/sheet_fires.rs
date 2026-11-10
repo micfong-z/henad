@@ -142,10 +142,10 @@ fn the_starters_count_their_change_lines() {
     }
 }
 
-/// A change inside a Repeat has no count, even when its condition is a node outside the Repeat's region: a Move by
+/// A Move by inside a Repeat has no count, even when its condition is a node outside the Repeat's region: a Move by
 /// with a blank condition inside a Repeat inside a When takes the When's condition.
 #[test]
-fn a_change_inside_a_repeat_has_no_count() {
+fn a_move_by_inside_a_repeat_has_no_count() {
     let text = sheet_text("random_walk.toml");
     let wrapped = [
         ("next_line = 3\n", "next_line = 4\n"),
@@ -301,4 +301,53 @@ fn a_fire_count_reads_as_its_number_and_its_description() {
         fire_count_description("Line 10", 1_200, "ant", 7),
         "Line 10 applied to 1,200 ants in tick 7."
     );
+}
+
+/// A Become inside a Repeat counts the agents it changed in the tick, through its row of the transition: over the
+/// test sheet of one roll each time round, line 3 counts the agents now in A and line 4 those in B. A Set inside a
+/// Repeat has no count.
+#[test]
+fn a_become_inside_a_repeat_counts_the_agents_it_changed() {
+    let text = include_str!("sheets/repeat_roll.toml");
+    let file = sheet(text);
+    let fires = file.fire_lines();
+    assert_eq!(fires.lines(), ["l3", "l4"]);
+    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let agents = 1000;
+    let world = HostWorld::Agents {
+        count: agents,
+        width: 1000.0,
+        height: 1000.0,
+    };
+    let mut lanes = evaluator.init(world, &[], Some(3)).expect("the init runs");
+    let counts = counted_tick(&evaluator, &mut lanes, &[], Some(3), 0, fires.probes());
+    let status = lanes.column("status").expect("the status lane");
+    let in_state = |state: u32| {
+        (0..agents as usize)
+            .filter(|&index| status.get(index) == Some(HostValue::Category(state)))
+            .count() as u64
+    };
+    let (in_a, in_b) = (in_state(1), in_state(2));
+    assert_eq!(in_a + in_b, u64::from(agents), "every agent leaves S");
+    assert_eq!(
+        fires.counts_by_line(&counts),
+        BTreeMap::from([("l3".to_owned(), in_a), ("l4".to_owned(), in_b)])
+    );
+    let sets = text
+        .replace(
+            "property = \"status\"\nnew_state = \"a\"\nstart_state = \"s\"",
+            "property = \"level\"\nvalue = 1",
+        )
+        .replace(
+            "property = \"status\"\nnew_state = \"b\"\nstart_state = \"s\"",
+            "property = \"level\"\nvalue = 2",
+        )
+        .replace("kind = \"become\"", "kind = \"set\"")
+        .replacen(
+            "[[measure]]",
+            "[[agents.property]]\nid = \"level\"\nname = \"Level\"\ntype = \"number\"\n\n\
+             [agents.property.starts_as]\nrule = \"value\"\nvalue = 0\n\n[[measure]]",
+            1,
+        );
+    assert!(sheet(&sets).fire_lines().is_empty());
 }

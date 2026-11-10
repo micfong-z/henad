@@ -109,9 +109,23 @@ is about not undoing them.
   reproduces wgpu's words exactly (record #67). Integer arithmetic and comparisons are
   unaffected, and so are the draws of henad-graph's tests. A graph equals a stock port on one device
   when both write the same float expression, as `gpu_sir_exact.toml` and `gpu_sir` do with `pow`.
-  henad-graph's `a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` is `#[ignore]`d
-  for it. A2's contraction probe (henad-models' `graph_ants_parity.rs`) found `a * b + c` written
-  as one expression and as two `let`s rounded alike, both fused, on every one of 6216 inputs where
+  henad-graph's `a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` and henad-models'
+  `a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit` are `#[ignore]`d for it,
+  as probes of a device and no gate. Contraction is no Metal peculiarity. Both tests also fail on
+  lavapipe on aarch64 (Mesa 25.0.7, LLVM 19), where LLVM contracts the multiply and the add, and
+  the device then differs from the host. The contract: a graph or sheet on a grid replays exactly
+  with one seed on one device, and so does one of agents unless a tick pass's `agent.radius_fold`
+  holds a `carry`, a float `sum`, or reads its `k` or a `prev.<acc>` (`fold_order_matters` in
+  `wgsl/agents.rs` clears `replays_exactly`). The device's index lists a cell's agents in the order
+  its atomics resolve. That order changes between runs, and a float sum in another order rounds
+  differently. The boids sheet and starter and the bounded confidence sheet are such models, and
+  `the_replay_flag_follows_the_radius_folds` holds every other starter and sheet starter to
+  replaying. The app says so in Compare runs (`runs_do_not_replay`) and beside Results' Open
+  (`INEXACT_REPLAY`). In a model that replays, a computation over whole numbers alone gives the
+  same result on every device and the host evaluator, and float results may differ in their last
+  places between devices and between two shapes of one computation. A whole number worked out from
+  floats can differ where the floats do. A2's contraction probe (henad-models' `graph_ants_parity.rs`) found `a * b + c`
+  written as one expression and as two `let`s rounded alike, both fused, on every one of 6216 inputs where
   a fused and a rounded result differ, so a `let` boundary does not stop contraction. A field
   that adds up (henad-graph's `combine = "sum"`) keeps to a power-of-two resolution 2^-k for this:
   the deposit's product by 2^k and the merge's `f32(word) * 2^-k` are exact below 2^24, so a

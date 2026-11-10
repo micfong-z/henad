@@ -212,7 +212,11 @@ types an unsuffixed literal falls back to.
   (`vote.toml` slowest, `gpu_sir_exact.toml` fastest, 2048 and 4096 squared, linear), so the
   heaviest init at 16384 squared, `gpu_sir_exact.toml` at 11 units a cell, is 2.95e9 units, about
   6 s, and the host budget is a third above it. henad-models' `graph_corpus.rs` holds
-  `every_grid_corpus_file_at_its_largest_size_fits_the_work_budgets`. Keep it.
+  `every_grid_corpus_file_at_its_largest_size_fits_the_work_budgets`. Keep it. Its
+  `graph_agent_runs.rs` holds each agents file and agent sheet starter at its `max_count` in the
+  largest world its parameters allow to the submission budget, and pins the largest population
+  each admits in its declared world (`agents/models.md`). A radius walk's charge grows with the
+  agents in its range, so a larger world admits a larger population.
   A `PassBindings` also holds `uniform_bytes` and `workgroup_bytes`, copied from the
   `GridPassSpec` fields of the same names (zero when unknown, as for a hand-written shader), and
   `shortfalls` refuses a pass past `max_uniform_buffer_binding_size` or
@@ -293,13 +297,16 @@ types an unsuffixed literal falls back to.
   statements, each callee's body counted once per call (`function_costs`, in handle order, since
   naga puts a callee before its caller). Without that limit, a chain of helpers each calling the
   one before twice holds no loop and runs 2^60 calls. The template comes first, so the text's
-  lines keep their numbers after the template's. It imports `pcg_hash`, `offset_cell`, `TORUS` and
+  lines keep their numbers after the template's. It imports `pcg4d`, `offset_cell`, `TORUS` and
   `BOUNDED` under `henad_` and `HENAD_` aliases, and declares `Params` (`width`, `height`, `seed`,
   then one 4-byte field per parameter, `f32` for an F32 and `u32` otherwise), the five bindings
   (`state` and the one-word `tick` ping-pong, `params` is a uniform), `NUM_STATES`, one
   upper-snake constant per state, `neighbor` (state 0 past a bounded edge), `moore_count`,
-  `von_neumann_count`, and `main`, which seeds the cell's `rng` from `pcg_hash(seed ^
-  pcg_hash(index ^ pcg_hash(tick)))`, clamps the result below `NUM_STATES` and advances the tick.
+  `von_neumann_count`, and `main`, which seeds the cell's `rng` from `pcg4d(pcg4d(vec4(seed,
+  index, tick, 0))).x`, the two rounds of the graph draw core, clamps the result below
+  `NUM_STATES` and advances the tick. A chain `pcg_hash(seed ^ pcg_hash(index ^ pcg_hash(tick)))`
+  repeats the field of one tick, shifted, in another wherever `pcg_hash(t1) ^ pcg_hash(t2)` falls
+  below the cell count, as at ticks 3 and 326 of a 256 by 256 grid.
   The engine owns the display shader (a palette const) and the reduce shader (one count per state,
   one stat per state), and a problem in either has no place. `CompiledGridRule::entry(code)`
   builds a `GpuGridSpec` with `RuleHooks` and calls `ModelEntry::from_grid_spec` with
@@ -316,8 +323,11 @@ types an unsuffixed literal falls back to.
   `a_call_chain_past_the_work_limit_is_refused`, `a_param_named_seed_is_refused`,
   `a_parameter_its_kind_cannot_hold_is_refused`, `two_states_with_one_constant_name_are_refused`,
   `the_params_block_matches_the_naga_layout`, `a_grid_rule_binds_at_most_five_storage_buffers`,
-  `a_result_past_the_last_state_is_clamped` and `a_random_rule_draws_a_fresh_stream_each_tick`
-  (each tick's Alive count against the stream recomputed on the CPU), and henad-models holds
+  `a_result_past_the_last_state_is_clamped`, `a_random_rule_draws_a_fresh_stream_each_tick`
+  (each tick's Alive count against the stream recomputed on the CPU),
+  `a_rule_draws_the_words_of_the_rust_twin` (each cell's two draws against `rng_start`, the Rust
+  twin of the seeding) and `one_tick_draws_no_shifted_copy_of_another_ticks_field` (the first
+  repeating tick pair of the old chain at four sizes, no device), and henad-models holds
   `the_life_starter_matches_game_of_life` (128 by 128, 64 ticks, the Alive count every tick and
   the cells every 8, read back through the display) and `a_grid_rule_conforms` (the Life starter
   and a rule that draws every cell afresh each tick). Keep them.

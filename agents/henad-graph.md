@@ -124,11 +124,13 @@ on the device, the test asks for more than 300.
 
 **Draws** (`draw.rs`). `key_word(key, phase, seed)`, `draw_bits(k, element, tick, iteration,
 sub_draw)` and `press_word(seed, press)`, with `GRAPH_DEFAULT_SEED` and `GRAPH_SEED_SALT`. The
-core is `draw_core`, the provisional `pcg4d2`: `pcg4d(pcg4d([k, e, t, (i << 4) | (s >> 2)]))[s &
-3]`, with `i` 0 outside every region and `pcg4d` the JCGT function. It is the one core that
-passed every walk of the PractRand gate, which failed both candidates. The maintainer chooses the
-core, so it stays one function here and one in WGSL, and the `rand.*` case words and their lock
-lines move with it. Phase
+core is `draw_core`, `pcg4d2`: `pcg4d(pcg4d([k, e, t, (i << 4) | (s >> 2)]))[s & 3]`, with `i`
+0 outside every region and `pcg4d` the JCGT function, which henad-core's random primitives hold
+(`rng::pcg4d` and `henad::rng::pcg4d`). `draw.rs` re-exports it and `draw.wgsl` imports it. It is
+the one core that passed every walk of the PractRand gate, which failed both candidates, and is
+the settled core of library 1. A grid rule's `rng` starts from the same two rounds.
+`the_draw_core_keeps_its_words` pins its words, since the `rand.*` case words and their lock
+lines are drawn from them. Phase
 words: `PHASE_INIT` 0, `PHASE_TICK` 1 (view and stats too, which draw nothing), and
 `action_phase(j)` = 2 + j for the action at position `j` of `[[action]]`, its reruns included.
 The tick word `t` is the tick in a tick pass, the press count in an action, 0 in init.
@@ -250,7 +252,8 @@ a Repeat equals its hand-chained copies bit for bit, mixed-radix draws), `edit.r
 compiles, no shader but the display returns early, the range table, region forms, uniform body
 values, and files past the workgroup, uniform and shader-size limits built in the test),
 `gpu_cases.rs`, `gpu_repeat.rs` and `agent_wgsl.rs` (agents' budgets, uniform and workgroup limits,
-the replay flag, a float sum on a grid writing `partials`, the forms of counters and deposits).
+the replay flag, false among the starters and sheet starters for boids and bounded confidence
+alone, a float sum on a grid writing `partials`, the forms of counters and deposits).
 `HENAD_DUMP_GRAPH_WGSL=<dir>` makes `every_starter_compiles` and `every_agents_graph_compiles` write
 each shader's text there.
 `gpu_cases.rs` runs every `Both` case on the device, an agents pass case through
@@ -265,9 +268,10 @@ bodies (`CARRIED`, `chained()`, `TWO_DRAWS`, `NESTED_DRAW`, `pub(super)` there) 
 once through the step shader on the device and once through `run_pass`: the integer half of
 `CARRIED` equals its hand-chained copies and the host bit for bit, two iterations of one draw
 differ and replay, and draws read the mixed-radix iteration word, each equal to the host's. Its
-float half replays on one device but differs from its copies on Metal (`agents/gpu-traps.md`), so
-`a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` is `#[ignore]`d with that
-reason. Run it with `--ignored` on another backend before calling the gate met there.
+float half replays on one device but may differ from its copies and the host on a device that
+fuses a multiply with an add (`agents/gpu-traps.md`), so
+`a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` is `#[ignore]`d as a probe of a
+device and no gate.
 `a_repeat_runs_in_stats_view_and_action_passes_on_the_device` holds a Repeat with a per-cell count
 in the other map passes to the host: the statistics finished from the device's tallies, every
 cell's colour and the action's lane.

@@ -65,9 +65,22 @@ stock port's invariants (in the world, speeds in the band, the reduced average s
 lanes, 300037 agents), and `gpu_boids.toml`'s sweep equal to the stock sweep of
 `interleaved_gpu_boids_runs_commit_in_plan_order` in its engine-owned fields on one and four tracks,
 `run_key` aside since it hashes the schema, which reads the model id. Neither graph replays, as the
-stock port does not. `src/tests/graph_agent_runs.rs` runs the testing kit over every agents entry,
-holds each at its `max_count` to the work budgets (which the boids graphs fail since the A2 review
-charged their walks, record #68), holds `random_walk.toml`'s Repeat on the device
+stock port does not. `src/tests/graph_agent_runs.rs` runs the testing kit over every agents entry.
+Two of its tests take the agents corpus and the agent sheet starters through `ModelFile`, named
+`starters/`, `graphs/` and `sheets/`, on limits that hold every buffer.
+`every_agent_file_at_its_largest_population_in_its_largest_world_fits_the_work_budgets` holds each
+at its `max_count` with `world_width` and `world_height` at their maxima (10000) to the submission
+budget, and each but the three ants files to the host budget with no shortfall. Each ants file lays
+a ground of one cell per world unit, and its init on the host passes `HOST_WORK_BUDGET` at 10000 by
+10000 at every population (`GROUND_INIT_PAST_THE_HOST_BUDGET`): that refusal alone, equal at the
+declared and the largest population.
+`every_agent_file_in_its_declared_world_admits_its_pinned_largest_population` admits each at its
+declared population with every other parameter at its default, bisects over
+`ModelEntry::shortfalls` (no device) for the largest population it admits and holds it to a pin in
+the test's table: 201012 for both boids starters, 195355 for `gpu_boids.toml`, 552857 for the
+bounded confidence sheet and `max_count` for the rest. One agent past a smaller pin is refused by
+the submission budget alone, in `Demand::shortfalls`' words with the heaviest step pass. A change of
+a pass's charge moves a pin. The file also holds `random_walk.toml`'s Repeat on the device
 to the host's `run_pass` within 1e-4 world units over three ticks (not bit for bit: after one tick
 36 of 1554 words differed by one unit in the last place on an Apple M4 Pro), and builds a crowd of
 70000 agents at the origin of a world of 1000, wide so the budget admits it, whose radius fold
@@ -101,8 +114,9 @@ agent, an inner count reading the outer `k`), a hash chain equal to its hand-cha
 Repeat in a `grid.fold` at their closed forms, the random walk's replay, step length and mean
 squared step, and a Repeat of 16384 refused by the budget at a million agents. Its float body
 (`FLOAT_LOOP`, `prev * 1.1 + k`) replays on the device, and
-`a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit` is `#[ignore]`d: on Metal's
-fast math the loop and its copies differ by up to 2 units in the last place (record #70).
+`a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit` is `#[ignore]`d as a probe of
+a device and no gate: a device that fuses a multiply with an add rounds the loop and its copies
+differently (`agents/gpu-traps.md`).
 `src/tests/graph_grid_sums.rs` reduces a grid graph's `stat.sum` and `stat.mean` of an `f32` lane
 and a `vec2f` sum on the device through the engine's `partials` tree, at sizes from 1 by 1 to 300
 by 211, to closed forms that every order of addition reaches exactly. Keep these files.
@@ -122,7 +136,9 @@ checked with no error. Keep these files.
 `henad_graph::sheet::starters()` (filtered by the lowered world, so an agents sheet joining the
 starters stays out), `tests/fixtures/sheets/sir_chance.toml`, a copy of henad-graph's test sheet
 `src/tests/sheets/sir_chance.toml` (the SIR of `round1/`, with chances per tick), and
-`tests/fixtures/sheets/sird.toml` below. Copy them again when the source changes. Entries come from `ModelFile::parse`. A test that needs given tick-0 lanes plants
+`tests/fixtures/sheets/sird.toml` below. Copy them again when the source changes, and henad-graph's
+`the_copies_of_the_test_sheets_equal_their_source` fails until they are. Entries come from
+`ModelFile::parse`. A test that needs given tick-0 lanes plants
 them through `planted_entry`, whose `PlantedHooks` wrap the lowered graph's `GridHooks` and replace
 the seeded words of the lanes it names, since no sheet start and no app tool paints cells.
 The tests: the Game of Life sheet's blinker (period 2) and glider (moved by one cell on each axis
@@ -131,7 +147,13 @@ presses of Randomise differ, replay in a second build, and equal the host's `rer
 `a_rebuild_replays_the_same_start`; `every_grid_sheet_steps_alike_on_the_host_and_the_device`
 (every lane every tick for 50 ticks at 64 by 64, two seeds, the forest fire at lightning 0.001 and
 growth 0.05 so every draw decides cells, the SIRD's competing group included, and a press of New
-outbreak after tick 10 on each sheet that has it, through `host_press` on the host); the chance SIR's lanes and measures summing to the cells
+outbreak after tick 10 on each sheet that has it, through `host_press` on the host);
+`a_competing_group_with_a_rate_for_each_steps_alike_on_the_host_and_the_device`, the same
+comparison (`assert_steps_alike`) over the SIRD with line 4's death rate for each infected
+neighbour, whose group works out `e^(-h dt)` and its shares per cell in the tick shader, held to
+Recovered and Dead cells at each seed (a device whose `exp` or division differs from the host's in
+its last places fails only when a draw falls between the two thresholds); the chance SIR's lanes
+and measures summing to the cells
 for 200 ticks across a New outbreak press; Game of Life and Vote, whose cards draw nothing, equal to
 their files in `lowered/round1/` in every lane every tick for 200 ticks at 64 by 64 from the tick-0
 lanes each sheet draws at seeds 1 to 4, on the host (every tick pass in document order) and on the

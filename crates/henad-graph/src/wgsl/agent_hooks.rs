@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use henad_compute::gpu::{AgentPassId, AgentRun, AgentUploads};
+use henad_compute::gpu::{AgentHooks, AgentPassId, AgentRun, AgentUploads};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{Geometry, PassCtx, PassId};
 use henad_core::helpers::{extract_f32, extract_u32};
@@ -201,7 +201,7 @@ impl AgentGraphHooks {
     }
 }
 
-impl henad_compute::gpu::AgentHooks for AgentGraphHooks {
+impl AgentHooks for AgentGraphHooks {
     fn dims(&self, params: &[ParamValue]) -> (u32, Extent) {
         (
             extract_u32(params, 0, self.count),

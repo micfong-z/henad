@@ -917,6 +917,47 @@ fn chips_name_the_property_when_two_share_a_state_name() {
     );
 }
 
+/// Inside a Repeat the first time a change applies decides, so the "otherwise" of a line whose higher line sits in its
+/// own Repeat says the higher line wins at the same time. A line outside the Repeat keeps the plain words.
+#[test]
+fn otherwise_inside_a_repeat_says_the_higher_line_wins_at_the_same_time() {
+    let text = starter_text("random_walk.toml");
+    let text = text.replacen(
+        "[[parameter]]",
+        "[[agents.property]]\nid = \"status\"\nname = \"Status\"\ntype = \"states\"\nstates = [\n  \
+         { id = \"s\", name = \"S\", color = \"#E8E8F0\" },\n  { id = \"a\", name = \"A\", color = \"#3DD58C\" },\n\
+         ]\n\n[agents.property.starts_as]\nrule = \"value\"\nvalue = { state = \"s\" }\n\n[[parameter]]",
+        1,
+    );
+    let text = text
+        .replacen("next_line = 3", "next_line = 6", 1)
+        .replacen("lines = [\"l1\"]", "lines = [\"l1\", \"l5\"]", 1)
+        .replacen("lines = [\"l2\"]", "lines = [\"l2\", \"l3\", \"l4\"]", 1);
+    let become_line = |id: &str, key: u32| {
+        format!(
+            "\n[card.line.{id}]\nkind = \"become\"\nkey = {key}\nproperty = \"status\"\nnew_state = \"a\"\n\
+             start_state = \"s\"\n\n[card.line.{id}.condition]\nkind = \"chance\"\nchance = 0.5\n"
+        )
+    };
+    let text = format!(
+        "{text}{}{}{}",
+        become_line("l3", 3),
+        become_line("l4", 4),
+        become_line("l5", 5)
+    );
+    let lines = lines_of(&text, 0);
+    assert_eq!(lines[3].otherwise, ["l3"]);
+    assert_eq!(
+        lines[3].otherwise_tooltip,
+        "Line 3 also changes Status for a walker that is S. When both apply at the same time, line 3 wins."
+    );
+    assert_eq!(lines[4].otherwise, ["l3", "l4"]);
+    assert_eq!(
+        lines[4].otherwise_tooltip,
+        "Lines 3 and 4 also change Status for a walker that is S. When more than one applies, the highest line wins."
+    );
+}
+
 #[test]
 fn otherwise_carries_its_partner_as_a_description() {
     let lines = lines_of(starter_text("forest_fire.toml"), 0);

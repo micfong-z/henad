@@ -219,7 +219,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     },
 ];
 
-/// Word of [`ctx.press_seed`] at seed 7 on the first press.
+/// Word of `ctx.press_seed` at seed 7 on the first press.
 const PRESS_ONE: u32 = 0x923f_9d35;
-/// Word of [`ctx.press_seed`] at seed 7 on the second press.
+/// Word of `ctx.press_seed` at seed 7 on the second press.
 const PRESS_TWO: u32 = 0x699e_147e;

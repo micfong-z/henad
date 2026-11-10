@@ -1449,7 +1449,8 @@ pub fn draws_diagnostic(document: &SheetDocument, diagnostic: &SheetDiagnostic) 
 /// Returns the tooltip of the "otherwise" words of line `line_id`, whose line prefix is `prefix`, overridden by the
 /// lines numbered `numbers`, and the notice shown the first time the line starts with "otherwise".
 ///
-/// Both name the property the lines change, and the old state a cell must be in for both to apply.
+/// Both name the property the lines change, and the old state a cell must be in for both to apply. When a higher line
+/// sits in the Repeat that holds line `line_id`, both say the higher line wins only at the same time.
 fn otherwise_words_of(
     document: &SheetDocument,
     relations: &CardRelations<'_>,
@@ -1464,9 +1465,15 @@ fn otherwise_words_of(
     let state = line.and_then(|line| state_of(document, line.property.as_deref(), line.start_state.as_deref()));
     let property_name = property.map_or(BLANK_TEXT, |property| property.name.as_str());
     let thing = Sentences::new(document).thing_word(&relations.card().every);
+    let repeat = relations.repeat_of(line_id);
+    let in_repeat = repeat.is_some()
+        && relations
+            .otherwise_of(line_id)
+            .into_iter()
+            .any(|higher| relations.repeat_of(higher) == repeat);
     (
-        otherwise_tooltip(numbers, property_name, state, &thing),
-        otherwise_notice(prefix, numbers, property_name, state, &thing),
+        otherwise_tooltip(numbers, property_name, state, &thing, in_repeat),
+        otherwise_notice(prefix, numbers, property_name, state, &thing, in_repeat),
     )
 }
 

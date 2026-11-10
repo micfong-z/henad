@@ -1,10 +1,22 @@
 //! Repeat lines over agents: the lines inside run a number of times within the tick, each time with fresh chances.
 //!
 //! A Repeat is one `region.repeat`, its count the line's number or Whole number parameter and its `max` that number or
-//! the parameter's maximum. The Move by and Steer lines inside add up across the times: each property they change has
-//! a `sum` accumulator, and its total is one change of the property, owned by the Repeat line. A Become or Set inside
-//! applies when its condition holds at any time, through an `or` accumulator `<line>_applies`, and a Set's value is
-//! worked out once, outside the Repeat. Every time reads the start of the tick.
+//! the parameter's maximum. Each pass through the lines inside is a *time round*, counted from 0 by the region's `k`.
+//! Every time round reads the start of the tick.
+//!
+//! The Move by and Steer lines inside add up across the time rounds: each property they change has a `sum`
+//! accumulator, and its total is one change of the property, owned by the Repeat line.
+//!
+//! A Become or Set inside applies when its condition holds at any time round, and a Set's value is worked out once,
+//! outside the Repeat. Two Become or two Set lines of one property inside one Repeat that can both apply *compete*.
+//! Among competing lines, the line whose condition first held at the earliest time round wins, and the higher line
+//! wins when two first held at the same time round. Each competing line keeps that time round in a `u32` `min`
+//! accumulator `<line>_first`, which stays at the largest `u32` when the line never held. A line applies when its
+//! first time round is below the largest `u32` and no lower competing line first held at an earlier time round, and
+//! the rows of the change, in display order, then pick the winner. A Become from a state that competes with a higher
+//! Become from any state keeps its time round only for an element in that state, since it cannot change any other
+//! element. A change with no competitor reads an `or` accumulator `<line>_applies` alone. Each change inside takes
+//! one accumulator either way.
 
 use std::collections::BTreeMap;
 
@@ -14,21 +26,39 @@ use super::{Site, text};
 use crate::ids::NodeId;
 use crate::limits::MAX_REPEAT_ITERATIONS;
 use crate::sheet::document::{LineKind, LineMode, PropertyType, SheetChip, SheetLine, SheetValue, Slot};
+use crate::sheet::sentence::ANY_STATE_ID;
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, Literal, PortRef};
 
-/// A Repeat line lowered: its region and the accumulator of each property its lines change.
+/// A Repeat line lowered: its region, the accumulator of each property its lines change and its competing changes.
 #[derive(Debug, Clone)]
 pub(super) struct RepeatBlock {
     /// Temporary id of the `region.repeat`.
     pub node: NodeId,
     /// Name of the accumulator of each property the lines inside change, by the property's index.
     accumulators: BTreeMap<usize, String>,
+    /// Each Become or Set line inside that competes with another change of its property inside, by line id.
+    contests: BTreeMap<String, Contest>,
+}
+
+/// A Become or Set line inside a Repeat that competes with another change of its property inside the same Repeat.
+#[derive(Debug, Clone, Default)]
+struct Contest {
+    /// Competing lines below the line, in display order.
+    lower: Vec<String>,
+    /// State the line changes from, when a higher competing line changes from any state. The line's first time round
+    /// is then kept only for an element in that state.
+    gate: Option<String>,
 }
 
 /// Returns the name of the `or` accumulator of the Become or Set line `line` inside a Repeat.
 fn applies(line: &str) -> String {
     format!("{line}_applies")
+}
+
+/// Returns the name of the `min` accumulator of the first time round at which the competing line `line` held.
+fn first(line: &str) -> String {
+    format!("{line}_first")
 }
 
 impl<'a> CardLowering<'_, 'a> {
@@ -80,12 +110,18 @@ impl<'a> CardLowering<'_, 'a> {
             ])));
             accumulators.insert(index, name);
         }
+        let contests = self.contests(&changes);
         changes.sort_by_key(|line| super::ids::line_number(line));
         for line in &changes {
+            let (name, value_type, combine) = if contests.contains_key(*line) {
+                (first(line), "u32", "min")
+            } else {
+                (applies(line), "bool", "or")
+            };
             config.push(ConfigValue::Table(BTreeMap::from([
-                ("name".to_owned(), text(&applies(line))),
-                ("type".to_owned(), text("bool")),
-                ("combine".to_owned(), text("or")),
+                ("name".to_owned(), text(&name)),
+                ("type".to_owned(), text(value_type)),
+                ("combine".to_owned(), text(combine)),
             ])));
         }
         let node = self.builder.emit(
@@ -117,8 +153,52 @@ impl<'a> CardLowering<'_, 'a> {
             };
             self.add_change(index, id, kind, Operand::Constant(Literal::Bool(true)))?;
         }
-        self.repeats.insert(id, RepeatBlock { node, accumulators });
+        self.repeats.insert(
+            id,
+            RepeatBlock {
+                node,
+                accumulators,
+                contests,
+            },
+        );
         Ok(())
+    }
+
+    /// Returns the competing lines among `changes`, the Become and Set lines inside one Repeat in display order.
+    ///
+    /// Two lines compete when both are Become or both are Set lines of one property and the relations say they can
+    /// both apply.
+    fn contests(&self, changes: &[&'a str]) -> BTreeMap<String, Contest> {
+        let mut contests: BTreeMap<String, Contest> = BTreeMap::new();
+        for (index, &upper) in changes.iter().enumerate() {
+            let Some(upper_line) = self.relations.line(upper) else {
+                continue;
+            };
+            for &lower in &changes[index + 1..] {
+                let Some(lower_line) = self.relations.line(lower) else {
+                    continue;
+                };
+                if lower_line.kind != upper_line.kind
+                    || lower_line.property != upper_line.property
+                    || !self.relations.can_both_apply(upper, lower)
+                {
+                    continue;
+                }
+                contests
+                    .entry(upper.to_owned())
+                    .or_default()
+                    .lower
+                    .push(lower.to_owned());
+                let contest = contests.entry(lower.to_owned()).or_default();
+                if upper_line.kind == LineKind::Become
+                    && upper_line.start_state.as_deref() == Some(ANY_STATE_ID)
+                    && let Some(state) = lower_line.start_state.as_deref().filter(|state| *state != ANY_STATE_ID)
+                {
+                    contest.gate = Some(state.to_owned());
+                }
+            }
+        }
+        contests
     }
 
     /// Returns the count input of a Repeat and its most times: a whole number, or a Whole number parameter from 0 and
@@ -165,30 +245,99 @@ impl<'a> CardLowering<'_, 'a> {
         Ok((count, max.max(1)))
     }
 
-    /// Returns the condition of the Become or Set line `id` across the times of the Repeat that holds it: whether
-    /// `condition`, written inside the Repeat at `site`, holds at any time. Returns `condition` for a line outside a
-    /// Repeat.
+    /// Returns the condition of the Become or Set line `id` across the time rounds of the Repeat that holds it, from
+    /// `condition`, written inside the Repeat at `site`. Returns `condition` for a line outside a Repeat.
+    ///
+    /// A line with no competitor applies when `condition` holds at any time round. A competing line applies when its
+    /// first time round is below the largest `u32` and no lower competing line first held at an earlier time round.
     pub(super) fn any_time(&mut self, site: &Site, id: &str, condition: Operand) -> Result<Operand, String> {
         let Some(repeat) = self.repeat_of(id) else {
             return Ok(condition);
         };
-        let node = self
+        let (node, contest) = self
             .repeats
             .get(repeat)
-            .map(|block| block.node)
+            .map(|block| (block.node, block.contests.get(id).cloned()))
             .ok_or_else(|| format!("the Repeat line {repeat} did not lower"))?;
-        let name = applies(id);
-        let value = self.builder.condition_input(site, &condition)?;
+        let Some(contest) = contest else {
+            let name = applies(id);
+            let value = self.builder.condition_input(site, &condition)?;
+            self.builder.emit(
+                site,
+                "region.put",
+                vec![("acc", text(&name))],
+                vec![
+                    ("value".to_owned(), value),
+                    ("when".to_owned(), InputValue::Literal(Literal::Bool(true))),
+                ],
+            );
+            return Ok(Operand::Link(PortRef { node, port: Some(name) }, ValueType::Bool));
+        };
+        let mut kept = condition;
+        if let Some(state) = &contest.gate {
+            let in_state = self.in_state(site, id, state)?;
+            kept = self.builder.join(site, "logic.and", &kept, &in_state)?;
+        }
+        let when = self.builder.condition_input(site, &kept)?;
+        let round = InputValue::Link(PortRef {
+            node,
+            port: Some("k".to_owned()),
+        });
         self.builder.emit(
             site,
             "region.put",
-            vec![("acc", text(&name))],
-            vec![
-                ("value".to_owned(), value),
-                ("when".to_owned(), InputValue::Literal(Literal::Bool(true))),
-            ],
+            vec![("acc", text(&first(id)))],
+            vec![("value".to_owned(), round), ("when".to_owned(), when)],
         );
-        Ok(Operand::Link(PortRef { node, port: Some(name) }, ValueType::Bool))
+        let own = InputValue::Link(PortRef {
+            node,
+            port: Some(first(id)),
+        });
+        let change_site = self.change_site(id)?;
+        // The line held where its first time round is below the largest `u32`, the start of a `min` accumulator.
+        let mut decided = self.builder.node_value(
+            &change_site,
+            "cmp.lt",
+            vec![("a", own.clone()), ("b", InputValue::Literal(Literal::U32(u32::MAX)))],
+            ValueType::Bool,
+        );
+        for lower in &contest.lower {
+            let other = InputValue::Link(PortRef {
+                node,
+                port: Some(first(lower)),
+            });
+            let not_earlier = self.builder.node_value(
+                &change_site,
+                "cmp.ge",
+                vec![("a", other), ("b", own.clone())],
+                ValueType::Bool,
+            );
+            decided = self.builder.join(&change_site, "logic.and", &decided, &not_earlier)?;
+        }
+        Ok(decided)
+    }
+
+    /// Returns whether the States property that the Become line `id` changes holds `state` at the start of the tick,
+    /// compared outside the Repeat that holds the line at `site`.
+    fn in_state(&mut self, site: &Site, id: &str, state: &str) -> Result<Operand, String> {
+        let property = self
+            .relations
+            .line(id)
+            .and_then(|line| line.property.as_deref())
+            .ok_or_else(|| "the line names no property".to_owned())?;
+        let current = self.builder.read(self.pass, property)?;
+        let outside = Site {
+            region: None,
+            ..site.clone()
+        };
+        let category = ValueType::Category(property.to_owned());
+        let a = self.builder.input_as(&outside, &current, &category, false)?;
+        let b = self
+            .builder
+            .input_as(&outside, &Operand::State(state.to_owned()), &category, false)?;
+        Ok(self
+            .builder
+            .node_value(&outside, "cmp.eq", vec![("a", a), ("b", b)], ValueType::Bool))
     }
 
     /// Returns whether `slot` reads, at any depth, the result of a line inside the Repeat line `repeat`.

@@ -17,8 +17,8 @@
 //! - `NUM_STATES`, and one constant per state numbered in declaration order, named from its label in upper snake case:
 //!   `Dead` gives `DEAD`, and `Infected cells` gives `INFECTED_CELLS`.
 //!
-//! `rng` starts each step from `pcg_hash(seed ^ pcg_hash(index ^ pcg_hash(tick)))`, a hash of the run's seed, the
-//! cell's index and the tick, and the step draws from it with `henad::rng`. The engine owns the rest of the model. It
+//! `rng` starts each step from `pcg4d(pcg4d(vec4(seed, index, tick, 0))).x`, a hash of the run's seed, the cell's
+//! index and the tick, and the step draws from it with `henad::rng`. The engine owns the rest of the model. It
 //! clamps a result past the last state to the last state, colours each cell by its state, and counts the cells in
 //! each state, one stat per state. It seeds the cells on the CPU from the run's seed: each state with an initial share
 //! takes that share of the cells, and the first state without one takes the rest.

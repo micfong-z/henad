@@ -1606,7 +1606,10 @@ pub fn otherwise_words(lines: &[usize]) -> String {
 /// `property` is the property the lines change, `state` the state one `thing` must be in for both to apply, and
 /// `thing` names one of what the card runs on. For example "Line 2 also changes Cover for a cell that is Tree. When
 /// both apply, line 2 wins."
-pub fn otherwise_tooltip(lines: &[usize], property: &str, state: Option<&str>, thing: &str) -> String {
+///
+/// `in_repeat` is whether a higher line sits in the line's own Repeat. The winner then holds only for changes that
+/// apply at the same time, since the first time a change applies decides, and the tooltip says so.
+pub fn otherwise_tooltip(lines: &[usize], property: &str, state: Option<&str>, thing: &str, in_repeat: bool) -> String {
     let who = if lines.len() == 1 {
         format!("Line {} also changes", number_list(lines))
     } else {
@@ -1615,10 +1618,11 @@ pub fn otherwise_tooltip(lines: &[usize], property: &str, state: Option<&str>, t
     let for_whom = state
         .map(|state| format!(" for {} that is {state}", with_article(thing)))
         .unwrap_or_default();
+    let when = if in_repeat { " at the same time" } else { "" };
     let wins = if lines.len() == 1 {
-        format!("When both apply, line {} wins.", number_list(lines))
+        format!("When both apply{when}, line {} wins.", number_list(lines))
     } else {
-        "When more than one applies, the highest line wins.".to_owned()
+        format!("When more than one applies{when}, the highest line wins.")
     };
     format!("{who} {property}{for_whom}. {wins}")
 }
@@ -1627,10 +1631,17 @@ pub fn otherwise_tooltip(lines: &[usize], property: &str, state: Option<&str>, t
 ///
 /// `prefix` is the line prefix, such as "Line 6" or "Clear line 2", and the tooltip of [`otherwise_tooltip`] follows
 /// the first sentence.
-pub fn otherwise_notice(prefix: &str, lines: &[usize], property: &str, state: Option<&str>, thing: &str) -> String {
+pub fn otherwise_notice(
+    prefix: &str,
+    lines: &[usize],
+    property: &str,
+    state: Option<&str>,
+    thing: &str,
+    in_repeat: bool,
+) -> String {
     format!(
         "{prefix} now starts with otherwise. {}",
-        otherwise_tooltip(lines, property, state, thing)
+        otherwise_tooltip(lines, property, state, thing, in_repeat)
     )
 }
 
@@ -2104,7 +2115,8 @@ pub const LINES_HELP_AGENTS: &str = "Every agent of this kind follows these line
                                      properties. Everyone reads the world as it was at the start of the tick, and all \
                                      changes land together at the end of it. Whatever no line changes stays as it \
                                      was. When two changes to one property both apply, the higher line wins, and the \
-                                     lower one shows \"otherwise\".";
+                                     lower one shows \"otherwise\". Inside a Repeat, the first time a change applies \
+                                     decides, so a lower line that applies earlier wins.";
 
 /// Example of the Lines help beside the card of a kind of agent.
 pub const LINES_HELP_AGENTS_EXAMPLE: &str =

@@ -234,8 +234,9 @@ grid sheets today. Until then a sheet is test data in `src/tests/sheets/`. `sir_
 `mobile_sir.toml` (chances once for each infected person nearby) and `sird.toml` (SIR with a Dead
 state, two competing rates of 0.05 per day out of Infected, its lines numbered in creation order)
 stay test data. `sir_chance.toml` and `sird.toml` have copies in henad-models'
-`tests/fixtures/sheets/` for the device gates. No test holds the copies equal, and an edit to one is
-copied to the other. The graph starters stay graph files in `starters/`.
+`tests/fixtures/sheets/` (`agents/models.md`) and henad-app's `src/tests/sheets/`
+(`agents/henad-app-card.md`), and `the_copies_of_the_test_sheets_equal_their_source` fails when one
+differs. The graph starters stay graph files in `starters/`.
 
 **Relations.** `CardRelations::new(&document, &card)` holds a card's display order (a block's lines
 after the block line, an id listed twice or inside its own block taken once at its first place, an
@@ -247,7 +248,7 @@ the condition of each When around it, and a Become's named start state as "my X 
 as its index). An all of gives each item, nested all of included, and any of, none of, a result
 chip, a draw and a `within` give nothing. A test reads `my` or a result chip
 (with its part or property) against fixed numbers, percents or states, `outside` included, and a
-result of a line inside a Repeat gives none (`inside_repeat`), as each time round works it out
+result of a line inside a Repeat gives none (`repeat_of`), as each time round works it out
 again. Two tests exclude each other when no tried value passes both: each listed number, its
 neighbours (+-1 for whole values, +-0.5 otherwise), the midpoints, and the ends +-2, with a 1e-9
 allowance. Whole means a States property, a Count result, or a Look around's `count` part or Count

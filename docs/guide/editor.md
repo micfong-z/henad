@@ -202,6 +202,8 @@ A world of agents runs a card over its kind of agent, such as "Each tick, every 
 - **+ Change** adds a Become, a Set, a Steer of a number or an arrow by a value or towards it, a Keep between that holds a number or an arrow's length inside two bounds, a Move by an arrow or to a cell, a Leave that marks the ground, and a Record that counts an event.
 - **+ Repeat...** adds a Repeat line, whose lines run that many times each tick.
   Its number of times takes an integer parameter, and **New parameter...** there makes one.
+  Each time, the changes of one property inside it are tried from the top, and the first time a change applies decides.
+  With "Become A from S, with chance 0.1" above "otherwise become B from S, with chance 0.5", repeated 4 times, 0.174 of the agents in S become A and 0.785 become B.
 
 A look at agents starts with one summary, an average.
 The select before each summary changes it to a total, the largest, the smallest or a count, or removes it, and **+** after the summaries adds another.
@@ -272,6 +274,13 @@ Press <span class="ui" markdown>:material-check: Apply</span> to install the mod
 A sheet that holds a problem still opens, with the problem under its line, or listed under the panes when no line holds it.
 [Sheets](../reference/model-files.md#sheets) in the model file reference describes the file.
 
+While a run of another model is past tick 0, the preview waits, and the Editor reads **Preview waits for the running model. Press Offload in Playback to show this one.**
+Apply then installs the sheet and selects it, and the run keeps going.
+The Editor reads **Model applied. Press Build to run it.**, and <span class="ui" markdown>:material-restart: Build</span> replaces the run with the sheet at its own size.
+Press <span class="ui" markdown>:material-tray-remove: Offload</span> instead to end the run, and the preview takes the Viewport.
+The Editor then reads **Preview at 256 × 256 cells starts at tick 0. Press Play to run it, or Apply to run the model at its own size.**, or the number of agents, and **Press Apply to check and install the model.**
+Build now starts the preview again from tick 0, and Apply runs the sheet at its own size.
+
 ### Fire counts
 
 While the sheet runs, a grey number at the right of each change line counts the cells or agents that line applied to in the last tick.
@@ -282,7 +291,8 @@ A line that works out a result has no count.
 A change other than a Become that always applies has no count either, since it applies to every cell or agent.
 A Become that reads "otherwise" counts only the cells it applied to, and the lines of a competing group count separately.
 A Become from any state also counts the cells already in its state.
-A Set that reads "otherwise", a Move to, and any change inside a Repeat show no count.
+A Set that reads "otherwise" and a Move to show no count.
+Inside a Repeat a Become counts the agents it changed, and every other change shows no count.
 
 ### The Diagram
 
@@ -471,6 +481,7 @@ What happens to the run depends on what was running:
   The app tour's [Model code changes](app.md#model-code-changes) describes the dialog.
 - A run of another model past tick 0 keeps going.
   The Editor reads **Model applied. Press Build to run it.**, and <span class="ui" markdown>:material-restart: Build</span> runs the rule.
+  Once you select another model in the Model tab, Build builds that model, and the Editor reads **Press Apply to check and install the model.**
 
 Applying the code the run already runs changes nothing, and the Editor reads **Model unchanged.**
 

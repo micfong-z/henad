@@ -2,7 +2,7 @@
 //! bindings, and a rule stepped on a device.
 
 use henad_core::authoring::model::binding::BindingDecl;
-use henad_core::authoring::primitives::rng::pcg_hash;
+use henad_core::authoring::primitives::rng::{pcg_hash, pcg4d, random_float};
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::helpers::{bool_param, choice_param, f32_param, u32_param};
 use henad_core::params::{ChoiceOptions, ParamDescriptor, ParamKind, ParamValue};
@@ -17,7 +17,7 @@ use crate::gpu::runtime_grid::test_support::{
     DISPLAY_BINDINGS, MAX_FUNCTION_BYTES, MAX_PRIVATE_BYTES, MAX_STEP_COST, REDUCE_BINDINGS, STEP_BINDINGS, composed,
     costs, module_problems,
 };
-use crate::gpu::runtime_grid::{GridRule, MAX_STEP_BYTES, RuleDeclaration, RuleState};
+use crate::gpu::runtime_grid::{CompiledGridRule, GridRule, MAX_STEP_BYTES, RuleDeclaration, RuleState};
 
 /// Returns the step pass's uniform block that `hooks` write for a `width` by `height` grid seeded with `seed`.
 fn step_block(hooks: &impl GridHooks, width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<u8> {
@@ -683,9 +683,21 @@ fn a_result_past_the_last_state_is_clamped() {
     assert_eq!(state.tick(), 2);
 }
 
-/// A rule that draws every cell's state afresh each tick draws from
-/// `pcg_hash(seed ^ pcg_hash(index ^ pcg_hash(tick)))`, so the tick buffer advances and the stream differs from tick to
-/// tick. The Alive count of each tick equals the count recomputed on the CPU from the seed word of the uniform block.
+/// Returns the state a rule's `rng` starts from at cell `index` and tick `tick`, the Rust twin of the template's
+/// `henad_rng`. `seed` is the seed word of the uniform block.
+fn rng_start(seed: u32, index: u32, tick: u32) -> u32 {
+    pcg4d(pcg4d([seed, index, tick, 0]))[0]
+}
+
+/// Returns the seed word of the uniform block that `compiled`'s hooks write for a `width` by `height` grid.
+fn seed_word(compiled: &CompiledGridRule, width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> u32 {
+    let uniform = step_block(&compiled.hooks(), width, height, params, seed);
+    u32::from_le_bytes([uniform[8], uniform[9], uniform[10], uniform[11]])
+}
+
+/// A rule that draws every cell's state afresh each tick draws from the start state of [`rng_start`], so the tick
+/// buffer advances and the stream differs from tick to tick. The Alive count of each tick equals the count recomputed
+/// on the CPU from the seed word of the uniform block.
 #[test]
 fn a_random_rule_draws_a_fresh_stream_each_tick() {
     let Some(ctx) = headless_context("henad_runtime_grid_random", wgpu::Features::empty()) else {
@@ -701,8 +713,7 @@ fn a_random_rule_draws_a_fresh_stream_each_tick() {
     let entry = compiled.entry(ModelCode::new(GridRule::CODE_FORMAT, rule.step.clone()));
     let (width, height, seed) = (40u32, 24u32, Some(5));
     let params = [ParamValue::U32(width), ParamValue::U32(height), ParamValue::F32(0.3)];
-    let uniform = step_block(&compiled.hooks(), width, height, &params, seed);
-    let seed_word = u32::from_le_bytes([uniform[8], uniform[9], uniform[10], uniform[11]]);
+    let word = seed_word(&compiled, width, height, &params, seed);
     let built = entry
         .build(&params, seed, Some(&ctx))
         .unwrap_or_else(|fault| panic!("{fault}"));
@@ -724,7 +735,7 @@ fn a_random_rule_draws_a_fresh_stream_each_tick() {
             other => panic!("no Alive count: {other:?}"),
         };
         let expected = (0..width * height)
-            .filter(|&index| pcg_hash(pcg_hash(seed_word ^ pcg_hash(index ^ pcg_hash(tick)))) < 0x8000_0000)
+            .filter(|&index| pcg_hash(rng_start(word, index, tick)) < 0x8000_0000)
             .count();
         assert_eq!(alive, expected as f64, "Alive after tick {tick}");
         counts.push(expected);
@@ -733,4 +744,82 @@ fn a_random_rule_draws_a_fresh_stream_each_tick() {
         counts.windows(2).all(|pair| pair[0] != pair[1]),
         "the stream repeats from one tick to the next: {counts:?}"
     );
+}
+
+/// Each cell's two draws on the device equal the draws of its [`rng_start`] state on the CPU. The rule has 256 states,
+/// and a cell's state holds the top four bits of a `next_bits` draw and the whole part of a `next_float` draw below 16.
+#[test]
+fn a_rule_draws_the_words_of_the_rust_twin() {
+    let Some(ctx) = headless_context("henad_runtime_grid_twin", wgpu::Features::empty()) else {
+        log::warn!("skipping a_rule_draws_the_words_of_the_rust_twin: no adapter");
+        return;
+    };
+    let mut rule = GridRule::life();
+    rule.states = (0..=255u8)
+        .map(|number| RuleState::new(format!("S{number}"), [number, 0, 0, 255]))
+        .collect();
+    rule.step = format!(
+        "#import henad::rng::{{next_bits, next_float}}\n{STEP_HEAD}    \
+         let high = next_bits(rng) >> 28u;\n    \
+         return high * 16u + u32(next_float(rng, 16.0));\n}}\n"
+    );
+    let compiled = rule.compile().unwrap_or_else(|problems| panic!("{problems:#?}"));
+    let entry = compiled.entry(ModelCode::new(GridRule::CODE_FORMAT, rule.step.clone()));
+    let (width, height, seed) = (40u32, 24u32, Some(9));
+    let params = [ParamValue::U32(width), ParamValue::U32(height), ParamValue::F32(0.3)];
+    let word = seed_word(&compiled, width, height, &params, seed);
+    let built = entry
+        .build(&params, seed, Some(&ctx))
+        .unwrap_or_else(|fault| panic!("{fault}"));
+    let ModelState::Gpu(mut state) = built else {
+        panic!("a rule builds a GPU state");
+    };
+    for tick in 0..4u32 {
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        state.encode_steps(&mut encoder, 1, None);
+        ctx.queue.submit(Some(encoder.finish()));
+        let cells = state
+            .read_buffer(0)
+            .unwrap_or_else(|| panic!("a rule keeps its cells in buffer 0"));
+        let expected: Vec<u32> = (0..width * height)
+            .map(|index| {
+                let first = pcg_hash(rng_start(word, index, tick));
+                let second = pcg_hash(first);
+                (first >> 28) * 16 + random_float(second, 16.0) as u32
+            })
+            .collect();
+        assert_eq!(cells, expected, "the cells after tick {tick}");
+    }
+}
+
+/// A start state `pcg_hash(seed ^ pcg_hash(index ^ pcg_hash(tick)))` repeats whole fields of draws. Where
+/// `pcg_hash(t1) ^ pcg_hash(t2)` is a `d` below the cell count, it starts cell `e` at tick `t2` from the state of cell
+/// `e ^ d` at tick `t1`, for every seed. Each pair below is the first such pair at its grid side. The start state of
+/// [`rng_start`] keeps the two fields apart.
+#[test]
+fn one_tick_draws_no_shifted_copy_of_another_ticks_field() {
+    let chain = |seed: u32, index: u32, tick: u32| pcg_hash(seed ^ pcg_hash(index ^ pcg_hash(tick)));
+    for (first, second, side) in [(3u32, 326u32, 256u32), (42, 119, 1024), (1, 24, 4096), (2, 3, 16384)] {
+        let cells = side * side;
+        let shift = pcg_hash(first) ^ pcg_hash(second);
+        assert!(shift < cells, "ticks {first} and {second} at side {side}");
+        for seed in [0u32, 5, 0xDEAD_BEEF] {
+            let sample = (0..cells).step_by((cells / 1024) as usize);
+            for index in sample {
+                assert_eq!(
+                    chain(seed, index, second),
+                    chain(seed, index ^ shift, first),
+                    "the old chain at cell {index} of side {side}"
+                );
+                assert_ne!(
+                    rng_start(seed, index, second),
+                    rng_start(seed, index ^ shift, first),
+                    "cell {index} at tick {second} starts from cell {} at tick {first}, side {side}, seed {seed}",
+                    index ^ shift
+                );
+            }
+        }
+    }
 }

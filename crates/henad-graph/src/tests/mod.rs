@@ -30,6 +30,7 @@ mod sheet_ground;
 mod sheet_lower;
 mod sheet_mutation;
 mod sheet_rates;
+mod sheet_repeat;
 mod sheet_sentence;
 mod sheet_writer;
 mod sum_fields;
