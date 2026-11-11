@@ -28,7 +28,7 @@ use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use web_time::Instant;
 
 use super::EditorModel;
-use crate::state::{AppState, PreviewRun, setup_message, too_large_message};
+use crate::state::{AppState, PreviewRun, setup_message};
 
 /// Largest side of a preview's grid in cells.
 pub const PREVIEW_SIDE: u32 = 256;
@@ -240,9 +240,8 @@ fn build_preview(app: &mut AppState) {
     };
     let (mut values, run) = preview_values(&entry);
     with_tried(&entry, &mut values, app.editor.preview.tried_values());
-    let shortfalls = app.entry_shortfalls(&entry, &values);
-    if !shortfalls.is_empty() {
-        let problem = CodeDiagnostic::error(too_large_message(&shortfalls));
+    if let Some(message) = app.too_large(&entry, &values) {
+        let problem = CodeDiagnostic::error(message);
         app.editor.preview.state = PreviewState::Refused(vec![problem]);
         return;
     }

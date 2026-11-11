@@ -161,8 +161,7 @@ fn a_live_parameter_reaches_the_running_preview_and_the_tick_keeps_counting() {
         return;
     };
     preview(&mut app, "sir.toml");
-    app.sim_thread.as_mut().expect("a run").play();
-    app.sim_running = true;
+    app.play();
     let (reached, _) = snapshot_where(&mut app, "Infected", |tick| tick >= 5);
 
     try_value(&mut app, "infection_rate", 2.0);

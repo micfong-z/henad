@@ -1,5 +1,6 @@
 //! Tests of the unsaved edits the Editor tracks per model, and of the dialog that asks before New model, New grid rule,
-//! New node graph, Open model, Open in Editor or Edit model replaces a model with unsaved edits.
+//! New node graph, Open model, Open in Editor or Edit model replaces a model with unsaved edits, and before the window
+//! closes.
 
 use egui::accesskit::Role;
 use henad_graph::document::World;
@@ -167,6 +168,64 @@ fn the_editor_asks_before_replacing_a_model_with_unsaved_edits() {
         Some("Cells live and die by their neighbours.")
     );
     assert!(harness.app.editor.unsaved_names().is_empty());
+}
+
+/// A close request of the window with unsaved edits waits, and the dialog asks about them. Cancel keeps the app open,
+/// a save canceled in its own dialog keeps it open with the edits, and Save model saves the model and then closes the
+/// window.
+#[test]
+fn a_close_request_with_unsaved_edits_asks_and_saves_before_closing() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(life_sheet());
+    edit_purpose(&mut harness, "Cells live and die by their neighbours.");
+    let sentence = sentence_of("Game of Life");
+
+    assert!(harness.app.hold_close(), "the window closed over unsaved edits");
+    assert_eq!(asking(&mut harness).as_deref(), Some(sentence.as_str()));
+    click_in(&mut harness, &sentence, CANCEL);
+    assert_eq!(asking(&mut harness), None);
+    assert!(!harness.app.closing, "Cancel closed the window");
+    assert!(harness.app.editor.model.sheet().is_some());
+
+    assert!(harness.app.hold_close());
+    click_in(&mut harness, &sentence, SAVE_MODEL);
+    harness.app.finish_save(SaveResult::Canceled);
+    assert!(!harness.app.closing, "a canceled save closed the window");
+    assert_eq!(harness.app.editor.unsaved_names(), ["Game of Life"]);
+    assert_eq!(asking(&mut harness), None);
+
+    assert!(harness.app.hold_close());
+    click_in(&mut harness, &sentence, SAVE_MODEL);
+    assert!(!harness.app.closing, "the window closed before the save reported");
+    harness.app.finish_save(SaveResult::Saved("life.toml".to_owned()));
+    assert!(harness.app.closing, "the saved model's window stayed open");
+    assert!(harness.app.editor.unsaved_names().is_empty());
+    assert!(!harness.app.hold_close(), "the closing window held its close request");
+}
+
+/// A close request of the window without unsaved edits closes it at once, and Discard changes closes a window whose
+/// model holds unsaved edits.
+#[test]
+fn a_close_request_closes_at_once_without_edits_and_after_discard_with_them() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(life_sheet());
+    assert!(
+        !harness.app.hold_close(),
+        "a model without edits held the close request"
+    );
+    assert_eq!(asking(&mut harness), None);
+
+    edit_purpose(&mut harness, "A purpose nobody saves.");
+    let sentence = sentence_of("Game of Life");
+    assert!(harness.app.hold_close());
+    assert!(!harness.app.closing);
+    click_in(&mut harness, &sentence, DISCARD_CHANGES);
+    assert!(harness.app.closing, "Discard changes kept the window open");
+    assert!(!harness.app.hold_close());
 }
 
 /// Returns the sentence of the dialog for the one model `name`.

@@ -63,8 +63,8 @@ fn stats_chart(ui: &mut egui::Ui, app: &AppState) {
     stats_plot(ui, history, app.loaded_time());
 
     // The latest snapshot's vector and histogram stats get a plot each.
-    if let Some(snap) = &app.snapshot {
-        for stat in &snap.stats {
+    if let Some(snapshot) = &app.snapshot {
+        for stat in &snapshot.stats {
             match stat.value() {
                 StatValue::Vector2D { x, y } => {
                     vector_arrow_chart(ui, stat.label(), *x, *y, stat.color());
@@ -84,15 +84,18 @@ const SINGLE_SAMPLE_RADIUS: f32 = 3.0;
 /// Draws every stat of `history` over time, the x axis in ticks or, for a run with a time scale, in its unit.
 ///
 /// The y range holds 0. A series of one sample, as at tick 0, draws as a dot in its colour, since a line through one
-/// point draws nothing.
+/// point draws nothing, and the x range then spans the tick of the sample, as [`single_sample_x_range`] returns it.
 fn stats_plot(ui: &mut egui::Ui, history: &StatsHistory, time: Option<RunTime>) -> PlotResponse<()> {
-    let plot = egui_plot::Plot::new("stats_plot")
+    let mut plot = egui_plot::Plot::new("stats_plot")
         .height(200.0)
         .show_axes(true)
         .x_axis_label(axis_label(time.map(|time| time.unit)))
         .include_y(0.0)
         // In the order the model lists its stats, which for a sheet is the order of its measures.
         .legend(egui_plot::Legend::default().follow_insertion_order(true));
+    if let Some([start, end]) = single_sample_x_range(history, time) {
+        plot = plot.include_x(start).include_x(end);
+    }
     show_plot(ui, plot, |plot_ui| {
         for (column, descriptor) in history.descriptors().iter().enumerate() {
             let [r, g, b, _] = descriptor.color();
@@ -111,6 +114,19 @@ fn stats_plot(ui: &mut egui::Ui, history: &StatsHistory, time: Option<RunTime>) 
     })
 }
 
+/// Returns the x range of a plot of `history` while it holds one sample: from the sample's tick to the next tick, each
+/// at [`plot_x`]. Returns `None` for any other number of samples.
+///
+/// Note that `egui_plot` widens an x range of zero width to the height of the y range. A count of 65536 cells would
+/// then stretch the x axis of one sample at tick 0 from about -34000 to 34000.
+fn single_sample_x_range(history: &StatsHistory, time: Option<RunTime>) -> Option<[f64; 2]> {
+    if history.len() != 1 {
+        return None;
+    }
+    let tick = history.tick(0)?;
+    Some([plot_x(tick, time), plot_x(tick + 1, time)])
+}
+
 /// Returns the points of stat column `column` of `history`, each sample at [`plot_x`] of its tick.
 fn stat_points(history: &StatsHistory, column: usize, time: Option<RunTime>) -> Vec<[f64; 2]> {
     (0..history.len())
@@ -124,10 +140,10 @@ fn stat_points(history: &StatsHistory, column: usize, time: Option<RunTime>) -> 
 fn vector_arrow_chart(ui: &mut egui::Ui, label: &str, x: f64, y: f64, color: [u8; 4]) {
     let [r, g, b, _] = color;
     let arrow_color = egui::Color32::from_rgb(r, g, b);
-    let mag = x.hypot(y);
+    let magnitude = x.hypot(y);
 
     ui.separator();
-    ui.label(format!("{label}: ({x:.2}, {y:.2})  |{mag:.2}|"));
+    ui.label(format!("{label}: ({x:.2}, {y:.2})  |{magnitude:.2}|"));
 
     let plot = egui_plot::Plot::new(format!("vec_{label}"))
         .height(ui.available_width())
@@ -147,12 +163,12 @@ fn vector_arrow_chart(ui: &mut egui::Ui, label: &str, x: f64, y: f64, color: [u8
                 .tip_length(8.0),
         );
         // A reference circle sits at the current magnitude.
-        if mag > 1e-6 {
-            let n = 64;
-            let circle: Vec<[f64; 2]> = (0..=n)
-                .map(|i| {
-                    let angle = std::f64::consts::TAU * i as f64 / n as f64;
-                    [mag * angle.cos(), mag * angle.sin()]
+        if magnitude > 1e-6 {
+            let segments = 64;
+            let circle: Vec<[f64; 2]> = (0..=segments)
+                .map(|segment| {
+                    let angle = std::f64::consts::TAU * segment as f64 / segments as f64;
+                    [magnitude * angle.cos(), magnitude * angle.sin()]
                 })
                 .collect();
             plot_ui.line(
@@ -198,12 +214,17 @@ mod tests {
     use henad_core::metadata::TimeUnit;
     use henad_core::view::{StatDescriptor, StatEntry, StatValue, StatsHistory};
 
-    use super::{stat_points, stats_plot};
+    use super::{single_sample_x_range, stat_points, stats_plot};
     use crate::ui::time_axis::RunTime;
 
     const HALF_DAY: RunTime = RunTime {
         unit: TimeUnit::Day,
         tick_length: 0.5,
+    };
+
+    const DAY: RunTime = RunTime {
+        unit: TimeUnit::Day,
+        tick_length: 1.0,
     };
 
     /// Returns a history of one stat, Infected, holding `samples`, each a tick and its value.
@@ -216,11 +237,13 @@ mod tests {
         history
     }
 
-    /// Plot drawn for one frame: its texts, the number of circles it painted, and the lowest y it shows.
+    /// Plot drawn for one frame: its texts, the number of circles it painted, the lowest y it shows, and the range of x
+    /// it shows.
     struct DrawnPlot {
         texts: Vec<String>,
         circles: usize,
         lowest_y: f64,
+        x_range: [f64; 2],
     }
 
     /// Adds the text of every text shape in `shape` to `texts` and counts its circles into `circles`.
@@ -245,8 +268,11 @@ mod tests {
             ..egui::RawInput::default()
         };
         let mut lowest_y = f64::NAN;
+        let mut x_range = [f64::NAN; 2];
         let output = context.run_ui(input, |ui| {
-            lowest_y = stats_plot(ui, history, time).transform.bounds().min()[1];
+            let bounds = *stats_plot(ui, history, time).transform.bounds();
+            lowest_y = bounds.min()[1];
+            x_range = [bounds.min()[0], bounds.max()[0]];
         });
         let (mut texts, mut circles) = (Vec::new(), 0);
         for clipped in &output.shapes {
@@ -257,6 +283,7 @@ mod tests {
             texts,
             circles,
             lowest_y,
+            x_range,
         }
     }
 
@@ -304,5 +331,30 @@ mod tests {
         let two = draw(&history(&[(0, 94.0), (1, 96.0)]), None).circles;
         // The legend paints the same circles for both, so the dot is the one more.
         assert_eq!(one, two + 1, "{one} circles with one sample, {two} with two");
+    }
+
+    /// One sample at tick 0 shows the tick it sits on, whatever the size of its values, with a time scale or without.
+    /// Left to `egui_plot`, a range of zero width takes the height of the y range, and a count of 65536 cells stretched
+    /// it to tens of thousands.
+    #[test]
+    fn one_sample_shows_the_tick_it_sits_on() {
+        let one = history(&[(0, 65_536.0)]);
+        assert_eq!(single_sample_x_range(&one, None), Some([0.0, 1.0]));
+        assert_eq!(single_sample_x_range(&one, Some(DAY)), Some([0.0, 1.0]));
+        assert_eq!(single_sample_x_range(&one, Some(HALF_DAY)), Some([0.0, 0.5]));
+        for time in [None, Some(DAY)] {
+            let [start, end] = draw(&one, time).x_range;
+            assert!(
+                (-0.1..0.0).contains(&start) && (1.0..1.1).contains(&end),
+                "x from {start} to {end} with {time:?}"
+            );
+        }
+
+        let two = history(&[(0, 65_536.0), (1, 65_000.0)]);
+        assert_eq!(
+            single_sample_x_range(&two, None),
+            None,
+            "two samples set their own range"
+        );
     }
 }

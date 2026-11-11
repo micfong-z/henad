@@ -286,8 +286,7 @@ fn after_play_a_start_edit_waits_and_a_size_edit_restarts_with_the_notice() {
     harness.app.wait_for_build();
 
     // Play, as Playback's button presses it.
-    harness.app.sim_thread.as_mut().expect("a run").play();
-    harness.app.sim_running = true;
+    harness.app.play();
     wait_for_snapshot(&mut harness.app, |tick| tick > 0);
     assert!(harness.app.sheet_preview_past_start());
 
@@ -1017,8 +1016,7 @@ fn a_parameter_edit_after_play_restarts_at_tick_zero_with_the_notice() {
     harness.open_sheet(starters()[0].text);
     settle_preview(&mut harness);
     harness.app.wait_for_build();
-    harness.app.sim_thread.as_mut().expect("a run").play();
-    harness.app.sim_running = true;
+    harness.app.play();
     wait_for_snapshot(&mut harness.app, |tick| tick > 0);
     assert!(harness.app.sheet_preview_past_start());
     let key = sheet(&harness).preview_key();

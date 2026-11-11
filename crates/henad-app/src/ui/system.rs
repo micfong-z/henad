@@ -47,55 +47,47 @@ pub fn system_ui(ui: &mut egui::Ui, app: &AppState) {
         ui.add_space(4.0);
         ui.strong("Host");
         kv_grid(ui, "system_host_grid").show(ui, |ui, rows| {
-            ui.label("Platform");
-            ui.label(format!("{} ({})", info.host.os, info.host.arch));
-            rows.end_row(ui);
+            rows.row(ui, "Platform", format!("{} ({})", info.host.os, info.host.arch));
 
-            ui.label("Logical CPUs");
-            ui.label(
+            rows.row(
+                ui,
+                "Logical CPUs",
                 info.host
                     .logical_cpus
                     .map_or_else(|| "Unknown".to_owned(), |n| n.to_string()),
             );
-            rows.end_row(ui);
 
-            ui.label("Worker threads");
-            ui.label(
+            rows.row(
+                ui,
+                "Worker threads",
                 info.host
                     .worker_threads
                     .map_or_else(|| "None (single-threaded)".to_owned(), |n| n.to_string()),
             );
-            rows.end_row(ui);
         });
 
         ui.add_space(8.0);
         ui.strong("Graphics");
         kv_grid(ui, "system_gpu_grid").show(ui, |ui, rows| {
-            ui.label("Adapter");
-            ui.label(info.adapter.name.as_str());
-            rows.end_row(ui);
+            rows.row(ui, "Adapter", info.adapter.name.as_str());
 
-            ui.label("Type");
-            ui.label(device_type_name(info.adapter.device_type));
-            rows.end_row(ui);
+            rows.row(ui, "Type", device_type_name(info.adapter.device_type));
 
-            ui.label("Backend");
-            ui.label(info.adapter.backend.to_string());
-            rows.end_row(ui);
+            rows.row(ui, "Backend", info.adapter.backend.to_string());
 
             if !info.adapter.driver_info.is_empty() {
-                ui.label("Driver");
-                ui.label(info.adapter.driver_info.as_str());
-                rows.end_row(ui);
+                rows.row(ui, "Driver", info.adapter.driver_info.as_str());
             }
 
-            ui.label("Timestamp query");
-            ui.label(if info.timestamp_query {
-                "Supported"
-            } else {
-                "Unavailable"
-            });
-            rows.end_row(ui);
+            rows.row(
+                ui,
+                "Timestamp query",
+                if info.timestamp_query {
+                    "Supported"
+                } else {
+                    "Unavailable"
+                },
+            );
 
             ui.label("Network edges");
             if info.vertex_storage {

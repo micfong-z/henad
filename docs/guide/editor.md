@@ -35,6 +35,7 @@ New model, New grid rule, New node graph and Open model replace the Editor's mod
 Edit model replaces it too, but keeps the model, your edits since the last Apply included, while the selected model runs the code the Editor applied last.
 While the model holds changes you have not saved since you opened or made it, a dialog names it first, such as **Game of Life has unsaved changes.**
 Press <span class="ui">Save model</span> to save it and then replace it, <span class="ui">Discard changes</span> to replace it without saving, or <span class="ui">Cancel</span> to keep it.
+Closing the window of the desktop app asks the same, and the app closes once the model is saved or its changes discarded.
 Apply does not save the model, and a save you cancel keeps it in the Editor.
 A sheet converted to a node graph is held beside its copy, and the dialog names it too while it holds unsaved changes.
 

@@ -97,8 +97,7 @@ fn the_change_lines_show_their_counts_while_playing_and_keep_them_when_paused() 
         let before = line_bounds(&harness.settle(), "Line 3: ");
 
         // Play, as Playback's button presses it.
-        harness.app.sim_thread.as_mut().expect("a preview runs").play();
-        harness.app.sim_running = true;
+        harness.app.play();
         let tick = wait_for_counts(&mut harness);
         let counts = harness
             .app
@@ -160,8 +159,7 @@ fn the_change_lines_show_their_counts_while_playing_and_keep_them_when_paused() 
         );
 
         // Pause, then let any snapshot in flight land.
-        harness.app.sim_thread.as_mut().expect("a preview runs").pause();
-        harness.app.sim_running = false;
+        harness.app.pause_simulation();
         std::thread::sleep(std::time::Duration::from_millis(200));
         if let Some(snapshot) = harness
             .app
@@ -195,8 +193,7 @@ fn a_sheet_shows_no_counts_of_a_run_of_other_code() {
     let text = starter_text("game_of_life.toml");
     harness.open_sheet(text);
     build_preview(&mut harness);
-    harness.app.sim_thread.as_mut().expect("a preview runs").play();
-    harness.app.sim_running = true;
+    harness.app.play();
     wait_for_counts(&mut harness);
     assert_eq!(count_labels(&mut harness).len(), 2);
 
@@ -239,8 +236,7 @@ fn an_edit_hides_the_counts_and_a_blank_keeps_the_column() {
     harness.screen = egui::vec2(700.0, 1400.0);
     harness.open_sheet(starter_text("game_of_life.toml"));
     build_preview(&mut harness);
-    harness.app.sim_thread.as_mut().expect("a preview runs").play();
-    harness.app.sim_running = true;
+    harness.app.play();
     wait_for_counts(&mut harness);
     assert_eq!(count_labels(&mut harness).len(), 2);
     // The sentence of line 3 keeps its rows while the last control stays where it was in the line.

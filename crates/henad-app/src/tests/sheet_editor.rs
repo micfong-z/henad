@@ -131,8 +131,7 @@ fn every_sheet_starter_opens_as_a_sheet_previews_at_tick_zero_plays_and_applies(
         wait_for_snapshot(&mut app, |tick| tick == 0);
 
         // Play, as Playback's button presses it.
-        app.sim_thread.as_mut().expect("a run").play();
-        app.sim_running = true;
+        app.play();
         wait_for_snapshot(&mut app, |tick| tick > 0);
 
         apply(&mut app);
@@ -379,8 +378,7 @@ fn a_sheet_preview_waits_at_tick_zero_until_play() {
     );
 
     // Play, as Playback's button presses it.
-    app.sim_thread.as_mut().expect("a run").play();
-    app.sim_running = true;
+    app.play();
     let tick = wait_for_snapshot(&mut app, |tick| tick > 0).tick;
     assert!(tick > 0);
     assert!(tick_counter(&app).is_some_and(|counter| counter.ends_with("(a tick is one step of time)")));
@@ -417,8 +415,7 @@ fn a_rebuild_replays_the_same_start() {
     open(&mut app, starter_text("game_of_life.toml"));
     settle(&mut app);
     let first = tick_zero_stat(&mut app, "Alive");
-    app.sim_thread.as_mut().expect("a run").play();
-    app.sim_running = true;
+    app.play();
     wait_for_snapshot(&mut app, |tick| tick > 0);
 
     // Build replays the preview's start while the Editor holds the sheet.

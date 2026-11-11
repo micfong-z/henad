@@ -5,22 +5,22 @@ use crate::state::AppState;
 use henad_core::view::StatValue;
 
 pub fn stats_ui(ui: &mut egui::Ui, app: &AppState) {
-    let Some(snap) = &app.snapshot else {
+    let Some(snapshot) = &app.snapshot else {
         ui.label("No simulation loaded.");
         return;
     };
 
     crate::ui::kv_grid(ui, "stats_grid").show(ui, |ui, rows| {
-        for stat in &snap.stats {
+        for stat in &snapshot.stats {
             let [r, g, b, _] = stat.color();
             let color = egui::Color32::from_rgb(r, g, b);
             ui.colored_label(color, stat.label());
             ui.horizontal(|ui| {
                 let (text, data_type) = match stat.value() {
-                    StatValue::Scalar(v) => (format_scalar(*v), "Scalar"),
+                    StatValue::Scalar(value) => (format_scalar(*value), "Scalar"),
                     StatValue::Vector2D { x, y } => {
-                        let mag = x.hypot(*y);
-                        (format!("({x:.1}, {y:.1}) |{mag:.1}|"), "Vector2D")
+                        let magnitude = x.hypot(*y);
+                        (format!("({x:.1}, {y:.1}) |{magnitude:.1}|"), "Vector2D")
                     }
                     StatValue::Histogram { counts, .. } => {
                         let total: u64 = counts.iter().sum();
@@ -42,11 +42,11 @@ pub fn stats_ui(ui: &mut egui::Ui, app: &AppState) {
 }
 
 /// Formats a whole value without decimals, and any other value with up to three decimals.
-fn format_scalar(v: f64) -> String {
-    if v.fract() == 0.0 {
-        format!("{v:.0}")
+fn format_scalar(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
     } else {
-        let text = format!("{v:.3}");
+        let text = format!("{value:.3}");
         text.trim_end_matches('0').trim_end_matches('.').to_owned()
     }
 }

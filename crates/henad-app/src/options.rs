@@ -384,7 +384,6 @@ mod tests {
     use henad_compute::entry::{ModelSet, register_grid_model};
     use henad_core::action::{Schedule, Scheduled};
     use henad_core::authoring::model::grid_model::GridModel;
-    use henad_core::explore::replay::Replay;
     use henad_core::grid::Grid2D;
     use henad_core::params::{ParamDescriptor, ParamValue};
     use henad_core::topology::NeighborhoodKind;
@@ -392,6 +391,7 @@ mod tests {
 
     use super::{AppOpening, AppOptions, OpeningError};
     use crate::state::OpenAt;
+    use crate::tests::support::replay;
 
     /// A host's own model under the id of an example model, declaring no parameters.
     struct OtherSir;
@@ -428,14 +428,7 @@ mod tests {
 
     fn run_of(model: &str, params: Vec<ParamValue>) -> AppOpening {
         AppOpening::Run {
-            replay: Replay {
-                model: model.to_owned(),
-                params,
-                seed: 1,
-                schedule: Schedule::default(),
-                ticks: 10,
-                label: "Sweep run 0".to_owned(),
-            },
+            replay: replay(model, params),
             open_at: OpenAt::Start,
         }
     }

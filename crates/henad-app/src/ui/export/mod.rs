@@ -3,7 +3,7 @@
 pub mod image;
 pub mod metadata;
 
-use henad_compute::snapshot::SnapshotView;
+use henad_compute::snapshot::{CpuLayers, SnapshotView};
 use henad_core::export::{StatsWriteError, StatsWriter, state as state_export};
 use henad_core::view::StatEntry;
 
@@ -205,7 +205,10 @@ fn recording_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
 fn state_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
     ui.strong("Current state");
 
-    let is_cpu = matches!(app.snapshot.as_ref().map(|snap| &snap.view), Some(SnapshotView::Cpu(_)));
+    let is_cpu = matches!(
+        app.snapshot.as_ref().map(|snapshot| &snapshot.view),
+        Some(SnapshotView::Cpu(_))
+    );
 
     let button = ui.add_enabled(
         loaded && is_cpu,
@@ -254,11 +257,11 @@ fn details_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
     }
 }
 
-/// Returns the file name `henad-<model>-<export_type>-<tick>.<ext>`, so that files from several runs sort together.
-fn file_name(app: &AppState, export_type: &str, ext: &str) -> String {
+/// Returns the file name `henad-<model>-<export_type>-<tick>.<extension>`, so that files from several runs sort
+/// together.
+fn file_name(app: &AppState, export_type: &str, extension: &str) -> String {
     let model = app.loaded_entry().map_or("model", |entry| entry.id());
-    let tick = app.snapshot.as_ref().map_or(0, |snap| snap.tick);
-    format!("henad-{model}-{export_type}-{tick}.{ext}")
+    format!("henad-{model}-{export_type}-{}.{extension}", app.current_tick())
 }
 
 /// Returns a writer of a stat series into memory, with a `time` column for a run with a time scale, `time`.
@@ -272,8 +275,7 @@ fn stats_writer(time: Option<RunTime>) -> StatsWriter<Vec<u8>> {
 
 /// Starts a recording at the current tick of the loaded run, with its time scale.
 pub fn start_recording(app: &mut AppState) {
-    let from_tick = app.snapshot.as_ref().map_or(0, |snap| snap.tick);
-    app.recording = Recording::start(from_tick, app.loaded_time());
+    app.recording = Recording::start(app.current_tick(), app.loaded_time());
     app.export_status = None;
 }
 
@@ -286,12 +288,12 @@ pub fn start_recording(app: &mut AppState) {
 pub fn history_csv(app: &AppState) -> Option<Result<Vec<u8>, StatsWriteError>> {
     let history = app.stats_history.as_ref()?;
     let mut writer = stats_writer(app.loaded_time());
-    for j in 0..history.len() {
-        let (Some(entries), Some(tick)) = (history.entries(j), history.tick(j)) else {
+    for position in 0..history.len() {
+        let (Some(entries), Some(tick)) = (history.entries(position), history.tick(position)) else {
             break;
         };
-        if let Err(err) = writer.push(tick, &entries) {
-            return Some(Err(err));
+        if let Err(error) = writer.push(tick, &entries) {
+            return Some(Err(error));
         }
     }
     Some(writer.into_inner().map(|(csv, _)| csv))
@@ -300,7 +302,7 @@ pub fn history_csv(app: &AppState) -> Option<Result<Vec<u8>, StatsWriteError>> {
 fn export_history(app: &mut AppState) {
     match history_csv(app) {
         Some(Ok(csv)) => app.save_as(SaveTarget::Export, &file_name(app, "stats", "csv"), csv),
-        Some(Err(err)) => app.export_status = Some(format!("Export failed: {err}")),
+        Some(Err(error)) => app.export_status = Some(format!("Export failed: {error}")),
         None => {}
     }
 }
@@ -322,31 +324,31 @@ fn export_state(app: &mut AppState) {
     };
 
     let mut out = Vec::new();
-    let written = layers
-        .grid
-        .as_ref()
-        .map_or(Ok(()), |grid| {
-            state_export::write_grid(&mut out, grid.width, grid.height, &grid.cells)
-        })
-        .and_then(|()| {
-            layers.points.as_ref().map_or(Ok(()), |points| {
-                let color = (!points.color.is_empty()).then_some(points.color.as_slice());
-                state_export::write_points(&mut out, &points.pos_x, &points.pos_y, color)
-            })
-        })
-        .and_then(|()| match (&layers.points, &layers.edges) {
-            (Some(points), Some(edges)) => {
-                let rows = state_export::point_rows(&points.pos_x, &points.pos_y);
-                state_export::write_edges(&mut out, &edges.src, &edges.dst, &edges.color, &rows)
-            }
-            _ => Ok(()),
-        });
-
-    match written {
+    match write_state(&mut out, layers) {
         Ok(()) if out.is_empty() => app.export_status = Some("Model exposes no view to export".to_owned()),
         Ok(()) => app.save_as(SaveTarget::Export, &file_name(app, "state", "txt"), out),
-        Err(err) => app.export_status = Some(format!("Export failed: {err}")),
+        Err(error) => app.export_status = Some(format!("Export failed: {error}")),
     }
+}
+
+/// Writes the grid of `layers`, then its points, then its edges when it has points, to `out`.
+///
+/// # Errors
+///
+/// Returns the first error of a write.
+fn write_state(out: &mut Vec<u8>, layers: &CpuLayers) -> std::io::Result<()> {
+    if let Some(grid) = &layers.grid {
+        state_export::write_grid(out, grid.width, grid.height, &grid.cells)?;
+    }
+    if let Some(points) = &layers.points {
+        let color = (!points.color.is_empty()).then_some(points.color.as_slice());
+        state_export::write_points(out, &points.pos_x, &points.pos_y, color)?;
+        if let Some(edges) = &layers.edges {
+            let rows = state_export::point_rows(&points.pos_x, &points.pos_y);
+            state_export::write_edges(out, &edges.src, &edges.dst, &edges.color, &rows)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

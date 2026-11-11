@@ -59,7 +59,7 @@ fn app_over(entry: ModelEntry) -> Option<AppState> {
 fn build_and_step(app: &mut AppState, probe: &Probe) {
     app.reset_simulation();
     app.wait_for_build();
-    app.sim_thread.as_mut().expect("the run").step_once();
+    app.sim_thread.as_mut().expect("the run").send(SimCommand::StepOnce);
     wait_until("the first step", || !Probe::of(&probe.step_threads, 1).is_empty());
 }
 
@@ -127,7 +127,10 @@ fn a_cpu_build_after_a_detach_runs_on_a_fresh_pool() {
     );
     assert_eq!(app.stopping_status(), Some(DID_NOT_STOP));
 
-    app.sim_thread.as_mut().expect("the second run").step_once();
+    app.sim_thread
+        .as_mut()
+        .expect("the second run")
+        .send(SimCommand::StepOnce);
     wait_until("the second step", || !Probe::of(&probe.step_threads, 2).is_empty());
     let build_threads = Probe::of(&probe.build_threads, 2);
     assert!(build_threads.iter().all(in_fresh_pool), "built on {build_threads:?}");
@@ -255,7 +258,7 @@ fn a_viewport_frame_beside_a_run_that_holds_its_pool_returns() {
         first.is_some()
     });
     // A step right after a publish holds every worker of the run's pool, and nothing stops the run.
-    thread.step_once();
+    thread.send(SimCommand::StepOnce);
     let workers = rayon::current_num_threads();
     let deadline = Instant::now() + Duration::from_secs(5);
     while probe.held_workers.load(Ordering::SeqCst) < workers && Instant::now() < deadline {

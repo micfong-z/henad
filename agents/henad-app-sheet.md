@@ -42,8 +42,8 @@ and the Cells table shows `START_AGAIN_TO_SEE` under that property's select whil
 holds (Build, which is Start again, clears it). A restart while `past_start` sets `notice` to
 `RESTART_NOTICE`, which `sheet_outcome_ui` lists under the preview line as a warning notice.
 `AppState::sheet_preview_past_start` is `previews_editor_sheet()` and either `Preview::acted` (set
-by `ui/params.rs` when a button of the model is pressed in the preview, cleared by `build_preview`)
-or `!run_at_start()`. `editor_ui` reads it before borrowing the panel and passes it to `sheet_ui`.
+by `ui/params/trial.rs` when a button of the model is pressed in the preview, cleared by
+`build_preview`) or `!run_at_start()`. `editor_ui` reads it before borrowing the panel and passes it to `sheet_ui`.
 
 **The empty world.** `SheetEditor::shows_nothing` holds for a world of cells with no property.
 `preview_source` then reports `has_errors` and `empty`, `preview::poll_at` offloads a running Editor

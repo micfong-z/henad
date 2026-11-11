@@ -5,17 +5,15 @@ use std::sync::Arc;
 use egui::TextureHandle;
 use henad_compute::cpu::sim_thread::{SimCommand, WakeFn};
 use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet};
-use henad_compute::fault::{BUILDING, Fault, FaultSink};
+use henad_compute::fault::FaultSink;
 use henad_compute::simulation::{RunSetup, SetupError};
 use henad_compute::snapshot::Snapshot;
 use henad_core::action::Schedule;
-use henad_core::explore::replay::Replay;
 use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
 use henad_core::view::StatsHistory;
-use henad_explore::output::memory::SweepFiles;
 
-use crate::options::{AppOpening, Product};
+use crate::options::Product;
 use crate::sim_runner::SimRunner;
 use crate::ui::agent_layer::AgentLayer;
 use crate::ui::dock::{Layout, Tab};
@@ -23,9 +21,9 @@ use crate::ui::edge_layer::EdgeStyle;
 use crate::ui::editor::EditorPanel;
 use crate::ui::export::Recording;
 use crate::ui::export::image::PendingCapture;
-use crate::ui::files::open::spawn_open;
-use crate::ui::files::save::{spawn_save, spawn_save_files};
-use crate::ui::files::{OpenOutcome, OpenTarget, SaveOutcome, SaveResult, SaveTarget};
+#[cfg(test)]
+use crate::ui::files::SaveTarget;
+use crate::ui::files::{OpenOutcome, SaveOutcome};
 use crate::ui::params::{INVALID_SEED, parse_seed};
 use crate::ui::results::ResultsPanel;
 use crate::ui::sweep::SweepPanel;
@@ -33,11 +31,15 @@ use crate::ui::time_axis::RunTime;
 use henad_compute::runtime_info::RuntimeInfo;
 
 use henad_compute::gpu::GpuContext;
-use henad_compute::gpu::timing::{DEFAULT_BATCH_SIZE, DEFAULT_TARGET_MS};
+use henad_compute::gpu::sim_thread::GpuBatchSettings;
 
 mod build;
+mod fault;
+mod files;
 mod install;
+mod open;
 mod pool;
+mod preview;
 
 #[cfg(test)]
 pub use build::STILL_STOPPING;
@@ -45,8 +47,11 @@ pub use build::STILL_STOPPING;
 pub use build::STOP_WAIT;
 pub use build::{BUILDING_MODEL, DID_NOT_STOP};
 use build::{PendingBuild, Stopping};
+pub use fault::ShownFault;
 pub use install::{PendingRebuild, remap_schedule, remap_values, same_code};
+pub use open::{OpenAt, OpenedRun, OpeningRefusal};
 pub use pool::{ModelPool, UiPool};
+pub use preview::PreviewRun;
 
 /// Exponential moving average smoothing factor (0..1, higher = more responsive).
 const EMA_ALPHA: f64 = 0.1;
@@ -59,17 +64,6 @@ pub const DEFAULT_HISTORY_LEN: usize = 10_000;
 
 /// Default time in milliseconds that a snapshot can spend on a network's layout.
 const DEFAULT_LAYOUT_BUDGET_MS: f32 = 4.0;
-
-/// Status shown while a save is pending, followed by the file name.
-#[cfg(not(target_arch = "wasm32"))]
-const SAVE_PENDING: &str = "Select location to save";
-
-/// Status shown while a download is pending, followed by the file name.
-#[cfg(target_arch = "wasm32")]
-const SAVE_PENDING: &str = "Downloading";
-
-/// Status of the downloads of several files. A browser can hold back every download after the first.
-const DOWNLOADS_STARTED: &str = "Downloads started. Press Save results again if your browser blocked any.";
 
 /// Per-frame timing breakdown, smoothed with EMA.
 #[derive(Default)]
@@ -164,7 +158,6 @@ pub struct AppState {
     pub grid_texture: Option<TextureHandle>,
     /// Separate from `grid_texture`, so density mode does not overwrite a composite model's field.
     pub density_texture: Option<TextureHandle>,
-    pub density_max: f32,
     pub point_render_mode: PointRenderMode,
     // Edge toggles from the Viewport toolbar, for network models.
     pub show_edges: bool,
@@ -216,82 +209,11 @@ pub struct AppState {
     pub sweep: SweepPanel,
     pub results: ResultsPanel,
     pub editor: EditorPanel,
-    // GPU batching controls
-    pub gpu_adaptive: bool,
-    pub gpu_target_ms: f64,
-    pub gpu_batch_size: u32,
-}
-
-/// Fault the modal shows, with the model it stopped.
-#[derive(Debug)]
-pub struct ShownFault {
-    pub fault: Fault,
-    /// Name of the model the fault stopped, `None` when no model was building or loaded.
-    pub model: Option<String>,
-}
-
-/// Opening that the app could not open, as shown in the Model panel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpeningRefusal {
-    /// Line naming what was not opened, as in "Run not opened".
-    pub lead: &'static str,
-    /// Reason, as in "This build does not include model 'x'".
-    pub reason: String,
-}
-
-/// Tick an opened run or setup is stepped to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum OpenAt {
-    /// Tick 0, paused.
-    Start,
-    /// A tick reached by stepping uncapped from tick 0.
-    Tick(u64),
-}
-
-/// Sweep run the loaded model was built from.
-#[derive(Debug, Clone)]
-pub struct OpenedRun {
-    pub replay: Replay,
-    /// Entry that built the run when it was opened.
-    pub entry: ModelEntry,
-    /// Whether a live edit, an action, or a build from other values or other code has left the run's trajectory.
-    pub modified: bool,
-}
-
-impl OpenedRun {
-    /// Returns whether a build from `params`, `seed` and `schedule` steps through the run tick for tick.
-    pub fn is_built_by(&self, params: &[ParamValue], seed: Option<u64>, schedule: &Schedule) -> bool {
-        params == self.replay.params.as_slice() && seed == Some(self.replay.seed) && *schedule == self.replay.schedule
-    }
-}
-
-/// Size of a preview of the Editor's graph model, as the live simulation runs it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreviewRun {
-    /// A grid model.
-    Grid {
-        /// Width of the preview's grid in cells.
-        width: u32,
-        /// Height of the preview's grid in cells.
-        height: u32,
-    },
-    /// An agent model.
-    Agents {
-        /// Number of the preview's agents.
-        count: u32,
-    },
-}
-
-impl PreviewRun {
-    /// Returns the size as the app shows it, such as `256 × 256 cells` or `4096 agents`.
-    pub fn size_text(self) -> String {
-        match self {
-            Self::Grid { width, height } => format!("{width} × {height} cells"),
-            Self::Agents { count: 1 } => "1 agent".to_owned(),
-            Self::Agents { count } => format!("{count} agents"),
-        }
-    }
+    /// Batch settings of the Pacing tab for a GPU runner.
+    pub gpu_batch: GpuBatchSettings,
+    /// Whether the window closes, once the unsaved changes dialog has let a close request through.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub closing: bool,
 }
 
 /// Draw style for an agent population in the viewport.
@@ -367,7 +289,6 @@ impl AppState {
             sim_running: false,
             grid_texture: None,
             density_texture: None,
-            density_max: 4.0,
             point_render_mode: PointRenderMode::default(),
             show_edges: true,
             edge_arrows: false,
@@ -399,9 +320,9 @@ impl AppState {
             sweep,
             results: ResultsPanel::default(),
             editor: EditorPanel::default(),
-            gpu_adaptive: true,
-            gpu_target_ms: DEFAULT_TARGET_MS,
-            gpu_batch_size: DEFAULT_BATCH_SIZE,
+            gpu_batch: GpuBatchSettings::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            closing: false,
         }
     }
 
@@ -419,9 +340,8 @@ impl AppState {
             None => None,
         };
         // The engine asserts the same check, and in a browser its panic ends the page.
-        let shortfalls = self.selection_shortfalls();
-        if !shortfalls.is_empty() {
-            log::warn!("Build refused: {}", too_large_message(&shortfalls));
+        if let Some(message) = self.selection_too_large() {
+            log::warn!("Build refused: {message}");
             return;
         }
         self.load(setup);
@@ -437,136 +357,13 @@ impl AppState {
         self.load_setup(setup, None);
     }
 
-    /// Tears down the live simulation and builds `setup` as the Editor's preview `preview`, which neither the
-    /// selection nor the next build's fields follow.
-    ///
-    /// With `plays` the preview plays from tick 0 once it is built, and otherwise it waits at tick 0 for Play. A build
-    /// that fails goes to the Editor. The model selected now is recorded for [`Self::build_replays_preview`].
-    ///
-    /// Note that a build can fail before this returns: inline in a browser, or natively when the build thread does
-    /// not start. The fault then offloads the preview, which stays paused with nothing loaded.
-    pub fn load_preview(&mut self, setup: RunSetup, preview: PreviewRun, plays: bool) {
-        self.preview_selection.clone_from(&self.selected_model);
-        self.load_setup(Some(setup), Some(preview));
-        if plays && self.preview.is_some() && self.has_simulation() {
-            self.sim_running = true;
-            self.send_command(SimCommand::Play);
-        }
-    }
-
-    /// Preview of the Editor's graph model that the live simulation runs or builds, `None` for any other run.
-    pub fn preview(&self) -> Option<PreviewRun> {
-        self.preview
-    }
-
-    /// Returns whether the live simulation runs the Editor's sheet: as its preview, or as the model the Editor
-    /// applied last. Playback reads a tick in the sheet's words then.
-    pub fn runs_editor_sheet(&self) -> bool {
-        self.previews_editor_sheet()
-            || (self.editor.model.sheet().is_some()
-                && self
-                    .loaded
-                    .as_ref()
-                    .is_some_and(|loaded| self.editor.is_applied(loaded.source())))
-    }
-
-    /// Returns whether the live simulation runs the preview of the Editor's sheet.
-    ///
-    /// A preview of another document is not the sheet's. It runs until the sheet's own preview replaces it.
-    pub fn previews_editor_sheet(&self) -> bool {
-        let sheet_id = self
-            .editor
-            .model
-            .sheet()
-            .map(|sheet| sheet.document().sheet.id.as_str());
-        self.preview.is_some() && sheet_id.is_some() && self.loaded.as_ref().map(ModelEntry::id) == sheet_id
-    }
-
-    /// Returns whether the preview of the Editor's sheet has left its start: it has passed tick 0, it runs, or a button
-    /// of the model was pressed in it.
-    ///
-    /// Until then a sheet edit draws the start again at tick 0. After that, an edit starts the world again from tick 0
-    /// with a notice, and a changed start waits for Start again.
-    pub fn sheet_preview_past_start(&self) -> bool {
-        self.previews_editor_sheet() && (self.editor.preview.acted || !self.run_at_start())
-    }
-
-    /// Returns whether Playback's Build builds the preview of the Editor's sheet again at the same seed: the preview
-    /// runs, and the selection has not changed since it loaded.
-    ///
-    /// Once another model is selected, Build builds that model as it does behind any preview.
-    pub fn build_replays_preview(&self) -> bool {
-        self.previews_editor_sheet() && self.preview_selection == self.selected_model
-    }
-
-    /// Returns whether the Parameters tab draws the preview's parameters and sends a change to it: a preview runs or
-    /// builds, and the selection has not changed since it loaded.
-    ///
-    /// The selected model's values, seed and schedule stay as they are. Once another model is selected, the tab draws
-    /// that model's parameters for the next build, as Build builds it.
-    pub fn params_drive_preview(&self) -> bool {
-        self.preview.is_some() && self.loaded.is_some() && self.preview_selection == self.selected_model
-    }
-
-    /// Sends a live edit of parameter `index` to the preview, and records `value` as a value the preview runs with.
-    ///
-    /// Returns whether the edit was sent. It is sent only while a preview runs or builds.
-    pub fn send_preview_param(&mut self, index: usize, value: ParamValue) -> bool {
-        if self.preview.is_none() || !self.has_simulation() {
-            return false;
-        }
-        self.send_command(SimCommand::SetParam {
-            index,
-            value: value.clone(),
-        });
-        if let Some(slot) = self.loaded_values.get_mut(index) {
-            *slot = value;
-        }
-        true
-    }
-
-    /// Number of builds started so far that were no preview. A preview that waits compares it, and gives way to a
-    /// build started after its edit.
-    pub fn builds(&self) -> u64 {
-        self.builds
-    }
-
-    /// Returns whether the Editor's preview can replace the live simulation: nothing is loaded, the loaded run is a
-    /// preview, or the loaded run has built and is at tick 0.
-    pub fn preview_can_load(&self) -> bool {
-        if self.preview.is_some() {
-            return true;
-        }
-        match &self.loaded {
-            None => !self.has_simulation(),
-            Some(_) => !self.is_building() && self.pending_rebuild.is_none() && self.run_at_start(),
-        }
-    }
-
     /// Tears down the live simulation and builds `setup`, as the preview `preview` when set.
     fn load_setup(&mut self, setup: Option<RunSetup>, preview: Option<PreviewRun>) {
         self.settle_opened_run(setup.as_ref());
-        self.stop_recording();
-        // A runner that stops releases a GPU model's buffers and pipelines, and the build waits for one that has not
-        // stopped yet. A paint callback still in flight this frame holds its own `Arc` to the display, and keeps the
-        // texture alive.
-        self.stop_simulation();
-        drop(self.render_ctx.faults.take());
-        self.snapshot = None;
-        self.last_rendered_serial = None;
-        self.grid_texture = None;
-        self.density_texture = None;
-        self.density_max = 4.0;
-        self.ticks_per_snapshot = 1;
-        self.loaded = None;
+        self.clear_run();
         self.preview = preview;
-        self.pending_rebuild = None;
+        self.ticks_per_snapshot = 1;
         self.export_status = None;
-        self.run_to_target = None;
-        // The next model may have no agents at all.
-        if let Some(layer) = &mut self.agent_layer {
-            layer.clear();
-        }
 
         let Some(setup) = setup else {
             return;
@@ -597,163 +394,13 @@ impl AppState {
         }
     }
 
-    /// Clears the opened run before a build of another model or a teardown, or sets its `modified` to whether
-    /// `setup` differs from the run in its values or its code, as [`same_code`] compares code.
-    ///
-    /// A rebuild from the run's own values and code clears the mark that [`Self::mark_opened_run_modified`] sets.
-    fn settle_opened_run(&mut self, setup: Option<&RunSetup>) {
-        let Some(run) = &mut self.opened_run else {
-            return;
-        };
-        let Some(setup) = setup.filter(|setup| setup.entry().id() == run.replay.model) else {
-            self.opened_run = None;
-            return;
-        };
-        run.modified =
-            !same_code(&run.entry, setup.entry()) || !run.is_built_by(setup.values(), setup.seed(), setup.schedule());
-    }
-
-    /// Opens `opening`, the results, run or setup that the host requested.
-    ///
-    /// A run or a setup this machine cannot open leaves the app with nothing selected, and the Model panel shows the
-    /// reason.
-    pub fn open(&mut self, opening: AppOpening) {
-        let opened = match opening {
-            #[cfg(not(target_arch = "wasm32"))]
-            AppOpening::Results(folder) => {
-                crate::ui::results::open_folder(self, folder);
-                self.focus_request = Some(Tab::Results);
-                Ok(())
-            }
-            AppOpening::Run { replay, open_at } => self.open_run(replay, open_at).map_err(|reason| OpeningRefusal {
-                lead: "Run not opened",
-                reason,
-            }),
-            AppOpening::Setup { setup, open_at } => self.open_setup(&setup, open_at).map_err(|reason| OpeningRefusal {
-                lead: "Model not opened",
-                reason,
-            }),
-        };
-        if let Err(refusal) = opened {
-            log::warn!("{}: {}", refusal.lead, refusal.reason);
-            self.selected_model = None;
-            self.param_values.clear();
-            self.pending_reload.clear();
-            self.schedule = Schedule::default();
-            self.opening_refusal = Some(refusal);
-            self.focus_request = Some(Tab::Model);
-        }
-    }
-
-    /// Builds the run `replay` holds, optionally steps it to a tick, and brings the viewport to the front.
-    ///
-    /// # Errors
-    ///
-    /// Returns a message when this build or this machine has no model `replay.model`, the model declares a different
-    /// number of parameters, or the device cannot hold the model at the run's values. A build that fails goes to the
-    /// fault modal instead, and leaves no run open.
-    pub fn open_run(&mut self, replay: Replay, start: OpenAt) -> Result<(), String> {
-        let declared = self
-            .lookup(&replay.model)
-            .map_err(|error| lookup_message(&error))?
-            .param_descriptors()
-            .len();
-        if replay.params.len() != declared {
-            return Err(format!(
-                "This run sets {} {}, but model '{}' has {declared}",
-                replay.params.len(),
-                crate::ui::plural(replay.params.len() as u64, "parameter"),
-                replay.model
-            ));
-        }
-
-        let entry = self.lookup(&replay.model).map_err(|error| lookup_message(&error))?;
-        RunSetup::from_replay(entry, &replay).map_err(|error| setup_message(&error))?;
-        let shortfalls = self.entry_shortfalls(entry, &replay.params);
-        if !shortfalls.is_empty() {
-            return Err(too_large_message(&shortfalls));
-        }
-
-        let built = self.open_values(
-            &replay.model,
-            &replay.params,
-            Some(replay.seed),
-            &replay.schedule,
-            start,
-        );
-        if built && let Some(loaded) = &self.loaded {
-            self.opened_run = Some(OpenedRun {
-                replay,
-                entry: loaded.clone(),
-                modified: false,
-            });
-        }
-        Ok(())
-    }
-
-    /// Builds the model of the set under `setup`'s model id from the setup's values, seed and schedule, optionally
-    /// steps it to a tick, and brings the viewport to the front.
-    ///
-    /// The setup's fields are stored in the fields the next build reads, and a default seed stays the default.
-    ///
-    /// # Errors
-    ///
-    /// Returns a message when this build or this machine has no model under the setup's id, that model rejects the
-    /// setup's values, or the device cannot hold the model at them. A build that fails goes to the fault modal
-    /// instead.
-    pub fn open_setup(&mut self, setup: &RunSetup, start: OpenAt) -> Result<(), String> {
-        let id = setup.entry().id();
-        let entry = self.lookup(id).map_err(|error| lookup_message(&error))?;
-        RunSetup::from_parts(entry, setup.values(), setup.seed(), setup.schedule().clone())
-            .map_err(|error| setup_message(&error))?;
-        let shortfalls = self.entry_shortfalls(entry, setup.values());
-        if !shortfalls.is_empty() {
-            return Err(too_large_message(&shortfalls));
-        }
-        self.open_values(id, setup.values(), setup.seed(), setup.schedule(), start);
-        Ok(())
-    }
-
-    /// Selects model `id`, builds it from `params`, `seed` and `schedule`, steps it to `start`, and brings the
-    /// viewport to the front.
-    ///
-    /// Returns whether the build runs or has succeeded. A run to a tick sent while the build runs waits for its runner.
-    fn open_values(
-        &mut self,
-        id: &str,
-        params: &[ParamValue],
-        seed: Option<u64>,
-        schedule: &Schedule,
-        start: OpenAt,
-    ) -> bool {
-        self.opened_run = None;
-        self.opening_refusal = None;
-        self.selected_model = Some(id.to_owned());
-        self.param_values = params.to_vec();
-        self.pending_reload = vec![false; params.len()];
-        self.seed = seed;
-        self.seed_text = seed.map(|seed| seed.to_string()).unwrap_or_default();
-        self.schedule = schedule.clone();
-        self.schedule_action_input = 0;
-        self.reset_simulation();
-        if !self.has_simulation() {
-            return false;
-        }
-        if let OpenAt::Tick(tick) = start {
-            self.run_to_input = tick;
-            self.run_to(tick);
-        }
-        self.focus_request = Some(Tab::Viewport);
-        true
-    }
-
     /// Steps the loaded model uncapped to `tick` and pauses there.
     ///
     /// A tick behind the current one rebuilds first, as Build does: the preview of the Editor's sheet replays its start
     /// while [`Self::build_replays_preview`] holds, and otherwise the selected model is built. Note that the selected
     /// model is the loaded one only while [`Self::selection_is_loaded`] holds.
     pub fn run_to(&mut self, tick: u64) {
-        if self.snapshot.as_ref().is_some_and(|snap| tick < snap.tick) {
+        if tick < self.current_tick() {
             crate::ui::playback::press_build(self);
         }
         if !self.has_simulation() {
@@ -762,13 +409,6 @@ impl AppState {
         self.send_command(SimCommand::RunTo(tick));
         self.sim_running = false;
         self.run_to_target = Some(tick);
-    }
-
-    /// Marks the opened run modified, after a live edit or an action.
-    pub fn mark_opened_run_modified(&mut self) {
-        if let Some(run) = &mut self.opened_run {
-            run.modified = true;
-        }
     }
 
     /// Returns whether the Seed field holds a seed the loaded model was not built with.
@@ -797,6 +437,45 @@ impl AppState {
         Arc::new(move || ctx.request_repaint())
     }
 
+    /// Plays the live simulation, and ends a run to a tick.
+    pub fn play(&mut self) {
+        if !self.has_simulation() {
+            return;
+        }
+        self.send_command(SimCommand::Play);
+        self.sim_running = true;
+        self.run_to_target = None;
+    }
+
+    /// Steps the live simulation once, and ends a run to a tick.
+    pub fn step_once(&mut self) {
+        if !self.has_simulation() {
+            return;
+        }
+        self.send_command(SimCommand::StepOnce);
+        self.run_to_target = None;
+    }
+
+    /// Returns whether a close request of the window waits. It waits while a model the Editor holds has unsaved edits,
+    /// and the unsaved changes dialog asks about them, as before a replacement of the models.
+    ///
+    /// Once the dialog closes the window, [`Self::closing`] holds and no close request waits.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn hold_close(&mut self) -> bool {
+        if self.closing || self.editor.unsaved_names().is_empty() {
+            return false;
+        }
+        crate::ui::editor::replace_model(self, crate::ui::editor::Replacement::CloseWindow);
+        true
+    }
+
+    /// Closes the window, which no close request then holds.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn close_window(&mut self) {
+        self.closing = true;
+        self.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
     /// Pauses the live simulation, a run to a tick included.
     pub fn pause_simulation(&mut self) {
         if !self.has_simulation() {
@@ -809,85 +488,36 @@ impl AppState {
         self.run_to_target = None;
     }
 
-    /// Offloads the live simulation and passes the fault to the modal, or to the Editor for a fault of the code the
-    /// Editor applied. A running sweep carries on.
-    ///
-    /// A fault while building belongs to the selected model, and any other to the loaded one. The Model panel stays
-    /// usable while a model runs, and the selection can be another model by then.
-    ///
-    /// While a build runs on its own thread, the fault goes to the modal. The build thread returns the build's own
-    /// faults, and a fault in a sink meanwhile comes from a detached run or from rendering.
-    pub fn report_fault(&mut self, fault: Fault) {
-        let model = if fault.during == BUILDING {
-            self.selected_entry()
-        } else {
-            self.loaded_entry()
-        };
-        let model = model.cloned();
-        if self.is_building() {
-            self.show_fault_in_modal(fault, model.as_ref());
-        } else {
-            self.show_fault(fault, model.as_ref());
-        }
-    }
-
-    /// Offloads the live simulation and passes the fault to the modal, naming `model` as the model it stopped.
-    ///
-    /// A fault of a run built from the code the Editor applied last, before the run passes tick 0, goes to the Editor
-    /// instead, as the outcome of the edit, when an edit of the code can fix it ([`EditorPanel::claims`]). So does a
-    /// fault of the Editor's preview at any tick, while the Editor holds a graph to show it under. The fault of a
-    /// preview that outlived its graph goes to the modal.
-    ///
-    /// On native the build thread returns the fault of a build in a later frame than the press that started it, and in
-    /// a browser the device reports a shader it refuses after the build that created it.
-    fn show_fault(&mut self, fault: Fault, model: Option<&ModelEntry>) {
-        if self.preview.is_some() && self.editor.model.holds_preview_model() && EditorPanel::is_code_fault(&fault) {
-            log::error!("{fault}");
-            self.offload_simulation();
-            self.editor.show_preview_fault(&fault);
-            return;
-        }
-        let at_start = self.snapshot.as_ref().is_none_or(|snapshot| snapshot.tick == 0);
-        let claimed = at_start && model.is_some_and(|entry| self.editor.claims(entry.source(), &fault));
-        if claimed {
-            log::error!("{fault}");
-            self.offload_simulation();
-            self.editor.show_fault(&fault);
-            self.focus_request = Some(Tab::Editor);
-        } else {
-            self.show_fault_in_modal(fault, model);
-        }
-    }
-
-    /// Offloads the live simulation and passes the fault to the modal, naming `model` as the model it stopped, for a
-    /// fault the Editor never claims.
-    fn show_fault_in_modal(&mut self, fault: Fault, model: Option<&ModelEntry>) {
-        log::error!("{fault}");
-        self.offload_simulation();
-        self.fault = Some(ShownFault {
-            fault,
-            model: model.map(|entry| entry.name().to_owned()),
-        });
-    }
-
     /// Tears down the live simulation, or abandons the build that runs, and leaves no model loaded.
     ///
     /// Neither waits past [`STOP_WAIT`]. A runner or a build still running then is detached.
     pub fn offload_simulation(&mut self) {
+        self.clear_run();
+        self.sim_running = false;
+        self.stats_history = None;
+        self.opened_run = None;
+    }
+
+    /// Stops the recording, tears down the live simulation, and clears the run's snapshot, textures, loaded entry,
+    /// preview, pending rebuild, run to a tick and agent population.
+    ///
+    /// The recording stops first. It ends at the snapshot's tick.
+    fn clear_run(&mut self) {
         self.stop_recording();
+        // A runner that stops releases a GPU model's buffers and pipelines, and the build waits for one that has not
+        // stopped yet. A paint callback still in flight this frame holds its own `Arc` to the display, and keeps the
+        // texture alive.
         self.stop_simulation();
         drop(self.render_ctx.faults.take());
         self.snapshot = None;
-        self.sim_running = false;
+        self.last_rendered_serial = None;
         self.grid_texture = None;
         self.density_texture = None;
-        self.last_rendered_serial = None;
-        self.stats_history = None;
         self.loaded = None;
         self.preview = None;
-        self.opened_run = None;
         self.pending_rebuild = None;
         self.run_to_target = None;
+        // The next model may have no agents at all.
         if let Some(layer) = &mut self.agent_layer {
             layer.clear();
         }
@@ -969,6 +599,11 @@ impl AppState {
         })
     }
 
+    /// Tick of the latest snapshot, 0 before the first.
+    pub fn current_tick(&self) -> u64 {
+        self.snapshot.as_ref().map_or(0, |snapshot| snapshot.tick)
+    }
+
     /// Id of the model the live simulation was built from.
     pub fn loaded_id(&self) -> Option<&str> {
         self.loaded.as_ref().map(ModelEntry::id)
@@ -1005,22 +640,33 @@ impl AppState {
         let previewing = self.preview.is_some();
         if let Some(loaded) = self.loaded.as_ref().filter(|loaded| loaded.id() == id && !previewing) {
             let current = self.models.get(id).unwrap_or(loaded);
-            self.param_values = remap_values(
+            let values = remap_values(
                 loaded.param_descriptors(),
                 &self.loaded_values,
                 current.param_descriptors(),
             )
             .values;
-            self.pending_reload = vec![false; self.param_values.len()];
-            self.seed = self.loaded_seed;
-            self.seed_text = self.loaded_seed.map(|seed| seed.to_string()).unwrap_or_default();
-            self.schedule = remap_schedule(&self.loaded_schedule, current.action_descriptors()).schedule;
+            let schedule = remap_schedule(&self.loaded_schedule, current.action_descriptors()).schedule;
+            self.set_param_values(values);
+            self.set_seed(self.loaded_seed);
+            self.schedule = schedule;
             return;
         }
-        self.param_values = self.models.get(id).map(default_values).unwrap_or_default();
-        self.pending_reload = vec![false; self.param_values.len()];
+        self.set_param_values(self.models.get(id).map(default_values).unwrap_or_default());
         // Entries index the previous model's actions.
         self.schedule = Schedule::default();
+    }
+
+    /// Sets the values of the next build to `values`, none of them marked as awaiting a build.
+    pub fn set_param_values(&mut self, values: Vec<ParamValue>) {
+        self.pending_reload = vec![false; values.len()];
+        self.param_values = values;
+    }
+
+    /// Sets the seed of the next build to `seed`, and the Seed field to its digits, empty for the default seed.
+    pub fn set_seed(&mut self, seed: Option<u64>) {
+        self.seed = seed;
+        self.seed_text = seed.map(|seed| seed.to_string()).unwrap_or_default();
     }
 
     /// Sends a live edit of parameter `index` to the loaded model, and records `value` as a value that the model
@@ -1031,6 +677,13 @@ impl AppState {
         if !self.selection_is_loaded() || !self.has_simulation() {
             return false;
         }
+        self.send_param(index, value);
+        true
+    }
+
+    /// Sends a live edit of parameter `index` to the live simulation, and records `value` among the values it runs
+    /// with.
+    fn send_param(&mut self, index: usize, value: ParamValue) {
         self.send_command(SimCommand::SetParam {
             index,
             value: value.clone(),
@@ -1038,7 +691,6 @@ impl AppState {
         if let Some(slot) = self.loaded_values.get_mut(index) {
             *slot = value;
         }
-        true
     }
 
     /// Reasons this machine cannot build the selection. Always empty for a CPU model.
@@ -1059,6 +711,18 @@ impl AppState {
         }
     }
 
+    /// Returns Build's disabled reason when this machine cannot build `entry` at `values`, `None` when it can.
+    pub fn too_large(&self, entry: &ModelEntry, values: &[ParamValue]) -> Option<String> {
+        let shortfalls = self.entry_shortfalls(entry, values);
+        (!shortfalls.is_empty()).then(|| too_large_message(&shortfalls))
+    }
+
+    /// Returns Build's disabled reason when this machine cannot build the selection, `None` when it can or nothing
+    /// is selected.
+    pub fn selection_too_large(&self) -> Option<String> {
+        self.too_large(self.selected_entry()?, &self.param_values)
+    }
+
     /// Sheet of the Editor when it builds `entry`, `None` for an entry of other code.
     pub fn editor_sheet_of(&self, entry: &ModelEntry) -> Option<&henad_graph::sheet::SheetFile> {
         self.editor
@@ -1076,9 +740,8 @@ impl AppState {
         if self.selected_entry().is_none() {
             return Some(NO_SELECTED_MODEL.to_owned());
         }
-        let shortfalls = self.selection_shortfalls();
-        if !shortfalls.is_empty() {
-            return Some(too_large_message(&shortfalls));
+        if let Some(message) = self.selection_too_large() {
+            return Some(message);
         }
         if parse_seed(&self.seed_text).is_err() {
             return Some(INVALID_SEED.to_owned());
@@ -1099,152 +762,44 @@ impl AppState {
         }
     }
 
-    /// Opens a save dialog for `bytes` under the name `name`, for the panel `target`.
+    /// Takes the newest snapshot of the live simulation, if one has arrived, and receives it through
+    /// [`Self::receive_snapshot`].
+    pub fn poll_snapshot(&mut self) {
+        if let Some(snapshot) = self.sim_thread.as_mut().and_then(SimRunner::take_snapshot) {
+            self.receive_snapshot(snapshot);
+        }
+    }
+
+    /// Makes `snapshot` the snapshot the panels show, after adding its stats to the history and the recording.
     ///
-    /// Results can be polled via [`Self::poll_saves`].
-    pub fn save_as(&mut self, target: SaveTarget, name: &str, bytes: Vec<u8>) {
-        self.set_save_status(target, format!("{SAVE_PENDING} {name}"), false);
-        // A test opens no dialog, and reports the save's outcome through `finish_save`.
-        #[cfg(test)]
-        if let Some(requested) = &mut self.saves_requested {
-            requested.push((target, name.to_owned()));
-            return;
+    /// A snapshot at or past the run to a tick ends it, and one past it runs to the tick again, which rebuilds. The
+    /// previous snapshot goes back to the runner, to be refilled.
+    pub fn receive_snapshot(&mut self, snapshot: Snapshot) {
+        // The loop can be past the target by the time it handles `RunTo`, and then pauses where it is. A second
+        // run to the target sees this snapshot's tick, rebuilds, and stops there.
+        let passed_target = self
+            .run_to_target
+            .filter(|&target| snapshot.tick > target && (self.selection_is_loaded() || self.build_replays_preview()));
+        if self.run_to_target.is_some_and(|target| snapshot.tick >= target) {
+            self.run_to_target = None;
         }
-        spawn_save(
-            target,
-            name.to_owned(),
-            bytes,
-            self.saves.0.clone(),
-            self.egui_ctx.clone(),
-        );
-    }
-
-    /// Reports `result` as the outcome of the first save requested through [`Self::save_as`], and polls it, as a dialog
-    /// that ends would. Test builds only.
-    ///
-    /// # Panics
-    ///
-    /// Panics when no save was requested.
-    #[cfg(test)]
-    pub fn finish_save(&mut self, result: SaveResult) {
-        let (target, _) = self.saves_requested.as_mut().expect("saves are recorded").remove(0);
-        drop(self.saves.0.send(SaveOutcome { target, result }));
-        self.poll_saves();
-    }
-
-    /// Opens a dialog that saves the four files of a sweep, `files`, together, for the panel `target`.
-    ///
-    /// Results can be polled via [`Self::poll_saves`].
-    pub fn save_files(&mut self, target: SaveTarget, files: Arc<SweepFiles>) {
-        self.set_save_status(target, format!("{SAVE_PENDING} {} files", files.entries().len()), false);
-        spawn_save_files(target, files, self.saves.0.clone(), self.egui_ctx.clone());
-    }
-
-    /// Sets the status line a save for `target` reports to, to `text`, a failure when `failed` holds.
-    fn set_save_status(&mut self, target: SaveTarget, text: String, failed: bool) {
-        match target {
-            SaveTarget::Export => self.export_status = Some(text),
-            SaveTarget::SweepSpec | SaveTarget::SweepResults(_) => self.sweep.status = Some(text),
-            SaveTarget::Model | SaveTarget::Counterpart => {
-                self.editor.file_status = Some(crate::ui::editor::FileStatus { text, failed });
+        // A publish at the newest row's tick replaces that row. After an action it carries the
+        // action's effect, and after a paused layout step the same stats again.
+        if let Some(history) = &mut self.stats_history {
+            for sample in &snapshot.run_to_samples {
+                history.push_entries(sample.entries(), sample.tick());
             }
+            history.push_entries(&snapshot.stats, snapshot.tick);
         }
-    }
-
-    pub fn poll_saves(&mut self) {
-        while let Ok(SaveOutcome { target, result }) = self.saves.1.try_recv() {
-            // A download of one file counts as saved. The user requested it, and the app cannot read back anything
-            // the browser asks the user. The downloads of several files leave them unsaved. A browser can hold back
-            // every download after the first.
-            if let SaveTarget::SweepResults(generation) = target
-                && matches!(result, SaveResult::Saved(_) | SaveResult::Downloaded(_))
-            {
-                self.results.mark_files_saved(generation);
-            }
-            let saved = match &result {
-                SaveResult::Saved(name) | SaveResult::Downloaded(name) => Some(name.clone()),
-                SaveResult::DownloadsStarted | SaveResult::Failed(_) | SaveResult::Canceled => None,
-            };
-            if matches!(target, SaveTarget::Model | SaveTarget::Counterpart) {
-                self.editor.save_finished(target, saved.clone());
-            }
-            let failed = matches!(result, SaveResult::Failed(_));
-            let text = match result {
-                SaveResult::Saved(name) => format!("Saved {name}"),
-                SaveResult::Downloaded(name) => format!("Downloaded {name}"),
-                SaveResult::DownloadsStarted => DOWNLOADS_STARTED.to_owned(),
-                SaveResult::Failed(message) => format!("Save failed: {message}"),
-                SaveResult::Canceled => "Save canceled".to_owned(),
-            };
-            self.set_save_status(target, text, failed);
-            if matches!(target, SaveTarget::Model | SaveTarget::Counterpart) {
-                crate::ui::editor::continue_replacement(self, target, saved.is_some());
-            }
+        self.record(&snapshot);
+        // Passing the outgoing snapshot back lets the sim thread refill it instead of allocating.
+        if let Some(previous) = self.snapshot.replace(snapshot)
+            && let Some(thread) = &mut self.sim_thread
+        {
+            thread.recycle(previous);
         }
-    }
-
-    /// Opens a dialog that picks the files or the folder that `target` requests.
-    ///
-    /// Results can be polled via [`Self::poll_opens`].
-    pub fn open_file(&self, target: OpenTarget) {
-        spawn_open(target, self.opens.0.clone(), self.egui_ctx.clone());
-    }
-
-    pub fn poll_opens(&mut self) {
-        while let Ok(OpenOutcome { target, result }) = self.opens.1.try_recv() {
-            match target {
-                OpenTarget::SweepSpec | OpenTarget::DesignTable | OpenTarget::OutputFolder => {
-                    crate::ui::sweep::receive_open(self, target, result);
-                }
-                OpenTarget::Results => crate::ui::results::receive_open(self, result),
-                OpenTarget::Model => crate::ui::editor::receive_open(self, result),
-                OpenTarget::Function => crate::ui::editor::receive_import(self, result),
-            }
-        }
-    }
-
-    /// Appends the snapshot's stats to the recording, and stops the recording on a write error.
-    pub fn record(&mut self, snapshot: &Snapshot) {
-        if let Err(err) = self.recording.push(snapshot.tick, &snapshot.stats) {
-            self.export_status = Some(format!("Recording stopped: {err}"));
-            self.recording = Recording::Off;
-        }
-    }
-
-    /// Stops recording and closes the CSV file.
-    pub fn stop_recording(&mut self) {
-        let to_tick = self.snapshot.as_ref().map_or(0, |snap| snap.tick);
-        match std::mem::replace(&mut self.recording, Recording::Off).stop(to_tick) {
-            Ok(recording) => self.recording = recording,
-            Err(err) => self.export_status = Some(format!("Recording failed: {err}")),
-        }
-    }
-
-    /// Draws the layers into an offscreen target at their own resolution and starts reading it back.
-    ///
-    /// Results can be polled via [`Self::poll_capture`].
-    pub fn request_viewport_capture(&mut self, name: String) {
-        match crate::ui::export::image::start(self, name) {
-            Ok(pending) => {
-                self.export_status = Some("Capturing viewport".to_owned());
-                self.capture = Some(pending);
-            }
-            Err(err) => self.export_status = Some(format!("Capture failed: {err}")),
-        }
-    }
-
-    pub fn poll_capture(&mut self) {
-        let Some(pending) = &self.capture else {
-            return;
-        };
-        let Some(result) = pending.poll(&self.render_ctx.device) else {
-            return;
-        };
-        let name = pending.name.clone();
-        self.capture = None;
-        match result {
-            Ok(png) => self.save_as(SaveTarget::Export, &name, png),
-            Err(err) => self.export_status = Some(format!("Capture failed: {err}")),
+        if let Some(target) = passed_target {
+            self.run_to(target);
         }
     }
 }
@@ -1301,7 +856,7 @@ pub fn lookup_message(error: &ModelLookupError) -> String {
 }
 
 /// Returns `shortfalls`, the reasons the device cannot build a model, as Build's disabled reason.
-pub fn too_large_message(shortfalls: &[String]) -> String {
+fn too_large_message(shortfalls: &[String]) -> String {
     format!("Too large for this device: {}", shortfalls.join("; "))
 }
 
@@ -1316,137 +871,18 @@ pub fn setup_message(error: &SetupError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use henad_core::action::{Schedule, Scheduled};
-    use henad_core::explore::replay::Replay;
     use henad_core::params::ParamValue;
-
-    use henad_compute::entry::ModelSet;
-    use henad_compute::fault::{BUILDING, Fault, STEPPING};
-    use henad_core::metadata::Backend;
     use henad_explore::output::details::{ChoiceForm, params_by_id_json};
 
-    use super::{AppState, OpenAt, OpenedRun};
-    use crate::options::AppOpening;
-    use crate::ui::dock::Tab;
+    use super::{AppState, OpenAt};
+    use crate::tests::support::gpu_only_app;
     use crate::ui::export::metadata::run_details;
-
-    /// Returns an app over the example models whose adapter, as the app sees it, cannot run compute shaders, or `None`
-    /// to skip on a machine without a device.
-    fn app_without_compute() -> Option<AppState> {
-        AppState::headless(henad_models::example_models(), false)
-    }
-
-    /// Returns a replay of model `model` with no parameters.
-    fn replay_of(model: &str) -> Replay {
-        Replay {
-            model: model.to_owned(),
-            params: Vec::new(),
-            seed: 1,
-            schedule: Schedule::default(),
-            ticks: 10,
-            label: "Sweep run 0".to_owned(),
-        }
-    }
-
-    #[test]
-    fn an_app_without_compute_hides_gpu_models_and_names_each_missing_one() {
-        let Some(mut app) = app_without_compute() else {
-            return;
-        };
-        let offered: Vec<&str> = app.offered_models().map(|entry| entry.id()).collect();
-        assert_eq!(
-            offered,
-            ["sir", "boids", "game_of_life", "ants", "virus_network", "team_assembly"]
-        );
-        assert_eq!(
-            app.selected_model.as_deref(),
-            Some("sir"),
-            "the first model that runs here"
-        );
-
-        assert_eq!(
-            app.open_run(replay_of("gpu_sir"), OpenAt::Start),
-            Err("Model 'gpu_sir' needs a GPU with compute support, and this device has none".to_owned())
-        );
-        assert_eq!(
-            app.open_run(replay_of("absent"), OpenAt::Start),
-            Err("This build does not include model 'absent'".to_owned())
-        );
-        assert_eq!(
-            app.selected_model.as_deref(),
-            Some("sir"),
-            "a refused run leaves the selection alone"
-        );
-    }
-
-    #[test]
-    fn a_build_follows_the_run_only_from_its_own_values() {
-        let schedule = Schedule::from_entries(vec![Scheduled {
-            index: 0,
-            id: "seed_outbreak".to_owned(),
-            tick: 50,
-        }]);
-        let params = vec![ParamValue::U32(64), ParamValue::F32(0.3)];
-        let run = OpenedRun {
-            entry: henad_compute::entry::register_grid_model::<henad_models::sir::SirGridModel>(),
-            replay: Replay {
-                model: "sir".to_owned(),
-                params: params.clone(),
-                seed: 42,
-                schedule: schedule.clone(),
-                ticks: 300,
-                label: "Sweep run 0: config 0, replicate 0".to_owned(),
-            },
-            modified: false,
-        };
-
-        assert!(run.is_built_by(&params, Some(42), &schedule));
-        assert!(
-            !run.is_built_by(&params, None, &schedule),
-            "the Default seed matched seed 42"
-        );
-        assert!(!run.is_built_by(&params, Some(43), &schedule), "another seed");
-        assert!(!run.is_built_by(&params, Some(42), &Schedule::default()), "no schedule");
-        let edited = [ParamValue::U32(64), ParamValue::F32(0.4)];
-        assert!(!run.is_built_by(&edited, Some(42), &schedule), "an edited parameter");
-    }
-
-    #[test]
-    fn an_opened_setup_keeps_the_default_seed() {
-        let Some(mut app) = app_without_compute() else {
-            return;
-        };
-        let sir = app.models.get("sir").expect("the example models include sir").clone();
-        let setup = sir
-            .setup()
-            .set("infection_rate", 0.4_f32)
-            .and_then(|setup| setup.act_at("seed_outbreak", 20))
-            .expect("a valid setup");
-
-        assert_eq!(app.open_setup(&setup, OpenAt::Start), Ok(()));
-        app.wait_for_build();
-        assert_eq!(app.selected_model.as_deref(), Some("sir"));
-        assert_eq!(app.param_values, setup.values());
-        assert_eq!(app.schedule, *setup.schedule());
-        assert_eq!(app.seed, None, "the default seed became a number");
-        assert_eq!(app.seed_text, "", "the Seed field shows the Default hint");
-        assert!(app.sim_thread.is_some(), "the setup built");
-        assert_eq!(app.loaded_seed, None);
-        assert_eq!(app.loaded_schedule, *setup.schedule());
-        assert!(app.opened_run.is_none(), "a setup is no sweep run");
-        assert_eq!(app.focus_request, Some(Tab::Viewport));
-
-        assert_eq!(app.open_setup(&setup.with_seed(7), OpenAt::Start), Ok(()));
-        assert_eq!(app.seed, Some(7));
-        assert_eq!(app.seed_text, "7");
-        assert_eq!(app.loaded_seed, Some(7));
-    }
 
     /// Picking the loaded model again restores its values. Otherwise the run details would record values the model
     /// was not built with.
     #[test]
     fn picking_the_loaded_model_again_restores_what_it_runs_with() {
-        let Some(mut app) = app_without_compute() else {
+        let Some(mut app) = AppState::headless(henad_models::example_models(), false) else {
             return;
         };
         let sir = app.models.get("sir").expect("the example models include sir").clone();
@@ -1503,59 +939,9 @@ mod tests {
         assert_eq!(app.loaded_values[index], edited);
     }
 
-    /// The modal shows the name of the model that faulted. The selection can be another model by then.
-    #[test]
-    fn a_fault_names_the_model_it_stopped() {
-        let Some(mut app) = app_without_compute() else {
-            return;
-        };
-        let name = |app: &AppState, id: &str| app.models.get(id).map(|entry| entry.name().to_owned());
-        app.reset_simulation();
-        app.wait_for_build();
-        assert_eq!(app.loaded_id(), Some("sir"));
-        app.select_model("boids");
-        app.report_fault(Fault::refused(STEPPING, "a test fault"));
-        assert_eq!(
-            app.fault.as_ref().and_then(|shown| shown.model.clone()),
-            name(&app, "sir")
-        );
-        assert_eq!(app.loaded_id(), None, "the faulted model is offloaded");
-
-        app.report_fault(Fault::refused(BUILDING, "a test fault"));
-        assert_eq!(
-            app.fault.as_ref().and_then(|shown| shown.model.clone()),
-            name(&app, "boids"),
-            "a build fault is the selected model's"
-        );
-    }
-
-    #[test]
-    fn a_run_with_another_parameter_count_names_its_model() {
-        let Some(mut app) = app_without_compute() else {
-            return;
-        };
-        let declared = app
-            .models
-            .get("sir")
-            .expect("the example models include sir")
-            .param_descriptors()
-            .len();
-        assert_eq!(
-            app.open_run(replay_of("sir"), OpenAt::Start),
-            Err(format!("This run sets 0 parameters, but model 'sir' has {declared}"))
-        );
-    }
-
     #[test]
     fn a_gpu_only_set_without_compute_opens_with_nothing_selected() {
-        let mut models = ModelSet::new(henad_core::build_info!());
-        for entry in &henad_models::example_models() {
-            if entry.metadata().backend == Backend::Gpu {
-                models.insert(entry.clone()).expect("example ids are unique");
-            }
-        }
-        assert!(!models.is_empty());
-        let Some(app) = AppState::headless(models, false) else {
+        let Some(app) = gpu_only_app() else {
             return;
         };
         assert_eq!(app.offered_models().count(), 0);
@@ -1563,55 +949,5 @@ mod tests {
         assert!(app.selected_entry().is_none());
         assert!(app.param_values.is_empty());
         assert!(app.build_setup().is_none(), "Build has nothing to build");
-    }
-
-    #[test]
-    fn an_opening_of_a_hidden_gpu_model_opens_with_nothing_selected() {
-        let Some(mut app) = app_without_compute() else {
-            return;
-        };
-        let needs_gpu = "Model 'gpu_sir' needs a GPU with compute support, and this device has none";
-        let gpu_sir = app
-            .models
-            .get("gpu_sir")
-            .expect("the example models include gpu_sir")
-            .clone();
-
-        app.open(AppOpening::Setup {
-            setup: gpu_sir.setup(),
-            open_at: OpenAt::Start,
-        });
-        assert_eq!(app.selected_model, None);
-        assert!(app.param_values.is_empty());
-        assert!(app.sim_thread.is_none());
-        assert_eq!(
-            app.opening_refusal.as_ref().map(|refusal| refusal.reason.as_str()),
-            Some(needs_gpu)
-        );
-        assert_eq!(app.focus_request, Some(Tab::Model), "the Model panel shows the reason");
-        assert_eq!(
-            app.opening_refusal.as_ref().map(|refusal| refusal.lead),
-            Some("Model not opened")
-        );
-
-        let mut replay = replay_of("gpu_sir");
-        replay.params = gpu_sir.setup().values().to_vec();
-        app.open(AppOpening::Run {
-            replay,
-            open_at: OpenAt::Tick(5),
-        });
-        assert_eq!(app.selected_model, None);
-        assert_eq!(
-            app.opening_refusal.as_ref().map(|refusal| refusal.reason.as_str()),
-            Some(needs_gpu)
-        );
-        assert_eq!(app.run_to_target, None);
-        assert_eq!(
-            app.opening_refusal.as_ref().map(|refusal| refusal.lead),
-            Some("Run not opened")
-        );
-
-        app.select_model("sir");
-        assert_eq!(app.opening_refusal, None, "a selected model replaces the reason");
     }
 }

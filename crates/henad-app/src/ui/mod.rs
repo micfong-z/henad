@@ -109,6 +109,13 @@ impl KvGridRows {
         }
     }
 
+    /// Adds a row of `label` and `value`, and ends it.
+    pub fn row(&mut self, ui: &mut egui::Ui, label: &str, value: impl Into<egui::WidgetText>) {
+        ui.label(label);
+        ui.label(value);
+        self.end_row(ui);
+    }
+
     /// Ends the row being drawn, and paints its stripe when it is an odd row.
     ///
     /// The slot for the next row's stripe is added before any of its cells, so the stripe lies under them.

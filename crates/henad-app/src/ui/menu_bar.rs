@@ -149,6 +149,7 @@ mod tests {
 
     use super::{EDITOR_LAYOUT_ON_OPEN, source_icon, view_menu};
     use crate::icons::material_design_icons::{MDI_CODE_BRACES, MDI_GITHUB};
+    use crate::tests::support::{bounds, click_events};
     use crate::ui::dock::{Layout, Tab, Workspace};
 
     /// One accessible node of a frame of the View menu.
@@ -197,15 +198,11 @@ mod tests {
                 .nodes
                 .iter()
                 .filter_map(|(_, node)| {
-                    let rect = node.bounds()?;
                     Some(MenuNode {
                         label: node.label().unwrap_or_default().to_owned(),
                         role: node.role(),
                         toggled: node.toggled(),
-                        bounds: egui::Rect::from_min_max(
-                            egui::pos2(rect.x0 as f32, rect.y0 as f32),
-                            egui::pos2(rect.x1 as f32, rect.y1 as f32),
-                        ),
+                        bounds: bounds(node.bounds()?),
                     })
                 })
                 .collect()
@@ -226,16 +223,9 @@ mod tests {
                 .filter(|node| node.label == label || node.label.ends_with(&after_icon))
                 .collect();
             assert_eq!(found.len(), 1, "one node reads {label}: {found:?}");
-            let position = found[0].bounds.center();
-            let button = |pressed| egui::Event::PointerButton {
-                pos: position,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: egui::Modifiers::NONE,
-            };
-            self.frame(vec![egui::Event::PointerMoved(position)]);
-            self.frame(vec![button(true)]);
-            self.frame(vec![button(false)]);
+            for events in click_events(found[0].bounds.center()) {
+                self.frame(events);
+            }
         }
     }
 

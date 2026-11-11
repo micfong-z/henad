@@ -44,7 +44,7 @@ use crate::icons::material_design_icons::{
     MDI_CHECK, MDI_FILE_DOCUMENT_PLUS_OUTLINE, MDI_FILE_PLUS_OUTLINE, MDI_FOLDER_OPEN_OUTLINE, MDI_GRAPH_OUTLINE,
     MDI_TRAY_ARROW_DOWN,
 };
-use crate::state::{AppState, PreviewRun, too_large_message};
+use crate::state::{AppState, PreviewRun};
 use crate::ui::dock::Tab;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
 use crate::ui::params::sheet_number;
@@ -588,6 +588,9 @@ pub enum Replacement {
     OpenModel,
     /// Opens a model read from a model's recorded code, as Open in Editor and Edit model do.
     Open(EditableModel),
+    /// Closes the app's window, after a close request of the window.
+    #[cfg(not(target_arch = "wasm32"))]
+    CloseWindow,
 }
 
 /// Replacement waiting for the saves that the unsaved changes dialog's Save model started.
@@ -1505,6 +1508,8 @@ fn run_replacement(app: &mut AppState, replacement: Replacement) {
         Replacement::NewGraphModel(file_name) => new_graph_model(app, file_name),
         Replacement::OpenModel => open_model(app),
         Replacement::Open(model) => open_editable(app, model),
+        #[cfg(not(target_arch = "wasm32"))]
+        Replacement::CloseWindow => app.close_window(),
     }
 }
 
@@ -1758,9 +1763,8 @@ pub fn apply(app: &mut AppState) {
     }
     if !runs_source(app) && app.pending_rebuild.is_none() && (app.run_at_start() || app.preview().is_some()) {
         // Build is disabled for the same reason. In a browser the engine's own check would end the page.
-        let shortfalls = app.selection_shortfalls();
-        if !shortfalls.is_empty() {
-            let problem = CodeDiagnostic::error(too_large_message(&shortfalls));
+        if let Some(message) = app.selection_too_large() {
+            let problem = CodeDiagnostic::error(message);
             app.editor.outcome = Some(ApplyOutcome::Faulted(vec![problem]));
             return;
         }

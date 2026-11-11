@@ -26,25 +26,18 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
         let play = ui.add_enabled(has_thread, egui::Button::new(icon));
         // The button shows an icon alone, so the screen reader takes its name from here.
         icon_name(ui, play.id, name);
-        if play.on_hover_text("Play / Pause").clicked()
-            && let Some(thread) = &mut app.sim_thread
-        {
+        if play.on_hover_text("Play / Pause").clicked() {
             if app.sim_running {
-                thread.pause();
+                app.pause_simulation();
             } else {
-                thread.play();
+                app.play();
             }
-            app.sim_running = !app.sim_running;
-            app.run_to_target = None;
         }
 
         let step = ui.add_enabled(has_thread, egui::Button::new(MDI_SKIP_NEXT));
         icon_name(ui, step.id, "Step");
-        if step.on_hover_text("Step").clicked()
-            && let Some(thread) = &mut app.sim_thread
-        {
-            thread.step_once();
-            app.run_to_target = None;
+        if step.on_hover_text("Step").clicked() {
+            app.step_once();
         }
 
         if let Some(counter) = tick_counter(app) {
@@ -153,8 +146,7 @@ fn preview_line(ui: &mut egui::Ui, app: &AppState) {
         run.size_text()
     ))
     .on_hover_text(preview_hover(app));
-    let at_start = app.snapshot.as_ref().is_none_or(|snapshot| snapshot.tick == 0);
-    if app.previews_editor_sheet() && !app.sim_running && at_start {
+    if app.previews_editor_sheet() && !app.sim_running && app.current_tick() == 0 {
         ui.weak(format!("{MDI_INFORMATION} {PREVIEW_WAITS_FOR_PLAY}"));
     }
 }
@@ -200,7 +192,7 @@ fn stopping_line(ui: &mut egui::Ui, app: &AppState) {
 
 /// Draws the Run to tick row, or the progress of a pending run to a tick with its Cancel button.
 fn run_to_row(ui: &mut egui::Ui, app: &mut AppState, build_disabled_reason: Option<&str>) {
-    let current = app.snapshot.as_ref().map_or(0, |snap| snap.tick);
+    let current = app.current_tick();
 
     if let Some(target) = app.run_to_target {
         let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
@@ -298,26 +290,15 @@ fn opened_run_warning(app: &AppState) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use henad_compute::entry::ModelSet;
-    use henad_core::metadata::Backend;
-
-    use henad_core::action::Schedule;
-    use henad_core::explore::replay::Replay;
-
     use super::opened_run_warning;
     use crate::options::AppOpening;
     use crate::state::{AppState, NO_SELECTED_MODEL, OpenAt};
+    use crate::tests::support::{gpu_only_app, replay};
     use crate::ui::results::table::INEXACT_REPLAY;
 
     #[test]
     fn build_is_refused_with_no_model_selected() {
-        let mut models = ModelSet::new(henad_core::build_info!());
-        for entry in &henad_models::example_models() {
-            if entry.metadata().backend == Backend::Gpu {
-                models.insert(entry.clone()).expect("example ids are unique");
-            }
-        }
-        let Some(app) = AppState::headless(models, false) else {
+        let Some(app) = gpu_only_app() else {
             return;
         };
         assert_eq!(app.build_refusal().as_deref(), Some(NO_SELECTED_MODEL));
@@ -329,19 +310,12 @@ mod tests {
         let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
             return;
         };
-        let replay = |model: &str| {
+        let run_of = |model: &str| {
             let entry = app.models.get(model).expect("an example model");
-            Replay {
-                model: model.to_owned(),
-                params: entry.setup().values().to_vec(),
-                seed: 1,
-                schedule: Schedule::default(),
-                ticks: 5,
-                label: "Sweep run 5: config 1, replicate 1".to_owned(),
-            }
+            replay(model, entry.setup().values().to_vec())
         };
-        let boids = replay("boids");
-        let gpu_boids = replay("gpu_boids");
+        let boids = run_of("boids");
+        let gpu_boids = run_of("gpu_boids");
 
         app.open(AppOpening::Run {
             replay: boids,

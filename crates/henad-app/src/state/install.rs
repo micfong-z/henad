@@ -12,7 +12,7 @@ use henad_core::explore::fingerprint::schema_hash;
 use henad_core::explore::value::check_value;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 
-use super::{AppState, setup_message, too_large_message};
+use super::{AppState, setup_message};
 
 /// Rebuild of the loaded model under replaced code. The Rebuild model modal asks for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,9 +171,7 @@ impl AppState {
     ///
     /// The snapshot lags the run. A run to a tick or a play started this frame has no snapshot past tick 0 yet.
     pub fn run_at_start(&self) -> bool {
-        !self.sim_running
-            && self.run_to_target.is_none()
-            && self.snapshot.as_ref().is_none_or(|snapshot| snapshot.tick == 0)
+        !self.sim_running && self.run_to_target.is_none() && self.current_tick() == 0
     }
 
     /// Returns the reason the loaded model cannot be rebuilt under the set's entry for its id, or `None` when it can
@@ -189,10 +187,7 @@ impl AppState {
         }
         let current = self.models.get(loaded.id())?;
         match self.carried_setup(loaded, current) {
-            Ok(setup) => {
-                let shortfalls = self.entry_shortfalls(current, setup.values());
-                (!shortfalls.is_empty()).then(|| too_large_message(&shortfalls))
-            }
+            Ok(setup) => self.too_large(current, setup.values()),
             Err(error) => Some(setup_message(&error)),
         }
     }

@@ -531,9 +531,7 @@ pub fn origin_ui(ui: &mut egui::Ui, origin: &ModelOrigin, notes: &[NoteLayout]) 
             ("File", origin.file.clone()),
             ("Converted", converted_date(&origin.converted)),
         ] {
-            ui.label(label);
-            ui.label(value);
-            rows.end_row(ui);
+            rows.row(ui, label, value);
         }
     });
     for note in notes {

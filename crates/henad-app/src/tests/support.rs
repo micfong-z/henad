@@ -6,15 +6,18 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
+use henad_compute::cpu::sim_thread::SimCommand;
 use henad_compute::entry::{ModelEntry, ModelSet, ModelState, register_grid_model};
 use henad_compute::fault::Fault;
 use henad_compute::gpu::GpuContext;
-use henad_core::action::ActionDescriptor;
+use henad_core::action::{ActionDescriptor, Schedule};
 use henad_core::authoring::model::grid_model::GridModel;
 use henad_core::explore::measure::SeriesBuffer;
 use henad_core::explore::outcome::{PlannedRun, RunOutcome, RunStatus, StopReason};
+use henad_core::explore::replay::Replay;
 use henad_core::grid::Grid2D;
 use henad_core::helpers::f32_param;
+use henad_core::metadata::Backend;
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::provenance::ModelCode;
@@ -169,6 +172,55 @@ pub fn recoded(entry: &ModelEntry, text: &str, builds: &Arc<AtomicUsize>) -> Mod
         })
 }
 
+/// Returns an app over the example GPU models whose adapter, as the app sees it, cannot run compute shaders, with no
+/// model offered and none selected, or `None` to skip on a machine without a device.
+pub fn gpu_only_app() -> Option<AppState> {
+    let mut models = ModelSet::new(henad_core::build_info!());
+    for entry in &henad_models::example_models() {
+        if entry.metadata().backend == Backend::Gpu {
+            models.insert(entry.clone()).expect("example ids are unique");
+        }
+    }
+    assert!(!models.is_empty(), "the example models include GPU models");
+    AppState::headless(models, false)
+}
+
+/// Returns a replay of ten ticks of model `model` at `params`, seed 1, with no scheduled actions.
+pub fn replay(model: &str, params: Vec<ParamValue>) -> Replay {
+    Replay {
+        model: model.to_owned(),
+        params,
+        seed: 1,
+        schedule: Schedule::default(),
+        ticks: 10,
+        label: "Sweep run 0".to_owned(),
+    }
+}
+
+/// Returns `rect`, bounds in AccessKit's coordinates, as egui's rect.
+pub fn bounds(rect: egui::accesskit::Rect) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(rect.x0 as f32, rect.y0 as f32),
+        egui::pos2(rect.x1 as f32, rect.y1 as f32),
+    )
+}
+
+/// Returns the events of the three frames that click the primary button at `position`: the move there, the press and
+/// the release.
+pub fn click_events(position: egui::Pos2) -> [Vec<egui::Event>; 3] {
+    let button = |pressed| egui::Event::PointerButton {
+        pos: position,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    [
+        vec![egui::Event::PointerMoved(position)],
+        vec![button(true)],
+        vec![button(false)],
+    ]
+}
+
 /// Returns the value of the stat `label` in the loaded run's snapshot at tick 0, or panics after ten seconds.
 pub fn tick_zero_stat(app: &mut AppState, label: &str) -> f64 {
     app.wait_for_build();
@@ -201,7 +253,7 @@ pub fn wait_for_snapshot(app: &mut AppState, accept: impl Fn(u64) -> bool) -> &h
 pub fn step_past(app: &mut AppState, tick: u64) {
     app.wait_for_build();
     let thread = app.sim_thread.as_mut().expect("a model is loaded");
-    thread.step_once();
+    thread.send(SimCommand::StepOnce);
     for _ in 0..1000 {
         if let Some(snapshot) = thread.take_snapshot()
             && snapshot.tick > tick
@@ -578,12 +630,7 @@ impl Harness {
                 description: node.description().unwrap_or_default().to_owned(),
                 role: node.role(),
                 disabled: node.is_disabled(),
-                bounds: node.bounds().map(|rect| {
-                    egui::Rect::from_min_max(
-                        egui::pos2(rect.x0 as f32, rect.y0 as f32),
-                        egui::pos2(rect.x1 as f32, rect.y1 as f32),
-                    )
-                }),
+                bounds: node.bounds().map(bounds),
             })
             .collect()
     }
@@ -610,15 +657,9 @@ impl Harness {
 
     /// Clicks the primary button at `position`.
     pub fn click_at(&mut self, position: egui::Pos2) {
-        let button = |pressed| egui::Event::PointerButton {
-            pos: position,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
-        self.frame(vec![egui::Event::PointerMoved(position)]);
-        self.frame(vec![button(true)]);
-        self.frame(vec![button(false)]);
+        for events in click_events(position) {
+            self.frame(events);
+        }
     }
 
     /// Returns the centre of the one node whose label ends with `label`.

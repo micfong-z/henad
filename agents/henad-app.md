@@ -33,10 +33,13 @@ henad-models and the binary's env_logger are optional behind the default
 `example_models()`: "Henad", the icon, the links, the licence, `cli_command("henad-cli")` and `__official()`. The
 eframe app name "Henad" names the native storage folder, which left 0.2.0's `Henad-Engine` behind,
 and a browser keeps eframe's one key per origin. `ui/` has one file per panel or window
-(`menu_bar.rs`, `model.rs`, `params.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
+(`menu_bar.rs`, `model.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
 `charts.rs`, `performance.rs`, `system.rs`, `fault.rs`, `rebuild.rs`, `about.rs`), and
 `time_axis.rs` holds the time axis the Charts tab, the Results tab's Series view and Playback
-share. The Export tab and the Editor live in directories, `export/` and `editor/`. The Export
+share. The Parameters tab, the Export tab and the Editor live in directories, `params/`, `export/`
+and `editor/`. The Parameters tab's `mod.rs` draws the panel, its action buttons and its notice,
+`values.rs` the widget and text of one value (`value_widget`, `display_value`, `sheet_number`),
+`seed.rs` the Seed row, `schedule.rs` the scheduled actions and `trial.rs` the preview mode. The Export
 tab's `mod.rs` draws the tab and writes the stat series and final state, `image.rs` captures the
 viewport and `metadata.rs` builds the run details. Save stats (`history_csv`) and Record
 (`start_recording`, `Recording::start`) give the `StatsWriter` the tick length of `loaded_time`,
@@ -89,7 +92,13 @@ otherwise sets `EditorPanel::ask`. `unsaved_modal` (drawn from `lib.rs`) is a `D
 `poll_saves` passes each outcome to `save_finished` and `continue_replacement`, which runs the
 action once both saved and drops it on a
 save that saved nothing. In a test build `save_as` records each save in `saves_requested`, and
-`finish_save` reports it (`src/tests/unsaved.rs`).
+`finish_save` reports it (`src/tests/unsaved.rs`). On native a close request of the window waits
+the same way: `HenadApp::logic` sends `ViewportCommand::CancelClose` while `AppState::hold_close`
+holds, which asks through `replace_model(app, Replacement::CloseWindow)`. Discard changes, or a
+Save model that saved both models, runs `AppState::close_window`: `closing` set, which holds no
+later request, then `ViewportCommand::Close`. A browser tab has no close request to hold
+(`a_close_request_with_unsaved_edits_asks_and_saves_before_closing`,
+`a_close_request_closes_at_once_without_edits_and_after_discard_with_them`).
 `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer drawn over the grid layer,
 and `painted.rs` carries a paint callback's wgpu handles past `CallbackTrait`'s `Send + Sync`
 bound. `edge_layer.rs` (with `edges.wgsl`) draws a network's
@@ -117,11 +126,11 @@ and clears the schedule, or, for the loaded model, restores `loaded_values` (its
 every live edit, kept by `send_live_param`), its seed and its schedule, carried by id to the set's
 entry (`remap_values`, `remap_schedule`), for the Model panel and the Sweep tab alike, and an id
 the set lacks leaves no values. `AppState` also holds the values the next build reads:
-`param_values`, the Seed field's `seed` with its raw `seed_text`, and the scheduled actions in
-`schedule`.
+`param_values` with its `pending_reload` marks (`set_param_values`), the Seed field's `seed` with
+its raw `seed_text` (`set_seed`), and the scheduled actions in `schedule`.
 `AppState::build_setup` checks all three through `RunSetup::from_parts`. `AppState::build_refusal`
 returns Build's disabled reason, which Playback shows. It shows a `SetupError` through
-`setup_message`, as it shows `INVALID_SEED` and a shortfall through `too_large_message`. Every
+`setup_message`, as it shows `INVALID_SEED` and a shortfall through `selection_too_large`. Every
 shortfall goes through `AppState::entry_shortfalls`, which takes `SheetFile::shortfalls` when the
 Editor's sheet has the entry's code (`editor_sheet_of`), so a sheet's work past a budget names its
 lines and no pass (`work_past_the_budget_on_a_sheet_names_its_lines_and_no_pass`).
@@ -137,6 +146,10 @@ schedule is not empty. The loaded fields are the setup's from the start of the b
 (`previews_editor_sheet`, the loaded id the sheet's) or the source the Editor applied, and Playback
 then reads a tick in the sheet's words. Build replays the preview while the selection is the one
 `load_preview` recorded in `preview_selection` (`build_replays_preview`, `henad-app-sheet.md`).
+`state.rs` holds `AppState`, its selection, the next build's fields, the loaded run and the
+snapshot intake. Beside it `state/preview.rs` holds the Editor's previews, `state/open.rs` the
+openings and the opened run, `state/fault.rs` the fault routes and `state/files.rs` the save and
+open dialogs, the recording and the viewport capture.
 `state/build.rs` holds the build and the teardown, and `state/pool.rs` the `ModelPool`, a shared
 slot holding the pool the app's model code runs in (`None` for rayon's global pool) and its
 generation, and the `UiPool`. On native `start_build` runs a `BuildJob` on a thread named
@@ -221,11 +234,11 @@ shows each trial under its parameter (`henad-app-sheet.md`). `src/tests/preview_
 `seed_pending` and `schedule_pending` compare each with its loaded copy, and the Reload needed
 notice counts both. A `None` seed is the model's default, the constant `henad-cli` uses without
 `--seed`. The engines take `seed.map_or(CONST, mix_seed)`, and the field keeps `None` as a state
-of its own, shown as the "Default" hint and never as a number. `params.rs` draws the Seed row
+of its own, shown as the "Default" hint and never as a number. `params/` draws the Seed row
 above the sliders, its dice (`draw_seed`, the clock mixed through `mix_seed`), and the
 scheduled-actions list under the action buttons. `parse_seed` reads an empty field as `None` and
 a decimal `u64` as `Some`. Anything else shows `INVALID_SEED` and disables Build. Picking another
-model clears the schedule. Its entries index the previous model's actions. `params.rs` skips a
+model clears the schedule. Its entries index the previous model's actions. `params_ui` skips a
 hidden parameter (`ParamDescriptor::is_hidden`, a model's tick length), and shows "This model has
 no parameters." when every parameter is hidden. The graph editor's world panel skips it too and
 counts only the shown ones, as the Model tab's Parameters row (`model.rs`, `interface_rows`) does
@@ -239,7 +252,8 @@ scale. `time_axis::counter_text` is Playback's tick counter beside Play and Step
 capitalised, "Day"), and `plot_x` a sample's x, `TimeScale::time_at` of its tick, which equals
 the `time` column of `--export-stats`. The Charts tab plots every stat at `plot_x`, includes 0 in
 the y range, and draws a series of one sample as `Points` of radius 3, since a `Line` of one point
-draws nothing. `tests/time_axis.rs` holds the app-level tests over henad-models'
+draws nothing. Its x range then spans the sample's tick to the next (`single_sample_x_range`).
+Otherwise egui_plot widens the zero-width range to the height of the y range. `tests/time_axis.rs` holds the app-level tests over henad-models'
 `sir_rates.toml` fixture (`support::sir_rates`). `playback.rs` draws the Run to tick row.
 `AppState::run_to` rebuilds first for a tick behind the current one through `press_build` (a
 replay of the Editor's sheet preview while `build_replays_preview` holds), then sends
@@ -248,12 +262,13 @@ is selected than the one loaded, unless Build replays the sheet's preview, which
 (`run_to_tick_drives_the_sheet_preview`), while the sim plays, and for a tick behind the current one
 while Build is disabled.
 A playing loop runs ahead of the snapshot's tick, and a target between the two would pause past
-it. The progress line reads the target, Cancel sends `Pause`, and `HenadApp::logic` clears the
-target once a snapshot reaches it. A snapshot past the target makes `logic` call `run_to` again,
-and the second call rebuilds, for the selection or the replayed preview. Where the frame drives the
-sim (`!CAN_SPAWN_THREADS`), `logic`
-keeps repainting while a run-to is pending. `AppState::open_run(Replay, OpenAt)` builds one sweep
-run from a `henad_core::explore::replay::Replay`. It selects the model, sets the params, seed
+it. The progress line reads the target, Cancel sends `Pause`, and `AppState::receive_snapshot`
+(each frame's snapshot, through `poll_snapshot` from `HenadApp::logic`) clears the target once a
+snapshot reaches it. A snapshot past the target makes it call `run_to` again, and the second call
+rebuilds, for the selection or the replayed preview. Where the frame drives the sim
+(`!CAN_SPAWN_THREADS`), `logic` keeps repainting while a run-to is pending.
+`AppState::open_run(Replay, OpenAt)` builds one sweep run from a
+`henad_core::explore::replay::Replay`. It selects the model, sets the params, seed
 and schedule, rebuilds, sends `RunTo` for `OpenAt::Tick`, and sets `focus_request` to the
 Viewport. `HenadApp::ui` applies that request through `Workspace::focus` after
 `DockArea::show_inside`. The panels draw while the dock is borrowed. `OpenedRun` names the run in

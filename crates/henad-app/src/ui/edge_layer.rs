@@ -5,7 +5,7 @@
 
 use crate::shader_bindings::edges::Uniforms;
 use crate::state::UiPool;
-use crate::ui::agent_layer::{AGENT_SIZE_PT, palette_lut};
+use crate::ui::agent_layer::{AGENT_SIZE_PT, alpha_pipeline, palette_lut, vertex_uniform_entry};
 use henad_compute::snapshot::EdgeSnapshot;
 
 /// Alpha at the source of a directed edge.
@@ -99,20 +99,7 @@ impl EdgeLayer {
         };
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("henad_edge_bind_group_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                storage(1),
-                storage(2),
-            ],
+            entries: &[vertex_uniform_entry(0), storage(1), storage(2)],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -122,38 +109,17 @@ impl EdgeLayer {
         });
 
         let make = |label: &str, entry_point: &str, topology: wgpu::PrimitiveTopology| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some(entry_point),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: (WORDS * 4) as u64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &INSTANCE_ATTRS,
-                    })],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+            let vertex = wgpu::VertexState {
+                module: &shader,
+                entry_point: Some(entry_point),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: (WORDS * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &INSTANCE_ATTRS,
+                })],
+            };
+            alpha_pipeline(device, label, &pipeline_layout, vertex, topology, target_format)
         };
         let pipeline = make("henad_edge_pipeline", "vs_main", wgpu::PrimitiveTopology::LineList);
         let arrow_pipeline = make(

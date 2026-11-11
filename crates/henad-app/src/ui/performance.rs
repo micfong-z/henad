@@ -4,9 +4,9 @@ use crate::state::AppState;
 use crate::ui::KvGridRows;
 use henad_core::helpers::fmt_bytes;
 
-/// Adds a label of `s` with its leading zeros dimmed.
-fn padded_num_label(ui: &mut egui::Ui, s: &str) {
-    let (zeros, sig) = split_leading_zeros(s);
+/// Adds a label of `text` with its leading zeros dimmed.
+fn padded_num_label(ui: &mut egui::Ui, text: &str) {
+    let (zeros, significant) = split_leading_zeros(text);
 
     let normal = ui.visuals().text_color();
     let faded = egui::Color32::from_gray(80);
@@ -26,20 +26,14 @@ fn padded_num_label(ui: &mut egui::Ui, s: &str) {
             },
         );
     }
-    job.append(sig, 0.0, egui::TextFormat { color: normal, ..font });
+    job.append(significant, 0.0, egui::TextFormat { color: normal, ..font });
     ui.label(job);
 }
 
 /// Splits the leading zeros from the significant digits. An all-zero value keeps its last digit.
-fn split_leading_zeros(s: &str) -> (&str, &str) {
-    let first_sig = s.find(|c: char| c != '0').unwrap_or(s.len() - 1);
-    s.split_at(first_sig)
-}
-
-fn row(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: impl Into<egui::WidgetText>) {
-    ui.label(label);
-    ui.label(value);
-    rows.end_row(ui);
+fn split_leading_zeros(text: &str) -> (&str, &str) {
+    let first_significant = text.find(|c: char| c != '0').unwrap_or(text.len() - 1);
+    text.split_at(first_significant)
 }
 
 fn padded_row(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: &str) {
@@ -60,27 +54,27 @@ pub fn performance_ui(ui: &mut egui::Ui, app: &AppState) {
     }
     crate::ui::kv_grid(ui, "performance_grid").show(ui, |ui, rows| {
         match &app.snapshot {
-            Some(snap) => {
-                padded_row(ui, rows, "Tick", &format!("{:09}", snap.tick));
-                padded_row(ui, rows, "TPS", &format!("{:09.0}", snap.actual_tps));
-                row(ui, rows, "Population", format!("{}", snap.population));
-                row(ui, rows, "Sim memory", fmt_bytes(snap.heap_bytes as u64));
+            Some(snapshot) => {
+                padded_row(ui, rows, "Tick", &format!("{:09}", snapshot.tick));
+                padded_row(ui, rows, "TPS", &format!("{:09.0}", snapshot.actual_tps));
+                rows.row(ui, "Population", format!("{}", snapshot.population));
+                rows.row(ui, "Sim memory", fmt_bytes(snapshot.heap_bytes as u64));
             }
-            None => row(ui, rows, "Simulation", "Not loaded"),
+            None => rows.row(ui, "Simulation", "Not loaded"),
         }
 
         let dt = ui.ctx().input(|i| i.stable_dt);
         if dt > 0.0 {
             padded_row(ui, rows, "FPS", &format!("{:04.0}", 1.0 / dt));
         } else {
-            row(ui, rows, "FPS", "-");
+            rows.row(ui, "FPS", "-");
         }
 
         // Each time is padded to three integer digits and one decimal.
-        let engine_ms = app.snapshot.as_ref().map_or(0.0, |s| s.engine_ms);
+        let engine_ms = app.snapshot.as_ref().map_or(0.0, |snapshot| snapshot.engine_ms);
         padded_row(ui, rows, "Engine", &format!("{engine_ms:05.1} ms"));
         // Shows the last snapshot's own cost.
-        let view_ms = app.snapshot.as_ref().map_or(0.0, |s| s.view_ms);
+        let view_ms = app.snapshot.as_ref().map_or(0.0, |snapshot| snapshot.view_ms);
         padded_row(ui, rows, "Prepare view", &format!("{view_ms:05.1} ms"));
 
         padded_row(ui, rows, "Render", &format!("{:05.1} ms", app.timings.render_ms));

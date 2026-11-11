@@ -41,16 +41,14 @@ fn tps_controls(ui: &mut egui::Ui, app: &mut AppState) {
 }
 
 fn cpu_pacing_controls(ui: &mut egui::Ui, app: &mut AppState) {
-    let mut max = app.ticks_per_snapshot as i32;
     if ui
         .add(
-            egui::Slider::new(&mut max, 1..=1000)
+            egui::Slider::new(&mut app.ticks_per_snapshot, 1..=1000)
                 .logarithmic(true)
                 .text("Ticks/snapshot"),
         )
         .changed()
     {
-        app.ticks_per_snapshot = max as u32;
         app.send_command(SimCommand::SetTicksPerSnapshot(app.ticks_per_snapshot));
     }
 
@@ -97,7 +95,7 @@ fn gpu_batching_controls(ui: &mut egui::Ui, app: &mut AppState) {
     let stats = app
         .sim_thread
         .as_ref()
-        .and_then(crate::sim_runner::SimRunner::gpu_stats)
+        .and_then(SimRunner::gpu_stats)
         .unwrap_or_default();
 
     ui.label(match stats.gpu_us_per_step {
@@ -105,22 +103,16 @@ fn gpu_batching_controls(ui: &mut egui::Ui, app: &mut AppState) {
         None => "GPU time/step: N/A".to_owned(),
     });
 
-    if ui
-        .checkbox(&mut app.gpu_adaptive, "Adaptive batching")
+    let mut changed = ui
+        .checkbox(&mut app.gpu_batch.adaptive, "Adaptive batching")
         .on_hover_text(
             "Automatically pick steps-per-batch to keep each GPU submission under the target \
              time below, instead of a fixed batch size, so large batches don't block egui's own \
              rendering on the shared queue.",
         )
-        .changed()
-    {
-        let adaptive = app.gpu_adaptive;
-        if let Some(gpu) = app.sim_thread.as_mut().and_then(SimRunner::as_gpu_mut) {
-            gpu.set_adaptive(adaptive);
-        }
-    }
+        .changed();
 
-    if app.gpu_adaptive {
+    if app.gpu_batch.adaptive {
         // The disabled slider shows the controller's batch size, read from the stats every frame to track the GPU
         // cost.
         let mut live_batch_size = stats.batch_size;
@@ -129,26 +121,20 @@ fn gpu_batching_controls(ui: &mut egui::Ui, app: &mut AppState) {
             egui::Slider::new(&mut live_batch_size, 1..=MAX_BATCH_SIZE).text("Steps per batch (live)"),
         );
 
-        if ui
+        changed |= ui
             .add(
-                egui::Slider::new(&mut app.gpu_target_ms, 1.0..=16.0)
+                egui::Slider::new(&mut app.gpu_batch.target_ms, 1.0..=16.0)
                     .text("Target ms/batch")
                     .fixed_decimals(1),
             )
-            .changed()
-        {
-            let target_ms = app.gpu_target_ms;
-            if let Some(gpu) = app.sim_thread.as_mut().and_then(SimRunner::as_gpu_mut) {
-                gpu.set_target_ms(target_ms);
-            }
-        }
-    } else if ui
-        .add(egui::Slider::new(&mut app.gpu_batch_size, 1..=2000).text("Steps per batch"))
-        .changed()
-    {
-        let batch_size = app.gpu_batch_size;
-        if let Some(gpu) = app.sim_thread.as_mut().and_then(SimRunner::as_gpu_mut) {
-            gpu.set_batch_size(batch_size);
-        }
+            .changed();
+    } else {
+        changed |= ui
+            .add(egui::Slider::new(&mut app.gpu_batch.batch_size, 1..=2000).text("Steps per batch"))
+            .changed();
+    }
+
+    if changed && let Some(runner) = &mut app.sim_thread {
+        runner.set_gpu_batch(app.gpu_batch);
     }
 }

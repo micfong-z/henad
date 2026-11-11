@@ -117,9 +117,9 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     scroll.show(ui, |ui| {
         section(ui, "Identity");
         kv_grid(ui, "model_identity_grid").show(ui, |ui, rows| {
-            row(ui, rows, "Id", entry.id());
-            row(ui, rows, "Backend", entry.metadata().backend.label());
-            row(ui, rows, "Topology", topology_label(entry.topology_hint()));
+            rows.row(ui, "Id", entry.id());
+            rows.row(ui, "Backend", entry.metadata().backend.label());
+            rows.row(ui, "Topology", topology_label(entry.topology_hint()));
         });
 
         ui.add_space(8.0);
@@ -186,12 +186,6 @@ fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(2.0);
 }
 
-fn row(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: impl Into<egui::WidgetText>) {
-    ui.label(label);
-    ui.label(value);
-    rows.end_row(ui);
-}
-
 /// Adds a row with the count `value`, whose two cells both list `names` on hover.
 ///
 /// A value as short as "7" is barely a pointer wide on its own.
@@ -223,13 +217,13 @@ fn yes_no(present: bool) -> &'static str {
     if present { MDI_CHECK } else { MDI_CLOSE }
 }
 
-/// Returns the count `n`, followed by the count `flagged` labelled `flag` unless `flagged` is zero, as in
+/// Returns the count `count`, followed by the count `flagged` labelled `flag` unless `flagged` is zero, as in
 /// "7 (2 reload)".
-fn count_of(n: usize, flagged: usize, flag: &str) -> String {
+fn count_of(count: usize, flagged: usize, flag: &str) -> String {
     if flagged == 0 {
-        n.to_string()
+        count.to_string()
     } else {
-        format!("{n} ({flagged} {flag})")
+        format!("{count} ({flagged} {flag})")
     }
 }
 
@@ -255,7 +249,7 @@ fn lane_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, lanes: &[LaneSpec]) {
 fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structure) {
     match structure {
         Structure::Grid { neighborhood } => {
-            row(ui, rows, "Neighbourhood", neighborhood_label(*neighborhood));
+            rows.row(ui, "Neighbourhood", neighborhood_label(*neighborhood));
         }
         Structure::Agents {
             chunk,
@@ -264,17 +258,17 @@ fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structur
             field,
         } => {
             lane_rows(ui, rows, lanes);
-            row(ui, rows, "Chunk size", format!("{chunk} agents"));
-            row(ui, rows, "Neighbour index", *index);
-            row(ui, rows, "Field layer", *field);
+            rows.row(ui, "Chunk size", format!("{chunk} agents"));
+            rows.row(ui, "Neighbour index", *index);
+            rows.row(ui, "Field layer", *field);
         }
         Structure::Network { chunk, lanes, .. } => {
             lane_rows(ui, rows, lanes);
-            row(ui, rows, "Chunk size", format!("{chunk} nodes"));
+            rows.row(ui, "Chunk size", format!("{chunk} nodes"));
         }
         Structure::GpuGrid { buffers, workgroup } => {
             row_listing(ui, rows, "Buffers", buffers.len().to_string(), &buffers.join("\n"));
-            row(ui, rows, "Workgroup", format!("{workgroup} × {workgroup}"));
+            rows.row(ui, "Workgroup", format!("{workgroup} × {workgroup}"));
         }
         Structure::GpuAgents {
             buffers,
@@ -300,15 +294,10 @@ fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structur
                 passes.len().to_string(),
                 &pass_names.join("\n"),
             );
-            row(
-                ui,
-                rows,
-                "Neighbour index",
-                if *index { "Spatial hash" } else { "None" },
-            );
-            row(ui, rows, "Display pass", yes_no(*display));
+            rows.row(ui, "Neighbour index", if *index { "Spatial hash" } else { "None" });
+            rows.row(ui, "Display pass", yes_no(*display));
             if *counters > 0 {
-                row(ui, rows, "Counters", counters.to_string());
+                rows.row(ui, "Counters", counters.to_string());
             }
         }
         // A structure this build does not know has no rows to show.
@@ -323,10 +312,10 @@ fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) 
     let shown: Vec<&ParamDescriptor> = entry
         .param_descriptors()
         .iter()
-        .filter(|desc| !desc.is_hidden())
+        .filter(|descriptor| !descriptor.is_hidden())
         .collect();
-    let reload = shown.iter().filter(|desc| !desc.is_live()).count();
-    row(ui, rows, "Parameters", count_of(shown.len(), reload, "reload"));
+    let reload = shown.iter().filter(|descriptor| !descriptor.is_live()).count();
+    rows.row(ui, "Parameters", count_of(shown.len(), reload, "reload"));
 
     ui.label("Statistics");
     ui.horizontal(|ui| {
@@ -364,9 +353,9 @@ fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) 
 
 /// Adds the rows of the model's expected footprint on the GPU.
 fn footprint_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, id: &str, demand: &Demand, storage_limit: u32) {
-    row(ui, rows, "Expected memory", fmt_bytes(demand.bytes()));
+    rows.row(ui, "Expected memory", fmt_bytes(demand.bytes()));
 
-    if let Some(largest) = demand.buffers.iter().max_by_key(|alloc| alloc.bytes) {
+    if let Some(largest) = demand.buffers.iter().max_by_key(|buffer| buffer.bytes) {
         row_listing(
             ui,
             rows,
@@ -376,8 +365,8 @@ fn footprint_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, id: &str, demand: &D
         );
     }
 
-    if let Some((w, h)) = demand.texture {
-        row(ui, rows, "Display texture", format!("{w} × {h}"));
+    if let Some((width, height)) = demand.texture {
+        rows.row(ui, "Display texture", format!("{width} × {height}"));
     }
 
     if let Some(widest) = demand.passes.iter().max_by_key(|pass| pass.storage) {

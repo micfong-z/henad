@@ -380,6 +380,17 @@ mod tests {
 
     use super::{Layout, Tab, Workspace, default_dock_state, editor_dock_state, focus_tab, toggle_tab};
 
+    /// Returns the tabs of each leaf of `dock`.
+    fn leaves(dock: &DockState<Tab>) -> Vec<Vec<Tab>> {
+        dock.iter_leaves().map(|(_, leaf)| leaf.tabs.clone()).collect()
+    }
+
+    /// Returns the tab in front of the leaf that holds `tab`, `None` while `tab` is closed.
+    fn front_of(dock: &DockState<Tab>, tab: Tab) -> Option<Tab> {
+        let (_, leaf) = dock.iter_leaves().find(|(_, leaf)| leaf.tabs.contains(&tab))?;
+        leaf.tabs.get(leaf.active.0).copied()
+    }
+
     /// Tabs the default layout leaves closed.
     const CLOSED_BY_DEFAULT: [Tab; 1] = [Tab::Editor];
 
@@ -448,12 +459,11 @@ mod tests {
         let mut dock = default_dock_state();
         for tab in [Tab::Results, Tab::Sweep, Tab::Viewport] {
             focus_tab(&mut dock, Layout::Default, tab);
-            let (_, leaf) = dock
-                .iter_leaves()
-                .find(|(_, leaf)| leaf.tabs.contains(&Tab::Viewport))
-                .expect("Viewport is in the default layout");
-            assert_eq!(leaf.tabs.get(leaf.active.0), Some(&tab), "{tab:?} is not in front");
-            assert_eq!(leaf.tabs.len(), 3, "focusing {tab:?} moved a tab out of the stack");
+            assert_eq!(front_of(&dock, Tab::Viewport), Some(tab), "{tab:?} is not in front");
+            assert!(
+                leaves(&dock).contains(&STACKED[0].to_vec()),
+                "focusing {tab:?} moved a tab out of the stack"
+            );
         }
     }
 
@@ -506,11 +516,7 @@ mod tests {
     fn focusing_a_tab_brings_it_in_front_of_its_siblings() {
         let mut dock = default_dock_state();
         focus_tab(&mut dock, Layout::Default, Tab::Export);
-        let (_, leaf) = dock
-            .iter_leaves()
-            .find(|(_, leaf)| leaf.tabs.contains(&Tab::Export))
-            .expect("Export is in the default layout");
-        assert_eq!(leaf.tabs.get(leaf.active.0), Some(&Tab::Export));
+        assert_eq!(front_of(&dock, Tab::Export), Some(Tab::Export));
     }
 
     #[test]
@@ -550,17 +556,6 @@ mod tests {
         &[Tab::Playback, Tab::Pacing],
         &[Tab::Charts, Tab::Params, Tab::Stats, Tab::Model],
     ];
-
-    /// Returns the tabs of each leaf of `dock`.
-    fn leaves(dock: &DockState<Tab>) -> Vec<Vec<Tab>> {
-        dock.iter_leaves().map(|(_, leaf)| leaf.tabs.clone()).collect()
-    }
-
-    /// Returns the tab in front of the leaf that holds `tab`, `None` while `tab` is closed.
-    fn front_of(dock: &DockState<Tab>, tab: Tab) -> Option<Tab> {
-        let (_, leaf) = dock.iter_leaves().find(|(_, leaf)| leaf.tabs.contains(&tab))?;
-        leaf.tabs.get(leaf.active.0).copied()
-    }
 
     #[test]
     fn editor_layout_contains_every_tab_but_performance_system_and_export() {

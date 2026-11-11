@@ -106,14 +106,10 @@ fn the_export_tab_writes_the_time_of_a_timed_model() {
             .unwrap_or_default()
             .to_owned()
     };
-    // Each sample goes to the history and the recording, as `HenadApp::logic` passes it.
+    // Each sample goes to the history and the recording through the app's intake of a snapshot.
     let record = |app: &mut AppState| {
         let snapshot = app.snapshot.take().expect("a snapshot");
-        if let Some(history) = &mut app.stats_history {
-            history.push_entries(&snapshot.stats, snapshot.tick);
-        }
-        app.record(&snapshot);
-        app.snapshot = Some(snapshot);
+        app.receive_snapshot(snapshot);
     };
 
     app.select_model(sir_rates().id());

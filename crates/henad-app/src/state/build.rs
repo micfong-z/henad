@@ -29,9 +29,7 @@ use henad_compute::simulation::RunSetup;
 use henad_core::metadata::Backend;
 
 use super::AppState;
-#[cfg(not(target_arch = "wasm32"))]
-use super::pool::ModelPool;
-use super::pool::UiPool;
+use super::pool::{ModelPool, UiPool};
 use crate::sim_runner::SimRunner;
 
 /// Longest time a teardown waits on the UI thread for the runner to stop. A runner still running after it is detached.
@@ -152,19 +150,7 @@ impl BuildJob {
             if self.phase.load(Ordering::SeqCst) == PHASE_CANCELED {
                 return None;
             }
-            let now = Instant::now();
-            let mut waiting = false;
-            for stopping in &self.predecessors {
-                if stopping.is_finished() {
-                    continue;
-                }
-                if stopping.is_late(now) {
-                    self.pools.retire(stopping.generation);
-                } else {
-                    waiting = true;
-                }
-            }
-            if !waiting {
+            if !retire_late(&self.pools, &self.predecessors, Instant::now()) {
                 break;
             }
             std::thread::sleep(SETTLE_POLL);
@@ -284,7 +270,7 @@ impl AppState {
             target_tps: self.target_tps,
             uncapped: self.uncapped,
             layout,
-            gpu_settings: self.gpu_batch_settings(),
+            gpu_settings: self.gpu_batch,
             #[cfg(not(target_arch = "wasm32"))]
             pools: self.pools.clone(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -299,27 +285,29 @@ impl AppState {
         };
 
         #[cfg(target_arch = "wasm32")]
-        {
-            // A browser detaches no thread, and its one pool is the global pool.
-            let built = Built {
-                runner: job.run_here(None),
-                generation: self.pools.current().0,
-            };
-            self.finish_build(built, Vec::new(), &model);
-        }
+        self.build_inline(job, &model);
 
         #[cfg(all(test, not(target_arch = "wasm32")))]
         if self.inline_builds {
-            let built = Built {
-                runner: job.run_here(None),
-                generation: self.pools.current().0,
-            };
-            self.finish_build(built, Vec::new(), &model);
+            self.build_inline(job, &model);
             return;
         }
 
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_build(job, model);
+    }
+
+    /// Builds `job`, the build of entry `model`, on the calling thread, as a browser builds and as a test does with
+    /// [`Self::inline_builds`].
+    ///
+    /// A browser detaches no thread, and its one pool is the global pool.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn build_inline(&mut self, job: BuildJob, model: &ModelEntry) {
+        let built = Built {
+            runner: job.run_here(None),
+            generation: self.pools.current().0,
+        };
+        self.finish_build(built, Vec::new(), model);
     }
 
     /// Starts the build thread for `job`, the build of entry `model`.
@@ -396,12 +384,7 @@ impl AppState {
     fn finish_build(&mut self, built: Built, queued: Vec<SimCommand>, model: &ModelEntry) {
         match built.runner {
             Ok(mut runner) => {
-                if let Some(gpu) = runner.as_gpu_mut() {
-                    let settings = self.gpu_batch_settings();
-                    gpu.set_adaptive(settings.adaptive);
-                    gpu.set_batch_size(settings.batch_size);
-                    gpu.set_target_ms(settings.target_ms);
-                }
+                runner.set_gpu_batch(self.gpu_batch);
                 for command in queued {
                     runner.send(command);
                 }
@@ -409,15 +392,6 @@ impl AppState {
                 self.runner_generation = built.generation;
             }
             Err(fault) => self.show_fault(fault, Some(model)),
-        }
-    }
-
-    /// Batch settings of the Pacing tab for a GPU runner.
-    fn gpu_batch_settings(&self) -> GpuBatchSettings {
-        GpuBatchSettings {
-            adaptive: self.gpu_adaptive,
-            batch_size: self.gpu_batch_size,
-            target_ms: self.gpu_target_ms,
         }
     }
 
@@ -508,15 +482,7 @@ impl AppState {
         if self.stopping.is_empty() {
             return;
         }
-        let now = Instant::now();
-        let mut young = false;
-        for stopping in &self.stopping {
-            if stopping.is_late(now) {
-                self.pools.retire(stopping.generation);
-            } else {
-                young = true;
-            }
-        }
+        let young = retire_late(&self.pools, &self.stopping, Instant::now());
         ctx.request_repaint_after(if young { STOPPING_REPAINT } else { STOPPED_REPAINT });
     }
 
@@ -538,6 +504,23 @@ impl AppState {
             STILL_STOPPING
         })
     }
+}
+
+/// Retires the pool of each thread of `stopping` that is still running at `now` and has run past
+/// [`DEFAULT_STOP_TIMEOUT`] since the app stopped it. Returns whether any thread still running is younger than that.
+fn retire_late(pools: &ModelPool, stopping: &[Arc<Stopping>], now: Instant) -> bool {
+    let mut young = false;
+    for stopping in stopping {
+        if stopping.is_finished() {
+            continue;
+        }
+        if stopping.is_late(now) {
+            pools.retire(stopping.generation);
+        } else {
+            young = true;
+        }
+    }
+    young
 }
 
 /// Stops the live simulation and abandons a build without waiting past [`STOP_WAIT`], as the app quits. Then aborts a

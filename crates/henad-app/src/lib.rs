@@ -55,7 +55,6 @@ pub use crate::state::OpenAt;
 #[cfg(target_arch = "wasm32")]
 pub use crate::web::{init_web_logger, start_web};
 
-use crate::sim_runner::SimRunner;
 use crate::state::AppState;
 use crate::ui::dock::Workspace;
 use henad_compute::fault::{FaultSink, install_panic_hook};
@@ -149,6 +148,13 @@ impl HenadApp {
 
 impl eframe::App for HenadApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // A close request of the window waits while a model the Editor holds has unsaved edits. A browser tab has no close
+        // request the app can hold.
+        #[cfg(not(target_arch = "wasm32"))]
+        if ctx.input(|i| i.viewport().close_requested()) && self.state.hold_close() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+
         // Takes the runner of a build that has finished on its thread, with its first snapshot.
         self.state.poll_build();
         self.state.poll_stopping(ctx);
@@ -160,36 +166,7 @@ impl eframe::App for HenadApp {
         }
         ui::sweep::update(&mut self.state, dt);
 
-        // Takes the latest snapshot from the sim thread.
-        let fresh = self.state.sim_thread.as_mut().and_then(SimRunner::take_snapshot);
-        if let Some(snap) = fresh {
-            // The loop can be past the target by the time it handles `RunTo`, and then pauses where it is. A second
-            // run to the target sees this snapshot's tick, rebuilds, and stops there.
-            let passed_target = self.state.run_to_target.filter(|&target| {
-                snap.tick > target && (self.state.selection_is_loaded() || self.state.build_replays_preview())
-            });
-            if self.state.run_to_target.is_some_and(|target| snap.tick >= target) {
-                self.state.run_to_target = None;
-            }
-            // A publish at the newest row's tick replaces that row. After an action it carries the
-            // action's effect, and after a paused layout step the same stats again.
-            if let Some(history) = &mut self.state.stats_history {
-                for sample in &snap.run_to_samples {
-                    history.push_entries(sample.entries(), sample.tick());
-                }
-                history.push_entries(&snap.stats, snap.tick);
-            }
-            self.state.record(&snap);
-            // Passing the outgoing snapshot back lets the sim thread refill it instead of allocating.
-            if let Some(previous) = self.state.snapshot.replace(snap)
-                && let Some(thread) = &mut self.state.sim_thread
-            {
-                thread.recycle(previous);
-            }
-            if let Some(target) = passed_target {
-                self.state.run_to(target);
-            }
-        }
+        self.state.poll_snapshot();
 
         if let Some(fault) = self
             .state
