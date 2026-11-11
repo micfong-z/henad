@@ -1,4 +1,4 @@
-# Recording the `be338ec` sweep folder
+# Recording the sweep folder without a `time` column
 
 Produces the sweep folder beside this file: `manifest.json`, `runs.csv`, `series.csv` and `summary.csv`.
 `a_folder_written_before_the_time_column_still_reads` (`crates/henad-explore/src/tests/result_set.rs`) opens it and reads its series.
@@ -22,12 +22,12 @@ From the repository root:
 mkdir -p /tmp/henad-s2-be338ec
 git archive be338ec | tar -x -C /tmp/henad-s2-be338ec
 (cd /tmp/henad-s2-be338ec && CARGO_TARGET_DIR=/tmp/henad-s2-be338ec-target cargo build --release -p henad-cli)
-rm -f crates/henad-explore/tests/fixtures/series-be338ec/*.json \
-    crates/henad-explore/tests/fixtures/series-be338ec/*.csv
+rm -f crates/henad-explore/tests/fixtures/series-without-time/*.json \
+    crates/henad-explore/tests/fixtures/series-without-time/*.csv
 /tmp/henad-s2-be338ec-target/release/henad-cli sir --set grid_width=16 --set grid_height=16 \
     --vary infection_rate=0.2,0.4 --reps 1 --steps 10 --stats-every 5 --seed 7 \
-    --out crates/henad-explore/tests/fixtures/series-be338ec
-rm crates/henad-explore/tests/fixtures/series-be338ec/.lock
+    --out crates/henad-explore/tests/fixtures/series-without-time
+rm crates/henad-explore/tests/fixtures/series-without-time/.lock
 rm -rf /tmp/henad-s2-be338ec /tmp/henad-s2-be338ec-target
 ```
 
@@ -35,6 +35,7 @@ The sweep runs 2 configs of SIR with 1 replicate each, 2 runs of 10 steps on the
 The `.lock` file the writer leaves is removed, since a reader never takes the lock.
 A tree extracted with `git archive` holds no `.git` directory, so the build stamps no commit and the manifest's `commit` fields are empty.
 The manifest's `argv` names the binary at the path above, and no test reads it.
+It also names this folder as `series-be338ec`, the name it had when it was recorded.
 
 ## Recorded
 

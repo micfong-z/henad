@@ -274,7 +274,8 @@ The *original* of a copy is the counterpart when it is a sheet with `origin.mode
 `copy_banner` returns a `CopyBanner` (cached by load, code revision and a hash of the original's
 text) in four states (`CopyState`): `Unedited`, `Edited(node_edits)` when `GraphEditor::code_hash`
 differs from `origin.copy_code` (counts from `changes_since_conversion`), `OriginalChanged` (the
-hash differs, or the counterpart no longer lowers) and `NotFound`. `header_ui` draws it in a
+code's hash differs from `origin.code`, or the counterpart no longer lowers) and `NotFound`.
+`header_ui` draws it in a
 `Panel::top` under the header, blue 950 fill and blue 200 text, with Open <name>
 (`EditorRequest::OpenOriginal`, `open_original_of`: a swap, or the sheet read from beside, which
 takes the copy as its counterpart) in every state but `NotFound`. The sheet's link line

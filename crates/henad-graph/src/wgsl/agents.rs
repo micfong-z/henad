@@ -10,9 +10,9 @@
 //! *Buffers.* Each lane has a buffer of its own, `lane_<id>_<domain>`, a `vec2` lane as one interleaved `vec2` per
 //! element. A lane that a tick pass writes and another agent reads is dual, its sides swapped at the end of the step.
 //! A field holds its layers one after another in `field_<id>_cells`, and a field that takes deposits holds their merged
-//! values in `accum_<id>_cells`. The engine's `counters` hold the fault word, then the document's counters, then the
-//! tallies of the reduce leaf, which the engine clears before each leaf, then the counts of the probes that
-//! [`AgentProgram::compile_with_probes`] takes.
+//! values in `accum_<id>_cells`. The engine's `counters` hold the fault word, the tick word, then the document's
+//! counters, then the tallies of the reduce leaf, which the engine clears before each leaf, then the counts of the
+//! probes that [`AgentProgram::compile_with_probes`] takes.
 
 use std::fmt;
 use std::sync::Arc;
@@ -46,6 +46,7 @@ use crate::host::HostEvaluator;
 use crate::host::program::{Instruction, Operation, Program};
 use crate::ids::NodeId;
 use crate::node::{Combine, Node};
+use crate::sheet::sentence;
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, PortRef};
 
@@ -266,9 +267,10 @@ impl AgentProgram {
     /// Checks `file` and compiles every pass the GPU runs, the fault of each radius fold `names` holds naming its words
     /// in place of its pass, node and line.
     ///
-    /// A sheet passes the names of its looks at agents, so a fold past its visit cap names the author line, as "line 3,
-    /// Flockmates: looked at more than 65536 agents around one agent, and the run stops". The names change no shader
-    /// and leave the file's text and its code identity alone.
+    /// A sheet passes the names of its looks at agents, so a fold past its visit cap names the author line in the
+    /// words of [`sentence::look_met_too_many`], as "line 3, Flockmates: looked at more than 65536 agents around one
+    /// agent, and the run stops. A larger world or a shorter distance looks at fewer". The names change no shader and
+    /// leave the file's text and its code identity alone.
     ///
     /// # Errors
     ///
@@ -391,15 +393,8 @@ impl AgentProgram {
                 let written = evaluator.origin(*node).map_or(*node, crate::normal::Origin::written);
                 if let Some(name) = names.and_then(|names| names.get(written)) {
                     return [
-                        format!(
-                            "{name}: looked at more than {} agents around one agent, and the run stops",
-                            crate::limits::MAX_FOLD_CANDIDATES
-                        ),
-                        format!(
-                            "{name}: would search more than {} cells around one agent, and the run stops. A shorter \
-                             distance searches fewer",
-                            crate::limits::MAX_WALK_CELLS
-                        ),
+                        sentence::look_met_too_many(name, crate::limits::MAX_FOLD_CANDIDATES),
+                        sentence::look_searches_too_far(name, crate::limits::MAX_WALK_CELLS),
                     ];
                 }
                 let located = match evaluator.origin(*node) {
@@ -522,6 +517,11 @@ impl AgentProgram {
     /// Returns the buffer and segment that hold the lane `id` on the device, `None` for a lane the graph lacks.
     pub fn lane_buffer(&self, id: &str) -> Option<LaneBuffer> {
         self.parts.layout.place_of(self.parts.hooks.evaluator.document(), id)
+    }
+
+    /// Returns the label of each lane buffer in buffer order with the ids of the lanes it holds, in segment order.
+    pub(crate) fn lane_groups(&self) -> Vec<(String, Vec<String>)> {
+        self.parts.layout.lane_ids(&self.parts.hooks.evaluator.document().lanes)
     }
 
     /// Whether two builds on one seed step through identical states.

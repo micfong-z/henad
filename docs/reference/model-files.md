@@ -417,6 +417,7 @@ The converted graph model has its own code.
 Its id, name and description enter its semantic text, so its code differs from the sheet's before any edit, and a sweep of it is a sweep of another model.
 The `origin` record of its `[editor]` region names the sheet: `code` is the sheet's code, and `copy_code` the graph model's own code at conversion.
 `kind`, `model`, `name` and `file` name the sheet and its file, `hash` is the FNV-1a hash of the sheet's canonical text, and `converted` the date.
+The app lists the changes of a copy only while the sheet's code still hashes to `code`, so an edit of a note on the sheet leaves them listed.
 Like the rest of the region, the record stays outside the code.
 
 Each `[[editor.frame]]` of the converted file holds the nodes of one line, the nodes several lines share, or the nodes of a part of the sheet such as a start or a measure.

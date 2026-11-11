@@ -667,8 +667,8 @@ impl<'a> CardRelations<'a> {
         notes
     }
 
-    /// Returns the offers to fold a When into its lines, each under its When. A When whose test is "my [property] is
-    /// [state]" and whose lines are all Become lines from that state repeats them. Otherwise a When around one change
+    /// Returns the offers to fold a When into its lines, each under its When. A When whose test is "my \[property\] is
+    /// \[state\]" and whose lines are all Become lines from that state repeats them. Otherwise a When around one change
     /// that holds always can move its condition into the change. A When holding another When gets neither.
     fn fold_notes(&self) -> Vec<RelationNote> {
         let mut notes = Vec::new();
@@ -843,8 +843,8 @@ impl<'a> CardRelations<'a> {
             .unwrap_or_else(|| "result".to_owned())
     }
 
-    /// Returns the property and the state that `condition` tests as "my [property] is [state]", `None` for any other
-    /// condition.
+    /// Returns the property and the state that `condition` tests as "my \[property\] is \[state\]", `None` for any
+    /// other condition.
     fn tested_state<'b>(&self, condition: &'b SheetLine) -> Option<(&'b str, &'b str)> {
         if condition.kind != LineKind::Compare || condition.test != Some(CompareTest::Is) {
             return None;

@@ -26,9 +26,9 @@
 //! checks and lowers a sheet to the graph it runs as, whose code identity is the sheet's, and whose entries record
 //! the sheet's canonical text as their author text in [`SHEET_CODE_FORMAT`]. [`LineMap`] names the
 //! line or part of the sheet each node of that graph comes from. [`SheetFile::place_graph_diagnostic`] places a finding
-//! about that graph at the table of the sheet its node comes from. [`convert`] copies that graph to a node graph file
+//! about that graph at the table of the sheet its node comes from. [`convert()`] copies that graph to a node graph file
 //! of its own, with frames naming the line each node came from, and [`changes_since_conversion`] lists what an edit of
-//! the copy changed. [`starters`] returns the sheets a new model begins from, [`edit`] holds the commands every edit
+//! the copy changed. [`starters()`] returns the sheets a new model begins from, [`edit`] holds the commands every edit
 //! of the sheet editor runs, and [`rates`] the chance per tick a rate gives and the note that states it.
 //!
 //! ```

@@ -10,7 +10,9 @@ use crate::sheet::document::{
     Around, CompareTest, LineKind, LookSummary, PropertyType, SheetChip, SheetDocument, SheetLine, SheetProperty,
     SheetValue, Slot, SummaryKind,
 };
-use crate::sheet::sentence::{self, AddButton, AddItem, Blank, ConditionItem, ConditionKind, DrawKind, LineSelect};
+use crate::sheet::sentence::{
+    self, AddButton, AddItem, Blank, ConditionItem, ConditionKind, DrawKind, LineSelect, OtherwiseRepeat,
+};
 use crate::sheet::sentence::{COMPARISONS, Sentences, SheetSection, StartsField};
 
 use super::sheet_document::sheets;
@@ -524,26 +526,37 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         (
             "Line 2 also changes Cover for a cell that is Tree. When both apply, line 2 wins.",
-            sentence::otherwise_tooltip(&[2], "Cover", Some("Tree"), "cell", false),
+            sentence::otherwise_tooltip(&[2], "Cover", Some("Tree"), "cell", OtherwiseRepeat::Apart),
         ),
         (
             "Lines 2 and 5 also change Cover for a cell that is Tree. When more than one applies, the highest line \
              wins.",
-            sentence::otherwise_tooltip(&[2, 5], "Cover", Some("Tree"), "cell", false),
+            sentence::otherwise_tooltip(&[2, 5], "Cover", Some("Tree"), "cell", OtherwiseRepeat::Apart),
         ),
         (
             "Line 2 also changes Status for an agent that is S. When both apply at the same time, line 2 wins.",
-            sentence::otherwise_tooltip(&[2], "Status", Some("S"), "agent", true),
+            sentence::otherwise_tooltip(&[2], "Status", Some("S"), "agent", OtherwiseRepeat::Own),
         ),
         (
             "Lines 2 and 5 also change Status for an agent that is S. When more than one applies at the same time, \
              the highest line wins.",
-            sentence::otherwise_tooltip(&[2, 5], "Status", Some("S"), "agent", true),
+            sentence::otherwise_tooltip(&[2, 5], "Status", Some("S"), "agent", OtherwiseRepeat::Own),
         ),
         (
             "Line 6 now starts with otherwise. Lines 2 and 5 also change Cover for a cell that is Tree. When more \
              than one applies, the highest line wins.",
-            sentence::otherwise_notice("Line 6", &[2, 5], "Cover", Some("Tree"), "cell", false),
+            sentence::otherwise_notice("Line 6", &[2, 5], "Cover", Some("Tree"), "cell", OtherwiseRepeat::Apart),
+        ),
+        (
+            "Lines 2 and 3 also change Status for an agent that is S. When more than one applies, the highest line \
+             wins. Between lines in one Repeat, the first time round that one applies decides.",
+            sentence::otherwise_tooltip(&[2, 3], "Status", Some("S"), "agent", OtherwiseRepeat::Higher),
+        ),
+        (
+            "Line 6 now starts with otherwise. Lines 2 and 3 also change Status for an agent that is S. When more \
+             than one applies, the highest line wins. Between lines in one Repeat, the first time round that one \
+             applies decides.",
+            sentence::otherwise_notice("Line 6", &[2, 3], "Status", Some("S"), "agent", OtherwiseRepeat::Higher),
         ),
         // Rates and chances.
         (
@@ -628,6 +641,10 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::SET_IN_REPEAT),
         ),
         (
+            "An arrow cannot be compared with a number. Compare its length instead.",
+            fixed(sentence::ARROW_COMPARED_WITH_NUMBER),
+        ),
+        (
             "Line 3 sets Velocity. A card that sets a property cannot also steer it.",
             sentence::set_already("Line 3", "Velocity"),
         ),
@@ -652,6 +669,16 @@ fn every_wording_table_entry_equals_the_final_words() {
         (
             "Line 1, Flockmates: looks at too many birds at 1,000,000 birds. Use a shorter distance or fewer birds.",
             sentence::look_costs_too_much("line 1, Flockmates", "birds", 1_000_000),
+        ),
+        (
+            "line 3, Flockmates: looked at more than 65536 agents around one agent, and the run stops. A larger world \
+             or a shorter distance looks at fewer",
+            sentence::look_met_too_many("line 3, Flockmates", 65_536),
+        ),
+        (
+            "line 3, Flockmates: would search more than 65536 cells around one agent, and the run stops. A shorter \
+             distance searches fewer",
+            sentence::look_searches_too_far("line 3, Flockmates", 65_536),
         ),
         (
             "Each tick, every bird: too much work at 1,000,000 birds. Use fewer birds.",
@@ -939,6 +966,7 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
             ),
         ),
         ("up to 0.91 with 8", sentence::long_tick_chance("0.91", 8)),
+        ("almost 1 with 8", sentence::long_tick_almost_one(8)),
         (
             "On average a cell stays Infected 10.5 days at this tick length. It approaches 1/0.1 = 10 days as the \
              tick shrinks.",
@@ -1497,7 +1525,7 @@ fn agent_lines_read_round_1_words_in_the_final_conventions() {
     let opinion = document("bounded_confidence.toml");
     assert_eq!(
         card_sentences(&opinion, 0, &[])[0],
-        "Like-minded = look at persons within Hearing range including me, only those whose Opinion is within \
+        "Like-minded = look at people within Hearing range including me, only those whose Opinion is within \
          Confidence of my Opinion: average of their Opinion (average opinion)"
     );
     let walk = document("random_walk.toml");
@@ -1507,6 +1535,63 @@ fn agent_lines_read_round_1_words_in_the_final_conventions() {
             "Repeat Steps per tick times:",
             "Move by a random direction of length Step size",
         ]
+    );
+}
+
+#[test]
+fn a_kind_reads_in_the_plural_by_the_rules_of_english() {
+    for (name, words) in [
+        ("bird", "birds"),
+        ("ground cell", "ground cells"),
+        ("fox", "foxes"),
+        ("virus", "viruses"),
+        ("church", "churches"),
+        ("bush", "bushes"),
+        ("fly", "flies"),
+        ("monkey", "monkeys"),
+        ("wolf", "wolves"),
+        ("leaf", "leaves"),
+        ("knife", "knives"),
+        ("roof", "roofs"),
+        ("chief", "chiefs"),
+        ("giraffe", "giraffes"),
+        ("person", "people"),
+        ("Person", "People"),
+        ("child", "children"),
+        ("man", "men"),
+        ("woman", "women"),
+        ("human", "humans"),
+        ("field mouse", "field mice"),
+        ("foot", "feet"),
+        ("thief", "thieves"),
+        ("sheep", "sheep"),
+        ("fish", "fish"),
+        ("deer", "deer"),
+    ] {
+        assert_eq!(sentence::plural(name), words, "{name}");
+    }
+    let people = document("mobile_sir.toml");
+    assert_eq!(
+        card_sentences(&people, 0, &[])[0],
+        "Infected nearby = count of people within Contact range whose Health is Infected"
+    );
+}
+
+#[test]
+fn a_count_names_its_only_test_and_a_set_to_a_chance_reads_yes_otherwise_no() {
+    let values = ParsedSheet::parse(include_str!("sheets/values.toml"))
+        .expect("the values sheet reads")
+        .into_document();
+    let (_, count) = values.line("l10").expect("line 10");
+    assert_eq!(count.kind, LineKind::Count);
+    assert_eq!(
+        Sentences::new(&values).line("l10", &[]),
+        "Bright alive = count of the 8 cells around me whose Status is Alive, only those whose Level is at least 0.5"
+    );
+    let people = document("mobile_sir.toml");
+    assert_eq!(
+        card_sentences(&people, 0, &[])[1],
+        "Set Hit to yes with chance Infection chance for each of Infected nearby, otherwise no, always"
     );
 }
 
@@ -1614,6 +1699,7 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
         sentence::ON_GROUND_CELLS,
         sentence::AHEAD_NEEDS_CELLS,
         sentence::SET_IN_REPEAT,
+        sentence::ARROW_COMPARED_WITH_NUMBER,
         sentence::LONG_TICK,
         sentence::NOT_RUN_TICK,
         sentence::RESTART_NOTICE,
@@ -1909,6 +1995,11 @@ fn a_typed_number_reads_as_its_known_answers() {
         sentence::world_side_out_of_range(16384),
         "Type a size from 1 to 16384 cells."
     );
+    assert_eq!(
+        sentence::number_not_kept(f64::INFINITY),
+        "that number is too large to keep"
+    );
+    assert_eq!(sentence::number_not_kept(f64::NAN), "that number cannot be worked out");
 }
 
 #[test]

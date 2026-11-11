@@ -10,7 +10,8 @@ use super::sheet_document::{mutate, sheets};
 use crate::sheet::check::SheetDiagnostic;
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{
-    CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, NOT_RUN_TICK, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD,
+    ARROW_COMPARED_WITH_NUMBER, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, NOT_RUN_TICK, RATE_BELOW_ZERO,
+    RATE_IN_BUTTON_CARD,
 };
 use crate::sheet::{ParsedSheet, check};
 
@@ -601,4 +602,33 @@ fn the_sheet_checker_never_panics_on_the_mutation_corpus() {
         read * 4 > cases,
         "only {read} of {cases} edits read, so the corpus tests the TOML parser alone"
     );
+}
+
+#[test]
+fn a_comparison_of_an_arrow_with_a_number_is_an_error_at_its_line() {
+    let compare = |test: &str, left: &str, right: &str| {
+        edited(
+            "boids.toml",
+            &[(
+                "[card.line.l8.condition]\nkind = \"always\"",
+                &format!("[card.line.l8.condition]\nkind = \"compare\"\ntest = \"{test}\"\nleft = {left}\n{right}"),
+            )],
+        )
+    };
+    let velocity = "{ my = \"velocity\" }";
+    for text in [
+        compare("more_than", velocity, "right = 1"),
+        compare("at_most", "2", "right = { my = \"velocity\" }"),
+        compare("outside", velocity, "low = 1\nhigh = 2"),
+    ] {
+        assert_reported(&text, Expected::Error, ARROW_COMPARED_WITH_NUMBER, "[card.line.l8]");
+    }
+    // A number compared with the length of the arrow checks clean.
+    let length = compare(
+        "more_than",
+        "{ kind = \"calculate\", formula = \"length(my.velocity)\" }",
+        "right = 1",
+    );
+    let report = ParsedSheet::parse(&length).expect("the sheet reads").check();
+    assert!(!report.has_errors(), "{:?}", report.diagnostics);
 }

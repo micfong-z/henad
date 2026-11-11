@@ -30,7 +30,8 @@ of `sentence.rs` from "Errors on a rate in a button's card" on hold the remainin
 at agents (`look_name`, "line 3, Flockmates") and of its cost (`look_costs_too_much`,
 `card_costs_too_much`, `start_costs_too_much`, counts written with thousands commas, and for a pass
 past its cost per element `line_costs_too_much`, `smaller_maximum`, `FEWER_TIMES` and
-`FEWER_LINES`). `plural` is crate-visible for `SheetFile::shortfalls`. Every editor milestone and
+`FEWER_LINES`). `plural` (the rules of English and `IRREGULAR_PLURALS`) is crate-visible for
+`SheetFile::shortfalls`. Every editor milestone and
 the writer's comments draw their words from here and from no literal of their own. `FORBIDDEN_WORDS`
 lists the words sheet mode never shows, and `is_forbidden_word` also matches their endings ("nodes",
 "compiled"). A note or tooltip about what a card runs on takes `thing_word` ("cell", "bird"): the
@@ -43,10 +44,12 @@ every cell", or "Lines of Clear: run once, every cell, when pressed" for a card 
 named by the button that runs it) and `line(line_id, otherwise)`, where `otherwise` holds the
 numbers of the higher lines that override the line ("otherwise (when line 2 does not apply) become
 ..."). The sentence decides no "otherwise" of its own. The writer passes
-`CardRelations::otherwise_numbers`. A blank reads `...`, an unknown reference reads as its id. Words
+`CardRelations::otherwise_numbers`. A blank reads `...`, an unknown reference as its id, an
+unnamed Count result as its automatic name. Words
 follow the wording table: "Become X from Y" ("from any state"), ", always", "when my Cargo is
 Searching" (no "I am"), "is none of the numbers 2, 3" and "is one of the states" when the left reads
-a States property, "the 3 by 3 block including me", "for each infected neighbour" through
+a States property, "count of ... whose X, only those whose Y", "Set Hit to yes with chance P,
+otherwise no", "the 3 by 3 block including me", "for each infected neighbour" through
 `for_each_words` (a name whose last word is not a plural reads "for each of B in my block"), a
 percent as typed ("30%"), a Compare line's name hidden while it equals its sentence, a Calculate
 formula's operators as "plus", "minus", "times", "divided by" and "to the power of" with a call's

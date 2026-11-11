@@ -550,6 +550,11 @@ impl GridProgram {
         self.parts.layout.place_of(self.parts.hooks.evaluator.document(), id)
     }
 
+    /// Returns the label of each lane buffer in buffer order with the ids of the lanes it holds, in segment order.
+    pub(crate) fn lane_groups(&self) -> Vec<(String, Vec<String>)> {
+        self.parts.layout.lane_ids(&self.parts.hooks.evaluator.document().lanes)
+    }
+
     /// Returns the spec the GPU grid engine runs.
     pub fn spec(&self) -> GpuGridSpec {
         let parts = &*self.parts;

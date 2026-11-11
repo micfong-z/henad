@@ -76,7 +76,7 @@ every = "person"
 runs = "each_tick"
 lines = ["l1", "l2"]
 
-# Infected nearby = count of persons within Contact range whose Health is Infected
+# Infected nearby = count of people within Contact range whose Health is Infected
 [card.line.l1]
 kind = "count"
 name = "Infected nearby"
@@ -91,7 +91,7 @@ test = "is"
 left = { their = "health" }
 right = { state = "infected" }
 
-# Set Hit to with chance Infection chance for each of Infected nearby, always
+# Set Hit to yes with chance Infection chance for each of Infected nearby, otherwise no, always
 [card.line.l2]
 kind = "set"
 key = 1916243617

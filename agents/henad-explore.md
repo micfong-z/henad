@@ -276,8 +276,8 @@ reducer columns. `series.csv`'s header has to name `run_id`, `tick` and the mani
 columns, with `SERIES_TIME_COLUMN` (`time`) after `tick` for a model with a time scale.
 `check_series_header` takes the header one column wider than the ids and stats, with `time` third,
 as timed, and `parse_series_row` then checks the time as a number and skips it. Otherwise the
-read is by position. `tests/fixtures/series-be338ec/` is a folder written before the column, with
-its procedure in `README.md` (`a_folder_written_before_the_time_column_still_reads`). Keep it.
+read is by position. `tests/fixtures/series-without-time/` is a folder written before the column,
+with its procedure in `README.md` (`a_folder_written_before_the_time_column_still_reads`). Keep it.
 `summary.csv` is left unread. `ResultSet::replay` plans the recorded spec and returns a
 run's `Replay`, refusing a run whose config, replicate, seed or run key differ from its row. The
 run key hashes the model's declarations too, and is compared only while `schema_matches` holds.

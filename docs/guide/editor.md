@@ -64,6 +64,7 @@ Each state takes a colour, and a few usual names take their usual colour as you 
 **Parameters** lists the named numbers lines can use, each with its value, its range and an optional unit.
 The value on the sheet is the one the model keeps.
 **Measures** plots a number worked out from every cell each tick: tick **Plot** beside a state to plot how many cells are in it.
+An average keeps the name it was given, such as "Average of Food", in step with its property: renaming Food to Energy renames it "Average of Energy", and the column of the results with it, until you rename the measure yourself.
 **Colours** chooses the property that colours the cells in the Viewport.
 **Buttons** adds a button beside the world, either to start again or to run its own short card of lines once on every cell.
 
@@ -140,6 +141,7 @@ A rate line runs only while one tick has a length, so a model of rates sets **On
 
 A new rate starts in the unit of one tick.
 A parameter put into a rate gives the line its unit, read from the first "per day" or the like in the parameter's Unit.
+A parameter with no Unit takes the line's unit instead, such as "per day", and one Undo takes back both.
 A rate's picker lists the parameters whose Unit names a unit of time or none, and a chance's picker leaves out those that name one.
 The unit select on the line sets a unit by hand.
 If one tick has no length yet, choosing a unit sets one tick to 1 of it, and a notice says so: "One tick is now 1 day. Change it on the sheet."
@@ -154,7 +156,7 @@ A grey note under a rate line states the chance per tick it gives with the param
 
 The note reads the values the world tries while a run of the sheet is loaded, and the values the sheet keeps otherwise.
 Hover over it to read how long a cell stays in its state on average at this tick length.
-A rate for each infected neighbour gives the chances for 1 and 2 of them, and adds a second note when the chance at the largest count passes one half, such as "Up to 0.909 with 8.", since a shorter tick then follows the rate more closely.
+A rate for each infected neighbour gives the chances for 1 and 2 of them, and adds a second note when the chance at the largest count passes one half, such as "Up to 0.909 with 8.", or "Almost 1 with 8." when it rounds to 1, since a shorter tick then follows the rate more closely.
 Other notes ask about a rate that looks wrong:
 
 - A rate read per week from a parameter per day says "Infection rate is per day on the sheet, but this line reads it per week."
@@ -323,7 +325,8 @@ The inputs of the node that changes a state read by line, such as "Line 2 when".
 
 A banner above the canvas says which sheet the copy came from and when, and whether the copy was edited since.
 Press the banner's button named after the sheet, such as **Open Game of Life**, to return to the sheet, whose toolbar then shows "Converted to node graph:" and the copy's name, a link back to the copy.
-The banner says when the sheet has changed since the conversion, or when it is not beside the copy's file.
+The banner says when the sheet's model has changed since the conversion, or when the sheet is not beside the copy's file.
+An edit of the sheet that leaves its code alone, such as a note, a comment, the purpose or what a parameter means, does not count as a change.
 The panel beside the canvas ends with **From the author model**, naming the sheet, its file and the date of the conversion, then the sheet's purpose and what each parameter means, which the node graph has no place for.
 
 Once an edit of the copy adds, removes or changes a node, press **Show changes** in the banner to list every node added, removed or changed since the conversion, at the top of the panel beside the canvas.

@@ -38,8 +38,9 @@ moves.
 tick in a unit, through `TimeUnit::days`), `chance_per_tick`, `mean_stay`, `parameter_defaults`,
 `chance_words` (the number rule of the final wording table: three significant figures, more until
 the chance prints differently from `r dt n`), `LONG_TICK_CHANCE` (0.5), `largest_count_chance`
-(`LargestCount` with `is_long` and `words`, "up to 0.909 with 8"; a fixed rate with a "for each" of
-a Count over the cells around, or a Calculate of a fixed number times such a Count), and
+(`LargestCount` with `is_long` and `words`, "up to 0.909 with 8" or "almost 1 with 8"; a fixed rate
+with a "for each" of a Count over the cells around, or a Calculate of a fixed number times such a
+Count), and
 `rate_note(document, line_id, values)`, a `RateNote` (`text`, `mean_stay`, `long_tick`) filled from
 the wording table's templates with the values passed (the defaults, or a run's). The rate is
 the line, its condition or an item of an all of in it. A fixed rate gives `rate_note` or
@@ -220,7 +221,7 @@ that runs once), a card's kind of thing (`cells` in any grid world), a name on a
 a line or outside a condition, a When that is always, `outside` outside a condition, a phrase of a
 change kind, unknown parameters, states of another property, `their` and relations outside a look,
 results from another card or of a change line, parts, places, value types (a slot's expected type
-against a literal, chip or phrase), formulas, keys held twice, Count, Look around and Pick a cell
+against a literal, chip or phrase, and `ARROW_COMPARED_WITH_NUMBER`), formulas, keys held twice, Count, Look around and Pick a cell
 inside a Repeat (`LOOK_IN_REPEAT`) or a run-once card, `RATE_IN_BUTTON_CARD`, a rate inside a
 Repeat, and the ranges from the wording table (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on
 literals, a percent divided by 100, `CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters).
@@ -278,8 +279,9 @@ names each fold of the heaviest step's pass (label `<sheet id>_<pass id>`) by it
 through `look_costs_too_much` ("Line 1, Flockmates: looks at too many birds at 1,000,000 birds. Use a
 shorter distance or fewer birds."), or the card through `card_costs_too_much` when the
 pass holds no fold. A host run past `HOST_WORK_BUDGET` reads `start_costs_too_much`. The population
-is `num_agents`, or `grid_width` times `grid_height`, read from the entry's parameters. The
-checker's per-element cost (V22) is placed at the heaviest node's line by `place_graph_diagnostic`,
+is `num_agents`, or `grid_width` times `grid_height`, read from the entry's parameters. A buffer a
+line names takes its properties' names (`with_property_names`). The checker's per-element cost (V22)
+is placed at the heaviest node's line by `place_graph_diagnostic`,
 which recognises it by `check::is_pass_cost` (the message's start and its `MAX_PASS_COST` end, built
 in `check/cost.rs` beside the message), rewords it through `SheetFile::cost_words` and drops its
 note: `line_costs_too_much` names the line by `look_name` ("Line 1: too much work for one walker. Set a
@@ -354,4 +356,4 @@ state chips, a half-built line, two agent kinds),
 phrases, a compare slot, a list, and the places), `malformed_values_are_refused_on_their_bytes`,
 `a_malformed_percent_is_refused_on_its_key`, `colours_and_sizes_follow_their_rules` and
 `the_sheet_reader_never_panics_on_the_mutation_corpus` (its hostile values hold percents). Keep
-them. The sheet files are copies, since the design folder they came from is not tracked.
+them.

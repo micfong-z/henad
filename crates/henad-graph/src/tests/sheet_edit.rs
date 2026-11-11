@@ -372,6 +372,106 @@ fn a_rename_changes_one_name_and_the_comments_that_show_it() {
 }
 
 #[test]
+fn an_average_with_its_automatic_name_follows_a_rename_of_its_property() {
+    let rename = |builder: &mut SheetBuilder, item: SheetItem, name: &str| {
+        run(
+            builder,
+            SheetEdit::Rename {
+                item,
+                name: name.to_owned(),
+            },
+        );
+    };
+    let position = || SheetItem::Property("position".to_owned());
+    let measure = |builder: &SheetBuilder| builder.document().measures[0].name.clone();
+
+    let mut builder = builder_of("random_walk.toml");
+    assert_eq!(measure(&builder), "Average of Position");
+    rename(&mut builder, position(), "Place");
+    assert_eq!(measure(&builder), "Average of Place");
+    assert_eq!(builder.document().measures[0].id, "average_of_position");
+
+    // A measure named by hand keeps its name.
+    let mut builder = builder_of("random_walk.toml");
+    rename(
+        &mut builder,
+        SheetItem::Measure("average_of_position".to_owned()),
+        "Centre",
+    );
+    rename(&mut builder, position(), "Place");
+    assert_eq!(measure(&builder), "Centre");
+
+    // A follower whose new name another measure holds keeps its old name.
+    let mut builder = builder_of("random_walk.toml");
+    run(
+        &mut builder,
+        SheetEdit::AddMeasure {
+            name: "Average of place".to_owned(),
+            rule: MeasureRule::EventCount,
+            over: None,
+            property: None,
+            state: None,
+            event: None,
+            value: Slot::Blank,
+            color: None,
+        },
+    );
+    rename(&mut builder, position(), "Place");
+    assert_eq!(measure(&builder), "Average of Position");
+}
+
+#[test]
+fn an_edit_that_would_keep_a_number_that_is_not_finite_is_refused() {
+    let mut builder = builder_of("sir.toml");
+    let before = builder.document().clone();
+    let refusals = [
+        builder.apply(SheetEdit::SetSlot {
+            line: "l3".to_owned(),
+            path: "condition.rate".to_owned(),
+            value: Slot::Filled(SheetValue::Literal(SheetLiteral::Number(f64::INFINITY))),
+        }),
+        builder.apply(SheetEdit::SetTime {
+            time: Some(SheetTime::new(f64::INFINITY, TimeUnit::Day)),
+        }),
+        builder.apply(SheetEdit::SetSlot {
+            line: "l3".to_owned(),
+            path: "condition.rate".to_owned(),
+            value: Slot::Filled(SheetValue::Literal(SheetLiteral::Percent(f64::NAN))),
+        }),
+    ];
+    let reasons: Vec<String> = refusals
+        .into_iter()
+        .map(|refusal| match refusal {
+            Err(SheetEditError::Invalid(reason)) => reason,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            "that number is too large to keep",
+            "that number is too large to keep",
+            "that number cannot be worked out",
+        ]
+    );
+    assert_eq!(builder.document(), &before, "a refused edit changes nothing");
+    let parameter = builder.apply(SheetEdit::SetParameter {
+        parameter: "recovery_rate".to_owned(),
+        min: 0.0,
+        max: f64::INFINITY,
+        default: 0.1,
+        step: None,
+        unit: None,
+        means: None,
+    });
+    assert!(
+        matches!(&parameter, Err(SheetEditError::Invalid(reason)) if reason == "that number is too large to keep"),
+        "{parameter:?}"
+    );
+    assert!(builder.document().to_text().is_ok());
+}
+
+#[test]
 fn change_id_rewrites_every_reference_and_nothing_else() {
     let cases: [(&str, SheetItem, &str, &str, &str); 5] = [
         (
@@ -1276,8 +1376,8 @@ fn a_rate_unit_comes_from_the_tick_until_chosen() {
 }
 
 #[test]
-fn a_parameter_with_no_unit_takes_the_rate_unit_chosen_by_hand() {
-    // Put into a rate, the parameter leaves the rate's unit and its own alone.
+fn a_parameter_with_no_unit_takes_the_rate_unit() {
+    // Put into a rate, the parameter takes the rate's unit and leaves the rate's unit and its mark alone.
     let mut builder = builder_of("sir.toml");
     run(
         &mut builder,
@@ -1314,7 +1414,7 @@ fn a_parameter_with_no_unit_takes_the_rate_unit_chosen_by_hand() {
             .find(|parameter| parameter.id == "plain")
             .and_then(|parameter| parameter.unit.clone())
     };
-    assert_eq!(plain_unit(&builder), None);
+    assert_eq!(plain_unit(&builder).as_deref(), Some("per day"));
     assert_eq!(
         (
             line(&builder, &made[0]).rate_unit,
@@ -1322,15 +1422,39 @@ fn a_parameter_with_no_unit_takes_the_rate_unit_chosen_by_hand() {
         ),
         (Some(TimeUnit::Day), true)
     );
+
+    // A unit chosen by hand for a rate that reads a parameter with no unit gives the parameter that unit.
+    let mut builder = builder_of("sir.toml");
+    run(
+        &mut builder,
+        SheetEdit::SetParameter {
+            parameter: "recovery_rate".to_owned(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.1,
+            step: None,
+            unit: None,
+            means: None,
+        },
+    );
+    let recovery_unit = |builder: &SheetBuilder| {
+        builder
+            .document()
+            .parameters
+            .iter()
+            .find(|parameter| parameter.id == "recovery_rate")
+            .and_then(|parameter| parameter.unit.clone())
+    };
+    assert_eq!(recovery_unit(&builder), None);
     run(
         &mut builder,
         SheetEdit::SetField {
-            line: made[0].clone(),
-            phrase: String::new(),
+            line: "l3".to_owned(),
+            phrase: "condition".to_owned(),
             field: LineField::RateUnit(Some(TimeUnit::Week)),
         },
     );
-    assert_eq!(plain_unit(&builder).as_deref(), Some("per week"));
+    assert_eq!(recovery_unit(&builder).as_deref(), Some("per week"));
 }
 
 #[test]

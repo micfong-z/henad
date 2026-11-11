@@ -127,12 +127,13 @@ writes it, to the words that name it in the document the graph was lowered from,
 Flockmates" for a radius fold a sheet lowered. It writes its own `Debug` (the number of names).
 `AgentProgram::compile_with_fault_names(file, &names)` compiles as `compile` does, through the
 private `compile_named(file, probes, Option<&FaultNames>)` that `compile_with_probes` shares, and
-the fault messages of a named fold become "<words>: looked at more than 65536 agents around one
-agent, and the run stops" and "<words>: would search more than 65536 cells around one agent, and the
-run stops. A shorter distance searches fewer", naming no pass, node or line. A fold the table does
-not hold keeps the graph's message, and a graph file passes no table. The names change no shader, so
-the text and the code identity stay. henad-explore's `ModelFile` passes a sheet's
-`SheetFile::fault_names`.
+the fault messages of a named fold become `sheet::sentence::look_met_too_many` ("<words>: looked at
+more than 65536 agents around one agent, and the run stops. A larger world or a shorter distance
+looks at fewer") and `look_searches_too_far` ("<words>: would search more than 65536 cells around
+one agent, and the run stops. A shorter distance searches fewer"), naming no pass, node or line. A
+fold the table does not hold keeps the graph's message, and a graph file passes no table. The names
+change no shader, so the text and the code identity stay. henad-explore's `ModelFile` passes a
+sheet's `SheetFile::fault_names`.
 
 **Counters and deposits.** A step that adds to a counter declares `var<workgroup>
 henad_counter_tally`, one `atomic<u32>` slot per counter its passes add to, numbered in the order
@@ -223,15 +224,19 @@ lane buffer a shader uses once, read-write when any of its lanes is written. Bel
 nothing changes, and every existing starter's shaders are as before.
 `GridProgram::lane_buffer(id)` and `AgentProgram::lane_buffer(id)` return the public `LaneBuffer`:
 its buffer's position, its words per element, `is_packed`, `segment_range` and `segment(words)`,
-the lane's words from the whole buffer read back. henad-models' tests read a graph's lanes
-through `tests/lanes.rs` (`GraphLanes::of`, `of_text`, `of_starter`, `read`), and `planted_entry`
-plants a lane by id into its segment, never by buffer index. henad-graph's `gpu_cases.rs` and
-`gpu_repeat.rs` build and read a case's lane buffers through `support::lane_buffers` and
-`support::lane_words`, both over `compiled.layout`, and `sheet_agents.rs` reads a lane through
-`AgentProgram::lane_buffer`. Tests: `tests/packing.rs` (the ants and boids starters with one more
-Number property and `sheets/three_strains.toml` with one more, each past 8 unpacked, within 8
-packed and built on `baseline_test_device`; the same texts on two compiles and a build on both
-devices; the ants with a Number, a Whole number and an Arrow more (an `i32` and a `vec2<f32>`
-lane packed at non-zero offsets) and the three strains with one more, each equal to its unpacked
-twin after 20 ticks and a press of Reset colony, through the thread-local `pack::UNPACKED`
-switch), and the layout's unit tests in `pack.rs`.
+the lane's words from the whole buffer read back. The crate-private `lane_groups` of both programs
+(`LaneLayout::lane_ids`) returns each lane buffer's label and lane ids in buffer order.
+`SheetFile::shortfalls` compiles the lowered graph again when a shortfall names a buffer of the
+model (`<id>_buffer<k>_a` of a grid, `<id>_<label>_a` of agents), and names the buffer by its
+properties (`a_shortfall_names_the_properties_a_buffer_holds`). henad-models' tests read a graph's
+lanes through `tests/lanes.rs` (`GraphLanes::of`, `of_text`, `of_starter`, `read`), and
+`planted_entry` plants a lane by id into its segment, never by buffer index. henad-graph's
+`gpu_cases.rs` and `gpu_repeat.rs` build and read a case's lane buffers through
+`support::lane_buffers` and `support::lane_words`, both over `compiled.layout`, and
+`sheet_agents.rs` reads a lane through `AgentProgram::lane_buffer`. Tests: `tests/packing.rs` (the
+ants and boids starters with one more Number property and `sheets/three_strains.toml` with one more,
+each past 8 unpacked, within 8 packed and built on `baseline_test_device`; the same texts on two
+compiles and a build on both devices; the ants with a Number, a Whole number and an Arrow more (an
+`i32` and a `vec2<f32>` lane packed at non-zero offsets) and the three strains with one more, each
+equal to its unpacked twin after 20 ticks and a press of Reset colony, through the thread-local
+`pack::UNPACKED` switch), and the layout's unit tests in `pack.rs`.

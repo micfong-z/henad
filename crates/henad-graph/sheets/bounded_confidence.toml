@@ -124,7 +124,7 @@ every = "person"
 runs = "each_tick"
 lines = ["l1", "l2", "l3"]
 
-# Like-minded = look at persons within Hearing range including me, only those whose Opinion is within Confidence of my Opinion: average of their Opinion (average opinion)
+# Like-minded = look at people within Hearing range including me, only those whose Opinion is within Confidence of my Opinion: average of their Opinion (average opinion)
 [card.line.l1]
 kind = "look_around"
 name = "Like-minded"

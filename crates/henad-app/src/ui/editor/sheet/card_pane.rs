@@ -59,13 +59,13 @@ use henad_graph::sheet::sentence::{
     ADD_AT_END_NOTE, ALWAYS, ALWAYS_TOOLTIP, ANY_STATE_ID, AddButton, AddItem, BLANK_MODEL_CARD, BLANK_TEXT,
     BUTTON_CARD_EMPTY, Blank, CONDITION_ARROW_TOOLTIP, ChipKind, DELETE_WHEN_TOOLTIP, DRAW_NEW_NUMBERS, DrawKind,
     FOR_EACH_BLANK_WORDS, FOR_EACH_WORDS, FROM_WORD, FieldPlace, LAW, LineSelect, MOVE_DOWN_LAST, MOVE_UP_FIRST,
-    ONE_SIDED_RANGE, PartPlace, PlaceTarget, PlacedPart, REMOVE_THIS_WHEN, SHARED_DRAW_GROUP, SentenceChip,
-    SentencePart, Sentences, UNIT_PLACEHOLDER, add_inside_label, add_inside_name, add_value_name, always_name,
-    card_header, condition_arrow_name, count_used_as_draw, delete_line, for_each_change_name, for_each_optional_name,
-    for_each_optional_tooltip, for_each_words, from_tooltip, line_actions_name, line_count, line_list_name, line_name,
-    line_prefix, line_word, move_into_label, move_into_name, move_line_down, move_line_up, operation_words,
-    otherwise_notice, otherwise_tooltip, otherwise_words, remove_when_name, rename_field_name, rename_line,
-    rename_result_name, result_below_tooltip, result_inside_tooltip, result_name_taken, sentence_text,
+    ONE_SIDED_RANGE, OtherwiseRepeat, PartPlace, PlaceTarget, PlacedPart, REMOVE_THIS_WHEN, SHARED_DRAW_GROUP,
+    SentenceChip, SentencePart, Sentences, UNIT_PLACEHOLDER, add_inside_label, add_inside_name, add_value_name,
+    always_name, card_header, condition_arrow_name, count_used_as_draw, delete_line, for_each_change_name,
+    for_each_optional_name, for_each_optional_tooltip, for_each_words, from_tooltip, line_actions_name, line_count,
+    line_list_name, line_name, line_prefix, line_word, move_into_label, move_into_name, move_line_down, move_line_up,
+    operation_words, otherwise_notice, otherwise_tooltip, otherwise_words, remove_when_name, rename_field_name,
+    rename_line, rename_result_name, result_below_tooltip, result_inside_tooltip, result_name_taken, sentence_text,
     use_for_each_label, use_for_each_name, use_instead_label, use_instead_name, uses_result_below, uses_result_inside,
 };
 use henad_graph::sheet::sentence::{
@@ -1716,7 +1716,8 @@ pub fn draws_diagnostic(document: &SheetDocument, diagnostic: &SheetDiagnostic) 
 /// lines numbered `numbers`, and the notice shown the first time the line starts with "otherwise".
 ///
 /// Both name the property the lines change, and the old state a cell must be in for both to apply. When a higher line
-/// sits in the Repeat that holds line `line_id`, both say the higher line wins only at the same time.
+/// sits in the Repeat that holds line `line_id`, both say the higher line wins only at the same time. Otherwise, when
+/// two higher lines share a Repeat, both say the first time round decides between them.
 fn otherwise_words_of(
     document: &SheetDocument,
     relations: &CardRelations<'_>,
@@ -1731,15 +1732,26 @@ fn otherwise_words_of(
     let state = line.and_then(|line| state_of(document, line.property.as_deref(), line.start_state.as_deref()));
     let property_name = property.map_or(BLANK_TEXT, |property| property.name.as_str());
     let thing = Sentences::new(document).thing_word(&relations.card().every);
-    let repeat = relations.repeat_of(line_id);
-    let in_repeat = repeat.is_some()
-        && relations
-            .otherwise_of(line_id)
-            .into_iter()
-            .any(|higher| relations.repeat_of(higher) == repeat);
+    let own = relations.repeat_of(line_id);
+    let higher: Vec<Option<&str>> = relations
+        .otherwise_of(line_id)
+        .into_iter()
+        .map(|higher| relations.repeat_of(higher))
+        .collect();
+    let repeat = if own.is_some() && higher.contains(&own) {
+        OtherwiseRepeat::Own
+    } else if higher
+        .iter()
+        .enumerate()
+        .any(|(index, repeat)| repeat.is_some() && higher[index + 1..].contains(repeat))
+    {
+        OtherwiseRepeat::Higher
+    } else {
+        OtherwiseRepeat::Apart
+    };
     (
-        otherwise_tooltip(numbers, property_name, state, &thing, in_repeat),
-        otherwise_notice(prefix, numbers, property_name, state, &thing, in_repeat),
+        otherwise_tooltip(numbers, property_name, state, &thing, repeat),
+        otherwise_notice(prefix, numbers, property_name, state, &thing, repeat),
     )
 }
 

@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use super::convert::{frames, source_hash};
+use super::convert::frames;
 use super::{SheetFile, sentence};
 use crate::document::GraphDocument;
 use crate::editor::FrameLayout;
@@ -36,8 +36,11 @@ pub struct ChangeGroup {
 pub enum ChangesError {
     /// The copy records no conversion.
     NoOrigin,
-    /// The sheet's canonical text no longer hashes to the one the copy records, so the sheet changed since the
-    /// conversion or is another sheet.
+    /// The sheet's code no longer hashes to the code the copy records, so the model the sheet holds changed since the
+    /// conversion or is another model.
+    ///
+    /// Note that an edit outside the code, such as a note, a comment or a parameter's meaning, leaves the code's hash
+    /// alone.
     OriginalChanged {
         /// Name of the sheet the copy was converted from.
         name: String,
@@ -66,13 +69,13 @@ impl std::error::Error for ChangesError {}
 /// # Errors
 ///
 /// Returns [`ChangesError::NoOrigin`] for a copy with no origin record, and [`ChangesError::OriginalChanged`] when the
-/// hash of `original` differs from the one the copy records.
+/// hash of the code of `original` differs from the `code` the copy records.
 pub fn changes_since_conversion(copy: &GraphFile, original: &SheetFile) -> Result<Vec<ChangeGroup>, ChangesError> {
     let origin = copy
         .editor()
         .and_then(|editor| editor.model_origin())
         .ok_or(ChangesError::NoOrigin)?;
-    if origin.hash != source_hash(original) {
+    if origin.code != format!("{:016x}", original.code().hash()) {
         return Err(ChangesError::OriginalChanged { name: origin.name });
     }
     let converted = frames(original, &original.parsed().check());

@@ -212,7 +212,7 @@ new_state = "alive"
 start_state = "dead"
 condition = { result = "l2", part = "all_flagged" }
 
-# Bright alive = count of the 8 cells around me whose Status is Alive
+# Bright alive = count of the 8 cells around me whose Status is Alive, only those whose Level is at least 0.5
 [card.line.l10]
 kind = "count"
 name = "Bright alive"

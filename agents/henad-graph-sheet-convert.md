@@ -72,8 +72,9 @@ The copy's `[editor]` region, written through `EditorRegion`'s typed setters:
 
 **`sheet/changes.rs`** (private, `sheet` re-exports `changes_since_conversion`, `ChangeGroup` and
 `ChangesError`). `changes_since_conversion(&GraphFile, &SheetFile)` refuses a copy with no origin
-(`NoOrigin`) and a sheet whose `source_hash` differs from `origin.hash` (`OriginalChanged`, whose
-`Display` is `sentence::original_changed`, "Game of Life has changed since this conversion."). It
+(`NoOrigin`) and a sheet whose `SheetFile::code` hash differs from `origin.code` (`OriginalChanged`,
+whose `Display` is `sentence::original_changed`, "Game of Life has changed since this conversion."),
+so an edit outside the code, such as a note, a comment or the purpose, keeps the changes listed. It
 diffs the copy's nodes against the sheet's lowered graph by node id across passes and functions:
 added, removed, and changed when kind, config, inputs, region or canvas differ. Each node goes under
 the first frame of its canvas holding it in the copy, else in a fresh `frames` of the sheet, so a

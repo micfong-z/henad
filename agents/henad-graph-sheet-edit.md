@@ -7,7 +7,9 @@ commands leave meaning to, and `agents/henad-graph-edit.md` holds `KeyStream`.
 **Edit commands.** `SheetBuilder` holds a `SheetDocument` and a `KeyStream` (`new` seeds it from
 entropy, `with_key_seed` from a seed), and `apply(SheetEdit)` runs one command on a copy (`Draft`),
 so a refused command changes nothing, then returns the ids it made. A command checks structure (ids,
-names, the line a path reaches, a block to add inside) and leaves meaning to the checker.
+names, the line a path reaches, a block to add inside) and leaves meaning to the checker. A command
+that leaves a number that is not finite is refused in `sentence::number_not_kept`'s words, found
+by `to_text` failing after it and not before, so the history's texts always write.
 `SheetEditError` is `Missing`, `Invalid`, `Taken` (a name of the same kind, case aside, or an id)
 and `Reserved` (the id). Commands: the sheet's name and purpose, `SetWorld`, `SetTime`;
 `AddProperty` (the first States property of a kind of thing with no colour rule colours it by
@@ -20,8 +22,10 @@ twelve in the order of `sentence::COLOR_NAMES`), `AddParameter`, `SetParameter` 
 step, unit and means as one edit), `AddMeasure` (a count in a state takes the state's colour, else
 the next of `MEASURE_COLORS`), `AddEvent`, `AddButton` (start again over a kind of thing, or run
 once with a card of the button's id), `SetButtonSteps`, `AddCard` (`cell_tick` or
-`<agent kind>_tick`, before the cards that run once); `Rename`, `ChangeId`, `Recolor` (a measure
-drawn in its state's colour follows the state) and `Delete` over a `SheetItem` (property, state,
+`<agent kind>_tick`, before the cards that run once); `Rename` (an average of a property still
+named `sentence::average_measure` of its old name follows it, unless another measure holds the new
+name), `ChangeId`, `Recolor` (a measure drawn in its state's colour follows the state) and `Delete`
+over a `SheetItem` (property, state,
 parameter, measure, event, button, card, agent kind); `SetStartsAs` (one edit for a Starts as
 commit, the old key kept), `SetColorRule`; `SetAgentKind` (the number of agents at the start, from 1
 to the largest number, and that largest number), `SetMarks` (a Number property of the ground: how
@@ -98,7 +102,9 @@ first value or makes a list of one.
 Rates: a rate phrase put in by `AddLine`, `SetSlot` or `ChooseCondition` with no unit takes
 the tick's unit and `rate_unit_from_tick = true` while `[time]` exists. A parameter put into `rate`
 whose rate has no unit or a marked one gives the rate the first "per <unit>" its Unit text names and
-clears the mark, and with no `[time]` sets one tick to 1 of that unit. `unit_in_text` reads the Unit
+clears the mark, and with no `[time]` sets one tick to 1 of that unit. A parameter with no Unit
+put into `rate` takes `unit_suggestion` of the rate's unit in the same command
+(`parameter_takes_unit`), the rate's mark left alone. `unit_in_text` reads the Unit
 case aside, spaces after "per", a plural "s", a word
 boundary at both ends. `LineField::RateUnit` by hand clears the mark, sets one tick when `[time]` is
 absent, and gives a parameter with no unit in the rate's `rate` slot `unit_suggestion` of the unit.

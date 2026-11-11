@@ -579,6 +579,20 @@ fn changes_need_the_sheet_the_copy_was_converted_from() {
         changes_since_conversion(sheet.lowered(), &sheet),
         Err(ChangesError::NoOrigin)
     );
+
+    // A new purpose and a note under a line change the sheet's text and leave its code, so the changes still list.
+    let noted = lowered(&edited(
+        &edited(
+            life(),
+            "Conway's Game of Life.",
+            "Conway's Game of Life, as he wrote it.",
+        ),
+        "[card.line.l1]\n",
+        "[card.line.l1]\nnote = \"Counts the eight cells around.\"\n",
+    ));
+    assert_ne!(noted.to_toml(), sheet.to_toml());
+    assert_eq!(noted.code(), sheet.code());
+    assert_eq!(changes_since_conversion(&copy, &noted), Ok(Vec::new()));
 }
 
 #[test]

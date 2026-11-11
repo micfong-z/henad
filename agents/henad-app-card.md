@@ -53,7 +53,9 @@ from `Sentences::placed_parts` with `otherwise_numbers`, the ids and tooltip of 
 `red_chips` (a result chip whose line sits at or below this one, or whose direct When does not hold
 this line), `swatches`, `otherwise_notice` (`otherwise_notice`, beside the tooltip from
 `otherwise_words_of`, both saying "at the same time" when a higher line sits in the line's own
-Repeat, as `CardRelations::repeat_of` finds it), `notes` (the report's diagnostics at that card and
+Repeat, as `CardRelations::repeat_of` finds it, and that the first time round decides when two
+higher lines share another Repeat, through `sentence::OtherwiseRepeat`), `notes` (the report's
+diagnostics at that card and
 line, the skip notes first, red for an error or a skip note that names a red chip, amber otherwise)
 and `skips`, the number of skip notes. `sheet_outcome_ui` in `editor/mod.rs` lists every problem
 the card does not draw (`draws_diagnostic`). `line_ui` names the row a group of role `Group`

@@ -17,8 +17,8 @@ use crate::sheet::document::{
 use crate::sheet::edit::unit_in_text;
 use crate::sheet::limits::MAX_NESTING;
 use crate::sheet::sentence::{
-    self, ANY_STATE_ID, Blank, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, LineSelect, NOT_RUN_TICK, RATE_BELOW_ZERO,
-    RATE_IN_BUTTON_CARD,
+    self, ANY_STATE_ID, ARROW_COMPARED_WITH_NUMBER, Blank, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, LineSelect,
+    NOT_RUN_TICK, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD,
 };
 
 /// Kind of value a blank wants. Its words fill the skip note.
@@ -963,7 +963,7 @@ impl<'a> Checker<'a> {
     fn compare(&mut self, line: &SheetLine, context: &Context<'a>, state: &mut LineState) {
         let inner = context.inner();
         let left_want = if context.whose { Blank::Property } else { Blank::Value };
-        self.slot(&line.left, &inner, Want::Blank(left_want), None, None, state);
+        let left = self.slot(&line.left, &inner, Want::Blank(left_want), None, None, state);
         let governing = line.left.value().and_then(governing_property);
         let of_states = governing.is_some_and(|id| {
             self.properties
@@ -982,6 +982,9 @@ impl<'a> Checker<'a> {
                 }
                 self.slot(&line.low, &inner, Want::Blank(Blank::LowerNumber), number, None, state);
                 self.slot(&line.high, &inner, Want::Blank(Blank::UpperNumber), number, None, state);
+                if left == Some(ValueType::Arrow) {
+                    self.error(ARROW_COMPARED_WITH_NUMBER, &context.place);
+                }
             }
             Some(test) => {
                 let list = matches!(test, CompareTest::OneOf | CompareTest::NotOneOf);
@@ -991,9 +994,13 @@ impl<'a> Checker<'a> {
                     (false, true) => Blank::NumberList,
                     (false, false) => Blank::Number,
                 };
-                self.slot(&line.right, &inner, Want::Blank(want), None, governing, state);
+                let right = self.slot(&line.right, &inner, Want::Blank(want), None, governing, state);
                 if test == CompareTest::Within {
                     self.slot(&line.tolerance, &inner, Want::Blank(Blank::Number), number, None, state);
+                }
+                let sides = [left, right];
+                if sides.contains(&Some(ValueType::Arrow)) && sides.contains(&Some(ValueType::Number)) {
+                    self.error(ARROW_COMPARED_WITH_NUMBER, &context.place);
                 }
             }
         }

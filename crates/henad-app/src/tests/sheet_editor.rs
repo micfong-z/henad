@@ -17,9 +17,10 @@ use henad_explore::result_set::ResultSet;
 use henad_explore::sweep::{Provenance, SweepOptions, run_spec};
 use henad_graph::sheet::check::check;
 use henad_graph::sheet::document::{
-    LineKind, MadeOf, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, StartRule,
-    StartsAs,
+    LineKind, MadeOf, ParameterType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue,
+    Slot, StartRule, StartsAs,
 };
+use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::sentence::{A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE, STARTER_CHOICES};
 use henad_graph::sheet::{ParsedSheet, starters};
 use web_time::Instant;
@@ -953,7 +954,8 @@ fn chips_name_the_property_when_two_share_a_state_name() {
 }
 
 /// Inside a Repeat the first time a change applies decides, so the "otherwise" of a line whose higher line sits in its
-/// own Repeat says the higher line wins at the same time. A line outside the Repeat keeps the plain words.
+/// own Repeat says the higher line wins at the same time. A line outside the Repeat, whose higher lines share it, says
+/// the first time round decides between them.
 #[test]
 fn otherwise_inside_a_repeat_says_the_higher_line_wins_at_the_same_time() {
     let text = starter_text("random_walk.toml");
@@ -989,8 +991,52 @@ fn otherwise_inside_a_repeat_says_the_higher_line_wins_at_the_same_time() {
     assert_eq!(lines[4].otherwise, ["l3", "l4"]);
     assert_eq!(
         lines[4].otherwise_tooltip,
-        "Lines 3 and 4 also change Status for a walker that is S. When more than one applies, the highest line wins."
+        "Lines 3 and 4 also change Status for a walker that is S. When more than one applies, the highest line wins. \
+         Between lines in one Repeat, the first time round that one applies decides."
     );
+}
+
+/// A parameter with no unit put into a rate takes the rate's unit in the same edit, and one Undo takes both back.
+#[test]
+fn a_parameter_put_into_a_rate_takes_its_unit_and_one_undo_restores_both() {
+    let parsed = ParsedSheet::parse(starter_text("sir.toml")).expect("the starter reads");
+    let mut sheet = SheetEditor::new(parsed.document().clone());
+    let apply = |sheet: &mut SheetEditor, edit: SheetEdit| {
+        sheet
+            .edit(false, false, |builder| builder.apply(edit).map(drop))
+            .expect("the edit applies");
+    };
+    apply(
+        &mut sheet,
+        SheetEdit::AddParameter {
+            name: "Plain".to_owned(),
+            parameter_type: ParameterType::Number,
+            min: 0.0,
+            max: 1.0,
+            default: 0.5,
+            unit: None,
+        },
+    );
+    let before = sheet.document().clone();
+    apply(
+        &mut sheet,
+        SheetEdit::SetSlot {
+            line: "l3".to_owned(),
+            path: "condition.rate".to_owned(),
+            value: Slot::Filled(SheetValue::Chip(SheetChip::Param("plain".to_owned()))),
+        },
+    );
+    let plain_unit = |document: &SheetDocument| {
+        document
+            .parameters
+            .iter()
+            .find(|parameter| parameter.id == "plain")
+            .and_then(|parameter| parameter.unit.clone())
+    };
+    assert_eq!(plain_unit(sheet.document()).as_deref(), Some("per day"));
+    assert!(sheet.undo(false), "one edit to undo");
+    assert_eq!(sheet.document(), &before, "one Undo restores the rate and the unit");
+    assert_eq!(plain_unit(sheet.document()), None);
 }
 
 #[test]

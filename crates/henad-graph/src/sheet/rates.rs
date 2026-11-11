@@ -123,9 +123,15 @@ impl LargestCount {
         self.chance > LONG_TICK_CHANCE
     }
 
-    /// Returns the words of the chance, such as "up to 0.909 with 8".
+    /// Returns the words of the chance, such as "up to 0.909 with 8", or "almost 1 with 8" for a chance below 1 that
+    /// rounds to 1 at three significant figures.
     pub fn words(&self) -> String {
-        sentence::long_tick_chance(&significant(self.chance, 3), self.count)
+        let chance = significant(self.chance, 3);
+        if chance == "1" && self.chance < 1.0 {
+            sentence::long_tick_almost_one(self.count)
+        } else {
+            sentence::long_tick_chance(&chance, self.count)
+        }
     }
 }
 

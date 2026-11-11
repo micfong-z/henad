@@ -17,9 +17,9 @@ use super::{
     FireLines, LineMap, NodeOrigin, NodeOwner, ParsedSheet, SHEET_CODE_FORMAT, SheetErrors, SheetFileError, SheetPlaces,
 };
 use crate::GraphFile;
-use crate::document::GraphDocument;
+use crate::document::{GraphDocument, World};
 use crate::ids::NodeId;
-use crate::wgsl::FaultNames;
+use crate::wgsl::{AgentProgram, FaultNames, GridProgram};
 
 /// A sheet file: the sheet, its text and places, its warnings, and the graph it lowers to with the table of that
 /// graph's nodes.
@@ -216,9 +216,10 @@ impl SheetFile {
     /// The reasons are those of [`ModelEntry::shortfalls`]. A submission past its budget names the looks at agents of
     /// the heaviest card, as "Line 1, Flockmates: looks at too many birds at 1,000,000 birds. Use a shorter distance
     /// or fewer birds.", or the card when it looks at no agents, and starts past the host's budget name the
-    /// number started. A reason of another kind, such as a buffer past the device's size, is kept as it is.
+    /// number started. A reason of another kind, such as a buffer past the device's size, is kept as it is, except
+    /// that a buffer of properties is named by the properties it holds, as "'Health A, Health B and Age'".
     pub fn shortfalls(&self, entry: &ModelEntry, params: &[ParamValue], limits: &wgpu::Limits) -> Vec<String> {
-        let found = entry.shortfalls(params, limits);
+        let found = self.with_property_names(entry.shortfalls(params, limits));
         let Some(demand) = entry.demand(params, limits) else {
             return found;
         };
@@ -286,6 +287,53 @@ impl SheetFile {
             lines.push(sentence::start_costs_too_much(&things, count));
         }
         lines
+    }
+
+    /// Returns `lines` with each buffer of properties they name, such as `'<id>_buffer0_a'` of a grid or
+    /// `'<id>_lanes_agents_0_a'` of agents, named by the properties it holds, as "'Health A, Health B and Age'".
+    ///
+    /// The buffers come from compiling [`Self::lowered`] again, which happens only when a line names a buffer of the
+    /// model. The compiler reads no device, so the buffers equal those of the entry built from the same graph. A grid's
+    /// engine labels its buffers by position, `<id>_buffer<k>`, and an engine of agents by the compiler's label,
+    /// `<id>_<label>`, each with a side `_a` or `_b`.
+    fn with_property_names(&self, lines: Vec<String>) -> Vec<String> {
+        let id = &self.lowered.document().id;
+        if !lines.iter().any(|line| line.contains(&format!("'{id}_"))) {
+            return lines;
+        }
+        let (groups, grid) = match self.lowered.document().world {
+            World::Grid(_) => (
+                GridProgram::compile(&self.lowered).map(|program| program.lane_groups()),
+                true,
+            ),
+            World::Agents(_) => (
+                AgentProgram::compile_with_fault_names(&self.lowered, &self.fault_names)
+                    .map(|program| program.lane_groups()),
+                false,
+            ),
+        };
+        let properties = Sentences::new(self.document());
+        let mut names: Vec<(String, String)> = Vec::new();
+        for (position, (label, lanes)) in groups.unwrap_or_default().into_iter().enumerate() {
+            let words: Vec<String> = lanes.iter().map(|lane| properties.property_words(lane)).collect();
+            let words = format!("'{}'", sentence::word_list(&words));
+            let label = if grid {
+                format!("{id}_buffer{position}")
+            } else {
+                format!("{id}_{label}")
+            };
+            for side in ["a", "b"] {
+                names.push((format!("'{label}_{side}'"), words.clone()));
+            }
+        }
+        lines
+            .into_iter()
+            .map(|line| {
+                names
+                    .iter()
+                    .fold(line, |line, (label, words)| line.replace(label, words))
+            })
+            .collect()
     }
 
     /// Warnings of the sheet's check, skip warnings included, each placed at its table.

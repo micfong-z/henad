@@ -68,7 +68,7 @@ use super::document::{
 };
 use super::limits::{MAX_LINES_PER_CARD, MAX_NESTING, MAX_SHEET_ID_BYTES};
 use super::rates::{chance_from_rate, rate_from_chance, shortest_f32, tick_in};
-use super::sentence::{ANY_STATE_ID, ConditionItem, rate_unit_word, unit_suggestion};
+use super::sentence::{self, ANY_STATE_ID, ConditionItem, rate_unit_word, unit_suggestion};
 use crate::ids::is_id;
 use crate::keys::KeyStream;
 use crate::value::Color;
@@ -765,7 +765,8 @@ impl SheetBuilder {
     ///
     /// # Errors
     ///
-    /// Returns the reason the edit is refused. On an error nothing changes.
+    /// Returns the reason the edit is refused. On an error nothing changes. An edit that would leave a number that is
+    /// not finite anywhere in a sheet that held none is refused with [`sentence::number_not_kept`].
     pub fn apply(&mut self, edit: SheetEdit) -> Result<Vec<String>, SheetEditError> {
         let mut draft = Draft {
             document: self.document.clone(),
@@ -777,6 +778,15 @@ impl SheetBuilder {
         draft.finish();
         names::update_summary_names(&self.document, &mut draft.document);
         names::update_names(&self.document, &mut draft.document);
+        // A sheet the writer cannot write, one holding a number that is not finite, would leave no text to undo to. A
+        // sheet that held such a number before the edit takes edits as before.
+        if let Err(error) = draft.document.to_text()
+            && self.document.to_text().is_ok()
+        {
+            return Err(SheetEditError::Invalid(
+                sentence::number_not_kept(error.value).to_owned(),
+            ));
+        }
         self.document = draft.document;
         self.keys = draft.keys;
         Ok(made)
@@ -820,12 +830,11 @@ fn refuse_taken<'a>(name: &str, mut names: impl Iterator<Item = &'a str>, what: 
     Ok(())
 }
 
-/// Returns an error for a number that is not finite.
+/// Returns an error for the first number of `numbers` that is not finite.
 fn refuse_infinite(numbers: &[f64]) -> Result<(), SheetEditError> {
-    if numbers.iter().all(|number| number.is_finite()) {
-        Ok(())
-    } else {
-        Err(SheetEditError::Invalid("every number of a sheet is finite".to_owned()))
+    match numbers.iter().find(|number| !number.is_finite()) {
+        None => Ok(()),
+        Some(number) => Err(SheetEditError::Invalid(sentence::number_not_kept(*number).to_owned())),
     }
 }
 
@@ -942,8 +951,11 @@ impl Draft {
                 self.document.world.edges = edges;
             }
             SheetEdit::SetTime { time } => {
+                if let Some(time) = time {
+                    refuse_infinite(&[time.tick_length])?;
+                }
                 if let Some(time) = time
-                    && !(time.tick_length.is_finite() && time.tick_length > 0.0)
+                    && time.tick_length <= 0.0
                 {
                     return Err(SheetEditError::Invalid(
                         "one tick lasts a number of units above 0".to_owned(),
@@ -1528,6 +1540,33 @@ impl Draft {
         Ok(vec![id])
     }
 
+    /// Renames each average of property `id` that holds its automatic name, the words of
+    /// [`sentence::average_measure`] for `old`, the property's name before a rename to `new`.
+    ///
+    /// A measure named by hand keeps its name, and so does a follower whose new name another measure holds, case
+    /// aside.
+    fn follow_property_name(&mut self, id: &str, old: &str, new: &str) {
+        let (before, after) = (sentence::average_measure(old), sentence::average_measure(new));
+        let follows = |measure: &SheetMeasure| {
+            measure.rule == MeasureRule::Average
+                && measure.name == before
+                && matches!(measure.value.value(), Some(SheetValue::Chip(SheetChip::My(property))) if property == id)
+        };
+        let taken = self
+            .document
+            .measures
+            .iter()
+            .any(|measure| !follows(measure) && measure.name.to_lowercase() == after.to_lowercase());
+        if taken {
+            return;
+        }
+        for measure in &mut self.document.measures {
+            if follows(measure) {
+                measure.name.clone_from(&after);
+            }
+        }
+    }
+
     /// Renames `item` to `name`.
     #[expect(clippy::too_many_lines, reason = "one arm per kind of item reads best as one table")]
     fn rename(&mut self, item: &SheetItem, name: &str) -> Result<(), SheetEditError> {
@@ -1543,7 +1582,8 @@ impl Draft {
                     .map(|property| property.name.clone())
                     .collect();
                 refuse_taken(&name, siblings.iter().map(String::as_str), "property")?;
-                self.property_mut(id)?.name = name;
+                let old = std::mem::replace(&mut self.property_mut(id)?.name, name.clone());
+                self.follow_property_name(id, &old, &name);
             }
             SheetItem::State { property, state } => {
                 let name = clean_name(name, "state")?;
@@ -2177,7 +2217,8 @@ impl Draft {
         self.refuse_deep(line_id)
     }
 
-    /// Gives the rate at `steps` of line `line_id` the unit of `parameter`, when the rate's unit is empty or marked.
+    /// Gives the rate at `steps` of line `line_id` the unit of `parameter`, when the rate's unit is empty or marked, and
+    /// gives `parameter` the rate's unit when the parameter has none.
     fn rate_takes_parameter(
         &mut self,
         line_id: &str,
@@ -2202,12 +2243,26 @@ impl Draft {
             rate.rate_unit = Some(unit);
             rate.rate_unit_from_tick = false;
         }
+        let unit = rate.rate_unit;
         if let Some(unit) = chosen
             && self.document.time.is_none()
         {
             self.document.time = Some(SheetTime::new(1.0, unit));
         }
+        if let Some(unit) = unit {
+            self.parameter_takes_unit(parameter, unit);
+        }
         Ok(())
+    }
+
+    /// Gives `parameter`, a parameter a rate in `unit` reads, the words of [`unit_suggestion`] for the unit when it has
+    /// no unit.
+    fn parameter_takes_unit(&mut self, parameter: &str, unit: TimeUnit) {
+        if let Some(known) = self.document.parameters.iter_mut().find(|known| known.id == parameter)
+            && known.unit.as_deref().is_none_or(|text| text.trim().is_empty())
+        {
+            known.unit = Some(unit_suggestion(unit));
+        }
     }
 
     /// Sets `field` of the phrase at `phrase` of line `line_id`.
@@ -2318,11 +2373,8 @@ impl Draft {
         if self.document.time.is_none() {
             self.document.time = Some(SheetTime::new(1.0, unit));
         }
-        if let Some(parameter) = parameter
-            && let Some(known) = self.document.parameters.iter_mut().find(|known| known.id == parameter)
-            && known.unit.is_none()
-        {
-            known.unit = Some(unit_suggestion(unit));
+        if let Some(parameter) = parameter {
+            self.parameter_takes_unit(parameter, unit);
         }
     }
 

@@ -643,6 +643,17 @@ fn rate_notes_match_the_spec_examples() {
     assert_eq!(largest.count, 8);
     assert!(largest.chance < LONG_TICK_CHANCE, "{largest:?}");
     assert_eq!(largest.words(), "up to 0.451 with 8");
+    // At 4 days, 1 - e^(-0.3 x 8 x 4) is below 1 and rounds to 1. At 20 days it is 1 in a double.
+    let four = edited(sir, "tick_length = 1\n", "tick_length = 4\n");
+    assert_eq!(
+        note(&four, "l2").and_then(|note| note.long_tick).as_deref(),
+        Some("almost 1 with 8")
+    );
+    let twenty = edited(sir, "tick_length = 1\n", "tick_length = 20\n");
+    assert_eq!(
+        note(&twenty, "l2").and_then(|note| note.long_tick).as_deref(),
+        Some("up to 1 with 8")
+    );
 
     // A tick of 6 hours against a rate per day.
     let six_hours = edited(
@@ -794,8 +805,14 @@ fn worked_out_rate_notes_match_the_spec_examples() {
     );
     let unnamed_note = note(&unnamed, "l2").expect("a note").text;
     assert!(
-        unnamed_note.contains("chance 0.259 with 1 infected neighbour, and 0.451 with 2"),
+        unnamed_note.contains("chance 0.259 with 1 infected neighbour, and 0.451 with 2")
+            && unnamed_note.contains("where r is 0.3 times Infected neighbours."),
         "{unnamed_note}"
+    );
+    assert_eq!(
+        crate::sheet::sentence::Sentences::new(&document).line("l5", &[]),
+        "Pressure = 0.3 times Infected neighbours",
+        "a formula names an unnamed Count by its automatic name"
     );
 
     // A sheet with no length of one tick, a chance line, and a values map read in place of the defaults.
@@ -1126,5 +1143,9 @@ fn a_lower_line_of_a_competing_group_reads_or() {
     assert_eq!(
         sentence::long_tick_note("up to 0.909 with 8"),
         "Up to 0.909 with 8. This tick is long for this rate. A shorter tick follows the rate more closely."
+    );
+    assert_eq!(
+        sentence::long_tick_note(&sentence::long_tick_almost_one(8)),
+        "Almost 1 with 8. This tick is long for this rate. A shorter tick follows the rate more closely."
     );
 }

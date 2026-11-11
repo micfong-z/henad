@@ -393,3 +393,36 @@ fn a_packed_model_steps_as_its_unpacked_twin() {
         }
     }
 }
+
+/// A grid enlarged past what a device of the WebGPU default limits binds names the properties each buffer holds in its
+/// shortfall, the three packed lanes of the three strains together and the added property alone, never the buffer's
+/// label.
+#[test]
+fn a_shortfall_names_the_properties_a_buffer_holds() {
+    let text = three_strains_with_age();
+    let sheet = SheetFile::parse(&text).expect("the sheet lowers");
+    let entry = Program::of(&text, false).entry();
+    let params: Vec<ParamValue> = entry
+        .param_descriptors()
+        .iter()
+        .map(|descriptor| match descriptor.id() {
+            "grid_width" | "grid_height" => ParamValue::U32(8192),
+            _ => descriptor.kind().default_value(),
+        })
+        .collect();
+    let limits = wgpu::Limits::default();
+    let raw = entry.shortfalls(&params, &limits);
+    assert!(
+        raw.iter()
+            .any(|line| line.starts_with("'three_strains_buffer0_a' and 1 more each need")),
+        "{raw:?}"
+    );
+    assert_eq!(
+        sheet.shortfalls(&entry, &params, &limits),
+        [
+            "'Health A, Health B and Health C' and 1 more each need 768.0 MB, past the 128.0 MB this device allows for \
+             one storage binding",
+            "'Energy' needs 256.0 MB, past the 128.0 MB this device allows for one storage binding",
+        ]
+    );
+}

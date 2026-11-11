@@ -172,8 +172,8 @@ on every edited file that checks. `run_pass` and `rerun` first check that the `H
 the document's lanes (count, ids, types, one value per element) and return `Fault` otherwise.
 `HostLanes::new` refuses lanes past `MAX_HOST_LANE_BYTES` (4 GiB) before allocating, and every
 column and staged copy is reserved with `try_reserve_exact`, so a failed allocation is an error
-and no abort. Host init has no work bound yet: `cost * elements` of the init and rerun passes is
-for G2's `Demand` to count.
+and no abort. Host init is bounded by work: `Demand::shortfalls` refuses a host run whose
+`cost * elements`, over the init and rerun passes, is past `HOST_WORK_BUDGET`.
 
 **Edit commands** (`edit/`) and the editor region (`editor.rs`) are in
 `agents/henad-graph-edit.md`.

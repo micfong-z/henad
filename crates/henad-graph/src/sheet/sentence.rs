@@ -1318,6 +1318,18 @@ pub fn read_typed_number(text: &str) -> Option<SheetLiteral> {
     })
 }
 
+/// Returns the reason an edit is refused that would keep `value`, a number that is not finite, on the sheet.
+///
+/// It reads "that number is too large to keep" for an infinity and "that number cannot be worked out" for NaN. The
+/// reason is a clause, which the editor starts with a capital and ends with a full stop.
+pub fn number_not_kept(value: f64) -> &'static str {
+    if value.is_nan() {
+        "that number cannot be worked out"
+    } else {
+        "that number is too large to keep"
+    }
+}
+
 /// Returns the message on a side of the world typed as anything but a whole number from 1 to `max` cells, such as
 /// "Type a size from 1 to 16384 cells.".
 pub fn world_side_out_of_range(max: u32) -> String {
@@ -1637,15 +1649,37 @@ pub fn otherwise_words(lines: &[usize]) -> String {
     format!("{OTHERWISE} ({})", otherwise_description(lines))
 }
 
+/// Places of the higher lines of an "otherwise" against the card's Repeat lines, which decide the words of
+/// [`otherwise_tooltip`] on the line that wins.
+///
+/// Inside a Repeat the first time round that a change applies decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OtherwiseRepeat {
+    /// No higher line shares a Repeat with the line or with another higher line. The highest line that applies wins.
+    Apart,
+    /// A higher line sits in the line's own Repeat. The highest line wins among changes that apply at the same time.
+    Own,
+    /// Two or more higher lines share a Repeat that the line sits outside of. Between those lines, the first time
+    /// round that one applies decides.
+    Higher,
+}
+
 /// Returns the tooltip of the "otherwise" words, where `lines` holds the higher lines.
 ///
 /// `property` is the property the lines change, `state` the state one `thing` must be in for both to apply, and
 /// `thing` names one of what the card runs on. For example "Line 2 also changes Cover for a cell that is Tree. When
 /// both apply, line 2 wins."
 ///
-/// `in_repeat` is whether a higher line sits in the line's own Repeat. The winner then holds only for changes that
-/// apply at the same time, since the first time a change applies decides, and the tooltip says so.
-pub fn otherwise_tooltip(lines: &[usize], property: &str, state: Option<&str>, thing: &str, in_repeat: bool) -> String {
+/// `repeat` places the higher lines against the card's Repeat lines. For [`OtherwiseRepeat::Own`] the tooltip says
+/// the highest line wins at the same time, and for [`OtherwiseRepeat::Higher`] that the first time round decides
+/// between lines in one Repeat.
+pub fn otherwise_tooltip(
+    lines: &[usize],
+    property: &str,
+    state: Option<&str>,
+    thing: &str,
+    repeat: OtherwiseRepeat,
+) -> String {
     let who = if lines.len() == 1 {
         format!("Line {} also changes", number_list(lines))
     } else {
@@ -1654,9 +1688,17 @@ pub fn otherwise_tooltip(lines: &[usize], property: &str, state: Option<&str>, t
     let for_whom = state
         .map(|state| format!(" for {} that is {state}", with_article(thing)))
         .unwrap_or_default();
-    let when = if in_repeat { " at the same time" } else { "" };
+    let when = if repeat == OtherwiseRepeat::Own {
+        " at the same time"
+    } else {
+        ""
+    };
     let wins = if lines.len() == 1 {
         format!("When both apply{when}, line {} wins.", number_list(lines))
+    } else if repeat == OtherwiseRepeat::Higher {
+        "When more than one applies, the highest line wins. Between lines in one Repeat, the first time round that \
+         one applies decides."
+            .to_owned()
     } else {
         format!("When more than one applies{when}, the highest line wins.")
     };
@@ -1673,11 +1715,11 @@ pub fn otherwise_notice(
     property: &str,
     state: Option<&str>,
     thing: &str,
-    in_repeat: bool,
+    repeat: OtherwiseRepeat,
 ) -> String {
     format!(
         "{prefix} now starts with otherwise. {}",
-        otherwise_tooltip(lines, property, state, thing, in_repeat)
+        otherwise_tooltip(lines, property, state, thing, repeat)
     )
 }
 
@@ -1889,6 +1931,12 @@ pub fn long_tick_chance(chance: &str, count: u32) -> String {
     format!("up to {chance} with {count}")
 }
 
+/// Returns the largest chance of a rate counted for each when it is below 1 and rounds to 1, such as "almost 1 with
+/// 8".
+pub fn long_tick_almost_one(count: u32) -> String {
+    format!("almost 1 with {count}")
+}
+
 /// Returns the description of a rate note on how long one element stays in `state`.
 ///
 /// `stay` is the mean stay at this tick length and `limit` the mean stay as the tick shrinks, both with their unit.
@@ -1950,6 +1998,9 @@ pub const LOOK_IN_REPEAT: &str = "A look around, a count or a pick of a cell can
 pub const SET_IN_REPEAT: &str =
     "A Set inside a Repeat sets one value every time, so its value cannot read a line inside the Repeat.";
 
+/// Error on a comparison of an arrow with a number.
+pub const ARROW_COMPARED_WITH_NUMBER: &str = "An arrow cannot be compared with a number. Compare its length instead.";
+
 // Errors on a change of a property in a second way, and the words of a look at agents that costs too much
 
 /// Returns the error on a Steer of a property that line `line` sets: "Line 3 sets Velocity. A card that sets a
@@ -1991,6 +2042,28 @@ pub fn look_name(lines: &[(usize, Option<&str>)]) -> String {
         words.push_str(&word_list(&names));
     }
     words
+}
+
+/// Returns the fault of looks at agents named `look` that met more than `cap` agents around one agent in a run.
+///
+/// For example "line 3, Flockmates: looked at more than 65536 agents around one agent, and the run stops. A larger
+/// world or a shorter distance looks at fewer".
+pub fn look_met_too_many(look: &str, cap: u32) -> String {
+    format!(
+        "{look}: looked at more than {cap} agents around one agent, and the run stops. A larger world or a shorter \
+         distance looks at fewer"
+    )
+}
+
+/// Returns the fault of looks at agents named `look` that would search more than `cap` cells around one agent.
+///
+/// For example "line 3, Flockmates: would search more than 65536 cells around one agent, and the run stops. A shorter
+/// distance searches fewer".
+pub fn look_searches_too_far(look: &str, cap: u32) -> String {
+    format!(
+        "{look}: would search more than {cap} cells around one agent, and the run stops. A shorter distance searches \
+         fewer"
+    )
 }
 
 /// Returns the error on looks at agents named `look` that cost too much at `count` agents.
@@ -3658,13 +3731,60 @@ fn possessive(name: &str) -> String {
     }
 }
 
-/// Returns `name` in the plural: "birds", or `name` itself when it ends in "s".
+/// Plurals of the words that follow no rule of [`plural`], each singular in lower case with its plural.
+const IRREGULAR_PLURALS: [(&str, &str); 10] = [
+    ("person", "people"),
+    ("child", "children"),
+    ("man", "men"),
+    ("woman", "women"),
+    ("mouse", "mice"),
+    ("foot", "feet"),
+    ("thief", "thieves"),
+    ("sheep", "sheep"),
+    ("fish", "fish"),
+    ("deer", "deer"),
+];
+
+/// Returns `name` in the plural, its last word changed by the rules of English.
+///
+/// A word ending in "s", "x", "z", "ch" or "sh" takes "es", a consonant and "y" turn into "ies", and "lf", "eaf",
+/// "oaf" and "ife" into "lves", "eaves", "oaves" and "ives". The words of [`IRREGULAR_PLURALS`] take their own plural,
+/// a capital kept. Any other word takes "s": "birds", "foxes", "flies", "wolves", "people".
 pub(crate) fn plural(name: &str) -> String {
-    if name.ends_with('s') {
-        name.to_owned()
-    } else {
-        format!("{name}s")
+    let (head, last) = name.rsplit_once(' ').unwrap_or(("", name));
+    let space = if head.is_empty() { "" } else { " " };
+    let lower = last.to_lowercase();
+    // The stem of `last` without its last `count` letters.
+    let stem = |count: usize| {
+        last.char_indices()
+            .rev()
+            .nth(count - 1)
+            .map_or("", |(index, _)| &last[..index])
+    };
+    if let Some((_, irregular)) = IRREGULAR_PLURALS.iter().find(|(singular, _)| *singular == lower) {
+        let word = if last.starts_with(char::is_uppercase) {
+            upper_first(irregular)
+        } else {
+            (*irregular).to_owned()
+        };
+        return format!("{head}{space}{word}");
     }
+    let consonant_y = lower
+        .strip_suffix('y')
+        .and_then(|rest| rest.chars().last())
+        .is_some_and(|letter| letter.is_alphabetic() && !"aeiou".contains(letter));
+    let word = if ["s", "x", "z", "ch", "sh"].iter().any(|ending| lower.ends_with(ending)) {
+        format!("{last}es")
+    } else if consonant_y {
+        format!("{}ies", stem(1))
+    } else if ["lf", "eaf", "oaf"].iter().any(|ending| lower.ends_with(ending)) {
+        format!("{}ves", stem(1))
+    } else if lower.ends_with("ife") {
+        format!("{}ves", stem(2))
+    } else {
+        format!("{last}s")
+    };
+    format!("{head}{space}{word}")
 }
 
 /// Returns the word for one of the kind of thing `every` of `document`, as [`Sentences::thing_word`] does.
@@ -4272,7 +4392,18 @@ impl<'a> Sentences<'a> {
                 };
                 parts.append(self.property_part(line.property.as_deref(), blank, FieldPlace::Property));
                 parts.push(" to ");
+                // A chance or a rate sets yes when it happens and no otherwise.
+                let draw = matches!(
+                    line.value.value(),
+                    Some(SheetValue::Phrase(phrase)) if matches!(phrase.kind, LineKind::Chance | LineKind::Rate)
+                );
+                if draw {
+                    parts.push(&format!("{} ", literal_words(SheetLiteral::Bool(true))));
+                }
                 parts.append(self.slot_parts(&line.value, None, value, "value"));
+                if draw {
+                    parts.push(&format!(", otherwise {}", literal_words(SheetLiteral::Bool(false))));
+                }
             }
             LineKind::Steer => {
                 parts.append(Parts::keyword("Steer"));
@@ -4503,8 +4634,15 @@ impl<'a> Sentences<'a> {
             SheetChip::State(id) => self.state_chip(about, id),
             SheetChip::Result { line, part, property } => {
                 let result = self.lines.get(line.as_str());
+                // An unnamed Count reads as its automatic name, which reads no result and so never comes back here.
                 let base = result
-                    .and_then(|result| result.name.clone())
+                    .and_then(|result| {
+                        result.name.clone().or_else(|| {
+                            (result.kind == LineKind::Count)
+                                .then(|| super::edit::automatic_name(self.document, result))
+                                .flatten()
+                        })
+                    })
                     .unwrap_or_else(|| line.clone());
                 let name = if let Some(part) = part {
                     if part == "open" {
@@ -4543,6 +4681,10 @@ impl<'a> Sentences<'a> {
                 if !line.whose.is_blank() {
                     parts.push(" whose ");
                     parts.append(self.whose(&line.whose, Blank::Property, "whose"));
+                }
+                if !line.only.is_blank() {
+                    parts.push(", only those whose ");
+                    parts.append(self.whose(&line.only, Blank::Property, "only"));
                 }
                 parts
             }

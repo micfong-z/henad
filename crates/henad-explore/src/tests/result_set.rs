@@ -282,9 +282,9 @@ fn a_series_header_with_other_columns_is_refused() {
 
 /// Returns the folder a sweep of SIR wrote at `be338ec`, before `series.csv` could hold a `time` column.
 ///
-/// `tests/fixtures/series-be338ec/README.md` gives the procedure that recorded it.
-fn folder_be338ec() -> std::path::PathBuf {
-    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/series-be338ec");
+/// `tests/fixtures/series-without-time/README.md` gives the procedure that recorded it.
+fn folder_without_time() -> std::path::PathBuf {
+    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/series-without-time");
     assert!(
         folder.join(MANIFEST_FILE).is_file(),
         "{} holds no manifest. Its README.md gives the procedure that records it",
@@ -309,7 +309,7 @@ fn series_rows(set: &ResultSet) -> Vec<Vec<(u64, Vec<f64>)>> {
 
 #[test]
 fn a_folder_written_before_the_time_column_still_reads() {
-    let folder = folder_be338ec();
+    let folder = folder_without_time();
     let set = ResultSet::open_dir(&folder, usize::MAX).expect("the folder reads");
     assert_eq!(set.stat_columns(), ["Susceptible", "Infected", "Recovered"]);
     let rows = series_rows(&set);
@@ -325,7 +325,7 @@ fn a_folder_written_before_the_time_column_still_reads() {
 /// the same series as the folder without the column.
 #[test]
 fn a_series_with_a_time_column_reads_by_its_header() {
-    let folder = folder_be338ec();
+    let folder = folder_without_time();
     let read = |file: &str| fs::read(folder.join(file)).expect("the fixture holds the file");
     let series = String::from_utf8(read(SERIES_FILE)).expect("the rows are UTF-8");
     let timed: String = series

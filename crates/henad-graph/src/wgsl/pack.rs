@@ -18,7 +18,7 @@ use henad_compute::gpu::ShaderBinding;
 use henad_core::diagnostic::CodeDiagnostic;
 
 use super::GeneratedShader;
-use crate::document::{Domain, GraphDocument};
+use crate::document::{Domain, GraphDocument, Lane};
 use crate::host::value::words_per_value;
 use crate::limits::{MAX_PACKED_BUFFER_BYTES, MAX_STORAGE_BINDINGS};
 use crate::types::ValueType;
@@ -246,6 +246,18 @@ impl LaneLayout {
     /// Returns the lane buffer that holds the lane at `position`.
     pub(crate) fn group_of(&self, position: usize) -> Option<&LaneGroup> {
         self.groups.get(self.place(position)?.buffer)
+    }
+
+    /// Returns the label of each lane buffer in buffer order with the ids of the lanes it holds in segment order, where
+    /// `lanes` holds the lanes of the graph by position.
+    pub(crate) fn lane_ids(&self, lanes: &[Lane]) -> Vec<(String, Vec<String>)> {
+        self.groups
+            .iter()
+            .map(|group| {
+                let ids = group.lanes.iter().filter_map(|&position| lanes.get(position));
+                (group.label.clone(), ids.map(|lane| lane.id.clone()).collect())
+            })
+            .collect()
     }
 }
 
