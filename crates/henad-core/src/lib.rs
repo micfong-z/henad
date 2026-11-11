@@ -20,6 +20,7 @@ pub mod authoring;
 pub mod diagnostic;
 pub mod explore;
 pub mod export;
+mod fnv;
 pub mod grid;
 pub mod helpers;
 pub mod metadata;

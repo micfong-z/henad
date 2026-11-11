@@ -22,13 +22,14 @@ use henad_core::export::state as state_export;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::send_sync::WasmNotSend;
-use henad_core::view::{EdgeView, GridView, PointView, StatEntry, StatValue};
+use henad_core::view::{EdgeView, GridView, PointView};
 
 use crate::entry::{ModelEntry, ModelState};
 use crate::fault::{BUILDING, Fault, STEPPING, catching};
 use crate::gpu::GpuContext;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::gpu::{GpuSimState, fault::catching_on, stepping};
+pub use crate::snapshot::StatSample;
 
 /// Values, seed and schedule for one build of an entry, each checked against its descriptors when set.
 ///
@@ -568,7 +569,7 @@ impl Simulation {
         &mut self,
         end_tick: u64,
         interval: u64,
-        mut on_sample: impl FnMut(&StatSample) -> ControlFlow<B> + WasmNotSend,
+        on_sample: impl FnMut(&StatSample) -> ControlFlow<B> + WasmNotSend,
     ) -> Result<ControlFlow<B>, Fault> {
         assert!(interval > 0, "a sampling interval is at least one tick");
         self.check_earlier_fault()?;
@@ -577,24 +578,26 @@ impl Simulation {
         let sampled = match engine {
             // One pool entry for the whole call. A pool entry per sample costs more than a small model's tick.
             Engine::Cpu(state) => in_pool(|| {
-                let first = catching(STEPPING, || sample_cpu(&mut **state))?;
-                if let ControlFlow::Break(stop) = on_sample(&first) {
-                    return Ok(ControlFlow::Break(stop));
-                }
-                while state.tick() < end_tick {
-                    let next = next_sample_tick(state.tick(), interval, end_tick);
-                    let sample = catching(STEPPING, || {
-                        step_cpu(&mut **state, schedule, next)?;
+                let sample_at = |next: Option<u64>| {
+                    catching(STEPPING, || {
+                        if let Some(next) = next {
+                            step_cpu(&mut **state, schedule, next)?;
+                        }
                         Ok(sample_cpu(&mut **state))
-                    })??;
-                    if let ControlFlow::Break(stop) = on_sample(&sample) {
-                        return Ok(ControlFlow::Break(stop));
-                    }
-                }
-                Ok(ControlFlow::Continue(()))
+                    })?
+                };
+                sample_until(end_tick, interval, sample_at, on_sample)
             }),
             #[cfg(not(target_arch = "wasm32"))]
-            Engine::Gpu { state, ctx } => run_sampled_gpu(&mut **state, ctx, schedule, end_tick, interval, on_sample),
+            Engine::Gpu { state, ctx } => {
+                let sample_at = |next: Option<u64>| {
+                    if let Some(next) = next {
+                        advance_gpu(&mut **state, ctx, schedule, next)?;
+                    }
+                    sample_gpu(&mut **state, ctx)
+                };
+                sample_until(end_tick, interval, sample_at, on_sample)
+            }
         };
         self.record(sampled)
     }
@@ -822,29 +825,27 @@ impl Simulation {
     }
 }
 
-/// Runs a GPU state to `end_tick` as [`Simulation::run_sampled`] does.
-#[cfg(not(target_arch = "wasm32"))]
-fn run_sampled_gpu<B>(
-    state: &mut dyn GpuSimState,
-    ctx: &GpuContext,
-    schedule: &Schedule,
+/// Calls `on_sample` with a sample of the current tick, then with a sample at each sample tick up to `end_tick`, as
+/// [`Simulation::run_sampled`] does.
+///
+/// `sample_at(None)` samples the current tick, and `sample_at(Some(next))` steps to `next` first.
+fn sample_until<B>(
     end_tick: u64,
     interval: u64,
+    mut sample_at: impl FnMut(Option<u64>) -> Result<StatSample, Fault>,
     mut on_sample: impl FnMut(&StatSample) -> ControlFlow<B>,
 ) -> Result<ControlFlow<B>, Fault> {
-    let first = sample_gpu(state, ctx)?;
-    if let ControlFlow::Break(stop) = on_sample(&first) {
-        return Ok(ControlFlow::Break(stop));
-    }
-    while state.tick() < end_tick {
-        let next = next_sample_tick(state.tick(), interval, end_tick);
-        advance_gpu(state, ctx, schedule, next)?;
-        let sample = sample_gpu(state, ctx)?;
+    let mut sample = sample_at(None)?;
+    loop {
         if let ControlFlow::Break(stop) = on_sample(&sample) {
             return Ok(ControlFlow::Break(stop));
         }
+        let tick = sample.tick();
+        if tick >= end_tick {
+            return Ok(ControlFlow::Continue(()));
+        }
+        sample = sample_at(Some(next_sample_tick(tick, interval, end_tick)))?;
     }
-    Ok(ControlFlow::Continue(()))
 }
 
 /// Runs `f` inside the fault scopes. Once the device is lost, the loss is returned instead of the errors it caused.
@@ -903,10 +904,7 @@ fn step_cpu(state: &mut dyn SimState, schedule: &Schedule, end: u64) -> Result<(
 /// Returns the stats of a CPU state's current tick, prepared as a publish prepares them.
 fn sample_cpu(state: &mut dyn SimState) -> StatSample {
     state.prepare_view();
-    StatSample {
-        tick: state.tick(),
-        entries: state.stats(),
-    }
+    StatSample::new(state.tick(), state.stats())
 }
 
 /// Returns the stats of a GPU state's current tick, blocking on a stats-only readback.
@@ -915,10 +913,7 @@ fn sample_gpu(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Result<StatSampl
     let entries = gpu_call(ctx, STEPPING, || stepping::sample_stats(state, ctx))?;
     // Reports a fault the sample raised outside the scopes. No later call might wait.
     stepping::wait(ctx)?;
-    Ok(StatSample {
-        tick: state.tick(),
-        entries,
-    })
+    Ok(StatSample::new(state.tick(), entries))
 }
 
 /// Writes every view of a prepared CPU state to `writer`.
@@ -990,38 +985,5 @@ impl From<io::Error> for ExportError {
 impl From<Fault> for ExportError {
     fn from(fault: Fault) -> Self {
         Self::Fault(fault)
-    }
-}
-
-/// One sample of a model's stats.
-#[derive(Debug, Clone)]
-pub struct StatSample {
-    tick: u64,
-    entries: Vec<StatEntry>,
-}
-
-impl StatSample {
-    /// Tick the sample was taken at.
-    pub fn tick(&self) -> u64 {
-        self.tick
-    }
-
-    /// Every stat the model reports, in the order it reports them.
-    pub fn entries(&self) -> &[StatEntry] {
-        &self.entries
-    }
-
-    /// Returns the value of stat `label`, `None` for a label the model does not report.
-    pub fn get(&self, label: &str) -> Option<&StatValue> {
-        self.entries
-            .iter()
-            .find(|entry| entry.label() == label)
-            .map(StatEntry::value)
-    }
-
-    /// Returns [`StatValue::scalar`] of stat `label`: a scalar's value, a vector's magnitude, a histogram's total
-    /// count. `None` for a label the model does not report.
-    pub fn scalar(&self, label: &str) -> Option<f64> {
-        self.get(label).map(StatValue::scalar)
     }
 }

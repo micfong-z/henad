@@ -222,10 +222,7 @@ impl ShaderBuild {
 
     /// Writes both files to `out_dir`, and returns the paths for Cargo to watch and the warnings to print.
     fn generate_in(self, out_dir: &Path) -> Result<Report, ShaderBuildError> {
-        let root = std::path::absolute(&self.root).map_err(|source| ShaderBuildError::Io {
-            path: self.root.clone(),
-            source,
-        })?;
+        let root = std::path::absolute(&self.root).map_err(io_error(&self.root))?;
         paths::check_root(&root)?;
         let files = paths::wgsl_files(&root)?;
         paths::check_reserved(&root, &files)?;
@@ -290,10 +287,15 @@ struct Report {
 
 /// Returns the text of `path`.
 fn read(path: &Path) -> Result<String, ShaderBuildError> {
-    std::fs::read_to_string(path).map_err(|source| ShaderBuildError::Io {
+    std::fs::read_to_string(path).map_err(io_error(path))
+}
+
+/// Returns a function that turns an IO error on `path` into [`ShaderBuildError::Io`].
+fn io_error(path: &Path) -> impl Fn(std::io::Error) -> ShaderBuildError + '_ {
+    move |source| ShaderBuildError::Io {
         path: path.to_path_buf(),
         source,
-    })
+    }
 }
 
 /// Reason a shader build fails.

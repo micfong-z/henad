@@ -8,14 +8,24 @@ use std::io::{self, Write};
 /// Writes the grid section: a `# grid WxH` marker, then one line of comma-separated cell indices
 /// per row.
 ///
+/// A width of 0 writes the marker alone.
+///
 /// # Errors
 ///
 /// Returns the error of the first write that fails.
 pub fn write_grid<W: Write>(out: &mut W, width: u32, height: u32, cells: &[u8]) -> io::Result<()> {
     writeln!(out, "# grid {width}x{height}")?;
+    if width == 0 {
+        return Ok(());
+    }
     for row in cells.chunks(width as usize) {
-        let line = row.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",");
-        writeln!(out, "{line}")?;
+        for (index, cell) in row.iter().enumerate() {
+            if index > 0 {
+                write!(out, ",")?;
+            }
+            write!(out, "{cell}")?;
+        }
+        writeln!(out)?;
     }
     Ok(())
 }

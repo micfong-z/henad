@@ -67,16 +67,11 @@ impl Searcher for RandomSearch {
 #[cfg(test)]
 mod tests {
     use super::RandomSearch;
-    use crate::explore::search::tests::support::{drive, unit_space};
-    use crate::explore::search::{Aggregate, Candidate, Goal, Objective, Searcher as _};
+    use crate::explore::search::tests::support::{drive, objective, unit_space};
+    use crate::explore::search::{Aggregate, Candidate, Goal, Searcher as _};
 
     fn search(seed: u64) -> RandomSearch {
-        let objective = Objective {
-            column: "Infected:max".to_owned(),
-            goal: Goal::Maximize,
-            aggregate: Aggregate::Mean,
-        };
-        RandomSearch::new(unit_space(3), objective, 50, seed)
+        RandomSearch::new(unit_space(3), objective(Goal::Maximize, Aggregate::Mean), 50, seed)
     }
 
     #[test]

@@ -42,6 +42,17 @@ pub enum RunStatus {
 }
 
 impl RunStatus {
+    /// Every status, in declaration order.
+    const ALL: [Self; 7] = [
+        Self::Ok,
+        Self::NonFinite,
+        Self::Panicked,
+        Self::GpuError,
+        Self::Refused,
+        Self::ShapeError,
+        Self::TimedOut,
+    ];
+
     /// Returns the status's name in `runs.csv`, as in `timed_out`.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -69,16 +80,10 @@ impl FromStr for RunStatus {
 
     /// Reads a status as [`RunStatus::as_str`] writes it.
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        match raw {
-            "ok" => Ok(Self::Ok),
-            "non_finite" => Ok(Self::NonFinite),
-            "panicked" => Ok(Self::Panicked),
-            "gpu_error" => Ok(Self::GpuError),
-            "refused" => Ok(Self::Refused),
-            "shape_error" => Ok(Self::ShapeError),
-            "timed_out" => Ok(Self::TimedOut),
-            _ => Err(RunStatusError { raw: raw.to_owned() }),
-        }
+        Self::ALL
+            .into_iter()
+            .find(|status| status.as_str() == raw)
+            .ok_or_else(|| RunStatusError { raw: raw.to_owned() })
     }
 }
 
@@ -111,6 +116,9 @@ pub enum StopReason {
 }
 
 impl StopReason {
+    /// Every reason, in declaration order.
+    const ALL: [Self; 4] = [Self::Steps, Self::Condition, Self::Fault, Self::Timeout];
+
     /// Returns the reason's name in `runs.csv`, as in `condition`.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -127,13 +135,10 @@ impl FromStr for StopReason {
 
     /// Reads a reason as [`StopReason::as_str`] writes it.
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        match raw {
-            "steps" => Ok(Self::Steps),
-            "condition" => Ok(Self::Condition),
-            "fault" => Ok(Self::Fault),
-            "timeout" => Ok(Self::Timeout),
-            _ => Err(StopReasonError { raw: raw.to_owned() }),
-        }
+        Self::ALL
+            .into_iter()
+            .find(|reason| reason.as_str() == raw)
+            .ok_or_else(|| StopReasonError { raw: raw.to_owned() })
     }
 }
 
@@ -195,15 +200,7 @@ mod tests {
 
     #[test]
     fn statuses_are_written_in_snake_case() {
-        let statuses = [
-            RunStatus::Ok,
-            RunStatus::NonFinite,
-            RunStatus::Panicked,
-            RunStatus::GpuError,
-            RunStatus::Refused,
-            RunStatus::ShapeError,
-            RunStatus::TimedOut,
-        ];
+        let statuses = RunStatus::ALL;
         let names: Vec<&str> = statuses.iter().map(|status| status.as_str()).collect();
         assert_eq!(
             names,
@@ -223,12 +220,7 @@ mod tests {
             assert_eq!(status.as_str().parse(), Ok(status));
         }
         assert!("timed out".parse::<RunStatus>().is_err());
-        let reasons = [
-            StopReason::Steps,
-            StopReason::Condition,
-            StopReason::Fault,
-            StopReason::Timeout,
-        ];
+        let reasons = StopReason::ALL;
         let names: Vec<&str> = reasons.iter().map(|reason| reason.as_str()).collect();
         assert_eq!(names, ["steps", "condition", "fault", "timeout"]);
         for reason in reasons {

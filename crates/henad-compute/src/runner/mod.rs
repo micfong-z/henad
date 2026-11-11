@@ -81,6 +81,20 @@ impl RunToStride {
     }
 }
 
+/// Returns the target rate of a capped run, 1 tick per second for a rate that is not finite and positive.
+pub(crate) fn capped_tps(target_tps: f64) -> f64 {
+    if target_tps.is_finite() && target_tps > 0.0 {
+        target_tps
+    } else {
+        1.0
+    }
+}
+
+/// Returns the wall-clock time `steps` take at the capped rate of `target_tps`.
+pub(crate) fn capped_interval(target_tps: f64, steps: u32) -> Duration {
+    Duration::from_secs_f64(f64::from(steps) / capped_tps(target_tps))
+}
+
 /// Longest time one publish may spend preparing its view, including a network's layout.
 ///
 /// In a browser, the view is prepared inside the frame pump, so going past the pump's budget stalls the frame.
@@ -226,5 +240,43 @@ pub fn publish(slot: &SharedSlot, mut snapshot: Snapshot) {
             std::mem::swap(&mut untaken.run_to_samples, &mut snapshot.run_to_samples);
         }
         slot.spare = slot.fresh.replace(snapshot);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capped_interval, capped_tps};
+    use std::time::Duration;
+
+    /// Batching must not multiply the tick rate by the batch size.
+    #[test]
+    fn batching_does_not_change_effective_tick_rate() {
+        for &tps in &[1.0, 30.0, 250.0, 1000.0] {
+            for &batch in &[1, 2, 10, 137, 1000] {
+                let interval = capped_interval(tps, batch).as_secs_f64();
+                let effective = f64::from(batch) / interval;
+                // A `Duration` holds whole nanoseconds, and the shortest interval here is a millisecond.
+                assert!(
+                    (effective - tps).abs() < tps * 1e-6,
+                    "tps {tps}, batch {batch}: effective {effective}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn interval_is_batch_size_over_tps() {
+        assert_eq!(capped_interval(30.0, 10), Duration::from_secs_f64(1.0 / 3.0));
+        assert_eq!(capped_interval(60.0, 1), Duration::from_secs_f64(1.0 / 60.0));
+    }
+
+    /// Guards against a `Duration::from_secs_f64` panic on a degenerate target rate.
+    #[test]
+    fn non_positive_tps_yields_a_finite_interval() {
+        for &tps in &[0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let capped = capped_tps(tps);
+            assert!(capped.is_finite() && capped > 0.0, "tps {tps} gave {capped}");
+            assert!(capped_interval(tps, 4) > Duration::ZERO);
+        }
     }
 }

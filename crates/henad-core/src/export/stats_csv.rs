@@ -168,6 +168,11 @@ impl StatColumns {
         &self.columns[i].name
     }
 
+    /// Returns an iterator over the column names, in column order, before CSV escaping.
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.columns.iter().map(|column| column.name.as_str())
+    }
+
     /// Returns the header of column `i`, escaped for CSV.
     ///
     /// # Panics
@@ -259,19 +264,21 @@ impl<W: Write> StatsWriter<W> {
     /// Returns [`StatsWriteError::Io`] when a write fails, and [`StatsWriteError::Shape`] when `stats` does not fit
     /// the layout the first sample fixed.
     pub fn push(&mut self, tick: u64, stats: &[StatEntry]) -> Result<(), StatsWriteError> {
-        if self.columns.is_none() {
-            let columns = StatColumns::plan(stats);
+        let planned = if let Some(planned) = self.columns.take() {
+            planned
+        } else {
+            let planned = StatColumns::plan(stats);
             write!(self.out, "tick")?;
             if self.tick_length.is_some() {
                 write!(self.out, ",time")?;
             }
-            for column in &columns.columns {
+            for column in &planned.columns {
                 write!(self.out, ",{}", column.header)?;
             }
             writeln!(self.out)?;
-            self.columns = Some(columns);
-        }
-        let columns = self.columns.as_ref().map_or(&[][..], |planned| &planned.columns[..]);
+            planned
+        };
+        let columns = &self.columns.insert(planned).columns;
 
         write!(self.out, "{tick}")?;
         if let Some(tick_length) = self.tick_length {
@@ -512,7 +519,7 @@ mod tests {
         assert_eq!(csv.lines().next(), Some(format!("tick,{}", headers.join(",")).as_str()));
 
         let records = crate::export::csv::parse_records(&csv).expect("the writer writes valid CSV");
-        let names: Vec<&str> = (0..columns.len()).map(|i| columns.name(i)).collect();
+        let names: Vec<&str> = columns.names().collect();
         assert_eq!(records[0][1..], names[..], "names are the headers unescaped");
         let row: Vec<String> = values.iter().map(|&value| fmt_f64(value)).collect();
         assert_eq!(records[1][1..], row[..]);
@@ -557,7 +564,7 @@ mod tests {
     /// [`crate::view::StatsHistory`] otherwise. Both claim the column layout the headless runner
     /// writes, and only one of them holds structured values.
     mod parity {
-        use super::super::StatsWriter;
+        use super::render;
         use crate::view::{StatDescriptor, StatEntry, StatValue, StatsHistory};
 
         const C: [u8; 4] = [9, 9, 9, 255];
@@ -577,55 +584,41 @@ mod tests {
             ]
         }
 
-        fn render(samples: &[(u64, Vec<StatEntry>)]) -> String {
-            let mut writer = StatsWriter::new(Vec::new());
-            for (tick, stats) in samples {
-                writer.push(*tick, stats).expect("push should succeed");
-            }
-            let (csv, _) = writer.into_inner().expect("finish should succeed");
-            String::from_utf8(csv).expect("output should be utf8")
-        }
+        /// Samples with the tick each was taken at.
+        type Samples = Vec<(u64, Vec<StatEntry>)>;
 
-        #[test]
-        fn a_replayed_history_writes_what_a_recording_writes() {
+        /// Returns twenty samples as recorded, and as replayed from a history of `capacity` samples.
+        fn recorded_and_replayed(capacity: usize) -> (Samples, Samples) {
             let descriptors = vec![
                 StatDescriptor::new("Alive", C),
                 StatDescriptor::new("Average Velocity", C),
             ];
-            let mut history = StatsHistory::new(descriptors, Some(64));
+            let mut history = StatsHistory::new(descriptors, Some(capacity));
             let mut recorded = Vec::new();
             for tick in 0..20 {
                 let stats = sample(tick);
                 history.push_entries(&stats, tick);
                 recorded.push((tick, stats));
             }
-
-            let replayed: Vec<(u64, Vec<StatEntry>)> = (0..history.len())
-                .map(|j| (history.tick(j).expect("tick"), history.entries(j).expect("entries")))
+            let replayed = (0..history.len())
+                .map(|position| {
+                    let tick = history.tick(position).expect("tick");
+                    (tick, history.entries(position).expect("entries"))
+                })
                 .collect();
+            (recorded, replayed)
+        }
 
+        #[test]
+        fn a_replayed_history_writes_what_a_recording_writes() {
+            let (recorded, replayed) = recorded_and_replayed(64);
             assert_eq!(render(&replayed), render(&recorded));
         }
 
         /// A history that has wrapped writes the tail of what a recording holds, column for column.
         #[test]
         fn a_wrapped_history_writes_the_tail_of_the_recording() {
-            let descriptors = vec![
-                StatDescriptor::new("Alive", C),
-                StatDescriptor::new("Average Velocity", C),
-            ];
-            let mut history = StatsHistory::new(descriptors, Some(5));
-            let mut recorded = Vec::new();
-            for tick in 0..20 {
-                let stats = sample(tick);
-                history.push_entries(&stats, tick);
-                recorded.push((tick, stats));
-            }
-
-            let replayed: Vec<(u64, Vec<StatEntry>)> = (0..history.len())
-                .map(|j| (history.tick(j).expect("tick"), history.entries(j).expect("entries")))
-                .collect();
-
+            let (recorded, replayed) = recorded_and_replayed(5);
             let full = render(&recorded);
             let tail = render(&replayed);
             let header = full.lines().next().expect("a header");

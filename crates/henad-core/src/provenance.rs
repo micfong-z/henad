@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::explore::fingerprint::Fnv1a64;
+use crate::fnv::Fnv1a64;
 
 /// Identity of one compiled crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

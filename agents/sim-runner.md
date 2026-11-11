@@ -25,7 +25,7 @@ start, each pump and each command through `pool.install`, through `Driver::spawn
 kernel then holds workers of that pool alone. `SimThread::new` keeps the shape above: commands on
 the runner thread, and each pump in `rayon::scope`. `GpuSimThread::new_in` runs its loop in a pool
 the same way, and a GPU pump then never waits for a worker of a pool a stuck CPU step holds.
-`stop_tests` in `cpu/sim_thread.rs` holds
+`cpu/tests/sim_thread_stop.rs` holds
 `a_runner_that_never_returns_is_detached_within_the_timeout`,
 `dropping_a_runaway_runner_returns_within_the_timeout`, `a_runner_that_stops_is_joined` and
 `a_runner_in_a_pool_steps_on_its_workers`, and `gpu/sim_thread.rs`

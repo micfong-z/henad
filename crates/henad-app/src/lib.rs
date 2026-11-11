@@ -176,7 +176,7 @@ impl eframe::App for HenadApp {
             // action's effect, and after a paused layout step the same stats again.
             if let Some(history) = &mut self.state.stats_history {
                 for sample in &snap.run_to_samples {
-                    history.push_entries(&sample.stats, sample.tick);
+                    history.push_entries(sample.entries(), sample.tick());
                 }
                 history.push_entries(&snap.stats, snap.tick);
             }

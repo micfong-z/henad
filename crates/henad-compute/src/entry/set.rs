@@ -92,23 +92,17 @@ impl ModelSet {
     /// Returns [`ModelLookupError::NotInSet`] for an id missing from the set, and
     /// [`ModelLookupError::NeedsGpu`] for a GPU model when `gpu` is `None`.
     pub fn lookup(&self, id: &str, gpu: Option<&GpuContext>) -> Result<&ModelEntry, ModelLookupError> {
-        if let Some(entry) = self.runnable(gpu).find(|entry| entry.id() == id) {
-            return Ok(entry);
+        match self.get(id) {
+            Some(entry) if runs_with(entry, gpu.is_some()) => Ok(entry),
+            Some(_) => Err(ModelLookupError::NeedsGpu { id: id.to_owned() }),
+            None => Err(ModelLookupError::NotInSet { id: id.to_owned() }),
         }
-        let id = id.to_owned();
-        Err(if self.get(&id).is_some() {
-            ModelLookupError::NeedsGpu { id }
-        } else {
-            ModelLookupError::NotInSet { id }
-        })
     }
 
     /// Returns the entries a host with `gpu` can run, in the set's order. A GPU model runs only with a device.
     pub fn runnable<'a>(&'a self, gpu: Option<&GpuContext>) -> impl Iterator<Item = &'a ModelEntry> + use<'a> {
         let device = gpu.is_some();
-        self.entries
-            .iter()
-            .filter(move |entry| device || entry.gpu_needs().is_none())
+        self.entries.iter().filter(move |entry| runs_with(entry, device))
     }
 
     /// Returns an iterator over the entries, in the set's order.
@@ -187,6 +181,11 @@ impl<'a> Iterator for ModelSetIter<'a> {
 impl ExactSizeIterator for ModelSetIter<'_> {}
 
 impl FusedIterator for ModelSetIter<'_> {}
+
+/// Returns whether a host can run `entry`, where `device` says whether the host holds a GPU device.
+fn runs_with(entry: &ModelEntry, device: bool) -> bool {
+    device || entry.gpu_needs().is_none()
+}
 
 /// Returns an error when `id` is outside the model id grammar.
 fn check_id(id: &str) -> Result<(), ModelSetError> {

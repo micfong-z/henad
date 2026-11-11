@@ -225,23 +225,11 @@ impl GeneticAlgorithm {
             let draw = draw_config(space, &self.config_candidates, &proposed, || {
                 space.mutate(&genome, rng, settings.mutation_rate, settings.mutation_scale)
             });
-            match draw {
-                ConfigDraw::New(genome, key) => {
-                    proposed.insert(key);
-                    self.queue.push_back(Proposal::first_evaluation(genome, origin));
-                }
-                ConfigDraw::Known { candidate_id } => {
-                    if reevaluated.insert(candidate_id) {
-                        let record = self
-                            .log
-                            .get(candidate_id)
-                            .expect("a candidate with a config was evaluated");
-                        self.queue.push_back(Proposal::reevaluation(candidate_id, record));
-                    }
-                    self.revisited.insert(candidate_id);
-                }
-                ConfigDraw::Proposed => {}
+            if let ConfigDraw::Known { candidate_id } = draw {
+                self.revisited.insert(candidate_id);
             }
+            self.queue
+                .extend(draw.into_proposal(origin, &self.log, &mut proposed, &mut reevaluated));
         }
     }
 
@@ -349,8 +337,10 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{GeneticAlgorithm, GeneticSettings};
-    use crate::explore::search::tests::support::{drive, level_space, noise, unit_space};
-    use crate::explore::search::{Aggregate, Candidate, CandidateOrigin, Evaluation, Goal, Objective, Searcher as _};
+    use crate::explore::search::tests::support::{
+        drive, evaluate, level_space, noise, objective, trajectory_hash, unit_space,
+    };
+    use crate::explore::search::{Aggregate, Candidate, CandidateOrigin, Goal, Searcher as _};
 
     fn settings() -> GeneticSettings {
         GeneticSettings {
@@ -371,11 +361,7 @@ mod tests {
 
     #[test]
     fn the_genetic_algorithm_improves_on_a_noisy_objective() {
-        let objective = Objective {
-            column: "Infected:max".to_owned(),
-            goal: Goal::Maximize,
-            aggregate: Aggregate::Median,
-        };
+        let objective = objective(Goal::Maximize, Aggregate::Median);
         let mut search = GeneticAlgorithm::new(unit_space(3), settings(), objective, 600, 11).expect("valid settings");
         let noisy = |candidate: &Candidate, replicate| {
             vec![Some(
@@ -414,11 +400,7 @@ mod tests {
 
     #[test]
     fn elites_survive_into_the_next_generation() {
-        let objective = Objective {
-            column: "Infected:max".to_owned(),
-            goal: Goal::Minimize,
-            aggregate: Aggregate::Mean,
-        };
+        let objective = objective(Goal::Minimize, Aggregate::Mean);
         let settings = GeneticSettings {
             reevaluate_fraction: 0.0,
             ..settings()
@@ -436,13 +418,40 @@ mod tests {
         assert_eq!(search.members.len(), 20);
     }
 
+    /// Pins the candidates a run asks for, over a continuous space and over a space of 15 configs.
+    #[test]
+    fn a_run_keeps_its_trajectory() {
+        let objective = objective(Goal::Maximize, Aggregate::Median);
+        let settings = GeneticSettings {
+            population: 12,
+            ..settings()
+        };
+        let dome = |candidate: &Candidate, replicate| {
+            vec![Some(
+                height(candidate.genome.genes()) + 0.01 * noise(candidate.id, replicate),
+            )]
+        };
+        let level = |candidate: &Candidate, replicate| {
+            vec![Some(candidate.genome.genes()[0] + 0.1 * noise(candidate.id, replicate))]
+        };
+        let mut search =
+            GeneticAlgorithm::new(unit_space(3), settings, objective.clone(), 120, 5).expect("valid settings");
+        assert_eq!(
+            trajectory_hash(&drive(&mut search, 5, 2, dome)),
+            0x57fc_981c_3eca_2488,
+            "a continuous space"
+        );
+        let mut search = GeneticAlgorithm::new(level_space(), settings, objective, 120, 5).expect("valid settings");
+        assert_eq!(
+            trajectory_hash(&drive(&mut search, 5, 2, level)),
+            0x50e6_d7a1_d773_96da,
+            "a space of few configs"
+        );
+    }
+
     #[test]
     fn no_two_first_evaluations_share_a_config() {
-        let objective = Objective {
-            column: "Infected:max".to_owned(),
-            goal: Goal::Maximize,
-            aggregate: Aggregate::Median,
-        };
+        let objective = objective(Goal::Maximize, Aggregate::Median);
         let settings = GeneticSettings {
             population: 12,
             ..GeneticSettings::default()
@@ -481,25 +490,16 @@ mod tests {
 
     #[test]
     fn no_batch_spans_two_generations() {
-        let objective = Objective {
-            column: "Infected:max".to_owned(),
-            goal: Goal::Maximize,
-            aggregate: Aggregate::Mean,
-        };
+        let objective = objective(Goal::Maximize, Aggregate::Mean);
         // 20 members, then 5 re-evaluations and 18 children a generation, in batches of at most 7.
         let mut search = GeneticAlgorithm::new(unit_space(2), settings(), objective, 200, 6).expect("valid settings");
         let mut sizes = Vec::new();
         while !search.is_done() {
             let (queued, finished) = (search.queue.len(), search.generations.len());
             let batch = search.ask(7);
-            let evaluations: Vec<Evaluation> = batch
-                .iter()
-                .map(|candidate| Evaluation {
-                    candidate_id: candidate.id,
-                    outputs: vec![vec![Some(height(candidate.genome.genes()))]],
-                })
-                .collect();
-            search.tell(&evaluations);
+            search.tell(&evaluate(&batch, 1, |candidate, _| {
+                vec![Some(height(candidate.genome.genes()))]
+            }));
             let drained = batch.len() == queued;
             assert_eq!(
                 search.generations.len(),
@@ -537,11 +537,7 @@ mod tests {
             elite_count: 20,
             ..settings()
         };
-        let objective = Objective {
-            column: "Infected:max".to_owned(),
-            goal: Goal::Minimize,
-            aggregate: Aggregate::Mean,
-        };
+        let objective = objective(Goal::Minimize, Aggregate::Mean);
         assert!(GeneticAlgorithm::new(unit_space(1), settings, objective, 10, 1).is_err());
     }
 }

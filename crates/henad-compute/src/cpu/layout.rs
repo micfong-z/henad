@@ -287,6 +287,7 @@ fn jitter_angle(seed: u64, iteration: u32, i: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{LayoutScratch, spring_step};
+    use crate::cpu::tests::support::{in_pool_of, random_network};
     use henad_core::authoring::model::field::Extent;
     use henad_core::authoring::model::network_model::SpringParams;
     use henad_core::authoring::primitives::rng::{next_bits, next_float};
@@ -527,21 +528,9 @@ mod tests {
     #[test]
     fn results_do_not_depend_on_the_thread_count() {
         fn run(threads: usize) -> Vec<u32> {
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .expect("rayon pool");
-            pool.install(|| {
+            in_pool_of(threads, || {
                 let n = 1500u32;
-                let mut net = Network::new(n as usize, false);
-                let mut rng = 0x5EED_7777_u64;
-                for _ in 0..4000 {
-                    let a = next_bits(&mut rng) % n;
-                    let b = next_bits(&mut rng) % n;
-                    if a != b && !net.has_edge(a, b) {
-                        net.add_edge(a, b, 0);
-                    }
-                }
+                let net = random_network(n, false, 0x5EED_7777, 4000);
                 let mut pos = (Vec::new(), Vec::new());
                 let mut prng = 0xC0DE_u64;
                 for _ in 0..n {

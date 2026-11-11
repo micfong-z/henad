@@ -15,8 +15,8 @@ use crate::explore::design_rng::DesignRng;
 use crate::explore::search::evaluation_log::EvaluationLog;
 use crate::explore::search::genome::{ConfigKey, SearchSpace};
 use crate::explore::search::{
-    Candidate, CandidateOrigin, CandidateTracker, ConfigDraw, Evaluation, Objective, Proposal, RankingEntry,
-    SearchReport, SearchSpecError, Searcher, check_setting, draw_config,
+    Candidate, CandidateOrigin, CandidateTracker, Evaluation, Objective, Proposal, RankingEntry, SearchReport,
+    SearchSpecError, Searcher, check_setting, draw_config,
 };
 
 /// Settings of a hill climb.
@@ -123,22 +123,8 @@ impl HillClimb {
         let mut proposed = BTreeSet::new();
         for _ in 0..count {
             let (space, rng) = (&self.space, &mut self.rng);
-            match draw_config(space, &self.config_candidates, &proposed, || space.random_genome(rng)) {
-                ConfigDraw::New(genome, key) => {
-                    proposed.insert(key);
-                    proposals.push(Proposal::first_evaluation(genome, origin));
-                }
-                ConfigDraw::Known { candidate_id } => {
-                    if self.revisited.insert(candidate_id) {
-                        let known = self
-                            .log
-                            .get(candidate_id)
-                            .expect("a candidate with a config was evaluated");
-                        proposals.push(Proposal::reevaluation(candidate_id, known));
-                    }
-                }
-                ConfigDraw::Proposed => {}
-            }
+            let draw = draw_config(space, &self.config_candidates, &proposed, || space.random_genome(rng));
+            proposals.extend(draw.into_proposal(origin, &self.log, &mut proposed, &mut self.revisited));
         }
         proposals
     }
@@ -162,25 +148,8 @@ impl HillClimb {
             let draw = draw_config(space, &self.config_candidates, &proposed, || {
                 space.mutate(record.genome(), rng, 1.0, scale)
             });
-            match draw {
-                ConfigDraw::New(genome, key) => {
-                    proposed.insert(key);
-                    proposals.push(Proposal::first_evaluation(
-                        genome,
-                        CandidateOrigin::Neighbor { parent_id: incumbent },
-                    ));
-                }
-                ConfigDraw::Known { candidate_id } => {
-                    if reevaluated.insert(candidate_id) {
-                        let known = self
-                            .log
-                            .get(candidate_id)
-                            .expect("a candidate with a config was evaluated");
-                        proposals.push(Proposal::reevaluation(candidate_id, known));
-                    }
-                }
-                ConfigDraw::Proposed => {}
-            }
+            let origin = CandidateOrigin::Neighbor { parent_id: incumbent };
+            proposals.extend(draw.into_proposal(origin, &self.log, &mut proposed, &mut reevaluated));
         }
         proposals
     }
@@ -271,8 +240,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{HillClimb, HillClimbSettings};
-    use crate::explore::search::tests::support::{drive, level_space, noise, unit_space};
-    use crate::explore::search::{Aggregate, Candidate, CandidateOrigin, Evaluation, Goal, Objective, Searcher as _};
+    use crate::explore::search::tests::support::{drive, evaluate, level_space, noise, trajectory_hash, unit_space};
+    use crate::explore::search::{Aggregate, Candidate, CandidateOrigin, Goal, Objective, Searcher as _};
 
     fn objective() -> Objective {
         Objective {
@@ -334,6 +303,31 @@ mod tests {
         assert_eq!(&origins[4..8], ["reevaluation", "neighbor", "neighbor", "neighbor"]);
     }
 
+    /// Pins the candidates a climb asks for, over a continuous space and over a space of 15 configs.
+    #[test]
+    fn a_climb_keeps_its_trajectory() {
+        let settings = HillClimbSettings {
+            mutation_scale: 0.1,
+            patience: 3,
+            reevaluate: true,
+        };
+        let level = |candidate: &Candidate, replicate| {
+            vec![Some(candidate.genome.genes()[0] + 0.1 * noise(candidate.id, replicate))]
+        };
+        let mut climb = HillClimb::new(unit_space(2), settings, objective(), 120, 5).expect("valid settings");
+        assert_eq!(
+            trajectory_hash(&drive(&mut climb, 4, 2, hill)),
+            0xb1c7_83f4_01d9_81a2,
+            "a continuous space"
+        );
+        let mut climb = HillClimb::new(level_space(), settings, objective(), 120, 5).expect("valid settings");
+        assert_eq!(
+            trajectory_hash(&drive(&mut climb, 4, 2, level)),
+            0x9d4d_4b8b_74fa_8ef4,
+            "a space of few configs"
+        );
+    }
+
     #[test]
     fn no_two_first_evaluations_share_a_config() {
         let settings = HillClimbSettings {
@@ -352,16 +346,7 @@ mod tests {
             let starting = climb.incumbent.is_none();
             let batch = climb.ask(4);
             assert!(!batch.is_empty(), "an ask within the budget returns a candidate");
-            let evaluations: Vec<Evaluation> = batch
-                .iter()
-                .map(|candidate| Evaluation {
-                    candidate_id: candidate.id,
-                    outputs: (0..2)
-                        .map(|index| value(candidate, candidate.replicate_offset + index))
-                        .collect(),
-                })
-                .collect();
-            climb.tell(&evaluations);
+            climb.tell(&evaluate(&batch, 2, value));
             if starting {
                 assert!(climb.incumbent.is_some(), "every start gives the climb an incumbent");
                 if batch

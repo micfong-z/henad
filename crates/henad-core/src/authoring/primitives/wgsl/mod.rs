@@ -9,7 +9,7 @@
 //! henad-build writes these modules beside a crate's shaders before it composes them. This text is the single source
 //! that every build and every host reads.
 
-use crate::explore::fingerprint::Fnv1a64;
+use crate::fnv::Fnv1a64;
 
 /// A WGSL module a model shader can `#import`, as text.
 #[derive(Clone, Copy)]
@@ -73,7 +73,7 @@ pub const SHARED_WGSL_FNV1A64: u64 = {
 #[cfg(test)]
 mod tests {
     use super::{SHARED_WGSL_FNV1A64, SHARED_WGSL_MODULES};
-    use crate::explore::fingerprint::Fnv1a64;
+    use crate::fnv::Fnv1a64;
 
     #[test]
     fn each_module_declares_its_import_path() {

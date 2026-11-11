@@ -185,7 +185,7 @@ use crate::gpu::timing::{ADAPTIVE_EMA_ALPHA, TimestampQuery, ema_update, next_ba
 use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION};
 use crate::runner::{
     DEFAULT_STOP_TIMEOUT, Driver, Pace, RUN_TO_PUBLISH_INTERVAL, RunToStride, RunnerShutdown, SharedSlot, SimLoop,
-    SnapshotSlot,
+    SnapshotSlot, capped_interval, capped_tps,
 };
 use crate::snapshot::{Snapshot, SnapshotView, StatSample};
 use henad_core::action::RefusedActions;
@@ -319,7 +319,7 @@ impl SimLoop for Loop {
             Command::Sim(SimCommand::SetTargetTps(tps)) => {
                 self.target_tps = tps;
                 // Pulls a deadline set at a lower rate in to one batch from now.
-                let limit = Instant::now() + self.capped_interval(self.capped_batch_size());
+                let limit = Instant::now() + capped_interval(self.target_tps, self.capped_batch_size());
                 if self.next_step_at > limit {
                     self.next_step_at = limit;
                 }
@@ -425,7 +425,7 @@ impl SimLoop for Loop {
         }
         // Advances from the previous deadline, so the batch's own time does not stretch every period. A run behind
         // its rate starts again from now.
-        let interval = self.capped_interval(steps);
+        let interval = capped_interval(self.target_tps, steps);
         let now = Instant::now();
         self.next_step_at += interval;
         if self.next_step_at + interval < now {
@@ -485,25 +485,11 @@ impl Loop {
         }
     }
 
-    /// Returns the target rate of a capped run, 1 tick per second for a rate that is not positive.
-    fn capped_tps(&self) -> f64 {
-        if self.target_tps.is_finite() && self.target_tps > 0.0 {
-            self.target_tps
-        } else {
-            1.0
-        }
-    }
-
     /// Returns the number of steps in one capped batch: the steps due in one snapshot interval, at least 1 and at most
     /// the batch size.
     fn capped_batch_size(&self) -> u32 {
-        let due = (self.capped_tps() * SNAPSHOT_INTERVAL.as_secs_f64()).ceil();
+        let due = (capped_tps(self.target_tps) * SNAPSHOT_INTERVAL.as_secs_f64()).ceil();
         (due.min(f64::from(self.batch_size)) as u32).max(1)
-    }
-
-    /// Returns the wall-clock time `steps` take at the capped rate.
-    fn capped_interval(&self, steps: u32) -> std::time::Duration {
-        std::time::Duration::from_secs_f64(f64::from(steps) / self.capped_tps())
     }
 
     /// Reads the stats of a run to `target` at the current tick if it is a sample tick, and publishes them if
@@ -525,10 +511,7 @@ impl Loop {
         self.state.poll_stats_readback(&self.ctx.device, true);
         self.read_snapshot_blocking("henad_gpu_run_to_sample");
         if sample_due && !self.state.stats_readback_pending() {
-            self.run_to_samples.push(StatSample {
-                tick,
-                stats: self.state.stats(),
-            });
+            self.run_to_samples.push(StatSample::new(tick, self.state.stats()));
         }
         if publish_due {
             self.last_snapshot_publish = Instant::now();
@@ -1522,10 +1505,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(reached, "the run never published its target");
-        let ticks: Vec<u64> = samples.iter().map(|sample| sample.tick).collect();
+        let ticks: Vec<u64> = samples.iter().map(|sample| sample.tick()).collect();
         assert_eq!(ticks, (1..500).map(|i| i * 2).collect::<Vec<_>>());
         for sample in &samples {
-            assert_eq!(sample.stats[0].value().scalar(), sample.tick as f64);
+            assert_eq!(sample.entries()[0].value().scalar(), sample.tick() as f64);
         }
     }
 

@@ -627,13 +627,10 @@ fn whole_domain(
             max: max as f64,
         }));
     }
-    let Some(step) = step else {
-        if sampled {
-            return Ok(FactorDomain::WholeNumbers { min, max });
-        }
-        return levels_by_step(min, max, 1, &level).map_err(range_error);
-    };
-    levels_by_step(min, max, step as u64, &level).map_err(range_error)
+    if sampled && step.is_none() {
+        return Ok(FactorDomain::WholeNumbers { min, max });
+    }
+    levels_by_step(min, max, step.map_or(1, |step| step as u64), &level).map_err(range_error)
 }
 
 /// Returns `min + i * step` for every `i` up to the last value not past `max`, each made a level by `level`.

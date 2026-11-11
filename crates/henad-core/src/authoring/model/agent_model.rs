@@ -84,9 +84,12 @@ impl NeighborIndex for SpatialHash {
     }
 
     fn rebuild(&mut self, pos_x: &[f32], pos_y: &[f32], cell_size: f32) {
-        // Picks up a live edit to whatever parameter sets the cell size, then reindexes.
-        self.rebuild_with_cell_size(cell_size, pos_x, pos_y);
-        self.build(pos_x, pos_y);
+        // Picks up a live edit to whatever parameter sets the cell size, or else reindexes at the same size.
+        if self.cell_size_is(cell_size) {
+            self.build(pos_x, pos_y);
+        } else {
+            self.rebuild_with_cell_size(cell_size, pos_x, pos_y);
+        }
     }
 
     fn heap_bytes(&self) -> usize {

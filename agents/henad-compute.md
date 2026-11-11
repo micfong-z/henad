@@ -63,8 +63,9 @@ one `rayon::scope` (`run_sampled` once for the whole call, its callback inside i
 scheduled action is a `Fault`. A `Simulation` keeps the message of the first fault a call
 returned, and every later call that runs model code returns it as `FaultKind::Refused`, or
 `FaultKind::DeviceLost` once the device is lost. A fault can leave a step half done, and a later
-call would step on from it. `StatSample` reads stats by label, `views` prepares at the read,
-and `write_state` is `--export`'s writer. `ParamValue` has exactly three `From` impls (`f32`,
+call would step on from it. `StatSample` reads stats by label. It is defined in `snapshot.rs`
+and re-exported here, and `Snapshot::run_to_samples` holds the same type. `views` prepares at the
+read, and `write_state` is `--export`'s writer. `ParamValue` has exactly three `From` impls (`f32`,
 `u32`, `bool`). `an_unsuffixed_literal_sets_a_parameter` fails to compile on a fourth for an
 integer type other than `i32`, and a static check beside it on `From<i32>` or `From<f64>`, the
 types an unsuffixed literal falls back to.
@@ -81,7 +82,9 @@ types an unsuffixed literal falls back to.
   (the many-agents-one-cell write path) and `components.rs` (connected components by min-label
   propagation). `AgentModelState` counts its model's own params once at construction, and a step
   builds no descriptor list. `cpu/sim_thread.rs` is the sim runner, a `SimLoop` with play/pause/TPS-capping,
-  driven by whichever `runner::Driver` the target has.
+  driven by whichever `runner::Driver` the target has. Its tests sit in `cpu/tests/`, one file
+  each for pacing, stopping and snapshots. `support.rs` holds their poll, and the random network
+  and sized rayon pool that the inline tests of the engines, layout and components share.
 - `gpu/grid_engine.rs` (`GpuGridState`) and `gpu/agent_engine.rs` (`GpuAgentState`) are the
   engines for the two GPU traits, mirroring their `cpu/` namesakes. `gpu/sim_thread.rs` is the
   batching GPU runner and `gpu/timing.rs` its adaptive-batch controller. `gpu/view/` is what a

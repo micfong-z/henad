@@ -198,11 +198,7 @@ impl ChoiceOptions {
 
     /// Returns the option names in index order.
     pub fn iter(&self) -> impl Iterator<Item = &str> + '_ {
-        let (borrowed, owned): (&[&str], &[String]) = match &self.0 {
-            ChoiceStorage::Static(options) => (options, &[]),
-            ChoiceStorage::Owned(options) => (&[], options),
-        };
-        borrowed.iter().copied().chain(owned.iter().map(String::as_str))
+        (0..self.len()).filter_map(move |index| self.get(index))
     }
 
     /// Returns the index of the option named `name`, the first one when two share it.

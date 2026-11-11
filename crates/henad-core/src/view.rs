@@ -271,18 +271,18 @@ impl StatsHistory {
     /// layout. A series that changes kind later is a model bug, and
     /// [`crate::export::StatsWriter`] already reports it as a bug.
     pub fn push_entries(&mut self, stats: &[StatEntry], tick: u64) {
-        let newest = self.len().checked_sub(1).and_then(|j| self.buf_index(j));
-        if let Some(idx) = newest
-            && self.ticks[idx] == tick
+        let newest = self.len().checked_sub(1).and_then(|position| self.slot_of(position));
+        if let Some(slot) = newest
+            && self.ticks[slot] == tick
         {
-            self.write_at(idx, stats, tick);
+            self.write_at(slot, stats, tick);
             return;
         }
 
         if self.write_count == 0 {
-            for (slot, entry) in self.full.iter_mut().zip(stats) {
+            for (kept, entry) in self.full.iter_mut().zip(stats) {
                 if !matches!(entry.value, StatValue::Scalar(_)) {
-                    *slot = Some(Vec::new());
+                    *kept = Some(Vec::new());
                 }
             }
         }
@@ -293,11 +293,11 @@ impl StatsHistory {
                 self.write_at(self.write_count % capacity, stats, tick);
             }
             _ => {
-                for (col, entry) in self.columns.iter_mut().zip(stats) {
-                    col.push(entry.value.scalar());
+                for (column, entry) in self.columns.iter_mut().zip(stats) {
+                    column.push(entry.value.scalar());
                 }
-                for (slot, entry) in self.full.iter_mut().zip(stats) {
-                    if let Some(values) = slot {
+                for (kept, entry) in self.full.iter_mut().zip(stats) {
+                    if let Some(values) = kept {
                         values.push(entry.value.clone());
                     }
                 }
@@ -307,17 +307,17 @@ impl StatsHistory {
         self.write_count += 1;
     }
 
-    /// Writes a sample over buffer slot `idx`.
-    fn write_at(&mut self, idx: usize, stats: &[StatEntry], tick: u64) {
-        for (col, entry) in self.columns.iter_mut().zip(stats) {
-            col[idx] = entry.value.scalar();
+    /// Writes a sample over buffer slot `slot`.
+    fn write_at(&mut self, slot: usize, stats: &[StatEntry], tick: u64) {
+        for (column, entry) in self.columns.iter_mut().zip(stats) {
+            column[slot] = entry.value.scalar();
         }
-        for (slot, entry) in self.full.iter_mut().zip(stats) {
-            if let Some(values) = slot {
-                values[idx] = entry.value.clone();
+        for (kept, entry) in self.full.iter_mut().zip(stats) {
+            if let Some(values) = kept {
+                values[slot] = entry.value.clone();
             }
         }
-        self.ticks[idx] = tick;
+        self.ticks[slot] = tick;
     }
 
     /// Series the history records.
@@ -327,7 +327,8 @@ impl StatsHistory {
 
     /// Number of entries stored, at most the capacity.
     pub fn len(&self) -> usize {
-        self.capacity.map_or(self.write_count, |cap| self.write_count.min(cap))
+        self.capacity
+            .map_or(self.write_count, |capacity| self.write_count.min(capacity))
     }
 
     /// Returns whether no sample has been recorded.
@@ -345,43 +346,44 @@ impl StatsHistory {
         self.write_count
     }
 
-    /// Returns the buffer slot holding logical index `j`, where 0 is the oldest visible entry.
-    fn buf_index(&self, j: usize) -> Option<usize> {
-        if j >= self.len() {
+    /// Returns the buffer slot holding logical position `position`, where 0 is the oldest visible entry.
+    fn slot_of(&self, position: usize) -> Option<usize> {
+        if position >= self.len() {
             return None;
         }
         match self.capacity {
-            Some(capacity) => Some((self.write_count.saturating_sub(capacity) + j) % capacity),
-            None => Some(j),
+            Some(capacity) => Some((self.write_count.saturating_sub(capacity) + position) % capacity),
+            None => Some(position),
         }
     }
 
-    /// Returns the value of series `col` and its tick at logical index `j`, where 0 is the oldest visible entry.
-    pub fn get(&self, col: usize, j: usize) -> Option<(f64, u64)> {
-        let idx = self.buf_index(j)?;
-        let value = self.columns.get(col)?.get(idx).copied()?;
-        let tick = self.ticks.get(idx).copied()?;
+    /// Returns the value of series `series` and its tick at logical position `position`, where 0 is the oldest
+    /// visible entry.
+    pub fn get(&self, series: usize, position: usize) -> Option<(f64, u64)> {
+        let slot = self.slot_of(position)?;
+        let value = self.columns.get(series)?.get(slot).copied()?;
+        let tick = self.ticks.get(slot).copied()?;
         Some((value, tick))
     }
 
-    /// Returns the tick at logical index `j`, where 0 is the oldest visible entry.
-    pub fn tick(&self, j: usize) -> Option<u64> {
-        self.ticks.get(self.buf_index(j)?).copied()
+    /// Returns the tick at logical position `position`, where 0 is the oldest visible entry.
+    pub fn tick(&self, position: usize) -> Option<u64> {
+        self.ticks.get(self.slot_of(position)?).copied()
     }
 
-    /// Returns the sample at logical index `j`, in the shape that [`crate::export::StatsWriter`] accepts.
-    pub fn entries(&self, j: usize) -> Option<Vec<StatEntry>> {
-        let idx = self.buf_index(j)?;
+    /// Returns the sample at logical position `position`, in the shape that [`crate::export::StatsWriter`] accepts.
+    pub fn entries(&self, position: usize) -> Option<Vec<StatEntry>> {
+        let slot = self.slot_of(position)?;
         let entries = self
             .descriptors
             .iter()
             .enumerate()
-            .map(|(col, desc)| {
-                let value = match self.full.get(col).and_then(Option::as_ref) {
-                    Some(values) => values[idx].clone(),
-                    None => StatValue::Scalar(self.columns[col][idx]),
+            .map(|(series, descriptor)| {
+                let value = match self.full.get(series).and_then(Option::as_ref) {
+                    Some(values) => values[slot].clone(),
+                    None => StatValue::Scalar(self.columns[series][slot]),
                 };
-                desc.entry(value)
+                descriptor.entry(value)
             })
             .collect();
         Some(entries)
@@ -389,7 +391,11 @@ impl StatsHistory {
 
     /// Heap memory held by the history, in bytes.
     pub fn heap_bytes(&self) -> usize {
-        let scalars = self.columns.iter().map(|c| c.capacity() * 8).sum::<usize>();
+        let scalars = self
+            .columns
+            .iter()
+            .map(|column| column.capacity() * size_of::<f64>())
+            .sum::<usize>();
         let full = self
             .full
             .iter()
@@ -398,31 +404,31 @@ impl StatsHistory {
                 values.capacity() * size_of::<StatValue>() + values.iter().map(stat_value_heap).sum::<usize>()
             })
             .sum::<usize>();
-        scalars + full + self.ticks.capacity() * 8
+        scalars + full + self.ticks.capacity() * size_of::<u64>()
     }
 
     /// Changes the capacity to `new_capacity`, keeping the most recent entries that fit.
     pub fn resize(&mut self, new_capacity: Option<usize>) {
         let filled = self.len();
-        let keep = new_capacity.map_or(filled, |cap| filled.min(cap));
+        let keep = new_capacity.map_or(filled, |capacity| filled.min(capacity));
         let skip = filled - keep;
 
-        let slots: Vec<usize> = (skip..filled).filter_map(|j| self.buf_index(j)).collect();
+        let slots: Vec<usize> = (skip..filled).filter_map(|position| self.slot_of(position)).collect();
 
         let new_columns: Vec<Vec<f64>> = self
             .columns
             .iter()
-            .map(|column| slots.iter().map(|&i| column[i]).collect())
+            .map(|column| slots.iter().map(|&slot| column[slot]).collect())
             .collect();
         let new_full: Vec<Option<Vec<StatValue>>> = self
             .full
             .iter()
-            .map(|slot| {
-                slot.as_ref()
-                    .map(|values| slots.iter().map(|&i| values[i].clone()).collect())
+            .map(|kept| {
+                kept.as_ref()
+                    .map(|values| slots.iter().map(|&slot| values[slot].clone()).collect())
             })
             .collect();
-        let new_ticks: Vec<u64> = slots.iter().map(|&i| self.ticks[i]).collect();
+        let new_ticks: Vec<u64> = slots.iter().map(|&slot| self.ticks[slot]).collect();
 
         self.columns = new_columns;
         self.full = new_full;
@@ -436,7 +442,9 @@ impl StatsHistory {
 fn stat_value_heap(value: &StatValue) -> usize {
     match value {
         StatValue::Scalar(_) | StatValue::Vector2D { .. } => 0,
-        StatValue::Histogram { edges, counts } => edges.capacity() * 8 + counts.capacity() * 8,
+        StatValue::Histogram { edges, counts } => {
+            edges.capacity() * size_of::<f64>() + counts.capacity() * size_of::<u64>()
+        }
     }
 }
 
@@ -444,34 +452,34 @@ fn stat_value_heap(value: &StatValue) -> usize {
 mod tests {
     use super::{StatDescriptor, StatEntry, StatValue, StatsHistory};
 
-    const C: [u8; 4] = [1, 2, 3, 255];
+    const COLOR: [u8; 4] = [1, 2, 3, 255];
 
     fn history(capacity: Option<usize>, labels: &[&'static str]) -> StatsHistory {
-        let descriptors = labels.iter().map(|l| StatDescriptor::new(l, C)).collect();
+        let descriptors = labels.iter().map(|label| StatDescriptor::new(label, COLOR)).collect();
         StatsHistory::new(descriptors, capacity)
     }
 
     fn scalars(values: &[f64]) -> Vec<StatEntry> {
         values
             .iter()
-            .map(|v| StatEntry::new("s", StatValue::Scalar(*v), C))
+            .map(|value| StatEntry::new("s", StatValue::Scalar(*value), COLOR))
             .collect()
     }
 
     fn vec2(x: f64, y: f64) -> Vec<StatEntry> {
-        vec![StatEntry::new("v", StatValue::Vector2D { x, y }, C)]
+        vec![StatEntry::new("v", StatValue::Vector2D { x, y }, COLOR)]
     }
 
     #[test]
     fn a_bounded_history_keeps_the_newest_entries() {
-        let mut h = history(Some(3), &["a"]);
+        let mut recorded = history(Some(3), &["a"]);
         for tick in 0u32..5 {
-            h.push_entries(&scalars(&[f64::from(tick)]), u64::from(tick));
+            recorded.push_entries(&scalars(&[f64::from(tick)]), u64::from(tick));
         }
-        assert_eq!(h.len(), 3);
-        assert_eq!(h.get(0, 0), Some((2.0, 2)));
-        assert_eq!(h.get(0, 2), Some((4.0, 4)));
-        assert_eq!(h.get(0, 3), None);
+        assert_eq!(recorded.len(), 3);
+        assert_eq!(recorded.get(0, 0), Some((2.0, 2)));
+        assert_eq!(recorded.get(0, 2), Some((4.0, 4)));
+        assert_eq!(recorded.get(0, 3), None);
     }
 
     /// An action publishes at the tick it was pressed on. Its stats replace that tick's entry
@@ -479,45 +487,49 @@ mod tests {
     #[test]
     fn a_sample_at_the_newest_tick_replaces_it() {
         for (capacity, ticks) in [(None, 3u32), (Some(2), 2), (Some(2), 5)] {
-            let mut h = history(capacity, &["v"]);
+            let mut recorded = history(capacity, &["v"]);
             for tick in 0..ticks {
-                h.push_entries(&vec2(f64::from(tick), 0.0), u64::from(tick));
+                recorded.push_entries(&vec2(f64::from(tick), 0.0), u64::from(tick));
             }
             let newest = u64::from(ticks - 1);
-            let (len, writes) = (h.len(), h.write_count());
-            h.push_entries(&vec2(3.0, 4.0), newest);
+            let (len, writes) = (recorded.len(), recorded.write_count());
+            recorded.push_entries(&vec2(3.0, 4.0), newest);
 
-            assert_eq!((h.len(), h.write_count()), (len, writes), "a second entry was added");
-            assert_eq!(h.get(0, len - 1), Some((5.0, newest)));
-            let sample = h.entries(len - 1).expect("the newest entry exists");
+            assert_eq!(
+                (recorded.len(), recorded.write_count()),
+                (len, writes),
+                "a second entry was added"
+            );
+            assert_eq!(recorded.get(0, len - 1), Some((5.0, newest)));
+            let sample = recorded.entries(len - 1).expect("the newest entry exists");
             assert!(matches!(*sample[0].value(), StatValue::Vector2D { x, y } if x == 3.0 && y == 4.0));
-            assert_eq!(h.tick(len - 2), Some(newest - 1), "an older entry changed");
+            assert_eq!(recorded.tick(len - 2), Some(newest - 1), "an older entry changed");
         }
     }
 
     #[test]
     fn an_unlimited_history_drops_nothing() {
-        let mut h = history(None, &["a"]);
+        let mut recorded = history(None, &["a"]);
         for tick in 0u32..1000 {
-            h.push_entries(&scalars(&[f64::from(tick)]), u64::from(tick));
+            recorded.push_entries(&scalars(&[f64::from(tick)]), u64::from(tick));
         }
-        assert_eq!(h.len(), 1000);
-        assert_eq!(h.capacity(), None);
-        assert_eq!(h.get(0, 0), Some((0.0, 0)));
-        assert_eq!(h.get(0, 999), Some((999.0, 999)));
+        assert_eq!(recorded.len(), 1000);
+        assert_eq!(recorded.capacity(), None);
+        assert_eq!(recorded.get(0, 0), Some((0.0, 0)));
+        assert_eq!(recorded.get(0, 999), Some((999.0, 999)));
     }
 
     /// A scalar cannot round-trip a vector, and an export drawn from history must still carry x and y.
     #[test]
     fn a_vector_series_keeps_its_components() {
-        let mut h = history(Some(4), &["v"]);
-        h.push_entries(&vec2(3.0, 4.0), 0);
-        h.push_entries(&vec2(6.0, 8.0), 1);
+        let mut recorded = history(Some(4), &["v"]);
+        recorded.push_entries(&vec2(3.0, 4.0), 0);
+        recorded.push_entries(&vec2(6.0, 8.0), 1);
 
         // The chart still sees one number, the magnitude.
-        assert_eq!(h.get(0, 0), Some((5.0, 0)));
+        assert_eq!(recorded.get(0, 0), Some((5.0, 0)));
 
-        let sample = h.entries(1).expect("index 1 exists");
+        let sample = recorded.entries(1).expect("index 1 exists");
         assert!(
             matches!(*sample[0].value(), StatValue::Vector2D { x, y } if x == 6.0 && y == 8.0),
             "got {:?}",
@@ -528,50 +540,50 @@ mod tests {
 
     #[test]
     fn a_scalar_series_rebuilds_from_its_own_column() {
-        let mut h = history(Some(4), &["a", "b"]);
-        h.push_entries(&scalars(&[1.0, 2.0]), 7);
-        let sample = h.entries(0).expect("index 0 exists");
+        let mut recorded = history(Some(4), &["a", "b"]);
+        recorded.push_entries(&scalars(&[1.0, 2.0]), 7);
+        let sample = recorded.entries(0).expect("index 0 exists");
         assert_eq!(sample.len(), 2);
-        assert!(matches!(*sample[0].value(), StatValue::Scalar(v) if v == 1.0));
-        assert!(matches!(*sample[1].value(), StatValue::Scalar(v) if v == 2.0));
-        assert!(h.entries(1).is_none());
+        assert!(matches!(*sample[0].value(), StatValue::Scalar(value) if value == 1.0));
+        assert!(matches!(*sample[1].value(), StatValue::Scalar(value) if value == 2.0));
+        assert!(recorded.entries(1).is_none());
     }
 
     /// Wrapping must not scramble the full values against their scalars.
     #[test]
     fn full_values_wrap_with_their_column() {
-        let mut h = history(Some(2), &["v"]);
+        let mut recorded = history(Some(2), &["v"]);
         for i in 0u32..5 {
-            h.push_entries(&vec2(f64::from(i), 0.0), u64::from(i));
+            recorded.push_entries(&vec2(f64::from(i), 0.0), u64::from(i));
         }
-        for (j, expected) in [3.0, 4.0].into_iter().enumerate() {
-            let sample = h.entries(j).expect("both slots are filled");
+        for (position, expected) in [3.0, 4.0].into_iter().enumerate() {
+            let sample = recorded.entries(position).expect("both slots are filled");
             assert!(
                 matches!(*sample[0].value(), StatValue::Vector2D { x, .. } if x == expected),
-                "slot {j} got {:?}",
+                "position {position} got {:?}",
                 sample[0].value()
             );
-            assert_eq!(h.get(0, j).map(|(v, _)| v), Some(expected));
+            assert_eq!(recorded.get(0, position).map(|(value, _)| value), Some(expected));
         }
     }
 
     #[test]
     fn shrinking_keeps_the_newest_and_growing_keeps_everything() {
-        let mut h = history(Some(10), &["v"]);
+        let mut recorded = history(Some(10), &["v"]);
         for i in 0u32..6 {
-            h.push_entries(&vec2(f64::from(i), 0.0), u64::from(i));
+            recorded.push_entries(&vec2(f64::from(i), 0.0), u64::from(i));
         }
 
-        h.resize(Some(3));
-        assert_eq!(h.len(), 3);
-        assert_eq!(h.tick(0), Some(3));
-        assert!(matches!(*h.entries(0).expect("kept")[0].value(), StatValue::Vector2D { x, .. } if x == 3.0));
+        recorded.resize(Some(3));
+        assert_eq!(recorded.len(), 3);
+        assert_eq!(recorded.tick(0), Some(3));
+        assert!(matches!(*recorded.entries(0).expect("kept")[0].value(), StatValue::Vector2D { x, .. } if x == 3.0));
 
-        h.resize(None);
-        assert_eq!(h.len(), 3, "growing adds no samples back");
-        h.push_entries(&vec2(9.0, 0.0), 9);
-        assert_eq!(h.len(), 4);
-        assert_eq!(h.tick(3), Some(9));
+        recorded.resize(None);
+        assert_eq!(recorded.len(), 3, "growing adds no samples back");
+        recorded.push_entries(&vec2(9.0, 0.0), 9);
+        assert_eq!(recorded.len(), 4);
+        assert_eq!(recorded.tick(3), Some(9));
     }
 
     #[test]

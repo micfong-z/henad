@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::explore::reducer::{ReducerError, ReducerKind, ReducerPlan, ReducerState};
+use crate::explore::reducer::{ReducerError, ReducerPlan, ReducerState};
 use crate::explore::spec::{MeasureSettings, RunSettings};
 use crate::explore::stop::{StopCondition, StopError};
 use crate::export::{StatColumns, StatsWriteError};
@@ -59,20 +59,7 @@ impl MeasurePlan {
             stop.check_threshold().map_err(MeasureError::Stop)?;
         }
         for reducer in &measure.reducers {
-            match reducer.kind {
-                ReducerKind::FirstCrossing(comparison) => comparison.check().map_err(|source| {
-                    MeasureError::Reducer(ReducerError::Comparison {
-                        raw: reducer.kind.to_string(),
-                        source,
-                    })
-                })?,
-                ReducerKind::WindowMean { start, end } if start > end => {
-                    return Err(MeasureError::Reducer(ReducerError::BadWindow {
-                        raw: reducer.kind.to_string(),
-                    }));
-                }
-                _ => {}
-            }
+            reducer.kind.check().map_err(MeasureError::Reducer)?;
         }
         Ok(())
     }

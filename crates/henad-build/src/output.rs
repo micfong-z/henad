@@ -14,7 +14,7 @@ use wgsl_bindgen::{
 
 use crate::binding_lines::read_bindings;
 use crate::paths::{components, constant_name};
-use crate::{ShaderBuildError, binding_lines, paths};
+use crate::{ShaderBuildError, binding_lines, io_error, paths};
 
 /// Directory under `OUT_DIR` that holds the shared modules, below it at `henad/<module>.wgsl`.
 const SHARED_DIRECTORY: &str = "henad_wgsl";
@@ -63,10 +63,7 @@ pub(crate) fn generate(
         // A stamp left by shaders that were since removed would match those shaders when they are restored. The pass
         // would then be skipped and leave the empty bindings.
         if stamp_path.exists() {
-            std::fs::remove_file(&stamp_path).map_err(|source| ShaderBuildError::Io {
-                path: stamp_path.clone(),
-                source,
-            })?;
+            std::fs::remove_file(&stamp_path).map_err(io_error(&stamp_path))?;
         }
     } else {
         let imported = imported_files(root, entries, sources, &shared)?;
@@ -107,16 +104,12 @@ fn write_shared_modules(shared: &Path) -> Result<(), ShaderBuildError> {
     if shared.is_dir() {
         let mut pending = vec![shared.to_path_buf()];
         while let Some(directory) = pending.pop() {
-            let io_error = |source| ShaderBuildError::Io {
-                path: directory.clone(),
-                source,
-            };
-            for item in std::fs::read_dir(&directory).map_err(io_error)? {
-                let path = item.map_err(io_error)?.path();
+            for item in std::fs::read_dir(&directory).map_err(io_error(&directory))? {
+                let path = item.map_err(io_error(&directory))?.path();
                 if path.is_dir() {
                     pending.push(path);
                 } else if path.extension().is_some_and(|extension| extension == "wgsl") && !current.contains(&path) {
-                    std::fs::remove_file(&path).map_err(|source| ShaderBuildError::Io { path, source })?;
+                    std::fs::remove_file(&path).map_err(io_error(&path))?;
                 }
             }
         }
@@ -340,14 +333,14 @@ fn binding_decls(root: &Path, entries: &[PathBuf], sources: &[(PathBuf, String)]
     let mut assertions = String::new();
     for entry in entries {
         let path = root.join(entry);
-        let source = match sources.iter().find(|(file, _)| file == entry) {
-            Some((_, source)) => source.clone(),
-            None => std::fs::read_to_string(&path).map_err(|source| ShaderBuildError::Io {
-                path: path.clone(),
-                source,
-            })?,
+        let read_here;
+        let source = if let Some((_, source)) = sources.iter().find(|(file, _)| file == entry) {
+            source.as_str()
+        } else {
+            read_here = crate::read(&path)?;
+            &read_here
         };
-        let bindings = read_bindings(&path, &source)?;
+        let bindings = read_bindings(&path, source)?;
         let names = components(entry).unwrap_or_default();
         let constant = constant_name(&names);
 
@@ -406,12 +399,8 @@ pub(crate) fn write_if_changed(path: &Path, contents: &str) -> Result<(), Shader
     if std::fs::read(path).is_ok_and(|current| current == contents.as_bytes()) {
         return Ok(());
     }
-    let io_error = |source| ShaderBuildError::Io {
-        path: path.to_path_buf(),
-        source,
-    };
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(io_error)?;
+        std::fs::create_dir_all(parent).map_err(io_error(path))?;
     }
-    std::fs::write(path, contents).map_err(io_error)
+    std::fs::write(path, contents).map_err(io_error(path))
 }

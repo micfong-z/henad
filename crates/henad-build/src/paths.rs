@@ -5,8 +5,8 @@ use std::path::{Component, Path, PathBuf};
 
 use heck::ToPascalCase as _;
 
-use crate::ShaderBuildError;
 use crate::binding_lines::strip_block_comments;
+use crate::{ShaderBuildError, io_error};
 
 /// Name reserved for the shared modules' import root, regardless of case.
 const RESERVED: &str = "henad";
@@ -51,13 +51,9 @@ pub(crate) fn wgsl_files(root: &Path) -> Result<Vec<PathBuf>, ShaderBuildError> 
         if !visited.insert(std::fs::canonicalize(&directory).unwrap_or_else(|_| directory.clone())) {
             continue;
         }
-        let io_error = |source| ShaderBuildError::Io {
-            path: directory.clone(),
-            source,
-        };
         let mut names = Vec::new();
-        for item in std::fs::read_dir(&directory).map_err(io_error)? {
-            names.push(item.map_err(io_error)?.file_name());
+        for item in std::fs::read_dir(&directory).map_err(io_error(&directory))? {
+            names.push(item.map_err(io_error(&directory))?.file_name());
         }
         names.sort();
         let mut directories = Vec::new();
@@ -95,10 +91,7 @@ pub(crate) fn defines_reserved_path(source: &str) -> bool {
 
 /// Returns an error when the last component of `root` is the reserved name, regardless of case.
 pub(crate) fn check_root(root: &Path) -> Result<(), ShaderBuildError> {
-    let absolute = std::path::absolute(root).map_err(|source| ShaderBuildError::Io {
-        path: root.to_path_buf(),
-        source,
-    })?;
+    let absolute = std::path::absolute(root).map_err(io_error(root))?;
     if absolute.file_name().is_some_and(is_reserved) {
         return Err(ShaderBuildError::ReservedName {
             path: root.to_path_buf(),

@@ -273,7 +273,7 @@ impl SpatialHash {
 
     /// Rebuilds the hash for `new_cell_size` and sorts the agents again, if the cell size changed.
     pub fn rebuild_with_cell_size(&mut self, new_cell_size: f32, pos_x: &[f32], pos_y: &[f32]) {
-        if (new_cell_size - self.cell_size).abs() > f32::EPSILON {
+        if !self.cell_size_is(new_cell_size) {
             *self = Self::new(new_cell_size, self.world_w, self.world_h);
             self.build(pos_x, pos_y);
         }

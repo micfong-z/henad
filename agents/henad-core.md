@@ -144,6 +144,8 @@ argmin, `first<=10` (`FirstCrossing`) and `mean@200..600` (`WindowMean`) on requ
 holds `PlannedRun`, `RunStatus` (`timed_out` among the failures), `StopReason` and `RunOutcome`,
 `summary.rs` the replicate statistics of `summary.csv` (`RunningMoments`, `student_t_975`,
 `SummaryAccumulator`), and `fingerprint.rs` the FNV-1a hashes naming a schema, a plan and a run.
+The hasher (`Fnv1a64`, `fnv1a64`) lives in the private `src/fnv.rs`, which provenance and the shared
+WGSL hash import directly, and `explore::fingerprint` re-exports it for other crates.
 `schema_hashes_are_unchanged_since_0_2_0` (henad-explore's `schema.rs`) pins every example
 model's schema hash to the value 0.2.0 recorded, through the procedure in
 `crates/henad-models/tests/fixtures/docs/schema-hashes-0.2.0.md`. Keep it.

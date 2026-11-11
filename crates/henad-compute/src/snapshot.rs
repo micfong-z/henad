@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use henad_core::view::StatEntry;
+use henad_core::view::{StatEntry, StatValue};
 
 use crate::gpu::view::agents::GpuAgents;
 use crate::gpu::view::display::GpuDisplay;
@@ -41,13 +41,42 @@ pub struct Snapshot {
     pub run_to_samples: Vec<StatSample>,
 }
 
-/// Stat values of one tick, sampled during a run to a tick.
+/// One sample of a model's stats.
 #[derive(Debug, Clone)]
 pub struct StatSample {
-    /// Tick the stats were read at.
-    pub tick: u64,
-    /// Stat values, one per stat series.
-    pub stats: Vec<StatEntry>,
+    tick: u64,
+    entries: Vec<StatEntry>,
+}
+
+impl StatSample {
+    /// Creates the sample of stats `entries` read at `tick`.
+    pub(crate) fn new(tick: u64, entries: Vec<StatEntry>) -> Self {
+        Self { tick, entries }
+    }
+
+    /// Tick the sample was taken at.
+    pub fn tick(&self) -> u64 {
+        self.tick
+    }
+
+    /// Every stat the model reports, in the order it reports them.
+    pub fn entries(&self) -> &[StatEntry] {
+        &self.entries
+    }
+
+    /// Returns the value of stat `label`, `None` for a label the model does not report.
+    pub fn get(&self, label: &str) -> Option<&StatValue> {
+        self.entries
+            .iter()
+            .find(|entry| entry.label() == label)
+            .map(StatEntry::value)
+    }
+
+    /// Returns [`StatValue::scalar`] of stat `label`: a scalar's value, a vector's magnitude, a histogram's total
+    /// count. `None` for a label the model does not report.
+    pub fn scalar(&self, label: &str) -> Option<f64> {
+        self.get(label).map(StatValue::scalar)
+    }
 }
 
 /// Counts of the elements each probe of a GPU model fired for on one step, with the tick that step reached.

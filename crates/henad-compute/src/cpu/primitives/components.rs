@@ -101,7 +101,7 @@ fn summarize(graph: &Network, label: &[u32], size: &mut Vec<u32>) -> ComponentSt
 #[cfg(test)]
 mod tests {
     use super::{ComponentStats, label_components};
-    use henad_core::authoring::primitives::rng::next_bits;
+    use crate::cpu::tests::support::{in_pool_of, random_network};
     use henad_core::network::Network;
 
     /// Computes reference components with a sequential depth-first search.
@@ -175,15 +175,7 @@ mod tests {
     fn labels_match_a_depth_first_search() {
         for &directed in &[false, true] {
             for seed in 0..6u64 {
-                let mut net = Network::new(120, directed);
-                let mut rng = 0x9E37 ^ (seed << 8) ^ u64::from(directed);
-                for _ in 0..90 {
-                    let a = next_bits(&mut rng) % 120;
-                    let b = next_bits(&mut rng) % 120;
-                    if a != b && !net.has_edge(a, b) {
-                        net.add_edge(a, b, 0);
-                    }
-                }
+                let net = random_network(120, directed, 0x9E37 ^ (seed << 8) ^ u64::from(directed), 90);
                 assert_eq!(run(&net), dfs(&net), "directed={directed} seed={seed}");
             }
         }
@@ -192,21 +184,8 @@ mod tests {
     #[test]
     fn results_do_not_depend_on_the_thread_count() {
         fn go(threads: usize) -> (ComponentStats, Vec<u32>) {
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .expect("rayon pool");
-            pool.install(|| {
-                let n = 9000u32;
-                let mut net = Network::new(n as usize, false);
-                let mut rng = 0xFACE_u64;
-                for _ in 0..7000 {
-                    let a = next_bits(&mut rng) % n;
-                    let b = next_bits(&mut rng) % n;
-                    if a != b && !net.has_edge(a, b) {
-                        net.add_edge(a, b, 0);
-                    }
-                }
+            in_pool_of(threads, || {
+                let net = random_network(9000, false, 0xFACE, 7000);
                 let (mut label, mut scratch) = (Vec::new(), Vec::new());
                 let stats = label_components(&net, &mut label, &mut scratch);
                 (stats, label)

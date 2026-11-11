@@ -506,9 +506,9 @@ mod tests {
         AUTOMATIC_RANGE_MARGIN, PatternAxis, PatternCell, PatternSpaceExploration, PatternSpaceSettings,
         automatic_range,
     };
-    use crate::explore::fingerprint::fnv1a64;
-    use crate::explore::search::tests::support::{drive, drive_batches, noise, unit_space};
+    use crate::explore::search::tests::support::{drive, drive_batches, evaluate, noise, unit_space};
     use crate::explore::search::{Candidate, CandidateOrigin, Evaluation, SearchSpecError, Searcher as _};
+    use crate::fnv::fnv1a64;
 
     fn axis(column: &str, cells: u32) -> PatternAxis {
         PatternAxis::bounded(column, 0.0, 100.0, cells)
@@ -760,18 +760,15 @@ mod tests {
     #[test]
     fn an_automatic_range_spans_the_initial_samples_with_a_margin() {
         let settings = automatic_settings();
+        let evaluation_of = |candidate: &Candidate| Evaluation {
+            candidate_id: candidate.id,
+            outputs: (0..3).map(|replicate| gappy(candidate, replicate)).collect(),
+        };
         let mut search = PatternSpaceExploration::new(unit_space(2), settings.clone(), 300, 3).expect("valid");
         let mut asked = Vec::new();
         while asked.len() < 32 {
             let batch = search.ask(16);
-            let evaluations: Vec<Evaluation> = batch
-                .iter()
-                .map(|candidate| Evaluation {
-                    candidate_id: candidate.id,
-                    outputs: (0..3).map(|replicate| gappy(candidate, replicate)).collect(),
-                })
-                .collect();
-            search.tell(&evaluations);
+            search.tell(&evaluate(&batch, 3, gappy));
             asked.extend(batch);
         }
         assert_eq!(search.pattern_settings(), None, "32 of 40 initial samples told");
@@ -779,25 +776,13 @@ mod tests {
 
         let batch = search.ask(16);
         assert_eq!(batch.len(), 8, "the third batch holds the last 8 initial samples alone");
-        let evaluations: Vec<Evaluation> = batch
-            .iter()
-            .map(|candidate| Evaluation {
-                candidate_id: candidate.id,
-                outputs: (0..3).map(|replicate| gappy(candidate, replicate)).collect(),
-            })
-            .collect();
-        search.tell(&evaluations);
+        search.tell(&evaluate(&batch, 3, gappy));
         asked.extend(batch);
         let resolved = search.pattern_settings().expect("every initial sample told").clone();
 
         let outputs: Vec<(f64, f64)> = asked[..40]
             .iter()
-            .filter_map(|candidate| {
-                settings.outputs(&Evaluation {
-                    candidate_id: candidate.id,
-                    outputs: (0..3).map(|replicate| gappy(candidate, replicate)).collect(),
-                })
-            })
+            .filter_map(|candidate| settings.outputs(&evaluation_of(candidate)))
             .collect();
         assert!(outputs.len() < 40, "a candidate with no y output is left out");
         for (axis, values) in [
@@ -818,21 +803,17 @@ mod tests {
         let report = search.report();
         let mut hits = 0;
         for (position, candidate) in asked.iter().enumerate() {
-            let evaluation = Evaluation {
-                candidate_id: candidate.id,
-                outputs: (0..3).map(|replicate| gappy(candidate, replicate)).collect(),
-            };
-            let Some(cell) = resolved.place(&evaluation).and_then(|placement| placement.cell) else {
+            let Some(cell) = resolved
+                .place(&evaluation_of(candidate))
+                .and_then(|placement| placement.cell)
+            else {
                 continue;
             };
             hits += 1;
             let entry = report.archive_entry(cell).expect("the cell is filled");
             let first = asked[..position].iter().all(|earlier| {
                 resolved
-                    .place(&Evaluation {
-                        candidate_id: earlier.id,
-                        outputs: (0..3).map(|replicate| gappy(earlier, replicate)).collect(),
-                    })
+                    .place(&evaluation_of(earlier))
                     .and_then(|placement| placement.cell)
                     != Some(cell)
             });

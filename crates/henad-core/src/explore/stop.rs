@@ -318,9 +318,7 @@ impl StopCondition {
     pub fn bind(spec: &StopSpec, columns: &StatColumns) -> Result<Self, StopError> {
         let column = columns.resolve(&spec.column).ok_or_else(|| StopError::UnknownColumn {
             column: spec.column.clone(),
-            known: (0..columns.len())
-                .map(|column| columns.name(column).to_owned())
-                .collect(),
+            known: columns.names().map(str::to_owned).collect(),
         })?;
         Ok(Self {
             column,
