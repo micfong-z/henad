@@ -36,7 +36,7 @@ table marks "Not built" are left out. The rate notes are templates taking number
 `growing_chance_note`, `competing_note`, `mean_stay_note`), which `sheet::rates` fills. The end of
 `rates.rs` holds the words of competing rates, the long tick (`long_tick_note`) and rate conversion
 (`chances_per_tick_note`), and `errors.rs` the remaining errors (`RATE_IN_BUTTON_CARD`,
-`ONE_AGENT_KIND`), with the interim refusals (`NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHANGE`,
+`RATE_IN_REPEAT`, `ONE_AGENT_KIND`), with the interim refusals (`NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHANGE`,
 `NOT_YET_AGENT_WALLS`, `NOT_YET_BLOCKED_MOVE_BY`), the errors of the ground and the places
 (`ON_GROUND_CELLS`, `AHEAD_NEEDS_CELLS`, `SET_IN_REPEAT`), a property changed two ways
 (`set_already`, `steered_already`, `moved_by_already`, `moved_to_already`) and the words of a look

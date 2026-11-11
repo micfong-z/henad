@@ -441,7 +441,8 @@ pub enum SheetEdit {
     /// The rate takes the tick's unit, marked as taken from the tick, keeps the line's "for each" and its key, and is
     /// written as the shortest number that reads back as the same `f32`. The sheet's tick needs a length. A card that
     /// runs once takes no rate, and a chance there is refused in the words of
-    /// [`RATE_IN_BUTTON_CARD`](crate::sheet::sentence::RATE_IN_BUTTON_CARD).
+    /// [`RATE_IN_BUTTON_CARD`](crate::sheet::sentence::RATE_IN_BUTTON_CARD). A chance on a line inside a Repeat is
+    /// refused in the words of [`RATE_IN_REPEAT`](crate::sheet::sentence::RATE_IN_REPEAT).
     ChangeToRate {
         /// Id of the line.
         line: String,

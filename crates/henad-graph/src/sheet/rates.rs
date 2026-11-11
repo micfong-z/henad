@@ -587,7 +587,8 @@ pub(in crate::sheet) fn typed_number(slot: &Slot) -> Option<f64> {
 /// A line that draws with a chance can change into a rate, and a line that draws at a rate into a chance.
 /// The draw is the line itself or its condition, and holds a typed number: a chance from 0 to below 1, or a rate with
 /// a unit. One tick of the sheet needs a length. A card that runs once has no duration and takes no rate, so a chance
-/// there changes into nothing. [`SheetEdit::ChangeToRate`](super::edit::SheetEdit::ChangeToRate) and
+/// there changes into nothing. Neither does a chance on a line inside a Repeat, where no rate can stand.
+/// [`SheetEdit::ChangeToRate`](super::edit::SheetEdit::ChangeToRate) and
 /// [`SheetEdit::ChangeToChance`](super::edit::SheetEdit::ChangeToChance) make the change.
 pub fn conversion(document: &SheetDocument, line_id: &str) -> Option<sentence::DrawKind> {
     document.time?;
@@ -600,9 +601,11 @@ pub fn conversion(document: &SheetDocument, line_id: &str) -> Option<sentence::D
         },
     };
     if holder.kind == LineKind::Chance {
-        let runs_once = document.cards.get(card_index)?.runs == CardRuns::Once;
+        let card = document.cards.get(card_index)?;
+        let runs_once = card.runs == CardRuns::Once;
+        let in_repeat = CardRelations::new(document, card).repeat_of(line_id).is_some();
         let chance = typed_number(&holder.chance)?;
-        (!runs_once && (0.0..1.0).contains(&chance)).then_some(sentence::DrawKind::Rate)
+        (!runs_once && !in_repeat && (0.0..1.0).contains(&chance)).then_some(sentence::DrawKind::Rate)
     } else {
         holder.rate_unit?;
         typed_number(&holder.rate)?;

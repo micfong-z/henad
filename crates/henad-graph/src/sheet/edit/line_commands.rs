@@ -15,7 +15,10 @@ use crate::sheet::document::{
 };
 use crate::sheet::limits::MAX_LINES_PER_CARD;
 use crate::sheet::rates::{chance_from_rate, rate_from_chance, shortest_f32, tick_in, typed_number};
-use crate::sheet::sentence::{ANY_STATE_ID, ConditionItem, RATE_IN_BUTTON_CARD, rate_unit_word, unit_suggestion};
+use crate::sheet::relations::CardRelations;
+use crate::sheet::sentence::{
+    ANY_STATE_ID, ConditionItem, RATE_IN_BUTTON_CARD, RATE_IN_REPEAT, rate_unit_word, unit_suggestion,
+};
 
 /// Returns the first unit of time that `text` names as "per second" to "per year", `None` when it names none.
 ///
@@ -473,6 +476,7 @@ impl Draft {
     /// `into` [`LineKind::Chance`], keeping its chance per tick.
     ///
     /// A chance on a card that runs once is refused in the words of [`RATE_IN_BUTTON_CARD`]. The card has no duration.
+    /// A chance on a line inside a Repeat is refused in the words of [`RATE_IN_REPEAT`].
     pub(super) fn change_draw(&mut self, line_id: &str, into: LineKind) -> Result<(), SheetEditError> {
         let time = self
             .document
@@ -483,7 +487,9 @@ impl Draft {
         } else {
             LineKind::Rate
         };
-        let runs_once = self.document.cards[self.card_of_line(line_id)?].runs == CardRuns::Once;
+        let card = &self.document.cards[self.card_of_line(line_id)?];
+        let runs_once = card.runs == CardRuns::Once;
+        let in_repeat = CardRelations::new(&self.document, card).repeat_of(line_id).is_some();
         let line = self.line_mut(line_id)?;
         let holder = draw_phrase_mut(line, |kind| kind == from)
             .ok_or_else(|| SheetEditError::Invalid(format!("line '{line_id}' holds no {}", from.as_str())))?;
@@ -503,6 +509,9 @@ impl Draft {
             }
             if runs_once {
                 return Err(SheetEditError::Invalid(RATE_IN_BUTTON_CARD.to_owned()));
+            }
+            if in_repeat {
+                return Err(SheetEditError::Invalid(RATE_IN_REPEAT.to_owned()));
             }
             rate_from_chance(typed, time.tick_length)
         } else {

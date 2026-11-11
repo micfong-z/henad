@@ -600,11 +600,13 @@ fn every_wording_table_entry_equals_the_final_words() {
             "One tick is now 1 day. Change it on the sheet.",
             sentence::tick_set_notice(TimeUnit::Day),
         ),
-        // Errors on a rate in a button's card, a second agent kind, lines this version cannot run and the ground.
+        // Errors on a rate in a button's card or inside a Repeat, a second agent kind, lines this version cannot run
+        // and the ground.
         (
             "A button's card has no duration, so it takes chances, not rates.",
             fixed(sentence::RATE_IN_BUTTON_CARD),
         ),
+        ("a rate cannot stand inside a Repeat", fixed(sentence::RATE_IN_REPEAT)),
         (
             "One kind of agent per model in this version.",
             fixed(sentence::ONE_AGENT_KIND),
@@ -1687,6 +1689,7 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
         sentence::FOR_EACH_BLANK_WORDS,
         sentence::FROM_WORD,
         sentence::RATE_IN_BUTTON_CARD,
+        sentence::RATE_IN_REPEAT,
         sentence::NOT_YET_REPEAT,
         sentence::NOT_YET_REPEAT_CHANGE,
         sentence::NOT_YET_AGENT_WALLS,

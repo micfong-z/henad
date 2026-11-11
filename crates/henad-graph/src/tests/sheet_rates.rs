@@ -1193,3 +1193,67 @@ fn change_to_a_rate_is_refused_on_a_card_that_runs_once_as_the_card_offers_it() 
     let report = check::check(builder.document());
     assert!(!report.has_errors(), "{report:?}");
 }
+
+#[test]
+fn change_to_a_rate_is_refused_inside_a_repeat_as_the_card_offers_it() {
+    use crate::sheet::check;
+    use crate::sheet::document::LineKind;
+    use crate::sheet::edit::{MoveDirection, SheetEditError};
+    use crate::sheet::rates::conversion;
+    use crate::sheet::sentence::DrawKind;
+
+    // Line 3 of the cell card becomes Recovered with a typed chance, and a Repeat of two times follows it.
+    let chance = edited(
+        sheet_text("sir_chance.toml"),
+        "chance = { param = \"recovery_chance\" }",
+        "chance = 0.01",
+    );
+    let timed = edited(
+        &chance,
+        "edges = \"wrap\"\n",
+        "edges = \"wrap\"\n\n[time]\ntick_length = 1\ntick_unit = \"day\"\n",
+    );
+    let mut builder = SheetBuilder::new(ParsedSheet::parse(&timed).expect("the sheet reads").into_document());
+    let mut repeat = SheetLine::new(LineKind::Repeat);
+    repeat.times = Slot::Filled(SheetValue::Literal(SheetLiteral::Number(2.0)));
+    let made = builder
+        .apply(SheetEdit::AddLine {
+            card: "cell_tick".to_owned(),
+            inside: None,
+            line: Box::new(repeat),
+        })
+        .expect("the card takes a Repeat");
+    let change = SheetEdit::ChangeToRate { line: "l3".to_owned() };
+    let into_repeat = SheetEdit::MoveLine {
+        line: "l3".to_owned(),
+        direction: MoveDirection::Down,
+    };
+    // Outside the Repeat, the card offers a rate and the command makes one.
+    assert_eq!(conversion(builder.document(), "l3"), Some(DrawKind::Rate));
+    let mut outside = builder.clone();
+    outside.apply(change.clone()).expect("line 3 changes to a rate");
+    let report = check::check(outside.document());
+    assert!(!report.has_errors(), "{report:?}");
+    // Inside it, the card offers none and the command refuses one in the checker's words.
+    builder
+        .apply(into_repeat.clone())
+        .expect("line 3 moves into the Repeat");
+    let document = builder.document();
+    let relations = CardRelations::new(document, &document.cards[0]);
+    assert_eq!(relations.repeat_of("l3"), made.first().map(String::as_str));
+    assert_eq!(conversion(document, "l3"), None);
+    let before = document.to_text().expect("the sheet writes");
+    assert_eq!(
+        builder.apply(change),
+        Err(SheetEditError::Invalid(sentence::RATE_IN_REPEAT.to_owned()))
+    );
+    assert_eq!(builder.document().to_text().expect("the sheet writes"), before);
+    outside.apply(into_repeat).expect("the rate moves into the Repeat");
+    let report = check::check(outside.document());
+    assert!(
+        report
+            .errors()
+            .any(|error| error.line.as_deref() == Some("l3") && error.diagnostic.message == sentence::RATE_IN_REPEAT),
+        "{report:?}"
+    );
+}

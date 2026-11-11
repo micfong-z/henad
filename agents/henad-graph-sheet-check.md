@@ -36,7 +36,7 @@ change kind, unknown parameters, states of another property, `their` and relatio
 results from another card or of a change line, parts, places, value types (a slot's expected type
 against a literal, chip or phrase, and `ARROW_COMPARED_WITH_NUMBER`), formulas, keys held twice,
 Count, Look around and Pick a cell inside a Repeat (`LOOK_IN_REPEAT`) or a run-once card,
-`RATE_IN_BUTTON_CARD`, a rate inside a Repeat, and the ranges from the wording table
+`RATE_IN_BUTTON_CARD`, a rate inside a Repeat (`RATE_IN_REPEAT`), and the ranges from the wording table
 (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on literals, a percent divided by 100,
 `CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters). Agent-only fields with no editor words
 yet (a Steer or Move mode, a pick rule, `which`, an event, `agent_kind`, `include_me`) are errors

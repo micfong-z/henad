@@ -121,10 +121,12 @@ into a rate and back, keeping the chance per tick through `sheet::rates` (`rate_
 the tick's length, `chance_from_rate` with `tick_in` of the rate's unit). Each refuses a sheet with
 no `[time]`, a value that is no typed number (a parameter or a result), a chance outside 0 to below
 1 and a rate with no unit, and `ChangeToRate` a chance on a card that runs once in the words of
-`sentence::RATE_IN_BUTTON_CARD`, where `rates::conversion` offers no rate either. The rate takes the
-tick's unit, marked, the chance clears the unit and the mark, both keep `tries` and the line's key,
-and the number is written as the shortest decimal that reads back as the same `f32`
-(`rates::shortest_f32`), so 1 - e^(-0.1) turns into 0.1 per day and back into the same chance.
+`sentence::RATE_IN_BUTTON_CARD` and a chance on a line inside a Repeat (`CardRelations::repeat_of`)
+in those of `sentence::RATE_IN_REPEAT`, the checker's error on a rate there. `rates::conversion`
+offers no rate in either place. The rate takes the tick's unit, marked, the chance clears the unit
+and the mark, both keep `tries` and the line's key, and the number is written as the shortest
+decimal that reads back as the same `f32` (`rates::shortest_f32`), so 1 - e^(-0.1) turns into 0.1
+per day and back into the same chance.
 
 Names (`names.rs`): `automatic_name(document, line)` follows the wording table's result names
 (Count, Total or average as a cells Look around with one total or average summary, chance and rate

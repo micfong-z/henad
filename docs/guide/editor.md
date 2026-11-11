@@ -248,7 +248,7 @@ Each line has a menu, "Line 2 actions", always drawn at the end of the line:
 - **Move line 2 up** and **Move line 2 down**, which follow the outline.
   The first line inside a block moves up out of it, the last moves down out of it, a line beside a block moves into it, and a When moves with all its lines.
 - **Draw new numbers**, on a line that draws by chance, which gives the line new random numbers.
-- **Change to a rate** on a line with a typed chance, and **Change to a chance** on a line with a typed rate, on a card that runs each tick.
+- **Change to a rate** on a line with a typed chance outside a Repeat, and **Change to a chance** on a line with a typed rate, on a card that runs each tick.
   Both keep the chance per tick.
 - **Include me in line 2** or **Leave me out of line 2**, on a look at agents.
 - **Delete line 2**.

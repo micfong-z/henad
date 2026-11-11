@@ -18,7 +18,7 @@ use crate::sheet::edit::unit_in_text;
 use crate::sheet::limits::MAX_NESTING;
 use crate::sheet::sentence::{
     self, ANY_STATE_ID, ARROW_COMPARED_WITH_NUMBER, Blank, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, LineSelect,
-    NOT_RUN_TICK, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD,
+    NOT_RUN_TICK, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD, RATE_IN_REPEAT,
 };
 
 /// Kind of value a blank wants. Its words fill the skip note.
@@ -598,7 +598,7 @@ impl<'a> Checker<'a> {
                     self.error(RATE_IN_BUTTON_CARD, place);
                 }
                 if context.line.is_some_and(|owner| owner.in_repeat) {
-                    self.error("a rate cannot stand inside a Repeat", place);
+                    self.error(RATE_IN_REPEAT, place);
                 }
                 self.number_slot(&line.rate, &inner, Blank::Rate, state);
                 self.draw_range(&line.rate, context, Draw::Rate);

@@ -275,8 +275,8 @@ a group with a worked-out rate splitting on the host, the rates SIR conserving i
 day, `a_tick_length_override_keeps_the_code_and_the_keys`, the factor of a rate per week, every
 other form of rate, a rate in an any of drawing alone, the notes of the wording table
 (`rate_notes_match_the_spec_examples`, `worked_out_rate_notes_match_the_spec_examples`), the two
-conversion commands and their refusals (a chance on a card that runs once among them, where the card
-offers no rate), the unit mismatch warning, and
+conversion commands and their refusals (a chance on a card that runs once and one inside a Repeat
+among them, where the card offers no rate), the unit mismatch warning, and
 `a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named`. Reader tests sit in
 `src/tests/sheet_document.rs`, over eleven sheets: the eight starters, and three test sheets in
 `src/tests/sheets/`. `sir.toml`, `boids.toml` and `ants.toml` are the author format's examples, and

@@ -2,10 +2,13 @@
 
 use super::grammar::{number_list, plural, upper_first, word_list};
 
-// Errors on a rate in a button's card and on a second agent kind
+// Errors on a rate in a button's card or inside a Repeat, and on a second agent kind
 
 /// Error on a rate in the card of a button.
 pub const RATE_IN_BUTTON_CARD: &str = "A button's card has no duration, so it takes chances, not rates.";
+
+/// Error on a rate on a line inside a Repeat.
+pub const RATE_IN_REPEAT: &str = "a rate cannot stand inside a Repeat";
 
 /// Error on a second kind of agent.
 pub const ONE_AGENT_KIND: &str = "One kind of agent per model in this version.";
