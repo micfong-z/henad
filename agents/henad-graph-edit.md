@@ -1,7 +1,7 @@
 # henad-graph: edit commands and the editor region
 
 `agents/henad-graph.md` holds the rest of the crate. The Editor tab of henad-app runs every gesture
-through these commands (`agents/henad-app-editor.md`).
+through these commands (`agents/henad-app-graph-editor.md`).
 
 **Edit commands** (`edit/`). `GraphBuilder` holds a `GraphDocument` and an `EditorRegion` and runs
 `EditCommand`s: `AddNode`, `RemoveNode`, `Connect`, `Disconnect`, `SetLiteral`, `BindParam`,

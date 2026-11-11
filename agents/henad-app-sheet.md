@@ -1,10 +1,10 @@
 # henad-app: the sheet editor
 
 `ui/editor/sheet/` shows a sheet, a model file of `kind = "sheet"` (`agents/henad-graph-sheet.md`),
-in the Editor tab as its Sheet and Card panes, and holds the New model dialog. The canvas and the
-code view are in `agents/henad-app-editor.md`, and the expert mode stays there beside the canvas it
-extends. The Sheet pane edits every section, those of a world of agents included,
-and the Card pane writes the lines of a cells card (`agents/henad-app-card.md`).
+in the Editor tab as its Sheet and Card panes, and holds the New model dialog. The code view and the
+expert mode are in `agents/henad-app-editor.md`, and the canvas in
+`agents/henad-app-graph-editor.md`. The Sheet pane edits every section, those of a world of agents
+included, and the Card pane writes the lines of a cells card (`agents/henad-app-card.md`).
 
 `mod.rs` holds `SheetEditor`: a `SheetBuilder` over the `SheetDocument` (so new draws take fresh
 keys), its canonical text (`text`, which Save model writes and Apply reads through
@@ -23,12 +23,15 @@ through `SheetFile::place_graph_diagnostic`. `place` does the same for a problem
 `EditorPanel::show_fault` (a fault of the applied code before tick 0) and `show_preview_fault`
 (`Preview::show_problem`) both place their fault. A fault carries no node or pass, so it lands at
 `[sheet]`. `sheet_ui` draws the Sheet pane as a resizable `Panel::left` (`sheet_pane_id`, one id per
-dock `Layout` from `SheetShown::layout`, so each layout keeps its own stored width, 40% of the tab's
-width by default, each pane at least 160 points) and the Card pane in the `CentralPanel`,
-each under a heading ("Sheet", "Card", `SHEET_PANE` and `CARD_PANE`) in a `ScrollArea` of its own
-(`henad_sheet_pane_scroll`, `henad_card_pane_scroll`). The Sheet pane's scroll sits in a child `Ui`
-of the rect the divider gives, which the panel takes whole, so content never widens the pane. The
-world stays in the dock's Viewport, Playback, Pacing, Parameters and Charts tabs.
+dock `Layout` from `SheetShown::layout`) and the Card pane in the `CentralPanel`. Each layout keeps
+the pane's share of the tab's width (0.4 by default, persisted under the id with "share"), each
+pane at least 160 points: `sheet_pane_width` sets the width egui keeps for the panel from the share
+before it draws, and `keep_sheet_pane_share` keeps a new share after a drag of the divider, so a
+window made smaller keeps the share (`each_layout_keeps_a_width_of_its_own_for_the_sheet_pane`).
+Each pane sits under a heading ("Sheet", "Card", `SHEET_PANE` and `CARD_PANE`) in a `ScrollArea` of
+its own (`henad_sheet_pane_scroll`, `henad_card_pane_scroll`). The Sheet pane's scroll sits in a
+child `Ui` of the rect the divider gives, which the panel takes whole, so content never widens the
+pane. The world stays in the dock's Viewport, Playback, Pacing, Parameters and Charts tabs.
 
 **Edits**. `SheetEditor::edit(past_start, starts_only, run)` runs `run`, a closure of
 `SheetEdit` commands, on a clone of the builder and keeps it only when every command is accepted, so
@@ -37,7 +40,7 @@ equal changes nothing. Every edit takes a fresh `load`, the preview key, so the 
 at tick 0, except a `starts_only` edit while `past_start`, which keeps the key: the world runs on
 and the Cells table shows `START_AGAIN_TO_SEE` under that property's select while `start_changed`
 holds (Build, which is Start again, clears it). A restart while `past_start` sets `notice` to
-`RESTART_NOTICE`, which `sheet_outcome_ui` lists under the preview line with an information icon.
+`RESTART_NOTICE`, which `sheet_outcome_ui` lists under the preview line as a warning notice.
 `AppState::sheet_preview_past_start` is `previews_editor_sheet()` and either `Preview::acted` (set
 by `ui/params.rs` when a button of the model is pressed in the preview, cleared by `build_preview`)
 or `!run_at_start()`. `editor_ui` reads it before borrowing the panel and passes it to `sheet_ui`.
@@ -159,17 +162,21 @@ step in the place of the old one, and renames alone a button that only sets whil
 (`the_button_form_keeps_the_steps_that_set_a_property_everywhere`, `src/tests/sheet_agents.rs`). A
 refusal shows as the form's message (`FormKind` on `Pending`).
 
-The toolbar (`toolbar_ui`, a `Panel::top` above both panes): the model name as a frameless button
-named `model_name_button` ("Model name: X. Rename", tooltip `RENAME_MODEL_TOOLTIP`) that opens
-`SheetEditor::renaming`, a field named `MODEL_NAME_FIELD` that takes the focus, keeps on Enter or a
-click elsewhere (`SetSheetName`, the id kept) and puts the old name back on Escape or an empty name,
-then Undo and Redo with their icons and tooltips, then the menu named `MODEL_ACTIONS` (an icon,
-"Model actions") holding `CONVERT_HEADING`, disabled with `ConvertRefusal::tooltip` while
-`SheetShown::refusal` holds (`agents/henad-app-editor.md`, the expert mode). Under the toolbar, a
-link `converted_link` ("Converted to node graph: Game of Life (expert)") shows while
-`SheetShown::copy` names the copy held as the counterpart, and returns `SheetRequest::OpenCopy`.
-`sheet_ui(ui, sheet, &SheetShown)` returns the `SheetRequest` of a pressed control
-(`Convert`, `OpenCopy`), which `editor_ui` maps to an `EditorRequest`. Undo
+The name row (`name_row` over a `NameRow`, the second row of the Editor's header, which
+`agents/henad-app-editor.md` describes): the model name in the body colour as a button shown
+framed only under the pointer or the focus, named `model_name_button` ("Model name: X. Rename",
+tooltip `RENAME_MODEL_TOOLTIP`) that opens `SheetEditor::renaming`, a field named
+`MODEL_NAME_FIELD` that takes the focus, keeps on Enter or a click elsewhere (`SetSheetName`, the
+id kept) and puts the old name back on Escape or an empty name, then `widgets::unsaved_mark` while
+the Editor holds unsaved changes, the file's name in the weak colour, a hairline, Undo and Redo
+with their icons and tooltips, a hairline, then the menu named `MODEL_ACTIONS` (an icon, "Model
+actions") holding `CONVERT_HEADING`, disabled with `ConvertRefusal::tooltip` while
+`NameRow::refusal` holds (`agents/henad-app-editor.md`, the expert mode). Undo, Redo and the menu
+button show their frame only under the pointer or the focus too. Under the row, a link
+`converted_link` ("Converted to node graph: Game of Life (expert)") shows while `NameRow::copy`
+names the copy held as the counterpart, and returns `SheetRequest::OpenCopy`.
+`sheet_ui(ui, sheet, &SheetShown)` and `name_row` return the `SheetRequest` of a pressed control
+(`Convert`, `OpenCopy`), which `editor_ui` and `header_ui` map to an `EditorRequest`. Undo
 (`SheetEditor::history`, the graph editor's `History` of canonical texts): `edit` and
 `keep_value` record the text before a kept edit, and
 `undo` and `redo` read a text back through `restore` (a fresh `SheetBuilder`, the pane's forms
@@ -221,7 +228,8 @@ name, for a starter's own colours), and the New parameter dialog:
 10 otherwise, or from the typed number with Min at twice a negative one and Max at `default_max` (1,
 2 or 5 times a power of ten about ten times it, at most 1 below 1 or for a chance). Max and a
 negative Min follow Default until typed. `parameter(taken)` runs the checks of the wording table in
-order, reading every field with a percent. The modal (`henad_new_parameter_modal`) is a `Dialog`
+order, reading every field with a percent. The modal (`henad_new_parameter_modal`, a dialog of the
+`widgets.rs` kind below, where Enter creates) is a `Dialog`
 named `NEW_PARAMETER_HEADING`. A rate's starting values and its "per [unit]" Unit wait for the first
 rate blank.
 
@@ -231,8 +239,9 @@ rate blank.
 words of a world of agents) and `help_button`: a borderless
 `MDI_HELP_CIRCLE_OUTLINE` button named `SheetSection::help_name` or `HELP_LINES_NAME` ("Help:
 World", "Help: lines") toggling a `Popup` (320 points wide, closed by a click outside, Escape or
-Close help) that holds the heading (`LINES_HELP_HEADING` for the lines), the text, "Example:" with
-the example, and Close help. The popup is a `Dialog` named by `help_dialog_name` ("World help"),
+Close help) drawn as an overlay (`widgets::overlay`) that holds the heading as its small upper-case
+title (`LINES_HELP_HEADING` for the lines), the text, "Example:" with the example in the weak
+colour, and Close help as a small button. The popup is a `Dialog` named by `help_dialog_name` ("World help"),
 apart from the button's name. Its id derives from the button's, so two "Help: lines" buttons open
 two popovers. `sheet_ui` makes each pane a `Group` named "Sheet" or "Card" (`pane_group`), so
 "region" never reaches the tree.
@@ -257,10 +266,10 @@ shows the preview's state (`preview_ui` with `plays` false, so a running preview
 `preview_running_text`'s "Preview at 256 × 256 cells starts at tick 0. Press Play to run it, or
 Apply to run the model at its own size."), the last Apply's outcome with any problem the check does
 not list, then every diagnostic of the report the card does not draw and every lowering problem the
-report lacks, errors in the theme's error colour and warnings in its warn colour, as the message
-alone. Its line and column point into the sheet's text, which sheet mode never shows. A waiting
-preview reads the sheet's `PREVIEW_WAITS`, which names Offload. A problem of a line the card shows
-sits under it on the card. `save_name` suggests `<sheet id>.toml` for a sheet with no file name,
+report lacks, each an error or a warning notice (`NoticeKind::of`) of the message alone. Its line
+and column point into the sheet's text, which sheet mode never shows. A waiting preview reads the
+sheet's `PREVIEW_WAITS`, which names Offload. A problem of a line the card shows sits under it on
+the card. `save_name` suggests `<sheet id>.toml` for a sheet with no file name,
 errors or not. Apply is unchanged: `ModelFile::parse(...).and_then(|file| file.entry())` installs
 the lowered graph's entry, whose source records the sheet's canonical text as its author text, and
 `edit_model` reopens an applied sheet's entry as that sheet unless the Editor applied it. A note
@@ -300,11 +309,12 @@ description from `STARTER_CHOICES` by that name), the chosen index, the Name tex
 author types in Name, the name to the starter's. "Untitled model" is the default name of Blank, the
 first choice. `open_new_model` opens it from the Editor header's New model, the File menu's first
 entry and the Model tab's New model. `lib.rs` calls `new_model_modal` every frame beside the other
-modals: an `egui::Modal` (`henad_new_model_modal`) whose content `Ui` takes `Role::Dialog` and the
-label "New model" through `accesskit_node_builder`, the heading `NEW_MODEL`, `START_FROM` with one
-`radio_value` per starter and its description indented under it, a Name `TextEdit` labelled by its
-label, Cancel and Create (`filled_button`, blue 700). Enter in Name creates, as Create does, and
-Cancel, Escape or a click on the backdrop closes it. `create_model(app, file_name, name)` reads the
+modals: an `egui::Modal` (`henad_new_model_modal`, a dialog of `widgets.rs` named "New model"),
+the title `NEW_MODEL`, `START_FROM` as a caption with one `widgets::choice_row` per starter (a
+radio button named by the starter, its description weak under its name, the tinted fill and a
+check while chosen), the world question indented under Blank, a Name `TextEdit` labelled by its
+label, Cancel and Create (blue 700). Enter creates, as Create does, and Cancel, Escape or a click on
+the backdrop closes it. `create_model(app, file_name, name)` reads the
 starter, runs `SheetEdit::SetSheetName` when the name differs (an empty name is `UNTITLED_MODEL`,
 and a refused one keeps the starter's name with the reason as the file status), loads the sheet
 under the id `new_model_id` gives (`agents/henad-app-editor.md`) with no file name and brings the

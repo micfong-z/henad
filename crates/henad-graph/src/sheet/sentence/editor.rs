@@ -69,6 +69,15 @@ pub const SAVE_MODEL: &str = "Save model";
 /// Action of the unsaved changes dialog that replaces the models without saving them.
 pub const DISCARD_CHANGES: &str = "Discard changes";
 
+/// Title of the dialog that asks before a model with unsaved changes is replaced.
+pub const UNSAVED_HEADING: &str = "Unsaved changes";
+
+/// Accessible name of the mark beside the name of a model with unsaved changes.
+pub const UNSAVED_MARK: &str = "Unsaved changes";
+
+/// Tooltip of the mark beside the name of a model with unsaved changes.
+pub const UNSAVED_MARK_TOOLTIP: &str = "Unsaved changes. Press Save model to keep them.";
+
 // The New parameter dialog
 
 /// Heading of the New parameter dialog.

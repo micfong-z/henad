@@ -1103,7 +1103,7 @@ impl AppState {
     ///
     /// Results can be polled via [`Self::poll_saves`].
     pub fn save_as(&mut self, target: SaveTarget, name: &str, bytes: Vec<u8>) {
-        *self.save_status(target) = Some(format!("{SAVE_PENDING} {name}"));
+        self.set_save_status(target, format!("{SAVE_PENDING} {name}"), false);
         // A test opens no dialog, and reports the save's outcome through `finish_save`.
         #[cfg(test)]
         if let Some(requested) = &mut self.saves_requested {
@@ -1136,16 +1136,18 @@ impl AppState {
     ///
     /// Results can be polled via [`Self::poll_saves`].
     pub fn save_files(&mut self, target: SaveTarget, files: Arc<SweepFiles>) {
-        *self.save_status(target) = Some(format!("{SAVE_PENDING} {} files", files.entries().len()));
+        self.set_save_status(target, format!("{SAVE_PENDING} {} files", files.entries().len()), false);
         spawn_save_files(target, files, self.saves.0.clone(), self.egui_ctx.clone());
     }
 
-    /// Returns the status line a save for `target` reports to.
-    fn save_status(&mut self, target: SaveTarget) -> &mut Option<String> {
+    /// Sets the status line a save for `target` reports to, to `text`, a failure when `failed` holds.
+    fn set_save_status(&mut self, target: SaveTarget, text: String, failed: bool) {
         match target {
-            SaveTarget::Export => &mut self.export_status,
-            SaveTarget::SweepSpec | SaveTarget::SweepResults(_) => &mut self.sweep.status,
-            SaveTarget::Model | SaveTarget::Counterpart => &mut self.editor.file_status,
+            SaveTarget::Export => self.export_status = Some(text),
+            SaveTarget::SweepSpec | SaveTarget::SweepResults(_) => self.sweep.status = Some(text),
+            SaveTarget::Model | SaveTarget::Counterpart => {
+                self.editor.file_status = Some(crate::ui::editor::FileStatus { text, failed });
+            }
         }
     }
 
@@ -1166,13 +1168,15 @@ impl AppState {
             if matches!(target, SaveTarget::Model | SaveTarget::Counterpart) {
                 self.editor.save_finished(target, saved.clone());
             }
-            *self.save_status(target) = Some(match result {
+            let failed = matches!(result, SaveResult::Failed(_));
+            let text = match result {
                 SaveResult::Saved(name) => format!("Saved {name}"),
                 SaveResult::Downloaded(name) => format!("Downloaded {name}"),
                 SaveResult::DownloadsStarted => DOWNLOADS_STARTED.to_owned(),
                 SaveResult::Failed(message) => format!("Save failed: {message}"),
                 SaveResult::Canceled => "Save canceled".to_owned(),
-            });
+            };
+            self.set_save_status(target, text, failed);
             if matches!(target, SaveTarget::Model | SaveTarget::Counterpart) {
                 crate::ui::editor::continue_replacement(self, target, saved.is_some());
             }

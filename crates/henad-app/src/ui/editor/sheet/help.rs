@@ -4,13 +4,14 @@
 //! [`henad_graph::sheet::sentence`]: the help of each [`SheetSection`] and the Lines help beside the card, each with
 //! its own words for a world of agents where the words for cells do not fit.
 
-use egui::{Button, Popup, PopupCloseBehavior, RichText, Ui};
+use egui::{Button, Frame, Label, Popup, PopupCloseBehavior, RichText, Ui};
 use henad_graph::sheet::sentence::{
     CLOSE_HELP, HELP_EXAMPLE_LABEL, HELP_LINES_NAME, LINES_HELP, LINES_HELP_AGENTS, LINES_HELP_AGENTS_EXAMPLE,
     LINES_HELP_EXAMPLE, LINES_HELP_HEADING, SheetSection, WORLD_HELP_AGENTS, help_dialog_name,
 };
 
 use super::accessible_group;
+use super::widgets::{OVERLAY_PADDING, overlay, overlay_title};
 use crate::icons::material_design_icons::MDI_HELP_CIRCLE_OUTLINE;
 use crate::ui::sweep::layout::add_button;
 
@@ -70,7 +71,8 @@ impl Help {
     }
 }
 
-/// Draws the "?" of `help` and, while it is open, its popover below it.
+/// Draws the "?" of `help` and, while it is open, its popover below it: an overlay with a small upper-case title, the
+/// text, "Example:" with the example in the weak colour, and Close help.
 pub fn help_button(ui: &mut Ui, help: Help) {
     let name = help.name();
     let heading = help.heading();
@@ -86,17 +88,26 @@ pub fn help_button(ui: &mut Ui, help: Help) {
     let popup = Popup::from_toggle_button_response(&button)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
         .width(HELP_WIDTH)
+        .frame(Frame::NONE)
         .show(|ui| {
-            ui.strong(heading);
-            ui.label(help.text());
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(HELP_EXAMPLE_LABEL).strong());
-                ui.label(help.example());
-            });
-            if ui.button(CLOSE_HELP).clicked() {
-                ui.close();
-            }
-            ui.unique_id()
+            overlay(ui, |ui| {
+                ui.set_width(HELP_WIDTH - 2.0 * OVERLAY_PADDING);
+                overlay_title(ui, heading);
+                ui.add_space(6.0);
+                ui.add(Label::new(help.text()).wrap());
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.weak(HELP_EXAMPLE_LABEL);
+                    ui.weak(help.example());
+                });
+                ui.add_space(8.0);
+                if ui.small_button(CLOSE_HELP).clicked() {
+                    ui.close();
+                }
+                ui.add_space(2.0);
+                ui.unique_id()
+            })
         });
     if let Some(popup) = popup {
         // Named apart from the button, so a locator of the button's name finds the button alone.

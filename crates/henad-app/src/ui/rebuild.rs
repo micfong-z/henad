@@ -3,8 +3,14 @@
 use egui::{Context, Id, Modal};
 
 use crate::state::{AppState, PendingRebuild};
+use crate::ui::editor::sheet::widgets::{DialogButton, DialogButtonKind, dialog_buttons, dialog_frame, dialog_title};
 use crate::ui::plural;
-use crate::ui::sweep::layout::destructive_button;
+
+/// Title of the modal.
+const REBUILD_HEADING: &str = "Rebuild model";
+
+/// Width in points of the modal's content.
+const DIALOG_WIDTH: f32 = 420.0;
 
 /// Line saying what a rebuild does to the run.
 const REBUILD_TEXT: &str = "The model will be rebuilt from tick 0. The current run will be lost.";
@@ -12,8 +18,8 @@ const REBUILD_TEXT: &str = "The model will be rebuilt from tick 0. The current r
 /// Asks before [`AppState::rebuild_loaded`] rebuilds the loaded model, while [`AppState::pending_rebuild`] holds a
 /// rebuild.
 ///
-/// Rebuild is disabled while [`AppState::rebuild_refusal`] returns a reason, with the reason as its tooltip. Cancel,
-/// Escape and a click beside the modal close it, and the run keeps going under its own code.
+/// Rebuild is disabled while [`AppState::rebuild_refusal`] returns a reason, with the reason as its tooltip. Enter
+/// presses Rebuild. Cancel, Escape and a click beside the modal close it, and the run keeps going under its own code.
 pub fn rebuild_modal(ctx: &Context, app: &mut AppState) {
     let Some(pending) = &app.pending_rebuild else {
         return;
@@ -27,27 +33,25 @@ pub fn rebuild_modal(ctx: &Context, app: &mut AppState) {
 
     let mut rebuild = false;
     let mut closed = false;
-    let response = Modal::new(Id::new("henad_rebuild_modal")).show(ctx, |ui| {
-        ui.set_max_width(420.0);
-        ui.heading("Rebuild model");
+    let modal = Modal::new(Id::new("henad_rebuild_modal")).frame(dialog_frame(ctx));
+    let response = modal.show(ctx, |ui| {
+        dialog_title(ui, REBUILD_HEADING, REBUILD_HEADING, DIALOG_WIDTH);
         ui.label(REBUILD_TEXT);
         for line in &lines {
             ui.label(line);
         }
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("Cancel").clicked() {
-                closed = true;
-            }
-            let button = ui.add_enabled(refusal.is_none(), destructive_button("Rebuild"));
-            let button = match &refusal {
-                Some(reason) => button.on_disabled_hover_text(reason.as_str()),
-                None => button,
-            };
-            if button.clicked() {
-                rebuild = true;
-            }
-        });
+        let buttons = [
+            DialogButton::new("Cancel", DialogButtonKind::Plain),
+            DialogButton {
+                refusal: refusal.as_deref(),
+                ..DialogButton::new("Rebuild", DialogButtonKind::Destructive)
+            },
+        ];
+        match dialog_buttons(ui, &buttons) {
+            Some(0) => closed = true,
+            Some(_) => rebuild = true,
+            None => {}
+        }
     });
 
     if rebuild {

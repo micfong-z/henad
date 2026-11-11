@@ -83,10 +83,11 @@ marks, swapped with the model. New model, New grid rule, New node graph and Open
 menu, Model tab), Edit model of code the Editor did not apply, and Open in Editor go through
 `replace_model(app, Replacement)`, which runs the action at once when `unsaved_names` is empty and
 otherwise sets `EditorPanel::ask`. `unsaved_modal` (drawn from `lib.rs`) is a `Dialog` named by
-`sentence::unsaved_changes(names)` with Cancel, `DISCARD_CHANGES` and `SAVE_MODEL`
-(`filled_button`). Save model saves the model shown (`SaveTarget::Model`) and then the counterpart
-(`SaveTarget::Counterpart`) in turn (`AfterSave`): `poll_saves` passes each outcome to
-`save_finished` and `continue_replacement`, which runs the action once both saved and drops it on a
+`sentence::unsaved_changes(names)`, titled `UNSAVED_HEADING`, with Cancel, `DISCARD_CHANGES` and
+`SAVE_MODEL` (the primary, which Enter presses). Save model saves the model shown
+(`SaveTarget::Model`) and then the counterpart (`SaveTarget::Counterpart`) in turn (`AfterSave`):
+`poll_saves` passes each outcome to `save_finished` and `continue_replacement`, which runs the
+action once both saved and drops it on a
 save that saved nothing. In a test build `save_as` records each save in `saves_requested`, and
 `finish_save` reports it (`src/tests/unsaved.rs`).
 `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer drawn over the grid layer,
@@ -287,9 +288,10 @@ rebuilds at once while `run_at_start` holds (no snapshot past tick 0, not playin
 tick pending) and `AppState::rebuild_refusal` returns no reason. Otherwise it sets
 `pending_rebuild` (`PendingRebuild`, with the run's values the new code does not take and the
 run's actions it drops, counted against the loaded entry), which `ui/rebuild.rs` shows as the
-Rebuild model modal. Rebuild calls `AppState::rebuild_loaded`: Build for the selected model, or
-the running values carried by id (`carried_setup`) for a model loaded while another one is
-selected, which keeps the selection. `rebuild_refusal` is `build_refusal` for the selected model,
+Rebuild model modal, a dialog whose Rebuild is destructive and takes Enter. Rebuild calls
+`AppState::rebuild_loaded`: Build for the selected model, or the running values carried by id
+(`carried_setup`) for a model loaded while another one is selected, which keeps the selection.
+`rebuild_refusal` is `build_refusal` for the selected model,
 and the carried setup's `SetupError` or device shortfall otherwise. It disables Rebuild with its
 reason, and `rebuild_loaded` checks it before any teardown. Cancel keeps the old run under its
 pinned entry, and the Parameters banner (`notice_content`, a `ParamsNotice`) reads "Model code

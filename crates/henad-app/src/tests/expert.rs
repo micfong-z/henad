@@ -9,7 +9,7 @@ use henad_graph::ids::NodeId;
 use henad_graph::sheet::ConvertRefusal;
 use henad_graph::sheet::sentence::{
     CONVERT, CONVERT_HEADING, CONVERT_NEEDS_FINISHED_LINES, CONVERT_NEEDS_FIXES, DIAGRAM, EDIT_AS_NODE_GRAPH,
-    MODEL_ACTIONS, Sentences, convert_text, converted_banner, converted_link, diagram_name, open_original,
+    LINES_VIEW, MODEL_ACTIONS, Sentences, convert_text, converted_banner, converted_link, diagram_name, open_original,
 };
 use henad_graph::sheet::starters;
 use henad_graph::value::Literal;
@@ -18,7 +18,7 @@ use crate::tests::support::{Harness, forbidden_words};
 use crate::ui::editor::expert::{CopyState, convert_refusal, copy_banner, find_original, open_original_of, today};
 use crate::ui::editor::graph::arrange::NODE_SIZE;
 use crate::ui::editor::sheet::diagram::diagram_boxes;
-use crate::ui::editor::{EditorModel, open_text};
+use crate::ui::editor::{EditorModel, FileStatus, open_text};
 
 /// Title of the frame of line 2 in the copy of Game of Life.
 const LINE_2: &str = "Line 2: Become Alive from Dead, when Alive neighbours is 3";
@@ -101,6 +101,48 @@ fn the_graph_view_draws_one_box_per_line_and_edits_nothing() {
     assert!(
         lines.iter().any(|node| node.label.starts_with("Line 2: ")),
         "the toggle returns to the lines"
+    );
+}
+
+/// Lines and Diagram are the two segments of one toggle, each a button on the keyboard path that a key presses.
+#[test]
+fn both_segments_of_the_card_toggle_take_the_focus_and_a_key() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    let nodes = harness.settle();
+    for segment in [LINES_VIEW, DIAGRAM] {
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.role == Role::Button && node.label == segment),
+            "{segment} is a button"
+        );
+    }
+    harness.click(DIAGRAM);
+    assert!(harness.app.editor.model.sheet().expect("a sheet").diagram);
+    // Tab walks the keyboard path from the start until it reaches Lines.
+    for _ in 0..200 {
+        if harness.focused == LINES_VIEW {
+            break;
+        }
+        harness.press(egui::Key::Tab, egui::Modifiers::NONE);
+    }
+    assert_eq!(harness.focused, LINES_VIEW, "Lines is on the keyboard path");
+    harness.press(egui::Key::Space, egui::Modifiers::NONE);
+    harness.settle();
+    assert!(
+        !harness.app.editor.model.sheet().expect("a sheet").diagram,
+        "Space on Lines returns to the lines"
+    );
+    harness.press(egui::Key::Tab, egui::Modifiers::NONE);
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+    harness.settle();
+    assert_eq!(harness.focused, DIAGRAM);
+    assert!(
+        harness.app.editor.model.sheet().expect("a sheet").diagram,
+        "Enter on Diagram shows the Diagram"
     );
 }
 
@@ -290,7 +332,11 @@ fn converting_game_of_life_opens_the_copy_with_frames_titled_by_line_and_the_ban
     assert_eq!(banner.state, CopyState::Unedited);
     assert_eq!(banner.text(), converted_banner("Game of Life", &today()));
     let texts = harness.accessible_texts();
-    assert!(texts.contains(&banner.text()), "the banner shows: {texts:?}");
+    // The banner is a notice, its text after the notice's icon.
+    assert!(
+        texts.iter().any(|text| text.ends_with(&format!(" {}", banner.text()))),
+        "the banner shows: {texts:?}"
+    );
     assert!(texts.contains(&open_original("Game of Life")));
 
     // Every frame of a canvas keeps its members together, apart from every other frame. A member of the open canvas
@@ -460,7 +506,7 @@ fn a_sheet_with_a_file_has_its_copy_written_beside_it_and_found_again() {
     let copy_path = folder.0.join("sheet_game_of_life_expert_2.toml");
     assert_eq!(harness.app.editor.file_path.as_ref(), Some(&copy_path));
     assert_eq!(
-        harness.app.editor.file_status.as_deref(),
+        harness.app.editor.file_status.as_ref().map(FileStatus::text),
         Some("Saved sheet_game_of_life_expert_2.toml")
     );
     let copy_text = std::fs::read_to_string(&copy_path).expect("the copy is written");

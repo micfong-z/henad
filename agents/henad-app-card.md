@@ -111,8 +111,8 @@ chip's name, and a state's swatch from `PickerItem::swatch`, a select's current 
 words, its list drawn by `widgets::select_list`, which the Sheet pane's selects share). The line
 menu's Move up and Move down stay listed where `can_move` refuses, disabled with
 `MOVE_UP_FIRST` or `MOVE_DOWN_LAST` as their tooltip. The pane's header draws Lines and Diagram as
-the two segments of a toggle (`toggle_label`), Diagram on the keyboard path and Lines a label that a
-click presses.
+the two segments of a toggle (`toggle_label`), each a selected or unselected button on the keyboard
+path that Space or Enter presses (`both_segments_of_the_card_toggle_take_the_focus_and_a_key`).
 
 **Pickers** (`picker.rs`). `control_picker` opens a control's picker or select when it is clicked or
 due to open (`CardState::open_next`), and takes the focus for `CardState::focus_next`. A picker's

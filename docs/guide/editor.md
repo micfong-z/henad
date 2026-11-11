@@ -48,8 +48,8 @@ Each heading has a help button with a short explanation and an example.
 
 ![The Sheet pane of a forest fire and its card, where line 3 starts with otherwise and a notice above the card says why](../assets/app/editor-sheet.png){ width="710" }
 
-Every change on either pane is one step of <span class="ui" markdown>:material-undo: Undo</span> and <span class="ui" markdown>:material-redo: Redo</span> in the toolbar above the panes.
-The toolbar also holds the model's name, and a click on the name renames the model.
+Every change on either pane is one step of <span class="ui" markdown>:material-undo: Undo</span> and <span class="ui" markdown>:material-redo: Redo</span>, on the second row of the Editor's header beside the model's name.
+A click on the name renames the model, and a dot after the name says the model holds changes you have not saved.
 
 ### The Sheet pane
 
@@ -316,7 +316,7 @@ The Diagram is read-only: edit the lines to change it, and press **Diagram** aga
 ### Converting to a node graph
 
 A sheet can be copied to a node graph, the form Henad runs, for edits the card cannot write.
-Choose **Convert to node graph** from the "Model actions" menu at the end of the sheet's toolbar, or press **Edit as node graph** beside the Diagram.
+Choose **Convert to node graph** from the "Model actions" menu after Redo, or press **Edit as node graph** beside the Diagram.
 A dialog says what the conversion does, and **Convert** makes the copy.
 Both controls are disabled while the card holds a problem or a line that does not run yet, and their tooltip says which.
 
@@ -332,7 +332,7 @@ A node named on the card, such as "Alive neighbours", shows that name instead.
 The inputs of the node that changes a state read by line, such as "Line 2 when".
 
 A banner above the canvas says which sheet the copy came from and when, and whether the copy was edited since.
-Press the banner's button named after the sheet, such as **Open Game of Life**, to return to the sheet, whose toolbar then shows "Converted to node graph:" and the copy's name, a link back to the copy.
+Press the banner's button named after the sheet, such as **Open Game of Life**, to return to the sheet, whose name row then shows "Converted to node graph:" and the copy's name, a link back to the copy.
 The banner says when the sheet's model has changed since the conversion, or when the sheet is not beside the copy's file.
 An edit of the sheet that leaves its code alone, such as a note, a comment, the purpose or what a parameter means, does not count as a change.
 The panel beside the canvas ends with **From the author model**, naming the sheet, its file and the date of the conversion, then the sheet's purpose and what each parameter means, which the node graph has no place for.

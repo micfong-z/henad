@@ -13,7 +13,7 @@ use crate::ui::dock::Tab;
 use crate::ui::editor::graph::world::param_with;
 use crate::ui::editor::graph::{GraphEdit, GraphEditor, GraphRequest, GraphStatus};
 use crate::ui::editor::{
-    ApplyOutcome, EditorModel, apply, editor_ui, new_graph_model, new_grid_rule, receive_open, save_name,
+    ApplyOutcome, EditorModel, FileStatus, apply, editor_ui, new_graph_model, new_grid_rule, receive_open, save_name,
 };
 use crate::ui::files::{DialogFile, OpenResult};
 
@@ -78,7 +78,10 @@ fn a_file_opens_on_the_canvas_or_as_text_by_whether_it_reads_as_a_graph() {
     receive_open(&mut app, opened("vote.toml", text));
     assert!(app.editor.model.graph().is_some(), "a graph opens on the canvas");
     assert_eq!(app.editor.file_name.as_deref(), Some("vote.toml"));
-    assert_eq!(app.editor.file_status.as_deref(), Some("Opened vote.toml"));
+    assert_eq!(
+        app.editor.file_status.as_ref().map(FileStatus::text),
+        Some("Opened vote.toml")
+    );
 
     let broken = text.replace("[graph]", "[graph]\nunknown_key = 1");
     receive_open(&mut app, opened("broken.toml", &broken));
@@ -436,11 +439,12 @@ fn a_converted_copy_opens_arranged_with_its_labels() {
     assert!(!graph.history().can_undo(), "opening makes no undo step");
 }
 
-/// Returns the colours of the text shapes in `shapes` that read `text`, nested shapes included.
+/// Returns the colours of the text shapes in `shapes` that end with `text`, as a notice's text follows its icon,
+/// nested shapes included.
 fn text_colors(shapes: &[egui::epaint::ClippedShape], text: &str) -> Vec<egui::Color32> {
     fn collect(shape: &egui::Shape, text: &str, colors: &mut Vec<egui::Color32>) {
         match shape {
-            egui::Shape::Text(shape) if shape.galley.text() == text => {
+            egui::Shape::Text(shape) if shape.galley.text().ends_with(text) => {
                 colors.extend(shape.override_text_color);
                 colors.extend(shape.galley.job.sections.iter().map(|section| section.format.color));
                 colors.push(shape.fallback_color);

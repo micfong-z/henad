@@ -1,5 +1,6 @@
 //! Controls the Sheet pane and the Card pane share: the chip, the dashed blank, a number field that commits on Enter
-//! or on losing focus, the picker, the colour palette and the New parameter dialog.
+//! or on losing focus, the picker, the colour palette and the New parameter dialog. The Editor's notices and the parts
+//! of its dialogs live here too.
 //!
 //! A *picker* is a popover under its anchor that lists what a blank or a field can take, in groups under headings, with
 //! "New parameter..." and a box for a typed number. A group with no item is left out, and a picker with nothing to
@@ -19,16 +20,18 @@ use henad_graph::sheet::sentence::{
     DIALOG_UNIT_PLACEHOLDER, LIMITS_NOT_NUMBERS, MAX_LABEL, MIN_LABEL, MIN_NOT_BELOW_MAX, NAME_LABEL, NEW_PARAMETER,
     NEW_PARAMETER_HEADING, NEW_PARAMETER_LEAD, NUMBER_BOX_HINT, NUMBER_PARAMETER_PLACEHOLDER, PARAMETER_NAME_FIELD,
     RATE_BELOW_ZERO, RATE_PARAMETER_PLACEHOLDER, SentenceChip, TIMES_LIMITS_NOT_INTEGERS, TIMES_PARAMETER_PLACEHOLDER,
-    TYPE_ONE_NUMBER, TYPE_TIMES, UNIT_LABEL, USE_BUTTON, parameter_name_taken, read_typed_number,
+    TYPE_ONE_NUMBER, TYPE_TIMES, UNIT_LABEL, UNSAVED_MARK, UNSAVED_MARK_TOOLTIP, USE_BUTTON, parameter_name_taken,
+    read_typed_number,
 };
 use henad_graph::value::Color;
 
 use super::accessible_group;
 use crate::icons::material_design_icons::{
-    MDI_CHECK, MDI_CHEVRON_DOWN, MDI_DOTS_HORIZONTAL, MDI_INFORMATION, MDI_TUNE_VERTICAL,
+    MDI_ALERT, MDI_ALERT_CIRCLE, MDI_CHECK, MDI_CHEVRON_DOWN, MDI_CIRCLE_MEDIUM, MDI_DOTS_HORIZONTAL, MDI_INFORMATION,
+    MDI_TUNE_VERTICAL,
 };
 use crate::ui::mcs;
-use crate::ui::sweep::layout::filled_button;
+use crate::ui::sweep::layout::{destructive_button, filled_button};
 
 /// Padding in points at each side of the words of a chip, a blank or a select.
 pub const CHIP_PADDING: f32 = 5.0;
@@ -46,7 +49,7 @@ pub const CHIP_SWATCH: f32 = 9.0;
 const FOCUS_WIDTH: f32 = 1.5;
 
 /// Padding in points inside an overlay, and at the sides of its items.
-const OVERLAY_PADDING: f32 = 6.0;
+pub const OVERLAY_PADDING: f32 = 6.0;
 
 /// Height in points of an item of an overlay with no grey words under it.
 const OVERLAY_ROW: f32 = 22.0;
@@ -611,21 +614,14 @@ pub fn note_button(ui: &mut Ui, words: &str, name: &str, size: f32) -> Response 
 /// returns its response: weak text while off, lighter under the pointer, and the text colour over a 2 point blue 500
 /// line while on.
 ///
-/// A `focusable` segment is a button on the keyboard path. Any other segment is a label that a click still presses.
-pub fn toggle_label(ui: &mut Ui, words: &str, selected: bool, focusable: bool) -> Response {
+/// The segment is a button on the keyboard path, which Space or Enter presses.
+pub fn toggle_label(ui: &mut Ui, words: &str, selected: bool) -> Response {
     let font = TextStyle::Body.resolve(ui.style());
     let galley = ui
         .painter()
         .layout_no_wrap(words.to_owned(), font, Color32::PLACEHOLDER);
-    let sense = if focusable { Sense::click() } else { Sense::CLICK };
-    let (rect, response) = ui.allocate_exact_size(galley.size() + vec2(8.0, 6.0), sense);
-    response.widget_info(|| {
-        if focusable {
-            WidgetInfo::selected(WidgetType::Button, true, selected, words)
-        } else {
-            WidgetInfo::labeled(WidgetType::Label, true, words)
-        }
-    });
+    let (rect, response) = ui.allocate_exact_size(galley.size() + vec2(8.0, 6.0), Sense::click());
+    response.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, selected, words));
     if ui.is_rect_visible(rect) {
         let color = if selected {
             ui.visuals().text_color()
@@ -650,53 +646,378 @@ pub fn toggle_label(ui: &mut Ui, words: &str, selected: bool, focusable: bool) -
 /// Paints the hairline between two segments of a segmented toggle, as high as their words.
 pub fn segment_rule(ui: &mut Ui) {
     let height = TextStyle::Body.resolve(ui.style()).size;
+    vertical_hairline(ui, height);
+}
+
+/// Paints a vertical gray 800 hairline `height` points high, as between two groups of buttons.
+pub fn vertical_hairline(ui: &mut Ui, height: f32) {
     let (rect, _) = ui.allocate_exact_size(vec2(1.0, height), Sense::hover());
     ui.painter()
         .vline(rect.center().x, rect.y_range(), Stroke::new(1.0, mcs::GRAY_800));
 }
 
-/// Adds an information notice: a row with a 2 point blue 500 bar and an information icon in blue 500 before `text` in
-/// the text colour. The row reads as one label, the icon, a space and the text.
-pub fn notice_ui(ui: &mut Ui, text: &str) {
-    let font = TextStyle::Body.resolve(ui.style());
-    let mut job = egui::text::LayoutJob::default();
-    job.append(
-        MDI_INFORMATION,
-        0.0,
-        egui::TextFormat {
-            font_id: font.clone(),
-            color: mcs::BLUE_500,
-            ..Default::default()
-        },
-    );
-    job.append(
-        &format!(" {text}"),
-        0.0,
-        egui::TextFormat {
-            font_id: font,
-            color: ui.visuals().text_color(),
-            ..Default::default()
-        },
-    );
-    let row = Frame::NONE
-        .inner_margin(Margin {
-            left: 8,
-            right: 4,
-            top: 3,
-            bottom: 3,
-        })
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.add(egui::Label::new(job).wrap());
-        })
-        .response
-        .rect;
-    let bar = Rect::from_min_size(row.min, vec2(2.0, row.height()));
-    ui.painter().rect_filled(bar, CornerRadius::ZERO, mcs::BLUE_500);
+/// Adds the mark beside the name of a model with unsaved changes, a small dot in the weak text colour named
+/// [`UNSAVED_MARK`] with [`UNSAVED_MARK_TOOLTIP`] as its tooltip, and returns its response.
+pub fn unsaved_mark(ui: &mut Ui) -> Response {
+    let dot = RichText::new(MDI_CIRCLE_MEDIUM).color(ui.visuals().weak_text_color());
+    let mark = ui.add(egui::Label::new(dot).selectable(false).sense(Sense::hover()));
+    set_name(ui, mark.id, UNSAVED_MARK);
+    mark.on_hover_text(UNSAVED_MARK_TOOLTIP)
 }
 
-/// Width in points of a picker.
-const PICKER_WIDTH: f32 = 280.0;
+/// Adds an information notice of `text`, as [`Notice`] draws it.
+pub fn notice_ui(ui: &mut Ui, text: &str) {
+    Notice::new(NoticeKind::Info, text).show(ui);
+}
+
+/// Kind of a notice, which picks the hue of its bar and its icon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeKind {
+    /// Information, blue 500 with an information icon.
+    Info,
+    /// A warning, orange 500 with a triangle.
+    Warning,
+    /// An error, red 500 with an exclamation mark.
+    Error,
+}
+
+impl NoticeKind {
+    /// Returns the kind of a problem of `severity`: an error for an error, a warning otherwise.
+    pub fn of(severity: henad_core::diagnostic::DiagnosticSeverity) -> Self {
+        if severity == henad_core::diagnostic::DiagnosticSeverity::Error {
+            Self::Error
+        } else {
+            Self::Warning
+        }
+    }
+
+    /// Hue of the notice's bar and icon, at step 500.
+    fn hue(self) -> Color32 {
+        match self {
+            Self::Info => mcs::BLUE_500,
+            Self::Warning => mcs::ORANGE_500,
+            Self::Error => mcs::RED_500,
+        }
+    }
+
+    /// Icon before the notice's text.
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Info => MDI_INFORMATION,
+            Self::Warning => MDI_ALERT,
+            Self::Error => MDI_ALERT_CIRCLE,
+        }
+    }
+}
+
+/// A notice: a row with a 2 point bar and an icon in the hue of its kind before its text in the text colour, and any
+/// small buttons after the text.
+///
+/// The text reads as one label, the icon, a space and the text. Weak notes under the text sit inside the row.
+#[derive(Debug, Clone, Copy)]
+pub struct Notice<'a> {
+    /// Kind of the notice.
+    kind: NoticeKind,
+    /// Text of the notice.
+    text: &'a str,
+    /// Whether the text is in the mono face, as a problem placed at a line and a column of a text.
+    mono: bool,
+    /// Whether the text can be selected and copied.
+    selectable: bool,
+    /// Whether a click on the text is reported, as on a problem that moves to its place.
+    clickable: bool,
+    /// Weak lines under the text.
+    notes: &'a [String],
+}
+
+impl<'a> Notice<'a> {
+    /// Returns a notice of `kind` showing `text`.
+    pub fn new(kind: NoticeKind, text: &'a str) -> Self {
+        Self {
+            kind,
+            text,
+            mono: false,
+            selectable: false,
+            clickable: false,
+            notes: &[],
+        }
+    }
+
+    /// Sets the text in the mono face.
+    pub fn mono(mut self) -> Self {
+        self.mono = true;
+        self
+    }
+
+    /// Lets the text be selected and copied.
+    pub fn selectable(mut self) -> Self {
+        self.selectable = true;
+        self
+    }
+
+    /// Reports a click on the text through the response [`Self::show`] returns.
+    pub fn clickable(mut self) -> Self {
+        self.clickable = true;
+        self
+    }
+
+    /// Adds `notes` as weak lines under the text.
+    pub fn notes(mut self, notes: &'a [String]) -> Self {
+        self.notes = notes;
+        self
+    }
+
+    /// Adds the notice across `ui`, and returns the response of its text.
+    pub fn show(self, ui: &mut Ui) -> Response {
+        self.show_with(ui, |_| ()).0
+    }
+
+    /// Adds the notice across `ui` with what `end` adds after its text, such as a small button, and returns the
+    /// response of its text and what `end` returns.
+    pub fn show_with<R>(self, ui: &mut Ui, end: impl FnOnce(&mut Ui) -> R) -> (Response, R) {
+        let body = TextStyle::Body.resolve(ui.style());
+        let font = if self.mono {
+            FontId::monospace(body.size - 1.0)
+        } else {
+            body.clone()
+        };
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            self.kind.icon(),
+            0.0,
+            egui::TextFormat {
+                font_id: body,
+                color: self.kind.hue(),
+                ..Default::default()
+            },
+        );
+        job.append(
+            &format!(" {}", self.text),
+            0.0,
+            egui::TextFormat {
+                font_id: font,
+                color: ui.visuals().text_color(),
+                ..Default::default()
+            },
+        );
+        let mut label = egui::Label::new(job).wrap().selectable(self.selectable);
+        if self.clickable {
+            label = label.sense(Sense::click());
+        }
+        let row = Frame::NONE
+            .inner_margin(Margin {
+                left: 8,
+                right: 4,
+                top: 3,
+                bottom: 3,
+            })
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let inner = ui
+                    .horizontal_wrapped(|ui| {
+                        let text = ui.add(label);
+                        (text, end(ui))
+                    })
+                    .inner;
+                for note in self.notes {
+                    ui.add(egui::Label::new(RichText::new(note).weak()).wrap());
+                }
+                inner
+            });
+        let rect = row.response.rect;
+        let bar = Rect::from_min_size(rect.min, vec2(2.0, rect.height()));
+        ui.painter().rect_filled(bar, CornerRadius::ZERO, self.kind.hue());
+        row.inner
+    }
+}
+
+// Dialogs
+
+/// Margin in points between a dialog's border and what it holds.
+const DIALOG_MARGIN: i8 = 12;
+
+/// Returns the frame of a dialog: the theme's window fill inside the overlay's 1 point gray 600 border, with no shadow
+/// and 12 points of margin.
+pub fn dialog_frame(ctx: &egui::Context) -> Frame {
+    Frame::popup(&ctx.global_style()).inner_margin(Margin::same(DIALOG_MARGIN))
+}
+
+/// Starts a dialog `width` points wide named `name` with the role of a dialog, and draws its title: `title` as a small
+/// upper-case mono label with a gray 800 hairline under it across the dialog.
+pub fn dialog_title(ui: &mut Ui, name: &str, title: &str, width: f32) {
+    ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+        node.set_role(egui::accesskit::Role::Dialog);
+        node.set_label(name);
+    });
+    ui.set_width(width);
+    caption(ui, title);
+    ui.add_space(4.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    let across = rect.x_range().expand(f32::from(DIALOG_MARGIN));
+    ui.painter()
+        .hline(across, rect.center().y, Stroke::new(1.0, mcs::GRAY_800));
+    ui.add_space(8.0);
+}
+
+/// Look of a button of a dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogButtonKind {
+    /// The theme's button, as Cancel.
+    Plain,
+    /// The primary action, blue 700 under gray 50.
+    Primary,
+    /// An action that discards work, red 900 under red 200.
+    Destructive,
+}
+
+/// One button of a dialog.
+#[derive(Debug, Clone, Copy)]
+pub struct DialogButton<'a> {
+    /// Words of the button. They also name it.
+    pub text: &'a str,
+    /// Look of the button.
+    pub kind: DialogButtonKind,
+    /// Reason the button is disabled, its tooltip, `None` while it is enabled.
+    pub refusal: Option<&'a str>,
+}
+
+impl<'a> DialogButton<'a> {
+    /// Returns an enabled button of `kind` showing `text`.
+    pub fn new(text: &'a str, kind: DialogButtonKind) -> Self {
+        Self {
+            text,
+            kind,
+            refusal: None,
+        }
+    }
+}
+
+/// Adds the buttons of a dialog in one row ending at its right edge, in the order of `buttons`, which puts the primary
+/// last, and returns the index of the one pressed.
+///
+/// Enter presses the last button, the primary, unless another button took the key or the dialog opened on the same
+/// frame. Escape closes the dialog through [`Modal`] itself.
+pub fn dialog_buttons(ui: &mut Ui, buttons: &[DialogButton<'_>]) -> Option<usize> {
+    ui.add_space(12.0);
+    let font = TextStyle::Button.resolve(ui.style());
+    let padding = ui.spacing().button_padding.x;
+    let spacing = ui.spacing().item_spacing.x;
+    let width: f32 = buttons
+        .iter()
+        .map(|button| {
+            let galley = ui
+                .painter()
+                .layout_no_wrap(button.text.to_owned(), font.clone(), Color32::PLACEHOLDER);
+            galley.size().x + 2.0 * padding + spacing
+        })
+        .sum();
+    let mut pressed = None;
+    ui.horizontal(|ui| {
+        ui.add_space((ui.available_width() - width + spacing).max(0.0));
+        for (index, button) in buttons.iter().enumerate() {
+            let widget = match button.kind {
+                DialogButtonKind::Plain => Button::new(button.text),
+                DialogButtonKind::Primary => filled_button(button.text.to_owned()),
+                DialogButtonKind::Destructive => destructive_button(button.text),
+            };
+            let response = ui.add_enabled(button.refusal.is_none(), widget);
+            let response = match button.refusal {
+                Some(refusal) => response.on_disabled_hover_text(refusal),
+                None => response,
+            };
+            if response.clicked() {
+                pressed = Some(index);
+            }
+        }
+    });
+    let primary = buttons.len().checked_sub(1);
+    let enter = dialog_enter(ui) && primary.is_some_and(|last| buttons[last].refusal.is_none());
+    pressed.or(primary.filter(|_| enter))
+}
+
+/// Returns whether Enter was pressed on a frame after the one that opened the dialog of `ui`. The press that opened a
+/// dialog from a menu or a focused button would otherwise confirm it at once.
+fn dialog_enter(ui: &Ui) -> bool {
+    let id = ui.unique_id().with("henad_dialog_pass");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let shown_before = ui
+        .data(|data| data.get_temp::<u64>(id))
+        .is_some_and(|last| last + 1 >= pass);
+    ui.data_mut(|data| data.insert_temp(id, pass));
+    shown_before && ui.input(|input| input.key_pressed(Key::Enter))
+}
+
+/// Adds a selectable full-width row of a dialog's list, `name` with `description` weak under it, and returns its
+/// response: a radio button named `name`, selected while `selected` holds.
+///
+/// The row takes the gray 800 fill under the pointer and the keyboard focus, and the focus outline inside its edge while
+/// it holds the focus. A selected row takes the tinted fill, blue 900 with its name in blue 200 after a check, as the
+/// current item of an overlay does.
+pub fn choice_row(ui: &mut Ui, name: &str, description: Option<&str>, selected: bool) -> Response {
+    let background = ui.painter().add(Shape::Noop);
+    let weak = ui.visuals().weak_text_color();
+    let name_color = if selected {
+        mcs::BLUE_200
+    } else {
+        ui.visuals().text_color()
+    };
+    let words = ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::ZERO;
+        ui.add_space(MARK_COLUMN);
+        ui.vertical(|ui| {
+            ui.add_space(3.0);
+            let name = ui.add(egui::Label::new(RichText::new(name).color(name_color)).selectable(false));
+            if let Some(description) = description {
+                let detail = RichText::new(description).color(weak).size(OVERLAY_DETAIL);
+                ui.add(egui::Label::new(detail).wrap().selectable(false));
+            }
+            ui.add_space(3.0);
+            name.rect
+        })
+        .inner
+    });
+    let name_rect = words.inner;
+    let row = Rect::from_x_y_ranges(
+        ui.max_rect().x_range().expand(OVERLAY_PADDING),
+        words.response.rect.y_range(),
+    );
+    let response = ui.interact(row, ui.id().with(("henad_choice_row", name)), Sense::click());
+    response.widget_info(|| WidgetInfo::selected(WidgetType::RadioButton, ui.is_enabled(), selected, name));
+    let fill = if selected {
+        Some(mcs::BLUE_900)
+    } else if response.hovered() || response.has_focus() {
+        Some(mcs::GRAY_800)
+    } else {
+        None
+    };
+    if let Some(fill) = fill {
+        ui.painter()
+            .set(background, Shape::rect_filled(row, CornerRadius::ZERO, fill));
+    }
+    let painter = ui.painter();
+    if selected {
+        painter.text(
+            pos2(row.left() + OVERLAY_PADDING, name_rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            MDI_CHECK,
+            FontId::proportional(SMALL_LABEL),
+            mcs::BLUE_200,
+        );
+    }
+    if response.has_focus() {
+        painter.rect_stroke(
+            row,
+            CornerRadius::ZERO,
+            Stroke::new(FOCUS_WIDTH, mcs::BLUE_500),
+            StrokeKind::Inside,
+        );
+    }
+    response
+}
+
+/// Width in points of a picker, the card's and the Sheet pane's alike. Its words wrap at it, and a picker with less to
+/// show keeps it, so every picker opens as wide as the next.
+pub const PICKER_WIDTH: f32 = 300.0;
 
 /// Side in points of a colour swatch button.
 const SWATCH_SIDE: f32 = 14.0;
@@ -1282,6 +1603,7 @@ impl Picker<'_> {
             .frame(Frame::NONE)
             .show(|ui| {
                 overlay(ui, |ui| {
+                    ui.set_min_width(PICKER_WIDTH - 2.0 * OVERLAY_PADDING);
                     let choice = self.contents(ui);
                     if choice.is_some() {
                         ui.close();
@@ -1672,15 +1994,11 @@ pub fn default_max(value: f64, number_use: NumberUse) -> f64 {
 pub fn new_parameter_modal(ctx: &egui::Context, dialog: &mut NewParameterDialog, taken: &[&str]) -> DialogOutcome {
     let mut create = false;
     let mut canceled = false;
-    let response = Modal::new(Id::new("henad_new_parameter_modal")).show(ctx, |ui| {
-        ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
-            node.set_role(egui::accesskit::Role::Dialog);
-            node.set_label(NEW_PARAMETER_HEADING);
-        });
-        ui.set_max_width(DIALOG_WIDTH);
-        ui.heading(NEW_PARAMETER_HEADING);
+    let modal = Modal::new(Id::new("henad_new_parameter_modal")).frame(dialog_frame(ctx));
+    let response = modal.show(ctx, |ui| {
+        dialog_title(ui, NEW_PARAMETER_HEADING, NEW_PARAMETER_HEADING, DIALOG_WIDTH);
         ui.label(NEW_PARAMETER_LEAD);
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let placeholder = match dialog.number_use {
             NumberUse::Chance => CHANCE_PARAMETER_PLACEHOLDER,
             NumberUse::Rate => RATE_PARAMETER_PLACEHOLDER,
@@ -1689,15 +2007,13 @@ pub fn new_parameter_modal(ctx: &egui::Context, dialog: &mut NewParameterDialog,
         };
         egui::Grid::new("henad_new_parameter_fields")
             .num_columns(2)
+            .spacing(vec2(12.0, 4.0))
             .show(ui, |ui| {
                 ui.label(NAME_LABEL);
                 let name = ui.add(TextEdit::singleline(&mut dialog.name).hint_text(placeholder));
                 set_name(ui, name.id, PARAMETER_NAME_FIELD);
                 if std::mem::take(&mut dialog.focus_name) {
                     name.request_focus();
-                }
-                if name.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
-                    create = true;
                 }
                 ui.end_row();
                 ui.label(DEFAULT_LABEL);
@@ -1726,15 +2042,15 @@ pub fn new_parameter_modal(ctx: &egui::Context, dialog: &mut NewParameterDialog,
         if let Some(message) = &dialog.message {
             message_ui(ui, message);
         }
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if ui.button(CANCEL).clicked() {
-                canceled = true;
-            }
-            if ui.add(filled_button(CREATE_PARAMETER.to_owned())).clicked() {
-                create = true;
-            }
-        });
+        let buttons = [
+            DialogButton::new(CANCEL, DialogButtonKind::Plain),
+            DialogButton::new(CREATE_PARAMETER, DialogButtonKind::Primary),
+        ];
+        match dialog_buttons(ui, &buttons) {
+            Some(0) => canceled = true,
+            Some(_) => create = true,
+            None => {}
+        }
     });
     if create {
         match dialog.parameter(taken) {

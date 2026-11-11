@@ -40,11 +40,9 @@ use henad_graph::sheet::sentence::{
 
 use super::accessible_group;
 use super::widgets::{
-    NumberUse, OverlayItem, color32, message_ui, overlay, overlay_group, overlay_item, overlay_title, set_name,
+    NumberUse, OVERLAY_PADDING, OverlayItem, PICKER_WIDTH, color32, message_ui, overlay, overlay_group, overlay_item,
+    overlay_title, set_name,
 };
-
-/// Width in points of a picker.
-const PICKER_WIDTH: f32 = 300.0;
 
 /// Tallest a picker grows in points before it scrolls.
 const PICKER_HEIGHT: f32 = 420.0;
@@ -181,6 +179,7 @@ impl CardPicker {
             .frame(Frame::NONE)
             .show(|ui| {
                 overlay(ui, |ui| {
+                    ui.set_min_width(PICKER_WIDTH - 2.0 * OVERLAY_PADDING);
                     // A long picker scrolls. A short one takes its own height. A scroll area lags a frame behind it.
                     let choice = if self.groups.iter().map(|group| group.items.len()).sum::<usize>() > LONG_PICKER {
                         ScrollArea::vertical()

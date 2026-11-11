@@ -22,8 +22,8 @@ use crate::ui::dock::Tab;
 use crate::ui::editor::code_view::{cursor_index, move_cursor};
 use crate::ui::editor::preview::{DEBOUNCE, PreviewState, poll_at};
 use crate::ui::editor::{
-    ApplyOutcome, EditableModel, EditorModel, NO_COMPUTE, apply, edit_model, editable_model, editor_ui, life_starter,
-    move_cursor_to, new_graph_model, new_grid_rule, open_text, receive_open,
+    ApplyOutcome, EditableModel, EditorModel, FileStatus, NO_COMPUTE, apply, edit_model, editable_model, editor_ui,
+    life_starter, move_cursor_to, new_graph_model, new_grid_rule, open_text, receive_open,
 };
 use crate::ui::files::{DialogFile, OpenResult};
 use crate::ui::playback::press_build;
@@ -804,7 +804,10 @@ fn edit_model_shows_the_code_the_rule_runs() {
     );
     assert_eq!(app.editor.model.file_text(), "format = \"henad-model\"\n");
     assert_eq!(app.editor.file_name.as_deref(), Some("other.toml"));
-    assert_eq!(app.editor.file_status.as_deref(), Some("Opened other.toml"));
+    assert_eq!(
+        app.editor.file_status.as_ref().map(FileStatus::text),
+        Some("Opened other.toml")
+    );
     assert_eq!(app.editor.outcome, None);
 
     edit_model(&mut app);
@@ -828,7 +831,7 @@ fn edit_model_shows_the_code_the_rule_runs() {
         "a file that is not text replaced the Editor's"
     );
     assert_eq!(
-        app.editor.file_status.as_deref(),
+        app.editor.file_status.as_ref().map(FileStatus::text),
         Some("Open failed: binary.toml is not UTF-8 text")
     );
 }

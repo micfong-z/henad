@@ -829,38 +829,64 @@ fn every_line_of_the_life_starter_reads_its_sentence_by_accessible_name() {
     }
 }
 
-/// A width the Sheet pane takes in one layout leaves the other layout alone, since egui stores the width in points.
+/// The Sheet pane keeps a share of the Editor's width of its own in each layout: a share dragged in one layout leaves
+/// the other layout alone, and a narrower window keeps the share.
 #[test]
 fn each_layout_keeps_a_width_of_its_own_for_the_sheet_pane() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    let sheet_width = |nodes: &[Node]| {
+    let pane = |nodes: &[Node], name: &str| {
         nodes
             .iter()
-            .find(|node| node.role == egui::accesskit::Role::Group && node.label == "Sheet")
+            .find(|node| node.role == egui::accesskit::Role::Group && node.label == name)
             .and_then(|node| node.bounds)
-            .expect("the Sheet pane")
-            .width()
+            .expect("the pane")
     };
-    harness.screen = egui::vec2(600.0, 1000.0);
+    let sheet_share = |harness: &mut Harness| {
+        let nodes = harness.settle();
+        let (sheet, card) = (pane(&nodes, "Sheet"), pane(&nodes, "Card"));
+        // The divider sits between the two panes' margins.
+        let divider = f32::midpoint(sheet.right(), card.left());
+        (divider / harness.screen.x, divider)
+    };
+    harness.screen = egui::vec2(1000.0, 1000.0);
     harness.open_sheet(starter_text("game_of_life.toml"));
-    let narrow = sheet_width(&harness.settle());
+    let (share, divider) = sheet_share(&mut harness);
+    assert!((share - 0.4).abs() < 0.02, "the default share is 0.4, not {share}");
+
+    // A drag of the divider in the default layout to 600 points.
+    let y = harness.screen.y / 2.0;
+    let button = |pressed, x: f32| egui::Event::PointerButton {
+        pos: egui::pos2(x, y),
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    harness.frame(vec![egui::Event::PointerMoved(egui::pos2(divider, y))]);
+    harness.frame(vec![button(true, divider)]);
+    for step in 1..=10 {
+        let x = divider + (600.0 - divider) * step as f32 / 10.0;
+        harness.frame(vec![egui::Event::PointerMoved(egui::pos2(x, y))]);
+    }
+    harness.frame(vec![button(false, 600.0)]);
+    harness.frame(vec![egui::Event::PointerGone]);
+    let (dragged, _) = sheet_share(&mut harness);
+    assert!((dragged - 0.6).abs() < 0.02, "the drag left a share of {dragged}");
 
     harness.app.layout = Layout::Editor;
-    harness.screen = egui::vec2(1400.0, 1000.0);
-    let wide = sheet_width(&harness.settle());
-    let share = 0.4 * harness.screen.x;
+    let (editor, _) = sheet_share(&mut harness);
     assert!(
-        wide > narrow + 100.0 && (wide - share).abs() < 20.0,
-        "the Editor layout took the width of the default layout: {wide} against {narrow}, not about {share}"
+        (editor - 0.4).abs() < 0.02,
+        "the Editor layout took the share of the default layout: {editor}"
     );
 
     harness.app.layout = Layout::Default;
-    let back = sheet_width(&harness.settle());
+    harness.screen = egui::vec2(700.0, 1000.0);
+    let (narrower, _) = sheet_share(&mut harness);
     assert!(
-        (back - narrow).abs() < 1.0,
-        "the default layout lost its width: {back} against {narrow}"
+        (narrower - 0.6).abs() < 0.02,
+        "the default layout lost its share in a narrower window: {narrower}"
     );
 }
 

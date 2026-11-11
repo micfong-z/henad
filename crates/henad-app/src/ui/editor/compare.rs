@@ -360,7 +360,7 @@ pub fn start_comparison(app: &mut AppState) {
     app.editor.comparison = None;
     match Comparison::start(app, &original, &copy, seed, key) {
         Ok(comparison) => app.editor.comparison = Some(Box::new(comparison)),
-        Err(error) => app.editor.file_status = Some(compare_failed(&error)),
+        Err(error) => app.editor.file_status = Some(super::FileStatus::failure(compare_failed(&error))),
     }
 }
 

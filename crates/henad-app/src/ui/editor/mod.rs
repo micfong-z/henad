@@ -21,7 +21,7 @@ pub mod graph;
 pub mod preview;
 pub mod sheet;
 
-use egui::{Button, CentralPanel, Frame, Label, Margin, Modal, Panel, RichText, ScrollArea, Sense};
+use egui::{Align, Button, CentralPanel, Frame, Layout, Margin, Modal, Panel, RichText, ScrollArea, vec2};
 use henad_compute::entry::{ModelEntry, ModelSet};
 use henad_compute::fault::{Fault, FaultKind};
 use henad_compute::gpu::runtime_grid::GridRule;
@@ -33,16 +33,16 @@ use henad_graph::model_text::read_header;
 use henad_graph::sheet::document::SheetDocument;
 use henad_graph::sheet::edit::{IdSpace, mint_id};
 use henad_graph::sheet::sentence::{
-    CANCEL, DISCARD_CHANGES, PREVIEW_WAITS as SHEET_PREVIEW_WAITS, SAVE_MODEL, SHEET_EMPTY, WORLD_EMPTY,
-    unsaved_changes,
+    CANCEL, DISCARD_CHANGES, PREVIEW_WAITS as SHEET_PREVIEW_WAITS, SAVE_MODEL, SHEET_EMPTY, UNSAVED_HEADING,
+    WORLD_EMPTY, unsaved_changes,
 };
 use henad_graph::sheet::{KIND_SHEET, ParsedSheet, SHEET_CODE_FORMAT};
 use henad_graph::starters::{Starter, agent_starters, starters};
 use henad_graph::{GraphFile, KIND_GRAPH};
 
 use crate::icons::material_design_icons::{
-    MDI_ALERT, MDI_CHECK, MDI_FILE_DOCUMENT_PLUS_OUTLINE, MDI_FILE_PLUS_OUTLINE, MDI_FOLDER_OPEN_OUTLINE,
-    MDI_GRAPH_OUTLINE, MDI_INFORMATION, MDI_PLAY_OUTLINE, MDI_TRAY_ARROW_DOWN,
+    MDI_CHECK, MDI_FILE_DOCUMENT_PLUS_OUTLINE, MDI_FILE_PLUS_OUTLINE, MDI_FOLDER_OPEN_OUTLINE, MDI_GRAPH_OUTLINE,
+    MDI_TRAY_ARROW_DOWN,
 };
 use crate::state::{AppState, PreviewRun, too_large_message};
 use crate::ui::dock::Tab;
@@ -50,6 +50,7 @@ use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
 use crate::ui::params::sheet_number;
 use crate::ui::sweep::layout::{add_button, filled_button};
 use preview::{PREVIEW_WAITS, PreviewState};
+use sheet::widgets::{DialogButton, DialogButtonKind, Notice, NoticeKind};
 
 /// Text the Editor shows on an adapter that cannot run compute shaders.
 pub const NO_COMPUTE: &str =
@@ -67,6 +68,9 @@ pub const NEW_NODE_GRAPH: &str = "New node graph";
 
 /// Name of a saved model file whose text does not read as a model file.
 const FALLBACK_FILE_NAME: &str = "model.toml";
+
+/// Line the Editor shows while the model has not been applied since it was opened, made or last edited.
+const PRESS_APPLY: &str = "Press Apply to check and install the model.";
 
 /// Default height in points of the diagnostics list.
 const DIAGNOSTICS_HEIGHT: f32 = 120.0;
@@ -223,7 +227,7 @@ pub struct EditorPanel {
     /// Outcome of the last Apply, `None` once the text is replaced.
     pub outcome: Option<ApplyOutcome>,
     /// Status of the last open or save.
-    pub file_status: Option<String>,
+    pub file_status: Option<FileStatus>,
     /// Source of the entry the last Apply installed. A fault of a run built from it belongs to the edit until the run
     /// passes tick 0.
     applied: Option<ModelSource>,
@@ -267,6 +271,38 @@ pub struct EditorPanel {
     /// Runs of the copy and its original that Compare runs started, `None` before Compare runs and after Close
     /// comparison.
     pub comparison: Option<Box<compare::Comparison>>,
+}
+
+/// Status line of the Editor's last open, save or other action on a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileStatus {
+    /// Text of the line, such as "Opened sir.toml".
+    pub text: String,
+    /// Whether the line reports a failure, such as a save that failed.
+    pub failed: bool,
+}
+
+impl FileStatus {
+    /// Returns a line that reports what was done, such as "Opened sir.toml".
+    pub fn note(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            failed: false,
+        }
+    }
+
+    /// Returns a line that reports a failure, such as "Open failed: ...".
+    pub fn failure(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            failed: true,
+        }
+    }
+
+    /// Text of the line.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
 }
 
 /// Load, code revision and hash of the original's text that a copy's banner and comparison were worked out for.
@@ -620,30 +656,19 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     // The New model dialog takes the keys of Undo and Redo while it is open.
     let keys = panel.new_model.is_none();
 
-    header_ui(ui, panel, compute, empty, &mut request);
-
-    Panel::bottom("henad_editor_diagnostics")
-        .resizable(true)
-        .default_size(DIAGNOSTICS_HEIGHT)
-        .frame(Frame::NONE.inner_margin(Margin::symmetric(0, 4)))
-        .show(ui, |ui| {
-            ScrollArea::vertical()
-                .id_salt("henad_editor_diagnostics_scroll")
-                .auto_shrink([false; 2])
-                .show(ui, |ui| {
-                    if panel.model.graph().is_some() {
-                        graph_outcome_ui(ui, panel);
-                    } else if panel.model.sheet().is_some() {
-                        sheet_outcome_ui(ui, panel);
-                    } else {
-                        outcome_ui(ui, panel, &mut request);
-                    }
-                });
-        });
-
     let copy = expert::counterpart_copy(panel);
-    let changes = expert::shown_changes(panel);
     let refusal = panel.model.sheet().and_then(expert::convert_refusal);
+    let header = HeaderShown {
+        compute,
+        empty,
+        past_start,
+        refusal,
+        copy: copy.as_deref(),
+    };
+    header_ui(ui, panel, &header, &mut request);
+    status_area_ui(ui, panel, compute, &mut request);
+
+    let changes = expert::shown_changes(panel);
 
     let marked: Vec<u32> = panel
         .outcome
@@ -671,7 +696,6 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 past_start,
                 trials: &trials,
                 keys,
-                copy: copy.as_deref(),
                 refusal,
                 fires: fires.as_ref(),
                 layout,
@@ -712,29 +736,37 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     }
 }
 
-/// Draws the header of the Editor tab: its buttons, the file name, the status of the last open or save, the reason
-/// nothing runs without compute, and the banner of a copy converted from a sheet. A pressed button sets `request`.
-fn header_ui(
-    ui: &mut egui::Ui,
-    panel: &mut EditorPanel,
+/// Things the Editor's header shows besides the Editor's own state, for one frame.
+#[derive(Debug, Clone, Copy)]
+struct HeaderShown<'a> {
+    /// Whether the device runs compute shaders.
     compute: bool,
+    /// Whether the Editor holds no model.
     empty: bool,
-    request: &mut Option<EditorRequest>,
-) {
+    /// Whether the preview of the Editor's sheet has passed tick 0 or a button was pressed in it.
+    past_start: bool,
+    /// Reason the Editor's sheet does not convert, `None` for a sheet that converts or another model.
+    refusal: Option<henad_graph::sheet::ConvertRefusal>,
+    /// Name of the node graph copy converted from the Editor's sheet in this session, `None` for none.
+    copy: Option<&'a str>,
+}
+
+/// Draws the header of the Editor tab: its buttons with Apply at the right end, the name row of the model, and the
+/// banner of a copy converted from a sheet. A pressed button sets `request`.
+fn header_ui(ui: &mut egui::Ui, panel: &mut EditorPanel, shown: &HeaderShown<'_>, request: &mut Option<EditorRequest>) {
+    let compute = shown.compute;
     Panel::top("henad_editor_header")
         .resizable(false)
-        .frame(Frame::NONE.inner_margin(Margin::symmetric(0, 4)))
+        .frame(Frame::NONE.inner_margin(Margin {
+            left: 0,
+            right: 0,
+            top: 4,
+            bottom: 6,
+        }))
         .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| header_buttons(ui, compute, empty, request));
-            if let Some(name) = &panel.file_name {
-                ui.weak(name);
-            }
-            if let Some(status) = &panel.file_status {
-                ui.label(status);
-            }
-            if !compute {
-                ui.colored_label(ui.visuals().warn_fg_color, format!("{MDI_ALERT} {NO_COMPUTE}"));
-            }
+            header_buttons(ui, compute, shown.empty, request);
+            ui.add_space(4.0);
+            name_row(ui, panel, shown, request);
         });
     if let Some(banner) = expert::copy_banner(panel) {
         Panel::top("henad_expert_banner")
@@ -804,10 +836,78 @@ fn sheet_trials(app: &AppState) -> Vec<sheet::sheet_pane::SheetTrial> {
         .collect()
 }
 
+/// Draws the name row of the header: the model's name in the body colour, the mark of unsaved changes and the file's
+/// name in the weak colour. A sheet's row holds its rename button, Undo, Redo and the menu of its actions too. Nothing
+/// shows while the Editor holds no model.
+fn name_row(ui: &mut egui::Ui, panel: &mut EditorPanel, shown: &HeaderShown<'_>, request: &mut Option<EditorRequest>) {
+    if panel.model.is_empty() {
+        return;
+    }
+    let unsaved = panel.is_unsaved();
+    let name = model_name(&panel.model, panel.file_name.as_deref());
+    // A grid rule goes by its file's name, which the row then shows once.
+    let file_name = panel.file_name.as_deref().filter(|file_name| *file_name != name);
+    if let EditorModel::Sheet(sheet) = &mut panel.model {
+        let row = sheet::NameRow {
+            past_start: shown.past_start,
+            refusal: shown.refusal,
+            unsaved,
+            file_name,
+            copy: shown.copy,
+        };
+        if let Some(sheet_request) = sheet::name_row(ui, sheet, &row) {
+            *request = Some(match sheet_request {
+                sheet::SheetRequest::Convert => EditorRequest::Convert,
+                sheet::SheetRequest::OpenCopy => EditorRequest::OpenCopy,
+            });
+        }
+        return;
+    }
+    ui.horizontal(|ui| {
+        // The name lines up with the words of a sheet's rename button.
+        ui.add_space(ui.spacing().button_padding.x);
+        ui.label(RichText::new(&name).color(ui.visuals().text_color()));
+        if unsaved {
+            sheet::widgets::unsaved_mark(ui);
+        }
+        if let Some(file_name) = file_name {
+            ui.weak(file_name);
+        }
+    });
+}
+
 /// Draws the header buttons, each setting `request` when pressed.
 ///
-/// The buttons are New model, New grid rule, New node graph, Open model, Save model and Apply.
+/// The buttons are New model, New grid rule and New node graph, a hairline, Open model and Save model, then Apply, the
+/// one primary button, at the right end. The first five wrap onto a second row when the tab is too narrow for them.
 fn header_buttons(ui: &mut egui::Ui, compute: bool, empty: bool, request: &mut Option<EditorRequest>) {
+    let apply_text = format!("{MDI_CHECK} Apply");
+    let apply_width = button_width(ui, &apply_text);
+    ui.horizontal_top(|ui| {
+        let width = (ui.available_width() - apply_width - ui.spacing().item_spacing.x).max(0.0);
+        ui.allocate_ui_with_layout(
+            vec2(width, ui.spacing().interact_size.y),
+            Layout::left_to_right(Align::Min).with_main_wrap(true),
+            |ui| file_buttons(ui, empty, request),
+        );
+        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+            apply_button(ui, compute, empty, apply_text, request);
+        });
+    });
+}
+
+/// Returns the width in points of a button showing `text`.
+fn button_width(ui: &egui::Ui, text: &str) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font, egui::Color32::PLACEHOLDER);
+    galley.size().x + 2.0 * ui.spacing().button_padding.x
+}
+
+/// Draws New model, New grid rule, New node graph, a hairline, Open model and Save model, each setting `request` when
+/// pressed.
+fn file_buttons(ui: &mut egui::Ui, empty: bool, request: &mut Option<EditorRequest>) {
     let model = add_button(
         ui,
         true,
@@ -838,6 +938,7 @@ fn header_buttons(ui: &mut egui::Ui, compute: bool, empty: bool, request: &mut O
         .response;
     graph.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, NEW_NODE_GRAPH));
     graph.on_hover_text("Start node graph from an example");
+    sheet::widgets::vertical_hairline(ui, ui.spacing().interact_size.y);
     let open = add_button(
         ui,
         true,
@@ -859,6 +960,11 @@ fn header_buttons(ui: &mut egui::Ui, compute: bool, empty: bool, request: &mut O
     if save.clicked() {
         *request = Some(EditorRequest::SaveModel);
     }
+}
+
+/// Draws Apply, the primary button of the header, showing `text` and setting `request` when pressed. It is disabled
+/// with its reason as the tooltip without compute or while the Editor holds no model.
+fn apply_button(ui: &mut egui::Ui, compute: bool, empty: bool, text: String, request: &mut Option<EditorRequest>) {
     let refusal = if !compute {
         Some(NO_COMPUTE)
     } else if empty {
@@ -866,14 +972,9 @@ fn header_buttons(ui: &mut egui::Ui, compute: bool, empty: bool, request: &mut O
     } else {
         None
     };
-    let apply = add_button(
-        ui,
-        refusal.is_none(),
-        Button::new(format!("{MDI_CHECK} Apply")),
-        "Apply",
-    )
-    .on_hover_text("Check model and install it")
-    .on_disabled_hover_text(refusal.unwrap_or_default());
+    let apply = add_button(ui, refusal.is_none(), filled_button(text), "Apply")
+        .on_hover_text("Check model and install it")
+        .on_disabled_hover_text(refusal.unwrap_or_default());
     if apply.clicked() {
         *request = Some(EditorRequest::Apply);
     }
@@ -897,6 +998,30 @@ fn starter_name(starter: &Starter) -> String {
     GraphFile::parse(starter.text).map_or_else(|_| starter.file_name.to_owned(), |file| file.document().name.clone())
 }
 
+/// Draws the status area under the panes, a resizable panel that scrolls: the status of the last open or save, then
+/// the notices of the model's kind. A press on a placed problem of a grid rule sets `request`.
+fn status_area_ui(ui: &mut egui::Ui, panel: &mut EditorPanel, compute: bool, request: &mut Option<EditorRequest>) {
+    Panel::bottom("henad_editor_diagnostics")
+        .resizable(true)
+        .default_size(DIAGNOSTICS_HEIGHT)
+        .frame(Frame::NONE.inner_margin(Margin::symmetric(0, 4)))
+        .show(ui, |ui| {
+            ScrollArea::vertical()
+                .id_salt("henad_editor_diagnostics_scroll")
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    file_status_ui(ui, panel, compute);
+                    if panel.model.graph().is_some() {
+                        graph_outcome_ui(ui, panel);
+                    } else if panel.model.sheet().is_some() {
+                        sheet_outcome_ui(ui, panel);
+                    } else {
+                        outcome_ui(ui, panel, request);
+                    }
+                });
+        });
+}
+
 /// Draws the outcome of the last Apply of a graph model, the message of the last refused edit, and every problem the
 /// checker finds now. A press on a problem at a node opens its pass and brings the node into view.
 fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
@@ -907,39 +1032,30 @@ fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
     preview_ui(ui, &panel.preview.state, true);
     match &panel.outcome {
         Some(outcome) => {
-            let (line, error) = outcome.summary();
-            if error {
-                ui.colored_label(ui.visuals().error_fg_color, line);
-            } else {
-                ui.label(line);
-            }
+            outcome_line(ui, outcome);
             // The refusal of an Apply repeats the checker's errors, which the list below shows as they are now.
             for diagnostic in outcome
                 .diagnostics()
                 .iter()
                 .filter(|diagnostic| !live.iter().any(|known| known.message == diagnostic.message))
             {
-                ui.colored_label(ui.visuals().error_fg_color, diagnostic_text(diagnostic));
+                Notice::new(NoticeKind::Error, &diagnostic_text(diagnostic)).show(ui);
             }
         }
         None => {
-            ui.weak("Press Apply to check and install the model.");
+            Notice::new(NoticeKind::Info, PRESS_APPLY).show(ui);
         }
     }
     if let Some(status) = &graph.status {
-        if status.warning {
-            ui.colored_label(ui.visuals().warn_fg_color, &status.message);
+        let kind = if status.warning {
+            NoticeKind::Warning
         } else {
-            ui.label(&status.message);
-        }
+            NoticeKind::Info
+        };
+        Notice::new(kind, &status.message).show(ui);
     }
     let mut framing = None;
     for diagnostic in &live {
-        let color = if diagnostic.severity == henad_core::diagnostic::DiagnosticSeverity::Error {
-            ui.visuals().error_fg_color
-        } else {
-            ui.visuals().warn_fg_color
-        };
         let scope = graph.diagnostic_scope(diagnostic);
         let body = match &scope {
             Some(henad_graph::edit::Scope::Function(id)) => Some(format!("function {id}")),
@@ -950,23 +1066,23 @@ fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
             (Some(body), None) => format!("{body}: "),
             _ => String::new(),
         };
-        let text = RichText::new(format!("{place}{}", diagnostic.message)).color(color);
+        let text = format!("{place}{}", diagnostic.message);
         let target = scope.zip(
             diagnostic
                 .node
                 .as_ref()
                 .and_then(|node| node.parse::<henad_graph::ids::NodeId>().ok()),
         );
-        let label = Label::new(text).selectable(false);
+        let notice = Notice::new(NoticeKind::of(diagnostic.severity), &text);
         match target {
             Some((scope, node)) => {
-                let response = ui.add(label.sense(Sense::click())).on_hover_text("Show node on canvas");
+                let response = notice.clickable().show(ui).on_hover_text("Show node on canvas");
                 if response.clicked() {
                     framing = Some(graph::GraphRequest::Frame { scope, node });
                 }
             }
             None => {
-                ui.add(label);
+                notice.show(ui);
             }
         }
     }
@@ -983,12 +1099,13 @@ fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel) {
         return;
     };
     if sheet.shows_nothing() {
-        ui.weak(WORLD_EMPTY);
+        Notice::new(NoticeKind::Info, WORLD_EMPTY).show(ui);
     } else {
         preview_ui(ui, &panel.preview.state, false);
     }
+    // An edit past the start restarts the world, and the notice warns of the run it took away.
     if let Some(notice) = sheet.notice() {
-        ui.label(format!("{MDI_INFORMATION} {notice}"));
+        Notice::new(NoticeKind::Warning, notice).show(ui);
     }
     let report = &sheet.report().diagnostics;
     let mut known: Vec<&CodeDiagnostic> = report.iter().map(|diagnostic| &diagnostic.diagnostic).collect();
@@ -1009,32 +1126,22 @@ fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel) {
     }
     match &panel.outcome {
         Some(outcome) => {
-            let (line, error) = outcome.summary();
-            if error {
-                ui.colored_label(ui.visuals().error_fg_color, line);
-            } else {
-                ui.label(line);
-            }
+            outcome_line(ui, outcome);
             for diagnostic in outcome
                 .diagnostics()
                 .iter()
                 .filter(|diagnostic| !known.iter().any(|known| known.message == diagnostic.message))
             {
-                ui.colored_label(ui.visuals().error_fg_color, &diagnostic.message);
+                Notice::new(NoticeKind::Error, &diagnostic.message).show(ui);
             }
         }
         None => {
-            ui.weak("Press Apply to check and install the model.");
+            Notice::new(NoticeKind::Info, PRESS_APPLY).show(ui);
         }
     }
     // The message alone. The line and column of a problem point into the sheet's text, which sheet mode never shows.
     for diagnostic in live {
-        let color = if diagnostic.severity == henad_core::diagnostic::DiagnosticSeverity::Error {
-            ui.visuals().error_fg_color
-        } else {
-            ui.visuals().warn_fg_color
-        };
-        ui.colored_label(color, &diagnostic.message);
+        Notice::new(NoticeKind::of(diagnostic.severity), &diagnostic.message).show(ui);
     }
 }
 
@@ -1048,24 +1155,24 @@ fn preview_ui(ui: &mut egui::Ui, state: &PreviewState, plays: bool) {
         PreviewState::Idle => return,
         PreviewState::Waiting => {
             let waits = if sheet { SHEET_PREVIEW_WAITS } else { PREVIEW_WAITS };
-            ui.label(format!("{MDI_INFORMATION} {waits}"));
+            Notice::new(NoticeKind::Info, waits).show(ui);
             return;
         }
         PreviewState::Running(run) => {
-            ui.label(format!("{MDI_PLAY_OUTLINE} {}", preview_running_text(*run, plays)));
+            Notice::new(NoticeKind::Info, &preview_running_text(*run, plays)).show(ui);
             return;
         }
         PreviewState::Refused(problems) => ("Preview not built. Fix the problems below.", problems.as_slice()),
         PreviewState::Faulted(problem) => ("Preview stopped. Fix the problem below.", std::slice::from_ref(problem)),
     };
-    ui.colored_label(ui.visuals().error_fg_color, line);
+    Notice::new(NoticeKind::Error, line).show(ui);
     for problem in problems {
         let text = if sheet {
             problem.message.clone()
         } else {
             diagnostic_text(problem)
         };
-        ui.colored_label(ui.visuals().error_fg_color, text);
+        Notice::new(NoticeKind::Error, &text).show(ui);
     }
 }
 
@@ -1087,39 +1194,55 @@ pub fn preview_running_text(run: PreviewRun, plays: bool) -> String {
 /// `request` to move the cursor there.
 fn outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel, request: &mut Option<EditorRequest>) {
     let Some(outcome) = &panel.outcome else {
-        if panel.model.is_empty() {
-            ui.weak(EMPTY_EDITOR);
+        let hint = if panel.model.is_empty() {
+            EMPTY_EDITOR
         } else {
-            ui.weak("Press Apply to check and install the model.");
-        }
+            PRESS_APPLY
+        };
+        Notice::new(NoticeKind::Info, hint).show(ui);
         return;
     };
-    let (line, error) = outcome.summary();
-    if error {
-        ui.colored_label(ui.visuals().error_fg_color, line);
-    } else {
-        ui.label(line);
-    }
+    outcome_line(ui, outcome);
     for diagnostic in outcome.diagnostics() {
-        let text = RichText::new(diagnostic_text(diagnostic))
-            .monospace()
-            .color(ui.visuals().error_fg_color);
+        let text = diagnostic_text(diagnostic);
+        let notes: Vec<String> = diagnostic.notes.iter().map(|note| format!("note: {note}")).collect();
         let placed = diagnostic.line.zip(diagnostic.column);
-        let label = Label::new(text).selectable(true);
+        let notice = Notice::new(NoticeKind::of(diagnostic.severity), &text)
+            .mono()
+            .selectable()
+            .notes(&notes);
         let response = match placed {
-            Some(_) => ui
-                .add(label.sense(Sense::click()))
-                .on_hover_text("Move cursor to problem"),
-            None => ui.add(label),
+            Some(_) => notice.clickable().show(ui).on_hover_text("Move cursor to problem"),
+            None => notice.show(ui),
         };
         if let Some((line, column)) = placed
             && response.clicked()
         {
             *request = Some(EditorRequest::MoveCursor { line, column });
         }
-        for note in &diagnostic.notes {
-            ui.weak(format!("    note: {note}"));
-        }
+    }
+}
+
+/// Draws the line of `outcome` as a notice, an error for a refusal or a fault and information otherwise.
+fn outcome_line(ui: &mut egui::Ui, outcome: &ApplyOutcome) {
+    let (line, error) = outcome.summary();
+    let kind = if error { NoticeKind::Error } else { NoticeKind::Info };
+    Notice::new(kind, line).show(ui);
+}
+
+/// Draws the status of the last open or save as a notice, an error for a failure, and the reason nothing runs on a
+/// device without compute as a warning.
+fn file_status_ui(ui: &mut egui::Ui, panel: &EditorPanel, compute: bool) {
+    if let Some(status) = &panel.file_status {
+        let kind = if status.failed {
+            NoticeKind::Error
+        } else {
+            NoticeKind::Info
+        };
+        Notice::new(kind, status.text()).show(ui);
+    }
+    if !compute {
+        Notice::new(NoticeKind::Warning, NO_COMPUTE).show(ui);
     }
 }
 
@@ -1222,7 +1345,7 @@ pub fn new_graph_model(app: &mut AppState, file_name: &str) {
     let Some(mut file) =
         henad_graph::starters::starter(file_name).and_then(|starter| GraphFile::parse(starter.text).ok())
     else {
-        app.editor.file_status = Some(format!("Starter {file_name} does not read"));
+        app.editor.file_status = Some(FileStatus::failure(format!("Starter {file_name} does not read")));
         return;
     };
     let id = new_model_id(&app.models, &file.document().target.id, "node_");
@@ -1421,11 +1544,12 @@ pub fn continue_replacement(app: &mut AppState, target: SaveTarget, saved: bool)
     }
 }
 
-/// Draws the unsaved changes dialog while a replacement waits on it: a sentence naming each model with unsaved edits,
-/// then Cancel, Discard changes and Save model.
+/// Draws the unsaved changes dialog while a replacement waits on it: its title, a sentence naming each model with
+/// unsaved edits, then Cancel, Discard changes and Save model.
 ///
 /// Save model saves each such model, the one shown first, and runs the replacement once both are saved. Discard
-/// changes runs it at once. Cancel, Escape and a click outside close the dialog and keep the models.
+/// changes runs it at once, and Enter presses Save model. Cancel, Escape and a click outside close the dialog and keep
+/// the models.
 pub fn unsaved_modal(ctx: &egui::Context, app: &mut AppState) {
     if app.editor.ask.is_none() {
         return;
@@ -1440,25 +1564,21 @@ pub fn unsaved_modal(ctx: &egui::Context, app: &mut AppState) {
     }
     let sentence = unsaved_changes(&names);
     let mut choice = None;
-    let response = Modal::new(egui::Id::new("henad_unsaved_modal")).show(ctx, |ui| {
-        ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
-            node.set_role(egui::accesskit::Role::Dialog);
-            node.set_label(sentence.as_str());
-        });
-        ui.set_max_width(UNSAVED_DIALOG_WIDTH);
+    let modal = Modal::new(egui::Id::new("henad_unsaved_modal")).frame(sheet::widgets::dialog_frame(ctx));
+    let response = modal.show(ctx, |ui| {
+        sheet::widgets::dialog_title(ui, &sentence, UNSAVED_HEADING, UNSAVED_DIALOG_WIDTH);
         ui.label(&sentence);
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            if ui.button(CANCEL).clicked() {
-                choice = Some(UnsavedChoice::Cancel);
-            }
-            if ui.button(DISCARD_CHANGES).clicked() {
-                choice = Some(UnsavedChoice::Discard);
-            }
-            if ui.add(filled_button(SAVE_MODEL.to_owned())).clicked() {
-                choice = Some(UnsavedChoice::Save);
-            }
-        });
+        let buttons = [
+            DialogButton::new(CANCEL, DialogButtonKind::Plain),
+            DialogButton::new(DISCARD_CHANGES, DialogButtonKind::Plain),
+            DialogButton::new(SAVE_MODEL, DialogButtonKind::Primary),
+        ];
+        choice = match sheet::widgets::dialog_buttons(ui, &buttons) {
+            Some(0) => Some(UnsavedChoice::Cancel),
+            Some(1) => Some(UnsavedChoice::Discard),
+            Some(_) => Some(UnsavedChoice::Save),
+            None => None,
+        };
     });
     if choice.is_none() && response.should_close() {
         choice = Some(UnsavedChoice::Cancel);
@@ -1502,7 +1622,7 @@ pub fn receive_open(app: &mut AppState, result: OpenResult) {
     let file = match result {
         OpenResult::Files(files) => files.into_iter().next(),
         OpenResult::Failed(message) => {
-            app.editor.file_status = Some(format!("Open failed: {message}"));
+            app.editor.file_status = Some(FileStatus::failure(format!("Open failed: {message}")));
             return;
         }
         OpenResult::Folder(_) | OpenResult::Canceled => return,
@@ -1512,13 +1632,13 @@ pub fn receive_open(app: &mut AppState, result: OpenResult) {
     };
     match String::from_utf8(bytes) {
         Ok(text) => {
-            app.editor.file_status = Some(format!("Opened {name}"));
+            app.editor.file_status = Some(FileStatus::note(format!("Opened {name}")));
             open_text(&mut app.editor, text, Some(name));
             app.editor.file_path = path;
             expert::find_original(&mut app.editor);
             app.focus_request = Some(Tab::Editor);
         }
-        Err(_) => app.editor.file_status = Some(format!("Open failed: {name} is not UTF-8 text")),
+        Err(_) => app.editor.file_status = Some(FileStatus::failure(format!("Open failed: {name} is not UTF-8 text"))),
     }
 }
 
@@ -1550,7 +1670,7 @@ pub fn receive_import(app: &mut AppState, result: OpenResult) {
     let file = match result {
         OpenResult::Files(files) => files.into_iter().next(),
         OpenResult::Failed(message) => {
-            app.editor.file_status = Some(format!("Open failed: {message}"));
+            app.editor.file_status = Some(FileStatus::failure(format!("Open failed: {message}")));
             return;
         }
         OpenResult::Folder(_) | OpenResult::Canceled => return,
@@ -1560,7 +1680,7 @@ pub fn receive_import(app: &mut AppState, result: OpenResult) {
     };
     match String::from_utf8(bytes) {
         Ok(text) => graph.set_import_source(name, text),
-        Err(_) => app.editor.file_status = Some(format!("Open failed: {name} is not UTF-8 text")),
+        Err(_) => app.editor.file_status = Some(FileStatus::failure(format!("Open failed: {name} is not UTF-8 text"))),
     }
 }
 

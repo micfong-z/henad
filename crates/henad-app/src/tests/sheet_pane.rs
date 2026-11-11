@@ -32,7 +32,7 @@ use crate::ui::editor::preview::{DEBOUNCE, PreviewState, poll_at};
 use crate::ui::editor::sheet::new_model::create_blank_model;
 use crate::ui::editor::sheet::sheet_pane::slider_step;
 use crate::ui::editor::sheet::widgets::{NewParameterDialog, NumberUse, default_max};
-use crate::ui::editor::sheet::{CARD_PANE, SheetEditor};
+use crate::ui::editor::sheet::{CARD_PANE, SHEET_PANE, SheetEditor};
 
 /// Returns a harness whose Editor holds a blank model, or `None` to skip on a machine without a device.
 fn blank() -> Option<Harness> {
@@ -61,6 +61,34 @@ fn settle_preview(harness: &mut Harness) {
     let now = Instant::now();
     poll_at(&ctx, &mut harness.app, now);
     poll_at(&ctx, &mut harness.app, now + DEBOUNCE);
+}
+
+/// Drags the divider between the Sheet pane and the Card pane to `x` points from the Editor's left edge.
+fn drag_sheet_divider(harness: &mut Harness, x: f32) {
+    let nodes = harness.settle();
+    let bounds = |name: &str| {
+        nodes
+            .iter()
+            .find(|node| node.role == egui::accesskit::Role::Group && node.label == name)
+            .and_then(|node| node.bounds)
+            .expect("the pane")
+    };
+    let divider = f32::midpoint(bounds(SHEET_PANE).right(), bounds(CARD_PANE).left());
+    let y = harness.screen.y / 2.0;
+    let button = |pressed, x: f32| egui::Event::PointerButton {
+        pos: egui::pos2(x, y),
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    harness.frame(vec![egui::Event::PointerMoved(egui::pos2(divider, y))]);
+    harness.frame(vec![button(true, divider)]);
+    for step in 1..=10 {
+        let to = divider + (x - divider) * step as f32 / 10.0;
+        harness.frame(vec![egui::Event::PointerMoved(egui::pos2(to, y))]);
+    }
+    harness.frame(vec![button(false, x)]);
+    harness.frame(vec![egui::Event::PointerGone]);
 }
 
 /// Returns the centre of the one node of a settled frame named exactly `name`.
@@ -1098,8 +1126,9 @@ fn every_plot_box_of_three_states_stays_in_the_sheet_pane_and_takes_a_click() {
     let Some(mut harness) = blank() else {
         return;
     };
-    // A narrow Editor, as a docked tab beside the Viewport and Charts leaves it.
+    // A narrow Editor, as a docked tab beside the Viewport and Charts leaves it, its Sheet pane dragged to 290 points.
     harness.screen = egui::vec2(450.0, 1000.0);
+    drag_sheet_divider(&mut harness, 290.0);
     click(&mut harness, ADD_PROPERTY);
     type_into(&mut harness, "Property name", "Health");
     type_into(&mut harness, "State 1 name", "Susceptible");

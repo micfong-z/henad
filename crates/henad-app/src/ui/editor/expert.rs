@@ -15,7 +15,7 @@
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::path::PathBuf;
 
-use egui::{Frame, Id, Margin, Modal, RichText};
+use egui::{Id, Modal, RichText};
 use henad_graph::GraphFile;
 use henad_graph::editor::{ModelOrigin, NoteLayout};
 use henad_graph::sheet::sentence::{
@@ -31,11 +31,12 @@ use web_time::{SystemTime, UNIX_EPOCH};
 use super::graph::GraphEditor;
 use super::graph::changes::CopyChanges;
 use super::sheet::SheetEditor;
-use super::{BannerKey, EditorModel, EditorPanel, EditorRequest};
+use super::sheet::widgets::{
+    DialogButton, DialogButtonKind, Notice, NoticeKind, dialog_buttons, dialog_frame, dialog_title,
+};
+use super::{BannerKey, EditorModel, EditorPanel, EditorRequest, FileStatus};
 use crate::state::AppState;
 use crate::ui::dock::Tab;
-use crate::ui::mcs;
-use crate::ui::sweep::layout::filled_button;
 
 /// Width in points of the conversion dialog.
 const DIALOG_WIDTH: f32 = 560.0;
@@ -174,28 +175,26 @@ pub fn convert_modal(ctx: &egui::Context, panel: &mut EditorPanel) -> bool {
     };
     let mut confirmed = false;
     let mut closed = false;
-    let response = Modal::new(Id::new("henad_convert_modal")).show(ctx, |ui| {
-        ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
-            node.set_role(egui::accesskit::Role::Dialog);
-            node.set_label(CONVERT_HEADING);
-        });
-        ui.set_max_width(DIALOG_WIDTH);
-        ui.heading(CONVERT_HEADING);
-        for paragraph in convert_text(name) {
-            ui.add_space(6.0);
+    let modal = Modal::new(Id::new("henad_convert_modal")).frame(dialog_frame(ctx));
+    let response = modal.show(ctx, |ui| {
+        dialog_title(ui, CONVERT_HEADING, CONVERT_HEADING, DIALOG_WIDTH);
+        for (index, paragraph) in convert_text(name).iter().enumerate() {
+            if index > 0 {
+                ui.add_space(8.0);
+            }
             for line in paragraph.lines() {
                 ui.label(line);
             }
         }
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            if ui.button(CANCEL).clicked() {
-                closed = true;
-            }
-            if ui.add(filled_button(CONVERT.to_owned())).clicked() {
-                confirmed = true;
-            }
-        });
+        let buttons = [
+            DialogButton::new(CANCEL, DialogButtonKind::Plain),
+            DialogButton::new(CONVERT, DialogButtonKind::Primary),
+        ];
+        match dialog_buttons(ui, &buttons) {
+            Some(0) => closed = true,
+            Some(_) => confirmed = true,
+            None => {}
+        }
     });
     if confirmed || closed || response.should_close() {
         panel.convert = None;
@@ -237,7 +236,7 @@ pub fn convert_sheet(app: &mut AppState) {
     let copy = match convert(file, &options) {
         Ok(copy) => copy,
         Err(error) => {
-            app.editor.file_status = Some(error.to_string());
+            app.editor.file_status = Some(FileStatus::failure(error.to_string()));
             return;
         }
     };
@@ -261,20 +260,24 @@ pub fn convert_sheet(app: &mut AppState) {
 /// Writes `copy` as `copy_name` into `folder`, and returns its path with the status line to show, or no path and no
 /// status without a folder.
 #[cfg(not(target_arch = "wasm32"))]
-fn save_beside(folder: Option<&PathBuf>, copy_name: &str, copy: &GraphFile) -> (Option<PathBuf>, Option<String>) {
+fn save_beside(folder: Option<&PathBuf>, copy_name: &str, copy: &GraphFile) -> (Option<PathBuf>, Option<FileStatus>) {
     let Some(folder) = folder else {
         return (None, None);
     };
     let path = folder.join(copy_name);
     match std::fs::write(&path, copy.to_toml()) {
-        Ok(()) => (Some(path), Some(format!("Saved {copy_name}"))),
-        Err(error) => (None, Some(format!("Save failed: {error}"))),
+        Ok(()) => (Some(path), Some(FileStatus::note(format!("Saved {copy_name}")))),
+        Err(error) => (None, Some(FileStatus::failure(format!("Save failed: {error}")))),
     }
 }
 
 /// Returns no path and no status. A browser writes no file beside another.
 #[cfg(target_arch = "wasm32")]
-fn save_beside(_folder: Option<&PathBuf>, _copy_name: &str, _copy: &GraphFile) -> (Option<PathBuf>, Option<String>) {
+fn save_beside(
+    _folder: Option<&PathBuf>,
+    _copy_name: &str,
+    _copy: &GraphFile,
+) -> (Option<PathBuf>, Option<FileStatus>) {
     (None, None)
 }
 
@@ -427,33 +430,29 @@ pub fn copy_banner(panel: &mut EditorPanel) -> Option<CopyBanner> {
     banner
 }
 
-/// Draws `banner` in the info colours, with its buttons, and sets `request` when a button is pressed.
+/// Draws `banner` as an information notice with its small buttons after its text, and sets `request` when a button is
+/// pressed.
 /// `showing_changes` is whether the changes since the conversion are listed, which Show changes toggles.
 pub fn banner_ui(ui: &mut egui::Ui, banner: &CopyBanner, showing_changes: bool, request: &mut Option<EditorRequest>) {
-    Frame::NONE
-        .fill(mcs::BLUE_950)
-        .inner_margin(Margin::symmetric(8, 6))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(banner.text()).color(mcs::BLUE_200));
-                if banner.opens_original() && ui.button(open_original(&banner.origin.name)).clicked() {
-                    *request = Some(EditorRequest::OpenOriginal);
-                }
-                if banner.compares_runs() {
-                    let enabled = cfg!(not(target_arch = "wasm32"));
-                    let compare = ui
-                        .add_enabled(enabled, egui::Button::new(COMPARE_RUNS))
-                        .on_disabled_hover_text(COMPARE_NEEDS_NATIVE);
-                    if compare.clicked() {
-                        *request = Some(EditorRequest::CompareRuns);
-                    }
-                }
-                if banner.shows_changes() && ui.selectable_label(showing_changes, SHOW_CHANGES).clicked() {
-                    *request = Some(EditorRequest::ShowChanges);
-                }
-            });
-        });
+    let text = banner.text();
+    Notice::new(NoticeKind::Info, &text).show_with(ui, |ui| {
+        if banner.opens_original() && ui.small_button(open_original(&banner.origin.name)).clicked() {
+            *request = Some(EditorRequest::OpenOriginal);
+        }
+        if banner.compares_runs() {
+            let enabled = cfg!(not(target_arch = "wasm32"));
+            let compare = ui
+                .add_enabled(enabled, egui::Button::new(COMPARE_RUNS).small())
+                .on_disabled_hover_text(COMPARE_NEEDS_NATIVE);
+            if compare.clicked() {
+                *request = Some(EditorRequest::CompareRuns);
+            }
+        }
+        let show = egui::Button::selectable(showing_changes, SHOW_CHANGES).small();
+        if banner.shows_changes() && ui.add(show).clicked() {
+            *request = Some(EditorRequest::ShowChanges);
+        }
+    });
 }
 
 /// Returns the changes of the copy in the Editor that the side panel lists and the canvas marks: the banner's changes

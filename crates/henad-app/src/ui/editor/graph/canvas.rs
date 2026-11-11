@@ -1081,10 +1081,13 @@ pub fn framing_transform(target: Rect, canvas: Rect) -> TSTransform {
 }
 
 /// Returns the canvas style: square corners on nodes, headers and the selection, and no space before the title.
+///
+/// Nodes and the canvas keep a gray 800 border. The theme's window border is the brighter border of an overlay.
 pub fn canvas_style(style: &Style) -> SnarlStyle {
     let node_frame = Frame::window(style)
         .corner_radius(CornerRadius::ZERO)
-        .shadow(Shadow::NONE);
+        .shadow(Shadow::NONE)
+        .stroke(Stroke::new(1.0, mcs::GRAY_800));
     SnarlStyle {
         node_frame: Some(node_frame),
         header_frame: Some(node_frame),
@@ -1096,7 +1099,12 @@ pub fn canvas_style(style: &Style) -> SnarlStyle {
             stroke: Stroke::new(1.0, mcs::BLUE_500),
         }),
         wire_style: Some(WireStyle::Bezier5),
-        bg_frame: Some(Frame::canvas(style).corner_radius(CornerRadius::ZERO).inner_margin(0)),
+        bg_frame: Some(
+            Frame::canvas(style)
+                .corner_radius(CornerRadius::ZERO)
+                .inner_margin(0)
+                .stroke(Stroke::new(1.0, mcs::GRAY_800)),
+        ),
         bg_pattern: Some(BackgroundPattern::Grid(Grid::new(vec2(50.0, 50.0), 0.0))),
         bg_pattern_stroke: Some(Stroke::new(1.0, mcs::GRAY_900)),
         pin_placement: Some(PinPlacement::Edge),

@@ -12,9 +12,9 @@
 //! that, a changed Starts as waits for Start again, and any other edit starts the world again from tick 0 with a
 //! notice.
 //!
-//! The *toolbar* above the panes holds the model's name and Undo and Redo. A click on the name turns it into a field.
-//! Undo keeps the canonical text of the sheet before each edit, and an undo or a redo reads that text back as one
-//! more edit of the world.
+//! The *name row*, the second row of the Editor's header, holds the model's name and Undo and Redo. A click on the
+//! name turns it into a field. Undo keeps the canonical text of the sheet before each edit, and an undo or a redo reads
+//! that text back as one more edit of the world.
 
 pub mod card_pane;
 pub mod diagram;
@@ -28,7 +28,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 
 use egui::{
-    Button, CentralPanel, Frame, Key, KeyboardShortcut, Margin, Modifiers, Panel, ScrollArea, TextEdit, UiBuilder,
+    Button, CentralPanel, Frame, Key, KeyboardShortcut, Margin, Modifiers, Panel, RichText, ScrollArea, TextEdit,
+    UiBuilder,
 };
 use henad_compute::entry::ModelEntry;
 use henad_compute::snapshot::Snapshot;
@@ -65,10 +66,33 @@ const PANE_MIN_WIDTH: f32 = 160.0;
 
 /// Returns the id of the Sheet pane in `layout`, one per layout.
 ///
-/// egui stores the pane's width in points under the id. With one id for both layouts, a width dragged in the narrow
-/// default layout would carry over to the Editor layout.
+/// The pane's share of the Editor's width is kept under the id, so a share dragged in the narrow default layout leaves
+/// the Editor layout alone.
 fn sheet_pane_id(layout: Layout) -> egui::Id {
     egui::Id::new("henad_sheet_pane").with(layout)
+}
+
+/// Returns the width in points the Sheet pane takes in an Editor `width` points wide, by the share of the pane `id`
+/// keeps, and sets the width egui keeps for the pane to it.
+///
+/// egui keeps a panel's width in points. A pane set from its share keeps its share as the window narrows or widens.
+fn sheet_pane_width(ctx: &egui::Context, id: egui::Id, width: f32) -> f32 {
+    let share = ctx
+        .data_mut(|data| data.get_persisted::<f32>(id.with("share")))
+        .unwrap_or(SHEET_PANE_SHARE);
+    let pane = (share * width).clamp(PANE_MIN_WIDTH, (width - PANE_MIN_WIDTH).max(PANE_MIN_WIDTH));
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(pane, 1.0));
+    ctx.data_mut(|data| data.insert_persisted(id, egui::containers::panel::PanelState { outer_rect: rect }));
+    pane
+}
+
+/// Keeps the share of the Editor's `width` that the Sheet pane `id` takes after a drag of its divider left it `pane`
+/// points wide, where the width it was set to is `set`.
+fn keep_sheet_pane_share(ctx: &egui::Context, id: egui::Id, width: f32, set: f32, pane: f32) {
+    let dragged = ctx.input(|input| input.pointer.any_down() || input.pointer.any_released());
+    if dragged && (pane - set).abs() > 0.5 && width > 0.0 {
+        ctx.data_mut(|data| data.insert_persisted(id.with("share"), pane / width));
+    }
 }
 
 /// A sheet model in the Editor.
@@ -448,8 +472,6 @@ pub struct SheetShown<'a> {
     /// Whether the New model dialog is closed. Undo and Redo then take their keys while no modal of the app is open
     /// and no text field holds the focus.
     pub keys: bool,
-    /// Name of the node graph copy converted from the sheet in this session, `None` for none.
-    pub copy: Option<&'a str>,
     /// Reason the sheet does not convert, `None` for a sheet that converts.
     pub refusal: Option<ConvertRefusal>,
     /// Fire counts of the run of the sheet on its latest snapshot, `None` while the run counts none.
@@ -467,8 +489,8 @@ pub enum SheetRequest {
     OpenCopy,
 }
 
-/// Draws the sheet editor: the toolbar, the line that opens the sheet's copy, then the Sheet pane on the left and the
-/// Card pane beside it, each scrolling on its own, and returns the request of a pressed control.
+/// Draws the sheet editor: the Sheet pane on the left and the Card pane beside it, each scrolling on its own, and
+/// returns the request of a pressed control.
 ///
 /// Each pane is a group named by its heading.
 pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'_>) -> Option<SheetRequest> {
@@ -492,21 +514,12 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'
             sheet.undo(past_start);
         }
     }
-    Panel::top("henad_sheet_toolbar")
-        .resizable(false)
-        .frame(Frame::NONE.inner_margin(Margin::symmetric(8, 4)))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| toolbar_ui(ui, sheet, past_start, shown.refusal, &mut request));
-            if let Some(copy) = shown.copy
-                && ui.link(converted_link(copy)).clicked()
-            {
-                request = Some(SheetRequest::OpenCopy);
-            }
-        });
     let width = ui.available_width();
-    Panel::left(sheet_pane_id(shown.layout))
+    let pane_id = sheet_pane_id(shown.layout);
+    let set = sheet_pane_width(ui.ctx(), pane_id, width);
+    let pane = Panel::left(pane_id)
         .resizable(true)
-        .default_size(width * SHEET_PANE_SHARE)
+        .default_size(set)
         .min_size(PANE_MIN_WIDTH)
         .max_size((width - PANE_MIN_WIDTH).max(PANE_MIN_WIDTH))
         .frame(Frame::NONE.inner_margin(Margin::symmetric(8, 4)))
@@ -523,17 +536,17 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'
             ui.advance_cursor_after_rect(rect);
             pane_group(ui, SHEET_PANE);
         });
+    keep_sheet_pane_share(ui.ctx(), pane_id, width, set, pane.response.rect.width());
     CentralPanel::no_frame().show(ui, |ui| {
         Frame::NONE.inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading(CARD_PANE);
                 ui.add_space(8.0);
-                // Lines and Diagram read as the two segments of one toggle. Only Diagram is on the keyboard path, as
-                // it was before Lines was drawn.
+                // Lines and Diagram read as the two segments of one toggle, each on the keyboard path.
                 ui.spacing_mut().item_spacing.x = 4.0;
-                let lines = widgets::toggle_label(ui, LINES_VIEW, !sheet.diagram, false);
+                let lines = widgets::toggle_label(ui, LINES_VIEW, !sheet.diagram);
                 widgets::segment_rule(ui);
-                let toggle = widgets::toggle_label(ui, DIAGRAM, sheet.diagram, true).on_hover_text(DIAGRAM_TOOLTIP);
+                let toggle = widgets::toggle_label(ui, DIAGRAM, sheet.diagram).on_hover_text(DIAGRAM_TOOLTIP);
                 if toggle.clicked() || (lines.clicked() && sheet.diagram) {
                     sheet.diagram = !sheet.diagram;
                     sheet.card.close();
@@ -557,18 +570,44 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'
     request
 }
 
-/// Draws the toolbar: the model's name, a button that turns into a field named "Model name", then Undo, Redo and the
-/// menu of the model's actions, which holds Convert to node graph.
+/// Things the name row shows besides the sheet, for one frame.
+#[derive(Debug, Clone, Copy)]
+pub struct NameRow<'a> {
+    /// Whether the preview has passed tick 0 or a button was pressed in it.
+    pub past_start: bool,
+    /// Reason the sheet does not convert, `None` for a sheet that converts.
+    pub refusal: Option<ConvertRefusal>,
+    /// Whether the sheet holds edits since it was opened, made or last saved.
+    pub unsaved: bool,
+    /// Name of the file the sheet was opened from or saved to, `None` for a sheet with no file.
+    pub file_name: Option<&'a str>,
+    /// Name of the node graph copy converted from the sheet in this session, `None` for none.
+    pub copy: Option<&'a str>,
+}
+
+/// Draws the name row of the Editor's header for `sheet`, and returns the request of a pressed control.
+///
+/// The row holds the model's name in the body colour, a button that turns into a field named "Model name", the mark of
+/// unsaved changes, the file's name in the weak colour, then Undo, Redo and the menu of the model's actions, which holds
+/// Convert to node graph. The line that opens the sheet's copy follows under the row.
 ///
 /// In the field, Enter or a click elsewhere keeps the name and Escape puts the old name back. An empty name keeps the
-/// old one. Convert to node graph is disabled with the tooltip of `refusal` while the sheet does not convert.
-fn toolbar_ui(
-    ui: &mut egui::Ui,
-    sheet: &mut SheetEditor,
-    past_start: bool,
-    refusal: Option<ConvertRefusal>,
-    request: &mut Option<SheetRequest>,
-) {
+/// old one. Convert to node graph is disabled with the tooltip of the refusal while the sheet does not convert.
+pub fn name_row(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &NameRow<'_>) -> Option<SheetRequest> {
+    let mut request = None;
+    ui.horizontal(|ui| name_row_ui(ui, sheet, shown, &mut request));
+    if let Some(copy) = shown.copy
+        && ui.link(converted_link(copy)).clicked()
+    {
+        request = Some(SheetRequest::OpenCopy);
+    }
+    request
+}
+
+/// Draws the controls of the name row, as [`name_row`] describes them.
+fn name_row_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &NameRow<'_>, request: &mut Option<SheetRequest>) {
+    let past_start = shown.past_start;
+    let refusal = shown.refusal;
     let name = sheet.document().sheet.name.clone();
     if let Some(text) = &mut sheet.renaming {
         let field = ui.add(TextEdit::singleline(text).desired_width(200.0));
@@ -589,37 +628,59 @@ fn toolbar_ui(
             }
         }
     } else {
-        let button = add_button(ui, true, Button::new(&name).frame(false), &model_name_button(&name))
-            .on_hover_text(RENAME_MODEL_TOOLTIP);
+        let words = RichText::new(&name).color(ui.visuals().text_color());
+        let button = add_button(
+            ui,
+            true,
+            Button::new(words).frame_when_inactive(false),
+            &model_name_button(&name),
+        )
+        .on_hover_text(RENAME_MODEL_TOOLTIP);
         if button.clicked() {
             sheet.renaming = Some(name);
         }
     }
-    ui.separator();
-    let undo =
-        add_button(ui, sheet.can_undo(), Button::new(format!("{MDI_UNDO} {UNDO}")), UNDO).on_hover_text(UNDO_TOOLTIP);
+    if shown.unsaved {
+        widgets::unsaved_mark(ui);
+    }
+    if let Some(file_name) = shown.file_name {
+        ui.weak(file_name);
+    }
+    let height = ui.spacing().interact_size.y;
+    widgets::vertical_hairline(ui, height);
+    let undo = add_button(
+        ui,
+        sheet.can_undo(),
+        Button::new(format!("{MDI_UNDO} {UNDO}")).frame_when_inactive(false),
+        UNDO,
+    )
+    .on_hover_text(UNDO_TOOLTIP);
     if undo.clicked() {
         sheet.undo(past_start);
     }
-    let redo =
-        add_button(ui, sheet.can_redo(), Button::new(format!("{MDI_REDO} {REDO}")), REDO).on_hover_text(REDO_TOOLTIP);
+    let redo = add_button(
+        ui,
+        sheet.can_redo(),
+        Button::new(format!("{MDI_REDO} {REDO}")).frame_when_inactive(false),
+        REDO,
+    )
+    .on_hover_text(REDO_TOOLTIP);
     if redo.clicked() {
         sheet.redo(past_start);
     }
-    ui.separator();
-    let menu = ui
-        .menu_button(MDI_DOTS_HORIZONTAL, |ui| {
-            let convert = add_button(ui, refusal.is_none(), Button::new(CONVERT_HEADING), CONVERT_HEADING);
-            let convert = match refusal {
-                Some(refusal) => convert.on_disabled_hover_text(refusal.tooltip()),
-                None => convert,
-            };
-            if convert.clicked() {
-                *request = Some(SheetRequest::Convert);
-                ui.close();
-            }
-        })
-        .response;
+    widgets::vertical_hairline(ui, height);
+    let dots = Button::new(MDI_DOTS_HORIZONTAL).frame_when_inactive(false);
+    let (menu, _) = egui::containers::menu::MenuButton::from_button(dots).ui(ui, |ui| {
+        let convert = add_button(ui, refusal.is_none(), Button::new(CONVERT_HEADING), CONVERT_HEADING);
+        let convert = match refusal {
+            Some(refusal) => convert.on_disabled_hover_text(refusal.tooltip()),
+            None => convert,
+        };
+        if convert.clicked() {
+            *request = Some(SheetRequest::Convert);
+            ui.close();
+        }
+    });
     menu.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, MODEL_ACTIONS));
 }
 

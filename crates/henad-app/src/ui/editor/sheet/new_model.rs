@@ -1,7 +1,7 @@
 //! The New model dialog: a sheet model started blank or from one of the sheet starters, under a name.
 //!
 //! "Start from" lists Blank, then the starters [`henad_graph::sheet::starters`] returns, grid and agent starters alike,
-//! each with its one-line description. Under Blank alone the dialog asks what the world is made of: cells on a grid
+//! each a selectable row with its one-line description under its name. Under Blank alone the dialog asks what the world is made of: cells on a grid
 //! or agents in open space. The Name field follows the chosen starter's name, or "Untitled model" for Blank, until the
 //! author types in it. Create opens the sheet in the Editor, and so does Enter in the Name field. Cancel, Escape and a
 //! click beside the dialog close it.
@@ -14,7 +14,7 @@
 //! that id, such as the example `game_of_life`, the new model takes `sheet_` before it, so Apply adds it beside that
 //! model instead of replacing it.
 
-use egui::{Context, Id, Key, Modal, RichText, TextEdit};
+use egui::{Context, Id, Modal, TextEdit};
 use henad_graph::sheet::ParsedSheet;
 use henad_graph::sheet::document::{
     AgentKind, Edges, MadeOf, PropertyType, SheetDocument, SheetHeader, SheetWorld, StartRule, StartsAs,
@@ -26,10 +26,10 @@ use henad_graph::sheet::sentence::{
 };
 
 use super::SheetEditor;
+use super::widgets::{DialogButton, DialogButtonKind, caption, choice_row, dialog_buttons, dialog_frame, dialog_title};
 use crate::state::AppState;
 use crate::ui::dock::Tab;
-use crate::ui::editor::new_model_id;
-use crate::ui::sweep::layout::filled_button;
+use crate::ui::editor::{FileStatus, new_model_id};
 
 /// Width in points of the dialog's content.
 const DIALOG_WIDTH: f32 = 420.0;
@@ -149,50 +149,45 @@ pub fn new_model_modal(ctx: &Context, app: &mut AppState) {
     };
     let mut create = false;
     let mut closed = false;
-    let response = Modal::new(Id::new("henad_new_model_modal")).show(ctx, |ui| {
-        ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
-            node.set_role(egui::accesskit::Role::Dialog);
-            node.set_label(NEW_MODEL);
-        });
-        ui.set_max_width(DIALOG_WIDTH);
-        ui.heading(NEW_MODEL);
+    let modal = Modal::new(Id::new("henad_new_model_modal")).frame(dialog_frame(ctx));
+    let response = modal.show(ctx, |ui| {
+        dialog_title(ui, NEW_MODEL, NEW_MODEL, DIALOG_WIDTH);
+        caption(ui, START_FROM);
         ui.add_space(4.0);
-        ui.label(RichText::new(START_FROM).strong());
         let mut chosen = dialog.chosen;
         for (index, choice) in dialog.choices.iter().enumerate() {
-            ui.radio_value(&mut chosen, index, &choice.name);
-            ui.indent(("henad_new_model_choice", index), |ui| {
-                if let Some(description) = choice.description {
-                    ui.weak(description);
-                }
-                if choice.file_name.is_none() && dialog.chosen == index {
+            if choice_row(ui, &choice.name, choice.description, dialog.chosen == index).clicked() {
+                chosen = index;
+            }
+            if choice.file_name.is_none() && dialog.chosen == index {
+                ui.indent(("henad_new_model_choice", index), |ui| {
                     world_question(ui, &mut dialog.made_of);
-                }
-            });
+                });
+            }
         }
         if chosen != dialog.chosen {
             dialog.choose(chosen);
         }
-        ui.add_space(8.0);
+        ui.add_space(12.0);
         ui.horizontal(|ui| {
             let label = ui.label(NAME_LABEL);
-            let field = ui.add(TextEdit::singleline(&mut dialog.name)).labelled_by(label.id);
+            let width = ui.available_width();
+            let field = ui
+                .add(TextEdit::singleline(&mut dialog.name).desired_width(width))
+                .labelled_by(label.id);
             if field.changed() {
                 dialog.name_typed = true;
             }
-            if field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
-                create = true;
-            }
         });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button(CANCEL).clicked() {
-                closed = true;
-            }
-            if ui.add(filled_button(CREATE.to_owned())).clicked() {
-                create = true;
-            }
-        });
+        let buttons = [
+            DialogButton::new(CANCEL, DialogButtonKind::Plain),
+            DialogButton::new(CREATE, DialogButtonKind::Primary),
+        ];
+        match dialog_buttons(ui, &buttons) {
+            Some(0) => closed = true,
+            Some(_) => create = true,
+            None => {}
+        }
     });
     if create {
         let chosen = dialog.choices.get(dialog.chosen).map(|choice| choice.file_name);
@@ -212,9 +207,11 @@ pub fn new_model_modal(ctx: &Context, app: &mut AppState) {
 
 /// Draws the world question under Blank: a world of cells on a grid or of agents in open space, chosen in `made_of`.
 fn world_question(ui: &mut egui::Ui, made_of: &mut MadeOf) {
+    ui.add_space(4.0);
     ui.label(WORLD_QUESTION);
     ui.radio_value(made_of, MadeOf::Cells, CELLS_ON_A_GRID);
     ui.radio_value(made_of, MadeOf::Agents, AGENTS_IN_OPEN_SPACE);
+    ui.add_space(4.0);
 }
 
 /// Returns a blank model named `name`: a world of 100 by 100 cells that wraps around, with nothing else.
@@ -302,7 +299,7 @@ pub fn create_model(app: &mut AppState, file_name: &str, name: &str) {
         .find(|starter| starter.file_name == file_name)
         .and_then(|starter| ParsedSheet::parse(starter.text).ok())
     else {
-        app.editor.file_status = Some(format!("Starter {file_name} does not read"));
+        app.editor.file_status = Some(FileStatus::failure(format!("Starter {file_name} does not read")));
         return;
     };
     let name = if name.is_empty() { UNTITLED_MODEL } else { name };
@@ -313,7 +310,7 @@ pub fn create_model(app: &mut AppState, file_name: &str, name: &str) {
         let mut builder = SheetBuilder::new(document.clone());
         match builder.apply(SheetEdit::SetSheetName { name: name.to_owned() }) {
             Ok(_) => document = builder.into_document(),
-            Err(error) => status = Some(format!("Name not kept: {error}")),
+            Err(error) => status = Some(FileStatus::failure(format!("Name not kept: {error}"))),
         }
     }
     app.editor.load_sheet(SheetEditor::new(document), None);

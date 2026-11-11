@@ -36,10 +36,24 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   entry from that mapping in place of a `gamma_multiply` tint, a `Color32` literal or a theme
   colour borrowed as a fill. A node of a converted copy added since the conversion is green, and a
   node changed since then is yellow (`ChangeMark::colors`, badge 900 and 200, stroke 500). The
-  theme's warn and error colours are orange 500 and red 500, and a status text reads them from the
-  theme. The theme's neutral surfaces and strokes in `init.rs` predate MCS and stay as they are.
-  Data colours (the plot series, the heatmap scale and its no-data grey) are not MCS and come from
-  `ui/results/plot.rs`.
+  theme. The theme's neutral surfaces and strokes in `init.rs` predate MCS and stay as they are,
+  apart from the values below. Data colours (the plot series, the heatmap scale and its no-data
+  grey) are not MCS and come from `ui/results/plot.rs`.
+- **Theme values for overlays and focus** (`init.rs`), each with its value before. egui's own
+  popups, menus, tooltips and modals read as the app's overlays, and its focus as the app's.
+  - `window_stroke`: gray 800, now 1 point gray 600, the border of every popup, menu, tooltip and
+    modal. The graph canvas and its nodes set their gray 800 border themselves (`canvas_style`).
+  - `popup_shadow`: black at alpha 96, blur 8, offset (6, 10), now `Shadow::NONE`.
+  - `selection.bg_fill`: blue 700, now blue 900. `selection.stroke`: 1 point of (192, 222, 255),
+    now 1.5 points of blue 200. A list's current item, a selected toggle and selected text take
+    the tinted fill. egui also outlines a focused text field in `selection.stroke`, so a focused
+    field is outlined in blue 200, where every other control's focus is blue 500.
+  - `widgets.active.bg_stroke`: 1 point of white, now 1.5 points of blue 500, the focus outline
+    of egui's buttons, checkboxes, radios and combo boxes. A pressed button shows it too.
+  - `slider_trailing_fill`: true, now false. egui fills a slider's rail in the selection fill,
+    which blue 900 leaves unreadable on the rail.
+  `lib.rs` sets the dock's drop zone tint back to blue 700 at half alpha, which `from_egui` would
+  take from the selection fill.
 - **One palette rule: the meaning picks the hue, and the element picks the step.** No step outside
   this table without adding its row here.
 
@@ -86,8 +100,23 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     opaque from its first frame, a small upper-case title and group labels with a hairline. An
     item is a full-width row, gray 800 under the pointer or the keyboard focus, blue 900 with a
     check and blue 200 words when current, weak with its reason as a tooltip when it cannot apply.
-    A state shows its swatch, a square of its own colour inside gray 700.
-  - Notice: a 2 point blue 500 bar and a blue 500 icon before the text, one label. Segmented
+    A state shows its swatch, a square of its own colour inside gray 700. A picker of either pane
+    is `widgets::PICKER_WIDTH` (300 points) wide at least, its words wrapping at that width, so
+    pickers open as wide as each other. A select's list and a menu take their content's width.
+  - Dialog (`dialog_frame`, `dialog_title`, `dialog_buttons`, the New model, New parameter,
+    Rebuild model, conversion and unsaved changes dialogs): the theme's window fill inside gray
+    600 with 12 points of margin, a small upper-case mono title with a gray 800 hairline under it
+    across the dialog, and the buttons in one row at the bottom right, the primary last (blue 700,
+    or red 900 under red 200 for Rebuild). Enter presses the primary unless another button took
+    the key or the dialog opened on that frame, and Escape closes through `Modal`. A list of
+    choices is `choice_row`s: full-width radio buttons with a weak description under the name,
+    gray 800 under the pointer or the focus, blue 900 with a check and blue 200 words when chosen.
+  - Notice (`Notice`, `notice_ui` for information): a 2 point bar and an icon in the hue of its
+    kind at step 500 before the text in the text colour, one label: blue and an information icon
+    for information, orange and a triangle for a warning, red and an exclamation mark for an
+    error. Small buttons follow the text, and weak notes sit under it inside the row. Every
+    message of the Editor is one, in the status area under the panes or, for a converted copy's
+    banner, under the header. Segmented
     toggle (Lines, Diagram): weak while off, the text colour over a 2 point blue 500 line while on.
   The theme in `init.rs` is unchanged by the Card pane. The primary action is blue 700, never the
   prototype's orange.
@@ -123,7 +152,7 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   its message in the theme's error colour under its row. A parameter's Unit is free text with
   "per second" to "per year" offered under the field, never a select. A Number property's
   shading shows a swatch of its hue from MCS step 900 to step 200 (`ShadeHue::ends`, data colours
-  of the sheet like the state palette). The sheet toolbar's Undo and Redo show their icon and word.
+  of the sheet like the state palette). The header's Undo and Redo show their icon and word.
 - **The words rule of sheet mode.** The Editor tab in sheet mode and the text a sheet puts in the
   world tabs (names, measures, buttons, the tick counter) never show a word of
   `henad_graph::sheet::sentence::FORBIDDEN_WORDS` ("node", "seed", "compile" and the rest), nor one
