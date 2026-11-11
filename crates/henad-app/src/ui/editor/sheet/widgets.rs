@@ -40,7 +40,7 @@ pub const CHIP_HEIGHT: f32 = 20.0;
 const CHIP_GAP: f32 = 4.0;
 
 /// Side in points of the swatch of a state chip.
-const CHIP_SWATCH: f32 = 9.0;
+pub const CHIP_SWATCH: f32 = 9.0;
 
 /// Width in points of the keyboard focus outline.
 const FOCUS_WIDTH: f32 = 1.5;
@@ -75,6 +75,46 @@ pub const ARROW_WIDTH: f32 = ARROW_SIDE + 4.0;
 // colours follow the palette in `agents/ui.md`: a tinted fill is a hue's 900 with its 200 for text, a line or an
 // outline in a hue is its 500, a neutral chip is gray 800 with gray 100 text, a neutral outline gray 700, an empty slot
 // gray 500 dashes around a gray 400 word, a hairline gray 800, and an overlay the window fill inside gray 600.
+
+/// Space in points between two framed regions.
+pub const REGION_GAP: f32 = 12.0;
+
+/// Draws a framed region, gray 900 inside a 1 point gray 800 border, with `add` inside it across the width it is
+/// given, and returns what `add` returns. A card and each section of the Sheet pane is one.
+///
+/// The region adds no margin and no space between the rows `add` draws.
+pub fn region<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    Frame::NONE
+        .fill(mcs::GRAY_900)
+        .stroke(Stroke::new(1.0, mcs::GRAY_800))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui)
+        })
+        .inner
+}
+
+/// Draws a gray 800 hairline across `ui`.
+pub fn hairline(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().rect_filled(rect, CornerRadius::ZERO, mcs::GRAY_800);
+}
+
+/// Draws the title row of a region: `title` as a small upper-case mono label, then a hairline running to what `end`
+/// draws at the right edge, such as the region's help.
+pub fn region_title(ui: &mut Ui, title: &str, end: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        caption(ui, title);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            end(ui);
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+            ui.painter()
+                .hline(rect.x_range(), rect.center().y, Stroke::new(1.0, mcs::GRAY_800));
+        });
+    });
+}
 
 /// Paints the keyboard focus outline of a control whose border is `rect`: 1.5 points of blue 500 outside the border.
 pub fn focus_ring(ui: &Ui, rect: Rect) {
@@ -246,6 +286,12 @@ pub fn overlay_item(ui: &mut Ui, item: &OverlayItem<'_>) -> Response {
     response
 }
 
+/// Adds a state's swatch of the colour `color` beside the words of a row: a small square inside a gray 700 outline.
+pub fn swatch_ui(ui: &mut Ui, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(CHIP_SWATCH, CHIP_HEIGHT), Sense::hover());
+    swatch(ui.painter(), rect.center(), color);
+}
+
 /// Paints a state's swatch of the colour `color` centred on `center`: a small square inside a gray 700 outline.
 fn swatch(painter: &egui::Painter, center: Pos2, color: Color32) {
     let square = Rect::from_center_size(center, Vec2::splat(CHIP_SWATCH));
@@ -261,6 +307,16 @@ fn swatch(painter: &egui::Painter, center: Pos2, color: Color32) {
 /// Returns whether the popup of the control `id` is open.
 fn picker_open(ui: &Ui, id: Option<Id>) -> bool {
     id.is_some_and(|id| Popup::is_id_open(ui.ctx(), id.with("picker")))
+}
+
+/// Returns the width in points of a text control showing `text`, as [`text_control`] adds it.
+pub fn text_control_width(ui: &Ui, text: &str) -> f32 {
+    let font = TextStyle::Body.resolve(ui.style());
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER)
+        .size()
+        .x
+        + 6.0
 }
 
 /// Adds a text control showing `text` in the weak text colour, named `name`, under the widget id `id` when one is
@@ -305,14 +361,37 @@ pub fn text_control(ui: &mut Ui, id: Option<Id>, text: &str, name: &str, row: f3
 /// A filled select has a gray 700 outline, gray 400 under the pointer and blue 500 while its options are open. An
 /// `empty` select is dashed gray 500 around its words in gray 400, as a blank is.
 pub fn select_control(ui: &mut Ui, id: Option<Id>, words: &str, name: &str, empty: bool) -> Response {
+    select_within(ui, id, words, name, empty, f32::INFINITY)
+}
+
+/// Adds an inline select as [`select_control`] does, at most `max_width` wide.
+///
+/// Words too long for that width end in an ellipsis, and the whole words show as the select's tooltip. Inside a
+/// disabled `Ui` the words are weak.
+pub fn select_within(ui: &mut Ui, id: Option<Id>, words: &str, name: &str, empty: bool, max_width: f32) -> Response {
     let font = TextStyle::Body.resolve(ui.style());
-    let color = if empty { mcs::GRAY_400 } else { mcs::GRAY_100 };
+    let enabled = ui.is_enabled();
     let weak = ui.visuals().weak_text_color();
+    let color = if !enabled {
+        weak
+    } else if empty {
+        mcs::GRAY_400
+    } else {
+        mcs::GRAY_100
+    };
     let painter = ui.painter();
-    let text = painter.layout_no_wrap(words.to_owned(), font, color);
     let chevron = painter.layout_no_wrap(MDI_CHEVRON_DOWN.to_owned(), FontId::proportional(SMALL_LABEL), weak);
-    let width = CHIP_PADDING + text.size().x + CHIP_GAP + chevron.size().x + 3.0;
+    let frame = CHIP_PADDING + CHIP_GAP + chevron.size().x + 3.0;
+    let mut job = egui::text::LayoutJob::simple_singleline(words.to_owned(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width((max_width - frame).max(0.0));
+    let text = painter.layout_job(job);
+    let width = frame + text.size().x;
     let (rect, response) = allocate_control(ui, id, vec2(width, CHIP_HEIGHT));
+    let response = if text.elided {
+        response.on_hover_text(words)
+    } else {
+        response
+    };
     response.widget_info(|| WidgetInfo {
         current_text_value: (!words.is_empty()).then(|| words.to_owned()),
         ..WidgetInfo::labeled(
@@ -321,7 +400,7 @@ pub fn select_control(ui: &mut Ui, id: Option<Id>, words: &str, name: &str, empt
             } else {
                 WidgetType::ComboBox
             },
-            true,
+            enabled,
             name,
         )
     });
@@ -354,6 +433,36 @@ pub fn select_control(ui: &mut Ui, id: Option<Id>, words: &str, name: &str, empt
         }
     }
     response
+}
+
+/// Draws the list of options of a select under `anchor` while the popup `popup_id` is open, one row of `items` per
+/// option, and returns the index of the option chosen.
+///
+/// A click on `anchor` opens and closes the list, and a choice or a click outside closes it. The list is an overlay.
+pub fn select_list(ui: &Ui, anchor: &Response, popup_id: Id, items: &[OverlayItem<'_>]) -> Option<usize> {
+    if anchor.clicked() {
+        Popup::toggle_id(ui.ctx(), popup_id);
+    }
+    let popup = Popup::from_response(anchor)
+        .id(popup_id)
+        .open_memory(None)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .frame(Frame::NONE)
+        .show(|ui| {
+            overlay(ui, |ui| {
+                let mut chosen = None;
+                for (index, item) in items.iter().enumerate() {
+                    if overlay_item(ui, item).clicked() {
+                        chosen = Some(index);
+                    }
+                }
+                if chosen.is_some() {
+                    ui.close();
+                }
+                chosen
+            })
+        })?;
+    popup.inner
 }
 
 /// Adds the chevron box after a condition word, named `name` under the widget id `id`, and returns its response.
@@ -590,7 +699,7 @@ pub fn notice_ui(ui: &mut Ui, text: &str) {
 const PICKER_WIDTH: f32 = 280.0;
 
 /// Side in points of a colour swatch button.
-const SWATCH_SIDE: f32 = 16.0;
+const SWATCH_SIDE: f32 = 14.0;
 
 /// Width in points of the New parameter dialog's content.
 const DIALOG_WIDTH: f32 = 380.0;
@@ -648,21 +757,29 @@ fn chip_colors(kind: &ChipKind, red: bool, open: bool) -> ChipColors {
     }
 }
 
-/// Adds the chip of `chip`, a button named by its visible text, and returns its response.
+/// Adds the chip of `chip`, a button named by its visible text, under the widget id `id` when one is given, so another
+/// frame can open its picker or give it the focus, and returns its response.
 ///
 /// A result chip is blue, or red and struck through when `red` holds, and every other chip neutral. A parameter chip
 /// carries a slider mark, a state chip a swatch of the colour `swatch`, a property chip its lead word ("my"), "any
 /// state" is in italics and a number in the mono face. Clicking a chip does nothing.
-pub fn chip_ui(ui: &mut Ui, chip: &SentenceChip, red: bool, swatch: Option<Color32>) -> Response {
-    chip_with_id(ui, None, chip, red, swatch)
-}
-
-/// Adds the chip of `chip` as [`chip_ui`] does, under the widget id `id` when one is given, so another frame can open
-/// its picker or give it the focus.
 ///
 /// Under the pointer the chip takes a 1 point outline in its text colour, and while the picker of `id` is open the
 /// blue tinted fill inside a blue 500 outline. The eye then finds what the picker edits.
 pub fn chip_with_id(ui: &mut Ui, id: Option<Id>, chip: &SentenceChip, red: bool, swatch: Option<Color32>) -> Response {
+    chip_within(ui, id, chip, red, swatch, f32::INFINITY)
+}
+
+/// Adds the chip of `chip` as [`chip_with_id`] does, at most `max_width` wide. A name too long for that width ends in
+/// an ellipsis, and the chip's whole text shows as its tooltip.
+pub fn chip_within(
+    ui: &mut Ui,
+    id: Option<Id>,
+    chip: &SentenceChip,
+    red: bool,
+    swatch: Option<Color32>,
+    max_width: f32,
+) -> Response {
     let open = picker_open(ui, id);
     let colors = chip_colors(&chip.kind, red, open);
     let body = TextStyle::Body.resolve(ui.style());
@@ -675,6 +792,11 @@ pub fn chip_with_id(ui: &mut Ui, id: Option<Id>, chip: &SentenceChip, red: bool,
     let mark = matches!(chip.kind, ChipKind::Parameter(_))
         .then(|| painter.layout_no_wrap(MDI_TUNE_VERTICAL.to_owned(), body.clone(), colors.lead));
     let lead = (!chip.lead.is_empty()).then(|| painter.layout_no_wrap(chip.lead.to_owned(), body.clone(), colors.lead));
+    let swatch_width = if swatch.is_some() { CHIP_SWATCH + CHIP_GAP } else { 0.0 };
+    let frame = CHIP_PADDING * 2.0
+        + swatch_width
+        + mark.as_ref().map_or(0.0, |galley| galley.size().x + CHIP_GAP)
+        + lead.as_ref().map_or(0.0, |galley| galley.size().x + CHIP_GAP);
     let mut job = egui::text::LayoutJob::default();
     job.append(
         &chip.name,
@@ -686,14 +808,16 @@ pub fn chip_with_id(ui: &mut Ui, id: Option<Id>, chip: &SentenceChip, red: bool,
             ..Default::default()
         },
     );
+    job.wrap = egui::text::TextWrapping::truncate_at_width((max_width - frame).max(0.0));
     let name = painter.layout_job(job);
-    let swatch_width = if swatch.is_some() { CHIP_SWATCH + CHIP_GAP } else { 0.0 };
-    let width = CHIP_PADDING * 2.0
-        + swatch_width
-        + mark.as_ref().map_or(0.0, |galley| galley.size().x + CHIP_GAP)
-        + lead.as_ref().map_or(0.0, |galley| galley.size().x + CHIP_GAP)
-        + name.size().x;
+    let elided = name.elided;
+    let width = frame + name.size().x;
     let (rect, response) = allocate_control(ui, id, vec2(width, CHIP_HEIGHT));
+    let response = if elided {
+        response.on_hover_text(chip.text())
+    } else {
+        response
+    };
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, chip.text()));
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
@@ -858,6 +982,29 @@ pub fn commit_field(
         name,
         current,
         |text| TextEdit::singleline(text).desired_width(width),
+        commit,
+    )
+}
+
+/// Adds a number field as [`commit_field`] does, its text aligned to the right edge.
+pub fn commit_number(
+    ui: &mut Ui,
+    id: Id,
+    name: &str,
+    current: &str,
+    width: f32,
+    commit: impl FnOnce(&str) -> Option<String>,
+) -> Response {
+    commit_edit(
+        ui,
+        id,
+        name,
+        current,
+        |text| {
+            TextEdit::singleline(text)
+                .desired_width(width)
+                .horizontal_align(egui::Align::RIGHT)
+        },
         commit,
     )
 }
@@ -1124,16 +1271,23 @@ pub struct Picker<'a> {
 impl Picker<'_> {
     /// Draws the picker under `anchor` while it is open, and returns what the author chose. A click on `anchor` opens
     /// and closes it, and a choice, a click outside or Escape closes it.
+    ///
+    /// The picker is an overlay. Its open state lives under the anchor's id with "picker". A chip or a text control
+    /// that anchors it then shows itself open.
     pub fn show(self, ui: &Ui, anchor: &Response) -> Option<PickerChoice> {
         let popup = Popup::from_toggle_button_response(anchor)
+            .id(anchor.id.with("picker"))
             .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
             .width(PICKER_WIDTH)
+            .frame(Frame::NONE)
             .show(|ui| {
-                let choice = self.contents(ui);
-                if choice.is_some() {
-                    ui.close();
-                }
-                (choice, ui.unique_id())
+                overlay(ui, |ui| {
+                    let choice = self.contents(ui);
+                    if choice.is_some() {
+                        ui.close();
+                    }
+                    (choice, ui.unique_id())
+                })
             })?;
         let (choice, id) = popup.inner;
         accessible_group(
@@ -1149,45 +1303,53 @@ impl Picker<'_> {
     /// Draws what the picker offers, and returns what the author chose.
     fn contents(&self, ui: &mut Ui) -> Option<PickerChoice> {
         let mut choice = None;
-        ui.strong(self.title);
+        overlay_title(ui, self.title);
         let mut offered = false;
         for (group_index, group) in self.groups.iter().enumerate() {
             if group.items.is_empty() {
                 continue;
             }
             offered = true;
-            ui.add_space(4.0);
-            ui.label(RichText::new(group.heading).weak().small());
+            overlay_group(ui, group.heading);
             for (item_index, item) in group.items.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    if ui.add(Button::new(&item.label).frame(false)).clicked() {
-                        choice = Some(PickerChoice::Item {
-                            group: group_index,
-                            item: item_index,
-                        });
-                    }
-                    if let Some(detail) = &item.detail {
-                        ui.weak(detail);
-                    }
-                });
+                let row = OverlayItem {
+                    label: &item.label,
+                    detail: item.detail.as_deref(),
+                    described: true,
+                    ..OverlayItem::default()
+                };
+                if overlay_item(ui, &row).clicked() {
+                    choice = Some(PickerChoice::Item {
+                        group: group_index,
+                        item: item_index,
+                    });
+                }
             }
         }
         if self.new_parameter {
             offered = true;
-            if ui.add(Button::new(NEW_PARAMETER).frame(false)).clicked() {
+            ui.add_space(4.0);
+            let row = OverlayItem {
+                label: NEW_PARAMETER,
+                ..OverlayItem::default()
+            };
+            if overlay_item(ui, &row).clicked() {
                 choice = Some(PickerChoice::NewParameter);
             }
         }
         if let Some(number_use) = self.number_box {
             offered = true;
-            ui.add_space(4.0);
+            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing.y = 4.0;
             if let Some(literal) = number_box(ui, number_use) {
                 choice = Some(PickerChoice::Number(literal));
             }
         }
         if !offered {
+            ui.add_space(4.0);
             ui.weak(self.empty);
         }
+        ui.add_space(2.0);
         choice
     }
 }
@@ -1243,25 +1405,39 @@ pub fn color_name(color: Color) -> &'static str {
 }
 
 /// Adds a swatch of `color`, a button named `name` that opens "Choose a colour", and returns the colour chosen.
+///
+/// "Choose a colour" is an overlay of the twelve palette colours, six to a row.
 pub fn color_button(ui: &mut Ui, name: &str, color: Color) -> Option<Color> {
-    let response = swatch_button(ui, color32(color), name);
+    let id = ui.next_auto_id();
+    let popup_id = id.with("picker");
+    let response = swatch_button(ui, color32(color), name, Popup::is_id_open(ui.ctx(), popup_id));
     let popup = Popup::from_toggle_button_response(&response)
+        .id(popup_id)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .frame(Frame::NONE)
         .show(|ui| {
-            ui.strong(CHOOSE_A_COLOR);
-            let mut chosen = None;
-            ui.horizontal_wrapped(|ui| {
-                ui.set_max_width(6.0 * (SWATCH_SIDE + 8.0));
-                for (palette, name) in PALETTE_COLORS.iter().zip(COLOR_NAMES) {
-                    if swatch_button(ui, color32(*palette), name).on_hover_text(name).clicked() {
-                        chosen = Some(*palette);
+            overlay(ui, |ui| {
+                overlay_title(ui, CHOOSE_A_COLOR);
+                ui.add_space(6.0);
+                let mut chosen = None;
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                    ui.set_max_width(6.0 * (SWATCH_SIDE + 8.0));
+                    for (palette, name) in PALETTE_COLORS.iter().zip(COLOR_NAMES) {
+                        if swatch_button(ui, color32(*palette), name, false)
+                            .on_hover_text(name)
+                            .clicked()
+                        {
+                            chosen = Some(*palette);
+                        }
                     }
+                });
+                ui.add_space(2.0);
+                if chosen.is_some() {
+                    ui.close();
                 }
-            });
-            if chosen.is_some() {
-                ui.close();
-            }
-            (chosen, ui.unique_id())
+                (chosen, ui.unique_id())
+            })
         })?;
     let (chosen, id) = popup.inner;
     accessible_group(
@@ -1274,18 +1450,23 @@ pub fn color_button(ui: &mut Ui, name: &str, color: Color) -> Option<Color> {
     chosen
 }
 
-/// Adds a square swatch of `color`, a button named `name`.
-fn swatch_button(ui: &mut Ui, color: Color32, name: &str) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(SWATCH_SIDE + 4.0), Sense::click());
+/// Adds a square swatch of `color`, a button named `name`, and returns its response.
+///
+/// The outline is gray 700, gray 100 under the pointer and blue 500 while the picker it opens is `open`. Keyboard focus
+/// draws the focus outline.
+fn swatch_button(ui: &mut Ui, color: Color32, name: &str, open: bool) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(SWATCH_SIDE + 4.0, CHIP_HEIGHT), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
     if ui.is_rect_visible(rect) {
         let square = Rect::from_center_size(rect.center(), Vec2::splat(SWATCH_SIDE));
         let painter = ui.painter();
         painter.rect_filled(square, CornerRadius::ZERO, color);
-        let outline = if response.hovered() || response.has_focus() {
+        let outline = if open {
+            mcs::BLUE_500
+        } else if response.hovered() {
             mcs::GRAY_100
         } else {
-            mcs::GRAY_600
+            mcs::GRAY_700
         };
         painter.rect_stroke(
             square,
@@ -1293,6 +1474,9 @@ fn swatch_button(ui: &mut Ui, color: Color32, name: &str) -> Response {
             Stroke::new(1.0, outline),
             egui::StrokeKind::Inside,
         );
+        if response.has_focus() {
+            focus_ring(ui, square);
+        }
     }
     response
 }

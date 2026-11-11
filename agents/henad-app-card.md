@@ -7,8 +7,8 @@ sheet editor, the Sheet pane, the toolbar and the New model dialog are in
 and of a card over agents (**Agent lines** below).
 
 **Drawing.** `card_pane(ui, sheet, past_start, trials)` draws the notices (`notice_ui`) and every
-card in file order with the body text at `SENTENCE_SIZE` 13, `CARD_GAP` 12 apart, each in
-`card_frame` (a region of gray 900 inside a gray 800 hairline): `title_bar_ui`
+card in file order with the body text at `SENTENCE_SIZE` 13, `REGION_GAP` 12 apart, each in
+`widgets::region` (gray 900 inside a gray 800 hairline): `title_bar_ui`
 (`Sentences::card_heading` in the semibold face in gray 100, the Lines help on a card that runs
 every tick, `line_count` at the right as a `caption`, a hairline), on a card that runs every tick
 `law_ui` (`LAW` at 12 in gray 400 after a 2 point gray 600 bar, a hairline), the dashed
@@ -59,11 +59,11 @@ diagnostics at that card and
 line, the skip notes first, red for an error or a skip note that names a red chip, amber otherwise)
 and `skips`, the number of skip notes. `sheet_outcome_ui` in `editor/mod.rs` lists every problem
 the card does not draw (`draws_diagnostic`). `line_ui` names the row a group of role `Group`
-named `CardLine::label` with bounds from `accessible_group`, the whole row. `card_notes` adds to the report's notes, in the order of the
-wording table: the one-side offer after the skip notes, then `count_used_as_draw` with its button
-(`rates::count_as_draw`, `UseCountForEach`, after which the emptied chance or rate opens its
-picker), then the grey rate or chance note, then the grow offer (both in **Rates** below), then the
-line's relation notes (`relation_line_note`):
+named `CardLine::label` with bounds from `accessible_group`, the whole row. `card_notes` adds to the
+report's notes, in the order of the wording table: the one-side offer after the skip notes, then
+`count_used_as_draw` with its button (`rates::count_as_draw`, `UseCountForEach`, after which the
+emptied chance or rate opens its picker), then the grey rate or chance note, then the grow offer
+(both in **Rates** below), then the line's relation notes (`relation_line_note`):
 grey, or amber with a button for the fold offers, `REMOVE_THIS_WHEN` named `remove_when_name`
 running `DeleteLine` on the When, and `move_into_label` named `move_into_name` running
 `MoveConditionInto`. Both names are the When's line prefix and the button's words ("Line 2: remove
@@ -81,8 +81,8 @@ opened.
 
 **Controls.** `part_ui` draws each part, the look of each control in `widgets.rs` (`agents/ui.md`
 lists the colours). Plain words go through `text_ui`: closing punctuation at their start is placed
-at the cursor with no wrap check, so a row never starts with ")" or ";", a space that ends a full row
-takes no row, and one label keeps the words. `words_ui` (`Words`) lays a label out in rows of
+at the cursor with no wrap check, so a row never starts with ")" or ";", a space that ends a full
+row takes no row, and one label keeps the words. `words_ui` (`Words`) lays a label out in rows of
 `SENTENCE_ROW` and paints it level with the chips, with a painted dotted underline where
 `Words::dotted` holds: plain words in the text colour, a `Keyword` and a `ConditionWord` in the
 semibold face (`semibold_font` in `init.rs`, the regular face where the context has no semibold
@@ -108,7 +108,8 @@ with a square of its group's `kind_hue`, so they read as the legend of the bars.
 pane takes `Frame::NONE` and draws its contents in an `overlay`: titles and group labels are
 `caption`s, items `overlay_item`s (a picker's current value marked by `CardPicker::current`, the
 chip's name, and a state's swatch from `PickerItem::swatch`, a select's current option by its
-words). The line menu's Move up and Move down stay listed where `can_move` refuses, disabled with
+words, its list drawn by `widgets::select_list`, which the Sheet pane's selects share). The line
+menu's Move up and Move down stay listed where `can_move` refuses, disabled with
 `MOVE_UP_FIRST` or `MOVE_DOWN_LAST` as their tooltip. The pane's header draws Lines and Diagram as
 the two segments of a toggle (`toggle_label`), Diagram on the keyboard path and Lines a label that a
 click presses.

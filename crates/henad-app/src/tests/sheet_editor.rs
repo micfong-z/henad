@@ -1258,6 +1258,8 @@ fn every_accessible_name_holds_its_visible_words() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
+    // Every section's help button, the last at the foot of a long sheet, takes a click.
+    harness.screen = super::sheet_pane::TALL_SCREEN;
     for text in starters()
         .iter()
         .map(|starter| starter.text.to_owned())

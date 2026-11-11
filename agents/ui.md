@@ -54,7 +54,7 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   | Neutral outline of a control | gray 700 |
   | Dashed outline of an empty slot (blank, empty select, add button) | gray 500, word gray 400 |
   | Hairline (separator, guide, a region's border) | gray 800 |
-  | Region ground (a card) | gray 900, the window fill |
+  | Region ground (a card, a section of the Sheet pane) | gray 900, the window fill |
   | Overlay border (picker, menu, select list) | gray 600 |
 
 - **Style: flat, framed regions, hairlines inside.** No shadow, gradient or animation. A card is a
@@ -91,13 +91,29 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     toggle (Lines, Diagram): weak while off, the text colour over a 2 point blue 500 line while on.
   The theme in `init.rs` is unchanged by the Card pane. The primary action is blue 700, never the
   prototype's orange.
+- **The Sheet pane's sections** (`ui/editor/sheet/sheet_pane/layout.rs` over the components of
+  `widgets.rs`). Each section is a region (`widgets::region`, as a card is), `REGION_GAP` 12 from
+  the next, its title a small upper-case mono label with a hairline to its "?" at the right edge
+  (`widgets::region_title`), its "+ Add ..." button the last row inside it, dashed
+  (`widgets::add_button` with no kind). Form rows put every label of a section in one column and
+  its fields in the next, number fields right-aligned (`commit_number`), a hint weak and a refused
+  field's message red under its field. Tables (properties, parameters, plotted measures, buttons,
+  events) have a header row of small upper-case mono labels, a gray 800 hairline under it and under
+  each row, the theme's hover fill under the row under the pointer, and the delete button, a weak
+  "×" text control, in a right-aligned last column. A table's columns give up width in an order
+  its function's doc states, a long select or chip ends in an ellipsis with its words as the
+  tooltip, and a table that still does not fit scrolls sideways on its own. Every select of the
+  pane is the inline select with its list in an overlay (`select_within`, `select_list`), and the
+  pickers ("Choose a parameter", a chip's picker, "Choose a colour") are overlays too.
 - **A hue names a line's kind in one place.** The bar at the left of a card's row, and the square
   on its add button, take the kind's hue at step 500: Look around blue, Chance purple, Yes or no
   yellow, Change green, Calculate gray, When and Repeat gray 100 (`card_pane::kind_hue`, over
   `AddButton::for_kind`). The Diagram's boxes take the same bar. Everywhere else a hue still means
   a state: blue the primary action and a result, orange a warning, red a failure.
-- **Swatches of the Sheet pane** (`ui/editor/sheet/widgets.rs`). A swatch is a square of the state's
-  own colour with a gray 600 outline, gray 100 while hovered or focused. "Choose a colour" offers
+- **Swatches of the Sheet pane** (`ui/editor/sheet/widgets.rs`). A swatch button is a 14 point
+  square of the state's own colour inside gray 700, gray 100 while hovered, blue 500 while its
+  picker is open, and the focus outline while focused. A swatch beside a state's name
+  (`swatch_ui`) is the chip's 9 point square inside gray 700. "Choose a colour" offers
   the twelve `henad_graph::sheet::edit::PALETTE_COLORS`, named by `COLOR_NAMES` (Black, Dark grey,
   Grey, White, Red, Orange, Yellow, Brown, Green, Dark green, Blue and Purple). They are data
   colours a state is drawn in, taken from MCS entries, so they live in the sheet

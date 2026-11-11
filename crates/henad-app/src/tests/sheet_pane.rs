@@ -1025,6 +1025,7 @@ fn measures_count_states_average_numbers_and_follow_their_state_colour() {
     let Some(mut harness) = blank() else {
         return;
     };
+    harness.screen = TALL_SCREEN;
     add_status(&mut harness);
     click(&mut harness, ADD_PROPERTY);
     type_into(&mut harness, "Property name", "Food");
@@ -1193,6 +1194,7 @@ fn buttons_start_again_or_run_once_and_check_their_names() {
     let Some(mut harness) = blank() else {
         return;
     };
+    harness.screen = TALL_SCREEN;
     add_status(&mut harness);
     click(&mut harness, ADD_BUTTON);
     click(&mut harness, DONE);

@@ -42,9 +42,8 @@ use std::rc::Rc;
 
 use egui::accesskit::Role;
 use egui::{
-    Align, Color32, CornerRadius, FontId, Frame, Id, Key, Label, Layout, Margin, Popup, PopupCloseBehavior, Pos2, Rect,
-    Response, RichText, Sense, Shape, Sides, Stroke, TextEdit, TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
-    pos2, vec2,
+    Align, Color32, CornerRadius, FontId, Frame, Id, Key, Label, Layout, Margin, Popup, Pos2, Rect, Response, RichText,
+    Sense, Shape, Sides, Stroke, TextEdit, TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType, pos2, vec2,
 };
 use henad_core::diagnostic::DiagnosticSeverity;
 use henad_graph::sheet::check::{SheetDiagnostic, SheetReport, holds_draw};
@@ -83,10 +82,10 @@ use super::picker::{
 };
 use super::sheet_pane::SheetTrial;
 use super::widgets::{
-    ARROW_WIDTH, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, add_button, arrow_control, blank_shapes,
-    blank_ui, caption, chip_with_id, dashed_rect, menu_button, message_ui, new_parameter_modal, note_button, notice_ui,
-    overlay, overlay_group, overlay_item, overlay_title, refusal_text, select_control, set_name, small_label,
-    text_control,
+    ARROW_WIDTH, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, REGION_GAP, add_button, arrow_control,
+    blank_shapes, blank_ui, caption, chip_with_id, dashed_rect, hairline, menu_button, message_ui, new_parameter_modal,
+    note_button, notice_ui, overlay, overlay_group, overlay_item, overlay_title, refusal_text, region, select_control,
+    select_list, set_name, small_label, text_control,
 };
 use super::{LineFires, SheetEditor, accessible_group};
 use crate::init::semibold_font;
@@ -119,9 +118,6 @@ const SENTENCE_ROW: f32 = 24.0;
 /// Start and length in points of the dash in the indent of an alternative of a Choose or a Depending on, level with its
 /// first row.
 const ALTERNATIVE_DASH: (f32, f32) = (6.0, 7.0);
-
-/// Space in points between two cards.
-const CARD_GAP: f32 = 12.0;
 
 /// Size in points of the words and chips of a sentence.
 const SENTENCE_SIZE: f32 = 13.0;
@@ -561,17 +557,17 @@ fn cards_ui(
         && !has_tick_card(every)
     {
         // A blank model holds no card. Its first line adds the card that runs each tick.
-        card_frame(ui, |ui| {
+        region(ui, |ui| {
             title_bar_ui(ui, &card_header(&sentences.thing_word(every)), None, None);
             empty_card_ui(ui, BLANK_MODEL_CARD);
             footer_ui(ui, None, |ui| add_buttons_ui(ui, document, state, None, every, pending));
         });
-        ui.add_space(CARD_GAP);
+        ui.add_space(REGION_GAP);
     }
     let mut overridden: Vec<(String, String)> = Vec::new();
     for (index, card) in document.cards.iter().enumerate() {
         if index > 0 {
-            ui.add_space(CARD_GAP);
+            ui.add_space(REGION_GAP);
         }
         let lines = card_lines(document, &sentences, report, index);
         overridden.extend(
@@ -673,7 +669,7 @@ fn card_ui(
     let report = drawing.report;
     let notes = relations.notes(drawing.sentences, |line| !report.is_skipped(line));
     let closing = closing_blocks(&relations, lines);
-    card_frame(ui, |ui| {
+    region(ui, |ui| {
         title_bar_ui(ui, &heading, Some(lines.len()), help);
         if each_tick {
             law_ui(ui);
@@ -712,20 +708,6 @@ fn card_ui(
     });
 }
 
-/// Draws a card's frame, a framed region of gray 900 inside a hairline, with `add` inside it, and returns what `add`
-/// returns.
-fn card_frame<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    Frame::NONE
-        .fill(mcs::GRAY_900)
-        .stroke(Stroke::new(1.0, mcs::GRAY_800))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing.y = 0.0;
-            add(ui)
-        })
-        .inner
-}
-
 /// Draws a card's title row, with a hairline under it: the `heading` in gray 100 and the semibold face, the help `help`
 /// beside it where the card has one, and the number of lines `count` as a small upper-case label at the right edge.
 fn title_bar_ui(ui: &mut Ui, heading: &str, count: Option<usize>, help: Option<Help>) {
@@ -754,13 +736,7 @@ fn title_bar_ui(ui: &mut Ui, heading: &str, count: Option<usize>, help: Option<H
                 },
             );
         });
-    rule_ui(ui);
-}
-
-/// Draws a hairline across `ui`.
-fn rule_ui(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::ZERO, mcs::GRAY_800);
+    hairline(ui);
 }
 
 /// Draws the law of a card that runs each tick in gray 400, after a bar of 2 points of gray 600, with a hairline under
@@ -782,7 +758,7 @@ fn law_ui(ui: &mut Ui) {
     let place = response.rect.shrink2(vec2(0.0, 6.0));
     let bar = Rect::from_min_size(pos2(place.left() + CARD_INSET, place.top()), vec2(2.0, place.height()));
     ui.painter().rect_filled(bar, CornerRadius::ZERO, mcs::GRAY_600);
-    rule_ui(ui);
+    hairline(ui);
 }
 
 /// Draws `words` in a dashed box where the lines of an empty card would be: gray 500 dashes around words in gray 400.
@@ -803,7 +779,7 @@ fn empty_card_ui(ui: &mut Ui, words: &str) {
 /// Draws a card's footer under a hairline: `note` in the weak text colour where one is given, then what `add` draws,
 /// the add buttons.
 fn footer_ui(ui: &mut Ui, note: Option<&str>, add: impl FnOnce(&mut Ui)) {
-    rule_ui(ui);
+    hairline(ui);
     Frame::NONE.inner_margin(Margin::same(8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         if let Some(note) = note {
@@ -3111,34 +3087,16 @@ fn select_popup(
         } => look_summary_options(*index, line.summaries.len() > 1),
         _ => Vec::new(),
     };
-    if anchor.clicked() {
-        Popup::toggle_id(ui.ctx(), popup_id);
-    }
-    let popup = Popup::from_response(anchor)
-        .id(popup_id)
-        .open_memory(None)
-        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
-        .frame(Frame::NONE)
-        .show(|ui| {
-            overlay(ui, |ui| {
-                let mut chosen = None;
-                for (words, option) in &options {
-                    let row = OverlayItem {
-                        label: words,
-                        current: words.as_str() == current,
-                        ..OverlayItem::default()
-                    };
-                    if overlay_item(ui, &row).clicked() {
-                        chosen = Some(*option);
-                    }
-                }
-                if chosen.is_some() {
-                    ui.close();
-                }
-                chosen
-            })
-        })?;
-    popup.inner
+    let items: Vec<OverlayItem<'_>> = options
+        .iter()
+        .map(|(words, _)| OverlayItem {
+            label: words,
+            current: words.as_str() == current,
+            ..OverlayItem::default()
+        })
+        .collect();
+    let chosen = select_list(ui, anchor, popup_id, &items)?;
+    options.get(chosen).map(|(_, option)| *option)
 }
 
 /// Returns the edit that chooses `option` in the select at `place`, or `None` when it only changes a draft.

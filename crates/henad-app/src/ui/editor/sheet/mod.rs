@@ -27,7 +27,9 @@ pub mod widgets;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 
-use egui::{Button, CentralPanel, Frame, Key, KeyboardShortcut, Margin, Modifiers, Panel, ScrollArea, TextEdit};
+use egui::{
+    Button, CentralPanel, Frame, Key, KeyboardShortcut, Margin, Modifiers, Panel, ScrollArea, TextEdit, UiBuilder,
+};
 use henad_compute::entry::ModelEntry;
 use henad_compute::snapshot::Snapshot;
 use henad_core::diagnostic::CodeDiagnostic;
@@ -510,10 +512,15 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'
         .frame(Frame::NONE.inner_margin(Margin::symmetric(8, 4)))
         .show(ui, |ui| {
             ui.heading(SHEET_PANE);
+            // The pane keeps the width its divider gives it, and clips anything wider at its edge.
+            let rect = ui.available_rect_before_wrap();
+            let mut pane = ui.new_child(UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+            pane.shrink_clip_rect(rect);
             ScrollArea::vertical()
                 .id_salt("henad_sheet_pane_scroll")
                 .auto_shrink([false; 2])
-                .show(ui, |ui| sheet_pane::sheet_pane(ui, sheet, past_start, trials));
+                .show(&mut pane, |ui| sheet_pane::sheet_pane(ui, sheet, past_start, trials));
+            ui.advance_cursor_after_rect(rect);
             pane_group(ui, SHEET_PANE);
         });
     CentralPanel::no_frame().show(ui, |ui| {

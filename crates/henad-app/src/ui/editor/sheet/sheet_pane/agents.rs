@@ -6,7 +6,7 @@
 //! first property. Events lists what Record lines count, each name a field, and adds an event through the *event
 //! form*.
 
-use egui::{Button, ComboBox, Frame, Key, TextEdit, Ui};
+use egui::{Align, Key, Label, Layout, RichText, TextEdit, Ui};
 use henad_graph::limits::MAX_AGENTS;
 use henad_graph::sheet::document::{
     AgentKind, Marks, PropertyType, SheetDocument, SheetLiteral, SheetProperty, SheetValue, Slot,
@@ -16,17 +16,20 @@ use henad_graph::sheet::sentence::{
     ADD_EVENT, ADD_GROUND_PROPERTY_NAME, AGENT_COUNT_LABEL, AGENT_COUNT_NAME, AGENT_MAX_LABEL, AGENT_MAX_NAME,
     AGENT_MAX_TOOLTIP, AGENT_NAME_FIELD, AGENT_NAME_MISSING, CANCEL, DONE, EVENT_NAME_FIELD, EVENT_NAME_MISSING,
     EVENT_NAME_PLACEHOLDER, EVENTS_EMPTY, GROUND_EMPTY, KEPT_LEAD, KEPT_OUT_OF_RANGE, KEPT_TAIL, MARKS_ADD_UP,
-    MARKS_LABEL, MARKS_LARGEST, MARKS_NONE, MARKS_TOOLTIP, NAME_LABEL, NEW_EVENT, REMOVE_ROW_LABEL, add_property_name,
-    blocked_lead, blocked_state_name, delete_event_name, event_name_name, event_name_taken, integer_up_to, kept_place,
-    marks_name, name_reserved, read_typed_number,
+    MARKS_LABEL, MARKS_LARGEST, MARKS_NONE, MARKS_TOOLTIP, NAME_LABEL, NEW_EVENT, add_property_name, blocked_lead,
+    blocked_state_name, delete_event_name, event_name_name, event_name_taken, integer_up_to, kept_place, marks_name,
+    name_reserved, read_typed_number,
 };
 
+use super::layout::{Column, Form, Table, line, text_cell, wrapped_line};
 use super::{
-    FormKind, GROUND, NumberField, NumberTarget, PARAMETER_NAME_WIDTH, PaneState, Pending, number_field, properties_of,
-    property_form_or_add, property_table,
+    FormKind, GROUND, NumberField, NumberTarget, PARAMETER_NAME_WIDTH, PaneState, Pending, delete_button, form_buttons,
+    form_heading, number_field, properties_of, property_form_or_add, property_table, select,
 };
-use crate::ui::editor::sheet::widgets::{NumberUse, commit_field, field_message, message_ui, set_name};
-use crate::ui::sweep::layout::{add_button, filled_button};
+use crate::ui::editor::sheet::widgets::{
+    NumberUse, OverlayItem, add_button, commit_field, commit_number, field_message, message_ui, set_name,
+};
+use crate::ui::sweep::layout::filled_button;
 
 /// Width in points of a field that holds a number of agents.
 const COUNT_WIDTH: f32 = 72.0;
@@ -58,14 +61,14 @@ pub(super) fn agents(
     let name_id = widgets.with("henad_sheet_agent_name");
     let count_id = widgets.with("henad_sheet_agent_count");
     let max_id = widgets.with("henad_sheet_agent_max");
-    ui.horizontal(|ui| {
-        ui.label(NAME_LABEL);
+    let form = Form::new(ui, &[NAME_LABEL, AGENT_COUNT_LABEL, AGENT_MAX_LABEL]);
+    form.row(ui, NAME_LABEL, |ui| {
         commit_field(
             ui,
             name_id,
             AGENT_NAME_FIELD,
             &kind.name,
-            PARAMETER_NAME_WIDTH,
+            PARAMETER_NAME_WIDTH.min(ui.available_width()),
             |text| {
                 let name = text.trim();
                 if name.is_empty() {
@@ -76,9 +79,11 @@ pub(super) fn agents(
             },
         );
     });
-    ui.horizontal(|ui| {
-        ui.label(AGENT_COUNT_LABEL);
-        commit_field(
+    if let Some(message) = field_message(ui, name_id) {
+        form.under(ui, |ui| message_ui(ui, &message));
+    }
+    form.row(ui, AGENT_COUNT_LABEL, |ui| {
+        commit_number(
             ui,
             count_id,
             AGENT_COUNT_NAME,
@@ -93,34 +98,41 @@ pub(super) fn agents(
             },
         );
     });
-    ui.horizontal(|ui| {
-        ui.label(AGENT_MAX_LABEL).on_hover_text(AGENT_MAX_TOOLTIP);
-        commit_field(
-            ui,
-            max_id,
-            AGENT_MAX_NAME,
-            &kind.max_count.to_string(),
-            COUNT_WIDTH,
-            |text| {
-                match whole_number(text, MAX_AGENTS) {
-                    Ok(max_count) => {
-                        // A smaller world holds fewer agents at the start too.
-                        *pending = Some(set_kind(kind, kind.count.min(max_count), max_count));
-                        None
-                    }
-                    Err(message) => Some(message),
-                }
-            },
-        );
-    });
-    if let Some(message) = [name_id, count_id, max_id]
-        .into_iter()
-        .find_map(|id| field_message(ui, id))
-    {
-        message_ui(ui, &message);
+    if let Some(message) = field_message(ui, count_id) {
+        form.under(ui, |ui| message_ui(ui, &message));
     }
+    form.row_with(
+        ui,
+        |ui| {
+            ui.add(Label::new(AGENT_MAX_LABEL).wrap())
+                .on_hover_text(AGENT_MAX_TOOLTIP);
+        },
+        |ui| {
+            commit_number(
+                ui,
+                max_id,
+                AGENT_MAX_NAME,
+                &kind.max_count.to_string(),
+                COUNT_WIDTH,
+                |text| {
+                    match whole_number(text, MAX_AGENTS) {
+                        Ok(max_count) => {
+                            // A smaller world holds fewer agents at the start too.
+                            *pending = Some(set_kind(kind, kind.count.min(max_count), max_count));
+                            None
+                        }
+                        Err(message) => Some(message),
+                    }
+                },
+            );
+        },
+    );
+    if let Some(message) = field_message(ui, max_id) {
+        form.under(ui, |ui| message_ui(ui, &message));
+    }
+    ui.add_space(6.0);
     property_table(ui, document, &kind.id, pane, stale, pending);
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     property_form_or_add(
         ui,
         document,
@@ -210,9 +222,10 @@ pub(super) fn ground(
 ) {
     let properties = properties_of(document, GROUND);
     if properties.is_empty() {
-        ui.label(GROUND_EMPTY);
+        text_cell(ui, Label::new(GROUND_EMPTY));
     } else {
         property_table(ui, document, GROUND, pane, stale, pending);
+        ui.add_space(4.0);
         for property in properties {
             match property.property_type {
                 PropertyType::Number => marks_row(ui, document, property, pane, pending),
@@ -221,7 +234,7 @@ pub(super) fn ground(
             }
         }
     }
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     property_form_or_add(ui, document, GROUND, ADD_GROUND_PROPERTY_NAME, false, pane, pending);
 }
 
@@ -240,19 +253,26 @@ fn marks_row(
         Some(_) => MARKS_LARGEST,
         None => MARKS_NONE,
     };
-    ui.horizontal_wrapped(|ui| {
+    wrapped_line(ui, |ui| {
         ui.weak(&property.name);
         ui.label(MARKS_LABEL).on_hover_text(MARKS_TOOLTIP);
-        let mut marks = property.marks;
-        let combo = ComboBox::from_id_salt(("henad_sheet_marks", &property.id))
-            .selected_text(marks_words(marks))
-            .show_ui(ui, |ui| {
-                for choice in [None, Some(Marks::Largest), Some(Marks::AddUp)] {
-                    ui.selectable_value(&mut marks, choice, marks_words(choice));
-                }
-            });
-        set_name(ui, combo.response.id, &marks_name(&property.name));
-        combo.response.on_hover_text(MARKS_TOOLTIP);
+        let choices = [None, Some(Marks::Largest), Some(Marks::AddUp)];
+        let items = choices.map(|choice| OverlayItem {
+            label: marks_words(choice),
+            current: choice == property.marks,
+            ..OverlayItem::default()
+        });
+        let (response, chosen) = select(
+            ui,
+            ("henad_sheet_marks", &property.id),
+            &marks_name(&property.name),
+            marks_words(property.marks),
+            &items,
+        );
+        response.on_hover_text(MARKS_TOOLTIP);
+        let marks = chosen
+            .and_then(|index| choices.get(index).copied())
+            .unwrap_or(property.marks);
         if marks != property.marks {
             // A property that takes marks says what share each tick keeps, all of it to start with.
             let kept_per_tick = match &property.kept_per_tick {
@@ -276,6 +296,7 @@ fn marks_row(
                 },
                 number_use: NumberUse::Number,
                 limit: Some((0.0, 1.0, KEPT_OUT_OF_RANGE)),
+                after: 0.0,
             };
             number_field(ui, document, field, pane, pending);
             ui.label(KEPT_TAIL);
@@ -299,7 +320,7 @@ fn blocked_row(ui: &mut Ui, document: &SheetDocument, property: &SheetProperty, 
                 .any(|known| known.property == property.id && known.state == state)
         })
     };
-    ui.horizontal_wrapped(|ui| {
+    wrapped_line(ui, |ui| {
         ui.label(blocked_lead(&property.name));
         for state in &property.states {
             let mut kept_out = blocked(&state.id);
@@ -320,49 +341,61 @@ fn blocked_row(ui: &mut Ui, document: &SheetDocument, property: &SheetProperty, 
 /// event". A sheet with no event says what one is for.
 pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, pending: &mut Option<Pending>) {
     if document.events.is_empty() {
-        ui.weak(EVENTS_EMPTY);
-    }
-    for event in &document.events {
-        let id = pane.widgets.with(("henad_sheet_event", event.id.as_str()));
-        ui.horizontal(|ui| {
-            commit_field(
-                ui,
-                id,
-                &event_name_name(&event.name),
-                &event.name,
-                PARAMETER_NAME_WIDTH,
-                |text| {
-                    let name = text.trim();
-                    if name.is_empty() {
-                        return Some(EVENT_NAME_MISSING.to_owned());
+        text_cell(ui, Label::new(RichText::new(EVENTS_EMPTY).weak()));
+    } else {
+        let columns = vec![
+            Column::new("", PARAMETER_NAME_WIDTH, 64.0),
+            Column::fixed(super::DELETE_WIDTH),
+        ];
+        let id = ui.make_persistent_id("henad_sheet_events");
+        Table::new(id, columns, 0, &[(0, 0.0)]).show(ui, |ui, rows| {
+            for event in &document.events {
+                let id = pane.widgets.with(("henad_sheet_event", event.id.as_str()));
+                rows.row(ui, &event.id, |row| {
+                    row.cell(0, |ui| {
+                        line(ui, |ui| {
+                            commit_field(
+                                ui,
+                                id,
+                                &event_name_name(&event.name),
+                                &event.name,
+                                PARAMETER_NAME_WIDTH.min(ui.available_width()),
+                                |text| {
+                                    let name = text.trim();
+                                    if name.is_empty() {
+                                        return Some(EVENT_NAME_MISSING.to_owned());
+                                    }
+                                    if event_taken(document, name, Some(&event.id)) {
+                                        return Some(event_name_taken(name));
+                                    }
+                                    *pending = Some(Pending::one(SheetEdit::Rename {
+                                        item: SheetItem::Event(event.id.clone()),
+                                        name: name.to_owned(),
+                                    }));
+                                    None
+                                },
+                            );
+                        });
+                    });
+                    row.cell(1, |ui| {
+                        line(ui, |ui| {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if delete_button(ui, &delete_event_name(&event.name)).clicked() {
+                                    *pending = Some(Pending::one(SheetEdit::Delete {
+                                        item: SheetItem::Event(event.id.clone()),
+                                    }));
+                                }
+                            });
+                        });
+                    });
+                    if let Some(message) = row.message(id) {
+                        row.below(0, |ui| message_ui(ui, &message));
                     }
-                    if event_taken(document, name, Some(&event.id)) {
-                        return Some(event_name_taken(name));
-                    }
-                    *pending = Some(Pending::one(SheetEdit::Rename {
-                        item: SheetItem::Event(event.id.clone()),
-                        name: name.to_owned(),
-                    }));
-                    None
-                },
-            );
-            let delete = add_button(
-                ui,
-                true,
-                Button::new(REMOVE_ROW_LABEL).small(),
-                &delete_event_name(&event.name),
-            );
-            if delete.clicked() {
-                *pending = Some(Pending::one(SheetEdit::Delete {
-                    item: SheetItem::Event(event.id.clone()),
-                }));
+                });
             }
         });
-        if let Some(message) = field_message(ui, id) {
-            message_ui(ui, &message);
-        }
     }
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     match &mut pane.event_form {
         Some(form) => {
             let mut close = false;
@@ -372,7 +405,7 @@ pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState
             }
         }
         None => {
-            if ui.button(ADD_EVENT).clicked() {
+            if add_button(ui, ADD_EVENT, ADD_EVENT, None, false).clicked() {
                 pane.event_form = Some(EventForm {
                     name: String::new(),
                     message: None,
@@ -401,42 +434,43 @@ fn event_form(
     close: &mut bool,
     pending: &mut Option<Pending>,
 ) {
-    Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.strong(NEW_EVENT);
-        let mut done = false;
-        ui.horizontal(|ui| {
-            ui.label(NAME_LABEL);
-            let field = ui.add(TextEdit::singleline(&mut form.name).hint_text(EVENT_NAME_PLACEHOLDER));
-            set_name(ui, field.id, EVENT_NAME_FIELD);
-            if std::mem::take(&mut form.focus_name) {
-                field.request_focus();
-            }
-            done |= field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
-        });
-        if let Some(message) = &form.message {
-            message_ui(ui, message);
+    form_heading(ui, NEW_EVENT);
+    let rows = Form::new(ui, &[NAME_LABEL]);
+    let mut done = false;
+    rows.row(ui, NAME_LABEL, |ui| {
+        let field = ui.add(
+            TextEdit::singleline(&mut form.name)
+                .hint_text(EVENT_NAME_PLACEHOLDER)
+                .desired_width(ui.available_width().min(PARAMETER_NAME_WIDTH + 80.0)),
+        );
+        set_name(ui, field.id, EVENT_NAME_FIELD);
+        if std::mem::take(&mut form.focus_name) {
+            field.request_focus();
         }
-        ui.horizontal(|ui| {
-            done |= ui.add(filled_button(DONE.to_owned())).clicked();
-            if ui.button(CANCEL).clicked() {
-                *close = true;
-            }
-        });
-        if done {
-            let name = form.name.trim().to_owned();
-            if name.is_empty() {
-                form.message = Some(EVENT_NAME_MISSING.to_owned());
-            } else if event_taken(document, &name, None) {
-                form.message = Some(event_name_taken(&name));
-            } else if is_reserved_name(&name, IdSpace::Item) {
-                form.message = Some(name_reserved(&name));
-            } else {
-                *pending = Some(Pending::from_form(
-                    FormKind::Event,
-                    Box::new(move |builder| builder.apply(SheetEdit::AddEvent { name }).map(drop)),
-                ));
-            }
+        done |= field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+    });
+    if let Some(message) = &form.message {
+        rows.under(ui, |ui| message_ui(ui, message));
+    }
+    form_buttons(ui, |ui| {
+        done |= ui.add(filled_button(DONE.to_owned())).clicked();
+        if ui.button(CANCEL).clicked() {
+            *close = true;
         }
     });
+    if done {
+        let name = form.name.trim().to_owned();
+        if name.is_empty() {
+            form.message = Some(EVENT_NAME_MISSING.to_owned());
+        } else if event_taken(document, &name, None) {
+            form.message = Some(event_name_taken(&name));
+        } else if is_reserved_name(&name, IdSpace::Item) {
+            form.message = Some(name_reserved(&name));
+        } else {
+            *pending = Some(Pending::from_form(
+                FormKind::Event,
+                Box::new(move |builder| builder.apply(SheetEdit::AddEvent { name }).map(drop)),
+            ));
+        }
+    }
 }

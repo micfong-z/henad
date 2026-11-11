@@ -14,8 +14,10 @@
 //! the *button form*. A Starts as number is a plain field with "Use a parameter" beside it, and a chosen parameter
 //! shows as its chip. A parameter's slider commits once, when it is let go.
 
+use std::hash::Hash;
+
 use egui::{
-    Button, ComboBox, CornerRadius, Frame, Id, Key, Label, Rect, RichText, Sense, Slider, TextEdit, Ui, Vec2, vec2,
+    Align, Button, CornerRadius, Id, Key, Label, Layout, Rect, Response, RichText, Sense, Slider, TextEdit, Ui, vec2,
 };
 use henad_core::metadata::TimeUnit;
 use henad_graph::limits::MAX_GRID_SIDE;
@@ -66,16 +68,20 @@ use henad_graph::value::Color;
 
 use super::SheetEditor;
 use super::card_pane::card_lines;
-use super::help::{Help, help_button};
+use super::help::Help;
 use super::widgets::{
-    DialogOutcome, NewParameterDialog, NumberUse, Picker, PickerChoice, PickerGroup, PickerItem, chip_ui, color_button,
-    color_name, color32, commit_area, commit_field, field_message, forget_field, message_ui, new_parameter_modal,
-    refusal_text, set_name, suggestion_field,
+    CHIP_HEIGHT, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, Picker, PickerChoice, PickerGroup,
+    PickerItem, REGION_GAP, caption, chip_within, color_button, color_name, color32, commit_area, commit_field,
+    commit_number, field_message, forget_field, hairline, message_ui, new_parameter_modal, notice_ui, refusal_text,
+    region, select_list, select_within, set_name, small_label, suggestion_field, swatch_ui, text_control,
+    text_control_width,
 };
-use crate::icons::material_design_icons::MDI_INFORMATION;
+use crate::init::semibold_font;
 use crate::ui::sweep::layout::{add_button, destructive_button, filled_button};
+use layout::{Column, Form, ITEM_GAP, Table, line, section, text_cell, text_width, wrapped_line};
 
 mod agents;
+mod layout;
 
 /// A value the world tries for a parameter of the sheet while the model keeps its own.
 #[derive(Debug, Clone, PartialEq)]
@@ -98,17 +104,23 @@ const FIELD_WIDTH: f32 = 56.0;
 /// Width in points of a state's name field in the property form.
 const STATE_FIELD_WIDTH: f32 = 140.0;
 
-/// Side in points of a state's swatch in the Cells table.
+/// Side in points of the gradient of a shade.
 const SWATCH_SIDE: f32 = 10.0;
 
 /// Width in points of a parameter's name field.
 const PARAMETER_NAME_WIDTH: f32 = 120.0;
 
-/// Width in points of a parameter's slider.
-const SLIDER_WIDTH: f32 = 110.0;
+/// Width in points of a parameter's slider while its table has room.
+const SLIDER_WIDTH: f32 = 100.0;
 
-/// Width in points of a parameter's unit field.
-const UNIT_WIDTH: f32 = 90.0;
+/// Width in points of a parameter's unit field while its table has room.
+const UNIT_WIDTH: f32 = 80.0;
+
+/// Width in points of a table's last column, the column of a row's delete button.
+const DELETE_WIDTH: f32 = 18.0;
+
+/// Width in points an inline select takes besides its words: the padding, the gap and the chevron.
+const SELECT_FRAME: f32 = 22.0;
 
 /// Width in points of the swatch of a shade, from its dark end to its light end.
 const GRADIENT_WIDTH: f32 = 60.0;
@@ -432,6 +444,8 @@ struct NumberField<'a> {
     /// Range a typed number must fall in, with the message for a number outside it, `None` for any number. A field
     /// with a range cannot be left empty either.
     limit: Option<(f64, f64, &'static str)>,
+    /// Width in points to keep free after the chip of a parameter on its line, for the control after it.
+    after: f32,
 }
 
 /// One edit of the sheet: commands run on a copy of it, kept when every command is accepted.
@@ -502,20 +516,15 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
         } = &mut *sheet;
         let document = builder.document();
         ui.push_id(pane.widgets, |ui| {
-            for &section in SheetSection::shown(document.world.made_of) {
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(section.heading()).strong());
-                    let agents = document.world.made_of == MadeOf::Agents;
-                    help_button(
-                        ui,
-                        match section {
-                            SheetSection::World if agents => Help::AgentWorld,
-                            _ => Help::Section(section),
-                        },
-                    );
-                });
-                match section {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let agents = document.world.made_of == MadeOf::Agents;
+            for (index, &shown) in SheetSection::shown(document.world.made_of).iter().enumerate() {
+                ui.add_space(if index == 0 { 4.0 } else { REGION_GAP });
+                let help = match shown {
+                    SheetSection::World if agents => Help::AgentWorld,
+                    _ => Help::Section(shown),
+                };
+                section(ui, shown.heading(), help, |ui| match shown {
                     SheetSection::Purpose => purpose(ui, document, pane.widgets, &mut pending),
                     SheetSection::World => world(ui, document, pane, &mut pending),
                     SheetSection::Cells => cells(ui, document, pane, &stale, &mut pending),
@@ -527,8 +536,9 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
                     SheetSection::Colours => colors(ui, document, pane.widgets, &mut pending),
                     SheetSection::Buttons => buttons(ui, document, report, pane, &mut pending),
                     _ => {}
-                }
+                });
             }
+            ui.add_space(REGION_GAP);
             new_parameter(ui, document, pane, &mut pending);
         });
     }
@@ -588,18 +598,22 @@ fn purpose(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Opt
     );
 }
 
-/// Draws the world's kind, its size and edges as fields, and the length of one tick with the notice of `pane` under it.
+/// Draws the world's kind, then its size, its edges and the length of one tick as form rows, and the notice of `pane`
+/// under them.
 fn world(ui: &mut Ui, document: &SheetDocument, pane: &PaneState, pending: &mut Option<Pending>) {
     let widgets = pane.widgets;
     let world = document.world;
-    ui.label(match world.made_of {
-        MadeOf::Agents => AGENTS_IN_OPEN_SPACE,
-        _ => CELLS_ON_A_GRID,
-    });
+    let form = Form::new(ui, &[SIZE_LABEL, EDGES_LABEL, ONE_TICK_IS]);
+    text_cell(
+        ui,
+        Label::new(RichText::new(match world.made_of {
+            MadeOf::Agents => AGENTS_IN_OPEN_SPACE,
+            _ => CELLS_ON_A_GRID,
+        })),
+    );
     let width_id = widgets.with("henad_sheet_world_width");
     let height_id = widgets.with("henad_sheet_world_height");
-    ui.horizontal(|ui| {
-        ui.label(SIZE_LABEL);
+    form.row(ui, SIZE_LABEL, |ui| {
         side_field(ui, width_id, WIDTH_NAME, world.width, pending, |width| {
             SheetEdit::SetWorld {
                 width,
@@ -617,7 +631,7 @@ fn world(ui: &mut Ui, document: &SheetDocument, pane: &PaneState, pending: &mut 
         });
     });
     if let Some(message) = field_message(ui, width_id).or_else(|| field_message(ui, height_id)) {
-        message_ui(ui, &message);
+        form.under(ui, |ui| message_ui(ui, &message));
     }
     let agents = world.made_of == MadeOf::Agents;
     let (words, sentence, tooltip) = match world.edges {
@@ -626,33 +640,33 @@ fn world(ui: &mut Ui, document: &SheetDocument, pane: &PaneState, pending: &mut 
         _ if agents => (WRAP_AROUND, WRAP_SENTENCE, AGENT_WRAP_TOOLTIP),
         _ => (WRAP_AROUND, WRAP_SENTENCE, WRAP_TOOLTIP),
     };
-    ui.horizontal(|ui| {
-        ui.label(EDGES_LABEL);
-        let mut edges = world.edges;
-        let combo = ComboBox::from_id_salt("henad_sheet_edges")
-            .selected_text(words)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut edges, Edges::Wrap, WRAP_AROUND);
-                ui.selectable_value(&mut edges, Edges::Walls, WALLS);
-            });
-        set_name(ui, combo.response.id, EDGES_LABEL);
-        combo.response.on_hover_text(tooltip);
-        if edges != world.edges {
+    form.row(ui, EDGES_LABEL, |ui| {
+        let options = [(Edges::Wrap, WRAP_AROUND), (Edges::Walls, WALLS)];
+        let items = options.map(|(edges, label)| OverlayItem {
+            label,
+            current: edges == world.edges,
+            ..OverlayItem::default()
+        });
+        let (response, chosen) = select(ui, "henad_sheet_edges", EDGES_LABEL, words, &items);
+        response.on_hover_text(tooltip);
+        if let Some((edges, _)) = chosen.and_then(|index| options.get(index))
+            && *edges != world.edges
+        {
             *pending = Some(Pending::one(SheetEdit::SetWorld {
                 width: world.width,
                 height: world.height,
-                edges,
+                edges: *edges,
             }));
         }
     });
-    ui.weak(sentence);
-    time_line(ui, document, widgets, pending);
+    form.under(ui, |ui| ui.weak(sentence));
+    time_line(ui, document, &form, widgets, pending);
     // A chance is per tick, and a new length of one tick leaves the lines that draw with one behind the time scale.
     if pane.time_changed && document.time.is_some() {
         let lines = chance_line_numbers(document);
         if !lines.is_empty() {
-            let notice = chances_per_tick_note(&lines);
-            ui.add(Label::new(format!("{MDI_INFORMATION} {notice}")).wrap());
+            ui.add_space(4.0);
+            notice_ui(ui, &chances_per_tick_note(&lines));
         }
     }
 }
@@ -667,7 +681,7 @@ fn side_field(
     pending: &mut Option<Pending>,
     edit: impl FnOnce(u32) -> SheetEdit,
 ) {
-    commit_field(ui, id, name, &side.to_string(), FIELD_WIDTH, |text| {
+    commit_number(ui, id, name, &side.to_string(), FIELD_WIDTH, |text| {
         let Some(number) = read_typed_number(text).and_then(SheetLiteral::number) else {
             return Some(TYPE_ONE_NUMBER.to_owned());
         };
@@ -681,15 +695,14 @@ fn side_field(
     });
 }
 
-/// Draws the Time line, "One tick is [number] [unit]", with the number hidden while the tick has no unit.
-fn time_line(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Option<Pending>) {
+/// Draws the Time line of `form`, "One tick is [number] [unit]", with the number hidden while the tick has no unit.
+fn time_line(ui: &mut Ui, document: &SheetDocument, form: &Form, widgets: Id, pending: &mut Option<Pending>) {
     let length_id = widgets.with("henad_sheet_tick_length");
     let time = document.time;
-    ui.horizontal(|ui| {
-        ui.label(ONE_TICK_IS);
+    form.row(ui, ONE_TICK_IS, |ui| {
         if let Some(time) = time {
             let current = format_number(time.tick_length).unwrap_or_default();
-            commit_field(ui, length_id, TICK_LENGTH_NAME, &current, FIELD_WIDTH, |text| {
+            commit_number(ui, length_id, TICK_LENGTH_NAME, &current, FIELD_WIDTH, |text| {
                 let Some(length) = read_typed_number(text).and_then(SheetLiteral::number) else {
                     return Some(TYPE_ONE_NUMBER.to_owned());
                 };
@@ -702,17 +715,22 @@ fn time_line(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut O
             });
         }
         let current = time.map(|time| time.tick_unit);
-        let mut unit = current;
-        let combo = ComboBox::from_id_salt("henad_sheet_tick_unit")
-            .selected_text(tick_unit_choice(current))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut unit, None, tick_unit_choice(None));
-                for choice in TimeUnit::ALL {
-                    ui.selectable_value(&mut unit, Some(choice), tick_unit_choice(Some(choice)));
-                }
-            });
-        set_name(ui, combo.response.id, TICK_UNIT_NAME);
-        if unit != current {
+        let choices: Vec<Option<TimeUnit>> = std::iter::once(None)
+            .chain(TimeUnit::ALL.iter().copied().map(Some))
+            .collect();
+        let items: Vec<OverlayItem<'_>> = choices
+            .iter()
+            .map(|choice| OverlayItem {
+                label: tick_unit_choice(*choice),
+                current: *choice == current,
+                ..OverlayItem::default()
+            })
+            .collect();
+        let shown = tick_unit_choice(current);
+        let (_, chosen) = select(ui, "henad_sheet_tick_unit", TICK_UNIT_NAME, shown, &items);
+        if let Some(&unit) = chosen.and_then(|index| choices.get(index))
+            && unit != current
+        {
             let length = time.map_or(1.0, |time| time.tick_length);
             *pending = Some(Pending::one(SheetEdit::SetTime {
                 time: unit.map(|unit| SheetTime::new(length, unit)),
@@ -722,8 +740,31 @@ fn time_line(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut O
     if time.is_some()
         && let Some(message) = field_message(ui, length_id)
     {
-        message_ui(ui, &message);
+        form.under(ui, |ui| message_ui(ui, &message));
     }
+}
+
+/// Adds an inline select keyed by `salt`, named `name` and showing `words`, with its options `items` in a list under
+/// it, and returns its response and the index of the option chosen.
+///
+/// The select is at most as wide as the line it sits on. Longer words end in an ellipsis, whole in its tooltip.
+fn select(
+    ui: &mut Ui,
+    salt: impl Hash + std::fmt::Debug,
+    name: &str,
+    words: &str,
+    items: &[OverlayItem<'_>],
+) -> (Response, Option<usize>) {
+    let id = ui.make_persistent_id(salt);
+    let width = ui.max_rect().width();
+    let response = select_within(ui, Some(id), words, name, words.is_empty(), width);
+    let chosen = select_list(ui, &response, id.with("picker"), items);
+    (response, chosen)
+}
+
+/// Returns the width in points of an inline select showing `words`.
+fn select_width(ui: &Ui, words: &str) -> f32 {
+    text_width(ui, words) + SELECT_FRAME
 }
 
 /// Draws the Cells table, with each property's start as controls, and the property form or "+ Add property" under
@@ -731,11 +772,11 @@ fn time_line(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut O
 fn cells(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, stale: &[String], pending: &mut Option<Pending>) {
     let properties = properties_of(document, CELLS);
     if properties.is_empty() {
-        ui.label(SHEET_EMPTY);
+        text_cell(ui, Label::new(SHEET_EMPTY));
     } else {
         property_table(ui, document, CELLS, pane, stale, pending);
     }
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     property_form_or_add(ui, document, CELLS, ADD_PROPERTY, properties.is_empty(), pane, pending);
     if let Some(refusal) = &pane.refusal {
         message_ui(ui, refusal);
@@ -744,6 +785,11 @@ fn cells(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, stale: &[S
 
 /// Draws the table of the properties of `thing`: each property's name, which opens the property form, its kind, its
 /// start as controls, and the lines that change it. `stale` holds the properties whose start waits for Start again.
+///
+/// Starts as takes the room left over. Short of room, Starts as gives up width down to 150 points, then Changed by,
+/// Kind and Name down to their longest words, wrapping at them, then Starts as down to the width of "Use a parameter",
+/// its selects and chips ending in an ellipsis, and last Kind and Name down to their least widths, a word too long for
+/// them ending in an ellipsis.
 fn property_table(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -752,38 +798,171 @@ fn property_table(
     stale: &[String],
     pending: &mut Option<Pending>,
 ) {
-    egui::Grid::new(("henad_sheet_properties", thing))
-        .num_columns(4)
-        .show(ui, |ui| {
-            for column in CELLS_COLUMNS {
-                ui.weak(column);
-            }
-            ui.end_row();
-            for property in properties_of(document, thing) {
-                let edit = add_button(
-                    ui,
-                    true,
-                    Button::new(&property.name).frame(false),
-                    &edit_property_heading(&property.name),
-                );
-                if edit.clicked() {
-                    pane.property_form = Some(PropertyForm::edit(property, thing));
-                }
-                kind_ui(ui, property);
-                ui.vertical(|ui| {
+    let properties = properties_of(document, thing);
+    let widest = |width: &dyn Fn(&SheetProperty) -> f32| properties.iter().map(width).fold(0.0, f32::max);
+    let changed = |property: &SheetProperty| changed_by(&changing_lines(document, &property.id));
+    let names = widest(&|property| text_width(ui, &property.name));
+    let name_words = widest(&|property| longest_word(ui, &property.name));
+    let kinds = widest(&|property| kind_width(ui, property, text_width));
+    let kind_words = widest(&|property| kind_width(ui, property, longest_word));
+    let starts = widest(&|property| starts_width(ui, document, thing, property));
+    let changes = widest(&|property| text_width(ui, &changed(property)));
+    let change_words = widest(&|property| longest_word(ui, &changed(property)));
+    // "Use a parameter" is the widest control of Starts as that neither wraps nor ends in an ellipsis.
+    let starts_least = text_control_width(ui, USE_A_PARAMETER);
+    let header_word = |index: usize| {
+        CELLS_COLUMNS[index]
+            .split_whitespace()
+            .map(|word| caption_width(ui, word))
+            .fold(0.0, f32::max)
+    };
+    let columns = vec![
+        Column::new(
+            CELLS_COLUMNS[0],
+            names.max(caption_width(ui, CELLS_COLUMNS[0])),
+            header_word(0).max(40.0),
+        ),
+        Column::new(
+            CELLS_COLUMNS[1],
+            kinds.max(caption_width(ui, CELLS_COLUMNS[1])),
+            header_word(1).max(56.0),
+        ),
+        Column::new(CELLS_COLUMNS[2], starts, starts_least),
+        Column::new(
+            CELLS_COLUMNS[3],
+            changes.max(caption_width(ui, CELLS_COLUMNS[3])),
+            change_words.max(header_word(3)),
+        ),
+    ];
+    let id = ui.make_persistent_id(("henad_sheet_properties", thing));
+    let give_up = [
+        (2, 150.0),
+        (3, 0.0),
+        (1, kind_words),
+        (0, name_words),
+        (2, starts_least),
+        (1, 0.0),
+        (0, 0.0),
+    ];
+    Table::new(id, columns, 2, &give_up).show(ui, |ui, rows| {
+        for property in properties {
+            rows.row(ui, &property.id, |row| {
+                row.cell(0, |ui| {
+                    line(ui, |ui| {
+                        if property_name_ui(ui, property).clicked() {
+                            pane.property_form = Some(PropertyForm::edit(property, thing));
+                        }
+                    });
+                });
+                row.cell(1, |ui| kind_ui(ui, property));
+                row.cell(2, |ui| {
                     starts_ui(ui, document, thing, property, pane, pending);
                     if stale.contains(&property.id) {
                         ui.weak(START_AGAIN_TO_SEE);
                     }
                 });
-                ui.label(changed_by(&changing_lines(document, &property.id)));
-                ui.end_row();
-            }
-        });
+                row.cell(3, |ui| {
+                    text_cell(ui, Label::new(changed(property)));
+                });
+            });
+        }
+    });
 }
 
+/// Returns the width in points of the longest word of `text` in the body font.
+fn longest_word(ui: &Ui, text: &str) -> f32 {
+    text.split_whitespace()
+        .map(|word| text_width(ui, word))
+        .fold(0.0, f32::max)
+}
+
+/// Adds the name of `property` as a frameless button named `edit_property_heading`. A click opens the property form.
+/// A name too long for its column wraps, and a word too long for it ends in an ellipsis, whole in the tooltip.
+fn property_name_ui(ui: &mut Ui, property: &SheetProperty) -> Response {
+    // With no padding, the name starts on the column's edge, under its header.
+    ui.spacing_mut().button_padding.x = 0.0;
+    let elided = longest_word(ui, &property.name) > ui.available_width();
+    let button = Button::new(&property.name).frame(false);
+    let button = if elided { button.truncate() } else { button.wrap() };
+    let response = add_button(ui, true, button, &edit_property_heading(&property.name));
+    if elided {
+        response.on_hover_text(&property.name)
+    } else {
+        response
+    }
+}
+
+/// Returns a label of `text` that wraps at the right edge of `ui`, or ends in an ellipsis, whole in its tooltip, where
+/// a word of it is too long to wrap.
+fn fitted_label(ui: &Ui, text: impl Into<egui::WidgetText>) -> Label {
+    let text = text.into();
+    if longest_word(ui, text.text()) > ui.available_width() {
+        Label::new(text).truncate()
+    } else {
+        Label::new(text).wrap()
+    }
+}
+
+/// Returns the width in points of `text` as the small upper-case label of a table header.
+fn caption_width(ui: &Ui, text: &str) -> f32 {
+    ui.painter()
+        .layout_no_wrap(
+            text.to_uppercase(),
+            egui::FontId::monospace(super::widgets::SMALL_LABEL),
+            egui::Color32::PLACEHOLDER,
+        )
+        .size()
+        .x
+}
+
+/// Returns the width in points the kind of `property` takes: its word, or the swatch and the name of its widest state,
+/// each measured by `measure`, the width of a whole text or of its longest word.
+fn kind_width(ui: &Ui, property: &SheetProperty, measure: fn(&Ui, &str) -> f32) -> f32 {
+    let word = measure(ui, kind_words(property.property_type));
+    property
+        .states
+        .iter()
+        .map(|state| measure(ui, &state.name) + STATE_SWATCH_WIDTH)
+        .fold(word, f32::max)
+}
+
+/// Width in points of the swatch before a state's name, with the gap after it.
+const STATE_SWATCH_WIDTH: f32 = 13.0;
+
+/// Returns the width in points the Starts as of `property`, a property of `thing`, takes while its first rows fit on
+/// one line each.
+fn starts_width(ui: &Ui, document: &SheetDocument, thing: &str, property: &SheetProperty) -> f32 {
+    let selected = starts_text(document, property);
+    let mut width = select_width(ui, &selected);
+    let Some(start) = &property.starts_as else {
+        return width;
+    };
+    let widest_state = property
+        .states
+        .iter()
+        .map(|state| select_width(ui, &state.name))
+        .fold(0.0, f32::max);
+    let row = match start.rule {
+        StartRule::ByChance => widest_state + text_width(ui, WITH_CHANCE) + FIELD_WIDTH + 2.0 * ITEM_GAP,
+        StartRule::Value if !matches!(property.property_type, PropertyType::States | PropertyType::YesNo) => {
+            let lead = if holds_random_number(&start.value) {
+                RANDOM_NUMBER_BETWEEN.to_owned()
+            } else {
+                every_starts_at(&Sentences::new(document).thing_word(thing))
+            };
+            text_width(ui, &lead) + FIELD_WIDTH + ITEM_GAP
+        }
+        _ => 0.0,
+    };
+    width = width.max(row);
+    width.min(STARTS_MOST)
+}
+
+/// Width in points the Starts as column takes at most while the table fits.
+const STARTS_MOST: f32 = 280.0;
+
 /// Draws the property form under the table of `thing` while it is open for that thing, or the button that opens it,
-/// named `add_name`. The button is the section's primary action while `primary` holds.
+/// named `add_name`. The button is the section's primary action while `primary` holds, and dashed otherwise.
 fn property_form_or_add(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -801,37 +980,41 @@ fn property_form_or_add(
         }
         return;
     }
-    let button = if primary {
-        filled_button(ADD_PROPERTY.to_owned())
+    let opened = if primary {
+        add_button(ui, true, filled_button(ADD_PROPERTY.to_owned()), add_name).clicked()
     } else {
-        Button::new(ADD_PROPERTY)
+        super::widgets::add_button(ui, ADD_PROPERTY, add_name, None, false).clicked()
     };
-    if add_button(ui, true, button, add_name).clicked() {
+    if opened {
         pane.property_form = Some(PropertyForm::add(thing));
     }
 }
 
-/// Draws the kind of `property`: "States" with each state's swatch and name, "Number", "Integer", "Yes or no",
-/// "Position", "Heading" or "Arrow".
+/// Draws the kind of `property`: "States" with each state's swatch and name under it, "Number", "Integer", "Yes or
+/// no", "Position", "Heading" or "Arrow". A state's name too long for the column wraps, or ends in an ellipsis where a
+/// word of it does not fit.
 fn kind_ui(ui: &mut Ui, property: &SheetProperty) {
     match property.property_type {
         PropertyType::States => {
-            ui.vertical(|ui| {
-                ui.label(STATES_KIND);
-                for state in &property.states {
-                    ui.horizontal(|ui| {
-                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(SWATCH_SIDE), Sense::hover());
-                        ui.painter().rect_filled(rect, CornerRadius::ZERO, color32(state.color));
-                        ui.label(&state.name);
+            text_cell(ui, fitted_label(ui, STATES_KIND));
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for state in &property.states {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = STATE_SWATCH_WIDTH - super::widgets::CHIP_SWATCH;
+                    swatch_ui(ui, color32(state.color));
+                    let row = ui.text_style_height(&egui::TextStyle::Body);
+                    ui.vertical(|ui| {
+                        ui.add_space(((CHIP_HEIGHT - row) / 2.0).max(0.0));
+                        ui.add(fitted_label(ui, &state.name));
                     });
-                }
-            });
+                });
+            }
         }
         PropertyType::WholeNumber => {
-            ui.label(INTEGER_KIND).on_hover_text(INTEGER_KIND_TOOLTIP);
+            text_cell(ui, fitted_label(ui, INTEGER_KIND)).on_hover_text(INTEGER_KIND_TOOLTIP);
         }
         kind => {
-            ui.label(kind_words(kind));
+            text_cell(ui, fitted_label(ui, kind_words(kind)));
         }
     }
 }
@@ -919,6 +1102,8 @@ enum StartChoice {
     Anywhere,
     /// Every agent starts on a cell whose ground property of the first id is the state of the second.
     OnGround(String, String),
+    /// The painted start. Choosing it changes nothing.
+    Painted,
 }
 
 /// Adds the select of the Starts as of `property`, showing `selected`, and returns the choice made in it.
@@ -928,59 +1113,68 @@ fn start_select(
     property: &SheetProperty,
     selected: &str,
 ) -> Option<StartChoice> {
-    let mut choice = None;
-    let mut offer = |ui: &mut Ui, words: &str, made: StartChoice| {
-        if ui.selectable_label(selected == words, words).clicked() {
-            choice = Some(made);
+    let mut offered: Vec<(String, StartChoice)> = Vec::new();
+    match property.property_type {
+        PropertyType::States => {
+            // No control paints, so a painted start shows as its own entry, and choosing it again changes nothing.
+            if selected == PAINTED {
+                offered.push((PAINTED.to_owned(), StartChoice::Painted));
+            }
+            for state in &property.states {
+                offered.push((starts_all(&state.name), StartChoice::All(state.id.clone())));
+            }
+            offered.push((BY_CHANCE.to_owned(), StartChoice::ByChance));
         }
-    };
-    let combo = ComboBox::from_id_salt(("henad_sheet_starts", &property.id))
-        .selected_text(selected)
-        .show_ui(ui, |ui| match property.property_type {
-            PropertyType::States => {
-                // No control paints, so a painted start shows as its own entry, and choosing it again changes nothing.
-                if selected == PAINTED {
-                    ui.add(Button::selectable(true, PAINTED));
-                }
-                for state in &property.states {
-                    offer(ui, &starts_all(&state.name), StartChoice::All(state.id.clone()));
-                }
-                offer(ui, BY_CHANCE, StartChoice::ByChance);
-            }
-            PropertyType::YesNo => {
-                offer(ui, &starts_all(YES), StartChoice::YesNo(true));
-                offer(ui, &starts_all(NO), StartChoice::YesNo(false));
-            }
-            PropertyType::Position => {
-                offer(ui, ANYWHERE_AT_RANDOM, StartChoice::Anywhere);
-                for ground in properties_of(document, GROUND)
+        PropertyType::YesNo => {
+            offered.push((starts_all(YES), StartChoice::YesNo(true)));
+            offered.push((starts_all(NO), StartChoice::YesNo(false)));
+        }
+        PropertyType::Position => {
+            offered.push((ANYWHERE_AT_RANDOM.to_owned(), StartChoice::Anywhere));
+            for ground in properties_of(document, GROUND)
+                .iter()
+                .filter(|ground| ground.property_type == PropertyType::States)
+            {
+                let painted = ground.starts_as.as_ref();
+                for state in ground
+                    .states
                     .iter()
-                    .filter(|ground| ground.property_type == PropertyType::States)
+                    .filter(|state| painted.is_some_and(|start| start.paints_single_cells(&state.id)))
                 {
-                    let painted = ground.starts_as.as_ref();
-                    for state in ground
-                        .states
-                        .iter()
-                        .filter(|state| painted.is_some_and(|start| start.paints_single_cells(&state.id)))
-                    {
-                        offer(
-                            ui,
-                            &on_ground_start(&ground.name, &state.name),
-                            StartChoice::OnGround(ground.id.clone(), state.id.clone()),
-                        );
-                    }
+                    offered.push((
+                        on_ground_start(&ground.name, &state.name),
+                        StartChoice::OnGround(ground.id.clone(), state.id.clone()),
+                    ));
                 }
             }
-            kind => {
-                offer(ui, A_VALUE, StartChoice::Value);
-                // A draw truncated to a whole number would never reach the high end.
-                if kind == PropertyType::Number {
-                    offer(ui, A_RANDOM_NUMBER, StartChoice::RandomNumber);
-                }
+        }
+        kind => {
+            offered.push((A_VALUE.to_owned(), StartChoice::Value));
+            // A draw truncated to a whole number would never reach the high end.
+            if kind == PropertyType::Number {
+                offered.push((A_RANDOM_NUMBER.to_owned(), StartChoice::RandomNumber));
             }
-        });
-    set_name(ui, combo.response.id, &starts_place(&property.name));
-    choice
+        }
+    }
+    let items: Vec<OverlayItem<'_>> = offered
+        .iter()
+        .map(|(words, _)| OverlayItem {
+            label: words,
+            current: words == selected,
+            ..OverlayItem::default()
+        })
+        .collect();
+    let (_, chosen) = line(ui, |ui| {
+        select(
+            ui,
+            ("henad_sheet_starts", &property.id),
+            &starts_place(&property.name),
+            selected,
+            &items,
+        )
+    });
+    let index = chosen?;
+    offered.into_iter().nth(index).map(|(_, choice)| choice)
 }
 
 /// Draws the Starts as of `property`, a property of `thing`: its select and, under it, the rows of a by-chance start,
@@ -999,12 +1193,13 @@ fn starts_ui(
     let selected = starts_text(document, property);
     match property.property_type {
         PropertyType::Heading => {
-            ui.weak(&selected);
+            text_cell(ui, Label::new(RichText::new(&selected).weak()));
             return;
         }
         PropertyType::Arrow => {
             if let Some(start) = &property.starts_as {
-                ui.weak(Sentences::new(document).slot(&start.value, Some(&property.id)));
+                let words = Sentences::new(document).slot(&start.value, Some(&property.id));
+                text_cell(ui, Label::new(RichText::new(words).weak()));
             }
             return;
         }
@@ -1025,7 +1220,7 @@ fn starts_ui(
                 .as_deref()
                 .and_then(|base| state_name(property, base))
                 .unwrap_or_default();
-            ui.weak(painted_shapes(base, start.shapes.len()));
+            ui.add(Label::new(RichText::new(painted_shapes(base, start.shapes.len())).weak()).wrap());
         }
         StartRule::Value if !states && property.property_type != PropertyType::YesNo => {
             let random = holds_random_number(&start.value);
@@ -1034,7 +1229,7 @@ fn starts_ui(
             } else {
                 &[StartSlot::Value]
             };
-            ui.horizontal_wrapped(|ui| {
+            wrapped_line(ui, |ui| {
                 if random {
                     ui.label(RANDOM_NUMBER_BETWEEN);
                     start_number(ui, document, property, start, StartSlot::Low, pane, pending);
@@ -1117,7 +1312,7 @@ fn chance_rows(
 ) {
     for (index, row) in start.rows.iter().enumerate() {
         let place = starts_row_place(&property.name, index + 1);
-        ui.horizontal_wrapped(|ui| {
+        wrapped_line(ui, |ui| {
             if let Some(state) = state_select(
                 ui,
                 property,
@@ -1131,14 +1326,9 @@ fn chance_rows(
                     }
                 }));
             }
-            ui.label(WITH_CHANCE);
+            ui.add(Label::new(WITH_CHANCE).extend());
             start_number(ui, document, property, start, StartSlot::Row(index), pane, pending);
-            let remove = add_button(
-                ui,
-                true,
-                Button::new(REMOVE_ROW_LABEL).small(),
-                &remove_row_name(index + 1, &property.name),
-            );
+            let remove = delete_button(ui, &remove_row_name(index + 1, &property.name));
             if remove.clicked() {
                 // The rows after it move up a place. Otherwise a refused text would show on the row that takes its
                 // place.
@@ -1154,7 +1344,9 @@ fn chance_rows(
         });
         start_messages(ui, pane.widgets, property, &[StartSlot::Row(index)]);
     }
-    let add = add_button(ui, true, Button::new(ADD_ROW).small(), &add_row_name(&property.name));
+    let add = line(ui, |ui| {
+        super::widgets::add_button(ui, ADD_ROW, &add_row_name(&property.name), None, false)
+    });
     if add.clicked() {
         // A new row draws the first state that no row draws yet.
         let drawn: Vec<Option<&str>> = start.rows.iter().map(|row| row.state.as_deref()).collect();
@@ -1170,7 +1362,7 @@ fn chance_rows(
             start.rows.push(row);
         }));
     }
-    ui.horizontal(|ui| {
+    wrapped_line(ui, |ui| {
         ui.label(OTHERWISE);
         if let Some(state) = state_select(
             ui,
@@ -1186,7 +1378,14 @@ fn chance_rows(
     });
 }
 
+/// Adds the delete button of a row, a "×" named `name` in the weak text colour.
+fn delete_button(ui: &mut Ui, name: &str) -> Response {
+    text_control(ui, None, REMOVE_ROW_LABEL, name, CHIP_HEIGHT)
+}
+
 /// Adds a select of the states of `property` showing `current`, named `name`, and returns the id of the state chosen.
+///
+/// Each state in the list shows its swatch.
 fn state_select(
     ui: &mut Ui,
     property: &SheetProperty,
@@ -1197,19 +1396,19 @@ fn state_select(
     let shown = current
         .and_then(|state| state_name(property, state))
         .unwrap_or_default();
-    let mut chosen = None;
-    let combo = ComboBox::from_id_salt(id_salt).selected_text(shown).show_ui(ui, |ui| {
-        for state in &property.states {
-            if ui
-                .selectable_label(current == Some(state.id.as_str()), &state.name)
-                .clicked()
-            {
-                chosen = Some(state.id.clone());
-            }
-        }
-    });
-    set_name(ui, combo.response.id, name);
-    chosen.filter(|state| current != Some(state.as_str()))
+    let items: Vec<OverlayItem<'_>> = property
+        .states
+        .iter()
+        .map(|state| OverlayItem {
+            label: &state.name,
+            current: current == Some(state.id.as_str()),
+            swatch: Some(color32(state.color)),
+            ..OverlayItem::default()
+        })
+        .collect();
+    let (_, chosen) = select(ui, id_salt, name, shown, &items);
+    let chosen = chosen.and_then(|index| property.states.get(index))?;
+    (current != Some(chosen.id.as_str())).then(|| chosen.id.clone())
 }
 
 /// Returns the edit that changes the start of `property` by `change`, applied to the start as the sheet holds it.
@@ -1317,6 +1516,11 @@ fn start_number(
         },
         number_use: if chance { NumberUse::Chance } else { NumberUse::Number },
         limit: None,
+        after: if chance {
+            text_control_width(ui, REMOVE_ROW_LABEL) + ITEM_GAP
+        } else {
+            0.0
+        },
     };
     number_field(ui, document, field, pane, pending);
 }
@@ -1337,6 +1541,7 @@ fn number_field(
         target,
         number_use,
         limit,
+        after,
     } = field;
     let chance = number_use == NumberUse::Chance;
     let choice = match current.and_then(Slot::value) {
@@ -1351,7 +1556,8 @@ fn number_field(
                 lead: "",
                 name,
             };
-            let response = chip_ui(ui, &chip, false, None);
+            let width = ui.max_rect().width() - after;
+            let response = chip_within(ui, Some(id.with("chip")), &chip, false, None, width);
             let blank = if chance { Blank::Chance } else { Blank::Number };
             let title = blank.picker_title();
             Picker {
@@ -1373,7 +1579,7 @@ fn number_field(
             } else {
                 StartsField::Number
             };
-            commit_field(ui, id, &starts_field_name(&place, word), &text, FIELD_WIDTH, |typed| {
+            commit_number(ui, id, &starts_field_name(&place, word), &text, FIELD_WIDTH, |typed| {
                 let value = if typed.trim().is_empty() {
                     if let Some((_, _, message)) = limit {
                         return Some(message.to_owned());
@@ -1398,11 +1604,12 @@ fn number_field(
                 *pending = Some(target.edit(value));
                 None
             });
-            let button = add_button(
+            let button = text_control(
                 ui,
-                true,
-                Button::new(USE_A_PARAMETER).small(),
+                Some(id.with("use")),
+                USE_A_PARAMETER,
                 &starts_field_name(&place, StartsField::UseParameter),
+                CHIP_HEIGHT,
             );
             Picker {
                 title: CHOOSE_A_PARAMETER,
@@ -1515,92 +1722,108 @@ fn property_form(
     close: &mut bool,
     pending: &mut Option<Pending>,
 ) {
-    Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        let heading = match &form.editing {
-            Some(_) => edit_property_heading(&form.original),
-            None => NEW_PROPERTY.to_owned(),
+    let heading = match &form.editing {
+        Some(_) => edit_property_heading(&form.original),
+        None => NEW_PROPERTY.to_owned(),
+    };
+    form_heading(ui, &heading);
+    let rows = Form::new(ui, &[NAME_LABEL, KIND_LABEL]);
+    rows.row(ui, NAME_LABEL, |ui| {
+        let field = ui.add(
+            TextEdit::singleline(&mut form.name)
+                .hint_text(PROPERTY_NAME_PLACEHOLDER)
+                .desired_width(ui.available_width().min(STATE_FIELD_WIDTH + 60.0)),
+        );
+        set_name(ui, field.id, PROPERTY_NAME_FIELD);
+        if std::mem::take(&mut form.focus_name) {
+            field.request_focus();
+        }
+    });
+    rows.row(ui, KIND_LABEL, |ui| {
+        for kind in form_kinds(document, form) {
+            let radio = ui.radio_value(&mut form.kind, kind, kind_words(kind));
+            if kind == PropertyType::WholeNumber {
+                radio.on_hover_text(INTEGER_KIND_TOOLTIP);
+            }
+        }
+    });
+    rows.under(ui, |ui| {
+        let description = match form.kind {
+            PropertyType::States => STATES_KIND_DESCRIPTION,
+            PropertyType::WholeNumber => INTEGER_KIND_TOOLTIP,
+            PropertyType::YesNo => YES_NO_KIND_DESCRIPTION,
+            PropertyType::Position => POSITION_KIND_DESCRIPTION,
+            PropertyType::Heading => HEADING_KIND_DESCRIPTION,
+            PropertyType::Arrow => ARROW_KIND_DESCRIPTION,
+            _ => NUMBER_KIND_DESCRIPTION,
         };
-        ui.strong(heading);
-        ui.horizontal(|ui| {
-            ui.label(NAME_LABEL);
-            let field = ui.add(TextEdit::singleline(&mut form.name).hint_text(PROPERTY_NAME_PLACEHOLDER));
-            set_name(ui, field.id, PROPERTY_NAME_FIELD);
-            if std::mem::take(&mut form.focus_name) {
-                field.request_focus();
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.label(KIND_LABEL);
-            for kind in form_kinds(document, form) {
-                let radio = ui.radio_value(&mut form.kind, kind, kind_words(kind));
-                if kind == PropertyType::WholeNumber {
-                    radio.on_hover_text(INTEGER_KIND_TOOLTIP);
-                }
-            }
-        });
-        match form.kind {
-            PropertyType::States => state_rows(ui, form),
-            PropertyType::WholeNumber => {
-                ui.weak(INTEGER_KIND_TOOLTIP);
-            }
-            PropertyType::YesNo => {
-                ui.weak(YES_NO_KIND_DESCRIPTION);
-            }
-            PropertyType::Position => {
-                ui.weak(POSITION_KIND_DESCRIPTION);
-            }
-            PropertyType::Heading => {
-                ui.weak(HEADING_KIND_DESCRIPTION);
-            }
-            PropertyType::Arrow => {
-                ui.weak(ARROW_KIND_DESCRIPTION);
-            }
-            _ => {
-                ui.weak(NUMBER_KIND_DESCRIPTION);
-            }
+        ui.weak(description);
+        if form.kind == PropertyType::States {
+            state_rows(ui, form);
         }
         if let Some(message) = &form.message {
             message_ui(ui, message);
         }
-        ui.horizontal(|ui| {
-            if ui.add(filled_button(DONE.to_owned())).clicked() {
-                match check_form(document, form) {
-                    Ok(()) => *pending = Some(Pending::from_form(FormKind::Property, form_edit(form.clone()))),
-                    Err(message) => form.message = Some(message),
-                }
+    });
+    form_buttons(ui, |ui| {
+        if ui.add(filled_button(DONE.to_owned())).clicked() {
+            match check_form(document, form) {
+                Ok(()) => *pending = Some(Pending::from_form(FormKind::Property, form_edit(form.clone()))),
+                Err(message) => form.message = Some(message),
             }
-            if ui.button(CANCEL).clicked() {
-                *close = true;
-            }
-            if let Some(id) = &form.editing
-                && ui.add(destructive_button(DELETE_PROPERTY)).clicked()
-            {
-                let item = SheetItem::Property(id.clone());
-                *pending = Some(Pending::from_form(
-                    FormKind::Property,
-                    Box::new(move |builder| builder.apply(SheetEdit::Delete { item }).map(drop)),
-                ));
-            }
-        });
+        }
+        if ui.button(CANCEL).clicked() {
+            *close = true;
+        }
+        if let Some(id) = &form.editing
+            && ui.add(destructive_button(DELETE_PROPERTY)).clicked()
+        {
+            let item = SheetItem::Property(id.clone());
+            *pending = Some(Pending::from_form(
+                FormKind::Property,
+                Box::new(move |builder| builder.apply(SheetEdit::Delete { item }).map(drop)),
+            ));
+        }
+    });
+}
+
+/// Draws the heading of a form inside a section, such as "New property", in the semibold face.
+fn form_heading(ui: &mut Ui, heading: &str) {
+    ui.add_space(2.0);
+    line(ui, |ui| {
+        let font = semibold_font(ui.ctx(), egui::TextStyle::Body.resolve(ui.style()).size);
+        ui.add(Label::new(
+            RichText::new(heading)
+                .font(font)
+                .color(ui.visuals().strong_text_color()),
+        ));
+    });
+}
+
+/// Draws the row of a form's buttons, Done first, at the form's left edge, after a little space.
+fn form_buttons(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = ITEM_GAP * 2.0;
+        add(ui);
     });
 }
 
 /// Draws the rows of states of the property form: each with its colour, its name and its remove button, then "+ Add
 /// state". Enter in a name moves to the next state, or adds one after the last.
 fn state_rows(ui: &mut Ui, form: &mut PropertyForm) {
-    ui.weak(STATES_KIND_DESCRIPTION);
     let mut remove = None;
     let mut entered = None;
     let focus = form.focus_state.take();
     for (index, state) in form.states.iter_mut().enumerate() {
-        ui.horizontal(|ui| {
+        line(ui, |ui| {
             let color_label = state_color_name(index + 1, color_name(state.color));
             if let Some(color) = color_button(ui, &color_label, state.color) {
                 state.color = color;
                 state.picked = true;
             }
-            let field = ui.add(TextEdit::singleline(&mut state.name).desired_width(STATE_FIELD_WIDTH));
+            let width = (ui.available_width() - DELETE_WIDTH - ITEM_GAP).clamp(48.0, STATE_FIELD_WIDTH);
+            let field = ui.add(TextEdit::singleline(&mut state.name).desired_width(width));
             set_name(ui, field.id, &state_name_field(index + 1));
             if focus == Some(index) {
                 field.request_focus();
@@ -1611,13 +1834,7 @@ fn state_rows(ui: &mut Ui, form: &mut PropertyForm) {
             if field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
                 entered = Some(index);
             }
-            let button = add_button(
-                ui,
-                true,
-                Button::new(REMOVE_ROW_LABEL).small(),
-                &remove_state_name(index + 1),
-            );
-            if button.clicked() {
+            if delete_button(ui, &remove_state_name(index + 1)).clicked() {
                 remove = Some(index);
             }
         });
@@ -1631,7 +1848,10 @@ fn state_rows(ui: &mut Ui, form: &mut PropertyForm) {
         }
         form.focus_state = Some(index + 1);
     }
-    if ui.add(Button::new(ADD_STATE).small()).clicked() {
+    let add = line(ui, |ui| {
+        super::widgets::add_button(ui, ADD_STATE, ADD_STATE, None, false)
+    });
+    if add.clicked() {
         form.states.push(FormState::empty(form.states.len()));
         form.focus_state = Some(form.states.len() - 1);
     }
@@ -1990,8 +2210,13 @@ fn typed_number(text: &str) -> Result<f64, String> {
         .ok_or_else(|| TYPE_ONE_NUMBER.to_owned())
 }
 
-/// Draws each parameter of `document` as two rows, its name, value and delete button, then its range and unit, and
-/// under a parameter in `trials` the value the world tries. "+ Add parameter" opens the New parameter dialog.
+/// Draws the table of the parameters of `document`: each parameter's name, value as a slider and a field, Min, Max and
+/// Unit, and delete button, with the value the world tries under a parameter in `trials`. "+ Add parameter" opens the
+/// New parameter dialog.
+///
+/// A table with room for every column at its comfortable width draws each parameter on one line, and Value takes the
+/// room left over. A narrower table draws Min, Max and Unit on a second line under each parameter, each after its small
+/// label, and short of room Value gives up width before Name.
 fn parameters(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -2000,68 +2225,103 @@ fn parameters(
     pending: &mut Option<Pending>,
 ) {
     if !document.parameters.is_empty() {
-        ui.horizontal(|ui| {
-            let height = ui.spacing().interact_size.y;
-            ui.add_sized(
-                vec2(PARAMETER_NAME_WIDTH, height),
-                Label::new(RichText::new(PARAMETER_COLUMNS[0]).weak()),
-            );
-            ui.weak(PARAMETER_COLUMNS[1]);
+        let names = document
+            .parameters
+            .iter()
+            .map(|parameter| text_width(ui, &parameter.name) + 12.0)
+            .fold(0.0, f32::max)
+            .min(PARAMETER_NAME_WIDTH + 20.0);
+        let value = Column::new(
+            PARAMETER_COLUMNS[1],
+            SLIDER_WIDTH + ITEM_GAP + FIELD_WIDTH,
+            36.0 + ITEM_GAP + 48.0,
+        );
+        let name = Column::new(PARAMETER_COLUMNS[0], names, 64.0);
+        let one_line = names + 120.0 + 2.0 * RANGE_WIDTH + UNIT_WIDTH + DELETE_WIDTH + 5.0 * layout::COLUMN_GAP;
+        let wide = ui.available_width() >= one_line;
+        let (columns, give_up): (Vec<Column>, &[(usize, f32)]) = if wide {
+            (
+                vec![
+                    name,
+                    value,
+                    Column::new(PARAMETER_COLUMNS[2], RANGE_WIDTH, 36.0),
+                    Column::new(PARAMETER_COLUMNS[3], RANGE_WIDTH, 36.0),
+                    Column::new(PARAMETER_COLUMNS[4], UNIT_WIDTH, 44.0),
+                    Column::fixed(DELETE_WIDTH),
+                ],
+                &[(4, 0.0), (1, 0.0), (0, 0.0), (2, 0.0), (3, 0.0)],
+            )
+        } else {
+            (vec![name, value, Column::fixed(DELETE_WIDTH)], &[(1, 0.0), (0, 0.0)])
+        };
+        let id = ui.make_persistent_id("henad_sheet_parameters");
+        Table::new(id, columns, 1, give_up).show(ui, |ui, rows| {
+            for parameter in &document.parameters {
+                rows.row(ui, &parameter.id, |row| {
+                    parameter_row(row, document, parameter, wide, pane, pending);
+                    if let Some(trial) = trials.iter().find(|trial| trial.parameter == parameter.id) {
+                        let kept = format_number(parameter.default).unwrap_or_default();
+                        let tried = format_number(trial.value).unwrap_or_default();
+                        row.below(0, |ui| {
+                            ui.add(Label::new(RichText::new(sheet_trying_value(&tried, &kept)).weak()).wrap());
+                        });
+                    }
+                });
+            }
         });
+        ui.add_space(6.0);
     }
-    for parameter in &document.parameters {
-        parameter_rows(ui, document, parameter, pane, pending);
-        if let Some(trial) = trials.iter().find(|trial| trial.parameter == parameter.id) {
-            let kept = format_number(parameter.default).unwrap_or_default();
-            let tried = format_number(trial.value).unwrap_or_default();
-            // The line wraps at the visible right edge of the pane. The pane's content can be wider than the pane, as
-            // with a wide Cells table, and a line wrapped at the content's edge would be clipped.
-            ui.scope(|ui| {
-                ui.set_max_width((ui.clip_rect().right() - ui.cursor().left()).max(0.0));
-                ui.add(Label::new(RichText::new(sheet_trying_value(&tried, &kept)).weak()).wrap());
-            });
-        }
-        ui.add_space(2.0);
-    }
-    if ui.button(ADD_PARAMETER).clicked() {
+    if super::widgets::add_button(ui, ADD_PARAMETER, ADD_PARAMETER, None, false).clicked() {
         pane.new_parameter = Some((None, NewParameterDialog::new(NumberUse::Number, None, None)));
     }
 }
 
-/// Draws the rows of `parameter`: its name, its value as a slider and a field, and its delete button, then its Min,
-/// Max and Unit, with the message of a refused field under them.
-fn parameter_rows(
-    ui: &mut Ui,
-    document: &SheetDocument,
-    parameter: &SheetParameter,
-    pane: &mut PaneState,
-    pending: &mut Option<Pending>,
-) {
-    let widgets = pane.widgets;
-    let field_id = |part: &str| widgets.with(("henad_sheet_parameter", parameter.id.as_str(), part));
-    let set = |min: f64, max: f64, default: f64, unit: Option<String>| {
+/// Width in points of a parameter's Min or Max field while its table has room.
+const RANGE_WIDTH: f32 = 48.0;
+
+/// The fields of one parameter's row, each keyed under the pane's widgets, and the edits they commit.
+struct ParameterFields<'a> {
+    /// The sheet.
+    document: &'a SheetDocument,
+    /// The parameter.
+    parameter: &'a SheetParameter,
+    /// Id the pane's widgets are keyed under.
+    widgets: Id,
+}
+
+impl ParameterFields<'_> {
+    /// Returns the id of the field `part` of the parameter.
+    fn id(&self, part: &str) -> Id {
+        self.widgets
+            .with(("henad_sheet_parameter", self.parameter.id.as_str(), part))
+    }
+
+    /// Returns the edit that gives the parameter the range `min` to `max`, the value `default` and the unit `unit`.
+    fn set(&self, min: f64, max: f64, default: f64, unit: Option<String>) -> Pending {
         Pending::one(SheetEdit::SetParameter {
-            parameter: parameter.id.clone(),
+            parameter: self.parameter.id.clone(),
             min,
             max,
             default,
-            step: parameter.step,
+            step: self.parameter.step,
             unit,
-            means: parameter.means.clone(),
+            means: self.parameter.means.clone(),
         })
-    };
-    let unit = parameter.unit.clone();
-    let message = &mut pane.parameter_message;
-    ui.horizontal(|ui| {
+    }
+
+    /// Adds the name field, as wide as `ui`. An empty or taken name puts the old name back and sets `message`.
+    fn name(&self, ui: &mut Ui, message: &mut Option<(String, String)>, pending: &mut Option<Pending>) {
+        let parameter = self.parameter;
         commit_field(
             ui,
-            field_id("name"),
+            self.id("name"),
             &sheet_parameter_name_field(&parameter.name),
             &parameter.name,
-            PARAMETER_NAME_WIDTH,
+            ui.available_width(),
             |text| {
                 let name = text.trim();
-                let taken = document
+                let taken = self
+                    .document
                     .parameters
                     .iter()
                     .any(|other| other.id != parameter.id && other.name.to_lowercase() == name.to_lowercase());
@@ -2080,110 +2340,75 @@ fn parameter_rows(
                 None
             },
         );
-        let shown = value_slider(ui, parameter, field_id("slider"), pending, &set);
-        commit_field(
+    }
+
+    /// Adds the value as a slider and a field, together as wide as `ui`.
+    fn value(&self, ui: &mut Ui, pending: &mut Option<Pending>) {
+        let parameter = self.parameter;
+        let field = FIELD_WIDTH.min(ui.available_width() - 36.0 - ITEM_GAP).max(36.0);
+        let slider = ui.available_width() - field - ITEM_GAP;
+        let set = |min, max, default, unit| self.set(min, max, default, unit);
+        let shown = value_slider(ui, parameter, self.id("slider"), slider, pending, &set);
+        commit_number(
             ui,
-            field_id("value"),
+            self.id("value"),
             &value_field_name(&parameter.name),
             &format_number(shown).unwrap_or_default(),
-            FIELD_WIDTH,
+            field,
             |text| match typed_number(text) {
                 Ok(value) => {
                     // A typed value outside the range widens it.
-                    *pending = Some(set(
+                    *pending = Some(self.set(
                         parameter.min.min(value),
                         parameter.max.max(value),
                         value,
-                        unit.clone(),
+                        parameter.unit.clone(),
                     ));
                     None
                 }
                 Err(message) => Some(message),
             },
         );
-        let delete = add_button(
-            ui,
-            true,
-            Button::new(REMOVE_ROW_LABEL).small(),
-            &delete_parameter_name(&parameter.name),
-        );
-        if delete.clicked() {
-            *pending = Some(Pending::one(SheetEdit::Delete {
-                item: SheetItem::Parameter(parameter.id.clone()),
-            }));
-        }
-    });
-    range_row(ui, parameter, &field_id, pending, &set);
-    let refused = ["value", MIN_LABEL, MAX_LABEL, "unit"]
-        .into_iter()
-        .find_map(|part| field_message(ui, field_id(part)))
-        .or_else(|| {
-            message
-                .as_ref()
-                .filter(|(id, _)| *id == parameter.id)
-                .map(|(_, text)| text.clone())
-        });
-    if let Some(refused) = refused {
-        message_ui(ui, &refused);
     }
-}
 
-/// Draws the second row of `parameter`: its Min, Max and Unit, each field keyed by `field_id` of its part. A typed end
-/// or unit commits the command `set` returns.
-fn range_row(
-    ui: &mut Ui,
-    parameter: &SheetParameter,
-    field_id: &impl Fn(&str) -> Id,
-    pending: &mut Option<Pending>,
-    set: &impl Fn(f64, f64, f64, Option<String>) -> Pending,
-) {
-    let unit = parameter.unit.clone();
-    ui.horizontal(|ui| {
-        ui.add_space(12.0);
-        for (end, label, name, current) in [
-            (
-                RangeEnd::Min,
-                MIN_LABEL,
-                parameter_min_name(&parameter.name),
-                parameter.min,
-            ),
-            (
-                RangeEnd::Max,
-                MAX_LABEL,
-                parameter_max_name(&parameter.name),
-                parameter.max,
-            ),
-        ] {
-            ui.label(label);
-            let id = field_id(label);
-            commit_field(
-                ui,
-                id,
-                &name,
-                &format_number(current).unwrap_or_default(),
-                FIELD_WIDTH,
-                |text| match typed_number(text) {
-                    Ok(typed) => {
-                        let (min, max, default) = with_range_end(parameter, end, typed);
-                        *pending = Some(set(min, max, default, unit.clone()));
-                        None
-                    }
-                    Err(message) => Some(message),
-                },
-            );
-        }
-        ui.label(UNIT_LABEL);
+    /// Adds the field of the end `end` of the range, `width` points wide.
+    fn range(&self, ui: &mut Ui, end: RangeEnd, width: f32, pending: &mut Option<Pending>) {
+        let parameter = self.parameter;
+        let (label, name, current) = match end {
+            RangeEnd::Min => (MIN_LABEL, parameter_min_name(&parameter.name), parameter.min),
+            RangeEnd::Max => (MAX_LABEL, parameter_max_name(&parameter.name), parameter.max),
+        };
+        commit_number(
+            ui,
+            self.id(label),
+            &name,
+            &format_number(current).unwrap_or_default(),
+            width,
+            |text| match typed_number(text) {
+                Ok(typed) => {
+                    let (min, max, default) = with_range_end(parameter, end, typed);
+                    *pending = Some(self.set(min, max, default, parameter.unit.clone()));
+                    None
+                }
+                Err(message) => Some(message),
+            },
+        );
+    }
+
+    /// Adds the unit field, `width` points wide.
+    fn unit(&self, ui: &mut Ui, width: f32, pending: &mut Option<Pending>) {
+        let parameter = self.parameter;
         suggestion_field(
             ui,
-            field_id("unit"),
+            self.id("unit"),
             &parameter_unit_name(&parameter.name),
             parameter.unit.as_deref().unwrap_or_default(),
             UNIT_FIELD_PLACEHOLDER,
-            UNIT_WIDTH,
+            width,
             &unit_suggestions(),
             |text| {
                 let unit = text.trim();
-                *pending = Some(set(
+                *pending = Some(self.set(
                     parameter.min,
                     parameter.max,
                     parameter.default,
@@ -2192,11 +2417,97 @@ fn range_row(
                 None
             },
         );
-    });
+    }
+
+    /// Adds Min, Max and Unit on wrapping lines, each field after its small label. A label stays on its field's line.
+    fn range_line(&self, ui: &mut Ui, pending: &mut Option<Pending>) {
+        wrapped_line(ui, |ui| {
+            let mut first = true;
+            for (header, end) in [
+                (MIN_LABEL, Some(RangeEnd::Min)),
+                (MAX_LABEL, Some(RangeEnd::Max)),
+                (UNIT_LABEL, None),
+            ] {
+                let field = if end.is_some() { RANGE_WIDTH } else { UNIT_WIDTH };
+                let width = caption_width(ui, header) + ITEM_GAP + field;
+                // egui wraps no nested group. A label and its field move to the next line by hand.
+                if !first && width > ui.available_size_before_wrap().x {
+                    ui.end_row();
+                }
+                first = false;
+                caption(ui, header);
+                match end {
+                    Some(end) => self.range(ui, end, field, pending),
+                    None => self.unit(ui, field, pending),
+                }
+                ui.add_space(ITEM_GAP);
+            }
+        });
+    }
 }
 
-/// Adds the slider of the value of `parameter`, named by its value slider name and keyed by `id`, and returns the
-/// value it shows.
+/// Draws the cells of `parameter` in `row`: its name, its value as a slider and a field, its Min, Max and Unit, and its
+/// delete button, with the message of a refused field under the field. Min, Max and Unit take columns of their own
+/// while `wide` holds, and a second line after their small labels otherwise.
+fn parameter_row(
+    row: &mut layout::TableRow<'_>,
+    document: &SheetDocument,
+    parameter: &SheetParameter,
+    wide: bool,
+    pane: &mut PaneState,
+    pending: &mut Option<Pending>,
+) {
+    let fields = ParameterFields {
+        document,
+        parameter,
+        widgets: pane.widgets,
+    };
+    let message = &mut pane.parameter_message;
+    row.cell(0, |ui| line(ui, |ui| fields.name(ui, message, pending)));
+    row.cell(1, |ui| line(ui, |ui| fields.value(ui, pending)));
+    let last = if wide { 5 } else { 2 };
+    if wide {
+        row.cell(2, |ui| {
+            line(ui, |ui| fields.range(ui, RangeEnd::Min, ui.available_width(), pending));
+        });
+        row.cell(3, |ui| {
+            line(ui, |ui| fields.range(ui, RangeEnd::Max, ui.available_width(), pending));
+        });
+        row.cell(4, |ui| line(ui, |ui| fields.unit(ui, ui.available_width(), pending)));
+    }
+    row.cell(last, |ui| {
+        line(ui, |ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if delete_button(ui, &delete_parameter_name(&parameter.name)).clicked() {
+                    *pending = Some(Pending::one(SheetEdit::Delete {
+                        item: SheetItem::Parameter(parameter.id.clone()),
+                    }));
+                }
+            });
+        });
+    });
+    if !wide {
+        row.below(0, |ui| fields.range_line(ui, pending));
+    }
+    // The message of a refused field sits under that field's column, the name's under the name.
+    let refused = [(1, "value"), (2, MIN_LABEL), (3, MAX_LABEL), (4, "unit")]
+        .into_iter()
+        .find_map(|(column, part)| row.message(fields.id(part)).map(|text| (column, text)))
+        .or_else(|| {
+            message
+                .as_ref()
+                .filter(|(id, _)| *id == parameter.id)
+                .map(|(_, text)| (0, text.clone()))
+        });
+    if let Some((column, refused)) = refused {
+        // On two lines, Min, Max and Unit start under the name, and so do their messages.
+        let column = if wide || column == 1 { column } else { 0 };
+        row.below(column, |ui| message_ui(ui, &refused));
+    }
+}
+
+/// Adds the slider of the value of `parameter`, `width` points long, named by its value slider name and keyed by `id`,
+/// and returns the value it shows.
 ///
 /// A drag holds its value until the slider is let go, and then commits it as one edit, the command `set` returns. A
 /// click or a key commits at once. A parameter with no range to slide over shows no slider.
@@ -2204,6 +2515,7 @@ fn value_slider(
     ui: &mut Ui,
     parameter: &SheetParameter,
     id: Id,
+    width: f32,
     pending: &mut Option<Pending>,
     set: &impl Fn(f64, f64, f64, Option<String>) -> Pending,
 ) -> f64 {
@@ -2214,7 +2526,7 @@ fn value_slider(
     }
     let response = ui
         .scope(|ui| {
-            ui.spacing_mut().slider_width = SLIDER_WIDTH;
+            ui.spacing_mut().slider_width = width;
             ui.add(
                 Slider::new(&mut value, parameter.min..=parameter.max)
                     .step_by(slider_step(parameter.max - parameter.min))
@@ -2342,79 +2654,106 @@ fn measure_words(document: &SheetDocument, measure: &SheetMeasure) -> String {
     }
 }
 
-/// Draws the Measures section: a Plot box beside each state, the Plotted list with each measure's colour and remove
-/// button, and the measure form or "+ Add measure".
+/// Draws the Measures section: a Plot box beside each state, the table of measures plotted with each measure's colour
+/// and delete button, and the measure form or "+ Add measure".
 fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, pending: &mut Option<Pending>) {
-    for property in properties_of(document, measured_thing(document))
+    let states: Vec<&SheetProperty> = properties_of(document, measured_thing(document))
         .iter()
         .filter(|property| property.property_type == PropertyType::States)
-    {
-        ui.weak(&property.name);
+        .collect();
+    let labels: Vec<&str> = states
+        .iter()
+        .flat_map(|property| property.states.iter().map(|state| state.name.as_str()))
+        .collect();
+    let swatch_room = STATE_SWATCH_WIDTH;
+    let form = Form::new(ui, &labels).wider(swatch_room);
+    for property in states {
+        text_cell(ui, Label::new(RichText::new(&property.name).weak()));
         // One row per state. egui wraps no nested group, so a row of groups would run past a narrow pane.
         for state in &property.states {
-            ui.horizontal(|ui| {
-                swatch(ui, state.color);
-                ui.label(&state.name);
-                let plotted = counts_of(document, &property.id, &state.id);
-                let mut on = !plotted.is_empty();
-                let response = ui.checkbox(&mut on, PLOT);
-                set_name(ui, response.id, &plot_state(&state_label(document, property, state)));
-                if response.changed() {
-                    *pending = Some(if on {
-                        Pending::one(add_count(document, property, state))
-                    } else {
-                        let items: Vec<SheetItem> = plotted
-                            .iter()
-                            .map(|measure| SheetItem::Measure(measure.id.clone()))
-                            .collect();
-                        Pending {
-                            starts_only: false,
-                            form: None,
-                            run: Box::new(move |builder| {
-                                items
-                                    .into_iter()
-                                    .try_for_each(|item| builder.apply(SheetEdit::Delete { item }).map(drop))
-                            }),
-                        }
-                    });
-                }
-            });
+            form.row_with(
+                ui,
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = swatch_room - super::widgets::CHIP_SWATCH;
+                    swatch_ui(ui, color32(state.color));
+                    ui.add(Label::new(&state.name).truncate());
+                },
+                |ui| {
+                    let plotted = counts_of(document, &property.id, &state.id);
+                    let mut on = !plotted.is_empty();
+                    let response = ui.checkbox(&mut on, PLOT);
+                    set_name(ui, response.id, &plot_state(&state_label(document, property, state)));
+                    if response.changed() {
+                        *pending = Some(if on {
+                            Pending::one(add_count(document, property, state))
+                        } else {
+                            let items: Vec<SheetItem> = plotted
+                                .iter()
+                                .map(|measure| SheetItem::Measure(measure.id.clone()))
+                                .collect();
+                            Pending {
+                                starts_only: false,
+                                form: None,
+                                run: Box::new(move |builder| {
+                                    items
+                                        .into_iter()
+                                        .try_for_each(|item| builder.apply(SheetEdit::Delete { item }).map(drop))
+                                }),
+                            }
+                        });
+                    }
+                },
+            );
         }
+        ui.add_space(4.0);
     }
     if !document.measures.is_empty() {
-        ui.weak(PLOTTED);
-        for measure in &document.measures {
-            ui.horizontal(|ui| {
-                let name = measure_color_name(&measure.name, color_name(measure.color));
-                if let Some(color) = color_button(ui, &name, measure.color) {
-                    *pending = Some(Pending::one(SheetEdit::Recolor {
-                        item: SheetItem::Measure(measure.id.clone()),
-                        color,
-                    }));
-                }
-                ui.label(measure_words(document, measure));
-                let remove = add_button(
-                    ui,
-                    true,
-                    Button::new(REMOVE_ROW_LABEL).small(),
-                    &remove_measure_name(&measure.name),
-                );
-                if remove.clicked() {
-                    *pending = Some(Pending::one(SheetEdit::Delete {
-                        item: SheetItem::Measure(measure.id.clone()),
-                    }));
-                }
-            });
-        }
+        let columns = vec![
+            Column::new(PLOTTED, 18.0, 18.0),
+            Column::new("", 160.0, 80.0),
+            Column::fixed(DELETE_WIDTH),
+        ];
+        let id = ui.make_persistent_id("henad_sheet_plotted");
+        Table::new(id, columns, 1, &[(1, 0.0)]).show(ui, |ui, rows| {
+            for measure in &document.measures {
+                rows.row(ui, &measure.id, |row| {
+                    row.cell(0, |ui| {
+                        line(ui, |ui| {
+                            let name = measure_color_name(&measure.name, color_name(measure.color));
+                            if let Some(color) = color_button(ui, &name, measure.color) {
+                                *pending = Some(Pending::one(SheetEdit::Recolor {
+                                    item: SheetItem::Measure(measure.id.clone()),
+                                    color,
+                                }));
+                            }
+                        });
+                    });
+                    row.cell(1, |ui| {
+                        text_cell(ui, Label::new(measure_words(document, measure)));
+                    });
+                    row.cell(2, |ui| {
+                        line(ui, |ui| {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if delete_button(ui, &remove_measure_name(&measure.name)).clicked() {
+                                    *pending = Some(Pending::one(SheetEdit::Delete {
+                                        item: SheetItem::Measure(measure.id.clone()),
+                                    }));
+                                }
+                            });
+                        });
+                    });
+                });
+            }
+        });
     }
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     if let Some(form) = &mut pane.measure_form {
         let mut close = false;
         measure_form(ui, document, form, &mut close, pending);
         if close {
             pane.measure_form = None;
         }
-    } else if ui.button(ADD_MEASURE).clicked() {
+    } else if super::widgets::add_button(ui, ADD_MEASURE, ADD_MEASURE, None, false).clicked() {
         pane.measure_form = Some(MeasureForm::add(document));
     }
 }
@@ -2432,19 +2771,17 @@ fn property_select(
     let shown = current
         .and_then(|id| properties.iter().find(|property| property.id == id))
         .map_or(empty, |property| property.name.as_str());
-    let mut chosen = None;
-    let combo = ComboBox::from_id_salt(id_salt).selected_text(shown).show_ui(ui, |ui| {
-        for property in properties {
-            if ui
-                .selectable_label(current == Some(property.id.as_str()), &property.name)
-                .clicked()
-            {
-                chosen = Some(property.id.clone());
-            }
-        }
-    });
-    set_name(ui, combo.response.id, name);
-    chosen.filter(|id| current != Some(id.as_str()))
+    let items: Vec<OverlayItem<'_>> = properties
+        .iter()
+        .map(|property| OverlayItem {
+            label: &property.name,
+            current: current == Some(property.id.as_str()),
+            ..OverlayItem::default()
+        })
+        .collect();
+    let (_, chosen) = select(ui, id_salt, name, shown, &items);
+    let chosen = chosen.and_then(|index| properties.get(index))?;
+    (current != Some(chosen.id.as_str())).then(|| chosen.id.clone())
 }
 
 /// Draws the measure form, and sets `close` on Cancel. Done checks the form and adds the measure.
@@ -2466,91 +2803,93 @@ fn measure_form(
     let states = of_kind(&[PropertyType::States]);
     // An average of agents' positions is their centre.
     let numbers = of_kind(&[PropertyType::Number, PropertyType::WholeNumber, PropertyType::Position]);
-    Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.strong(NEW_MEASURE);
-        let average = form.average;
+    form_heading(ui, NEW_MEASURE);
+    let average = form.average;
+    line(ui, |ui| {
         ui.radio_value(
             &mut form.average,
             false,
             if agents { COUNT_AGENTS_MEASURE } else { COUNT_MEASURE },
         );
+    });
+    line(ui, |ui| {
         ui.radio_value(&mut form.average, true, AVERAGE_MEASURE);
-        if form.average != average {
-            *form = MeasureForm {
-                average: form.average,
-                ..MeasureForm::default()
-            };
+    });
+    if form.average != average {
+        *form = MeasureForm {
+            average: form.average,
+            ..MeasureForm::default()
+        };
+    }
+    wrapped_line(ui, |ui| {
+        if form.average {
+            ui.label(AVERAGE_MEASURE_LEAD);
+            if let Some(chosen) = property_select(
+                ui,
+                "henad_sheet_measure_number",
+                MEASURE_PROPERTY_NAME,
+                &numbers,
+                form.property.as_deref(),
+                MEASURE_NUMBER_PROPERTY_EMPTY,
+            ) {
+                form.property = Some(chosen);
+            }
+        } else {
+            ui.label(if agents { COUNT_AGENTS_LEAD } else { COUNT_MEASURE_LEAD });
+            if let Some(chosen) = property_select(
+                ui,
+                "henad_sheet_measure_property",
+                MEASURE_PROPERTY_NAME,
+                &states,
+                form.property.as_deref(),
+                MEASURE_PROPERTY_EMPTY,
+            ) {
+                form.property = Some(chosen);
+                form.state = None;
+            }
+            ui.label(COUNT_MEASURE_IS);
+            let property = form
+                .property
+                .as_deref()
+                .and_then(|id| states.iter().find(|property| property.id == id));
+            let shown = property
+                .zip(form.state.as_deref())
+                .and_then(|(property, state)| state_name(property, state))
+                .unwrap_or(MEASURE_STATE_EMPTY);
+            let offered = property.map(|property| property.states.as_slice()).unwrap_or_default();
+            let items: Vec<OverlayItem<'_>> = offered
+                .iter()
+                .map(|state| OverlayItem {
+                    label: &state.name,
+                    current: form.state.as_deref() == Some(state.id.as_str()),
+                    swatch: Some(color32(state.color)),
+                    ..OverlayItem::default()
+                })
+                .collect();
+            let (_, chosen) = select(ui, "henad_sheet_measure_state", MEASURE_STATE_NAME, shown, &items);
+            if let Some(state) = chosen.and_then(|index| offered.get(index)) {
+                form.state = Some(state.id.clone());
+            }
         }
-        ui.horizontal_wrapped(|ui| {
-            if form.average {
-                ui.label(AVERAGE_MEASURE_LEAD);
-                if let Some(chosen) = property_select(
-                    ui,
-                    "henad_sheet_measure_number",
-                    MEASURE_PROPERTY_NAME,
-                    &numbers,
-                    form.property.as_deref(),
-                    MEASURE_NUMBER_PROPERTY_EMPTY,
-                ) {
-                    form.property = Some(chosen);
+    });
+    if let Some(message) = &form.message {
+        message_ui(ui, message);
+    }
+    form_buttons(ui, |ui| {
+        if ui.add(filled_button(DONE.to_owned())).clicked() {
+            match measure_edit(document, form) {
+                Ok(edit) => {
+                    *pending = Some(Pending::from_form(
+                        FormKind::Measure,
+                        Box::new(move |builder| builder.apply(edit).map(drop)),
+                    ));
                 }
-            } else {
-                ui.label(if agents { COUNT_AGENTS_LEAD } else { COUNT_MEASURE_LEAD });
-                if let Some(chosen) = property_select(
-                    ui,
-                    "henad_sheet_measure_property",
-                    MEASURE_PROPERTY_NAME,
-                    &states,
-                    form.property.as_deref(),
-                    MEASURE_PROPERTY_EMPTY,
-                ) {
-                    form.property = Some(chosen);
-                    form.state = None;
-                }
-                ui.label(COUNT_MEASURE_IS);
-                let property = form
-                    .property
-                    .as_deref()
-                    .and_then(|id| states.iter().find(|property| property.id == id));
-                let shown = property
-                    .zip(form.state.as_deref())
-                    .and_then(|(property, state)| state_name(property, state))
-                    .unwrap_or(MEASURE_STATE_EMPTY);
-                let combo = ComboBox::from_id_salt("henad_sheet_measure_state")
-                    .selected_text(shown)
-                    .show_ui(ui, |ui| {
-                        for state in property.map(|property| property.states.as_slice()).unwrap_or_default() {
-                            if ui
-                                .selectable_label(form.state.as_deref() == Some(state.id.as_str()), &state.name)
-                                .clicked()
-                            {
-                                form.state = Some(state.id.clone());
-                            }
-                        }
-                    });
-                set_name(ui, combo.response.id, MEASURE_STATE_NAME);
+                Err(message) => form.message = Some(message),
             }
-        });
-        if let Some(message) = &form.message {
-            message_ui(ui, message);
         }
-        ui.horizontal(|ui| {
-            if ui.add(filled_button(DONE.to_owned())).clicked() {
-                match measure_edit(document, form) {
-                    Ok(edit) => {
-                        *pending = Some(Pending::from_form(
-                            FormKind::Measure,
-                            Box::new(move |builder| builder.apply(edit).map(drop)),
-                        ));
-                    }
-                    Err(message) => form.message = Some(message),
-                }
-            }
-            if ui.button(CANCEL).clicked() {
-                *close = true;
-            }
-        });
+        if ui.button(CANCEL).clicked() {
+            *close = true;
+        }
     });
 }
 
@@ -2600,12 +2939,6 @@ fn measure_edit(document: &SheetDocument, form: &MeasureForm) -> Result<SheetEdi
     Ok(add_count(document, property, state))
 }
 
-/// Adds a square of `color` the size of a swatch of the Cells table.
-fn swatch(ui: &mut Ui, color: henad_graph::value::Color) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(SWATCH_SIDE), Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::ZERO, color32(color));
-}
-
 /// Returns the colour a number shaded in `hue` takes at `share` of the way from its darkest value to its lightest.
 fn shade_color(hue: ShadeHue, share: f32) -> egui::Color32 {
     let [dark, light] = hue.ends();
@@ -2650,8 +2983,9 @@ fn color_rule_edit(thing: &str, property: &SheetProperty, previous: Option<&Colo
 /// Draws the Colours section: the property that colours the cells, or in a world of agents the property that colours
 /// the agents and the one that colours the ground. `widgets` is the id the pane's widgets are keyed under.
 fn colors(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Option<Pending>) {
+    let form = Form::new(ui, &[COLOR_CELLS_BY, COLOR_AGENTS_BY, COLOR_GROUND_BY, SHADE]);
     if document.world.made_of != MadeOf::Agents {
-        colors_of(ui, document, CELLS, COLOR_CELLS_BY, widgets, pending);
+        colors_of(ui, document, CELLS, COLOR_CELLS_BY, &form, widgets, pending);
         return;
     }
     colors_of(
@@ -2659,17 +2993,18 @@ fn colors(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Opti
         document,
         measured_thing(document),
         COLOR_AGENTS_BY,
+        &form,
         widgets,
         pending,
     );
     if !properties_of(document, GROUND).is_empty() {
         ui.add_space(4.0);
-        colors_of(ui, document, GROUND, COLOR_GROUND_BY, widgets, pending);
+        colors_of(ui, document, GROUND, COLOR_GROUND_BY, &form, widgets, pending);
     }
 }
 
-/// Draws what colours `thing`: `label` and a select of its properties, with the states' colours under a States
-/// property, the note on a heading, and the hue and the range of the shading of a Number property.
+/// Draws what colours `thing` as rows of `form`: `label` and a select of its properties, with the states' colours under
+/// a States property, the note on a heading, and the hue and the range of the shading of a Number property.
 ///
 /// With no rule, or a rule over no property of `thing`, the select shows the first States property, or else the first
 /// property that can colour.
@@ -2678,6 +3013,7 @@ fn colors_of(
     document: &SheetDocument,
     thing: &str,
     label: &str,
+    form: &Form,
     widgets: Id,
     pending: &mut Option<Pending>,
 ) {
@@ -2710,8 +3046,7 @@ fn colors_of(
     let Some(&chosen) = chosen else {
         return;
     };
-    ui.horizontal(|ui| {
-        ui.label(label);
+    form.row(ui, label, |ui| {
         let picked = property_select(
             ui,
             &format!("henad_sheet_color_by_{thing}"),
@@ -2728,47 +3063,58 @@ fn colors_of(
     });
     match chosen.property_type {
         PropertyType::States => {
-            ui.horizontal_wrapped(|ui| {
-                for state in &chosen.states {
-                    swatch(ui, state.color);
-                    ui.weak(&state.name);
-                    ui.add_space(6.0);
-                }
+            form.under(ui, |ui| {
+                wrapped_line(ui, |ui| {
+                    // A state's swatch and name stay on one line. egui wraps no nested group, and the pair moves to
+                    // the next line by hand.
+                    let mut first = true;
+                    for state in &chosen.states {
+                        let width = STATE_SWATCH_WIDTH + text_width(ui, &state.name);
+                        if !first && width > ui.available_size_before_wrap().x {
+                            ui.end_row();
+                        }
+                        first = false;
+                        swatch_ui(ui, color32(state.color));
+                        ui.weak(&state.name);
+                        ui.add_space(ITEM_GAP);
+                    }
+                });
             });
         }
         PropertyType::Heading => {
-            ui.weak(BY_HEADING_NOTE);
+            form.under(ui, |ui| ui.weak(BY_HEADING_NOTE));
         }
         _ => {
             let shading = shaded_rule(
                 &chosen.id,
                 rule.filter(|rule| rule.property.as_deref() == Some(&chosen.id)),
             );
-            shading_ui(ui, thing, &shading, widgets, pending);
+            shading_ui(ui, thing, &shading, form, widgets, pending);
         }
     }
 }
 
-/// Draws the hue and the range of `shading`, the rule that shades `thing` by a Number property. A new hue or end
-/// commits the rule with it. `widgets` is the id the pane's widgets are keyed under.
-fn shading_ui(ui: &mut Ui, thing: &str, shading: &ColorRule, widgets: Id, pending: &mut Option<Pending>) {
+/// Draws the hue and the range of `shading`, the rule that shades `thing` by a Number property, as rows of `form`. A
+/// new hue or end commits the rule with it. `widgets` is the id the pane's widgets are keyed under.
+fn shading_ui(ui: &mut Ui, thing: &str, shading: &ColorRule, form: &Form, widgets: Id, pending: &mut Option<Pending>) {
     let hue = shading.hue.unwrap_or(ShadeHue::Blue);
     let hue_words = |hue: ShadeHue| {
         let index = ShadeHue::ALL.iter().position(|known| *known == hue).unwrap_or_default();
         SHADE_COLORS.get(index).copied().unwrap_or_default()
     };
-    ui.horizontal(|ui| {
-        ui.label(SHADE);
-        let mut picked = hue;
-        let combo = ComboBox::from_id_salt(("henad_sheet_shade", thing))
-            .selected_text(hue_words(hue))
-            .show_ui(ui, |ui| {
-                for known in ShadeHue::ALL {
-                    ui.selectable_value(&mut picked, *known, hue_words(*known));
-                }
-            });
-        set_name(ui, combo.response.id, SHADE);
-        if picked != hue {
+    form.row(ui, SHADE, |ui| {
+        let items: Vec<OverlayItem<'_>> = ShadeHue::ALL
+            .iter()
+            .map(|known| OverlayItem {
+                label: hue_words(*known),
+                current: *known == hue,
+                ..OverlayItem::default()
+            })
+            .collect();
+        let (_, chosen) = select(ui, ("henad_sheet_shade", thing), SHADE, hue_words(hue), &items);
+        if let Some(&picked) = chosen.and_then(|index| ShadeHue::ALL.get(index))
+            && picked != hue
+        {
             let mut rule = shading.clone();
             rule.hue = Some(picked);
             *pending = Some(Pending::one(SheetEdit::SetColorRule {
@@ -2792,43 +3138,45 @@ fn shading_ui(ui: &mut Ui, thing: &str, shading: &ColorRule, widgets: Id, pendin
     let lightest_id = widgets.with(("henad_sheet_shade_lightest", thing));
     // The ends left out read as 0 and 1, as the lowering reads them.
     let (darkest_at, lightest_at) = (shading.darkest.unwrap_or(0.0), shading.lightest.unwrap_or(1.0));
-    ui.horizontal(|ui| {
-        ui.label(SHADE_FROM);
-        for (id, name, current, other, darkest) in [
-            (darkest_id, DARKEST_NAME, darkest_at, lightest_at, true),
-            (lightest_id, LIGHTEST_NAME, lightest_at, darkest_at, false),
-        ] {
-            commit_field(
-                ui,
-                id,
-                name,
-                &format_number(current).unwrap_or_default(),
-                FIELD_WIDTH,
-                |text| match typed_number(text) {
-                    // The lowering refuses two equal ends, so the field refuses them first.
-                    Ok(value) if value == other => Some(SHADE_ENDS_EQUAL.to_owned()),
-                    Ok(value) => {
-                        let mut rule = shading.clone();
-                        if darkest {
-                            rule.darkest = Some(value);
-                        } else {
-                            rule.lightest = Some(value);
+    form.under(ui, |ui| {
+        wrapped_line(ui, |ui| {
+            ui.label(SHADE_FROM);
+            for (id, name, current, other, darkest) in [
+                (darkest_id, DARKEST_NAME, darkest_at, lightest_at, true),
+                (lightest_id, LIGHTEST_NAME, lightest_at, darkest_at, false),
+            ] {
+                commit_number(
+                    ui,
+                    id,
+                    name,
+                    &format_number(current).unwrap_or_default(),
+                    FIELD_WIDTH,
+                    |text| match typed_number(text) {
+                        // The lowering refuses two equal ends, so the field refuses them first.
+                        Ok(value) if value == other => Some(SHADE_ENDS_EQUAL.to_owned()),
+                        Ok(value) => {
+                            let mut rule = shading.clone();
+                            if darkest {
+                                rule.darkest = Some(value);
+                            } else {
+                                rule.lightest = Some(value);
+                            }
+                            *pending = Some(Pending::one(SheetEdit::SetColorRule {
+                                thing: thing.to_owned(),
+                                rule: Some(rule),
+                            }));
+                            None
                         }
-                        *pending = Some(Pending::one(SheetEdit::SetColorRule {
-                            thing: thing.to_owned(),
-                            rule: Some(rule),
-                        }));
-                        None
-                    }
-                    Err(message) => Some(message),
-                },
-            );
-            ui.label(if darkest { SHADE_DARK_TO } else { SHADE_LIGHT });
+                        Err(message) => Some(message),
+                    },
+                );
+                ui.label(if darkest { SHADE_DARK_TO } else { SHADE_LIGHT });
+            }
+        });
+        if let Some(message) = field_message(ui, darkest_id).or_else(|| field_message(ui, lightest_id)) {
+            message_ui(ui, &message);
         }
     });
-    if let Some(message) = field_message(ui, darkest_id).or_else(|| field_message(ui, lightest_id)) {
-        message_ui(ui, &message);
-    }
 }
 
 /// Returns what `button` does in words, such as "Start again: Status", "Start again: every property", "Run once,
@@ -2881,8 +3229,11 @@ fn button_does(document: &SheetDocument, button: &SheetButton) -> String {
     does.join(", ")
 }
 
-/// Draws the Buttons section: each button with what it does, its Edit and delete buttons, the button form under the
-/// button it changes, and the card of a button that runs once. "+ Add button" opens the form for a new button.
+/// Draws the Buttons section: the table of buttons, each with what it does and its Edit and delete buttons, the button
+/// form under the button it changes, and the card of a button that runs once. "+ Add button" opens the form for a new
+/// button.
+///
+/// The columns give up width in the order Does, Name, and Does takes the room left over.
 fn buttons(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -2891,42 +3242,72 @@ fn buttons(
     pending: &mut Option<Pending>,
 ) {
     let sentences = Sentences::new(document);
-    for button in &document.buttons {
-        ui.horizontal_wrapped(|ui| {
-            ui.strong(&button.name);
-            ui.weak(button_does(document, button));
-            let edit = add_button(ui, true, Button::new(EDIT).small(), &edit_button_name(&button.name));
-            if edit.clicked() {
-                pane.button_form = Some(ButtonForm::edit(button));
-            }
-            let delete = add_button(
-                ui,
-                true,
-                Button::new(REMOVE_ROW_LABEL).small(),
-                &delete_button_name(&button.name),
-            );
-            if delete.clicked() {
-                *pending = Some(Pending::one(SheetEdit::Delete {
-                    item: SheetItem::Button(button.id.clone()),
-                }));
+    if !document.buttons.is_empty() {
+        let names = document
+            .buttons
+            .iter()
+            .map(|button| text_width(ui, &button.name))
+            .fold(caption_width(ui, NAME_LABEL), f32::max);
+        let edit = text_width(ui, EDIT) + 6.0;
+        let columns = vec![
+            Column::new(NAME_LABEL, names.min(140.0), 56.0),
+            Column::new(BUTTON_DOES, 160.0, 80.0),
+            Column::fixed(edit),
+            Column::fixed(DELETE_WIDTH),
+        ];
+        let id = ui.make_persistent_id("henad_sheet_buttons");
+        Table::new(id, columns, 1, &[(1, 0.0), (0, 0.0)]).show(ui, |ui, rows| {
+            for button in &document.buttons {
+                rows.row(ui, &button.id, |row| {
+                    row.cell(0, |ui| {
+                        text_cell(ui, Label::new(RichText::new(&button.name).strong()));
+                    });
+                    row.cell(1, |ui| {
+                        text_cell(ui, Label::new(RichText::new(button_does(document, button)).weak()));
+                    });
+                    row.cell(2, |ui| {
+                        line(ui, |ui| {
+                            let edit = text_control(ui, None, EDIT, &edit_button_name(&button.name), CHIP_HEIGHT);
+                            if edit.clicked() {
+                                pane.button_form = Some(ButtonForm::edit(button));
+                            }
+                        });
+                    });
+                    row.cell(3, |ui| {
+                        line(ui, |ui| {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if delete_button(ui, &delete_button_name(&button.name)).clicked() {
+                                    *pending = Some(Pending::one(SheetEdit::Delete {
+                                        item: SheetItem::Button(button.id.clone()),
+                                    }));
+                                }
+                            });
+                        });
+                    });
+                });
+                if let Some(form) = pane
+                    .button_form
+                    .as_mut()
+                    .filter(|form| form.editing.as_deref() == Some(button.id.as_str()))
+                {
+                    let mut close = false;
+                    button_form(ui, document, form, &mut close, pending);
+                    if close {
+                        pane.button_form = None;
+                    }
+                    ui.add_space(6.0);
+                    hairline(ui);
+                }
+                for card in button.does.iter().filter_map(|step| step.card.as_deref()) {
+                    ui.add_space(6.0);
+                    run_once_card(ui, document, &sentences, report, card);
+                    ui.add_space(6.0);
+                    hairline(ui);
+                }
             }
         });
-        if let Some(form) = pane
-            .button_form
-            .as_mut()
-            .filter(|form| form.editing.as_deref() == Some(button.id.as_str()))
-        {
-            let mut close = false;
-            button_form(ui, document, form, &mut close, pending);
-            if close {
-                pane.button_form = None;
-            }
-        }
-        for card in button.does.iter().filter_map(|step| step.card.as_deref()) {
-            run_once_card(ui, document, &sentences, report, card);
-        }
+        ui.add_space(6.0);
     }
-    ui.add_space(4.0);
     match &mut pane.button_form {
         Some(form) if form.editing.is_none() => {
             let mut close = false;
@@ -2936,35 +3317,44 @@ fn buttons(
             }
         }
         _ => {
-            if ui.button(ADD_BUTTON).clicked() {
+            if super::widgets::add_button(ui, ADD_BUTTON, ADD_BUTTON, None, false).clicked() {
                 pane.button_form = Some(ButtonForm::add());
             }
         }
     }
 }
 
-/// Draws the card `card` that a button runs once, read-only: its heading, then each line's sentence or the text of a
-/// card with no line.
+/// Draws the card `card` that a button runs once, read-only, as a region inside the Buttons section: its heading, then
+/// each line's number and sentence, or the text of a card with no line.
 fn run_once_card(ui: &mut Ui, document: &SheetDocument, sentences: &Sentences<'_>, report: &SheetReport, card: &str) {
     let Some(index) = document.cards.iter().position(|known| known.id == card) else {
         return;
     };
-    Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        if let Some(card) = document.cards.get(index) {
-            ui.label(RichText::new(sentences.card_heading(card)).small());
-        }
-        let lines = card_lines(document, sentences, report, index);
-        if lines.is_empty() {
-            ui.weak(BUTTON_CARD_EMPTY);
-        }
-        for line in lines {
-            ui.horizontal_wrapped(|ui| {
-                ui.add_space(20.0 * line.depth as f32);
-                ui.weak(line.number.to_string());
-                ui.label(&line.sentence);
+    region(ui, |ui| {
+        egui::Frame::NONE
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 2.0;
+                if let Some(card) = document.cards.get(index) {
+                    ui.label(RichText::new(sentences.card_heading(card)).small());
+                }
+                let lines = card_lines(document, sentences, report, index);
+                if lines.is_empty() {
+                    ui.weak(BUTTON_CARD_EMPTY);
+                }
+                for line in lines {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.add_space(20.0 * line.depth as f32);
+                        ui.label(small_label(line.number.to_string()));
+                        ui.vertical(|ui| {
+                            ui.set_max_width(ui.available_width());
+                            ui.add(Label::new(&line.sentence).wrap());
+                        });
+                    });
+                }
             });
-        }
     });
 }
 
@@ -2988,43 +3378,51 @@ fn button_form(
         .filter(|property| property.starts_as.is_some())
         .collect();
     let thing_word = Sentences::new(document).thing_word(thing);
-    Frame::group(ui.style()).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        let heading = match &form.editing {
-            Some(_) => edit_button_name(&form.original),
-            None => NEW_BUTTON.to_owned(),
-        };
-        ui.strong(heading);
-        let mut done = false;
-        ui.horizontal(|ui| {
-            ui.label(NAME_LABEL);
-            let field = ui.add(TextEdit::singleline(&mut form.name).hint_text(BUTTON_NAME_PLACEHOLDER));
-            set_name(ui, field.id, BUTTON_NAME_FIELD);
-            if std::mem::take(&mut form.focus_name) {
-                field.request_focus();
+    let heading = match &form.editing {
+        Some(_) => edit_button_name(&form.original),
+        None => NEW_BUTTON.to_owned(),
+    };
+    form_heading(ui, &heading);
+    let rows = Form::new(ui, &[NAME_LABEL, BUTTON_DOES]);
+    let mut done = false;
+    rows.row(ui, NAME_LABEL, |ui| {
+        let field = ui.add(
+            TextEdit::singleline(&mut form.name)
+                .hint_text(BUTTON_NAME_PLACEHOLDER)
+                .desired_width(ui.available_width().min(STATE_FIELD_WIDTH + 60.0)),
+        );
+        set_name(ui, field.id, BUTTON_NAME_FIELD);
+        if std::mem::take(&mut form.focus_name) {
+            field.request_focus();
+        }
+        done |= field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+    });
+    rows.row(ui, BUTTON_DOES, |ui| {
+        ui.radio_value(&mut form.run_once, Some(false), START_AGAIN);
+        ui.add_enabled_ui(form.run_once == Some(false), |ui| {
+            let shown = form
+                .property
+                .as_deref()
+                .and_then(|id| properties.iter().find(|property| property.id == id))
+                .map_or(EVERY_PROPERTY, |property| property.name.as_str());
+            let choices: Vec<Option<&SheetProperty>> = std::iter::once(None)
+                .chain(properties.iter().copied().map(Some))
+                .collect();
+            let items: Vec<OverlayItem<'_>> = choices
+                .iter()
+                .map(|choice| OverlayItem {
+                    label: choice.map_or(EVERY_PROPERTY, |property| property.name.as_str()),
+                    current: form.property.as_deref() == choice.map(|property| property.id.as_str()),
+                    ..OverlayItem::default()
+                })
+                .collect();
+            let (_, chosen) = select(ui, "henad_sheet_button_property", START_AGAIN_FOR, shown, &items);
+            if let Some(choice) = chosen.and_then(|index| choices.get(index)) {
+                form.property = choice.map(|property| property.id.clone());
             }
-            done |= field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
         });
-        ui.label(BUTTON_DOES);
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut form.run_once, Some(false), START_AGAIN);
-            ui.add_enabled_ui(form.run_once == Some(false), |ui| {
-                let shown = form
-                    .property
-                    .as_deref()
-                    .and_then(|id| properties.iter().find(|property| property.id == id))
-                    .map_or(EVERY_PROPERTY, |property| property.name.as_str());
-                let combo = ComboBox::from_id_salt("henad_sheet_button_property")
-                    .selected_text(shown)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut form.property, None, EVERY_PROPERTY);
-                        for property in &properties {
-                            ui.selectable_value(&mut form.property, Some(property.id.clone()), &property.name);
-                        }
-                    });
-                set_name(ui, combo.response.id, START_AGAIN_FOR);
-            });
-        });
+    });
+    rows.under(ui, |ui| {
         ui.radio_value(&mut form.run_once, Some(true), run_once(&thing_word));
         // The steps that set a property everywhere, which no control of the form changes and Done keeps.
         if let Some(sets) = set_steps(document, form.editing.as_deref()) {
@@ -3033,24 +3431,24 @@ fn button_form(
         if let Some(message) = &form.message {
             message_ui(ui, message);
         }
-        ui.horizontal(|ui| {
-            done |= ui.add(filled_button(DONE.to_owned())).clicked();
-            if ui.button(CANCEL).clicked() {
-                *close = true;
-            }
-        });
-        if done {
-            match check_button_form(document, form) {
-                Ok(()) => {
-                    *pending = Some(Pending::from_form(
-                        FormKind::Button,
-                        button_edit(form.clone(), thing.to_owned()),
-                    ));
-                }
-                Err(message) => form.message = Some(message),
-            }
+    });
+    form_buttons(ui, |ui| {
+        done |= ui.add(filled_button(DONE.to_owned())).clicked();
+        if ui.button(CANCEL).clicked() {
+            *close = true;
         }
     });
+    if done {
+        match check_button_form(document, form) {
+            Ok(()) => {
+                *pending = Some(Pending::from_form(
+                    FormKind::Button,
+                    button_edit(form.clone(), thing.to_owned()),
+                ));
+            }
+            Err(message) => form.message = Some(message),
+        }
+    }
 }
 
 /// Returns the message for the first check of the button form that fails.
