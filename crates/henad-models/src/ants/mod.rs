@@ -19,7 +19,7 @@ use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
-use crate::ants::field::{PheromoneField, TO_FOOD, TO_HOME, nest_cell};
+use crate::ants::field::{PheromoneField, TO_FOOD, TO_HOME, nest_position};
 
 /// Ant colours, indexed by the `has_food` lane: searching, then carrying food.
 pub const ANT_PALETTE: [[u8; 4]; 2] = [
@@ -120,8 +120,7 @@ impl AgentModel for AntsModel {
     /// gradient to navigate back along.
     fn init(lanes: &mut AntLanes, extent: Extent, params: &[ParamValue], _rng: &mut u64) {
         let (width, height) = extent.cells();
-        let nest = nest_cell(width, height) as u32;
-        let (x, y) = ((nest % width) as f32, (nest / width) as f32);
+        let (x, y) = nest_position(width, height);
         let reward = extract_f32(params, REWARD, 1.0);
         for i in 0..lanes.pos_x.len() {
             lanes.pos_x[i] = x;
@@ -216,8 +215,7 @@ mod tests {
     fn every_ant_starts_on_the_nest_holding_a_reward() {
         let state = default_state();
         let lanes = state.lanes();
-        let nest = nest_cell(200, 200) as u32;
-        let (nx, ny) = ((nest % 200) as f32, (nest / 200) as f32);
+        let (nx, ny) = nest_position(200, 200);
         for i in 0..lanes.pos_x.len() {
             assert_eq!((lanes.pos_x[i], lanes.pos_y[i]), (nx, ny), "ant {i} is not on the nest");
             assert_eq!(lanes.reward[i], 1.0, "ant {i} has no reward to spend");

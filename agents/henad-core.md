@@ -60,7 +60,8 @@ double-buffered SoA grid (`grid.rs`),
 the counting-sort `SpatialHash` and the `HashGrid` cell geometry both backends share
 (`spatial_hash.rs`), the `Network` graph a `NetworkModel` works on (`network.rs`), param
 descriptors and `ParamStore` (`params.rs`), `ActionDescriptor`, the `actions!` macro,
-`action_seed` and the `Schedule` of `--act` entries with its `Fire` rule (`action.rs`),
+`action_seed` and the `Schedule` of `--act` entries with its `Fire` rule (`action.rs`, where
+`parse_entry` splits one `ID@TICK` for `Schedule::parse` and henad-cli's sweep actions),
 stat/view types consumed by the UI (`view.rs`), and small shared
 helpers such as the param and stat builders (`helpers.rs`). `xorshift64` sits with the random
 draws in `authoring/primitives/rng.rs`. `Extent` is re-exported at the crate root.

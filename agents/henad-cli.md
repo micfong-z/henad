@@ -7,8 +7,15 @@ with, henad-cli's description unless set), `SOME_RUNS_NOT_OK` and `run(options, 
 `run` installs the panic hook, parses with clap's `Command::name`, `bin_name` and `version` from
 the options, and `about` when set, prints an error as `Error: {error:?}` and returns 1, and
 returns clap's own code for `--help`, `--version` and a usage error. Argument parsing, the modes,
-`Reporter`, `json_report` and the text formats are private. `main.rs` is three lines over `run`
-with `example_models()` and its `build_info!()`. henad-models is optional behind the default
+`Reporter`, `json_report` and the text formats are private. `lib.rs` also holds `Args`, `Mode`,
+`run_args` with `headless_device` and `model_id`, and the `--info`, `--list` and `--params`
+text. `model_file.rs` reads `--model-file`, `single.rs` runs one configuration (`run_single`, the
+benchmark with its `Timings`, the two exports and `write_series`), and `explore/` runs sweeps.
+`Mode::Single` carries a `SingleRun` (`ExportStats` and `ExportFinal` with their paths, and
+`Benchmark`), which `run_single` matches with no catch-all, and every `match` on `Mode` in
+`run_args` names each variant.
+`json_report.rs` builds every `--json` line, one function per `kind`. `main.rs` is three lines
+over `run` with `example_models()` and its `build_info!()`. henad-models is optional behind the default
 `example-models` feature, which the `[[bin]]` and the four integration tests that run it name in
 `required-features`, and `cargo build -p henad-cli --no-default-features` builds the library
 alone. Steps a state in a bare loop with no rendering, no
@@ -82,7 +89,9 @@ sheet's code, a graph prints itself, a grid rule is refused, the flag's conflict
 sheet's run, and the others skip without one. Keep them.
 `--export` calls `prepare_view` before it writes, and `--export-stats` before each sample, as a
 publish would.
-`explore.rs` is the sweep mode. `--out`, `--spec` or `--dry-run` selects it (`Mode::Explore`), and
+`explore/` is the sweep mode: `mod.rs` runs a sweep or a merge, `args.rs` holds `ExploreArgs`,
+its value parsers and `spec_from_flags`, and `report.rs` holds `Reporter` and the text of a plan,
+its progress and its end. `--out`, `--spec` or `--dry-run` selects it (`Mode::Explore`), and
 no command line from before sweeps changes meaning. `--list` refuses all three, and `--info`
 beside them prints the provenance header and runs the sweep. It turns the flags in `ExploreArgs`
 into a one-block `SweepSpec`, a factorial over every `--vary`, a zip, a `--sample lhs:N` or
@@ -90,9 +99,11 @@ into a one-block `SweepSpec`, a factorial over every `--vary`, a zip, a `--sampl
 named by its id, or by the first of `ID_2`, `ID_3` and so on that no earlier action took, and
 `--vary action.NAME=LEVELS` varies its tick. `--spec` conflicts with every flag that changes a
 result, and needs `--out`, `--dry-run` or `--params` (the `spec_use` group). A value parser
-(`check_set`, `check_act`, `check_vary`, `check_stop`, `check_reduce`) refuses a malformed
+(`parse_set`, `check_act`, `parse_vary`, `parse_stop`, `parse_reduce`) refuses a malformed
 `--set`, `--act`, `--vary`, `--stop` or `--reduce` before anything runs, with exit code 2, and
-the model checks the ids later. `--concurrent` (the lanes of a
+the model checks the ids later. Each but `check_act` returns the parsed value, which
+`spec_from_flags` and `run_single` take as it is. `--act` stays text, since `Schedule::parse`
+reads text. `--concurrent` (the lanes of a
 CPU model or the tracks of a GPU model), `--memory`, `--gpu-memory`, `--shard`, `--resume` and
 `--retry-failed` pass through to `SweepOptions`, and `--merge DIR... --out DIR` (`Mode::Merge`)
 calls `merge` with no model and no device. It renders `ProgressEvent`s as a text line on stderr
@@ -113,8 +124,8 @@ over the tick length on `sir_rates.toml`, read from henad-models' fixtures.
 `build.rs` calls `henad_build::stamp_commit`, as henad-app's does, and the `CliOptions` host
 build is the one the manifest records, the binary's `build_info!()` for `henad-cli`. The `info`
 line's `engine_version` reads `ENGINE_BUILD.version()`. Under `--json` each `SweepWarning` also
-prints as an `explore_warning` line (`warning_json`), and so does the series rows warning, as
-`series_rows`. `existing_invocations_keep_their_mode` reads the command lines of `lib.rs`, which
+prints as an `explore_warning` line (`json_report::explore_warning`), and so does the series
+rows warning, as `series_rows`. `existing_invocations_keep_their_mode` reads the command lines of `lib.rs`, which
 holds the crate doc, and of `docs/reference/cli.md`, and its floor is the 13 documented lines
 that are not sweeps. `tests/json_lines.rs` runs the binary and holds each `--json` line kind to
 the fields `benchmarks/protocol.md` and `docs/reference/cli.md` list, `explore_progress` aside,

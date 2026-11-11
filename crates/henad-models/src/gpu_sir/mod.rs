@@ -11,17 +11,15 @@ use henad_compute::cpu::grid_engine::{GRID_INIT_SEED, grid_init_rng};
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
-use henad_core::authoring::primitives::rng::{mix_seed, pcg_hash, xorshift64};
+use henad_core::authoring::primitives::rng::{below, next_bits};
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
+use crate::port::{pcg_states, rng_buffer_seed};
 use crate::shader_bindings::gpu_sir::seed_outbreak::Params as ActionParams;
 use crate::shader_bindings::gpu_sir::step::Params as StepParams;
 use crate::sir::PALETTE;
-
-/// Domain separator of the `rng` buffer's seed, so the buffer and the cell seeding stream do not start correlated.
-const RNG_INIT_SEED: u64 = GRID_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
 
 // The list repeats the ids and order the CPU engine composes for `SirGridModel`, so one parameter vector drives
 // either backend.
@@ -59,18 +57,9 @@ pub fn seed_cells(width: u32, height: u32, initial_infected_pct: f32, mut rng: u
     let threshold = (initial_infected_pct * u32::MAX as f32) as u32;
     let mut cells = vec![0u32; (width as usize) * (height as usize)];
     for cell in &mut cells {
-        rng = xorshift64(rng);
-        *cell = u32::from(((rng >> 32) as u32) < threshold);
+        *cell = u32::from(below(next_bits(&mut rng), threshold));
     }
     cells
-}
-
-/// Returns the initial `pcg_hash` state of every cell, hashed from `seed` and the cell's index.
-fn seed_rng_states(width: u32, height: u32, seed: u64) -> Vec<u32> {
-    let seed32 = (seed ^ (seed >> 32)) as u32;
-    (0..(width as usize) * (height as usize))
-        .map(|idx| pcg_hash(seed32 ^ idx as u32))
-        .collect()
 }
 
 /// The SIR epidemic as a [`GpuGridModel`], with a random number state per cell.
@@ -118,11 +107,10 @@ impl GpuGridModel for GpuSir {
 
     fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
         let initial_infected_pct = extract_f32(params, PARAM_INITIAL_INFECTED_PCT, DEFAULT_INITIAL_INFECTED_PCT);
-        let cells = grid_init_rng(seed);
-        let rng = seed.map_or(RNG_INIT_SEED, |s| mix_seed(s ^ RNG_INIT_SEED));
+        let cell_count = (width as usize) * (height as usize);
         vec![
-            seed_cells(width, height, initial_infected_pct, cells),
-            seed_rng_states(width, height, rng),
+            seed_cells(width, height, initial_infected_pct, grid_init_rng(seed)),
+            pcg_states(cell_count, rng_buffer_seed(seed, GRID_INIT_SEED)),
         ]
     }
 
@@ -163,6 +151,7 @@ mod tests {
     use henad_compute::gpu::GpuContext;
     use henad_compute::gpu::grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::GpuSimState as _;
+    use henad_compute::gpu::stepping::submit_steps;
     use henad_core::authoring::model::grid_model::GridModel as _;
     use henad_core::grid::Grid2D;
     use henad_core::model::SimState as _;
@@ -213,14 +202,6 @@ mod tests {
         state.poll_stats_readback(&ctx.device, true);
     }
 
-    fn step_once(ctx: &GpuContext, state: &mut State) {
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        state.encode_steps(&mut encoder, 1, None);
-        ctx.queue.submit(Some(encoder.finish()));
-    }
-
     /// The total of S, I and R holds exactly at every tick, whatever the per-cell RNG streams do.
     #[test]
     fn population_conserved_over_many_ticks() {
@@ -237,7 +218,7 @@ mod tests {
             refresh_stats(&ctx, &mut state);
             let (s, i, r) = sir_counts(&state);
             assert_eq!(s + i + r, total, "S+I+R must equal total population at tick {tick}");
-            step_once(&ctx, &mut state);
+            submit_steps(&mut state, &ctx, 1);
         }
     }
 
@@ -256,7 +237,7 @@ mod tests {
         let (initial_s, _, _) = sir_counts(&state);
 
         for tick in 0..20 {
-            step_once(&ctx, &mut state);
+            submit_steps(&mut state, &ctx, 1);
             refresh_stats(&ctx, &mut state);
             let (s, _, _) = sir_counts(&state);
             assert_eq!(
@@ -281,7 +262,7 @@ mod tests {
         let (_, mut prev_i, _) = sir_counts(&state);
 
         for tick in 0..20 {
-            step_once(&ctx, &mut state);
+            submit_steps(&mut state, &ctx, 1);
             refresh_stats(&ctx, &mut state);
             let (_, i, r) = sir_counts(&state);
             assert!(
@@ -349,18 +330,6 @@ mod tests {
             "initial recovered count must be 0 on both backends"
         );
     }
-
-    #[test]
-    fn population_is_total_cells() {
-        let Some(ctx) = headless_context() else {
-            log::warn!("skipping population_is_total_cells: no adapter");
-            return;
-        };
-
-        let (width, height) = (32u32, 16u32);
-        let state = State::new(&ctx, &params(width, height, 0.3, 0.05, 0.1));
-        assert_eq!(state.population(), u64::from(width) * u64::from(height));
-    }
 }
 
 /// Tests that drive the real [`henad_compute::gpu::GpuSimThread`], similar to
@@ -376,7 +345,6 @@ mod runner_tests {
 
     use super::GpuSir;
     use super::tests::{headless_context, params};
-    use henad_compute::entry::ModelState;
     use henad_core::view::StatValue;
 
     fn wait_for(thread: &mut GpuSimThread, timeout: Duration, pred: impl Fn(&Snapshot) -> bool) -> Option<Snapshot> {
@@ -428,32 +396,5 @@ mod runner_tests {
 
         thread.pause();
         drop(thread);
-    }
-
-    #[test]
-    fn registry_with_gpu_context_offers_a_drivable_gpu_sir_model() {
-        let Some(ctx) = headless_context() else {
-            log::warn!("skipping registry_with_gpu_context_offers_a_drivable_gpu_sir_model: no adapter");
-            return;
-        };
-
-        let models = crate::example_models();
-        let entry = models
-            .lookup("gpu_sir", Some(&ctx))
-            .expect("a GPU context must make the GPU SIR model selectable");
-
-        let built = entry
-            .build(&params(32, 32, 0.3, 0.05, 0.1), None, Some(&ctx))
-            .unwrap_or_else(|fault| panic!("the GPU SIR entry's factory failed to build: {fault}"));
-        let ModelState::Gpu(mut state) = built else {
-            panic!("the GPU SIR entry's factory must yield ModelState::Gpu, not ModelState::Cpu");
-        };
-
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        state.encode_steps(&mut encoder, 4, None);
-        ctx.queue.submit(Some(encoder.finish()));
-        assert_eq!(state.tick(), 4, "the registry-built state must be steppable");
     }
 }

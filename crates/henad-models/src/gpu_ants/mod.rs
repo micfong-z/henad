@@ -15,17 +15,18 @@ use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{
     BufferSpec, DisplaySpec, Domain, Geometry, GpuAgentAction, GpuAgentModel, PassCtx, PassId, PassSpec, ReduceSpec,
 };
-use henad_core::authoring::primitives::rng::{mix_seed, pcg_hash};
 use henad_core::helpers::{extract_f32, extract_u32};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
-use crate::ants::field::{CELL_PALETTE, EMPTY, LOW_PHEROMONE, PheromoneField, nest_cell};
+use crate::ants::field::{CELL_PALETTE, EMPTY, LOW_PHEROMONE, PheromoneField, nest_position};
 use crate::ants::{ANT_PALETTE, AntLanes, AntsModel};
+use crate::port::{interleave, pack_palette, packed_color, pcg_states, rng_buffer_seed};
 use crate::shader_bindings::gpu_ants::display::Params as DisplayParams;
 use crate::shader_bindings::gpu_ants::merge::Params as MergeParams;
 use crate::shader_bindings::gpu_ants::reduce::Params as ReduceParams;
 use crate::shader_bindings::gpu_ants::reset_colony::Params as ActionParams;
+use crate::shader_bindings::gpu_ants::state::{HAS_FOOD_BIT, HAS_REWARD_BIT};
 use crate::shader_bindings::gpu_ants::step::Params as StepParams;
 
 // The param list is [`agent_model_param_descriptors`] for [`AntsModel`] verbatim, so both backends
@@ -42,13 +43,6 @@ henad_core::buffers! {
     const ACCUM = "accum";
     const SITES = "sites";
 }
-
-/// Domain separator of the `rng` buffer's seed, so the buffer and the ant seeding stream do not start correlated.
-const RNG_INIT_SEED: u64 = AGENT_INIT_SEED ^ 0x5EED_5EED_5EED_5EED;
-
-// Bits of `state`, which packs what the CPU model keeps in three lanes. `step.wgsl` mirrors them.
-const HAS_FOOD_BIT: u32 = 0b01_00000000; // 0x100
-const HAS_REWARD_BIT: u32 = 0b10_00000000; // 0x200
 
 /// Ant foraging as a [`GpuAgentModel`], seeded through [`AntsModel::init`].
 #[derive(Debug)]
@@ -146,16 +140,9 @@ impl GpuAgentModel for GpuAnts {
             &mut rng_state,
         );
 
-        let positions: Vec<f32> = lanes
-            .pos_x
-            .iter()
-            .zip(&lanes.pos_y)
-            .flat_map(|(&x, &y)| [x, y])
-            .collect();
         let packed: Vec<u32> = (0..n).map(|i| pack_state(&lanes, i)).collect();
         // The CPU lane holds palette indices. The GPU draws this buffer directly, and it holds colours.
-        let colors: Vec<u32> = lanes.has_food.iter().map(|&f| packed_ant_color(f)).collect();
-        let rng_seed = seed.map_or(RNG_INIT_SEED, |s| mix_seed(s ^ RNG_INIT_SEED));
+        let colors: Vec<u32> = lanes.has_food.iter().map(|&f| packed_color(&ANT_PALETTE, f)).collect();
 
         // The sites come from the field spec, so the two backends cannot place the nest differently.
         let mut site_bytes = vec![EMPTY; n_cells];
@@ -163,10 +150,10 @@ impl GpuAgentModel for GpuAnts {
         let site_words: Vec<u32> = site_bytes.iter().map(|&s| u32::from(s)).collect();
 
         vec![
-            bytemuck::cast_slice(&positions).to_vec(),
+            bytemuck::cast_slice(&interleave(&lanes.pos_x, &lanes.pos_y)).to_vec(),
             bytemuck::cast_slice(&packed).to_vec(),
             bytemuck::cast_slice(&colors).to_vec(),
-            bytemuck::cast_slice(&seed_rng_states(n, rng_seed)).to_vec(),
+            bytemuck::cast_slice(&pcg_states(n, rng_buffer_seed(seed, AGENT_INIT_SEED))).to_vec(),
             // The field starts empty, and `accum` is read before it is first written.
             Vec::new(),
             Vec::new(),
@@ -190,7 +177,7 @@ impl GpuAgentModel for GpuAnts {
                     reward: hot.reward,
                     momentum: hot.momentum,
                     random_action: hot.random_action,
-                    palette: packed_ant_palette(),
+                    palette: ANT_PALETTE.map(u32::from_le_bytes),
                 })
                 .to_vec()
             }
@@ -208,7 +195,7 @@ impl GpuAgentModel for GpuAnts {
                 _pad: 0,
                 tex: geom.display.into(),
                 _pad2: [0; 2],
-                palette: packed_cell_palette(),
+                palette: pack_palette(&CELL_PALETTE),
             })
             .to_vec(),
             PassId::Action(_) => bytemuck::bytes_of(&ActionParams {
@@ -217,7 +204,7 @@ impl GpuAgentModel for GpuAnts {
                 num_agents: geom.num_agents,
                 n_cells: geom.n_cells,
                 nest: nest_position(geom.width, geom.height).into(),
-                color: packed_ant_palette()[0],
+                color: u32::from_le_bytes(ANT_PALETTE[0]),
                 _pad: 0,
             })
             .to_vec(),
@@ -250,36 +237,6 @@ fn pack_state(lanes: &AntLanes, i: usize) -> u32 {
     }
     if lanes.reward[i] != 0.0 {
         packed |= HAS_REWARD_BIT;
-    }
-    packed
-}
-
-fn seed_rng_states(n: usize, seed: u64) -> Vec<u32> {
-    let seed32 = (seed ^ (seed >> 32)) as u32;
-    (0..n).map(|i| pcg_hash(seed32 ^ i as u32)).collect()
-}
-
-/// Returns the position that `AntsModel::init` assigns to every ant, in world coordinates.
-fn nest_position(width: u32, height: u32) -> (f32, f32) {
-    let nest = nest_cell(width, height) as u32;
-    ((nest % width) as f32, (nest / width) as f32)
-}
-
-/// Packs [`ANT_PALETTE`] for the step uniform, keeping both backends on one palette.
-fn packed_ant_palette() -> [u32; 2] {
-    [u32::from_le_bytes(ANT_PALETTE[0]), u32::from_le_bytes(ANT_PALETTE[1])]
-}
-
-fn packed_ant_color(index: u8) -> u32 {
-    let rgba = ANT_PALETTE.get(index as usize).copied().unwrap_or(ANT_PALETTE[0]);
-    u32::from_le_bytes(rgba)
-}
-
-/// Packs [`CELL_PALETTE`] for the display uniform, indexed as `palette[i >> 2][i & 3]`.
-fn packed_cell_palette() -> [[u32; 4]; 4] {
-    let mut packed = [[0u32; 4]; 4];
-    for (i, rgba) in CELL_PALETTE.iter().enumerate() {
-        packed[i / 4][i % 4] = u32::from_le_bytes(*rgba);
     }
     packed
 }

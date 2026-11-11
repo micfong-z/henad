@@ -12,7 +12,7 @@ use henad_compute::cpu::grid_engine::grid_init_rng;
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
-use henad_core::authoring::primitives::rng::xorshift64;
+use henad_core::authoring::primitives::rng::{below, next_bits};
 use henad_core::helpers::{extract_f32, extract_u32, f32_param, u32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
@@ -48,8 +48,7 @@ pub fn seed_random(width: u32, height: u32, density: f32, mut rng: u64) -> Vec<u
     let mut words = vec![0u32; stride * (height as usize)];
     for y in 0..height as usize {
         for x in 0..width as usize {
-            rng = xorshift64(rng);
-            if ((rng >> 32) as u32) < threshold {
+            if below(next_bits(&mut rng), threshold) {
                 words[y * stride + (x / 32)] |= 1u32 << (x % 32);
             }
         }
@@ -144,6 +143,7 @@ mod tests {
     use henad_compute::gpu::GpuContext;
     use henad_compute::gpu::grid_engine::GpuGridState;
     use henad_compute::gpu::sim_thread::GpuSimState as _;
+    use henad_compute::gpu::stepping::submit_steps;
     use henad_compute::gpu::timing::TimestampQuery;
     use henad_core::authoring::model::grid_model::GridModel as _;
     use henad_core::grid::Grid2D;
@@ -277,11 +277,7 @@ mod tests {
             );
             assert_eq!(gpu.tick(), cpu.tick(), "tick counters must stay in step");
 
-            let mut encoder = ctx
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-            gpu.encode_steps(&mut encoder, 1, None);
-            ctx.queue.submit(Some(encoder.finish()));
+            submit_steps(&mut gpu, &ctx, 1);
             cpu.step();
         }
 
@@ -395,31 +391,9 @@ mod tests {
             }
         }
     }
-
-    /// Checks that `population()` reports the total cell count, as `GridModelState` does.
-    ///
-    /// The alive count is a stat, and the two counts are easy to conflate.
-    #[test]
-    fn population_is_total_cells_not_alive_count() {
-        let Some(ctx) = headless_context() else {
-            log::warn!("skipping population_is_total_cells_not_alive_count: no adapter");
-            return;
-        };
-
-        let (width, height) = (32u32, 16u32);
-        let state = State::new(&ctx, &params(width, height, 0.3));
-        assert_eq!(state.population(), u64::from(width) * u64::from(height));
-
-        let cpu = GridModelState::<GameOfLifeModel>::from_params(&params(width, height, 0.3));
-        assert_eq!(
-            state.population(),
-            cpu.population(),
-            "GPU and CPU Game of Life must agree on what 'population' means"
-        );
-    }
 }
 
-/// Tests that drive a [`henad_compute::gpu::GpuSimThread`] or a registry entry as the app does.
+/// Tests that drive a [`henad_compute::gpu::GpuSimThread`] as the app does.
 ///
 /// The texture sampling in egui's paint callback needs a surface, and no test here covers it.
 #[cfg(test)]
@@ -433,7 +407,6 @@ mod runner_tests {
 
     use super::GpuGameOfLife;
     use super::tests::{headless_context, params};
-    use henad_compute::entry::ModelState;
     use henad_core::view::StatValue;
 
     /// Polls until the thread publishes a snapshot satisfying `pred`, or the deadline passes.
@@ -528,34 +501,5 @@ mod runner_tests {
             // The thread is dropped mid-run, as a model switch drops it.
             drop(thread);
         }
-    }
-
-    /// Checks that a lookup in the example set with a context returns the GPU entry, and that its factory builds a
-    /// `ModelState::Gpu` that steps. `HenadApp` routes that variant to the GPU thread.
-    #[test]
-    fn registry_with_gpu_context_offers_a_drivable_gpu_model() {
-        let Some(ctx) = headless_context() else {
-            log::warn!("skipping registry_with_gpu_context_offers_a_drivable_gpu_model: no adapter");
-            return;
-        };
-
-        let models = crate::example_models();
-        let entry = models
-            .lookup("gpu_game_of_life", Some(&ctx))
-            .expect("a GPU context must make the GPU model selectable");
-
-        let built = entry
-            .build(&params(32, 32, 0.3), None, Some(&ctx))
-            .unwrap_or_else(|fault| panic!("the GPU entry's factory failed to build: {fault}"));
-        let ModelState::Gpu(mut state) = built else {
-            panic!("the GPU entry's factory must yield ModelState::Gpu, not ModelState::Cpu");
-        };
-
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        state.encode_steps(&mut encoder, 4, None);
-        ctx.queue.submit(Some(encoder.finish()));
-        assert_eq!(state.tick(), 4, "the registry-built state must be steppable");
     }
 }

@@ -16,8 +16,12 @@ that finds the nodes due to retire without a scan) and `live.rs` (`LiveSet`, a d
 live nodes for uniform draws). A GPU model is one `mod.rs` of
 declarations next to its `.wgsl` files. Each GPU port starts from its CPU counterpart's tick 0
 bit for bit, which keeps the two backends fair to compare, and seeds only in `seed_buffers`. The
-agent ports call the CPU `init`. The grid ports repeat its draws (`gpu_game_of_life` bit-packed),
-and a device-free test per port compares the seeded buffer with the CPU grid.
+agent ports call the CPU `init`. The grid ports repeat its draws, `below(next_bits(..))` against
+the same threshold (`gpu_game_of_life` bit-packed), and a device-free test per port compares the
+seeded buffer with the CPU grid. The crate-private
+`port.rs` holds what two ports share: `rng_buffer_seed` and `pcg_states` seed an `rng` buffer
+(`gpu_sir`, `gpu_ants`), and `interleave`, `pack_palette` and `packed_color` lay out positions and
+palettes (`gpu_boids`, `gpu_ants`). A change there moves every port that calls it.
 `example_models()` (`lib.rs`) registers all ten into one `ModelSet` with henad-models' own
 `build_info!()`. The registry tests sit in `src/tests/registry.rs`. They run the testing kit
 over `example_models()` on a baseline device, check each model's skipped checks, and keep the

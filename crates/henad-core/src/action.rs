@@ -160,6 +160,35 @@ impl std::error::Error for ScheduleError {
     }
 }
 
+/// Splits one `ID@TICK` entry into its action id and its tick.
+///
+/// The entry splits at its last `@`, so an id can contain `@`. The id is not checked against any model.
+///
+/// # Errors
+///
+/// Returns [`ScheduleError::BadEntry`] for an entry with no `@`, and [`ScheduleError::BadTick`] for a tick that is
+/// not a `u64`.
+///
+/// # Examples
+///
+/// ```
+/// use henad_core::action::parse_entry;
+///
+/// assert_eq!(parse_entry("spawn@centre@100"), Ok(("spawn@centre", 100)));
+/// assert!(parse_entry("clear").is_err());
+/// assert!(parse_entry("clear@soon").is_err());
+/// ```
+pub fn parse_entry(raw: &str) -> Result<(&str, u64), ScheduleError> {
+    let (id, tick) = raw
+        .rsplit_once('@')
+        .ok_or_else(|| ScheduleError::BadEntry { raw: raw.to_owned() })?;
+    let tick = tick.parse::<u64>().map_err(|source| ScheduleError::BadTick {
+        raw: raw.to_owned(),
+        source,
+    })?;
+    Ok((id, tick))
+}
+
 /// Actions to run at set ticks, in the order given.
 ///
 /// A loop with no actions holds an empty schedule, and [`Self::run_due`] then returns after a single test.
@@ -180,13 +209,7 @@ impl Schedule {
     pub fn parse(raw: &[String], model_id: &str, actions: &[ActionDescriptor]) -> Result<Self, ScheduleError> {
         let mut entries = Vec::with_capacity(raw.len());
         for spec in raw {
-            let (id, tick) = spec
-                .rsplit_once('@')
-                .ok_or_else(|| ScheduleError::BadEntry { raw: spec.clone() })?;
-            let tick = tick.parse::<u64>().map_err(|source| ScheduleError::BadTick {
-                raw: spec.clone(),
-                source,
-            })?;
+            let (id, tick) = parse_entry(spec)?;
             let Some(index) = actions.iter().position(|action| action.id() == id) else {
                 let known: Vec<String> = actions.iter().map(|action| action.id().to_owned()).collect();
                 if known.is_empty() {

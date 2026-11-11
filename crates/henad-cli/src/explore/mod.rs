@@ -1,0 +1,265 @@
+//! Sweeps and searches from the command line, selected by `--out`, `--spec` or `--dry-run`, and shard merges selected
+//! by `--merge`.
+//!
+//! Flags build a sweep of one block: a factorial over every `--vary`, a zip with `--zip`, a sample with `--sample`,
+//! or a table with `--design`. A spec file describes the whole sweep instead, and conflicts with every flag that
+//! changes a result. A spec file with a `[search]` table runs a search. Flags cannot describe a search.
+
+use std::sync::Arc;
+
+use anyhow::{Context as _, Result, bail};
+
+use henad_compute::entry::ModelEntry;
+use henad_compute::gpu::GpuContext;
+use henad_core::explore::spec::SweepSpec;
+use henad_explore::handle::SweepOutput;
+use henad_explore::merge::merge;
+use henad_explore::model_file::ModelFile;
+use henad_explore::output::manifest::ResultCounts;
+use henad_explore::search_run::SearchPlan;
+use henad_explore::spec_file::LoadedSpec;
+use henad_explore::sweep::{ExploreError, Provenance, SweepEnd, SweepOptions, plan_spec, run_spec};
+
+use crate::json_report;
+use crate::{Args, SOME_RUNS_NOT_OK};
+
+mod args;
+pub(crate) mod report;
+
+pub use args::ExploreArgs;
+use args::{flags_source, spec_from_flags};
+use report::{Reporter, WarningPrinter, merge_text};
+
+/// Runs a sweep of `entry` from the flags or `spec`, and returns the exit status.
+///
+/// `file` is the model file that `entry` came from, if any. A sheet's configs past a work budget are then refused in
+/// the sheet's lines, as a single run of the sheet is.
+///
+/// The status is success when every run is `ok`, and [`SOME_RUNS_NOT_OK`] when the sweep ran to its end with some
+/// run in another status.
+///
+/// # Errors
+///
+/// Returns an error when the flags or the spec cannot make a sweep, the sweep cannot be planned, or its results
+/// cannot be written.
+pub fn run(
+    args: &Args,
+    entry: &ModelEntry,
+    file: Option<&ModelFile>,
+    gpu: Option<&GpuContext>,
+    spec: Option<LoadedSpec>,
+    provenance: Provenance,
+) -> Result<u8> {
+    let (sweep, options) = sweep_and_options(args, entry, spec, provenance)?;
+    if cfg!(debug_assertions) && !args.explore.dry_run {
+        eprintln!("!!! warning: debug build. Runs will step slowly and timings will be unreliable. Use --release !!!");
+    }
+    let mut reporter = Reporter::new(entry.name(), args, options.spec_source.path.is_some());
+    let in_sheet_words = |error| in_sheet_words(error, file, entry, &sweep, gpu);
+    let report = match &args.explore.out {
+        _ if args.explore.dry_run => {
+            plan_spec(entry, gpu, &sweep, args.explore.out.as_deref(), &options, &mut reporter)
+                .map_err(in_sheet_words)?
+        }
+        Some(output_dir) => {
+            let output = SweepOutput::Directory(output_dir.clone());
+            run_spec(entry, gpu, &sweep, output, &options, &mut reporter)
+                .map_err(in_sheet_words)?
+                .report
+        }
+        None => bail!("a sweep needs an output directory unless it is a dry run"),
+    };
+    exit_status(report.end, &report.counts)
+}
+
+/// Returns `error` with the reasons of each config that the capacity check refused in the words of the sheet in
+/// `file`, as a single run of the sheet words them: work past a budget names the sheet's lines and no pass.
+///
+/// Any other error, an entry from no sheet, and a check on a device other than `gpu` are returned as they are.
+fn in_sheet_words(
+    error: ExploreError,
+    file: Option<&ModelFile>,
+    entry: &ModelEntry,
+    sweep: &SweepSpec,
+    gpu: Option<&GpuContext>,
+) -> ExploreError {
+    let (Some(sheet), Some(gpu)) = (file.and_then(ModelFile::sheet), gpu) else {
+        return error;
+    };
+    let ExploreError::Capacity(mut capacity) = error else {
+        return error;
+    };
+    // The check reads the configs of the plan that the sweep ran, or of a search's fixed values.
+    let schema = entry.schema();
+    let plan = if sweep.search.is_some() {
+        SearchPlan::new(sweep, &schema)
+            .ok()
+            .map(|search| Arc::clone(search.base()))
+    } else {
+        sweep.plan(&schema).ok().map(Arc::new)
+    };
+    if let Some(plan) = plan {
+        let limits = gpu.device.limits();
+        for refused in &mut capacity.refused {
+            if let Some(config) = plan.config(refused.config_id) {
+                refused.reasons = sheet.shortfalls(entry, &config.params, &limits);
+            }
+        }
+    }
+    ExploreError::Capacity(capacity)
+}
+
+/// Returns the sweep the flags or `spec` describe, and its options.
+///
+/// A spec's `[execution]` table is applied first, and then each of `--concurrent`, `--memory` and `--gpu-memory` given
+/// on the command line replaces its setting.
+///
+/// # Errors
+///
+/// Returns an error when the flags cannot make a sweep.
+fn sweep_and_options(
+    args: &Args,
+    entry: &ModelEntry,
+    spec: Option<LoadedSpec>,
+    provenance: Provenance,
+) -> Result<(SweepSpec, SweepOptions)> {
+    let mut options = SweepOptions::new(provenance);
+    let sweep = if let Some(loaded) = spec {
+        options.apply_execution(&loaded.execution);
+        options.spec_source = loaded.spec_source;
+        loaded.spec
+    } else {
+        let sweep = spec_from_flags(args, entry.id())?;
+        options.spec_source = flags_source(args, &sweep);
+        sweep
+    };
+    if let Some(concurrency) = args.explore.concurrent {
+        options.concurrency = concurrency;
+    }
+    if let Some(memory) = args.explore.memory {
+        options.memory_budget = Some(memory);
+    }
+    if let Some(gpu_memory) = args.explore.gpu_memory {
+        options.gpu_memory_budget = Some(gpu_memory);
+    }
+    options.shard = args.explore.shard.unwrap_or_default();
+    options.resume = args.explore.resume;
+    options.retry_failed = args.explore.retry_failed;
+    Ok((sweep, options))
+}
+
+/// Merges the shard directories that `--merge` lists into the `--out` directory, and returns the exit status.
+///
+/// The status is success when the merged directory holds every run of the plan and every run is `ok`, and
+/// [`SOME_RUNS_NOT_OK`] otherwise.
+///
+/// # Errors
+///
+/// Returns an error when the directories cannot be merged.
+pub fn merge_shards(args: &Args) -> Result<u8> {
+    let output_dir = args.explore.out.as_deref().context("--merge requires --out")?;
+    let report = merge(&args.explore.merge, output_dir, &mut WarningPrinter { json: args.json })?;
+    if args.json {
+        json_report::emit(&json_report::explore_merge(&report, args.explore.merge.len()));
+    } else {
+        eprintln!("{}", merge_text(&report, args.explore.merge.len()));
+    }
+    let counts = &report.counts;
+    if report.missing == 0 && counts.ok == counts.rows {
+        Ok(0)
+    } else {
+        Ok(SOME_RUNS_NOT_OK)
+    }
+}
+
+/// Returns the exit status of a sweep or search that ended as `end` with `counts` rows written.
+///
+/// # Errors
+///
+/// Returns an error for a sweep that was aborted or lost its GPU device.
+fn exit_status(end: SweepEnd, counts: &ResultCounts) -> Result<u8> {
+    match end {
+        SweepEnd::Planned => Ok(0),
+        SweepEnd::Complete if counts.ok == counts.rows => Ok(0),
+        SweepEnd::Complete => Ok(SOME_RUNS_NOT_OK),
+        SweepEnd::Aborted => bail!("the sweep was aborted after {} runs", counts.rows),
+        SweepEnd::DeviceLost => bail!(
+            "the GPU device was lost after {} runs. Use --resume to run the rest",
+            counts.rows
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser as _;
+    use henad_explore::exec::Concurrency;
+    use henad_explore::output::manifest::ResultCounts;
+    use henad_explore::sweep::SweepEnd;
+    use henad_models::example_models;
+
+    use super::{LoadedSpec, SOME_RUNS_NOT_OK, exit_status, sweep_and_options};
+    use crate::{Args, test_provenance};
+
+    #[test]
+    fn a_sweep_exits_with_success_only_when_every_run_is_ok() {
+        let counts = |ok, non_finite, failed| ResultCounts {
+            rows: ok + non_finite + failed,
+            ok,
+            non_finite,
+            failed,
+        };
+        let status = |end, counts: ResultCounts| exit_status(end, &counts).ok();
+        assert_eq!(status(SweepEnd::Complete, counts(4, 0, 0)), Some(0));
+        assert_eq!(status(SweepEnd::Planned, counts(0, 0, 0)), Some(0));
+        let some_not_ok = Some(SOME_RUNS_NOT_OK);
+        assert_eq!(status(SweepEnd::Complete, counts(3, 0, 1)), some_not_ok);
+        assert_eq!(status(SweepEnd::Complete, counts(3, 1, 0)), some_not_ok);
+        assert_eq!(status(SweepEnd::Aborted, counts(2, 0, 0)), None, "an abort is an error");
+        assert_eq!(
+            status(SweepEnd::DeviceLost, counts(2, 0, 0)),
+            None,
+            "a lost device is an error"
+        );
+    }
+
+    /// Checks that a flag given on the command line replaces the spec table's setting, `--concurrent auto` included,
+    /// and that a setting with no flag keeps the table's value.
+    #[test]
+    fn an_explicit_concurrent_auto_overrides_the_spec_table() {
+        let dir = std::env::temp_dir().join(format!("henad-cli-execution-table-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the scratch directory can be made");
+        let path = dir.join("spec.toml");
+        std::fs::write(
+            &path,
+            "model = \"sir\"\n[execution]\nconcurrent = 4\nmemory = 1000\ngpu_memory = 2000\n",
+        )
+        .expect("the spec can be written");
+        let spec_arg = path.to_str().expect("the temporary directory is UTF-8");
+        let entry = example_models().get("sir").cloned().expect("sir is registered");
+        let options = |extra: &[&str]| {
+            let mut line = vec!["henad-cli", "--spec", spec_arg, "--dry-run"];
+            line.extend(extra);
+            let args = Args::try_parse_from(line).expect("the line parses");
+            let loaded = LoadedSpec::read(&path).expect("the spec reads");
+            sweep_and_options(&args, &entry, Some(loaded), test_provenance())
+                .expect("a sweep")
+                .1
+        };
+
+        let from_table = options(&[]);
+        assert_eq!(from_table.concurrency.to_string(), "4");
+        assert_eq!(
+            (from_table.memory_budget, from_table.gpu_memory_budget),
+            (Some(1000), Some(2000))
+        );
+
+        let overridden = options(&["--concurrent", "auto", "--memory", "500"]);
+        assert_eq!(overridden.concurrency, Concurrency::Auto);
+        assert_eq!(
+            (overridden.memory_budget, overridden.gpu_memory_budget),
+            (Some(500), Some(2000))
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
