@@ -36,65 +36,61 @@
 //! a blank or a select by what it wants and where it is ("Line 2: choose the old state"). Hovering or focusing
 //! "otherwise" or a result chip highlights the line it names.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 
 use egui::accesskit::Role;
 use egui::{
     Align, Color32, CornerRadius, FontId, Frame, Id, Key, Label, Layout, Margin, Popup, Pos2, Rect, Response, RichText,
     Sense, Shape, Sides, Stroke, TextEdit, TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType, pos2, vec2,
 };
-use henad_core::diagnostic::DiagnosticSeverity;
-use henad_graph::sheet::check::{SheetDiagnostic, SheetReport, holds_draw};
+use henad_graph::sheet::check::{SheetReport, holds_draw};
 use henad_graph::sheet::document::{
-    Around, CardRuns, CellWhich, ChooseRow, CompareTest, LineKind, LineMode, LookSummary, MadeOf, PickRule,
-    PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine, SheetProperty, SheetValue, Slot, SummaryKind,
+    Around, CELLS_ID, CardRuns, CellWhich, ChooseRow, CompareTest, GROUND_ID, LineKind, LineMode, LookSummary, MadeOf,
+    PickRule, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine, SheetValue, Slot, SummaryKind,
 };
-use henad_graph::sheet::edit::{LineField, MoveDirection, SheetBuilder, SheetEdit, SheetEditError};
+use henad_graph::sheet::edit::{LineField, MoveDirection, SheetBuilder, SheetEdit, SheetEditError, slot_value};
 use henad_graph::sheet::rates::{chance_note, conversion, count_as_draw, grow_count, parameter_defaults, rate_note};
 use henad_graph::sheet::relations::{CardRelations, RelationNote, RelationNoteKind};
 use henad_graph::sheet::sentence::{
-    ADD_AT_END_NOTE, ALWAYS, ALWAYS_TOOLTIP, ANY_STATE_ID, AddButton, AddItem, BLANK_MODEL_CARD, BLANK_TEXT,
-    BUTTON_CARD_EMPTY, Blank, CONDITION_ARROW_TOOLTIP, ChipKind, DELETE_WHEN_TOOLTIP, DRAW_NEW_NUMBERS, DrawKind,
-    FOR_EACH_BLANK_WORDS, FOR_EACH_WORDS, FROM_WORD, FieldPlace, LAW, LineSelect, MOVE_DOWN_LAST, MOVE_UP_FIRST,
-    ONE_SIDED_RANGE, OtherwiseRepeat, PartPlace, PlaceTarget, PlacedPart, REMOVE_THIS_WHEN, SHARED_DRAW_GROUP,
-    SentenceChip, SentencePart, Sentences, UNIT_PLACEHOLDER, add_inside_label, add_inside_name, add_value_name,
-    always_name, card_header, condition_arrow_name, count_used_as_draw, delete_line, for_each_change_name,
-    for_each_optional_name, for_each_optional_tooltip, for_each_words, from_tooltip, line_actions_name, line_count,
-    line_list_name, line_name, line_prefix, line_word, move_into_label, move_into_name, move_line_down, move_line_up,
-    operation_words, otherwise_notice, otherwise_tooltip, otherwise_words, remove_when_name, rename_field_name,
-    rename_line, rename_result_name, result_below_tooltip, result_inside_tooltip, result_name_taken, sentence_text,
-    use_for_each_label, use_for_each_name, use_instead_label, use_instead_name, uses_result_below, uses_result_inside,
+    ADD_AT_END_NOTE, ALWAYS, ALWAYS_TOOLTIP, AddButton, AddItem, BLANK_MODEL_CARD, BUTTON_CARD_EMPTY, Blank,
+    CONDITION_ARROW_TOOLTIP, ChipKind, DELETE_WHEN_TOOLTIP, DRAW_NEW_NUMBERS, DrawKind, FOR_EACH_BLANK_WORDS,
+    FOR_EACH_WORDS, FROM_WORD, FieldPlace, LAW, LineSelect, MOVE_DOWN_LAST, MOVE_UP_FIRST, ONE_SIDED_RANGE, PartPlace,
+    PlaceTarget, PlacedPart, REMOVE_THIS_WHEN, SHARED_DRAW_GROUP, SentenceChip, SentencePart, Sentences,
+    add_inside_label, add_inside_name, add_value_name, card_header, condition_arrow_name, count_used_as_draw,
+    delete_line, for_each_optional_tooltip, for_each_words, from_tooltip, line_actions_name, line_count,
+    line_list_name, move_into_label, move_into_name, move_line_down, move_line_up, operation_words, otherwise_words,
+    remove_when_name, rename_field_name, rename_line, rename_result_name, result_name_taken, use_for_each_label,
+    use_for_each_name, use_instead_label, use_instead_name,
 };
 use henad_graph::sheet::sentence::{
     CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, RANDOM_VALUE_GROUP, add_choose_row_name, add_for_each_label,
-    add_for_each_name, add_summary_name, comparison_words, competing_parts, competing_tooltip, fire_count,
-    fire_count_description, include_me_tool, leave_me_out_tool, long_tick_note, rate_grow_prompt, tick_set_notice,
+    add_for_each_name, add_summary_name, comparison_words, fire_count, fire_count_description, include_me_tool,
+    leave_me_out_tool, long_tick_note, rate_grow_prompt, tick_set_notice,
 };
 
+#[cfg(test)]
+use super::card_lines::LineControl;
+pub use super::card_lines::{CardLine, LineNote, NoteColor, card_lines, draws_diagnostic};
+use super::card_lines::{NoteAction, button_of, select_words};
 use super::help::{Help, help_button};
 use super::picker::{
     CalcDraft, CardPicker, Choice, DraftUpdate, LineContext, SelectOption, apply_choice, around_options,
-    calculate_edit, choose_when, comparison_options, is_result_line, list_len, look_summary_options, looked_at_picker,
-    mode_options, operation_options, phrase_of, pick_options, picker_for, read_property, slot_at, summary_options,
-    summary_picker, typed_text, unit_options, value_at, which_options,
+    calculate_edit, choose_when, comparison_options, list_len, look_summary_options, looked_at_picker, mode_options,
+    operation_options, phrase_of, pick_options, picker_for, read_property, summary_options, summary_picker, typed_text,
+    unit_options, value_at, which_options,
 };
 use super::sheet_pane::SheetTrial;
 use super::widgets::{
-    ARROW_WIDTH, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, REGION_GAP, add_button, arrow_control,
-    blank_shapes, blank_ui, caption, chip_with_id, dashed_rect, hairline, menu_button, message_ui, new_parameter_modal,
-    note_button, notice_ui, overlay, overlay_group, overlay_item, overlay_title, refusal_text, region, select_control,
-    select_list, set_name, small_label, text_control,
+    ARROW_WIDTH, DialogOutcome, KIND_BAR_WIDTH, NewParameterDialog, NumberUse, OverlayItem, REGION_GAP, add_row_button,
+    arrow_control, blank_shapes, blank_ui, caption, chip_with_id, dashed_rect, hairline, kind_bar, menu_button,
+    message_ui, new_parameter_modal, note_button, notice_ui, overlay, overlay_group, overlay_item, overlay_title,
+    parameter_names, refusal_text, region, select_control, select_list, set_name, small_label, text_control,
 };
-use super::{LineFires, SheetEditor, accessible_group};
+use super::{LineFires, SheetEditor, accessible_group, find_property, over_agents, properties_of};
 use crate::init::semibold_font;
 use crate::ui::mcs;
 
 // The layout of a card
-
-/// Width in points of the bar at the left edge of a row, in the hue of the line's kind.
-const KIND_BAR_WIDTH: f32 = 3.0;
 
 /// Width in points of the gutter of line numbers, between the kind bar and the body of a row.
 const GUTTER_WIDTH: f32 = 30.0;
@@ -149,21 +145,6 @@ const FOCUS_MARK_LENGTH: f32 = 14.0;
 /// Size in points of a note under a line.
 const NOTE_SIZE: f32 = 11.5;
 
-/// Returns the hue of the bar of a line of the group `button`, the hue's 500 step. The square on that add button
-/// shows it too.
-///
-/// This is the one place a hue names a kind of line in place of a state.
-pub(super) fn kind_hue(button: AddButton) -> Color32 {
-    match button {
-        AddButton::LookAround => mcs::BLUE_500,
-        AddButton::Chance => mcs::PURPLE_500,
-        AddButton::YesOrNo => mcs::YELLOW_500,
-        AddButton::Calculate => mcs::GRAY_500,
-        AddButton::Change => mcs::GREEN_500,
-        _ => mcs::GRAY_100,
-    }
-}
-
 // State between frames
 
 /// State of the Card pane between frames: the id its controls are keyed under, the rename field, the values of empty
@@ -211,6 +192,14 @@ impl CardState {
             otherwise_notice: None,
             tick_notice: None,
         }
+    }
+
+    /// Keeps the draft that `update` leaves for its Calculate line, or drops the line's draft when it leaves none.
+    fn keep_draft(&mut self, (line, draft): DraftUpdate) {
+        match draft {
+            Some(draft) => self.drafts.insert(line, draft),
+            None => self.drafts.remove(&line),
+        };
     }
 
     /// Closes the rename field and the New parameter dialog, drops every draft and message, and ends every range being
@@ -294,11 +283,9 @@ enum After {
     },
 }
 
-/// Draft of a Calculate line that the commands of an edit work out while they run.
-type DraftCell = Rc<RefCell<Option<DraftUpdate>>>;
-
-/// The commands of one edit of the card, as a closure that returns the ids of what they made.
-type CardRun = Box<dyn FnOnce(&mut SheetBuilder) -> Result<Vec<String>, SheetEditError>>;
+/// The commands of one edit of the card, as a closure that returns the ids of what they made and the draft of a
+/// Calculate line they leave, `None` for commands that leave the drafts alone.
+type CardRun = Box<dyn FnOnce(&mut SheetBuilder) -> Result<(Vec<String>, Option<DraftUpdate>), SheetEditError>>;
 
 /// An edit collected while the card is drawn, run once the card is drawn.
 struct CardEdit {
@@ -308,27 +295,26 @@ struct CardEdit {
     after: After,
     /// Whether a refusal belongs under the rename field.
     rename: bool,
-    /// Draft of a Calculate line that the edit leaves, `None` for an edit that leaves the drafts alone.
-    draft: Option<DraftUpdate>,
-    /// Draft that the commands work out while they run, read once they ran.
-    late_draft: Option<DraftCell>,
 }
 
 impl CardEdit {
     /// Returns the edit that runs `edits` in order, then moves the focus as `after` says.
     fn commands(edits: Vec<SheetEdit>, after: After) -> Self {
+        Self::with_draft(edits, after, None)
+    }
+
+    /// Returns the edit that runs `edits` in order and leaves `draft`, then moves the focus as `after` says.
+    fn with_draft(edits: Vec<SheetEdit>, after: After, draft: Option<DraftUpdate>) -> Self {
         Self {
             run: Box::new(move |builder| {
                 let mut made = Vec::new();
                 for edit in edits {
                     made.extend(builder.apply(edit)?);
                 }
-                Ok(made)
+                Ok((made, draft))
             }),
             after,
             rename: false,
-            draft: None,
-            late_draft: None,
         }
     }
 }
@@ -383,17 +369,12 @@ pub fn card_pane(
 
 /// Runs `edit` on `sheet`, then moves the focus and keeps the drafts and marks it leaves.
 fn run_card_edit(sheet: &mut SheetEditor, past_start: bool, edit: CardEdit) {
-    let CardEdit {
-        run,
-        after,
-        rename,
-        draft,
-        late_draft,
-    } = edit;
+    let CardEdit { run, after, rename } = edit;
     let mut made = Vec::new();
+    let mut draft = None;
     let timed = sheet.document().time.is_some();
     let result = sheet.edit(past_start, false, |builder| {
-        made = run(builder)?;
+        (made, draft) = run(builder)?;
         Ok(())
     });
     let time = sheet.document().time;
@@ -420,12 +401,8 @@ fn run_card_edit(sheet: &mut SheetEditor, past_start: bool, edit: CardEdit) {
             return;
         }
     }
-    let late = late_draft.and_then(|cell| cell.borrow_mut().take());
-    for (line, draft) in draft.into_iter().chain(late) {
-        match draft {
-            Some(draft) => state.drafts.insert(line, draft),
-            None => state.drafts.remove(&line),
-        };
+    if let Some(update) = draft {
+        state.keep_draft(update);
     }
     let document = sheet.builder.document();
     let state = &mut sheet.card;
@@ -545,7 +522,7 @@ fn cards_ui(
     let mut hovered: Vec<String> = Vec::new();
     let every = match document.world.made_of {
         MadeOf::Agents => document.agents.first().map(|kind| kind.id.as_str()),
-        _ => Some("cells"),
+        _ => Some(CELLS_ID),
     };
     let has_tick_card = |every: &str| {
         document
@@ -662,7 +639,7 @@ fn card_ui(
     let card = drawing.card;
     let each_tick = card.runs == CardRuns::EachTick;
     let heading = drawing.sentences.card_heading(card);
-    let agents = !matches!(card.every.as_str(), "cells" | "ground");
+    let agents = !matches!(card.every.as_str(), CELLS_ID | GROUND_ID);
     let help = each_tick.then_some(if agents { Help::AgentLines } else { Help::Lines });
     let list_name = line_list_name(button_of(drawing.document, card));
     let relations = CardRelations::new(drawing.document, card);
@@ -700,7 +677,7 @@ fn card_ui(
         let note = card
             .line_tables
             .values()
-            .any(|line| is_block(line.kind))
+            .any(|line| line.kind.is_block())
             .then_some(ADD_AT_END_NOTE);
         footer_ui(ui, note, |ui| {
             add_buttons_ui(ui, drawing.document, state, Some(card), &card.every, pending);
@@ -793,11 +770,6 @@ fn footer_ui(ui: &mut Ui, note: Option<&str>, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// Returns whether a line of `kind` holds lines: a When or a Repeat.
-fn is_block(kind: LineKind) -> bool {
-    matches!(kind, LineKind::When | LineKind::Repeat)
-}
-
 /// Returns the competing groups of the card of `relations` as the brackets that join them: each the indices in
 /// `lines` of the group's lines, top to bottom.
 fn brackets(relations: &CardRelations<'_>, lines: &[CardLine]) -> Vec<Vec<usize>> {
@@ -877,7 +849,7 @@ fn closing_blocks(relations: &CardRelations<'_>, lines: &[CardLine]) -> BTreeMap
         let Some(kind) = relations
             .line(&line.id)
             .map(|data| data.kind)
-            .filter(|kind| is_block(*kind))
+            .filter(|kind| kind.is_block())
         else {
             continue;
         };
@@ -918,7 +890,7 @@ fn add_inside_ui(
     let label = add_inside_label(block.number);
     let title = add_inside_name(block.number);
     let groups = add_inside_groups(drawing.card);
-    let agents = drawing.card.every != "cells";
+    let agents = over_agents(&drawing.card.every);
     let id = state.widgets.with(("add inside", &block.id));
     let menu_id = id.with("menu");
     let ground = ui.painter().add(Shape::Noop);
@@ -934,7 +906,7 @@ fn add_inside_ui(
             .layout(Layout::left_to_right(Align::Center)),
     );
     let open = Popup::is_id_open(row.ctx(), menu_id);
-    let response = add_button(&mut row, &label, &label, None, open);
+    let response = add_row_button(&mut row, &label, &label, None, open);
     let chosen = Popup::menu(&response)
         .id(menu_id)
         .frame(Frame::NONE)
@@ -976,9 +948,7 @@ fn add_inside_ui(
         },
     );
     // The row closes the block. Its bar takes the hue of the block's line.
-    let bar = Rect::from_min_size(rect.min, vec2(KIND_BAR_WIDTH, rect.height()));
-    ui.painter()
-        .rect_filled(bar, CornerRadius::ZERO, kind_hue(AddButton::for_kind(block.kind)));
+    kind_bar(ui.painter(), rect, AddButton::for_kind(block.kind));
     if response.has_focus() {
         focus_mark(ui, rect);
     }
@@ -1048,7 +1018,7 @@ fn focus_mark(ui: &Ui, rect: Rect) {
 fn add_inside_groups(card: &SheetCard) -> &'static [AddButton] {
     if card.runs == CardRuns::Once {
         &[AddButton::Change]
-    } else if card.every != "cells" {
+    } else if over_agents(&card.every) {
         &AddButton::AGENTS_INSIDE_ORDER
     } else {
         &AddButton::ADD_INSIDE_ORDER
@@ -1109,24 +1079,6 @@ pub fn card_buttons(
     buttons
 }
 
-/// Returns the name of the button that runs `card` once, `None` for a card that runs every tick or that no button
-/// runs.
-fn button_of<'a>(document: &'a SheetDocument, card: &SheetCard) -> Option<&'a str> {
-    if card.runs == CardRuns::EachTick {
-        return None;
-    }
-    document
-        .buttons
-        .iter()
-        .find(|button| {
-            button
-                .does
-                .iter()
-                .any(|step| step.card.as_deref() == Some(card.id.as_str()))
-        })
-        .map(|button| button.name.as_str())
-}
-
 // The add buttons
 
 /// Draws the add buttons under `card`, or under the heading of the card that runs each tick over `every` while there is
@@ -1142,7 +1094,7 @@ fn add_buttons_ui(
     pending: &mut Option<CardEdit>,
 ) {
     let once = card.is_some_and(|card| card.runs == CardRuns::Once);
-    let agents = every != "cells";
+    let agents = over_agents(every);
     let buttons: &[AddButton] = match (once, agents) {
         (true, _) => &[AddButton::Change],
         (false, true) => &AddButton::AGENTS,
@@ -1156,7 +1108,7 @@ fn add_buttons_ui(
             let id = state.widgets.with(("add", card_id.as_deref(), button.label()));
             let menu_id = id.with("menu");
             let open = Popup::is_id_open(ui.ctx(), menu_id);
-            let response = add_button(ui, button.label(), button.label(), Some(kind_hue(*button)), open)
+            let response = add_row_button(ui, button.label(), button.label(), Some(*button), open)
                 .on_hover_text(button.tooltip_for(agents));
             let chosen = Popup::menu(&response)
                 .id(menu_id)
@@ -1217,16 +1169,7 @@ fn add_items_ui(ui: &mut Ui, button: AddButton, agents: bool, states: Option<(&s
 /// Returns the second and first states of the first States property with two or more states of the kind of thing
 /// `every`, as `(new, old)`, which the Become patterns of the add menus name.
 fn pattern_states(document: &SheetDocument, every: &str) -> Option<(String, String)> {
-    let properties: &[SheetProperty] = if every == "cells" {
-        document.cells.as_deref().unwrap_or_default()
-    } else {
-        document
-            .agents
-            .iter()
-            .find(|kind| kind.id == every)
-            .map_or(&[], |kind| kind.properties.as_slice())
-    };
-    let property = properties
+    let property = properties_of(document, every)
         .iter()
         .find(|property| property.property_type == PropertyType::States && property.states.len() >= 2)?;
     Some((property.states[1].name.clone(), property.states[0].name.clone()))
@@ -1344,414 +1287,19 @@ fn add_line_edit(card: Option<String>, inside: Option<String>, item: AddItem, ev
                     .next()
                     .unwrap_or_default(),
             };
-            builder.apply(SheetEdit::AddLine {
+            let made = builder.apply(SheetEdit::AddLine {
                 card,
                 inside,
                 line: Box::new(line),
-            })
+            })?;
+            Ok((made, None))
         }),
         after: After::NewLine,
         rename: false,
-        draft: None,
-        late_draft: None,
     }
 }
 
 // The lines
-
-/// Colour of a note under a line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NoteColor {
-    /// A note that asks the author to look again, in the theme's warn colour.
-    Amber,
-    /// A note of a line that cannot run because of what it uses, or of an error, in the theme's error colour.
-    Red,
-    /// A note that explains or confirms, in grey.
-    Grey,
-}
-
-/// A button of a note. A click runs one edit of the sheet.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NoteAction {
-    /// Words of the button.
-    pub label: String,
-    /// Accessible name of the button.
-    pub name: String,
-    /// The edit the button runs.
-    pub edit: SheetEdit,
-}
-
-/// A note under a line.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LineNote {
-    /// Words of the note.
-    pub text: String,
-    /// Colour of the note.
-    pub color: NoteColor,
-    /// Button of the note, `None` for a note with none.
-    pub action: Option<NoteAction>,
-    /// Tooltip and accessible description of the note, `None` for a note with none.
-    pub description: Option<String>,
-}
-
-/// A control inside a line: a chip, a blank, a select, "always", "otherwise" or the optional "for each ..." blank.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LineControl {
-    /// Words the control shows.
-    pub visible: String,
-    /// Accessible name of the control.
-    pub name: String,
-    /// Whether the control is a select, whose visible words are its value rather than its label.
-    pub select: bool,
-}
-
-/// One line of a card as the Card pane shows it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CardLine {
-    /// Id of the line.
-    pub id: String,
-    /// Number of the line on its card, from 1.
-    pub number: usize,
-    /// Number of blocks around the line.
-    pub depth: usize,
-    /// Prefix of the line's accessible names, such as "Line 2" or "Clear line 1".
-    pub prefix: String,
-    /// Line word of the line in a tool's name, such as "line 2" or "Clear line 1".
-    pub word: String,
-    /// Sentence of the line as plain text, with its "otherwise" words.
-    pub sentence: String,
-    /// Parts of the sentence, in order.
-    pub parts: Vec<SentencePart>,
-    /// Place of each part of [`Self::parts`], `None` for words and for a part that no edit sets.
-    pub places: Vec<Option<PartPlace>>,
-    /// Ids of the higher lines that override this line, empty for a line with no "otherwise".
-    pub otherwise: Vec<String>,
-    /// Tooltip and accessible description of the "otherwise" words, empty for a line with no "otherwise".
-    pub otherwise_tooltip: String,
-    /// Notice shown the first time in a session that the line starts with "otherwise", empty for a line with no
-    /// "otherwise".
-    pub otherwise_notice: String,
-    /// Ids of the other lines of the competing group the line starts with "or" in, empty for a line with no "or".
-    pub competing: Vec<String>,
-    /// Tooltip and accessible description of the word "or", empty for a line with no "or".
-    pub competing_tooltip: String,
-    /// Index in [`Self::parts`] of each result chip that the line cannot use, with the chip's tooltip.
-    pub red_chips: Vec<(usize, String)>,
-    /// Index in [`Self::parts`] of each state chip, with the colour of its state. A state that no property has is
-    /// grey.
-    pub swatches: Vec<(usize, Color32)>,
-    /// Notes of the sheet's check about the line, in report order, a skip note first.
-    pub notes: Vec<LineNote>,
-    /// Number of skip notes at the start of [`Self::notes`]. The check skips a line that has one.
-    pub skips: usize,
-}
-
-impl CardLine {
-    /// Returns the accessible name of the line, such as "Line 2: Become Alive from Dead, when Alive neighbours is 3".
-    pub fn label(&self) -> String {
-        line_name(&self.prefix, &self.sentence)
-    }
-
-    /// Returns the control that `part` of the line draws, with its visible words and its accessible name, `None` for
-    /// words.
-    pub fn control(&self, part: &SentencePart) -> Option<LineControl> {
-        let (visible, name, select) = match part {
-            SentencePart::Chip(chip) => (chip.text(), chip.text(), false),
-            SentencePart::Blank(blank) => (blank.word().to_owned(), blank.name(&self.prefix), false),
-            SentencePart::Select(select, words) => {
-                (select_words(*select, words).to_owned(), select.name(&self.prefix), true)
-            }
-            SentencePart::Always => (ALWAYS.to_owned(), always_name(&self.prefix), false),
-            SentencePart::Otherwise(lines) => (otherwise_words(lines), otherwise_words(lines), false),
-            SentencePart::Competing(_) => (COMPETING_WORD.to_owned(), COMPETING_WORD.to_owned(), false),
-            SentencePart::ForEachBlank(_) => (
-                FOR_EACH_BLANK_WORDS.to_owned(),
-                for_each_optional_name(&self.prefix),
-                false,
-            ),
-            SentencePart::ForEach(_) => (FOR_EACH_WORDS.to_owned(), for_each_change_name(&self.prefix), false),
-            _ => return None,
-        };
-        Some(LineControl { visible, name, select })
-    }
-
-    /// Returns every control of the line in order.
-    #[cfg(test)]
-    pub fn controls(&self) -> Vec<LineControl> {
-        self.parts.iter().filter_map(|part| self.control(part)).collect()
-    }
-}
-
-/// Returns the lines of card `card_index` of `document` in display order, each with its number, depth, sentence and
-/// parts, and the notes of `report` about it.
-pub fn card_lines(
-    document: &SheetDocument,
-    sentences: &Sentences<'_>,
-    report: &SheetReport,
-    card_index: usize,
-) -> Vec<CardLine> {
-    let Some(card) = document.cards.get(card_index) else {
-        return Vec::new();
-    };
-    let button = button_of(document, card);
-    let relations = CardRelations::new(document, card);
-    let groups = relations.competing_groups();
-    relations
-        .order()
-        .iter()
-        .enumerate()
-        .map(|(index, &line_id)| {
-            let mut depth = 0;
-            let mut block = relations.parent(line_id);
-            // Display order holds each block once, before its lines. The bound guards against a cycle all the same.
-            while let Some(parent) = block
-                && depth < relations.order().len()
-            {
-                depth += 1;
-                block = relations.parent(parent);
-            }
-            let number = relations.number(line_id).unwrap_or(index + 1);
-            let prefix = line_prefix(button, number);
-            let otherwise_numbers = relations.otherwise_numbers(line_id);
-            let mut placed = sentences.placed_parts(line_id, &otherwise_numbers);
-            // A lower line of a competing group starts with "or", unless a line outside the group overrides it.
-            let group = groups
-                .iter()
-                .find(|group| group.contains(&line_id))
-                .filter(|group| group.first() != Some(&line_id) && otherwise_numbers.is_empty());
-            let (competing, competing_tooltip) = match group {
-                Some(group) => {
-                    let numbers: Vec<usize> = group.iter().filter_map(|id| relations.number(id)).collect();
-                    let state = relations
-                        .line(line_id)
-                        .and_then(|line| state_of(document, line.property.as_deref(), line.start_state.as_deref()))
-                        .unwrap_or(BLANK_TEXT);
-                    let thing = sentences.thing_word(&card.every);
-                    let tooltip = competing_tooltip(&numbers, state, &thing);
-                    placed = competing_parts(placed, numbers);
-                    let others = group.iter().filter(|id| **id != line_id).map(|id| (*id).to_owned());
-                    (others.collect(), tooltip)
-                }
-                None => (Vec::new(), String::new()),
-            };
-            let (parts, places): (Vec<SentencePart>, Vec<Option<PartPlace>>) =
-                placed.into_iter().map(|placed| (placed.part, placed.place)).unzip();
-            let red_chips = red_chips(&relations, line_id, index, &parts);
-            let (notes, skips) = line_notes(report, card_index, line_id, &red_chips);
-            let swatches = swatches(document, &parts);
-            let (otherwise_tooltip, otherwise_notice) = if otherwise_numbers.is_empty() {
-                (String::new(), String::new())
-            } else {
-                otherwise_words_of(document, &relations, line_id, &prefix, &otherwise_numbers)
-            };
-            CardLine {
-                id: line_id.to_owned(),
-                number,
-                depth,
-                prefix,
-                word: line_word(button, number),
-                sentence: sentence_text(&parts),
-                otherwise: relations.otherwise_of(line_id).into_iter().map(str::to_owned).collect(),
-                otherwise_tooltip,
-                otherwise_notice,
-                competing,
-                competing_tooltip,
-                parts,
-                places,
-                red_chips: red_chips.into_iter().map(|red| (red.index, red.tooltip)).collect(),
-                swatches,
-                notes,
-                skips,
-            }
-        })
-        .collect()
-}
-
-/// Returns the index of each state chip of `parts` with the colour of its state in `document`.
-fn swatches(document: &SheetDocument, parts: &[SentencePart]) -> Vec<(usize, Color32)> {
-    parts
-        .iter()
-        .enumerate()
-        .filter_map(|(index, part)| {
-            let SentencePart::Chip(SentenceChip {
-                kind: ChipKind::State { property, state },
-                ..
-            }) = part
-            else {
-                return None;
-            };
-            let color = property
-                .as_deref()
-                .and_then(|property| property_of(document, property))
-                .and_then(|property| property.states.iter().find(|candidate| candidate.id == *state))
-                .map_or(mcs::GRAY_500, |state| {
-                    let [red, green, blue, alpha] = state.color;
-                    Color32::from_rgba_unmultiplied(red, green, blue, alpha)
-                });
-            Some((index, color))
-        })
-        .collect()
-}
-
-/// A result chip that its line cannot use.
-struct RedChip {
-    /// Index of the chip in the line's parts.
-    index: usize,
-    /// Tooltip of the chip.
-    tooltip: String,
-    /// Skip note the sheet's check writes for the chip.
-    note: String,
-}
-
-/// Returns the result chips of line `line_id`, at `position` in display order, that name a result below it or a
-/// result inside a When the line is not in.
-fn red_chips(relations: &CardRelations<'_>, line_id: &str, position: usize, parts: &[SentencePart]) -> Vec<RedChip> {
-    parts
-        .iter()
-        .enumerate()
-        .filter_map(|(index, part)| {
-            let SentencePart::Chip(SentenceChip {
-                kind: ChipKind::Result(result),
-                name,
-                ..
-            }) = part
-            else {
-                return None;
-            };
-            let result_name = relations
-                .line(result)
-                .and_then(|line| line.name.clone())
-                .unwrap_or_else(|| name.clone());
-            let result_position = relations.index(result)?;
-            if result_position >= position {
-                return Some(RedChip {
-                    index,
-                    tooltip: result_below_tooltip(&result_name),
-                    note: uses_result_below(&result_name),
-                });
-            }
-            let block = relations.parent(result)?;
-            if relations.is_within(line_id, block) {
-                return None;
-            }
-            let number = relations.number(block).unwrap_or(0);
-            Some(RedChip {
-                index,
-                tooltip: result_inside_tooltip(&result_name),
-                note: uses_result_inside(&result_name, number),
-            })
-        })
-        .collect()
-}
-
-/// Returns the notes of `report` about line `line_id` of card `card_index`, the skip notes first, with the number of
-/// skip notes.
-///
-/// A skip note about a chip in `red_chips` and an error are red, and any other note amber.
-fn line_notes(report: &SheetReport, card_index: usize, line_id: &str, red_chips: &[RedChip]) -> (Vec<LineNote>, usize) {
-    let about_line = report
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.card == Some(card_index) && diagnostic.line.as_deref() == Some(line_id));
-    let (skips, others): (Vec<_>, Vec<_>) = about_line.partition(|diagnostic| diagnostic.skips_line);
-    let skip_count = skips.len();
-    let notes = skips
-        .into_iter()
-        .chain(others)
-        .map(|diagnostic| {
-            let text = diagnostic.diagnostic.message.clone();
-            let red = diagnostic.diagnostic.severity == DiagnosticSeverity::Error
-                || red_chips.iter().any(|chip| chip.note == text);
-            LineNote {
-                text,
-                color: if red { NoteColor::Red } else { NoteColor::Amber },
-                action: None,
-                description: None,
-            }
-        })
-        .collect();
-    (notes, skip_count)
-}
-
-/// Returns whether the card pane draws `diagnostic` under a line, which it does for a problem about a line in the
-/// display order of its card.
-///
-/// Note that the checker also places a problem at a line the card never shows, such as a line table no lines list
-/// names. Such a problem stays in the list under the panes.
-pub fn draws_diagnostic(document: &SheetDocument, diagnostic: &SheetDiagnostic) -> bool {
-    let (Some(card), Some(line)) = (diagnostic.card, diagnostic.line.as_deref()) else {
-        return false;
-    };
-    document
-        .cards
-        .get(card)
-        .is_some_and(|card| CardRelations::new(document, card).index(line).is_some())
-}
-
-/// Returns the tooltip of the "otherwise" words of line `line_id`, whose line prefix is `prefix`, overridden by the
-/// lines numbered `numbers`, and the notice shown the first time the line starts with "otherwise".
-///
-/// Both name the property the lines change, and the old state a cell must be in for both to apply. When a higher line
-/// sits in the Repeat that holds line `line_id`, both say the higher line wins only at the same time. Otherwise, when
-/// two higher lines share a Repeat, both say the first time round decides between them.
-fn otherwise_words_of(
-    document: &SheetDocument,
-    relations: &CardRelations<'_>,
-    line_id: &str,
-    prefix: &str,
-    numbers: &[usize],
-) -> (String, String) {
-    let line = relations.line(line_id);
-    let property = line
-        .and_then(|line| line.property.as_deref())
-        .and_then(|id| property_of(document, id));
-    let state = line.and_then(|line| state_of(document, line.property.as_deref(), line.start_state.as_deref()));
-    let property_name = property.map_or(BLANK_TEXT, |property| property.name.as_str());
-    let thing = Sentences::new(document).thing_word(&relations.card().every);
-    let own = relations.repeat_of(line_id);
-    let higher: Vec<Option<&str>> = relations
-        .otherwise_of(line_id)
-        .into_iter()
-        .map(|higher| relations.repeat_of(higher))
-        .collect();
-    let repeat = if own.is_some() && higher.contains(&own) {
-        OtherwiseRepeat::Own
-    } else if higher
-        .iter()
-        .enumerate()
-        .any(|(index, repeat)| repeat.is_some() && higher[index + 1..].contains(repeat))
-    {
-        OtherwiseRepeat::Higher
-    } else {
-        OtherwiseRepeat::Apart
-    };
-    (
-        otherwise_tooltip(numbers, property_name, state, &thing, repeat),
-        otherwise_notice(prefix, numbers, property_name, state, &thing, repeat),
-    )
-}
-
-/// Returns the name of the named state `state` of the property `property` of `document`, `None` for any state or a
-/// state the property does not hold.
-fn state_of<'a>(document: &'a SheetDocument, property: Option<&str>, state: Option<&str>) -> Option<&'a str> {
-    let state = state.filter(|state| *state != ANY_STATE_ID)?;
-    property_of(document, property?)?
-        .states
-        .iter()
-        .find(|candidate| candidate.id == state)
-        .map(|state| state.name.as_str())
-}
-
-/// Returns the property `id` of any kind of thing of `document`.
-fn property_of<'a>(document: &'a SheetDocument, id: &str) -> Option<&'a SheetProperty> {
-    document
-        .cells
-        .iter()
-        .flatten()
-        .chain(document.agents.iter().flat_map(|kind| &kind.properties))
-        .chain(document.ground.iter().flat_map(|ground| &ground.properties))
-        .find(|property| property.id == id)
-}
 
 /// Returns the notes the card adds under `line` to those of the check, in the order of the wording table: the one-side
 /// offer after the skip note, then the count used as a chance or a rate, then the note of a rate with its mean stay as
@@ -2187,8 +1735,7 @@ fn number_ui(ui: &mut Ui, number: usize, rect: Rect) {
 /// gutter beside it show the kind's word as their hover text.
 fn kind_bar_ui(ui: &Ui, kind: LineKind, rect: Rect) {
     let group = AddButton::for_kind(kind);
-    let bar = Rect::from_min_size(rect.min, vec2(KIND_BAR_WIDTH, rect.height()));
-    ui.painter().rect_filled(bar, CornerRadius::ZERO, kind_hue(group));
+    kind_bar(ui.painter(), rect, group);
     let gutter = Rect::from_min_size(
         rect.min,
         vec2(KIND_BAR_WIDTH + GUTTER_WIDTH - NUMBER_GAP, rect.height()),
@@ -2670,7 +2217,7 @@ fn list_end(line: &SheetLine, place: &PartPlace) -> Option<PartPlace> {
             let index: usize = index.parse().ok()?;
             let holder = match outer.strip_suffix("items")?.strip_suffix('.') {
                 None if outer == "items" => line,
-                Some(phrase) => match slot_at(line, phrase)?.value()? {
+                Some(phrase) => match slot_value(line, phrase)? {
                     SheetValue::Phrase(phrase) => phrase,
                     _ => return None,
                 },
@@ -2983,24 +2530,20 @@ fn choice_edit(
     let draft = state.drafts.get(&line_id).cloned();
     let applied = apply_choice(drawing.context.document, draft, &line_id, place, choice);
     if applied.edits.is_empty() {
-        if let Some((line, draft)) = applied.draft {
-            match draft {
-                Some(draft) => state.drafts.insert(line, draft),
-                None => state.drafts.remove(&line),
-            };
+        if let Some(update) = applied.draft {
+            state.keep_draft(update);
         }
         return None;
     }
-    let mut edit = CardEdit::commands(
+    Some(CardEdit::with_draft(
         applied.edits,
         After::Next {
             line: line_id,
             target: place.target.clone(),
             want: place.want,
         },
-    );
-    edit.draft = applied.draft;
-    Some(edit)
+        applied.draft,
+    ))
 }
 
 /// Returns the words of the unit a new parameter of a rate on `line` takes, "per day" from the rate's unit or the
@@ -3040,16 +2583,14 @@ fn select_popup(
             let phrase = if phrase.is_empty() {
                 Some(line)
             } else {
-                slot_at(line, phrase)
-                    .and_then(Slot::value)
-                    .and_then(|value| match value {
-                        SheetValue::Phrase(phrase) => Some(phrase.as_ref()),
-                        _ => None,
-                    })
+                slot_value(line, phrase).and_then(|value| match value {
+                    SheetValue::Phrase(phrase) => Some(phrase.as_ref()),
+                    _ => None,
+                })
             };
             let of_states = phrase
                 .and_then(|phrase| read_property(phrase.left.value()))
-                .and_then(|id| property_of(drawing.context.document, id))
+                .and_then(|id| find_property(drawing.context.document, id))
                 .is_some_and(|property| property.property_type == PropertyType::States);
             comparison_options(of_states)
         }
@@ -3145,14 +2686,12 @@ fn select_edit(
                 draft.operator = operator;
             });
             if applied.edits.is_empty() {
-                if let Some((line, Some(draft))) = applied.draft {
-                    state.drafts.insert(line, draft);
+                if let Some(update) = applied.draft {
+                    state.keep_draft(update);
                 }
                 return None;
             }
-            let mut edit = CardEdit::commands(applied.edits, After::Stay);
-            edit.draft = applied.draft;
-            return Some(edit);
+            return Some(CardEdit::with_draft(applied.edits, After::Stay, applied.draft));
         }
     };
     let edits = vec![SheetEdit::SetField {
@@ -3168,16 +2707,6 @@ fn select_edit(
             want: None,
         },
     ))
-}
-
-/// Returns the words a select shows: its chosen words, or while empty [`UNIT_PLACEHOLDER`] for a unit and
-/// [`BLANK_TEXT`] otherwise.
-fn select_words(select: LineSelect, words: &str) -> &str {
-    match (words.is_empty(), select) {
-        (false, _) => words,
-        (true, LineSelect::UnitOfTime) => UNIT_PLACEHOLDER,
-        (true, _) => BLANK_TEXT,
-    }
 }
 
 // The line menu and the rename field
@@ -3294,7 +2823,7 @@ fn line_tools_ui(
     };
     tool(
         ui,
-        is_result_line(line_data.kind),
+        line_data.kind.works_out_result(),
         None,
         rename_line(&line.word),
         LineTool::Rename,
@@ -3422,19 +2951,12 @@ fn new_parameter_dialog(ui: &Ui, document: &SheetDocument, state: &mut CardState
         ui.ctx().request_repaint();
         return;
     }
-    let taken: Vec<&str> = document
-        .parameters
-        .iter()
-        .map(|parameter| parameter.name.as_str())
-        .collect();
-    match new_parameter_modal(ui.ctx(), dialog, &taken) {
+    match new_parameter_modal(ui.ctx(), dialog, &parameter_names(document)) {
         DialogOutcome::Open => {}
         DialogOutcome::Canceled => state.new_parameter = None,
         DialogOutcome::Created(parameter) => {
             let target = target.clone();
             let draft = state.drafts.get(&target.line).cloned();
-            let late = Rc::new(RefCell::new(None));
-            let late_draft = Rc::clone(&late);
             let after = After::Next {
                 line: target.line.clone(),
                 target: target.place.target.clone(),
@@ -3442,27 +2964,17 @@ fn new_parameter_dialog(ui: &Ui, document: &SheetDocument, state: &mut CardState
             };
             *pending = Some(CardEdit {
                 run: Box::new(move |builder| {
-                    let made = builder.apply(SheetEdit::AddParameter {
-                        name: parameter.name,
-                        parameter_type: parameter.parameter_type,
-                        min: parameter.min,
-                        max: parameter.max,
-                        default: parameter.default,
-                        unit: parameter.unit,
-                    })?;
+                    let made = builder.apply(parameter.add_edit())?;
                     let id = made.first().cloned().unwrap_or_default();
                     let choice = Choice::Value(SheetValue::Chip(SheetChip::Param(id)));
                     let applied = apply_choice(builder.document(), draft, &target.line, &target.place, &choice);
                     for edit in applied.edits {
                         builder.apply(edit)?;
                     }
-                    *late.borrow_mut() = applied.draft;
-                    Ok(made)
+                    Ok((made, applied.draft))
                 }),
                 after,
                 rename: false,
-                draft: None,
-                late_draft: Some(late_draft),
             });
             state.new_parameter = None;
         }
@@ -3471,9 +2983,11 @@ fn new_parameter_dialog(ui: &Ui, document: &SheetDocument, state: &mut CardState
 
 #[cfg(test)]
 mod tests {
+    use henad_graph::sheet::document::CELLS_ID;
     use henad_graph::sheet::sentence::{AddButton, AddItem};
 
-    use super::{kind_hue, new_line};
+    use super::new_line;
+    use crate::ui::editor::sheet::widgets::kind_hue;
 
     /// Every item of an add button's menus adds a line whose bar takes the button's hue. A Become from "+ Chance" is a
     /// change and takes the Change hue. The five groups of lines that are no block take five hues.
@@ -3483,7 +2997,7 @@ mod tests {
             let (every, buttons): (&str, &[AddButton]) = if agents {
                 ("ant", &AddButton::AGENTS)
             } else {
-                ("cells", &AddButton::ALL)
+                (CELLS_ID, &AddButton::ALL)
             };
             for &button in buttons {
                 for &item in button.items_for(agents) {

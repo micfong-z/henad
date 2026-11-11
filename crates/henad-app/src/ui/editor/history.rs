@@ -1,4 +1,4 @@
-//! Snapshot undo of a graph: the canonical text of the whole file before each edit, `[editor]` included.
+//! Snapshot undo of a graph or a sheet: the canonical text of the whole file before each edit, `[editor]` included.
 //!
 //! An edit needs no inverse. Undo reads the snapshot back, and the canvas follows the document it reads. A *coalesce
 //! key* names a gesture that spans many edits, such as a value dragged in a field. Consecutive edits with one key make

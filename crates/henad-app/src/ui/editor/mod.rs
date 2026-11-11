@@ -18,10 +18,15 @@ pub mod code_view;
 pub mod compare;
 pub mod expert;
 pub mod graph;
+mod history;
 pub mod preview;
+pub mod program;
 pub mod sheet;
 
-use egui::{Align, Button, CentralPanel, Frame, Layout, Margin, Modal, Panel, RichText, ScrollArea, vec2};
+use egui::{
+    Align, Button, CentralPanel, Frame, Key, KeyboardShortcut, Layout, Margin, Modal, Modifiers, Panel, RichText,
+    ScrollArea, vec2,
+};
 use henad_compute::entry::{ModelEntry, ModelSet};
 use henad_compute::fault::{Fault, FaultKind};
 use henad_compute::gpu::runtime_grid::GridRule;
@@ -135,6 +140,11 @@ impl EditorModel {
         }
     }
 
+    /// Returns whether the model holds edits since its edit mark was `saved_mark`. An empty model holds none.
+    pub fn is_edited_since(&self, saved_mark: u64) -> bool {
+        !self.is_empty() && self.edit_mark() != saved_mark
+    }
+
     /// Text of the grid rule, `None` while the Editor holds another model or nothing.
     pub fn rule_text(&self) -> Option<&str> {
         match self {
@@ -199,7 +209,7 @@ impl EditorModel {
     ///
     /// Note that a graph whose viewed output no longer reads stops viewing it. The key of [`Self::preview_source`]
     /// then changes.
-    pub fn preview_program(&mut self) -> Option<graph::CompiledProgram> {
+    pub fn preview_program(&mut self) -> Option<program::CompiledProgram> {
         match self {
             Self::Graph(graph) => Some(graph.preview_program()),
             Self::Sheet(sheet) => Some(sheet.program()),
@@ -299,6 +309,11 @@ impl FileStatus {
         }
     }
 
+    /// Returns the line that reports the file `name` as no text, "Open failed: ... is not UTF-8 text".
+    pub fn not_text(name: &str) -> Self {
+        Self::failure(format!("Open failed: {name} is not UTF-8 text"))
+    }
+
     /// Text of the line.
     pub fn text(&self) -> &str {
         &self.text
@@ -392,16 +407,7 @@ impl EditorPanel {
     /// The outcome of the last Apply and the state of the preview are cleared, and a later fault of the applied code
     /// no longer belongs to the Editor.
     fn load(&mut self, text: String, file_name: Option<String>) {
-        self.clear_expert();
-        self.model = EditorModel::Rule(text);
-        self.file_name = file_name;
-        self.outcome = None;
-        self.applied = None;
-        self.applied_mark = None;
-        self.scroll_to = None;
-        self.preview = preview::Preview::default();
-        self.saved_mark = self.model.edit_mark();
-        self.saving = None;
+        self.replace(EditorModel::Rule(text), file_name);
         self.replace_view();
     }
 
@@ -410,16 +416,7 @@ impl EditorPanel {
     /// The outcome of the last Apply and the state of the preview are cleared, as [`Self::load`] clears them for a
     /// text.
     pub fn load_graph(&mut self, file: &GraphFile, file_name: Option<String>) {
-        self.clear_expert();
-        self.model = EditorModel::Graph(Box::new(graph::GraphEditor::new(file)));
-        self.file_name = file_name;
-        self.outcome = None;
-        self.applied = None;
-        self.applied_mark = None;
-        self.scroll_to = None;
-        self.preview = preview::Preview::default();
-        self.saved_mark = self.model.edit_mark();
-        self.saving = None;
+        self.replace(EditorModel::Graph(Box::new(graph::GraphEditor::new(file))), file_name);
     }
 
     /// Replaces the Editor's model with `model`, from no file, and clears the file status line.
@@ -437,16 +434,27 @@ impl EditorPanel {
     /// The outcome of the last Apply and the state of the preview are cleared, as [`Self::load`] clears them for a
     /// text.
     pub fn load_sheet(&mut self, sheet: sheet::SheetEditor, file_name: Option<String>) {
+        self.replace(EditorModel::Sheet(Box::new(sheet)), file_name);
+    }
+
+    /// Replaces the Editor's model with `model`, from the file `file_name` or from no file, as saved, and clears what
+    /// belonged to the model it replaces.
+    fn replace(&mut self, model: EditorModel, file_name: Option<String>) {
         self.clear_expert();
-        self.model = EditorModel::Sheet(Box::new(sheet));
+        self.model = model;
         self.file_name = file_name;
+        self.clear_outcome();
+        self.saved_mark = self.model.edit_mark();
+        self.saving = None;
+    }
+
+    /// Clears the outcome of the last Apply, the line to scroll to and the state of the preview.
+    fn clear_outcome(&mut self) {
         self.outcome = None;
         self.applied = None;
         self.applied_mark = None;
         self.scroll_to = None;
         self.preview = preview::Preview::default();
-        self.saved_mark = self.model.edit_mark();
-        self.saving = None;
     }
 
     /// Forgets the file path, the counterpart, the original read from beside the file, the banner and the conversion
@@ -464,11 +472,7 @@ impl EditorPanel {
     /// Clears the outcome of the last Apply, the state of the preview and the banner after the model and its
     /// counterpart changed places.
     pub fn settle_swap(&mut self) {
-        self.outcome = None;
-        self.applied = None;
-        self.applied_mark = None;
-        self.scroll_to = None;
-        self.preview = preview::Preview::default();
+        self.clear_outcome();
         self.banner = None;
         self.convert = None;
         self.show_changes = false;
@@ -476,7 +480,7 @@ impl EditorPanel {
 
     /// Returns whether the model shown holds edits since it was opened, made or last saved. An empty model holds none.
     pub fn is_unsaved(&self) -> bool {
-        !self.model.is_empty() && self.model.edit_mark() != self.saved_mark
+        self.model.is_edited_since(self.saved_mark)
     }
 
     /// Returns the names of the models that hold unsaved edits: the model shown, then the model held beside it.
@@ -645,6 +649,16 @@ pub enum EditorRequest {
     },
 }
 
+/// Maps a request of the sheet editor to the Editor's request of the same name.
+impl From<sheet::SheetRequest> for EditorRequest {
+    fn from(request: sheet::SheetRequest) -> Self {
+        match request {
+            sheet::SheetRequest::Convert => Self::Convert,
+            sheet::SheetRequest::OpenCopy => Self::OpenCopy,
+        }
+    }
+}
+
 /// Draws the Editor tab: its buttons and status, the code, and the outcome of the last Apply.
 pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let compute = app.gpu_ctx.is_some();
@@ -704,10 +718,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 layout,
             };
             if let Some(sheet_request) = sheet::sheet_ui(ui, sheet, &shown) {
-                request = Some(match sheet_request {
-                    sheet::SheetRequest::Convert => EditorRequest::Convert,
-                    sheet::SheetRequest::OpenCopy => EditorRequest::OpenCopy,
-                });
+                request = Some(sheet_request.into());
             }
         }
         EditorModel::Rule(text) => {
@@ -859,10 +870,7 @@ fn name_row(ui: &mut egui::Ui, panel: &mut EditorPanel, shown: &HeaderShown<'_>,
             copy: shown.copy,
         };
         if let Some(sheet_request) = sheet::name_row(ui, sheet, &row) {
-            *request = Some(match sheet_request {
-                sheet::SheetRequest::Convert => EditorRequest::Convert,
-                sheet::SheetRequest::OpenCopy => EditorRequest::OpenCopy,
-            });
+            *request = Some(sheet_request.into());
         }
         return;
     }
@@ -1619,20 +1627,22 @@ pub fn unsaved_modal(ctx: &egui::Context, app: &mut AppState) {
     }
 }
 
+/// Consumes the undo and redo shortcuts of `input`, and returns whether undo and whether redo was pressed.
+///
+/// Redo, command shift Z or command Y, is read first. Otherwise command Z would take command shift Z.
+fn undo_redo_keys(input: &mut egui::InputState) -> (bool, bool) {
+    let redo = input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z))
+        || input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Y));
+    let undo = input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Z));
+    (undo, redo)
+}
+
 /// Handles the result of an Open model dialog. The picked file replaces the Editor's model, and is applied only on
 /// Apply.
 ///
 /// The `kind` in the file's header decides where it opens, as [`open_text`] says.
 pub fn receive_open(app: &mut AppState, result: OpenResult) {
-    let file = match result {
-        OpenResult::Files(files) => files.into_iter().next(),
-        OpenResult::Failed(message) => {
-            app.editor.file_status = Some(FileStatus::failure(format!("Open failed: {message}")));
-            return;
-        }
-        OpenResult::Folder(_) | OpenResult::Canceled => return,
-    };
-    let Some(DialogFile { name, bytes, path }) = file else {
+    let Some(DialogFile { name, bytes, path }) = opened_file(&mut app.editor, result) else {
         return;
     };
     match String::from_utf8(bytes) {
@@ -1643,7 +1653,20 @@ pub fn receive_open(app: &mut AppState, result: OpenResult) {
             expert::find_original(&mut app.editor);
             app.focus_request = Some(Tab::Editor);
         }
-        Err(_) => app.editor.file_status = Some(FileStatus::failure(format!("Open failed: {name} is not UTF-8 text"))),
+        Err(_) => app.editor.file_status = Some(FileStatus::not_text(&name)),
+    }
+}
+
+/// Returns the first file of `result`, the outcome of an open dialog, `None` for a folder or a cancel. A failed open
+/// sets the file status of `panel` to its message.
+fn opened_file(panel: &mut EditorPanel, result: OpenResult) -> Option<DialogFile> {
+    match result {
+        OpenResult::Files(files) => files.into_iter().next(),
+        OpenResult::Failed(message) => {
+            panel.file_status = Some(FileStatus::failure(format!("Open failed: {message}")));
+            None
+        }
+        OpenResult::Folder(_) | OpenResult::Canceled => None,
     }
 }
 
@@ -1672,20 +1695,13 @@ pub fn open_text(panel: &mut EditorPanel, text: String, file_name: Option<String
 
 /// Takes the picked model file as the file the Editor's graph model imports functions from.
 pub fn receive_import(app: &mut AppState, result: OpenResult) {
-    let file = match result {
-        OpenResult::Files(files) => files.into_iter().next(),
-        OpenResult::Failed(message) => {
-            app.editor.file_status = Some(FileStatus::failure(format!("Open failed: {message}")));
-            return;
-        }
-        OpenResult::Folder(_) | OpenResult::Canceled => return,
-    };
+    let file = opened_file(&mut app.editor, result);
     let (Some(DialogFile { name, bytes, .. }), Some(graph)) = (file, app.editor.model.graph_mut()) else {
         return;
     };
     match String::from_utf8(bytes) {
         Ok(text) => graph.set_import_source(name, text),
-        Err(_) => app.editor.file_status = Some(FileStatus::failure(format!("Open failed: {name} is not UTF-8 text"))),
+        Err(_) => app.editor.file_status = Some(FileStatus::not_text(&name)),
     }
 }
 

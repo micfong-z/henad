@@ -20,15 +20,15 @@ adds the card (`AddCard`, then `AddLine`, one edit). `card_ui` computes the card
 `CardRelations::notes` once, `runs` read from the report's skip notes, and passes them to each
 line. After each line, `closing_blocks` gives the blocks that close there (after the last line
 inside them, or after an empty When or Repeat), inner blocks first, and `add_inside_ui` draws each
-one's row: a dashed `add_button` `add_inside_label` at the block's inner indent, a bar in the block
-line's hue. Its `Popup::menu` is an `overlay`, a group of role `Dialog` named `add_inside_name`,
-with that title and, for each group of `add_inside_groups` (`AddButton::ADD_INSIDE_ORDER`, or the
-Change group alone on a card that runs once, which only a written file can give a When), the
-`AddButton::group` label and `add_items_ui`'s items, and an item runs `AddLine` with `inside` set to
-the When.
+one's row: a dashed `add_row_button` `add_inside_label` at the block's inner indent, a bar in the
+block line's hue. Its `Popup::menu` is an `overlay`, a group of role `Dialog` named
+`add_inside_name`, with that title and, for each group of `add_inside_groups`
+(`AddButton::ADD_INSIDE_ORDER`, or the Change group alone on a card that runs once, which only a
+written file can give a When), the `AddButton::group` label and `add_items_ui`'s items, and an item
+runs `AddLine` with `inside` set to the When.
 
 **Rows.** `line_ui` lays a row out as columns, each a child `Ui`: the kind bar (`KIND_BAR_WIDTH` 3,
-`kind_bar_ui`, `kind_hue` of `AddButton::for_kind`, the group's word as the hover text of the bar
+`kind_bar_ui` over `widgets::kind_bar`, the group's word as the hover text of the bar
 and the gutter), the gutter (`GUTTER_WIDTH` 30, `number_ui` right-aligned as a `small_label`,
 `NUMBER_GAP` 9 before the body), the body (from the gutter plus `INDENT` 20 per block, to the tail),
 and the tail (`fire_count_ui` in `COUNT_WIDTH` on a line of `CardDrawing::counted` on a card that
@@ -46,6 +46,8 @@ under its number. The menu (`line_menu_ui` over `widgets::menu_button`, the tail
 allocated after the sentence and before the notes, so the keyboard path is unchanged. `bracket_ui`
 paints a competing group's bracket in the gutter between the numbers and the bodies.
 
+`card_lines.rs` holds the line data the pane, the Diagram and the Sheet pane read, with no `Ui`
+(`card_pane` re-exports what other modules import from it):
 `card_lines(document, sentences, report, card_index)` returns a `CardLine` per line in display order
 (`CardRelations`): id, number, depth (indent 20 points), `prefix` (`line_prefix`, "Line 2" or "Clear
 line 1"), `word` (`line_word`, for tool names), the plain `sentence`, its `parts` and their `places`
@@ -103,9 +105,9 @@ After the last item of a list, `add_value_ui` draws "+" named `add_value_name`, 
 list's picker for one item past the end. `CardLine::control` returns each control's visible words
 and name, which the label-in-name tests read. Hovering or focusing a result chip or "otherwise"
 highlights the lines it names on the next frame. Notes are `NOTE_SIZE` 11.5 in their three colours,
-a note's button a `note_button`. The add buttons (`add_buttons_ui`) are dashed `add_button`s, each
-with a square of its group's `kind_hue`, so they read as the legend of the bars. Every popup of the
-pane takes `Frame::NONE` and draws its contents in an `overlay`: titles and group labels are
+a note's button a `note_button`. The add buttons (`add_buttons_ui`) are dashed `add_row_button`s,
+each with a square of its group's `kind_hue`, so they read as the legend of the bars. Every popup of
+the pane takes `Frame::NONE` and draws its contents in an `overlay`: titles and group labels are
 `caption`s, items `overlay_item`s (a picker's current value marked by `CardPicker::current`, the
 chip's name, and a state's swatch from `PickerItem::swatch`, a select's current option by its
 words, its list drawn by `widgets::select_list`, which the Sheet pane's selects share). The line
@@ -147,23 +149,25 @@ Selects list `comparison_options` (the list words of a States property), `around
 writing `LineField::RateUnit`).
 
 **Edits.** A choice becomes a `CardEdit`, a boxed closure of `SheetEdit`s run after the card is
-drawn through `SheetEditor::edit`, one undo step, with `After` for the focus. `apply_choice`
-(`picker.rs`) maps a `Choice` at a place to commands: `SetSlot` for a slot (a Count's state also
-sets `whose.left`, a new property clears a state of another one, and a state in a slot that wants
-`Blank::StateList` starts a list), the whole list for a list item (an emptied list turns blank),
-`ChooseCondition` for a form, and `SetField` for a field (an old state of another property also sets
-the line's property). A Calculate line of one operation keeps the values chosen while its formula is
-incomplete in `CardState::drafts` (`CalcDraft`, `+` until another operation is chosen), shown as
-chips, and writes the formula with `Formula` once both values are chosen (`calculate_edit`,
-`value_token`). A percent operand is written as its decimal and reads as one. Only the line's own
-values and operation take a choice: a formula inside a slot has no places, and the guards in
-`field_choice`, `select_edit` and `draft_value` hold an empty phrase path. "New parameter..." opens
-the New parameter dialog for the place (a chance's or a rate's values, the rate's "per [unit]" as
-its Unit), drawn from the next frame, since the click that chose it would land on its backdrop.
-Create runs `AddParameter` and the place's commands as one edit. The add buttons (`add_buttons_ui`)
-are `AddButton::ALL`, "+ When, for several lines" last, or "+ Change" alone on a card that runs
-once, each a `Popup::menu` with the heading and items of `AddButton`. The
-pattern under an item is painted into `allocate_space`, so it stays out of the accessibility tree.
+drawn through `SheetEditor::edit`, one undo step, with `After` for the focus. The closure returns
+the ids made and the draft it leaves, which `CardState::keep_draft` stores once the edit is kept.
+`apply_choice` (`picker.rs`) maps a `Choice` at a place to commands: `SetSlot` for a slot (a
+Count's state also sets `whose.left`, a new property clears a state of another one, and a state in a
+slot that wants `Blank::StateList` starts a list), the whole list for a list item (an emptied list
+turns blank), `ChooseCondition` for a form, and `SetField` for a field (an old state of another
+property also sets the line's property). A Calculate line of one operation keeps the values chosen
+while its formula is incomplete in `CardState::drafts` (`CalcDraft`, `+` until another operation is
+chosen), shown as chips, and writes the formula with `Formula` once both values are chosen
+(`calculate_edit`, `value_token`). A percent operand is written as its decimal and reads as one.
+Only the line's own values and operation take a choice: a formula inside a slot has no places, and
+the guards in `field_choice`, `select_edit` and `draft_value` hold an empty phrase path. "New
+parameter..." opens the New parameter dialog for the place (a chance's or a rate's values, the
+rate's "per [unit]" as its Unit), drawn from the next frame, since the click that chose it would
+land on its backdrop. Create runs `NewParameter::add_edit` and the place's commands as one edit.
+The add buttons (`add_buttons_ui`) are `AddButton::ALL`, "+ When, for several lines" last, or "+
+Change" alone on a card that runs once, each a `Popup::menu` with the heading and items of
+`AddButton`. The pattern under an item is painted into `allocate_space`, so it stays out of the
+accessibility tree.
 `new_line` gives each item's line with its blanks empty: a Count's `whose` a comparison "is", a
 Total or average one summary "total", a change from "+ Change" an empty condition, from "+ Chance" a
 chance or a rate phrase. The line menu (`line_menu_ui`, "Line 2 actions", always drawn) holds
@@ -174,7 +178,7 @@ the bottom), `DRAW_NEW_NUMBERS` on a line
 `check::holds_draw` finds drawing (`DrawNewNumbers`), `CHANGE_TO_RATE` or `CHANGE_TO_CHANCE` where
 `rates::conversion` finds one (`ChangeToRate`, `ChangeToChance`), and `delete_line`, with
 `DELETE_WHEN_TOOLTIP` on a When, and on a look at agents `include_me_tool` or `leave_me_out_tool`
-(`SetField` `IncludeMe`). Rename shows on every line `picker::is_result_line` finds a result. Rename
+(`SetField` `IncludeMe`). Rename shows on a line of a result (`LineKind::works_out_result`). Rename
 opens a field named `rename_field_name` under the line: Enter or leaving it keeps (`RenameResult`),
 Escape cancels, and a taken name shows `result_name_taken` with the field focused again.
 
@@ -308,10 +312,10 @@ count nodes other than text runs.
 `RANDOM_VALUE_GROUP` `RandomNumber`, `RandomDirection`, and no rates; Calculate: `Calculate`,
 `Choose`, `DependingOn`; Change: `Become`, `Set`, `Steer`, `KeepBetween`, `MoveBy`, `MoveTo`,
 `Leave`, `Record`). The buttons are `AddButton::AGENTS`, "+ Repeat..." last, and a block's add row
-takes `AGENTS_INSIDE_ORDER`. A Repeat is a block like a When (`is_block`), with its add row and the
-add-at-end note. `cards_ui` draws a world of agents with no tick card as `card_header` of the kind
-and adds `AddCard { every: kind }` with the first line. `new_line(item, every)` fills what the
-checker asks of a template: a look at agents the card's kind, `include_me` false and one
+takes `AGENTS_INSIDE_ORDER`. A Repeat is a block like a When (`LineKind::is_block`), with its add
+row and the add-at-end note. `cards_ui` draws a world of agents with no tick card as `card_header`
+of the kind and adds `AddCard { every: kind }` with the first line. `new_line(item, every)` fills
+what the checker asks of a template: a look at agents the card's kind, `include_me` false and one
 `LookSummary::new("", "")` average (named by henad-graph), a Pick a cell `Cells8`, `Most` and open
 cells, a Look at a cell `Here`, Steer and Move a mode, a Choose one empty row. Selects:
 `mode_options` (by and towards for Steer, by and to for Move), `pick_options`, `which_options`, and

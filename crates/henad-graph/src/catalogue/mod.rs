@@ -19,7 +19,7 @@ mod view;
 
 use std::collections::BTreeMap;
 
-use crate::document::{Domain, GraphDocument};
+use crate::document::{Domain, GraphDocument, PassStage};
 use crate::node::{Combine, Node, OP_STAT_COUNTER};
 use crate::types::{Rate, ValueType};
 use crate::value::{ConfigValue, InputValue, Literal};
@@ -447,6 +447,19 @@ impl ContextSet {
         stats: true,
         ..Self::NONE
     };
+
+    /// Returns whether a pass of the stage `stage` takes a kind with these places.
+    ///
+    /// Note that a region body also needs [`Self::region`].
+    pub fn allows(self, stage: PassStage) -> bool {
+        match stage {
+            PassStage::Init => self.init,
+            PassStage::Tick => self.tick,
+            PassStage::View => self.view,
+            PassStage::Stats => self.stats,
+            PassStage::Action => self.action,
+        }
+    }
 }
 
 /// What a kind does besides returning its outputs.
@@ -664,8 +677,9 @@ impl NodeDef {
 
     /// Returns the words a message names the kind's first sink effect by, `None` for a kind with no sink effect.
     ///
-    /// A sink effect is one no function body holds.
-    pub(crate) fn sink(&self) -> Option<&'static str> {
+    /// A sink effect is one no function body holds: a lane or a field write, a deposit, a counter, a colour, a
+    /// reducer or a stream draw.
+    pub fn sink(&self) -> Option<&'static str> {
         SINK_EFFECTS
             .iter()
             .find(|(effect, _)| self.has_effect(*effect))

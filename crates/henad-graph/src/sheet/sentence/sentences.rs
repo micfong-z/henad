@@ -315,7 +315,7 @@ impl<'a> Sentences<'a> {
         let Some(line) = self.lines.get(line_id) else {
             return Parts::text(BLANK_TEXT).into_placed();
         };
-        if is_result_kind(line.kind) {
+        if line.kind.works_out_result() {
             let phrase = self.phrase(line, false);
             return match &line.name {
                 Some(name) if !(line.kind == LineKind::Compare && *name == phrase.plain()) => {
@@ -1366,28 +1366,6 @@ impl<'a> Sentences<'a> {
             .chain(document.agents.iter().flat_map(|kind| &kind.properties))
             .chain(document.ground.iter().flat_map(|ground| &ground.properties))
     }
-}
-
-/// Returns whether a line of `kind` works out a result, and so starts with its name.
-fn is_result_kind(kind: LineKind) -> bool {
-    matches!(
-        kind,
-        LineKind::Count
-            | LineKind::LookAround
-            | LineKind::PickCell
-            | LineKind::LookAtCell
-            | LineKind::Chance
-            | LineKind::Rate
-            | LineKind::RandomNumber
-            | LineKind::RandomDirection
-            | LineKind::Compare
-            | LineKind::AllOf
-            | LineKind::AnyOf
-            | LineKind::NoneOf
-            | LineKind::Choose
-            | LineKind::DependingOn
-            | LineKind::Calculate
-    )
 }
 
 /// Returns whether `id` has the form of a line id, `l` and a number.

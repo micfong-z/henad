@@ -287,7 +287,7 @@ fn check_card(checker: &mut Checker<'_>, index: usize) {
             checker.skip(note, index, id);
             skipped.insert(id);
         }
-        if let Some(name) = line.name.as_deref().filter(|_| is_result_kind(line.kind)) {
+        if let Some(name) = line.name.as_deref().filter(|_| line.kind.works_out_result()) {
             match names.get(name) {
                 Some(other) => checker.warning(
                     format!("lines {other} and {id} are both named '{name}'"),
@@ -328,7 +328,7 @@ fn check_line<'a>(
         );
         return None;
     }
-    if line.name.is_some() && !is_result_kind(line.kind) {
+    if line.name.is_some() && !line.kind.works_out_result() {
         checker.error(
             format!("line {}: a line that makes a change has no name", owner.id),
             &place,
@@ -366,7 +366,7 @@ fn check_line<'a>(
         // A result inside a skipped When still runs, and every line inside a skipped Repeat is skipped, however deep.
         let blocked_by_parent = relations.parent(owner.id).filter(|parent| {
             let parent_kind = relations.line(parent).map(|block| block.kind);
-            let depends = parent_kind == Some(LineKind::Repeat) || !is_result_kind(line.kind);
+            let depends = parent_kind == Some(LineKind::Repeat) || !line.kind.works_out_result();
             depends && skipped.contains(parent)
         });
         let blocked = blocked_by_parent.or_else(|| {
@@ -533,7 +533,7 @@ impl<'a> Checker<'a> {
             }
             return;
         }
-        if !is_result_kind(phrase.kind) {
+        if !phrase.kind.works_out_result() {
             self.error(
                 format!("a slot holds a {} line, which gives no value", phrase.kind.as_str()),
                 &context.place,
@@ -1092,7 +1092,7 @@ impl<'a> Checker<'a> {
             return None;
         }
         let source = &self.document.cards[card].line_tables[id];
-        if !is_result_kind(source.kind) {
+        if !source.kind.works_out_result() {
             self.error(format!("{id} makes a change and gives no result"), place);
             return None;
         }
@@ -1312,28 +1312,6 @@ pub(in crate::sheet) fn governing_property(left: &SheetValue) -> Option<&str> {
         }) => Some(property),
         _ => None,
     }
-}
-
-/// Returns whether a line of `kind` works out a result. The same kinds stand in a slot as a phrase.
-pub(crate) fn is_result_kind(kind: LineKind) -> bool {
-    matches!(
-        kind,
-        LineKind::Count
-            | LineKind::LookAround
-            | LineKind::PickCell
-            | LineKind::LookAtCell
-            | LineKind::Chance
-            | LineKind::Rate
-            | LineKind::RandomNumber
-            | LineKind::RandomDirection
-            | LineKind::Compare
-            | LineKind::AllOf
-            | LineKind::AnyOf
-            | LineKind::NoneOf
-            | LineKind::Choose
-            | LineKind::DependingOn
-            | LineKind::Calculate
-    )
 }
 
 /// Returns whether `line` changes the property `id`, whose type is `property_type`: a Become, Set, Steer or Keep

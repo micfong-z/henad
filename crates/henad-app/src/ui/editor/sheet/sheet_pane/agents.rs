@@ -6,7 +6,7 @@
 //! first property. Events lists what Record lines count, each name a field, and adds an event through the *event
 //! form*.
 
-use egui::{Align, Key, Label, Layout, RichText, TextEdit, Ui};
+use egui::{Label, RichText, Ui};
 use henad_graph::limits::MAX_AGENTS;
 use henad_graph::sheet::document::{
     AgentKind, Marks, PropertyType, SheetDocument, SheetLiteral, SheetProperty, SheetValue, Slot,
@@ -14,7 +14,7 @@ use henad_graph::sheet::document::{
 use henad_graph::sheet::edit::{IdSpace, SheetEdit, SheetItem, is_reserved_name, mint_id};
 use henad_graph::sheet::sentence::{
     ADD_EVENT, ADD_GROUND_PROPERTY_NAME, AGENT_COUNT_LABEL, AGENT_COUNT_NAME, AGENT_MAX_LABEL, AGENT_MAX_NAME,
-    AGENT_MAX_TOOLTIP, AGENT_NAME_FIELD, AGENT_NAME_MISSING, CANCEL, DONE, EVENT_NAME_FIELD, EVENT_NAME_MISSING,
+    AGENT_MAX_TOOLTIP, AGENT_NAME_FIELD, AGENT_NAME_MISSING, EVENT_NAME_FIELD, EVENT_NAME_MISSING,
     EVENT_NAME_PLACEHOLDER, EVENTS_EMPTY, GROUND_EMPTY, KEPT_LEAD, KEPT_OUT_OF_RANGE, KEPT_TAIL, MARKS_ADD_UP,
     MARKS_LABEL, MARKS_LARGEST, MARKS_NONE, MARKS_TOOLTIP, NAME_LABEL, NEW_EVENT, add_property_name, blocked_lead,
     blocked_state_name, delete_event_name, event_name_name, event_name_taken, integer_up_to, kept_place, marks_name,
@@ -23,13 +23,13 @@ use henad_graph::sheet::sentence::{
 
 use super::layout::{Column, Form, Table, line, text_cell, wrapped_line};
 use super::{
-    FormKind, GROUND, NumberField, NumberTarget, PARAMETER_NAME_WIDTH, PaneState, Pending, delete_button, form_buttons,
-    form_heading, number_field, properties_of, property_form_or_add, property_table, select,
+    FormKind, GROUND_ID, NumberField, NumberTarget, PARAMETER_NAME_WIDTH, PaneState, Pending, form_buttons,
+    form_heading, form_name_field, number_field, properties_of, property_form_or_add, property_table, select,
 };
 use crate::ui::editor::sheet::widgets::{
-    NumberUse, OverlayItem, add_button, commit_field, commit_number, field_message, message_ui, set_name,
+    NumberUse, OverlayItem, add_row_button, commit_field, commit_number, field_message, message_ui, name_taken,
+    set_name,
 };
-use crate::ui::sweep::layout::filled_button;
 
 /// Width in points of a field that holds a number of agents.
 const COUNT_WIDTH: f32 = 72.0;
@@ -220,11 +220,11 @@ pub(super) fn ground(
     stale: &[String],
     pending: &mut Option<Pending>,
 ) {
-    let properties = properties_of(document, GROUND);
+    let properties = properties_of(document, GROUND_ID);
     if properties.is_empty() {
         text_cell(ui, Label::new(GROUND_EMPTY));
     } else {
-        property_table(ui, document, GROUND, pane, stale, pending);
+        property_table(ui, document, GROUND_ID, pane, stale, pending);
         ui.add_space(4.0);
         for property in properties {
             match property.property_type {
@@ -235,7 +235,7 @@ pub(super) fn ground(
         }
     }
     ui.add_space(6.0);
-    property_form_or_add(ui, document, GROUND, ADD_GROUND_PROPERTY_NAME, false, pane, pending);
+    property_form_or_add(ui, document, GROUND_ID, ADD_GROUND_PROPERTY_NAME, false, pane, pending);
 }
 
 /// Draws how the marks agents leave on the Number property `property` of the ground combine and, while it takes
@@ -377,17 +377,11 @@ pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState
                             );
                         });
                     });
-                    row.cell(1, |ui| {
-                        line(ui, |ui| {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if delete_button(ui, &delete_event_name(&event.name)).clicked() {
-                                    *pending = Some(Pending::one(SheetEdit::Delete {
-                                        item: SheetItem::Event(event.id.clone()),
-                                    }));
-                                }
-                            });
-                        });
-                    });
+                    if row.delete_cell(1, &delete_event_name(&event.name)) {
+                        *pending = Some(Pending::one(SheetEdit::Delete {
+                            item: SheetItem::Event(event.id.clone()),
+                        }));
+                    }
                     if let Some(message) = row.message(id) {
                         row.below(0, |ui| message_ui(ui, &message));
                     }
@@ -405,7 +399,7 @@ pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState
             }
         }
         None => {
-            if add_button(ui, ADD_EVENT, ADD_EVENT, None, false).clicked() {
+            if add_row_button(ui, ADD_EVENT, ADD_EVENT, None, false).clicked() {
                 pane.event_form = Some(EventForm {
                     name: String::new(),
                     message: None,
@@ -418,11 +412,8 @@ pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState
 
 /// Returns whether an event of `document` other than `own` is named `name`, case aside.
 fn event_taken(document: &SheetDocument, name: &str, own: Option<&str>) -> bool {
-    document
-        .events
-        .iter()
-        .filter(|event| Some(event.id.as_str()) != own)
-        .any(|event| event.name.to_lowercase() == name.to_lowercase())
+    let others = document.events.iter().filter(|event| Some(event.id.as_str()) != own);
+    name_taken(name, others.map(|event| event.name.as_str()))
 }
 
 /// Draws the event form, and sets `close` on Cancel. Done, or Enter in the Name field, checks the name and adds the
@@ -438,26 +429,20 @@ fn event_form(
     let rows = Form::new(ui, &[NAME_LABEL]);
     let mut done = false;
     rows.row(ui, NAME_LABEL, |ui| {
-        let field = ui.add(
-            TextEdit::singleline(&mut form.name)
-                .hint_text(EVENT_NAME_PLACEHOLDER)
-                .desired_width(ui.available_width().min(PARAMETER_NAME_WIDTH + 80.0)),
+        done |= form_name_field(
+            ui,
+            &mut form.name,
+            EVENT_NAME_PLACEHOLDER,
+            EVENT_NAME_FIELD,
+            &mut form.focus_name,
         );
-        set_name(ui, field.id, EVENT_NAME_FIELD);
-        if std::mem::take(&mut form.focus_name) {
-            field.request_focus();
-        }
-        done |= field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
     });
     if let Some(message) = &form.message {
         rows.under(ui, |ui| message_ui(ui, message));
     }
-    form_buttons(ui, |ui| {
-        done |= ui.add(filled_button(DONE.to_owned())).clicked();
-        if ui.button(CANCEL).clicked() {
-            *close = true;
-        }
-    });
+    let (pressed, cancel) = form_buttons(ui, |_| {});
+    done |= pressed;
+    *close |= cancel;
     if done {
         let name = form.name.trim().to_owned();
         if name.is_empty() {

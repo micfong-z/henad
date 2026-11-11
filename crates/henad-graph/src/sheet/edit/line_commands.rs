@@ -5,10 +5,9 @@ use std::collections::BTreeSet;
 
 use henad_core::metadata::TimeUnit;
 
-use super::lines::{self, PathStep, is_block};
+use super::lines::{self, PathStep};
 use super::references::{Change, Target, change_references};
 use super::{Draft, LineField, SheetEditError, clean_name, missing, refuse_taken};
-use crate::sheet::check::is_result_kind;
 use crate::sheet::document::{
     Around, CardRuns, CompareTest, LineKind, LookSummary, SheetChip, SheetLine, SheetLiteral, SheetTime, SheetValue,
     Slot, SummaryKind,
@@ -151,7 +150,7 @@ impl Draft {
                 .line_tables
                 .get(block)
                 .ok_or_else(|| SheetEditError::Missing(format!("card '{card_id}' has no line '{block}'")))?;
-            if !is_block(holder.kind) {
+            if !holder.kind.is_block() {
                 return Err(SheetEditError::Invalid(format!(
                     "line '{block}' holds no lines: it is no When or Repeat"
                 )));
@@ -544,11 +543,11 @@ impl Draft {
             .cards
             .iter()
             .flat_map(|card| &card.line_tables)
-            .filter(|(id, other)| id.as_str() != line_id && is_result_kind(other.kind))
+            .filter(|(id, other)| id.as_str() != line_id && other.kind.works_out_result())
             .filter_map(|(_, other)| other.name.as_deref());
         refuse_taken(&name, others, "result")?;
         let target = self.line_mut(line_id)?;
-        if !is_result_kind(target.kind) {
+        if !target.kind.works_out_result() {
             return Err(SheetEditError::Invalid(format!("line '{line_id}' works out no result")));
         }
         target.name = Some(name);

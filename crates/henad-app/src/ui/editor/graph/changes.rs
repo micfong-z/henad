@@ -16,7 +16,7 @@ use henad_graph::node::NodeBody;
 use henad_graph::sheet::ChangeGroup;
 use henad_graph::sheet::sentence::{CHANGES_HEADING, IN_NO_FRAME, NODE_ADDED, NODE_CHANGED, NODE_REMOVED};
 
-use super::display::display_name;
+use super::display::kind_name;
 use super::{GraphEditor, GraphRequest};
 use crate::ui::mcs;
 
@@ -83,11 +83,6 @@ impl CopyChanges {
     pub fn is_empty(&self) -> bool {
         self.groups.is_empty()
     }
-}
-
-/// Returns the display name of the node kind `kind`, else the kind itself.
-fn kind_name(kind: &str) -> String {
-    display_name(kind).map_or_else(|| kind.to_owned(), |name| name.name.to_owned())
 }
 
 /// Returns the body whose canvas the editor region names `canvas`, such as `pass.tick_cells`, `None` for a name that

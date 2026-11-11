@@ -9,7 +9,7 @@
 //! it at its end or its start, and a block moves with its lines and swaps with the line or block beside it.
 
 use super::{MoveDirection, SheetEditError};
-use crate::sheet::document::{ChooseRow, LineKind, SheetCard, SheetLine, SheetValue, Slot};
+use crate::sheet::document::{ChooseRow, SheetCard, SheetLine, SheetValue, Slot};
 
 /// One step of a slot path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +126,89 @@ pub(super) fn slots_mut(line: &mut SheetLine) -> [&mut Slot; 21] {
         &mut line.condition,
         &mut line.otherwise,
     ]
+}
+
+/// Returns the slots of `line` in the order of [`SLOT_KEYS`].
+fn slots(line: &SheetLine) -> [&Slot; 21] {
+    [
+        &line.distance,
+        &line.place,
+        &line.left,
+        &line.right,
+        &line.tolerance,
+        &line.chance,
+        &line.rate,
+        &line.tries,
+        &line.low,
+        &line.high,
+        &line.length,
+        &line.times,
+        &line.value,
+        &line.strength,
+        &line.minimum,
+        &line.maximum,
+        &line.amount,
+        &line.only,
+        &line.whose,
+        &line.condition,
+        &line.otherwise,
+    ]
+}
+
+/// Returns the value at the slot path `path` of `line`.
+///
+/// A slot path is the author format's keys joined by dots, such as `distance`, `condition.rate`, `items.2`,
+/// `row.0.value`, `branches.alive` or `summaries.0.value`, and every step but the last descends into the phrase that a
+/// slot holds. Returns `None` for a path that does not read as one, for a blank slot, and for a step that finds no
+/// phrase, item, row, branch or summary.
+///
+/// ```
+/// use henad_graph::sheet::ParsedSheet;
+/// use henad_graph::sheet::document::{SheetChip, SheetValue};
+/// use henad_graph::sheet::edit::slot_value;
+///
+/// let boids = henad_graph::sheet::starters()
+///     .iter()
+///     .find(|starter| starter.file_name == "boids.toml")
+///     .expect("the boids starter");
+/// let sheet = ParsedSheet::parse(boids.text).expect("the starter reads");
+/// let (_, line) = sheet.document().line("l1").expect("line 1");
+/// let range = SheetValue::Chip(SheetChip::Param("visual_range".to_owned()));
+/// assert_eq!(slot_value(line, "distance"), Some(&range));
+/// assert_eq!(slot_value(line, "condition"), None);
+/// ```
+pub fn slot_value<'a>(line: &'a SheetLine, path: &str) -> Option<&'a SheetValue> {
+    let steps = parse_path(path).ok()?;
+    let (last, inner) = steps.split_last()?;
+    let mut phrase = line;
+    for step in inner {
+        phrase = match value_ref(phrase, step)? {
+            SheetValue::Phrase(inner) => inner,
+            _ => return None,
+        };
+    }
+    value_ref(phrase, last)
+}
+
+/// Returns the value at `step` of `line`, `None` when the line holds none there.
+fn value_ref<'a>(line: &'a SheetLine, step: &PathStep) -> Option<&'a SheetValue> {
+    match step {
+        PathStep::Slot(name) => SLOT_KEYS
+            .into_iter()
+            .zip(slots(line))
+            .find_map(|(key, slot)| (key == name).then_some(slot))?
+            .value(),
+        PathStep::Item(index) => line.items.get(*index),
+        PathStep::Row(index, slot) => {
+            let row = line.rows.get(*index)?;
+            match slot {
+                RowSlot::Value => row.value.value(),
+                RowSlot::Condition => row.condition.value(),
+            }
+        }
+        PathStep::Branch(state) => line.branches.get(state),
+        PathStep::Summary(index) => line.summaries.get(*index)?.value.value(),
+    }
 }
 
 /// Returns the slot of `line` with the key `name`.
@@ -263,11 +346,6 @@ pub(super) fn line_depth(line: &SheetLine) -> usize {
     slot_depth.max(items).max(branches).max(rows).max(summaries)
 }
 
-/// Returns whether `kind` holds lines: a When or a Repeat.
-pub(super) fn is_block(kind: LineKind) -> bool {
-    matches!(kind, LineKind::When | LineKind::Repeat)
-}
-
 /// Returns the block line of `card` that lists `line_id`, `None` for a line at the top of the card.
 pub(super) fn parent_of(card: &SheetCard, line_id: &str) -> Option<String> {
     card.line_tables
@@ -300,7 +378,7 @@ pub(super) fn list_mut<'a>(card: &'a mut SheetCard, parent: Option<&str>) -> Opt
 
 /// Returns whether the line `line_id` of `card` holds lines.
 fn holds_lines(card: &SheetCard, line_id: &str) -> bool {
-    card.line_tables.get(line_id).is_some_and(|line| is_block(line.kind))
+    card.line_tables.get(line_id).is_some_and(|line| line.kind.is_block())
 }
 
 /// Moves the line `line_id` of `card`, with the lines inside it, one step up or down the outline.

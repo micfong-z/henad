@@ -8,7 +8,7 @@ use henad_graph::edit::{EditCommand, Scope};
 use super::{GraphEdit, GraphEditor, GraphRequest};
 use crate::icons::material_design_icons::{MDI_ARROW_DOWN, MDI_ARROW_UP, MDI_DELETE_OUTLINE, MDI_PLUS};
 use crate::ui::mcs;
-use crate::ui::sweep::layout::add_button;
+use crate::ui::sweep::layout::{add_button, icon_button};
 
 /// Stages in the order the pass stack runs them, with the heading the panel shows for each.
 const STAGES: [(PassStage, &str); 5] = [
@@ -174,9 +174,7 @@ fn open_pass_ui(ui: &mut Ui, graph: &GraphEditor, pass: &Pass, requests: &mut Ve
                 enabled: PassEnabled::Literal(enabled),
             })));
         }
-        let remove = add_button(ui, true, Button::new(MDI_DELETE_OUTLINE).small(), "Remove pass")
-            .on_hover_text("Remove pass and its nodes");
-        if remove.clicked() {
+        if icon_button(ui, MDI_DELETE_OUTLINE, "Remove pass", "Remove pass and its nodes").clicked() {
             requests.push(GraphRequest::Edit(GraphEdit::one(EditCommand::RemovePass(
                 pass.id.clone(),
             ))));

@@ -1,4 +1,5 @@
-//! Pickers of the Card pane: what a blank, a chip or a select of a line can take, and the commands a choice runs.
+//! Pickers of the Card pane: what a blank, a chip or a select of a line can take, and the commands a choice runs. The
+//! Sheet pane's parameter picker shares their parts.
 //!
 //! A *picker* lists only what fits its place, in groups under headings: the results of the lines above ("From lines
 //! above"), the thing's properties ("This cell's properties", "This bird's properties"), the parameters with "New
@@ -10,26 +11,26 @@
 //! A *result above* a line is the result of a line higher on its card. A result worked out inside a When is open only
 //! to the lines after it inside that When.
 
-use egui::{Color32, Frame, Id, Key, Popup, PopupCloseBehavior, Response, RichText, ScrollArea, TextEdit, Ui};
+use egui::{Color32, Frame, Id, Key, Popup, PopupCloseBehavior, Rect, Response, RichText, ScrollArea, TextEdit, Ui};
 use henad_core::metadata::TimeUnit;
 use henad_graph::sheet::check::changes_property;
 use henad_graph::sheet::document::{
-    Around, CardRuns, CellWhich, ChipRelation, CompareTest, LineKind, LineMode, ParameterType, PickRule, PropertyType,
-    SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, SummaryKind,
+    Around, CELLS_ID, CardRuns, CellWhich, ChipRelation, CompareTest, GROUND_ID, LineKind, LineMode, ParameterType,
+    PickRule, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot,
+    SummaryKind,
 };
-use henad_graph::sheet::edit::{LineField, SheetEdit, automatic_name};
+use henad_graph::sheet::edit::{LineField, SheetEdit, automatic_name, slot_value};
 use henad_graph::sheet::format_number;
 use henad_graph::sheet::rates::parameter_rate_unit;
 use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
-    ANY_STATE, ANY_STATE_ID, Blank, CHANCE_BOX_HINT, CHOOSE_WHEN, COMPARISONS, CONDITIONS, ConditionItem, DrawKind,
-    FROM_LINES_ABOVE, FieldPlace, LIST_GROUP, LIST_HINT, LIST_IN_ONE_NUMBER, NEW_PARAMETER,
-    NO_NUMBER_PROPERTY_ON_SHEET, NO_NUMBER_RESULT, NO_STATES, NO_STATES_PROPERTY, NO_YES_OR_NO_RESULT, NUMBER_BOX_HINT,
-    OR_A_NEW_CONDITION, OTHERWISE, PARAMETERS, PROPERTIES, PartPlace, PlaceTarget, REMOVE_FOR_EACH, REMOVE_FROM_LIST,
-    STATES, Sentences, THIS_CELLS_PROPERTIES, TYPE_ONE_NUMBER, USE_BUTTON, around_words, binary_formula,
-    comparison_words, for_each_lead, literal_words, my_property_item, operation_words, otherwise_description,
-    otherwise_item_name, rate_unit_word, read_typed_number, result_condition_item, result_description,
-    shared_state_name, this_cells_property, when_lead,
+    ANY_STATE, ANY_STATE_ID, Blank, CHOOSE_WHEN, COMPARISONS, CONDITIONS, ConditionItem, DrawKind, FROM_LINES_ABOVE,
+    FieldPlace, LIST_GROUP, LIST_HINT, LIST_IN_ONE_NUMBER, NEW_PARAMETER, NO_NUMBER_PROPERTY_ON_SHEET,
+    NO_NUMBER_RESULT, NO_STATES, NO_STATES_PROPERTY, NO_YES_OR_NO_RESULT, OR_A_NEW_CONDITION, OTHERWISE, PARAMETERS,
+    PROPERTIES, PartPlace, PlaceTarget, REMOVE_FOR_EACH, REMOVE_FROM_LIST, STATES, Sentences, THIS_CELLS_PROPERTIES,
+    TYPE_ONE_NUMBER, USE_BUTTON, around_words, binary_formula, comparison_words, for_each_lead, literal_words,
+    my_property_item, operation_words, otherwise_description, otherwise_item_name, rate_unit_word, read_typed_number,
+    result_condition_item, result_description, shared_state_name, this_cells_property, when_lead,
 };
 use henad_graph::sheet::sentence::{
     AddItem, CHOOSE_A_SUMMARY, EVENTS, GROUND_PROPERTIES, LOOK_AT_AHEAD, LOOK_AT_HERE, LOOK_AT_PLACE, NO_EVENT,
@@ -38,11 +39,11 @@ use henad_graph::sheet::sentence::{
     this_things_properties, this_things_property,
 };
 
-use super::accessible_group;
 use super::widgets::{
     NumberUse, OVERLAY_PADDING, OverlayItem, PICKER_WIDTH, color32, message_ui, overlay, overlay_group, overlay_item,
     overlay_title, set_name,
 };
+use super::{accessible_group, over_agents, properties_of};
 
 /// Tallest a picker grows in points before it scrolls.
 const PICKER_HEIGHT: f32 = 420.0;
@@ -99,6 +100,25 @@ pub struct PickerItem {
     pub swatch: Option<Color32>,
     /// Value choosing the item puts in the place.
     pub choice: Choice,
+}
+
+impl PickerItem {
+    /// Returns the item showing `label`, named by its words, with no detail or swatch, that puts `choice` in its place.
+    pub fn new(label: impl Into<String>, choice: Choice) -> Self {
+        Self {
+            label: label.into(),
+            name: None,
+            detail: None,
+            swatch: None,
+            choice,
+        }
+    }
+
+    /// Returns the item with `detail` in grey under its words.
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
 }
 
 /// One group of a picker: a heading and its items.
@@ -174,42 +194,28 @@ impl CardPicker {
         let popup = Popup::from_response(anchor)
             .id(popup_id)
             .open_memory(None)
-            .close_behavior(PopupCloseBehavior::IgnoreClicks)
-            .width(PICKER_WIDTH)
-            .frame(Frame::NONE)
-            .show(|ui| {
-                overlay(ui, |ui| {
-                    ui.set_min_width(PICKER_WIDTH - 2.0 * OVERLAY_PADDING);
-                    // A long picker scrolls. A short one takes its own height. A scroll area lags a frame behind it.
-                    let choice = if self.groups.iter().map(|group| group.items.len()).sum::<usize>() > LONG_PICKER {
-                        ScrollArea::vertical()
-                            .max_height(PICKER_HEIGHT)
-                            .show(ui, |ui| self.contents(ui, popup_id))
-                            .inner
-                    } else {
-                        self.contents(ui, popup_id)
-                    };
-                    (choice, ui.unique_id())
-                })
-            });
-        let Some(popup) = popup else {
+            .close_behavior(PopupCloseBehavior::IgnoreClicks);
+        let shown = picker_overlay(ui, popup, &self.title, |ui| {
+            // A long picker scrolls. A short one takes its own height. A scroll area lags a frame behind it.
+            if self.groups.iter().map(|group| group.items.len()).sum::<usize>() > LONG_PICKER {
+                ScrollArea::vertical()
+                    .max_height(PICKER_HEIGHT)
+                    .show(ui, |ui| self.contents(ui, popup_id))
+                    .inner
+            } else {
+                self.contents(ui, popup_id)
+            }
+        });
+        let Some((choice, rect)) = shown else {
             *open = false;
             return None;
         };
-        let (choice, id) = popup.inner;
-        accessible_group(
-            ui.ctx(),
-            id,
-            egui::accesskit::Role::Dialog,
-            &self.title,
-            popup.response.rect,
-        );
         let clicked_outside = ui.input(|input| {
             input.pointer.any_click()
                 && input
                     .pointer
                     .interact_pos()
-                    .is_some_and(|position| !popup.response.rect.contains(position) && !anchor.rect.contains(position))
+                    .is_some_and(|position| !rect.contains(position) && !anchor.rect.contains(position))
         });
         if choice.is_some() || (was_open && clicked_outside) {
             Popup::close_id(ui.ctx(), popup_id);
@@ -249,25 +255,9 @@ impl CardPicker {
                 choice = Some(Choice::Numbers(numbers));
             }
         }
-        for group in &self.groups {
-            if group.items.is_empty() {
-                continue;
-            }
-            offered = true;
-            overlay_group(ui, &group.heading);
-            for item in &group.items {
-                let row = OverlayItem {
-                    label: &item.label,
-                    name: item.name.as_deref(),
-                    detail: item.detail.as_deref(),
-                    described: true,
-                    current: self.current.as_deref() == Some(item.label.as_str()),
-                    swatch: item.swatch,
-                };
-                if overlay_item(ui, &row).clicked() {
-                    choice = Some(item.choice.clone());
-                }
-            }
+        offered |= self.groups.iter().any(|group| !group.items.is_empty());
+        if let Some(clicked) = groups_ui(ui, &self.groups, self.current.as_deref()) {
+            choice = Some(clicked);
         }
         if self.new_parameter || self.number_box.as_ref().is_some_and(|number_box| !number_box.first) {
             ui.add_space(4.0);
@@ -307,6 +297,132 @@ impl CardPicker {
     }
 }
 
+/// A picker of the Sheet pane: the sheet's parameters, "New parameter..." and, for a number that takes one, a Number
+/// box.
+#[derive(Debug, Clone)]
+pub struct ParameterPicker<'a> {
+    /// Title of the picker, such as "Choose a parameter".
+    pub title: &'a str,
+    /// Sheet whose parameters the picker offers.
+    pub document: &'a SheetDocument,
+    /// Range the Number box reads, `None` for a picker with no Number box.
+    pub number_box: Option<NumberUse>,
+}
+
+impl ParameterPicker<'_> {
+    /// Draws the picker under `anchor` while it is open, and returns the choice made in it. A click on `anchor` opens
+    /// and closes it, and a choice, a click outside or Escape closes it.
+    ///
+    /// The picker's open state lives under the anchor's id with "picker". A chip or a text control that anchors it
+    /// then shows itself open.
+    pub fn show(self, ui: &Ui, anchor: &Response) -> Option<Choice> {
+        let popup = Popup::from_toggle_button_response(anchor)
+            .id(anchor.id.with("picker"))
+            .close_behavior(PopupCloseBehavior::CloseOnClickOutside);
+        let (choice, _) = picker_overlay(ui, popup, self.title, |ui| {
+            let choice = self.contents(ui);
+            if choice.is_some() {
+                ui.close();
+            }
+            choice
+        })?;
+        choice
+    }
+
+    /// Draws what the picker offers, and returns the choice made.
+    fn contents(&self, ui: &mut Ui) -> Option<Choice> {
+        overlay_title(ui, self.title);
+        let parameters = PickerGroup {
+            heading: PARAMETERS.to_owned(),
+            items: parameter_items(self.document, NumberUse::Number),
+        };
+        let mut choice = groups_ui(ui, &[parameters], None);
+        ui.add_space(4.0);
+        let row = OverlayItem {
+            label: NEW_PARAMETER,
+            ..OverlayItem::default()
+        };
+        if overlay_item(ui, &row).clicked() {
+            choice = Some(Choice::NewParameter);
+        }
+        if let Some(number_use) = self.number_box {
+            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing.y = 4.0;
+            if let Some(literal) = parameter_number_box(ui, number_use) {
+                choice = Some(Choice::Value(SheetValue::Literal(literal)));
+            }
+        }
+        ui.add_space(2.0);
+        choice
+    }
+}
+
+/// Draws `popup` as a picker titled `title`: an overlay [`PICKER_WIDTH`] wide that holds `contents`, named as a dialog
+/// by its title. Returns what `contents` returns and the picker's rectangle, `None` while the popup is closed.
+fn picker_overlay<R>(ui: &Ui, popup: Popup<'_>, title: &str, contents: impl FnOnce(&mut Ui) -> R) -> Option<(R, Rect)> {
+    let popup = popup.width(PICKER_WIDTH).frame(Frame::NONE).show(|ui| {
+        overlay(ui, |ui| {
+            ui.set_min_width(PICKER_WIDTH - 2.0 * OVERLAY_PADDING);
+            (contents(ui), ui.unique_id())
+        })
+    })?;
+    let (inner, id) = popup.inner;
+    accessible_group(ui.ctx(), id, egui::accesskit::Role::Dialog, title, popup.response.rect);
+    Some((inner, popup.response.rect))
+}
+
+/// Draws the groups of a picker that hold an item, each under its heading, and returns the choice of the item clicked.
+/// The item whose words are `current` takes the tinted fill and a check.
+fn groups_ui(ui: &mut Ui, groups: &[PickerGroup], current: Option<&str>) -> Option<Choice> {
+    let mut choice = None;
+    for group in groups {
+        if group.items.is_empty() {
+            continue;
+        }
+        overlay_group(ui, &group.heading);
+        for item in &group.items {
+            let row = OverlayItem {
+                label: &item.label,
+                name: item.name.as_deref(),
+                detail: item.detail.as_deref(),
+                described: true,
+                current: current == Some(item.label.as_str()),
+                swatch: item.swatch,
+            };
+            if overlay_item(ui, &row).clicked() {
+                choice = Some(item.choice.clone());
+            }
+        }
+    }
+    choice
+}
+
+/// Returns the parameters of `document` that a number read as `number_use` takes, each with its value and unit beside
+/// it.
+///
+/// A rate's picker leaves out a parameter whose Unit is set and names no unit of time, and a chance's picker leaves out
+/// a rate parameter, one whose Unit names a unit of time, as "per day" does. Any other number offers every parameter.
+fn parameter_items(document: &SheetDocument, number_use: NumberUse) -> Vec<PickerItem> {
+    document
+        .parameters
+        .iter()
+        .filter(|parameter| match number_use {
+            NumberUse::Chance => parameter_rate_unit(parameter).is_none(),
+            NumberUse::Rate => parameter.unit.is_none() || parameter_rate_unit(parameter).is_some(),
+            NumberUse::Number => true,
+            NumberUse::Times => parameter.parameter_type == ParameterType::WholeNumber,
+        })
+        .map(|parameter| {
+            let value = format_number(parameter.default).unwrap_or_default();
+            let choice = Choice::Value(SheetValue::Chip(SheetChip::Param(parameter.id.clone())));
+            PickerItem::new(parameter.name.clone(), choice).with_detail(match &parameter.unit {
+                Some(unit) => format!("{value} {unit}"),
+                None => value,
+            })
+        })
+        .collect()
+}
+
 /// Text typed in a box of a picker and the messages under it.
 #[derive(Debug, Clone, Default)]
 struct BoxDraft {
@@ -318,15 +434,25 @@ struct BoxDraft {
     shown: bool,
 }
 
+/// Draws a box `width` points wide over `text`, named `name`, with the Use button beside it, and returns the box's
+/// response and whether Enter or Use submitted the text.
+fn typed_box_row(ui: &mut Ui, text: &mut String, name: &str, width: f32) -> (Response, bool) {
+    ui.horizontal(|ui| {
+        let field = ui.add(TextEdit::singleline(text).desired_width(width));
+        set_name(ui, field.id, name);
+        let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
+        let used = ui.button(USE_BUTTON).clicked();
+        (field, used || entered)
+    })
+    .inner
+}
+
 /// Draws the Number box of the picker `popup_id`, and returns the number typed once Enter or Use is pressed on text
 /// that reads in its range.
 ///
 /// A list such as "2, 3" says to choose "is one of" first.
 fn number_box_ui(ui: &mut Ui, popup_id: Id, number_box: &NumberBox) -> Option<SheetLiteral> {
-    let hint = match number_box.number_use {
-        NumberUse::Chance => CHANCE_BOX_HINT,
-        NumberUse::Rate | NumberUse::Number | NumberUse::Times => NUMBER_BOX_HINT,
-    };
+    let hint = number_box.number_use.box_hint();
     ui.weak(hint);
     let id = popup_id.with(NUMBER_BOX_ID);
     let mut draft: BoxDraft = ui.data(|data| data.get_temp(id)).unwrap_or_default();
@@ -336,31 +462,51 @@ fn number_box_ui(ui: &mut Ui, popup_id: Id, number_box: &NumberBox) -> Option<Sh
         draft.shown = true;
     }
     let mut typed = None;
-    ui.horizontal(|ui| {
-        let field = ui.add(TextEdit::singleline(&mut draft.text).desired_width(140.0));
-        set_name(ui, field.id, hint);
-        if first_frame && number_box.first {
-            field.request_focus();
-        }
-        let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
-        if ui.button(USE_BUTTON).clicked() || entered {
-            match number_box.number_use.read(&draft.text) {
-                Ok(literal) => {
-                    typed = Some(literal);
-                    draft = BoxDraft::default();
+    let (field, submitted) = typed_box_row(ui, &mut draft.text, hint, 140.0);
+    if first_frame && number_box.first {
+        field.request_focus();
+    }
+    if submitted {
+        match number_box.number_use.read(&draft.text) {
+            Ok(literal) => {
+                typed = Some(literal);
+                draft = BoxDraft::default();
+            }
+            Err(message) => {
+                draft.messages = vec![message];
+                if message == TYPE_ONE_NUMBER && read_numbers(&draft.text).is_some_and(|numbers| numbers.len() > 1) {
+                    draft.messages.push(LIST_IN_ONE_NUMBER);
                 }
-                Err(message) => {
-                    draft.messages = vec![message];
-                    if message == TYPE_ONE_NUMBER && read_numbers(&draft.text).is_some_and(|numbers| numbers.len() > 1)
-                    {
-                        draft.messages.push(LIST_IN_ONE_NUMBER);
-                    }
-                    // The refused text stays in the box. The box keeps the focus for another try.
-                    field.request_focus();
-                }
+                // The refused text stays in the box. The box keeps the focus for another try.
+                field.request_focus();
             }
         }
-    });
+    }
+    for message in &draft.messages {
+        message_ui(ui, message);
+    }
+    ui.data_mut(|data| data.insert_temp(id, draft));
+    typed
+}
+
+/// Draws the Number box of a picker of the Sheet pane, and returns the number typed once Enter or Use is pressed on
+/// text that reads in the range of `number_use`.
+fn parameter_number_box(ui: &mut Ui, number_use: NumberUse) -> Option<SheetLiteral> {
+    let hint = number_use.box_hint();
+    ui.weak(hint);
+    let id = ui.id().with("henad_number_box");
+    let mut draft: BoxDraft = ui.data(|data| data.get_temp(id)).unwrap_or_default();
+    let mut typed = None;
+    let (_, submitted) = typed_box_row(ui, &mut draft.text, hint, 120.0);
+    if submitted {
+        match number_use.read(&draft.text) {
+            Ok(literal) => {
+                typed = Some(literal);
+                draft = BoxDraft::default();
+            }
+            Err(message) => draft.messages = vec![message],
+        }
+    }
     for message in &draft.messages {
         message_ui(ui, message);
     }
@@ -378,23 +524,19 @@ fn list_box_ui(ui: &mut Ui, popup_id: Id) -> Option<Vec<SheetLiteral>> {
     let first_frame = !draft.shown;
     draft.shown = true;
     let mut typed = None;
-    ui.horizontal(|ui| {
-        let field = ui.add(TextEdit::singleline(&mut draft.text).desired_width(140.0));
-        set_name(ui, field.id, LIST_HINT);
-        if first_frame {
+    let (field, submitted) = typed_box_row(ui, &mut draft.text, LIST_HINT, 140.0);
+    if first_frame {
+        field.request_focus();
+    }
+    if submitted {
+        if let Some(numbers) = read_numbers(&draft.text) {
+            typed = Some(numbers);
+            draft = BoxDraft::default();
+        } else {
+            draft.messages = vec![TYPE_ONE_NUMBER];
             field.request_focus();
         }
-        let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
-        if ui.button(USE_BUTTON).clicked() || entered {
-            if let Some(numbers) = read_numbers(&draft.text) {
-                typed = Some(numbers);
-                draft = BoxDraft::default();
-            } else {
-                draft.messages = vec![TYPE_ONE_NUMBER];
-                field.request_focus();
-            }
-        }
-    });
+    }
     for message in &draft.messages {
         message_ui(ui, message);
     }
@@ -461,23 +603,6 @@ fn result_kinds(line: &SheetLine) -> &'static [ResultKind] {
     }
 }
 
-/// Returns whether a line of `kind` works out a result, so that it has a name to rename.
-pub fn is_result_line(kind: LineKind) -> bool {
-    !matches!(
-        kind,
-        LineKind::Become
-            | LineKind::Set
-            | LineKind::Steer
-            | LineKind::KeepBetween
-            | LineKind::Move
-            | LineKind::Leave
-            | LineKind::Record
-            | LineKind::When
-            | LineKind::Repeat
-            | LineKind::Always
-    )
-}
-
 impl LineContext<'_> {
     /// Returns the ids of the lines above the line whose results it can use, in display order: every line above it
     /// on its card, a line inside a When or Repeat only to the lines after it inside that block.
@@ -522,21 +647,20 @@ impl LineContext<'_> {
                     .or_else(|| automatic_name(self.document, line))
                     .unwrap_or_else(|| id.to_owned());
                 let number = self.relations.number(id).unwrap_or(0);
-                Some(PickerItem {
-                    label: if condition {
-                        result_condition_item(&name, self.line.kind == LineKind::When)
-                    } else {
-                        name
-                    },
-                    name: None,
-                    detail: Some(result_description(number, &self.sentences.result_words(line))),
-                    swatch: None,
-                    choice: Choice::Value(SheetValue::Chip(SheetChip::Result {
-                        line: id.to_owned(),
-                        part: None,
-                        property: None,
-                    })),
-                })
+                let label = if condition {
+                    result_condition_item(&name, self.line.kind == LineKind::When)
+                } else {
+                    name
+                };
+                let choice = Choice::Value(SheetValue::Chip(SheetChip::Result {
+                    line: id.to_owned(),
+                    part: None,
+                    property: None,
+                }));
+                Some(
+                    PickerItem::new(label, choice)
+                        .with_detail(result_description(number, &self.sentences.result_words(line))),
+                )
             })
             .collect()
     }
@@ -576,13 +700,7 @@ impl LineContext<'_> {
             }
             items.extend(chips.into_iter().map(|chip| {
                 let value = SheetValue::Chip(chip);
-                PickerItem {
-                    label: self.sentences.value(&value, None),
-                    name: None,
-                    detail: Some(detail.clone()),
-                    swatch: None,
-                    choice: Choice::Value(value),
-                }
+                PickerItem::new(self.sentences.value(&value, None), Choice::Value(value)).with_detail(detail.clone())
             }));
         }
         items
@@ -593,33 +711,22 @@ impl LineContext<'_> {
         self.document
             .line(self.line_id)
             .and_then(|(card, _)| self.document.cards.get(card))
-            .map_or("cells", |card| card.every.as_str())
+            .map_or(CELLS_ID, |card| card.every.as_str())
     }
 
     /// Returns whether the line's card runs over agents.
     fn agents(&self) -> bool {
-        self.every() != "cells"
+        over_agents(self.every())
     }
 
     /// Returns the properties of the kind of thing the line's card runs over.
     fn properties(&self) -> &[SheetProperty] {
-        let every = self.every();
-        if every == "cells" {
-            return self.document.cells.as_deref().unwrap_or_default();
-        }
-        self.document
-            .agents
-            .iter()
-            .find(|kind| kind.id == every)
-            .map_or(&[], |kind| kind.properties.as_slice())
+        properties_of(self.document, self.every())
     }
 
     /// Returns the properties of the ground under agents.
     fn ground_properties(&self) -> &[SheetProperty] {
-        self.document
-            .ground
-            .as_ref()
-            .map_or(&[], |ground| ground.properties.as_slice())
+        properties_of(self.document, GROUND_ID)
     }
 
     /// Returns the heading of the group of the properties of the thing the line's card runs over, "This cell's
@@ -640,25 +747,22 @@ impl LineContext<'_> {
         let agents = self.agents();
         let mut items = Vec::new();
         for property in self.properties().iter().filter(|property| keep(property)) {
-            items.push(PickerItem {
-                label: my_property_item(&property.name),
-                name: None,
-                detail: Some(if agents {
-                    this_things_property(&thing, &property.name)
-                } else {
-                    this_cells_property(&property.name)
-                }),
-                swatch: None,
-                choice: Choice::Value(SheetValue::Chip(SheetChip::My(property.id.clone()))),
-            });
+            let detail = if agents {
+                this_things_property(&thing, &property.name)
+            } else {
+                this_cells_property(&property.name)
+            };
+            let choice = Choice::Value(SheetValue::Chip(SheetChip::My(property.id.clone())));
+            items.push(PickerItem::new(my_property_item(&property.name), choice).with_detail(detail));
             if agents && let Some(last) = self.last_change_above(property) {
-                items.push(PickerItem {
-                    label: my_new_property_item(&property.name),
-                    name: None,
-                    detail: Some(my_new_detail(&thing, &property.name, last)),
-                    swatch: None,
-                    choice: Choice::Value(SheetValue::Chip(SheetChip::MyNew(property.id.clone()))),
-                });
+                let choice = Choice::Value(SheetValue::Chip(SheetChip::MyNew(property.id.clone())));
+                items.push(
+                    PickerItem::new(my_new_property_item(&property.name), choice).with_detail(my_new_detail(
+                        &thing,
+                        &property.name,
+                        last,
+                    )),
+                );
             }
         }
         items
@@ -687,13 +791,11 @@ impl LineContext<'_> {
             .map(|property| {
                 let mut formula = SheetLine::new(LineKind::Calculate);
                 formula.formula = Some(format!("length(my.{})", property.id));
-                PickerItem {
-                    label: length_of_item(&property.name),
-                    name: None,
-                    detail: Some(this_things_property(&thing, &property.name)),
-                    swatch: None,
-                    choice: Choice::Value(SheetValue::Phrase(Box::new(formula))),
-                }
+                PickerItem::new(
+                    length_of_item(&property.name),
+                    Choice::Value(SheetValue::Phrase(Box::new(formula))),
+                )
+                .with_detail(this_things_property(&thing, &property.name))
             })
             .collect()
     }
@@ -704,12 +806,9 @@ impl LineContext<'_> {
             .properties()
             .iter()
             .filter(|property| property.property_type != PropertyType::States)
-            .map(|property| PickerItem {
-                label: their_property_item(&property.name),
-                name: None,
-                detail: None,
-                swatch: None,
-                choice: Choice::Value(SheetValue::Chip(SheetChip::Their(property.id.clone()))),
+            .map(|property| {
+                let choice = Choice::Value(SheetValue::Chip(SheetChip::Their(property.id.clone())));
+                PickerItem::new(their_property_item(&property.name), choice)
             })
             .collect();
         items.extend(
@@ -719,49 +818,17 @@ impl LineContext<'_> {
                 ChipRelation::DistanceToThem,
             ]
             .into_iter()
-            .map(|relation| PickerItem {
-                label: relation_words(relation).to_owned(),
-                name: None,
-                detail: None,
-                swatch: None,
-                choice: Choice::Value(SheetValue::Chip(SheetChip::Relation(relation))),
+            .map(|relation| {
+                PickerItem::new(
+                    relation_words(relation),
+                    Choice::Value(SheetValue::Chip(SheetChip::Relation(relation))),
+                )
             }),
         );
         PickerGroup {
             heading: each_looked_at(&self.sentences.thing_word(self.every())),
             items,
         }
-    }
-
-    /// Returns the parameters as items, each with its value and unit beside it.
-    ///
-    /// A rate's picker leaves out a parameter whose Unit is set and names no unit of time, and a chance's picker leaves
-    /// out a rate parameter, one whose Unit names a unit of time, as "per day" does. Any other number offers every
-    /// parameter.
-    fn parameters(&self, number_use: NumberUse) -> Vec<PickerItem> {
-        self.document
-            .parameters
-            .iter()
-            .filter(|parameter| match number_use {
-                NumberUse::Chance => parameter_rate_unit(parameter).is_none(),
-                NumberUse::Rate => parameter.unit.is_none() || parameter_rate_unit(parameter).is_some(),
-                NumberUse::Number => true,
-                NumberUse::Times => parameter.parameter_type == ParameterType::WholeNumber,
-            })
-            .map(|parameter| {
-                let value = format_number(parameter.default).unwrap_or_default();
-                PickerItem {
-                    label: parameter.name.clone(),
-                    name: None,
-                    detail: Some(match &parameter.unit {
-                        Some(unit) => format!("{value} {unit}"),
-                        None => value,
-                    }),
-                    swatch: None,
-                    choice: Choice::Value(SheetValue::Chip(SheetChip::Param(parameter.id.clone()))),
-                }
-            })
-            .collect()
     }
 
     /// Returns the states of `property`, or of every States property when `property` is `None`, as items named as chips
@@ -781,15 +848,13 @@ impl LineContext<'_> {
                     let shared = states_properties
                         .iter()
                         .any(|other| other.id != owner.id && other.states.iter().any(|known| known.name == state.name));
+                    let choice = Choice::State {
+                        property: owner.id.clone(),
+                        state: state.id.clone(),
+                    };
                     PickerItem {
-                        label: shared_state_name(&owner.name, &state.name, shared),
-                        name: None,
-                        detail: None,
                         swatch: Some(color32(state.color)),
-                        choice: Choice::State {
-                            property: owner.id.clone(),
-                            state: state.id.clone(),
-                        },
+                        ..PickerItem::new(shared_state_name(&owner.name, &state.name, shared), choice)
                     }
                 })
             })
@@ -864,13 +929,7 @@ pub fn picker_for(
     match want {
         Blank::State => one_group(NO_STATES, STATES, context.states(property)),
         Blank::OldState => {
-            let mut items = vec![PickerItem {
-                label: ANY_STATE.to_owned(),
-                name: None,
-                detail: None,
-                swatch: None,
-                choice: Choice::AnyState,
-            }];
+            let mut items = vec![PickerItem::new(ANY_STATE, Choice::AnyState)];
             items.extend(context.states(property));
             one_group(NO_STATES, STATES, items)
         }
@@ -965,13 +1024,7 @@ fn ground_number_items(context: &LineContext<'_>) -> Vec<PickerItem> {
         .ground_properties()
         .iter()
         .filter(|property| property.property_type == PropertyType::Number)
-        .map(|property| PickerItem {
-            label: property.name.clone(),
-            name: None,
-            detail: None,
-            swatch: None,
-            choice: Choice::Property(property.id.clone()),
-        })
+        .map(|property| PickerItem::new(property.name.clone(), Choice::Property(property.id.clone())))
         .collect()
 }
 
@@ -981,13 +1034,7 @@ fn event_items(context: &LineContext<'_>) -> Vec<PickerItem> {
         .document
         .events
         .iter()
-        .map(|event| PickerItem {
-            label: event.name.clone(),
-            name: None,
-            detail: None,
-            swatch: None,
-            choice: Choice::Event(event.id.clone()),
-        })
+        .map(|event| PickerItem::new(event.name.clone(), Choice::Event(event.id.clone())))
         .collect()
 }
 
@@ -1026,7 +1073,7 @@ fn number_picker(
     }
     picker.groups.push(PickerGroup {
         heading: PARAMETERS.to_owned(),
-        items: context.parameters(number_use),
+        items: parameter_items(context.document, number_use),
     });
     if agents && number_use == NumberUse::Number {
         // The new values come before the parameters, as a long picker scrolls.
@@ -1050,21 +1097,15 @@ fn number_picker(
 /// Returns the new values a picker of a value offers on a card over agents: a random number between two values, and
 /// when `arrow` holds a random direction of a length. Each is a phrase whose own values start blank.
 fn new_values(arrow: bool) -> Vec<PickerItem> {
-    let mut items = vec![PickerItem {
-        label: AddItem::RandomNumber.pattern(None),
-        name: None,
-        detail: None,
-        swatch: None,
-        choice: Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomNumber)))),
-    }];
+    let mut items = vec![PickerItem::new(
+        AddItem::RandomNumber.pattern(None),
+        Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomNumber)))),
+    )];
     if arrow {
-        items.push(PickerItem {
-            label: AddItem::RandomDirection.pattern(None),
-            name: None,
-            detail: None,
-            swatch: None,
-            choice: Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomDirection)))),
-        });
+        items.push(PickerItem::new(
+            AddItem::RandomDirection.pattern(None),
+            Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomDirection)))),
+        ));
     }
     items
 }
@@ -1075,13 +1116,7 @@ fn property_items(context: &LineContext<'_>, keep: impl Fn(&SheetProperty) -> bo
         .properties()
         .iter()
         .filter(|property| keep(property))
-        .map(|property| PickerItem {
-            label: property.name.clone(),
-            name: None,
-            detail: None,
-            swatch: None,
-            choice: Choice::Property(property.id.clone()),
-        })
+        .map(|property| PickerItem::new(property.name.clone(), Choice::Property(property.id.clone())))
         .collect()
 }
 
@@ -1114,18 +1149,12 @@ pub fn choose_when(context: &LineContext<'_>, otherwise: &[usize]) -> CardPicker
         .filter(|item| offers_condition(context, *item))
         .map(|item| match item {
             ConditionItem::Always if !otherwise.is_empty() => PickerItem {
-                label: OTHERWISE.to_owned(),
                 name: Some(otherwise_item_name(otherwise)),
-                detail: Some(otherwise_description(otherwise)),
-                swatch: None,
-                choice: Choice::Condition(item),
+                ..PickerItem::new(OTHERWISE, Choice::Condition(item)).with_detail(otherwise_description(otherwise))
             },
             _ => PickerItem {
-                label: item.label(on_when),
-                name: None,
                 detail: item.description().map(str::to_owned),
-                swatch: None,
-                choice: Choice::Condition(item),
+                ..PickerItem::new(item.label(on_when), Choice::Condition(item))
             },
         })
         .collect();
@@ -1249,13 +1278,7 @@ pub fn summary_picker() -> CardPicker {
         heading: SUMMARIES.to_owned(),
         items: LOOK_SUMMARIES
             .into_iter()
-            .map(|kind| PickerItem {
-                label: summary_item(kind),
-                name: None,
-                detail: None,
-                swatch: None,
-                choice: Choice::Summary(kind),
-            })
+            .map(|kind| PickerItem::new(summary_item(kind), Choice::Summary(kind)))
             .collect(),
     }];
     picker
@@ -1425,7 +1448,7 @@ fn slot_choice(
             {
                 let left = format!("{outer}.left");
                 let their = SheetValue::Chip(SheetChip::Their(property.clone()));
-                if slot_at(line, &left).and_then(Slot::value) != Some(&their) {
+                if slot_value(line, &left) != Some(&their) {
                     edits.insert(0, set_slot(line_id, &left, filled(their)));
                 }
             }
@@ -1447,7 +1470,7 @@ fn slot_choice(
                         .find(|known| known.id == *property)
                         .is_some_and(|owner| owner.states.iter().any(|known| known.id == state))
                 };
-                if let Some(SheetValue::Chip(SheetChip::State(state))) = slot_at(line, &right).and_then(Slot::value)
+                if let Some(SheetValue::Chip(SheetChip::State(state))) = slot_value(line, &right)
                     && !owns(state)
                 {
                     edits.push(set_slot(line_id, &right, Slot::Blank));
@@ -1473,7 +1496,7 @@ fn row_of_condition(path: &str) -> Option<usize> {
 /// Returns the commands that put `choice` at item `index` of the list in the slot `slot` of `line`, the line
 /// `line_id`. The index one past the last item adds an item, and a list left empty turns blank.
 fn list_choice(line_id: &str, line: &SheetLine, slot: &str, index: usize, choice: &Choice) -> Vec<SheetEdit> {
-    let mut items = match slot_at(line, slot).and_then(Slot::value) {
+    let mut items = match slot_value(line, slot) {
         Some(SheetValue::List(items)) => items.clone(),
         _ => Vec::new(),
     };
@@ -1618,41 +1641,11 @@ fn value_token(value: &SheetValue) -> Option<String> {
 
 // Slots by path
 
-/// Returns the slot of `line` at the slot path `path`, `None` when the line holds no such slot.
-pub fn slot_at<'a>(line: &'a SheetLine, path: &str) -> Option<&'a Slot> {
-    let (head, rest) = match path.split_once('.') {
-        Some((head, rest)) => (head, Some(rest)),
-        None => (path, None),
-    };
-    let slot = match head {
-        "condition" => &line.condition,
-        "whose" => &line.whose,
-        "only" => &line.only,
-        "left" => &line.left,
-        "right" => &line.right,
-        "low" => &line.low,
-        "high" => &line.high,
-        "chance" => &line.chance,
-        "rate" => &line.rate,
-        "tries" => &line.tries,
-        "value" => &line.value,
-        "tolerance" => &line.tolerance,
-        _ => return None,
-    };
-    match rest {
-        None => Some(slot),
-        Some(rest) => match slot.value()? {
-            SheetValue::Phrase(phrase) => slot_at(phrase, rest),
-            _ => None,
-        },
-    }
-}
-
 /// Returns the phrase that holds the last slot of `path` in `line`, the line itself for a slot of its own.
 pub fn phrase_of<'a>(line: &'a SheetLine, path: &str) -> Option<&'a SheetLine> {
     match path.rsplit_once('.') {
         None => Some(line),
-        Some((outer, _)) => match slot_at(line, outer)?.value()? {
+        Some((outer, _)) => match slot_value(line, outer)? {
             SheetValue::Phrase(phrase) => Some(phrase),
             _ => None,
         },
@@ -1662,8 +1655,8 @@ pub fn phrase_of<'a>(line: &'a SheetLine, path: &str) -> Option<&'a SheetLine> {
 /// Returns the value at `target` of `line`, `None` for an empty place or a field.
 pub fn value_at<'a>(line: &'a SheetLine, target: &PlaceTarget) -> Option<&'a SheetValue> {
     match target {
-        PlaceTarget::Slot(path) => slot_at(line, path)?.value(),
-        PlaceTarget::ListItem { slot, index } => match slot_at(line, slot)?.value()? {
+        PlaceTarget::Slot(path) => slot_value(line, path),
+        PlaceTarget::ListItem { slot, index } => match slot_value(line, slot)? {
             SheetValue::List(items) => items.get(*index),
             _ => None,
         },
@@ -1673,7 +1666,7 @@ pub fn value_at<'a>(line: &'a SheetLine, target: &PlaceTarget) -> Option<&'a She
 
 /// Returns the length of the list in the slot at `path` of `line`, 0 for a slot that holds no list.
 pub fn list_len(line: &SheetLine, path: &str) -> usize {
-    match slot_at(line, path).and_then(Slot::value) {
+    match slot_value(line, path) {
         Some(SheetValue::List(items)) => items.len(),
         _ => 0,
     }

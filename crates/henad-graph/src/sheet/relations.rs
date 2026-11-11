@@ -22,7 +22,6 @@
 
 use std::collections::HashMap;
 
-use super::check::is_result_kind;
 use super::document::{
     Around, CompareTest, LineKind, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine, SheetProperty,
     SheetValue, Slot, SummaryKind,
@@ -731,7 +730,9 @@ impl<'a> CardRelations<'a> {
                     let condition = (!block.condition.is_blank()).then(|| sentences.slot(&block.condition, None));
                     Some(only_when_note(number, condition.as_deref()))
                 } else {
-                    is_result_kind(line.kind).then(|| worked_out_everywhere_note(number, thing))
+                    line.kind
+                        .works_out_result()
+                        .then(|| worked_out_everywhere_note(number, thing))
                 };
                 if let Some(text) = text {
                     notes.push(RelationNote {

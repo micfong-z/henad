@@ -31,15 +31,15 @@ The *code revision* counts changes of `GraphFile::code`'s hash, which `refresh` 
 `Move` or Arrange changes the revision and not the code revision. `preview_key` and the `program`
 cache follow the code revision, and a move leaves the preview running
 (`moving_a_node_leaves_the_preview_running`).
-Undo keeps the canonical text before each edit, `[editor]` included (`history.rs`, 200 snapshots),
-and consecutive edits with one coalesce key make one step (a literal dragged, a parameter's range,
-the world table) until the gesture ends. `settle` ends it when the primary button goes up, before
-and after the batch the release runs, and when keyboard focus moves (`pressed`, `focused`), so two
-drags of one field are two steps. The world table and a parameter's range and default show
-`shown_world` and `shown_param`, the last waiting `SetWorld` or `SetParam`, so a dragged field
-shows its value while the requests wait for the release. Keys over the canvas while no field has
-focus: command Z, command shift Z or command Y, Delete or Backspace on the selection, and egui's
-`Copy`, `Cut` and `Paste` events. Copy puts
+Undo keeps the canonical text before each edit, `[editor]` included (`editor/history.rs`, 200
+snapshots, which the sheet editor shares), and consecutive edits with one coalesce key make one step
+(a literal dragged, a parameter's range, the world table) until the gesture ends. `settle` ends it
+when the primary button goes up, before and after the batch the release runs, and when keyboard
+focus moves (`pressed`, `focused`), so two drags of one field are two steps. The world table and a
+parameter's range and default show `shown_world` and `shown_param`, the last waiting `SetWorld` or
+`SetParam`, so a dragged field shows its value while the requests wait for the release. Keys over
+the canvas while no field has focus: command Z, command shift Z or command Y, Delete or Backspace on
+the selection, and egui's `Copy`, `Cut` and `Paste` events. Copy puts
 `GraphBuilder::copy` text on the clipboard, and Paste places the nodes' top left at the pointer.
 
 `canvas.rs` holds `BodyCanvas` (the `Snarl<NodeView>`, the `NodeId` to egui-snarl node map, the
@@ -58,12 +58,12 @@ framing holds over frames until the target's rectangle stops changing. A plain c
 the modifier write of record #62 around `show`. Quick-add (`quick_add.rs`) opens on the background
 and on a dropped wire, and adds the node where the pointer was when the menu opened (`menu_origin`),
 since egui-snarl passes the menu's top left: `offered_kinds(document, Option<&Pass>, ..)` keeps the
-kinds the pass's stage, backend and domain take (`fn.input` and `fn.output` never), or in a function
-(`None`) the kinds with no sink effect (`SINKS`, as henad-graph's checker), the world's domain and
-the function's own input and output (`function_takes`), that have a socket for the wire's type, and
-that match every word of the query or a synonym. Opened inside a region's frame (`region_at`, the
-deepest frame painted this frame), it offers the kinds a region body takes (`ContextSet::region`,
-`region.put` included, `lane.set` not) and the node joins that region
+kinds the pass's stage (`ContextSet::allows`), backend and domain take (`fn.input` and `fn.output`
+never), or in a function (`None`) the kinds with no sink effect (`NodeDef::sink`), the world's
+domain and the function's own input and output (`function_takes`), that have a socket for the wire's
+type, and that match every word of the query or a synonym. Opened inside a region's frame
+(`region_at`, the deepest frame painted this frame), it offers the kinds a region body takes
+(`ContextSet::region`, `region.put` included, `lane.set` not) and the node joins that region
 (`GraphRequest::AddNode::region`), and outside every frame no region-only kind. Inside a frame,
 `can_add` (the nesting rule of `can_join` for a new node) leaves out a region kind that cannot nest
 there, and `GraphEditor::add_node` refuses the same cases. A Repeat added from
@@ -75,8 +75,9 @@ the input half, a link to an accumulator the output half, and every node inside 
 input half and feeds the output half, so a body sits between its halves. `place_unplaced` places an
 output half only in a body placed from scratch, and counts a node as placed by
 `EditorRegion::node_pos`, so a converted copy's labelled nodes with no `pos` are arranged too. It
-runs at load, on every edit's draft before the snapshot (`edit`, `add_node`, `wrap`,
-`add_function_port`) and after `restore`. Otherwise a node an
+runs at load, on every edit's draft before the snapshot (`GraphEditor::keep`, which `edit`,
+`add_node`, `wrap` and `add_function_port` call, and `refuse` shows a refused command's message)
+and after `restore`. Otherwise a node an
 edit leaves unplaced, such as a new function port's node or an import from a file with no node
 placement, reaches `BodyCanvas::moved` as a move, an edit of its own that clears redo after each
 undo.
@@ -136,7 +137,8 @@ another input's name through `GraphRequest::Refuse`, which sets the status line,
 Remove), Add input (`x`, `f32`), and the outputs as one comma-separated field. Its `text`, `inputs`
 and `outputs` leave `settings_lines`.
 
-`GraphEditor::program` compiles the document through `GraphProgram::compile`, `GridProgram` or
+`GraphEditor::program` compiles the document through `GraphProgram::compile` (`editor/program.rs`,
+with `CompiledProgram` and `LOADS`, which the sheet editor shares), `GridProgram` or
 `AgentProgram` by the world, once per code revision (`CompiledProgram`), for the generated WGSL view
 and the preview. `wgsl_view.rs` is a right panel, toggled by the toolbar's WGSL switch
 (`GraphRequest::ShowWgsl`), that shows `GeneratedShader::text` of each shader whose `passes` hold

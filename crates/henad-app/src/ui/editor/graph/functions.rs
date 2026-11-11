@@ -12,7 +12,7 @@ use super::passes::{FIELD_WIDTH, commit_field, count_badge};
 use super::{GraphEdit, GraphEditor, GraphRequest};
 use crate::icons::material_design_icons::{MDI_DELETE_OUTLINE, MDI_FILE_IMPORT_OUTLINE, MDI_PLUS};
 use crate::ui::mcs;
-use crate::ui::sweep::layout::add_button;
+use crate::ui::sweep::layout::{add_button, icon_button};
 
 /// Draws the functions panel.
 pub fn functions_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequest>) {
@@ -147,9 +147,14 @@ fn port_row(
                     }
                 }
             });
-        let remove = add_button(ui, true, Button::new(MDI_DELETE_OUTLINE).small(), "Remove port")
-            .on_hover_text("Remove port, once no node names it");
-        if remove.clicked() {
+        if icon_button(
+            ui,
+            MDI_DELETE_OUTLINE,
+            "Remove port",
+            "Remove port, once no node names it",
+        )
+        .clicked()
+        {
             requests.push(GraphRequest::Edit(GraphEdit::one(EditCommand::RemoveFunctionPort {
                 function: function.id.clone(),
                 side,

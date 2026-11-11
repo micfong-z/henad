@@ -711,3 +711,10 @@ pub const DISPLAY_NAMES: [DisplayName; 114] = [
 pub fn display_name(kind: &str) -> Option<&'static DisplayName> {
     DISPLAY_NAMES.iter().find(|entry| entry.kind == kind)
 }
+
+/// Returns the name a node of the kind `kind` shows: its display name, else the kind itself.
+///
+/// Every kind of the catalogue has a display name, so only a kind the catalogue lacks shows itself.
+pub fn kind_name(kind: &str) -> String {
+    display_name(kind).map_or_else(|| kind.to_owned(), |display| display.name.to_owned())
+}

@@ -15,7 +15,6 @@ pub mod canvas;
 pub mod changes;
 pub mod display;
 pub mod functions;
-pub mod history;
 pub mod passes;
 pub mod quick_add;
 pub mod sockets;
@@ -24,10 +23,9 @@ pub mod wgsl_view;
 pub mod world;
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 
-use egui::{Button, CentralPanel, Event, Frame, Id, Key, KeyboardShortcut, Margin, Modifiers, Panel, ScrollArea};
-use henad_compute::entry::ModelEntry;
+use egui::{Button, CentralPanel, Event, Frame, Id, Key, Margin, Modifiers, Panel, ScrollArea};
 use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
 use henad_core::params::ParamDescriptor;
 use henad_graph::GraphFile;
@@ -40,18 +38,20 @@ use henad_graph::limits::MAX_REPEAT_ITERATIONS;
 use henad_graph::node::{NodeBody, OP_FUNCTION_INPUT, OP_FUNCTION_OUTPUT, OP_REGION_REPEAT};
 use henad_graph::types::ValueType;
 use henad_graph::value::{ConfigValue, Literal, PortRef};
-use henad_graph::wgsl::{AgentProgram, GeneratedShader, GridProgram, Probes};
 
 use self::arrange::CanvasKey;
 use self::canvas::{BodyCanvas, CanvasContext, Framing, can_add, show_canvas};
-use self::history::History;
 use self::quick_add::{WireEnd, wire_port};
 use self::view_pass::{ViewTarget, view_file};
+use super::history::History;
+use super::program::{CompiledProgram, GraphProgram, LOADS};
+use super::undo_redo_keys;
 use crate::icons::material_design_icons::{
     MDI_CHEVRON_RIGHT, MDI_CODE_BRACES, MDI_CONTENT_COPY, MDI_DELETE_OUTLINE, MDI_EYE_OFF_OUTLINE, MDI_EYE_OUTLINE,
     MDI_FIT_TO_SCREEN_OUTLINE, MDI_FUNCTION_VARIANT, MDI_REDO, MDI_REPEAT, MDI_SITEMAP_OUTLINE, MDI_UNDO,
 };
 use crate::ui::sweep::layout::add_button;
+use crate::ui::text::capitalize;
 
 /// Default width in points of the side panel that holds the passes and the world.
 const SIDEBAR_WIDTH: f32 = 220.0;
@@ -61,10 +61,6 @@ const WGSL_WIDTH: f32 = 420.0;
 
 /// Distance in canvas points a paste moves its nodes when the pointer is off the canvas.
 const PASTE_OFFSET: [f64; 2] = [40.0, 40.0];
-
-/// Number of graphs and sheets loaded so far. It keeps the egui state of each graph's canvases apart, and gives each
-/// document a preview key of its own.
-pub(crate) static LOADS: AtomicU64 = AtomicU64::new(0);
 
 /// Problems the checker found at one node.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -246,74 +242,6 @@ struct WrapFit {
     /// Sizes of the input half and the puts at the last frame, which have to hold for two frames.
     sizes: Vec<egui::Vec2>,
 }
-
-/// Compiled program of a graph model of either topology.
-#[derive(Clone)]
-pub enum GraphProgram {
-    /// A model on a grid.
-    Grid(GridProgram),
-    /// A model of agents.
-    Agents(AgentProgram),
-}
-
-/// Prints the model's id and the topology.
-impl std::fmt::Debug for GraphProgram {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (topology, id) = match self {
-            Self::Grid(program) => ("grid", program.id()),
-            Self::Agents(program) => ("agents", program.id()),
-        };
-        f.debug_struct("GraphProgram")
-            .field("topology", &topology)
-            .field("id", &id)
-            .finish_non_exhaustive()
-    }
-}
-
-impl GraphProgram {
-    /// Compiles `file` through the compiler of its topology.
-    ///
-    /// # Errors
-    ///
-    /// Returns the problems that stop the file compiling.
-    pub fn compile(file: &GraphFile) -> CompiledProgram {
-        Self::compile_with_probes(file, &Probes::default())
-    }
-
-    /// Compiles `file` through the compiler of its topology, each step counting the fires of its probes in `probes`.
-    ///
-    /// # Errors
-    ///
-    /// Returns the problems that stop the file compiling, a probe that names no `bool` output of a tick pass included.
-    pub fn compile_with_probes(file: &GraphFile, probes: &Probes) -> CompiledProgram {
-        match file.document().world {
-            World::Grid(_) => GridProgram::compile_with_probes(file, probes).map(Self::Grid),
-            World::Agents(_) => AgentProgram::compile_with_probes(file, probes).map(Self::Agents),
-            _ => Err(vec![CodeDiagnostic::error(
-                "The Editor runs graphs on a grid or of agents.",
-            )]),
-        }
-    }
-
-    /// Generated shaders, in the order the engine runs them.
-    pub fn shaders(&self) -> &[GeneratedShader] {
-        match self {
-            Self::Grid(program) => program.shaders(),
-            Self::Agents(program) => program.shaders(),
-        }
-    }
-
-    /// Returns the model entry that builds the program.
-    pub fn entry(&self) -> ModelEntry {
-        match self {
-            Self::Grid(program) => program.entry(),
-            Self::Agents(program) => program.entry(),
-        }
-    }
-}
-
-/// Program of one revision of the document: the compiled model, or the problems that stop it compiling.
-pub type CompiledProgram = Result<GraphProgram, Vec<CodeDiagnostic>>;
 
 /// A graph model under edit.
 pub struct GraphEditor {
@@ -763,15 +691,13 @@ impl GraphEditor {
         let made = match draft.apply(command) {
             Ok(made) => made,
             Err(error) => {
-                self.status = Some(GraphStatus::warning(edit_message(&error)));
+                self.refuse(&error);
                 self.history.end_gesture();
                 self.mark_canvases();
                 return;
             }
         };
-        place_unplaced(&mut draft);
-        self.history.record(self.text(), None);
-        self.builder = draft;
+        self.keep(draft, None);
         self.status = None;
         self.refresh();
         if let (Some(bounds), [repeat, puts @ ..]) = (bounds, made.as_slice()) {
@@ -883,11 +809,9 @@ impl GraphEditor {
 
     /// Moves `nodes` of the open body into a new function named `function`, or `function_<n>` when that is taken.
     fn make_function(&mut self, nodes: Vec<NodeId>) {
-        let taken = |id: &str| self.document().functions.iter().any(|function| function.id == id);
-        let id = std::iter::once("function".to_owned())
-            .chain((2..).map(|number| format!("function_{number}")))
-            .find(|id| !taken(id))
-            .unwrap_or_default();
+        let id = unused_id("function", |id| {
+            self.document().functions.iter().any(|function| function.id == id)
+        });
         let command = EditCommand::MakeFunction {
             scope: self.scope.clone(),
             nodes,
@@ -910,11 +834,7 @@ impl GraphEditor {
             PortSide::Input => (&declared.inputs, "input", OP_FUNCTION_INPUT),
             _ => (&declared.outputs, "output", OP_FUNCTION_OUTPUT),
         };
-        let taken = |name: &str| ports.iter().any(|port| port.port == name);
-        let port = std::iter::once(word.to_owned())
-            .chain((2..).map(|number| format!("{word}_{number}")))
-            .find(|name| !taken(name))
-            .unwrap_or_default();
+        let port = unused_id(word, |name| ports.iter().any(|port| port.port == name));
         let scope = Scope::Function(function.to_owned());
         let mut draft = self.builder.clone();
         let added = draft
@@ -927,13 +847,11 @@ impl GraphEditor {
             .and_then(|_| draft.add_node(&scope, op, &[("port", ConfigValue::String(port))], &[]));
         match added {
             Ok(_) => {
-                place_unplaced(&mut draft);
-                self.history.record(self.text(), None);
-                self.builder = draft;
+                self.keep(draft, None);
                 self.status = None;
                 self.refresh();
             }
-            Err(error) => self.status = Some(GraphStatus::warning(edit_message(&error))),
+            Err(error) => self.refuse(&error),
         }
     }
 
@@ -976,6 +894,19 @@ impl GraphEditor {
         })
     }
 
+    /// Takes `draft`, the document after an edit, in place of the document: places the nodes it left unplaced, and
+    /// records the text before it as a step of undo under `coalesce`. The caller refreshes.
+    fn keep(&mut self, mut draft: GraphBuilder, coalesce: Option<&str>) {
+        place_unplaced(&mut draft);
+        self.history.record(self.text(), coalesce);
+        self.builder = draft;
+    }
+
+    /// Shows the message of `error`, the reason a command was refused, as a warning in the status line.
+    fn refuse(&mut self, error: &EditError) {
+        self.status = Some(GraphStatus::warning(edit_message(error)));
+    }
+
     /// Runs `commands` as one edit, and returns whether they ran. A refused command changes nothing and sets the
     /// status to its message.
     ///
@@ -998,15 +929,13 @@ impl GraphEditor {
                 _ => {}
             }
             if let Err(error) = draft.apply(command) {
-                self.status = Some(GraphStatus::warning(edit_message(&error)));
+                self.refuse(&error);
                 self.history.end_gesture();
                 self.mark_canvases();
                 return false;
             }
         }
-        place_unplaced(&mut draft);
-        self.history.record(self.text(), coalesce);
-        self.builder = draft;
+        self.keep(draft, coalesce);
         for (old, new) in renamed {
             if let Some(canvas) = self.canvases.remove(&old) {
                 self.canvases.insert(new.clone(), canvas);
@@ -1050,7 +979,7 @@ impl GraphEditor {
             Ok(Some(node)) => node,
             Ok(None) => return,
             Err(error) => {
-                self.status = Some(GraphStatus::warning(edit_message(&error)));
+                self.refuse(&error);
                 return;
             }
         };
@@ -1077,7 +1006,7 @@ impl GraphEditor {
             ];
             for command in defaults {
                 if let Err(error) = draft.apply(command) {
-                    self.status = Some(GraphStatus::warning(edit_message(&error)));
+                    self.refuse(&error);
                 }
             }
         }
@@ -1105,11 +1034,9 @@ impl GraphEditor {
         if let Some(connect) = connect
             && let Err(error) = draft.apply(connect)
         {
-            self.status = Some(GraphStatus::warning(edit_message(&error)));
+            self.refuse(&error);
         }
-        place_unplaced(&mut draft);
-        self.history.record(self.text(), None);
-        self.builder = draft;
+        self.keep(draft, None);
         self.refresh();
     }
 
@@ -1128,7 +1055,7 @@ impl GraphEditor {
                 true
             }
             Err(error) => {
-                self.status = Some(GraphStatus::warning(edit_message(&error)));
+                self.refuse(&error);
                 false
             }
         }
@@ -1375,15 +1302,22 @@ fn edit_message(error: &EditError) -> String {
 
 /// Returns `text` with its first letter in upper case and a full stop.
 fn sentence(text: &str) -> String {
-    let mut chars = text.chars();
-    let mut message: String = chars
-        .next()
-        .map(|first| first.to_uppercase().chain(chars).collect())
-        .unwrap_or_default();
+    let mut message = capitalize(text);
     if !message.ends_with('.') {
         message.push('.');
     }
     message
+}
+
+/// Returns `wanted`, or `wanted` with the first number from 2 after an underscore that `taken` does not hold.
+fn unused_id(wanted: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(wanted) {
+        return wanted.to_owned();
+    }
+    (2..)
+        .map(|number| format!("{wanted}_{number}"))
+        .find(|id| !taken(id))
+        .unwrap_or_else(|| wanted.to_owned())
 }
 
 /// Returns the command that places the canvas node `key` at `pos`: a move of a node, or of a region's output half.
@@ -1586,12 +1520,11 @@ fn keyboard_requests(ctx: &egui::Context, graph: &GraphEditor) -> Vec<GraphReque
     });
     let mut requests = Vec::new();
     ctx.input_mut(|input| {
-        if input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z))
-            || input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Y))
-        {
+        let (undo, redo) = undo_redo_keys(input);
+        if redo {
             requests.push(GraphRequest::Redo);
         }
-        if input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Z)) {
+        if undo {
             requests.push(GraphRequest::Undo);
         }
         if !selected.is_empty()

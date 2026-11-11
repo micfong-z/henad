@@ -88,8 +88,10 @@ Lines (`lines.rs`): a slot path is the author format's keys joined by dots (`con
 `whose.right`, `items.2`, `row.0.condition`, `branches.alive`, `summaries.0.value`), each step but
 the last into a phrase. The lowering's `LineMap` paths use the same grammar, and `lines` with
 `parse_path`, `PathStep`, `RowSlot`, `phrase_mut` and `value_mut` is crate-visible for the test that
-holds them together. `SetSlot` with a filled value at one past the last item or row appends, and
-a blank removes an item or a branch. A line whose tables would nest past `MAX_NESTING` (counted
+holds them together. `slot_value(line, path)`, exported from `sheet::edit`, reads the value at a
+path over the same steps, and the Card pane reads every slot of a line through it. `SetSlot` with a
+filled value at one past the last item or row appends, and a blank removes an item or a branch. A
+line whose tables would nest past `MAX_NESTING` (counted
 generously from the line table's depth of 4) is refused, and so is a card past `MAX_LINES_PER_CARD`.
 Moves follow the outline: the first line of a block moves up out
 of it and the last moves down out of it, a line that is not a block beside a block moves into it (at

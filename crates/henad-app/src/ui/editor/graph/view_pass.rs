@@ -17,6 +17,8 @@ use henad_graph::node::NodeBody;
 use henad_graph::types::{Rate, ValueType};
 use henad_graph::value::{ConfigValue, InputValue, Literal, PortRef};
 
+use super::unused_id;
+
 /// Colours of the ramp a number is shown through, low to high: nine stops of viridis.
 pub const RAMP: [[u8; 4]; 9] = [
     [68, 1, 84, 255],
@@ -302,15 +304,4 @@ fn upstream(body: &NodeBody, node: NodeId, library: u32) -> Vec<NodeId> {
         }
     }
     kept.into_iter().collect()
-}
-
-/// Returns `wanted`, or `wanted` with the first number from 2 that `taken` does not hold.
-fn unused_id(wanted: &str, taken: impl Fn(&str) -> bool) -> String {
-    if !taken(wanted) {
-        return wanted.to_owned();
-    }
-    (2..)
-        .map(|number| format!("{wanted}_{number}"))
-        .find(|id| !taken(id))
-        .unwrap_or_else(|| wanted.to_owned())
 }

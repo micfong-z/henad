@@ -73,12 +73,14 @@ henad-core's `TimeUnit`), `cells` (`Option<Vec<SheetProperty>>`, `None` with no 
 thing id), `buttons` and `cards`. A property holds its `PropertyType`, states (each colour a `[u8;
 4]`), `marks`, `kept_per_tick` and `StartsAs`. A card holds `lines`, the top-level ids in display
 order, and `line_tables`, every line by id. A line is one `SheetLine`: a `LineKind` and every field
-and slot any kind holds. The reader takes any line key on any kind. A field the file leaves out is
-`None` or empty, and a slot is `Slot::Blank`, which is how a half-built line is stored. A filled
-slot holds a `SheetValue`: a `SheetLiteral` (number, percent or bool), a `SheetChip` (`Param`,
-`Result` with `part` and `property`, `My`, `MyNew`, `Their`, `Relation`, `State`), a phrase
-(`Box<SheetLine>`), or a `List` of literals and chips. A formula is the `formula` field of a
-Calculate phrase. Two stored forms: `{ kind = "always" }` (`LineKind::Always`)
+and slot any kind holds. `LineKind::works_out_result` (the fifteen kinds that are results, and stand
+in a slot as a phrase) and `LineKind::is_block` (When and Repeat) are the predicates the checker,
+the sentences, the edits and the app share. The reader takes any line key on any kind. A field the
+file leaves out is `None` or empty, and a slot is `Slot::Blank`, which is how a half-built line is
+stored. A filled slot holds a `SheetValue`: a `SheetLiteral` (number, percent or bool), a
+`SheetChip` (`Param`, `Result` with `part` and `property`, `My`, `MyNew`, `Their`, `Relation`,
+`State`), a phrase (`Box<SheetLine>`), or a `List` of literals and chips. A formula is the `formula`
+field of a Calculate phrase. Two stored forms: `{ kind = "always" }` (`LineKind::Always`)
 for a condition that always holds, and `start_state = "any_state"` for a Become from any state, an
 absent key in either being a blank; `test = "outside"` with `low` and `high`, a condition slot's
 alone; `rate_unit_from_tick = true` beside `rate_unit` while the unit came from the tick, read as

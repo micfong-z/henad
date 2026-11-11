@@ -58,9 +58,21 @@ pub struct Counterpart {
 }
 
 impl Counterpart {
+    /// Returns the model `panel` shows with its file and its save state, taken out of the panel, which keeps an empty
+    /// model with no file.
+    fn take_from(panel: &mut EditorPanel) -> Self {
+        Self {
+            model: std::mem::take(&mut panel.model),
+            file_name: panel.file_name.take(),
+            file_path: panel.file_path.take(),
+            saved_mark: panel.saved_mark,
+            saving: panel.saving.take(),
+        }
+    }
+
     /// Returns whether the model holds edits since it was opened, made or last saved. An empty model holds none.
     pub fn is_unsaved(&self) -> bool {
-        !self.model.is_empty() && self.model.edit_mark() != self.saved_mark
+        self.model.is_edited_since(self.saved_mark)
     }
 }
 
@@ -243,13 +255,7 @@ pub fn convert_sheet(app: &mut AppState) {
     let copy_name = format!("{}.toml", options.id);
     let (copy_path, status) = save_beside(folder.as_ref(), &copy_name, &copy);
     let panel = &mut app.editor;
-    let counterpart = Counterpart {
-        model: std::mem::take(&mut panel.model),
-        file_name: panel.file_name.take(),
-        file_path: panel.file_path.take(),
-        saved_mark: panel.saved_mark,
-        saving: panel.saving.take(),
-    };
+    let counterpart = Counterpart::take_from(panel);
     panel.load_graph(&copy, Some(copy_name));
     panel.file_path = copy_path;
     panel.counterpart = Some(Box::new(counterpart));
@@ -506,13 +512,7 @@ pub fn open_original_of(panel: &mut EditorPanel) {
             let Some((path, _)) = panel.beside.take() else {
                 return;
             };
-            let counterpart = Counterpart {
-                model: std::mem::take(&mut panel.model),
-                file_name: panel.file_name.take(),
-                file_path: panel.file_path.take(),
-                saved_mark: panel.saved_mark,
-                saving: panel.saving.take(),
-            };
+            let counterpart = Counterpart::take_from(panel);
             panel.load_sheet(SheetEditor::new(document), Some(origin.file.clone()));
             panel.file_path = Some(path);
             panel.counterpart = Some(Box::new(counterpart));

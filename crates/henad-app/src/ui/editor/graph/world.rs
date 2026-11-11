@@ -8,6 +8,7 @@ use henad_core::authoring::primitives::space::Boundary;
 use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind};
 use henad_graph::document::{Action, Category, GraphDocument, Lane, Variant, World};
 use henad_graph::edit::EditCommand;
+use henad_graph::limits::MAX_GRID_SIDE;
 use henad_graph::sheet::edit::STATE_COLORS;
 use henad_graph::sheet::sentence::color_button_name;
 use henad_graph::types::ValueType;
@@ -17,10 +18,7 @@ use super::passes::{FIELD_WIDTH, commit_field, topology_domain};
 use super::{GraphEdit, GraphEditor, GraphRequest};
 use crate::icons::material_design_icons::{MDI_DELETE_OUTLINE, MDI_PLUS};
 use crate::ui::editor::sheet::widgets::{color_button, color_name, set_name};
-use crate::ui::sweep::layout::add_button;
-
-/// Largest grid side the world form takes, in cells.
-const MAX_GRID_SIDE: u32 = 16384;
+use crate::ui::sweep::layout::{add_button, icon_button};
 
 /// Colour of a variant added in the form once its category holds every colour of [`STATE_COLORS`].
 const NEW_VARIANT_COLOR: Color = [128, 128, 128, 255];
@@ -55,13 +53,6 @@ pub fn world_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphReques
 /// Pushes the edit of one command.
 fn push(requests: &mut Vec<GraphRequest>, command: EditCommand) {
     requests.push(GraphRequest::Edit(GraphEdit::one(command)));
-}
-
-/// Draws a small button with `icon` alone, named `name`, and returns whether it was pressed.
-fn small_button(ui: &mut Ui, icon: &str, name: &str, tooltip: &str) -> bool {
-    add_button(ui, true, Button::new(icon).small(), name)
-        .on_hover_text(tooltip)
-        .clicked()
 }
 
 /// Draws the world table: the grid size and boundary, or the agent count and the world size.
@@ -256,7 +247,7 @@ fn params_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequest>)
                     coalesce: Some(format!("param {}", param.id())),
                 }));
             }
-            if small_button(ui, MDI_DELETE_OUTLINE, "Remove parameter", "Remove parameter") {
+            if icon_button(ui, MDI_DELETE_OUTLINE, "Remove parameter", "Remove parameter").clicked() {
                 push(requests, EditCommand::RemoveParam(param.id().to_owned()));
             }
         });
@@ -349,7 +340,7 @@ fn lanes_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<GraphReque
                 );
             }
             ui.weak(lane.value_type.to_string());
-            if small_button(ui, MDI_DELETE_OUTLINE, "Remove lane", "Remove lane") {
+            if icon_button(ui, MDI_DELETE_OUTLINE, "Remove lane", "Remove lane").clicked() {
                 push(requests, EditCommand::RemoveLane(lane.id.clone()));
             }
         });
@@ -433,7 +424,7 @@ fn categories_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<Graph
                 }
                 ui.label(&variant.name);
                 ui.weak(&variant.label);
-                if small_button(ui, MDI_DELETE_OUTLINE, "Remove variant", "Remove variant") {
+                if icon_button(ui, MDI_DELETE_OUTLINE, "Remove variant", "Remove variant").clicked() {
                     push(
                         requests,
                         EditCommand::RemoveVariant {
@@ -527,7 +518,7 @@ fn stats_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<GraphReque
                 );
             }
             ui.weak(stat.from.to_string());
-            if small_button(ui, MDI_DELETE_OUTLINE, "Remove statistic", "Remove statistic") {
+            if icon_button(ui, MDI_DELETE_OUTLINE, "Remove statistic", "Remove statistic").clicked() {
                 push(requests, EditCommand::RemoveStat(stat.label.clone()));
             }
         });
@@ -549,7 +540,7 @@ fn actions_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<GraphReq
                 );
             }
             ui.weak(&action.label);
-            if small_button(ui, MDI_DELETE_OUTLINE, "Remove action", "Remove action") {
+            if icon_button(ui, MDI_DELETE_OUTLINE, "Remove action", "Remove action").clicked() {
                 push(requests, EditCommand::RemoveAction(action.id.clone()));
             }
         });

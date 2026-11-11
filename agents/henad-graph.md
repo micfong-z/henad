@@ -90,7 +90,9 @@ returns the newest with `since <= library`. A def holds: one type variable (`typ
 `TypeClass`), `ConfigKey`s with a `ConfigType` and an optional default, fixed `InputSocket`s
 (type, fastest accepted `Rate`, `InputDefault`), `OutputSocket`s (`OutputRate::Join` or
 `Pinned`), `ConfigPorts` for ports configuration makes, `inner_outputs` and `is_region` for a
-region, `ContextSet` (stages plus a `region` flag), an optional `Domain`, `Effect`s, `Backends`,
+region, `ContextSet` (stages plus a `region` flag, `allows(stage)` the stage test the checker and
+the app's quick-add share), an optional `Domain`, `Effect`s (`NodeDef::sink` naming the first one no
+function body holds), `Backends`,
 `Parity`, `NodeCost` and `KnownAnswer`s. `resolved_inputs`, `resolved_outputs` and
 `resolved_inner_outputs` expand a node's ports, and the writer, the checker and every later
 consumer read ports through them. The kinds of G1 and A2 are all in: 114. A kind with no row in

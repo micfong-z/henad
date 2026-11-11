@@ -8,10 +8,13 @@ sections of a world of agents. The rest of the Sheet pane, what each section edi
 border, as a card is) with an inset of 10 at its sides, `region_title` (the heading as a small
 upper-case mono `caption`, a hairline to the help button at the right edge), then `add`, its rows 4
 apart. `sheet_pane` puts `REGION_GAP` 12 between sections. A section's "+ Add ..." is its last row,
-the dashed `widgets::add_button` with no kind, except "+ Add property" while the sheet holds no
+the dashed `widgets::add_row_button` with no kind, except "+ Add property" while the sheet holds no
 property, which stays the primary `filled_button`. A form inside a section (property, measure,
-button, event) is `form_heading` in the semibold face, `Form` rows and `form_buttons`, with no box
-of its own.
+button, event) is `form_heading` in the semibold face, `Form` rows and `form_buttons` (Done, Cancel,
+then the property form's Delete, returning the presses), with no box of its own. The property,
+button and event forms draw their Name field with `form_name_field` (at most `NAME_FIELD_WIDTH` 200,
+focused once on opening, Enter as Done for a button or an event), and every name check of the pane
+and the New parameter dialog goes through `widgets::name_taken`, case aside.
 
 **Form rows.** `Form::new(ui, labels)` makes a label column as wide as the widest label, at most 45%
 of the section, and `row` puts a label in it and the fields in the next column on wrapping lines of
@@ -32,7 +35,7 @@ header, running over the columns after it that have none, then a hairline) and t
 column to the right edge (the trying line, a refused field's message). A row ends in a gray 800
 hairline and takes the theme's hover fill under the pointer. `TableRow::message` reads a field's
 refusal. A delete button is `delete_button`, a "×" `text_control`, right-aligned in the last
-column. The tables and their orders:
+column by `TableRow::delete_cell`, which returns the click. The tables and their orders:
 
 - Properties (`property_table`, of any thing): Starts as takes the room left over. Short of room it
   gives up width down to 150, then Changed by, Kind and Name down to their longest words (Changed
@@ -52,9 +55,10 @@ of the `ComboBox` it replaced, over `select_list`), its options `OverlayItem`s w
 marked and a state's swatch. The kind of a States property shows "States" over each state's swatch
 and name.
 
-**A world of agents**. The pane works on a *thing*, `cells`, `ground` or the agent kind's id:
-`properties_of`, `find_property`, `all_properties` (also behind `starts_of` and
-`without_starts_or_words` in `mod.rs`, so a start of any thing waits for Start again) and
+**A world of agents**. The pane works on a *thing*, `CELLS_ID`, `GROUND_ID` or the agent kind's id:
+`properties_of`, `find_property`, `all_properties` and `over_agents` in `sheet/mod.rs`, which the
+Card pane and its pickers share (`all_properties` also behind `starts_of`, so a start of any thing
+waits for Start again), and
 `measured_thing` (the cells, or the first kind of agent, which Measures and Buttons act on).
 `property_table` draws any thing's table and `property_form_or_add` its form or "+ Add property",
 named `add_property_name(kind)` under the agents and `ADD_GROUND_PROPERTY_NAME` under the ground.

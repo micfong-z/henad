@@ -2,7 +2,8 @@
 //! accessible names, the list blanks of numbers and of states, a list typed in a blank of one number, a chance refused
 //! in the field, shared state names, the line menu, a cleared blank's skip note, When blocks built through their add
 //! rows, the offer to remove a When, moves that skip a line, the "otherwise" notice, a button's card with its notice
-//! and a When, and the words rule over every menu, picker, select, note and help popover opened on the way.
+//! and a When, a Calculate line written through its draft, and the words rule over every menu, picker, select, note
+//! and help popover opened on the way.
 
 use egui::accesskit::Role;
 use egui::{Event, Key, Modifiers};
@@ -1422,5 +1423,63 @@ fn moving_a_line_above_its_result_skips_it_and_moving_it_back_runs_it() {
     assert!(!shows(&mut harness, "Uses Alive neighbours, which is below this line"));
     assert!(!sheet(&harness).report().is_skipped("l2"), "the line runs again");
     assert_eq!(text(&harness), starter_text);
+    assert_no_forbidden_word(&seen);
+}
+
+/// Returns the words the operation select of line 4 shows.
+fn operation_of_line_4(harness: &mut Harness) -> String {
+    named(harness, "Line 4: operation")
+        .first()
+        .map(|node| node.value.clone())
+        .expect("the operation select")
+}
+
+/// Returns the formula of the Calculate line `l5` of the sheet in the harness.
+fn formula_of_l5(harness: &Harness) -> Option<String> {
+    let (_, line) = sheet(harness).document().line("l5").expect("the Calculate line");
+    line.formula.clone()
+}
+
+#[test]
+fn a_calculate_line_keeps_its_values_as_a_draft_until_both_are_chosen() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    let mut seen = Seen::default();
+    open_starter(&mut harness, "game_of_life.toml");
+    add(&mut harness, &mut seen, AddButton::Calculate, "Calculate");
+    let empty = text(&harness);
+    // The first value and the operation wait in the line's draft, and the sheet stays as it was. A new line's first
+    // blank opens by itself.
+    assert!(is_open(&mut harness, "Choose a number"));
+    type_and_enter(&mut harness, "2");
+    choose(&mut harness, "Line 4: operation", "times");
+    assert_eq!(text(&harness), empty, "a half-chosen line changes nothing");
+    assert_eq!(operation_of_line_4(&mut harness), "times");
+    // A new parameter in the second value writes the formula from the draft.
+    let second = named(&mut harness, "Line 4: choose a number")
+        .iter()
+        .filter_map(|node| node.bounds)
+        .max_by(|a, b| a.left().total_cmp(&b.left()))
+        .expect("the second value's blank")
+        .center();
+    harness.click_at(second);
+    pick(&mut harness, &mut seen, "Choose a number", NEW_PARAMETER);
+    create_parameter(&mut harness, &mut seen, "Factor", "3", None);
+    assert_eq!(formula_of_l5(&harness).as_deref(), Some("2 * factor"));
+    assert_eq!(line_text(&mut harness, "Line 4"), "2 times Factor = 2 times Factor");
+    // One undo takes the parameter and the formula back, and drops the draft.
+    harness.press(Key::Z, Modifiers::COMMAND);
+    assert_eq!(text(&harness), empty, "the parameter and the formula are one step");
+    assert_eq!(operation_of_line_4(&mut harness), "plus");
+    harness.press(Key::Z, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!(formula_of_l5(&harness).as_deref(), Some("2 * factor"));
+    // The written line's operation and values edit the formula.
+    choose(&mut harness, "Line 4: operation", "minus");
+    assert_eq!(formula_of_l5(&harness).as_deref(), Some("2 - factor"));
+    click_on_line(&mut harness, "Line 4", "2");
+    type_and_enter(&mut harness, "5");
+    assert_eq!(formula_of_l5(&harness).as_deref(), Some("5 - factor"));
     assert_no_forbidden_word(&seen);
 }

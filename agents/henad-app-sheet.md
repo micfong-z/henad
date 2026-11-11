@@ -10,8 +10,8 @@ included, and the Card pane writes the lines of a cells card (`agents/henad-app-
 keys), its canonical text (`text`, which Save model writes and Apply reads through
 `EditorModel::file_text`), the `SheetReport` of `ParsedSheet::check` on that text (so every problem
 is placed in what Save writes), the `SheetFile` read, checked and lowered from it or the problems
-that stop it lowering (`lowering_problems`, `has_errors`), the load number from the graph editor's
-`LOADS` (shared, so a graph and a sheet never take one preview key), the compiled program,
+that stop it lowering (`lowering_problems`, `has_errors`), the load number from
+`program::LOADS` (shared, so a graph and a sheet never take one preview key), the compiled program,
 `built_starts` (each cells property's start when the preview was last built, set by `mark_built`
 from `preview::build_preview`), the `notice` of the last edit and the pane's `PaneState`.
 `SheetEditor::new(document)` and every edit call `refresh`, which writes the canonical text, parses
@@ -52,7 +52,11 @@ preview line and leaves the checker's `SHEET_EMPTY` warning out of the list. The
 `SHEET_EMPTY` with "+ Add property" as a `filled_button`, and the Card pane, with no card, shows
 `card_header("cell")` and `BLANK_MODEL_CARD` (also under a tick card with no lines).
 
-`sheet_pane.rs` draws `SheetSection::shown(made_of)` in order (`ALL` for cells, `AGENT_WORLD` with
+`sheet_pane.rs` holds `PaneState`, `Pending`, the forms' state, the shared form parts and lookups,
+Purpose and World, and the children of `sheet_pane/` hold the other sections: `starts.rs` (the
+Cells table, starts, chance rows, `number_field` and the New parameter dialog), `property_form.rs`,
+`parameters.rs`, `measures.rs`, `colors.rs`, `buttons.rs`, `agents.rs` and `layout.rs`. It draws
+`SheetSection::shown(made_of)` in order (`ALL` for cells, `AGENT_WORLD` with
 Agents, Ground and Events in place of Cells), each a `layout::section` (a region, its heading from
 `SheetSection::heading` as a `region_title` with its help), under `ui.push_id(PaneState::widgets)`,
 an id per sheet opened (`PaneState::new` takes the load number from `SheetEditor::new`, not the
@@ -126,7 +130,7 @@ slider returns the stored default to the value field, so boids' Protected range 
 × named `delete_parameter_name`, Min and Max fields (`with_range_end`: Min above Max
 swaps, equal ends make Max one more, the value moves into the range) and Unit as a
 `suggestion_field` named `parameter_unit_name` with `UNIT_FIELD_PLACEHOLDER` and `unit_suggestions`
-(free text). Each edit is one `SetParameter` keeping `step` and `means`. Every number field
+(free text). Each edit is one `set_parameter_edit`, keeping `step` and `means`. Every number field
 reads a percent. The trying line of the Parameters tab's preview mode sits under its parameter. "+
 Add parameter" opens the New parameter dialog with no `StartTarget` (1 in 0 to 10), and Create runs
 `AddParameter` alone. Measures: per States property its weak name and a form row per state (egui
@@ -177,18 +181,18 @@ button show their frame only under the pointer or the focus too. Under the row, 
 names the copy held as the counterpart, and returns `SheetRequest::OpenCopy`.
 `sheet_ui(ui, sheet, &SheetShown)` and `name_row` return the `SheetRequest` of a pressed control
 (`Convert`, `OpenCopy`), which `editor_ui` and `header_ui` map to an `EditorRequest`. Undo
-(`SheetEditor::history`, the graph editor's `History` of canonical texts): `edit` and
+(`SheetEditor::history`, the Editor's `History` of canonical texts, `editor/history.rs`): `edit` and
 `keep_value` record the text before a kept edit, and
 `undo` and `redo` read a text back through `restore` (a fresh `SheetBuilder`, the pane's forms
 closed, the restart rule with `starts_only` when the two documents differ only in starts, the name
 and the purpose, `without_starts_or_words`). `sheet_ui` takes Cmd or Ctrl+Z, Shift+Cmd+Z and Cmd+Y
-(`consume_shortcut`) while `keys` (no New model dialog), no New parameter dialog (`dialog_open`), no
-modal of the app (egui memory's `top_modal_layer`, from the previous frame) and no focused text
-field (`text_edit_focused`), anywhere in the Editor tab. A focused field keeps its own undo.
-`Pending::one` counts `SetPurpose` and `SetSheetName` as `starts_only`, so a name or a purpose
-leaves the running world alone. The Charts tab shows `PLOT_EMPTY` while `runs_editor_sheet` and the
-sheet holds no measure. The Card pane shows `BUTTON_CARD_EMPTY` under a card that runs
-once with no line.
+(`editor::undo_redo_keys`, which the graph editor shares, redo read first) while `keys` (no New
+model dialog), no New parameter dialog (`dialog_open`), no modal of the app (egui memory's
+`top_modal_layer`, from the previous frame) and no focused text field (`text_edit_focused`),
+anywhere in the Editor tab. A focused field keeps its own undo. `Pending::one` counts `SetPurpose`
+and `SetSheetName` as `starts_only`, so a name or a purpose leaves the running world alone. The
+Charts tab shows `PLOT_EMPTY` while `runs_editor_sheet` and the sheet holds no measure. The Card
+pane shows `BUTTON_CARD_EMPTY` under a card that runs once with no line.
 
 `widgets.rs` adds `commit_area` and `suggestion_field` beside `commit_field`, all three over
 `commit_edit`. The suggestions are a `Popup` kept open in temp data from the field's focus until a
@@ -216,12 +220,9 @@ painted, anywhere or on-ground start, which no grid sheet holds, reads as an emp
 message; a `FieldDraft` in egui temp data keeps typed or refused text while memory focus holds, read
 through `Memory::has_focus` since `Response::has_focus` also needs the window's system focus, which
 an app driven through its inspection port lacks, `field_message` returns the message drawn by
-`message_ui` under the row, and `forget_field` drops a draft), the `Picker` (a `Popup` toggled by
-its anchor under the anchor's id with "picker", which shows on the anchor as open, an `overlay`
-named as a `Dialog` by its title, groups under `overlay_group` labels, `overlay_item`s named by
-their label with the grey detail as their description, empty groups left out, "New parameter...", a
-Number box named by its hint, and `empty` when nothing is offered), `NumberUse` (`Chance` or
-`Number`, `read` with the range messages), `color_button` (a swatch opening `CHOOSE_A_COLOR`, an
+`message_ui` under the row, and `forget_field` drops a draft), `NumberUse` (`Chance` or `Number`,
+`read` with the range messages, `box_hint` naming a Number box), `color_button` (a swatch opening
+`CHOOSE_A_COLOR`, an
 overlay of the twelve `PALETTE_COLORS` named by `COLOR_NAMES`), `color_name` (the nearest palette
 name, for a starter's own colours), and the New parameter dialog:
 `NewParameterDialog::new(number_use, typed, unit)` starts from 0.1 in 0 to 1 for a chance, 1 in 0 to
@@ -232,6 +233,15 @@ order, reading every field with a percent. The modal (`henad_new_parameter_modal
 `widgets.rs` kind below, where Enter creates) is a `Dialog`
 named `NEW_PARAMETER_HEADING`. A rate's starting values and its "per [unit]" Unit wait for the first
 rate blank.
+
+The Sheet pane's pickers ("Choose a parameter" and a parameter chip's picker) are
+`picker::ParameterPicker`: a `Popup` toggled by its anchor under the anchor's id with "picker",
+which shows on the anchor as open, closing on a choice, a click outside or Escape. It shares the
+card picker's shell (`picker_overlay`: an `overlay` `PICKER_WIDTH` wide named as a `Dialog` by its
+title), its `PickerItem`s, `Choice`s and group rows (`groups_ui`, empty groups left out), and its
+parameter items (`parameter_items`, value and unit in grey, every parameter for the pane), then
+"New parameter..." and a Number box 120 points wide named by its hint, its text kept under
+`ui.id()` with "henad_number_box".
 
 `card_pane.rs` and `picker.rs` draw and edit the cards, which `agents/henad-app-card.md` describes.
 

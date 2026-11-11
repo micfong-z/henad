@@ -110,7 +110,8 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     or red 900 under red 200 for Rebuild). Enter presses the primary unless another button took
     the key or the dialog opened on that frame, and Escape closes through `Modal`. A list of
     choices is `choice_row`s: full-width radio buttons with a weak description under the name,
-    gray 800 under the pointer or the focus, blue 900 with a check and blue 200 words when chosen.
+    gray 800 under the pointer or the focus, blue 900 with a check and blue 200 words when chosen,
+    as an overlay's current item (`list_row_fill` and `paint_list_row_marks` paint both).
   - Notice (`Notice`, `notice_ui` for information): a 2 point bar and an icon in the hue of its
     kind at step 500 before the text in the text colour, one label: blue and an information icon
     for information, orange and a triangle for a warning, red and an exclamation mark for an
@@ -124,7 +125,7 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   `widgets.rs`). Each section is a region (`widgets::region`, as a card is), `REGION_GAP` 12 from
   the next, its title a small upper-case mono label with a hairline to its "?" at the right edge
   (`widgets::region_title`), its "+ Add ..." button the last row inside it, dashed
-  (`widgets::add_button` with no kind). Form rows put every label of a section in one column and
+  (`widgets::add_row_button` with no kind). Form rows put every label of a section in one column and
   its fields in the next, number fields right-aligned (`commit_number`), a hint weak and a refused
   field's message red under its field. Tables (properties, parameters, plotted measures, buttons,
   events) have a header row of small upper-case mono labels, a gray 800 hairline under it and under
@@ -136,7 +137,7 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   pickers ("Choose a parameter", a chip's picker, "Choose a colour") are overlays too.
 - **A hue names a line's kind in one place.** The bar at the left of a card's row, and the square
   on its add button, take the kind's hue at step 500: Look around blue, Chance purple, Yes or no
-  yellow, Change green, Calculate gray, When and Repeat gray 100 (`card_pane::kind_hue`, over
+  yellow, Change green, Calculate gray, When and Repeat gray 100 (`widgets::kind_hue`, over
   `AddButton::for_kind`). The Diagram's boxes take the same bar. Everywhere else a hue still means
   a state: blue the primary action and a result, orange a warning, red a failure.
 - **Swatches of the Sheet pane** (`ui/editor/sheet/widgets.rs`). A swatch button is a 14 point

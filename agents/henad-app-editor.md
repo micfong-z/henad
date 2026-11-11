@@ -146,9 +146,12 @@ places it: `place_unplaced` and Arrange pass `arrange::frame_groups` (one group 
 `lines`, a frame drawn by hand makes none) and `arrange` gives each group a band of rows of its own
 across the columns its nodes and estimated title cover (`FRAME_SPACE`, `TITLE_CHAR_WIDTH`), a region
 joining the group of its contents (`group_of_nodes`). The sheet moves to `EditorPanel::counterpart`
-(`Counterpart`: model, file name, path), which keeps its undo history. Every `load*` clears the
-counterpart, the path, `beside`, the banner and the dialog (`clear_expert`), and `swap_counterpart`
-exchanges the model with the counterpart and clears what `settle_swap` names.
+(`Counterpart::take_from` the panel: model, file name, path, saved and saving marks), which keeps
+its undo history, and `EditorModel::is_edited_since` answers whether either holds unsaved edits.
+Every `load*` goes through `EditorPanel::replace`, which clears the counterpart, the path, `beside`,
+the banner and the dialog (`clear_expert`) and the outcome, the line to scroll to and the preview
+(`clear_outcome`), and `swap_counterpart` exchanges the model with the counterpart and clears what
+`settle_swap` names, `clear_outcome` among them.
 
 The *original* of a copy is the counterpart when it is a sheet with `origin.model`'s id, else
 `EditorPanel::beside`, the sheet `find_original` read from `origin.file` beside the copy's path.
@@ -239,10 +242,12 @@ keeps it). `compare.rs` holds the unit tests of `first_difference` and `differen
 
 **Display names, origin ports and frame titles**. `graph/display.rs` holds
 `DISPLAY_NAMES`, a `DisplayName` (kind, name, category, description) for each of the catalogue's
-114 kinds, and `display_name(kind)`. A node's header (`node_titles`) shows its label, or else the
-display name, with the raw kind in grey under it, after the display name when the node has a label
-("Count around me · grid.count"), then the id. The hover shows the description before the
-catalogue's semantics. Quick-add lists display names, its hover the kind and the description, and
+114 kinds, `display_name(kind)`, and `kind_name(kind)`, the display name or else the kind, which the
+header, Move into region and Show changes share. A node's header (`node_titles`) shows its label,
+or else the display name, with the raw kind in grey under it, after the display name when the node
+has a label ("Count around me · grid.count"), then the id. The hover shows the description
+before the catalogue's semantics. Quick-add lists display names, its hover the kind and the
+description, and
 `matches_words` searches the id, the catalogue label and group, the display name and the category,
 so a catalogue label still finds its kind. Move into region names nodes by display name. A pin
 shows `InputView::label` or `OutputView::label`, the port name except on a Become, where

@@ -69,15 +69,7 @@ pub fn offered_kinds(
 /// Returns whether `pass` takes a node of the kind `def` at the top of its body, or in a region's body when
 /// `in_region` holds.
 pub fn takes(def: &NodeDef, pass: &Pass, in_region: bool) -> bool {
-    let contexts = def.contexts;
-    let stage = match pass.stage {
-        PassStage::Init => contexts.init,
-        PassStage::Tick => contexts.tick,
-        PassStage::View => contexts.view,
-        PassStage::Stats => contexts.stats,
-        PassStage::Action => contexts.action,
-        _ => false,
-    };
+    let stage = def.contexts.allows(pass.stage);
     let backend = if pass.stage == PassStage::Init {
         def.backends.host
     } else {
@@ -85,23 +77,12 @@ pub fn takes(def: &NodeDef, pass: &Pass, in_region: bool) -> bool {
     };
     let domain = def.domain.is_none_or(|domain| Some(domain) == pass.domain);
     let place = if in_region {
-        contexts.region
+        def.contexts.region
     } else {
         !def.has_effect(Effect::RegionSink)
     };
     stage && backend && domain && place
 }
-
-/// Effects no function body holds.
-const SINKS: [Effect; 7] = [
-    Effect::WritesLane,
-    Effect::WritesField,
-    Effect::Deposits,
-    Effect::Counts,
-    Effect::View,
-    Effect::Reduce,
-    Effect::DrawsStream,
-];
 
 /// Returns whether `def` is a function's input or output, which only a function's body holds.
 fn is_interface(def: &NodeDef) -> bool {
@@ -111,7 +92,7 @@ fn is_interface(def: &NodeDef) -> bool {
 /// Returns whether a function of a world whose elements are `domain` takes a node of the kind `def` at the top of its
 /// body, or in a region's body when `in_region` holds.
 pub fn function_takes(def: &NodeDef, domain: Domain, in_region: bool) -> bool {
-    let pure = !SINKS.iter().any(|effect| def.has_effect(*effect));
+    let pure = def.sink().is_none();
     let place = if in_region {
         def.contexts.region && !is_interface(def)
     } else {

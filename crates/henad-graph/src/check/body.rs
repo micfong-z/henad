@@ -10,10 +10,10 @@ use super::config::{self, check_literal, param_type};
 use super::view::BodyView;
 use super::{Checker, PortType};
 use crate::catalogue::{
-    ConfigPorts, ConfigType, ContextSet, Effect, InputDefault, NodeDef, OutputRate, ResolvedInput, ResolvedOutput,
-    SocketType, transition_rule_ids,
+    ConfigPorts, ConfigType, Effect, InputDefault, NodeDef, OutputRate, ResolvedInput, ResolvedOutput, SocketType,
+    transition_rule_ids,
 };
-use crate::document::{Pass, PassStage};
+use crate::document::PassStage;
 use crate::ids::NodeId;
 use crate::node::{Accumulator, Combine, OP_REGION_PUT};
 use crate::types::{Rate, ValueType};
@@ -225,7 +225,7 @@ impl BodyWalk<'_, '_, '_, '_> {
             );
         }
         let Some(pass) = view.pass() else { return };
-        if !stage_allowed(def.contexts, pass) {
+        if !def.contexts.allows(pass.stage) {
             let reason = if def.has_effect(Effect::ReadsOtherLane) {
                 " since it reads another element"
             } else {
@@ -737,17 +737,6 @@ fn recorded(ports: Option<&BTreeMap<String, PortType>>, name: &str) -> ReadValue
             value_type: port.value_type.clone(),
             rate: port.rate,
         })
-}
-
-/// Returns whether `contexts` allows the stage of `pass`.
-fn stage_allowed(contexts: ContextSet, pass: &Pass) -> bool {
-    match pass.stage {
-        PassStage::Init => contexts.init,
-        PassStage::Tick => contexts.tick,
-        PassStage::View => contexts.view,
-        PassStage::Stats => contexts.stats,
-        PassStage::Action => contexts.action,
-    }
 }
 
 /// Reports a `region.put` outside a region, or with an accumulator its region lacks or another put feeds (V13).

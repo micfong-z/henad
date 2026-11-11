@@ -35,18 +35,19 @@ use henad_graph::editor::EditorRegion;
 use henad_graph::ids::NodeId;
 use henad_graph::limits::{MAX_ACCUMULATORS, MAX_REGION_DEPTH, MAX_REPEAT_ITERATIONS};
 use henad_graph::node::{
-    Accumulator, Combine, Node, NodeBody, OP_EXPRESSION, OP_FUNCTION_CALL, OP_FUNCTION_OUTPUT, OP_REGION_REPEAT,
+    Accumulator, Combine, Node, NodeBody, OP_EXPRESSION, OP_FUNCTION_CALL, OP_FUNCTION_OUTPUT, OP_GRID_FOLD,
+    OP_RADIUS_FOLD, OP_REGION_REPEAT,
 };
 use henad_graph::types::{Rate, ValueType};
 use henad_graph::value::{ConfigValue, InputValue, Literal, MemberName, PortRef};
 
 use super::arrange::{COLUMN_GAP, CanvasKey, NODE_SIZE};
 use super::changes::ChangeMark;
-use super::display::display_name;
+use super::display::{display_name, kind_name};
 use super::quick_add::{WireEnd, offered_kinds};
 use super::sockets::{rate_shape, type_color};
 use super::view_pass::can_view;
-use super::{DroppedWire, GraphEdit, GraphRequest, NodeIssues};
+use super::{DroppedWire, GraphEdit, GraphRequest, NodeIssues, unused_id};
 use crate::icons::material_design_icons::{MDI_ALERT, MDI_CLOSE, MDI_PLUS};
 use crate::ui::mcs;
 use crate::ui::sweep::layout::add_button;
@@ -81,11 +82,8 @@ const QUICK_ADD_LIMIT: usize = 80;
 /// Width in points of the hover popup and the quick-add list.
 const POPUP_WIDTH: f32 = 320.0;
 
-/// Kind of a neighborhood fold.
-const OP_GRID_FOLD: &str = "grid.fold";
-
 /// Kinds of the regions library 1 nests.
-const REGION_OPS: [&str; 3] = [OP_REGION_REPEAT, OP_GRID_FOLD, "agent.radius_fold"];
+const REGION_OPS: [&str; 3] = [OP_REGION_REPEAT, OP_GRID_FOLD, OP_RADIUS_FOLD];
 
 /// Width in points of an expression's text field on its node.
 const EXPRESSION_WIDTH: f32 = 260.0;
@@ -685,7 +683,7 @@ fn node_views(
     issues: NodeIssues,
 ) -> (NodeView, Option<NodeView>) {
     let def = lookup(&node.op, document.library);
-    let (title, subtitle) = node_titles(node, def, editor);
+    let (title, subtitle) = node_titles(node, editor);
     let output_type = |source: &PortRef| -> (Option<ValueType>, Rate) {
         let Some(report) = report else {
             return (None, Rate::Element);
@@ -781,19 +779,16 @@ fn node_views(
     (input_half, Some(output_half))
 }
 
-/// Returns the title of `node`, of kind `def`, and the grey text under it.
+/// Returns the title of `node` and the grey text under it.
 ///
 /// The title is the node's label, or else the display name of its kind. The grey text is the raw kind, after the
 /// display name when the node has a label.
-fn node_titles(node: &Node, def: Option<&NodeDef>, editor: &EditorRegion) -> (String, String) {
+fn node_titles(node: &Node, editor: &EditorRegion) -> (String, String) {
     let label = editor.node_layout(node.id).and_then(|layout| layout.label);
-    let kind_name = display_name(&node.op)
-        .map(|display| display.name.to_owned())
-        .or_else(|| def.map(|def| def.label.to_owned()))
-        .unwrap_or_else(|| node.op.clone());
+    let name = kind_name(&node.op);
     match label {
-        Some(label) => (label, format!("{kind_name} · {}", node.op)),
-        None => (kind_name, node.op.clone()),
+        Some(label) => (label, format!("{name} · {}", node.op)),
+        None => (name, node.op.clone()),
     }
 }
 
@@ -1690,11 +1685,7 @@ impl GraphViewer<'_> {
             "Add input",
         );
         if add.on_hover_text("Add input of type f32").clicked() {
-            let taken = |candidate: &str| inputs.iter().any(|(known, _)| known == candidate);
-            let name = std::iter::once("x".to_owned())
-                .chain((2..).map(|number| format!("x_{number}")))
-                .find(|candidate| !taken(candidate))
-                .unwrap_or_default();
+            let name = unused_id("x", |candidate| inputs.iter().any(|(known, _)| known == candidate));
             let mut list = inputs.clone();
             list.push((name, ValueType::F32));
             self.edit(vec![set("inputs", expression_input_list(&list))], None);
@@ -1775,7 +1766,7 @@ impl GraphViewer<'_> {
                 .on_hover_text("Add value carried through iterations")
                 .clicked()
         {
-            let name = unused_accumulator_name(accumulators);
+            let name = unused_id("acc", |name| accumulators.iter().any(|known| known.name == name));
             let command = EditCommand::AddAccumulator {
                 scope,
                 node: id,
@@ -1788,30 +1779,14 @@ impl GraphViewer<'_> {
     /// Draws one accumulator of the region `id`: its name, its type, its combine and its removal.
     fn accumulator_row(&mut self, ui: &mut Ui, id: NodeId, index: usize, accumulator: &Accumulator) {
         let scope = self.context.scope.clone();
-        let field_id = self.canvas_id.with(("accumulator name", id, index));
-        let mut name = ui
-            .data(|data| data.get_temp::<String>(field_id))
-            .unwrap_or_else(|| accumulator.name.clone());
-        let field = ui.add(
-            TextEdit::singleline(&mut name)
-                .id(field_id)
-                .desired_width(72.0)
-                .font(egui::TextStyle::Small),
-        );
-        if field.changed() {
-            ui.data_mut(|data| data.insert_temp(field_id, name.clone()));
-        }
-        if field.lost_focus() {
-            ui.data_mut(|data| data.remove::<String>(field_id));
-            if name != accumulator.name {
-                let command = EditCommand::RenameAccumulator {
-                    scope: scope.clone(),
-                    node: id,
-                    from: accumulator.name.clone(),
-                    to: name,
-                };
-                self.edit(vec![command], None);
-            }
+        if let Some(name) = self.commit_text(ui, ("accumulator name", id, index), &accumulator.name, false) {
+            let command = EditCommand::RenameAccumulator {
+                scope: scope.clone(),
+                node: id,
+                from: accumulator.name.clone(),
+                to: name,
+            };
+            self.edit(vec![command], None);
         }
         let mut changed: Option<Accumulator> = None;
         ui.menu_button(RichText::new(accumulator.value_type.to_string()).small(), |ui| {
@@ -1886,13 +1861,7 @@ impl GraphViewer<'_> {
                     && lookup(&other.op, document.library).is_some_and(|def| def.is_region)
                     && can_join(body, id, other.id)
             })
-            .map(|other| {
-                let label = display_name(&other.op).map_or_else(
-                    || lookup(&other.op, document.library).map_or(other.op.as_str(), |def| def.label),
-                    |display| display.name,
-                );
-                (other.id, format!("{label} {}", other.id))
-            })
+            .map(|other| (other.id, format!("{} {}", kind_name(&other.op), other.id)))
             .collect();
         let scope = self.context.scope.clone();
         if !targets.is_empty() {
@@ -2056,18 +2025,6 @@ fn moved_input(scope: &Scope, node: &Node, from: &str, to: &str) -> Vec<EditComm
 /// Returns whether `view` is the input half of a region, whose body holds the region controls.
 fn is_region_input(view: &NodeView) -> bool {
     view.part == NodePart::RegionInput
-}
-
-/// Returns `acc`, or `acc` with the first number from 2 that no accumulator in `taken` holds.
-fn unused_accumulator_name(taken: &[Accumulator]) -> String {
-    let free = |name: &str| !taken.iter().any(|known| known.name == name);
-    if free("acc") {
-        return "acc".to_owned();
-    }
-    (2..)
-        .map(|number| format!("acc_{number}"))
-        .find(|name| free(name))
-        .unwrap_or_else(|| "acc".to_owned())
 }
 
 /// Returns the types an accumulator or a function port of a GPU pass takes: the scalars and vectors, then each category

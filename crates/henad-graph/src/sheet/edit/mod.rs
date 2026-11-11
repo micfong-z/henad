@@ -59,6 +59,7 @@ pub use colors::{MEASURE_COLORS, PALETTE_COLORS, STATE_COLORS, suggested_state_c
 pub use command::{LineField, MoveDirection, SheetEdit, SheetEditError, SheetItem};
 pub use ids::{IdSpace, is_reserved_name, mint_id};
 pub(crate) use line_commands::unit_in_text;
+pub use lines::slot_value;
 pub use names::{automatic_name, automatic_summary_name};
 
 use std::collections::BTreeSet;

@@ -1,7 +1,7 @@
 //! Tests of writing the lines of a card over agents: the random walk and boids rebuilt from a blank model of agents by
 //! accessible names, "my new Velocity" offered only below the last change to Velocity, the refusals of a property
-//! changed two ways and of a look inside a Repeat shown on their lines, and the words rule over every agent menu and
-//! picker opened on the way.
+//! changed two ways and of a look inside a Repeat shown on their lines, the words rule over every agent menu and
+//! picker opened on the way, and the Number box opening on a number typed in each kind of agent slot.
 
 use egui::{Event, Key, Modifiers};
 use henad_graph::sheet::check::check;
@@ -13,14 +13,14 @@ use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
     ADD_BUTTON, ADD_MEASURE, AGENTS_IN_OPEN_SPACE, ARROW_KIND, AVERAGE_MEASURE, AddButton, BUTTON_NAME_FIELD, Blank,
     CHOOSE_WHEN, COLOR_AGENTS_BY, CREATE_PARAMETER, DONE, DrawKind, LOOK_IN_REPEAT, MEASURE_PROPERTY_NAME,
-    NEW_PARAMETER, OR_A_NEW_VALUE, Sentences, add_property_name, add_summary_name, moved_by_already, run_once,
-    steered_already, value_field_name,
+    NEW_PARAMETER, NUMBER_BOX_HINT, OR_A_NEW_VALUE, Sentences, add_property_name, add_summary_name, moved_by_already,
+    run_once, steered_already, value_field_name,
 };
 
 use super::sheet_card::{
     Seen, TALL_SCREEN, assert_controls_hold_their_words, assert_no_forbidden_word, click, click_in, click_last,
-    enter_into, is_open, line_text, named, open_starter, pick, sheet, shows, starter_document, text_and_code,
-    type_into,
+    click_on_line, enter_into, is_open, line_text, named, open_starter, pick, sheet, shows, starter_document,
+    text_and_code, type_into,
 };
 use super::sheet_pane::field_value;
 use crate::tests::support::{Harness, align_with_starter};
@@ -828,4 +828,120 @@ fn the_ants_note_on_slower_trail_formation_stays_under_its_line_after_an_edit() 
         shows(&mut harness, &note),
         "the note stays after an edit of another line"
     );
+}
+
+/// Opens the starter `file_name` with the number `typed` in the slot at `path` of line `line_id`, clicks that number
+/// on the line whose name starts with `line`, and returns the text the Number box of the open picker holds.
+fn number_box_on_typed(
+    harness: &mut Harness,
+    file_name: &str,
+    (line_id, path): (&str, &str),
+    typed: &str,
+    line: &str,
+) -> String {
+    harness.screen = TALL_SCREEN;
+    let mut builder = SheetBuilder::new(starter_document(file_name)).with_key_seed(1);
+    builder
+        .apply(SheetEdit::SetSlot {
+            line: line_id.to_owned(),
+            path: path.to_owned(),
+            value: Slot::Filled(SheetValue::Literal(SheetLiteral::Number(
+                typed.parse().expect("a number"),
+            ))),
+        })
+        .expect("the number goes into the slot");
+    harness.open_sheet(&builder.document().to_text().expect("the sheet writes"));
+    open_typed(harness, typed, line)
+}
+
+/// Clicks the number `typed` on the line whose name starts with `line`, and returns the text the Number box of the
+/// open picker holds.
+fn open_typed(harness: &mut Harness, typed: &str, line: &str) -> String {
+    click_on_line(harness, line, typed);
+    harness
+        .settle()
+        .into_iter()
+        .find(|node| node.label == NUMBER_BOX_HINT)
+        .map(|node| node.value)
+        .expect("the picker shows a Number box")
+}
+
+#[test]
+fn a_typed_number_of_times_opens_in_the_number_box() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let shown = number_box_on_typed(&mut harness, "random_walk.toml", ("l1", "times"), "3", "Line 1");
+    assert_eq!(shown, "3");
+}
+
+#[test]
+fn a_typed_length_opens_in_the_number_box() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let shown = number_box_on_typed(
+        &mut harness,
+        "random_walk.toml",
+        ("l2", "value.length"),
+        "1.5",
+        "Line 2",
+    );
+    assert_eq!(shown, "1.5");
+}
+
+#[test]
+fn a_typed_distance_opens_in_the_number_box() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let shown = number_box_on_typed(&mut harness, "boids.toml", ("l1", "distance"), "25", "Line 1");
+    assert_eq!(shown, "25");
+}
+
+#[test]
+fn a_typed_strength_opens_in_the_number_box() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let shown = number_box_on_typed(&mut harness, "boids.toml", ("l3", "strength"), "0.05", "Line 3");
+    assert_eq!(shown, "0.05");
+}
+
+#[test]
+fn a_typed_minimum_opens_in_the_number_box() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let shown = number_box_on_typed(&mut harness, "boids.toml", ("l6", "minimum"), "2", "Line 6");
+    assert_eq!(shown, "2");
+}
+
+#[test]
+fn a_typed_maximum_opens_in_the_number_box() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let shown = number_box_on_typed(&mut harness, "boids.toml", ("l6", "maximum"), "6", "Line 6");
+    assert_eq!(shown, "6");
+}
+
+#[test]
+fn a_typed_amount_opens_in_the_number_box() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let shown = number_box_on_typed(&mut harness, "ants.toml", ("l3", "amount"), "4", "Line 3");
+    assert_eq!(shown, "4");
+}
+
+#[test]
+fn a_typed_number_inside_a_row_of_a_choose_opens_in_the_number_box() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    // Line 7 compares Way's amount with 0 inside the condition of its first row, `row.0.condition.items.0.right`.
+    open_starter(&mut harness, "ants.toml");
+    assert_eq!(open_typed(&mut harness, "0", "Line 7"), "0");
 }

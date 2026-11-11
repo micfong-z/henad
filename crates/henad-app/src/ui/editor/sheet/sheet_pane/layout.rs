@@ -11,12 +11,15 @@
 use std::hash::Hash;
 
 use egui::{
-    Align, Color32, CornerRadius, Frame, Id, Label, Layout, Margin, Rect, ScrollArea, Shape, Stroke, TextStyle,
+    Align, Color32, CornerRadius, Frame, Id, Label, Layout, Margin, Rect, Response, ScrollArea, Shape, Stroke,
+    TextStyle,
 };
 use egui::{Ui, UiBuilder, pos2, vec2};
 
+use henad_graph::sheet::sentence::REMOVE_ROW_LABEL;
+
 use crate::ui::editor::sheet::help::{Help, help_button};
-use crate::ui::editor::sheet::widgets::{caption, field_message, region, region_title};
+use crate::ui::editor::sheet::widgets::{CHIP_HEIGHT, caption, field_message, region, region_title, text_control};
 use crate::ui::mcs;
 
 /// Height in points of one line of a form row or of a table cell. A field, a select or a chip sits centred in it.
@@ -382,6 +385,11 @@ fn rule(ui: &Ui, rect: Rect) {
         .hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, mcs::GRAY_800));
 }
 
+/// Adds the delete button of a row, a "×" named `name` in the weak text colour.
+pub(super) fn delete_button(ui: &mut Ui, name: &str) -> Response {
+    text_control(ui, None, REMOVE_ROW_LABEL, name, CHIP_HEIGHT)
+}
+
 /// One row of a table while its cells are drawn.
 pub(super) struct TableRow<'a> {
     /// The `Ui` the table is drawn in.
@@ -414,6 +422,19 @@ impl TableRow<'_> {
     pub(super) fn cells<R>(&mut self, first: usize, last: usize, add: impl FnOnce(&mut Ui) -> R) -> R {
         let top = self.top;
         self.place(first, last, top, ("cell", first), add)
+    }
+
+    /// Draws the row's delete button, a [`delete_button`] named `name` at the right edge of the cell of the column
+    /// `index`, and returns whether it was clicked.
+    pub(super) fn delete_cell(&mut self, index: usize, name: &str) -> bool {
+        self.cell(index, |ui| {
+            line(ui, |ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    delete_button(ui, name).clicked()
+                })
+                .inner
+            })
+        })
     }
 
     /// Draws `add` under every cell drawn so far, from the left edge of the column `first` to the row's right edge, and

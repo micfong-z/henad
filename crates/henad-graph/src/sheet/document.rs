@@ -1105,6 +1105,37 @@ pub enum LineKind {
     Always,
 }
 
+impl LineKind {
+    /// Returns whether a line of this kind works out a result, which later lines read by its name.
+    ///
+    /// The same kinds stand in a slot as a phrase.
+    pub fn works_out_result(self) -> bool {
+        matches!(
+            self,
+            Self::Count
+                | Self::LookAround
+                | Self::PickCell
+                | Self::LookAtCell
+                | Self::Chance
+                | Self::Rate
+                | Self::RandomNumber
+                | Self::RandomDirection
+                | Self::Compare
+                | Self::AllOf
+                | Self::AnyOf
+                | Self::NoneOf
+                | Self::Choose
+                | Self::DependingOn
+                | Self::Calculate
+        )
+    }
+
+    /// Returns whether a line of this kind holds lines: a When or a Repeat.
+    pub fn is_block(self) -> bool {
+        matches!(self, Self::When | Self::Repeat)
+    }
+}
+
 /// Value of a Steer or Move line's `mode` key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

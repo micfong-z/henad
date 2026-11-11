@@ -7,21 +7,21 @@
 //! offer says what is missing. A typed number takes a trailing "%" as a percent ("30%" is 0.3).
 
 use egui::{
-    Button, Color32, CornerRadius, FontId, Frame, Id, Key, Margin, Modal, Popup, PopupCloseBehavior, Pos2, Rect,
-    Response, RichText, Sense, Shape, Stroke, StrokeKind, TextEdit, TextStyle, Ui, Vec2, WidgetInfo, WidgetType, pos2,
-    vec2,
+    Button, Color32, CornerRadius, FontId, Frame, Id, Key, Margin, Modal, Painter, Popup, PopupCloseBehavior, Pos2,
+    Rect, Response, RichText, Sense, Shape, Stroke, StrokeKind, TextEdit, TextStyle, Ui, Vec2, WidgetInfo, WidgetType,
+    pos2, vec2,
 };
-use henad_graph::sheet::document::{ParameterType, SheetLiteral};
-use henad_graph::sheet::edit::{IdSpace, PALETTE_COLORS, SheetEditError, is_reserved_name};
+use henad_graph::sheet::document::{ParameterType, SheetDocument, SheetLiteral};
+use henad_graph::sheet::edit::{IdSpace, PALETTE_COLORS, SheetEdit, SheetEditError, is_reserved_name};
 use henad_graph::sheet::format_number;
 use henad_graph::sheet::sentence::{
-    CANCEL, CHANCE_BOX_HINT, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, CHANCE_PARAMETER_PLACEHOLDER, CHOOSE_A_COLOR,
-    COLOR_NAMES, CREATE_PARAMETER, ChipKind, DEFAULT_LABEL, DEFAULT_NAME, DEFAULT_OUTSIDE_LIMITS, DIALOG_NAME_MISSING,
-    DIALOG_UNIT_PLACEHOLDER, LIMITS_NOT_NUMBERS, MAX_LABEL, MIN_LABEL, MIN_NOT_BELOW_MAX, NAME_LABEL, NEW_PARAMETER,
-    NEW_PARAMETER_HEADING, NEW_PARAMETER_LEAD, NUMBER_BOX_HINT, NUMBER_PARAMETER_PLACEHOLDER, PARAMETER_NAME_FIELD,
-    RATE_BELOW_ZERO, RATE_PARAMETER_PLACEHOLDER, SentenceChip, TIMES_LIMITS_NOT_INTEGERS, TIMES_PARAMETER_PLACEHOLDER,
-    TYPE_ONE_NUMBER, TYPE_TIMES, UNIT_LABEL, UNSAVED_MARK, UNSAVED_MARK_TOOLTIP, USE_BUTTON, parameter_name_taken,
-    read_typed_number,
+    AddButton, CANCEL, CHANCE_BOX_HINT, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, CHANCE_PARAMETER_PLACEHOLDER,
+    CHOOSE_A_COLOR, COLOR_NAMES, CREATE_PARAMETER, ChipKind, DEFAULT_LABEL, DEFAULT_NAME, DEFAULT_OUTSIDE_LIMITS,
+    DIALOG_NAME_MISSING, DIALOG_UNIT_PLACEHOLDER, LIMITS_NOT_NUMBERS, MAX_LABEL, MIN_LABEL, MIN_NOT_BELOW_MAX,
+    NAME_LABEL, NEW_PARAMETER_HEADING, NEW_PARAMETER_LEAD, NUMBER_BOX_HINT, NUMBER_PARAMETER_PLACEHOLDER,
+    PARAMETER_NAME_FIELD, RATE_BELOW_ZERO, RATE_PARAMETER_PLACEHOLDER, SentenceChip, TIMES_LIMITS_NOT_INTEGERS,
+    TIMES_PARAMETER_PLACEHOLDER, TYPE_ONE_NUMBER, TYPE_TIMES, UNIT_LABEL, UNSAVED_MARK, UNSAVED_MARK_TOOLTIP,
+    parameter_name_taken, read_typed_number,
 };
 use henad_graph::value::Color;
 
@@ -32,6 +32,7 @@ use crate::icons::material_design_icons::{
 };
 use crate::ui::mcs;
 use crate::ui::sweep::layout::{destructive_button, filled_button};
+use crate::ui::text::capitalize;
 
 /// Padding in points at each side of the words of a chip, a blank or a select.
 pub const CHIP_PADDING: f32 = 5.0;
@@ -71,6 +72,9 @@ const ARROW_SIDE: f32 = 14.0;
 
 /// Width in points of the place of the chevron box after a condition word, its box with a gap at each side.
 pub const ARROW_WIDTH: f32 = ARROW_SIDE + 4.0;
+
+/// Width in points of the bar at the left edge of a card's row or a Diagram box, in the hue of its line's kind.
+pub const KIND_BAR_WIDTH: f32 = 3.0;
 
 // Custom components
 //
@@ -244,38 +248,22 @@ pub fn overlay_item(ui: &mut Ui, item: &OverlayItem<'_>) -> Response {
     if ui.is_rect_visible(row) {
         let active = enabled && (response.hovered() || response.has_focus());
         let visuals = ui.visuals();
-        let (fill, text_color) = if !enabled {
-            (None, visuals.weak_text_color())
+        let text_color = if !enabled {
+            visuals.weak_text_color()
         } else if item.current {
-            (Some(mcs::BLUE_900), mcs::BLUE_200)
+            mcs::BLUE_200
         } else if active {
-            (Some(mcs::GRAY_800), visuals.widgets.hovered.text_color())
+            visuals.widgets.hovered.text_color()
         } else {
-            (None, visuals.widgets.inactive.text_color())
+            visuals.widgets.inactive.text_color()
         };
         let painter = ui.painter();
-        if let Some(fill) = fill {
+        if let Some(fill) = list_row_fill(enabled && item.current, active) {
             painter.rect_filled(row, CornerRadius::ZERO, fill);
-        }
-        if response.has_focus() {
-            painter.rect_stroke(
-                row,
-                CornerRadius::ZERO,
-                Stroke::new(FOCUS_WIDTH, mcs::BLUE_500),
-                StrokeKind::Inside,
-            );
         }
         let top = row.top() + (height - content) / 2.0;
         let line_center = top + label_size.y / 2.0;
-        if item.current {
-            painter.text(
-                pos2(row.left() + OVERLAY_PADDING, line_center),
-                egui::Align2::LEFT_CENTER,
-                MDI_CHECK,
-                FontId::proportional(SMALL_LABEL),
-                mcs::BLUE_200,
-            );
-        }
+        paint_list_row_marks(painter, row, item.current, response.has_focus(), line_center);
         let mut x = rect.left() + MARK_COLUMN;
         if let Some(color) = item.swatch {
             swatch(painter, pos2(x + CHIP_SWATCH / 2.0, line_center), color);
@@ -540,11 +528,34 @@ pub fn menu_button(ui: &Ui, id: Id, popup_id: Id, name: &str, rect: Rect) -> Res
     response
 }
 
-/// Adds an add button showing `words`, named `name`, and returns its response: a dashed gray 500 outline around the
-/// words, with the square of the kind's colour `kind` before them on a card's add buttons.
+/// Returns the hue of the bar of a line of the group `button`, the hue's 500 step. The square on that add button
+/// shows it too.
+///
+/// This is the one place a hue names a kind of line in place of a state.
+pub fn kind_hue(button: AddButton) -> Color32 {
+    match button {
+        AddButton::LookAround => mcs::BLUE_500,
+        AddButton::Chance => mcs::PURPLE_500,
+        AddButton::YesOrNo => mcs::YELLOW_500,
+        AddButton::Calculate => mcs::GRAY_500,
+        AddButton::Change => mcs::GREEN_500,
+        _ => mcs::GRAY_100,
+    }
+}
+
+/// Paints the bar of a line of the group `group` at the left edge of `rect`, [`KIND_BAR_WIDTH`] wide and as tall as
+/// `rect`, in the group's [`kind_hue`].
+pub fn kind_bar(painter: &Painter, rect: Rect, group: AddButton) {
+    let bar = Rect::from_min_size(rect.min, vec2(KIND_BAR_WIDTH, rect.height()));
+    painter.rect_filled(bar, CornerRadius::ZERO, kind_hue(group));
+}
+
+/// Adds the button that adds a row, a line of a card or a row of a table, showing `words` and named `name`, and
+/// returns its response: a dashed gray 500 outline around the words, with the square of the [`kind_hue`] of the group
+/// `kind` before them on a card's add buttons.
 ///
 /// The outline turns solid under the pointer and blue 500 while the menu it opens is `open`.
-pub fn add_button(ui: &mut Ui, words: &str, name: &str, kind: Option<Color32>, open: bool) -> Response {
+pub fn add_row_button(ui: &mut Ui, words: &str, name: &str, kind: Option<AddButton>, open: bool) -> Response {
     let font = TextStyle::Body.resolve(ui.style());
     let color = ui.visuals().text_color();
     let galley = ui.painter().layout_no_wrap(words.to_owned(), font, color);
@@ -574,7 +585,7 @@ pub fn add_button(ui: &mut Ui, words: &str, name: &str, kind: Option<Color32>, o
         let mut x = rect.left() + 6.0;
         if let Some(kind) = kind {
             let square = Rect::from_min_size(pos2(x, rect.center().y - ADD_SQUARE / 2.0), Vec2::splat(ADD_SQUARE));
-            painter.rect_filled(square, CornerRadius::ZERO, kind);
+            painter.rect_filled(square, CornerRadius::ZERO, kind_hue(kind));
             x += ADD_SQUARE + 5.0;
         }
         painter.galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, color);
@@ -983,28 +994,30 @@ pub fn choice_row(ui: &mut Ui, name: &str, description: Option<&str>, selected: 
     );
     let response = ui.interact(row, ui.id().with(("henad_choice_row", name)), Sense::click());
     response.widget_info(|| WidgetInfo::selected(WidgetType::RadioButton, ui.is_enabled(), selected, name));
-    let fill = if selected {
-        Some(mcs::BLUE_900)
-    } else if response.hovered() || response.has_focus() {
-        Some(mcs::GRAY_800)
-    } else {
-        None
-    };
-    if let Some(fill) = fill {
+    if let Some(fill) = list_row_fill(selected, response.hovered() || response.has_focus()) {
         ui.painter()
             .set(background, Shape::rect_filled(row, CornerRadius::ZERO, fill));
     }
-    let painter = ui.painter();
-    if selected {
-        painter.text(
-            pos2(row.left() + OVERLAY_PADDING, name_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            MDI_CHECK,
-            FontId::proportional(SMALL_LABEL),
-            mcs::BLUE_200,
-        );
+    paint_list_row_marks(ui.painter(), row, selected, response.has_focus(), name_rect.center().y);
+    response
+}
+
+/// Returns the fill of a row of a list, an overlay's item or a dialog's choice: blue 900 while `chosen`, else gray 800
+/// while `active`, under the pointer or the focus, and none otherwise.
+fn list_row_fill(chosen: bool, active: bool) -> Option<Color32> {
+    if chosen {
+        Some(mcs::BLUE_900)
+    } else if active {
+        Some(mcs::GRAY_800)
+    } else {
+        None
     }
-    if response.has_focus() {
+}
+
+/// Paints the marks of `row`, a row of a list: the 1.5 point blue 500 focus stroke inside it while `focused`, and a
+/// blue 200 check at its left, centred on `check_y`, while `chosen`.
+fn paint_list_row_marks(painter: &Painter, row: Rect, chosen: bool, focused: bool, check_y: f32) {
+    if focused {
         painter.rect_stroke(
             row,
             CornerRadius::ZERO,
@@ -1012,7 +1025,15 @@ pub fn choice_row(ui: &mut Ui, name: &str, description: Option<&str>, selected: 
             StrokeKind::Inside,
         );
     }
-    response
+    if chosen {
+        painter.text(
+            pos2(row.left() + OVERLAY_PADDING, check_y),
+            egui::Align2::LEFT_CENTER,
+            MDI_CHECK,
+            FontId::proportional(SMALL_LABEL),
+            mcs::BLUE_200,
+        );
+    }
 }
 
 /// Width in points of a picker, the card's and the Sheet pane's alike. Its words wrap at it, and a picker with less to
@@ -1037,11 +1058,10 @@ pub fn refusal_text(error: &SheetEditError) -> String {
         return henad_graph::sheet::sentence::NAME_RESERVED.to_owned();
     }
     let text = error.to_string();
-    let mut characters = text.chars();
-    match characters.next() {
-        Some(first) => format!("{}{}.", first.to_uppercase(), characters.as_str()),
-        None => text,
+    if text.is_empty() {
+        return text;
     }
+    format!("{}.", capitalize(&text))
 }
 
 /// Returns `color`, the red, green, blue and alpha bytes of a sheet's colour, as egui draws it.
@@ -1501,12 +1521,18 @@ pub fn forget_field(ui: &Ui, id: Id) {
     ui.data_mut(|data| data.remove::<FieldDraft>(draft_id(id)));
 }
 
+/// Returns whether one of `names` is `name`, case aside.
+pub fn name_taken<'a>(name: &str, names: impl IntoIterator<Item = &'a str>) -> bool {
+    let name = name.to_lowercase();
+    names.into_iter().any(|known| known.to_lowercase() == name)
+}
+
 /// Draws `message` in the theme's error colour under a row of fields.
 pub fn message_ui(ui: &mut Ui, message: &str) {
     ui.colored_label(ui.visuals().error_fg_color, message);
 }
 
-// The picker
+// The Number box
 
 /// Range a typed number is read in: a chance, a rate or any number. A picker's Number box and the New parameter dialog
 /// accept numbers in it.
@@ -1538,173 +1564,14 @@ impl NumberUse {
             _ => Ok(literal),
         }
     }
-}
 
-/// One group of a picker: a heading and its items.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PickerGroup {
-    /// Heading of the group.
-    pub heading: &'static str,
-    /// Items of the group, in order.
-    pub items: Vec<PickerItem>,
-}
-
-/// One item of a picker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PickerItem {
-    /// Words of the item. They also name it.
-    pub label: String,
-    /// Grey words beside the item, such as a parameter's value and unit.
-    pub detail: Option<String>,
-}
-
-/// Choice made in a picker.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PickerChoice {
-    /// The item at `item` of the group at `group`, counted among every group passed to the picker.
-    Item {
-        /// Index of the group.
-        group: usize,
-        /// Index of the item in its group.
-        item: usize,
-    },
-    /// "New parameter...".
-    NewParameter,
-    /// A number typed in the Number box.
-    Number(SheetLiteral),
-}
-
-/// A picker: its title, its groups, "New parameter..." and its Number box.
-#[derive(Debug, Clone)]
-pub struct Picker<'a> {
-    /// Title of the picker, such as "Choose a parameter".
-    pub title: &'a str,
-    /// Groups of items. A group with no item is left out.
-    pub groups: Vec<PickerGroup>,
-    /// Whether the picker offers "New parameter...".
-    pub new_parameter: bool,
-    /// Range the Number box reads, `None` for a picker with no Number box.
-    pub number_box: Option<NumberUse>,
-    /// Text the picker shows when it has nothing to offer.
-    pub empty: &'a str,
-}
-
-impl Picker<'_> {
-    /// Draws the picker under `anchor` while it is open, and returns what the author chose. A click on `anchor` opens
-    /// and closes it, and a choice, a click outside or Escape closes it.
-    ///
-    /// The picker is an overlay. Its open state lives under the anchor's id with "picker". A chip or a text control
-    /// that anchors it then shows itself open.
-    pub fn show(self, ui: &Ui, anchor: &Response) -> Option<PickerChoice> {
-        let popup = Popup::from_toggle_button_response(anchor)
-            .id(anchor.id.with("picker"))
-            .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
-            .width(PICKER_WIDTH)
-            .frame(Frame::NONE)
-            .show(|ui| {
-                overlay(ui, |ui| {
-                    ui.set_min_width(PICKER_WIDTH - 2.0 * OVERLAY_PADDING);
-                    let choice = self.contents(ui);
-                    if choice.is_some() {
-                        ui.close();
-                    }
-                    (choice, ui.unique_id())
-                })
-            })?;
-        let (choice, id) = popup.inner;
-        accessible_group(
-            ui.ctx(),
-            id,
-            egui::accesskit::Role::Dialog,
-            self.title,
-            popup.response.rect,
-        );
-        choice
+    /// Returns the hint over a Number box that reads in this range. It also names the box.
+    pub fn box_hint(self) -> &'static str {
+        match self {
+            Self::Chance => CHANCE_BOX_HINT,
+            Self::Rate | Self::Number | Self::Times => NUMBER_BOX_HINT,
+        }
     }
-
-    /// Draws what the picker offers, and returns what the author chose.
-    fn contents(&self, ui: &mut Ui) -> Option<PickerChoice> {
-        let mut choice = None;
-        overlay_title(ui, self.title);
-        let mut offered = false;
-        for (group_index, group) in self.groups.iter().enumerate() {
-            if group.items.is_empty() {
-                continue;
-            }
-            offered = true;
-            overlay_group(ui, group.heading);
-            for (item_index, item) in group.items.iter().enumerate() {
-                let row = OverlayItem {
-                    label: &item.label,
-                    detail: item.detail.as_deref(),
-                    described: true,
-                    ..OverlayItem::default()
-                };
-                if overlay_item(ui, &row).clicked() {
-                    choice = Some(PickerChoice::Item {
-                        group: group_index,
-                        item: item_index,
-                    });
-                }
-            }
-        }
-        if self.new_parameter {
-            offered = true;
-            ui.add_space(4.0);
-            let row = OverlayItem {
-                label: NEW_PARAMETER,
-                ..OverlayItem::default()
-            };
-            if overlay_item(ui, &row).clicked() {
-                choice = Some(PickerChoice::NewParameter);
-            }
-        }
-        if let Some(number_use) = self.number_box {
-            offered = true;
-            ui.add_space(6.0);
-            ui.spacing_mut().item_spacing.y = 4.0;
-            if let Some(literal) = number_box(ui, number_use) {
-                choice = Some(PickerChoice::Number(literal));
-            }
-        }
-        if !offered {
-            ui.add_space(4.0);
-            ui.weak(self.empty);
-        }
-        ui.add_space(2.0);
-        choice
-    }
-}
-
-/// Draws the Number box of a picker, and returns the number typed once Enter or Use is pressed on text that reads.
-fn number_box(ui: &mut Ui, number_use: NumberUse) -> Option<SheetLiteral> {
-    let hint = match number_use {
-        NumberUse::Chance => CHANCE_BOX_HINT,
-        NumberUse::Rate | NumberUse::Number | NumberUse::Times => NUMBER_BOX_HINT,
-    };
-    ui.weak(hint);
-    let id = ui.id().with("henad_number_box");
-    let mut draft: FieldDraft = ui.data(|data| data.get_temp(id)).unwrap_or_default();
-    let mut typed = None;
-    ui.horizontal(|ui| {
-        let field = ui.add(TextEdit::singleline(&mut draft.text).desired_width(120.0));
-        set_name(ui, field.id, hint);
-        let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
-        if ui.button(USE_BUTTON).clicked() || entered {
-            match number_use.read(&draft.text) {
-                Ok(literal) => {
-                    typed = Some(literal);
-                    draft = FieldDraft::default();
-                }
-                Err(message) => draft.message = Some(message.to_owned()),
-            }
-        }
-    });
-    if let Some(message) = &draft.message {
-        message_ui(ui, message);
-    }
-    ui.data_mut(|data| data.insert_temp(id, draft));
-    typed
 }
 
 // The colour palette
@@ -1847,6 +1714,29 @@ pub struct NewParameter {
     pub parameter_type: ParameterType,
 }
 
+impl NewParameter {
+    /// Returns the command that adds the parameter to a sheet.
+    pub fn add_edit(self) -> SheetEdit {
+        SheetEdit::AddParameter {
+            name: self.name,
+            parameter_type: self.parameter_type,
+            min: self.min,
+            max: self.max,
+            default: self.default,
+            unit: self.unit,
+        }
+    }
+}
+
+/// Returns the names of the parameters of `document`, which the New parameter dialog refuses for a new one.
+pub fn parameter_names(document: &SheetDocument) -> Vec<&str> {
+    document
+        .parameters
+        .iter()
+        .map(|parameter| parameter.name.as_str())
+        .collect()
+}
+
 /// Outcome of a frame of the New parameter dialog.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DialogOutcome {
@@ -1917,7 +1807,7 @@ impl NewParameterDialog {
         if name.is_empty() {
             return Err(DIALOG_NAME_MISSING.to_owned());
         }
-        if taken.iter().any(|known| known.to_lowercase() == name.to_lowercase()) {
+        if name_taken(name, taken.iter().copied()) {
             return Err(parameter_name_taken(name));
         }
         if is_reserved_name(name, IdSpace::Item) {

@@ -24,8 +24,8 @@ use henad_graph::sheet::sentence::{
 };
 
 use super::accessible_group;
-use super::card_pane::{card_lines, kind_hue};
-use super::widgets::caption;
+use super::card_pane::card_lines;
+use super::widgets::{KIND_BAR_WIDTH, caption, kind_bar};
 use crate::init::semibold_font;
 use crate::ui::mcs;
 use crate::ui::sweep::layout::add_button;
@@ -56,9 +56,6 @@ const PIN_RADIUS: f32 = 4.0;
 
 /// Size in points of the text of a box.
 const TEXT_SIZE: f32 = 12.0;
-
-/// Width in points of the bar at the left edge of a box, in the hue of its line's kind.
-const KIND_BAR_WIDTH: f32 = 3.0;
 
 /// One box of the Diagram: a line of a card.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -414,8 +411,7 @@ fn paint_box(painter: &Painter, line: &DiagramBox, placed: &PlacedBox, font: &Fo
         FontId::proportional(TEXT_SIZE),
         mcs::GRAY_100,
     );
-    let bar = Rect::from_min_size(rect.min, vec2(KIND_BAR_WIDTH, rect.height()));
-    painter.rect_filled(bar, CornerRadius::ZERO, kind_hue(line.group));
+    kind_bar(painter, rect, line.group);
     let mut top = rect.top() + ROW_HEIGHT;
     if let Some(result) = &line.result {
         let pin = placed.output_pin();

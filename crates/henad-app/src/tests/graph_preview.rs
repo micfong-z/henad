@@ -630,7 +630,7 @@ fn every_starter_previews_within_the_device_limits_and_the_work_budget() {
     let starters = henad_graph::starters::starters().iter();
     for starter in starters.chain(henad_graph::starters::agent_starters()) {
         let file = henad_graph::GraphFile::parse(starter.text).expect("a starter reads");
-        let entry = crate::ui::editor::graph::GraphProgram::compile(&file)
+        let entry = crate::ui::editor::program::GraphProgram::compile(&file)
             .expect("a starter compiles")
             .entry();
         let (values, _) = crate::ui::editor::preview::preview_values(&entry);

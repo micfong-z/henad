@@ -16,6 +16,7 @@
 //! name turns it into a field. Undo keeps the canonical text of the sheet before each edit, and an undo or a redo reads
 //! that text back as one more edit of the world.
 
+pub mod card_lines;
 pub mod card_pane;
 pub mod diagram;
 pub mod help;
@@ -27,10 +28,7 @@ pub mod widgets;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 
-use egui::{
-    Button, CentralPanel, Frame, Key, KeyboardShortcut, Margin, Modifiers, Panel, RichText, ScrollArea, TextEdit,
-    UiBuilder,
-};
+use egui::{Button, CentralPanel, Frame, Key, Margin, Panel, RichText, ScrollArea, TextEdit, UiBuilder};
 use henad_compute::entry::ModelEntry;
 use henad_compute::snapshot::Snapshot;
 use henad_core::diagnostic::CodeDiagnostic;
@@ -38,7 +36,9 @@ use henad_core::provenance::ModelCode;
 use henad_explore::model_file::sheet_probes;
 use henad_graph::sheet::ConvertRefusal;
 use henad_graph::sheet::check::{SheetReport, check};
-use henad_graph::sheet::document::{MadeOf, SheetDocument, StartsAs};
+use henad_graph::sheet::document::{
+    CELLS_ID, GROUND_ID, MadeOf, SheetDocument, SheetParameter, SheetProperty, StartsAs,
+};
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit, SheetEditError};
 use henad_graph::sheet::sentence::{
     CONVERT_HEADING, DIAGRAM, DIAGRAM_TOOLTIP, LINES_VIEW, MODEL_ACTIONS, MODEL_NAME_FIELD, REDO, REDO_TOOLTIP,
@@ -46,8 +46,9 @@ use henad_graph::sheet::sentence::{
 };
 use henad_graph::sheet::{ParsedSheet, SheetFile};
 
-use super::graph::history::History;
-use super::graph::{CompiledProgram, GraphProgram, LOADS};
+use super::history::History;
+use super::program::{CompiledProgram, GraphProgram, LOADS};
+use super::undo_redo_keys;
 use crate::icons::material_design_icons::{MDI_DOTS_HORIZONTAL, MDI_REDO, MDI_UNDO};
 use crate::ui::dock::Layout;
 use crate::ui::sweep::layout::add_button;
@@ -395,24 +396,10 @@ impl SheetEditor {
     /// Returns the reason the edit was refused, such as a parameter the sheet does not hold. The sheet is then
     /// unchanged.
     pub fn keep_value(&mut self, parameter: &str, value: f64) -> Result<(), SheetEditError> {
-        let Some(kept) = self
-            .document()
-            .parameters
-            .iter()
-            .find(|known| known.id == parameter)
-            .cloned()
-        else {
+        let Some(kept) = self.document().parameters.iter().find(|known| known.id == parameter) else {
             return Err(SheetEditError::Missing(format!("no parameter has the id {parameter}")));
         };
-        let edit = SheetEdit::SetParameter {
-            parameter: kept.id,
-            min: kept.min.min(value),
-            max: kept.max.max(value),
-            default: value,
-            step: kept.step,
-            unit: kept.unit,
-            means: kept.means,
-        };
+        let edit = set_parameter_edit(kept, kept.min.min(value), kept.max.max(value), value, kept.unit.clone());
         let mut builder = self.builder.clone();
         builder.apply(edit)?;
         self.history.record(self.text.clone(), None);
@@ -501,12 +488,7 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'
     // egui reports the top modal layer of the previous frame. Every modal stays open past the frame that opens it.
     let modal_open = ui.ctx().memory(|memory| memory.top_modal_layer().is_some());
     if keys && !modal_open && !sheet.dialog_open() && !ui.ctx().text_edit_focused() {
-        let (undo, redo) = ui.ctx().input_mut(|input| {
-            let redo = input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z))
-                || input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Y));
-            let undo = input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Z));
-            (undo, redo)
-        });
+        let (undo, redo) = ui.ctx().input_mut(undo_redo_keys);
         if redo {
             sheet.redo(past_start);
         }
@@ -702,9 +684,64 @@ fn without_starts_or_words(document: &SheetDocument) -> SheetDocument {
 
 /// Returns the start of each property of `document`, by id.
 fn starts_of(document: &SheetDocument) -> Vec<(String, Option<StartsAs>)> {
-    sheet_pane::all_properties(document)
+    all_properties(document)
         .map(|property| (property.id.clone(), property.starts_as.clone()))
         .collect()
+}
+
+/// Returns the command that gives `parameter` the range `min` to `max`, the value `default` and the unit `unit`,
+/// keeping its step and its meaning.
+fn set_parameter_edit(parameter: &SheetParameter, min: f64, max: f64, default: f64, unit: Option<String>) -> SheetEdit {
+    SheetEdit::SetParameter {
+        parameter: parameter.id.clone(),
+        min,
+        max,
+        default,
+        step: parameter.step,
+        unit,
+        means: parameter.means.clone(),
+    }
+}
+
+// Kinds of thing and their properties
+
+/// Returns the properties of the kind of thing `thing`: `cells`, `ground` or an agent kind's id. A kind of thing the
+/// sheet lacks has none.
+fn properties_of<'a>(document: &'a SheetDocument, thing: &str) -> &'a [SheetProperty] {
+    match thing {
+        CELLS_ID => document.cells.as_deref().unwrap_or_default(),
+        GROUND_ID => document
+            .ground
+            .as_ref()
+            .map(|ground| ground.properties.as_slice())
+            .unwrap_or_default(),
+        _ => document
+            .agents
+            .iter()
+            .find(|kind| kind.id == thing)
+            .map(|kind| kind.properties.as_slice())
+            .unwrap_or_default(),
+    }
+}
+
+/// Returns every property of `document`: the cells', each kind of agent's, then the ground's.
+fn all_properties(document: &SheetDocument) -> impl Iterator<Item = &SheetProperty> {
+    document
+        .cells
+        .iter()
+        .flatten()
+        .chain(document.agents.iter().flat_map(|kind| &kind.properties))
+        .chain(document.ground.iter().flat_map(|ground| &ground.properties))
+}
+
+/// Returns the property `id` of any kind of thing of `document`.
+fn find_property<'a>(document: &'a SheetDocument, id: &str) -> Option<&'a SheetProperty> {
+    all_properties(document).find(|property| property.id == id)
+}
+
+/// Returns whether a card over the kind of thing `every` runs over agents, any kind but the cells.
+fn over_agents(every: &str) -> bool {
+    every != CELLS_ID
 }
 
 /// Gives the node of `ui` the role of a group named `name` with the bounds of what `ui` holds, as a pane of the sheet
