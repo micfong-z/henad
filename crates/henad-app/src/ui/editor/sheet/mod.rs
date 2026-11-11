@@ -38,7 +38,7 @@ use henad_graph::sheet::check::{SheetReport, check};
 use henad_graph::sheet::document::{MadeOf, SheetDocument, StartsAs};
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit, SheetEditError};
 use henad_graph::sheet::sentence::{
-    CONVERT_HEADING, DIAGRAM, DIAGRAM_TOOLTIP, MODEL_ACTIONS, MODEL_NAME_FIELD, REDO, REDO_TOOLTIP,
+    CONVERT_HEADING, DIAGRAM, DIAGRAM_TOOLTIP, LINES_VIEW, MODEL_ACTIONS, MODEL_NAME_FIELD, REDO, REDO_TOOLTIP,
     RENAME_MODEL_TOOLTIP, RESTART_NOTICE, UNDO, UNDO_TOOLTIP, converted_link, model_name_button,
 };
 use henad_graph::sheet::{ParsedSheet, SheetFile};
@@ -520,10 +520,14 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'
         Frame::NONE.inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading(CARD_PANE);
-                let toggle = ui
-                    .selectable_label(sheet.diagram, DIAGRAM)
-                    .on_hover_text(DIAGRAM_TOOLTIP);
-                if toggle.clicked() {
+                ui.add_space(8.0);
+                // Lines and Diagram read as the two segments of one toggle. Only Diagram is on the keyboard path, as
+                // it was before Lines was drawn.
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let lines = widgets::toggle_label(ui, LINES_VIEW, !sheet.diagram, false);
+                widgets::segment_rule(ui);
+                let toggle = widgets::toggle_label(ui, DIAGRAM, sheet.diagram, true).on_hover_text(DIAGRAM_TOOLTIP);
+                if toggle.clicked() || (lines.clicked() && sheet.diagram) {
                     sheet.diagram = !sheet.diagram;
                     sheet.card.close();
                 }

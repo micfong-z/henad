@@ -109,6 +109,12 @@ pub fn rename_line(word: &str) -> String {
     format!("Rename {word}")
 }
 
+/// Returns the name of a result line's name on its card, a button that renames the line, such as "Line 1: rename Alive
+/// neighbours", where `prefix` is the line prefix and `name` the result's name.
+pub fn rename_result_name(prefix: &str, name: &str) -> String {
+    format!("{prefix}: rename {name}")
+}
+
 /// Returns the tool that moves a line up, such as "Move line 2 up", where `word` is the line word.
 pub fn move_line_up(word: &str) -> String {
     format!("Move {word} up")
@@ -118,6 +124,12 @@ pub fn move_line_up(word: &str) -> String {
 pub fn move_line_down(word: &str) -> String {
     format!("Move {word} down")
 }
+
+/// Tooltip of the disabled Move up on the first line of a card.
+pub const MOVE_UP_FIRST: &str = "The first line of a card cannot move up.";
+
+/// Tooltip of the disabled Move down on the last line of a card.
+pub const MOVE_DOWN_LAST: &str = "The last line of a card cannot move down.";
 
 /// Returns the tool that deletes a line, such as "Delete line 2", where `word` is the line word.
 pub fn delete_line(word: &str) -> String {
@@ -257,6 +269,30 @@ impl AddButton {
             (true, Self::Calculate) => "Work out a number, or choose between values",
             (true, Self::Change) => "Change a state, a number, a direction or a place, or leave a mark",
             _ => self.tooltip(),
+        }
+    }
+
+    /// Returns the button whose menus add a line of `kind`, the group the kind belongs to.
+    ///
+    /// Note that a Become belongs to Change wherever it was added, "Become, with chance" from "+ Chance" included, and
+    /// the condition "always", which no line holds alone, to Yes or no.
+    pub fn for_kind(kind: LineKind) -> Self {
+        match kind {
+            LineKind::Count | LineKind::LookAround | LineKind::PickCell | LineKind::LookAtCell => Self::LookAround,
+            LineKind::Chance | LineKind::Rate | LineKind::RandomNumber | LineKind::RandomDirection => Self::Chance,
+            LineKind::Compare | LineKind::AllOf | LineKind::AnyOf | LineKind::NoneOf | LineKind::Always => {
+                Self::YesOrNo
+            }
+            LineKind::Calculate | LineKind::Choose | LineKind::DependingOn => Self::Calculate,
+            LineKind::Become
+            | LineKind::Set
+            | LineKind::Steer
+            | LineKind::KeepBetween
+            | LineKind::Move
+            | LineKind::Leave
+            | LineKind::Record => Self::Change,
+            LineKind::When => Self::When,
+            LineKind::Repeat => Self::Repeat,
         }
     }
 
@@ -3219,6 +3255,9 @@ pub const REDO: &str = "Redo";
 /// Tooltip of [`REDO`].
 pub const REDO_TOOLTIP: &str = "Redo last undone edit";
 
+/// Segment beside [`DIAGRAM`] that draws the card as its lines, the view that is on while the diagram is off.
+pub const LINES_VIEW: &str = "Lines";
+
 /// Toggle that draws the card as a diagram.
 pub const DIAGRAM: &str = "Diagram";
 
@@ -3650,8 +3689,18 @@ pub(crate) fn thing_word(document: &SheetDocument, every: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SentencePart {
-    /// Words between the values of the line, such as " = count of ".
+    /// Words between the values of the line, such as " whose ".
     Text(String),
+    /// A lead word that says what the line does, drawn in bold: the verb of a change ("Become", "Set", "Steer",
+    /// "Keep", "Move", "Leave", "Record"), "When" and "Repeat" before a blank or "always", and the words that name
+    /// what a result line works out ("count of", "look at", "all of", "choose, first that applies", "depending on")
+    /// with the "otherwise" of a Choose.
+    Keyword(String),
+    /// The name of the result a result line works out, before " = ", drawn as the line's result chip.
+    ResultName(String),
+    /// The start of one alternative of a Choose or a Depending on line, which the card draws on a row of its own.
+    /// Plain text reads it as nothing.
+    Alternative,
     /// A condition word in plain bold text: "when", "with chance" or "at rate", or on a When line "When", "When with
     /// chance" or "When at rate".
     ConditionWord(&'static str),
@@ -3683,7 +3732,9 @@ impl SentencePart {
     pub fn text(&self) -> String {
         match self {
             Self::Select(_, words) if words.is_empty() => BLANK_TEXT.to_owned(),
-            Self::Text(words) | Self::Select(_, words) => words.clone(),
+            Self::Text(words) | Self::Keyword(words) | Self::ResultName(words) | Self::Select(_, words) => {
+                words.clone()
+            }
             Self::ConditionWord(words) => (*words).to_owned(),
             Self::From => FROM_WORD.to_owned(),
             Self::Chip(chip) => chip.text(),
@@ -3691,7 +3742,7 @@ impl SentencePart {
             Self::Always => ALWAYS.to_owned(),
             Self::Otherwise(lines) => otherwise_words(lines),
             Self::Competing(_) => COMPETING_WORD.to_owned(),
-            Self::ForEachBlank(_) => String::new(),
+            Self::ForEachBlank(_) | Self::Alternative => String::new(),
             Self::ForEach(_) => FOR_EACH_WORDS.to_owned(),
         }
     }
@@ -3880,6 +3931,21 @@ impl Parts {
         parts
     }
 
+    /// Returns parts holding the lead word `words` alone.
+    fn keyword(words: &str) -> Self {
+        Self::part(SentencePart::Keyword(words.to_owned()))
+    }
+
+    /// Returns parts holding `words` alone, as words when `inline` holds and as a lead word otherwise. A phrase inside
+    /// a slot leads nothing.
+    fn lead(inline: bool, words: &str) -> Self {
+        if inline {
+            Self::text(words)
+        } else {
+            Self::keyword(words)
+        }
+    }
+
     /// Returns parts holding `part` alone.
     fn part(part: SentencePart) -> Self {
         let mut parts = Self::default();
@@ -3920,6 +3986,19 @@ impl Parts {
             parts.append(group);
         }
         parts
+    }
+
+    /// Returns the alternatives `groups` with `separator` between each two, each opening with
+    /// [`SentencePart::Alternative`].
+    fn alternatives(groups: impl IntoIterator<Item = Self>, separator: &str) -> Self {
+        Self::join(
+            groups.into_iter().map(|group| {
+                let mut parts = Self::part(SentencePart::Alternative);
+                parts.append(group);
+                parts
+            }),
+            separator,
+        )
     }
 
     /// Adds `words` at the end, merged into the last part when that part is words.
@@ -3964,10 +4043,10 @@ impl Parts {
         }
     }
 
-    /// Replaces the words of the first part with `map` of them, when the first part is words.
+    /// Replaces the words of the first part with `map` of them, when the first part is words or a lead word.
     fn map_first_text(&mut self, map: fn(&str) -> String) {
         if let Some(PlacedPart {
-            part: SentencePart::Text(first),
+            part: SentencePart::Text(first) | SentencePart::Keyword(first),
             ..
         }) = self.0.first_mut()
         {
@@ -4105,7 +4184,8 @@ impl<'a> Sentences<'a> {
             let phrase = self.phrase(line, false);
             return match &line.name {
                 Some(name) if !(line.kind == LineKind::Compare && *name == phrase.plain()) => {
-                    let mut parts = Parts::text(&format!("{name} = "));
+                    let mut parts = Parts::part(SentencePart::ResultName(name.clone()));
+                    parts.push(" = ");
                     parts.append(phrase);
                     parts.into_placed()
                 }
@@ -4119,7 +4199,8 @@ impl<'a> Sentences<'a> {
                 return parts.into_placed();
             }
             LineKind::Repeat => {
-                let mut parts = Parts::text("Repeat ");
+                let mut parts = Parts::keyword("Repeat");
+                parts.push(" ");
                 parts.append(self.slot_parts(&line.times, None, Blank::Times, "times"));
                 parts.push(" times:");
                 return parts.into_placed();
@@ -4151,7 +4232,8 @@ impl<'a> Sentences<'a> {
         let mut parts = Parts::default();
         match line.kind {
             LineKind::Become => {
-                parts.push("Become ");
+                parts.append(Parts::keyword("Become"));
+                parts.push(" ");
                 parts.append(self.state_part(
                     line.property.as_deref(),
                     line.new_state.as_deref(),
@@ -4180,7 +4262,8 @@ impl<'a> Sentences<'a> {
                 }
             }
             LineKind::Set => {
-                parts.push("Set ");
+                parts.append(Parts::keyword("Set"));
+                parts.push(" ");
                 // A Set over cells changes a number, and a Set over agents any property but its place.
                 let (blank, value) = if self.document.world.made_of == MadeOf::Agents {
                     (Blank::Property, Blank::Value)
@@ -4192,7 +4275,8 @@ impl<'a> Sentences<'a> {
                 parts.append(self.slot_parts(&line.value, None, value, "value"));
             }
             LineKind::Steer => {
-                parts.push("Steer ");
+                parts.append(Parts::keyword("Steer"));
+                parts.push(" ");
                 parts.append(self.property_part(line.property.as_deref(), Blank::Property, FieldPlace::Property));
                 parts.push(" ");
                 parts.append(mode_select(LineSelect::SteerMode, line.mode));
@@ -4207,7 +4291,8 @@ impl<'a> Sentences<'a> {
                     .as_deref()
                     .and_then(|id| self.properties.get(id))
                     .is_some_and(|property| property.property_type == PropertyType::Arrow);
-                parts.push("Keep ");
+                parts.append(Parts::keyword("Keep"));
+                parts.push(" ");
                 parts.append(self.property_part(line.property.as_deref(), Blank::Property, FieldPlace::Property));
                 if arrow {
                     // The possessive's ending after the chip: "Velocity's length", or "Pass' length".
@@ -4220,13 +4305,15 @@ impl<'a> Sentences<'a> {
                 parts.append(self.slot_parts(&line.maximum, None, Blank::UpperNumber, "maximum"));
             }
             LineKind::Move => {
-                parts.push("Move ");
+                parts.append(Parts::keyword("Move"));
+                parts.push(" ");
                 parts.append(mode_select(LineSelect::MoveMode, line.mode));
                 parts.push(" ");
                 parts.append(self.slot_parts(&line.value, None, Blank::Value, "value"));
             }
             LineKind::Leave => {
-                parts.push("Leave ");
+                parts.append(Parts::keyword("Leave"));
+                parts.push(" ");
                 parts.append(self.slot_parts(&line.amount, None, Blank::Number, "amount"));
                 parts.push(" on ");
                 parts.append(self.property_part(
@@ -4236,7 +4323,8 @@ impl<'a> Sentences<'a> {
                 ));
             }
             LineKind::Record => {
-                parts.push("Record a ");
+                parts.append(Parts::keyword("Record"));
+                parts.push(" a ");
                 let part = match line.event.as_deref() {
                     Some(id) => SentencePart::Chip(SentenceChip {
                         kind: ChipKind::Event(id.to_owned()),
@@ -4282,11 +4370,11 @@ impl<'a> Sentences<'a> {
     /// The places are relative to the slot, as [`Parts::under`] takes them.
     fn condition(&self, slot: &Slot, on_when_line: bool) -> Parts {
         let Some(value) = slot.value() else {
-            let mut parts = if on_when_line {
-                Parts::text("When ")
-            } else {
-                Parts::default()
-            };
+            let mut parts = Parts::default();
+            if on_when_line {
+                parts.append(Parts::keyword("When"));
+                parts.push(" ");
+            }
             parts.append(Parts::placed(
                 SentencePart::Blank(Blank::When),
                 PlaceTarget::Slot(String::new()),
@@ -4296,7 +4384,11 @@ impl<'a> Sentences<'a> {
         };
         let (kind, body) = match value {
             SheetValue::Phrase(phrase) => match phrase.kind {
-                LineKind::Always if on_when_line => return Parts::text(&format!("When {ALWAYS}")),
+                LineKind::Always if on_when_line => {
+                    let mut parts = Parts::keyword("When");
+                    parts.push(&format!(" {ALWAYS}"));
+                    return parts;
+                }
                 LineKind::Always => {
                     return Parts::placed(
                         SentencePart::Always,
@@ -4445,7 +4537,8 @@ impl<'a> Sentences<'a> {
     fn phrase(&self, line: &SheetLine, inline: bool) -> Parts {
         match line.kind {
             LineKind::Count => {
-                let mut parts = Parts::text("count of ");
+                let mut parts = Parts::lead(inline, "count of");
+                parts.push(" ");
                 parts.append(self.around(line));
                 if !line.whose.is_blank() {
                     parts.push(" whose ");
@@ -4482,7 +4575,8 @@ impl<'a> Sentences<'a> {
                     ));
                     return parts;
                 }
-                let mut parts = Parts::text("look at ");
+                let mut parts = Parts::lead(inline, "look at");
+                parts.push(" ");
                 parts.append(self.around(line));
                 if !line.only.is_blank() {
                     parts.push(", only those whose ");
@@ -4596,7 +4690,8 @@ impl<'a> Sentences<'a> {
                     LineKind::AnyOf => "any of",
                     _ => "none of",
                 };
-                let mut parts = Parts::text(&format!("{words} "));
+                let mut parts = Parts::lead(inline, words);
+                parts.push(" ");
                 if line.items.is_empty() {
                     parts.append(Parts::placed(
                         SentencePart::Blank(Blank::YesOrNoList),
@@ -4624,10 +4719,12 @@ impl<'a> Sentences<'a> {
                     );
                     parts
                 });
-                let mut otherwise = Parts::text("otherwise ");
+                let mut otherwise = Parts::lead(inline, "otherwise");
+                otherwise.push(" ");
                 otherwise.append(self.slot_parts(&line.otherwise, None, Blank::Value, "otherwise"));
-                let mut parts = Parts::text("choose, first that applies: ");
-                parts.append(Parts::join(rows.chain(std::iter::once(otherwise)), "; "));
+                let mut parts = Parts::lead(inline, "choose, first that applies");
+                parts.push(": ");
+                parts.append(Parts::alternatives(rows.chain(std::iter::once(otherwise)), "; "));
                 parts
             }
             LineKind::DependingOn => {
@@ -4656,10 +4753,11 @@ impl<'a> Sentences<'a> {
                     });
                     parts
                 });
-                let mut parts = Parts::text("depending on my ");
+                let mut parts = Parts::lead(inline, "depending on");
+                parts.push(" my ");
                 parts.append(self.property_part(property, Blank::Property, FieldPlace::Property));
                 parts.push(": ");
-                parts.append(Parts::join(branches, ", "));
+                parts.append(Parts::alternatives(branches, ", "));
                 parts
             }
             LineKind::Calculate => match line.formula.as_deref() {

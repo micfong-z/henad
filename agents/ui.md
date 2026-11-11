@@ -40,13 +40,62 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   theme. The theme's neutral surfaces and strokes in `init.rs` predate MCS and stay as they are.
   Data colours (the plot series, the heatmap scale and its no-data grey) are not MCS and come from
   `ui/results/plot.rs`.
-- **Chips of the sheet editor take MCS mappings** (`ui/editor/sheet/card_pane.rs`). A result chip
-  fills with blue 900 and writes in blue 200, a result its line cannot use with red 900 and red
-  200, and every other chip with gray 800 and gray 100, its lead word ("my") and the parameter's
-  slider mark in gray 400. A blank is a gray 500 dashed outline around its word in gray 400, a
-  select a gray 700 outline. The law box fills with gray 900, and a highlighted line with blue
-  950. A state's swatch is the state's own colour, a data colour from the sheet. The primary
-  action is blue 700, never the prototype's orange.
+- **One palette rule: the meaning picks the hue, and the element picks the step.** No step outside
+  this table without adding its row here.
+
+  | Element | Step |
+  | --- | --- |
+  | Tinted fill with text on it (chip, badge, current item, open control) | hue 900, text hue 200 |
+  | Faint row tint (the highlighted line only) | hue 950 |
+  | Solid fill (primary action, progress) | hue 700, text gray 50 |
+  | Line, bar, outline or icon in a hue (kind bar, focus outline, notice bar) | hue 500 |
+  | Status text straight on a panel | orange 500, red 500 (the theme's warn and error) |
+  | Neutral chip | gray 800 fill, gray 100 text, gray 400 lead word or glyph |
+  | Neutral outline of a control | gray 700 |
+  | Dashed outline of an empty slot (blank, empty select, add button) | gray 500, word gray 400 |
+  | Hairline (separator, guide, a region's border) | gray 800 |
+  | Region ground (a card) | gray 900, the window fill |
+  | Overlay border (picker, menu, select list) | gray 600 |
+
+- **Style: flat, framed regions, hairlines inside.** No shadow, gradient or animation. A card is a
+  region of gray 900 inside a 1 point gray 800 border, 12 points from the next, with its title row
+  at the top (the heading in the semibold face, the count as a small upper-case mono label) and
+  its add buttons in a footer under a hairline. Rows are split by gray 800 hairlines, and a block
+  is its indent and a 1 point gray 800 guide per level, with no tinted band. Metadata (line
+  numbers, fire counts, counts, titles of overlays and their group labels) is mono 11 in gray 400,
+  upper case for a title or a count. Sentences are 13 points, and the semibold face is for lead
+  words and the card heading alone.
+- **The Card pane's components** (`ui/editor/sheet/widgets.rs`, one function each, no call site
+  passes a colour). Keyboard focus is a 1.5 point blue 500 outline on every custom control, and
+  the row that holds it marks its gutter with a 2 point blue 500 line under the line number.
+  - Chip, 20 high: a result blue 900 under blue 200, a result its line cannot use red 900 under
+    red 200 and struck through, every other chip gray 800 under gray 100 with a gray 400 lead word
+    or slider mark, a number in the mono face, "any state" in italics. Hover outlines it in its
+    text colour, and an open picker turns any chip blue 900 inside a blue 500 outline.
+  - Blank: gray 500 dashes around its word in gray 400, solid on hover with the word gray 200,
+    blue 900 while open. The optional "for each ..." is quiet (gray 700 dashes, weak word) until
+    its line is hovered or focused.
+  - Inline select: gray 700 outline, gray 400 on hover, blue 500 while open, dashed while empty.
+    Condition arrow: a 14 point chevron box in gray 700, gray 400 on hover, blue 500 while open,
+    its hit area the row's height. Text control ("always", "for each ...", "+"): weak text, a gray
+    700 outline on hover or while open.
+  - Line menu button: weak dots in a fixed column, the theme's hover fill, blue 900 while open.
+    Add button: dashed gray 500 with the kind's 6 point square, solid on hover, blue 500 while
+    open. A note's button: gray 700 outline, gray 400 on hover.
+  - Overlay (picker, line menu, add menus, select list): the theme's window fill inside gray 600,
+    opaque from its first frame, a small upper-case title and group labels with a hairline. An
+    item is a full-width row, gray 800 under the pointer or the keyboard focus, blue 900 with a
+    check and blue 200 words when current, weak with its reason as a tooltip when it cannot apply.
+    A state shows its swatch, a square of its own colour inside gray 700.
+  - Notice: a 2 point blue 500 bar and a blue 500 icon before the text, one label. Segmented
+    toggle (Lines, Diagram): weak while off, the text colour over a 2 point blue 500 line while on.
+  The theme in `init.rs` is unchanged by the Card pane. The primary action is blue 700, never the
+  prototype's orange.
+- **A hue names a line's kind in one place.** The bar at the left of a card's row, and the square
+  on its add button, take the kind's hue at step 500: Look around blue, Chance purple, Yes or no
+  yellow, Change green, Calculate gray, When and Repeat gray 100 (`card_pane::kind_hue`, over
+  `AddButton::for_kind`). The Diagram's boxes take the same bar. Everywhere else a hue still means
+  a state: blue the primary action and a result, orange a warning, red a failure.
 - **Swatches of the Sheet pane** (`ui/editor/sheet/widgets.rs`). A swatch is a square of the state's
   own colour with a gray 600 outline, gray 100 while hovered or focused. "Choose a colour" offers
   the twelve `henad_graph::sheet::edit::PALETTE_COLORS`, named by `COLOR_NAMES` (Black, Dark grey,

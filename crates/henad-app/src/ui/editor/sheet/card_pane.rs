@@ -1,10 +1,15 @@
 //! The Card pane: each card of the sheet under its heading, with its lines numbered from 1 in display order, written
 //! and edited on the card.
 //!
-//! A line reads as its sentence from [`henad_graph::sheet::sentence`], drawn part by part: words, a chosen value as a
-//! *chip* coloured by what it refers to, an empty slot as a dashed *blank*, a select inside the line, the grey
-//! "always" and the muted "otherwise" words. A line inside a When is indented one step per level, and the notes of
-//! the sheet's check about a line sit under it.
+//! A card is a framed box: its heading, the law of a card that runs each tick, one row per line and a footer of add
+//! buttons. A row holds a bar in the hue of the line's *kind*, the group of the add button that adds such a line, then
+//! the line's number, its sentence with the notes of the sheet's check under it, and its menu. The add buttons carry
+//! the same hues, so they double as the legend.
+//!
+//! A line reads as its sentence from [`henad_graph::sheet::sentence`], drawn part by part: words with its lead words in
+//! the semibold face, a chosen value as a *chip* whose ground and border tell what it refers to, an empty slot as a
+//! dashed *blank*, a select inside the line, the grey "always" and the muted "otherwise" words. A line inside a When
+//! or a Repeat is indented one step per level on a darker ground, with a guide down each level.
 //!
 //! A click on a blank or a chip opens its *picker* ([`super::picker`]), and a choice runs one edit of the sheet. A
 //! select lists its options, the grey "always" and the arrow after a condition word open "Choose when", and the add
@@ -37,8 +42,9 @@ use std::rc::Rc;
 
 use egui::accesskit::Role;
 use egui::{
-    Align, Button, Color32, CornerRadius, Frame, Id, Key, Label, Layout, Margin, Popup, PopupCloseBehavior, Pos2, Rect,
-    Response, RichText, Sense, Shape, Stroke, TextEdit, TextStyle, Ui, UiBuilder, WidgetInfo, WidgetType, vec2,
+    Align, Color32, CornerRadius, FontId, Frame, Id, Key, Label, Layout, Margin, Popup, PopupCloseBehavior, Pos2, Rect,
+    Response, RichText, Sense, Shape, Sides, Stroke, TextEdit, TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    pos2, vec2,
 };
 use henad_core::diagnostic::DiagnosticSeverity;
 use henad_graph::sheet::check::{SheetDiagnostic, SheetReport, holds_draw};
@@ -52,15 +58,15 @@ use henad_graph::sheet::relations::{CardRelations, RelationNote, RelationNoteKin
 use henad_graph::sheet::sentence::{
     ADD_AT_END_NOTE, ALWAYS, ALWAYS_TOOLTIP, ANY_STATE_ID, AddButton, AddItem, BLANK_MODEL_CARD, BLANK_TEXT,
     BUTTON_CARD_EMPTY, Blank, CONDITION_ARROW_TOOLTIP, ChipKind, DELETE_WHEN_TOOLTIP, DRAW_NEW_NUMBERS, DrawKind,
-    FOR_EACH_BLANK_WORDS, FOR_EACH_WORDS, FROM_WORD, FieldPlace, LAW, LineSelect, ONE_SIDED_RANGE, PartPlace,
-    PlaceTarget, PlacedPart, REMOVE_THIS_WHEN, SHARED_DRAW_GROUP, SentenceChip, SentencePart, Sentences,
-    UNIT_PLACEHOLDER, add_inside_label, add_inside_name, add_value_name, always_name, card_header,
-    condition_arrow_name, count_used_as_draw, delete_line, for_each_change_name, for_each_optional_name,
+    FOR_EACH_BLANK_WORDS, FOR_EACH_WORDS, FROM_WORD, FieldPlace, LAW, LineSelect, MOVE_DOWN_LAST, MOVE_UP_FIRST,
+    ONE_SIDED_RANGE, PartPlace, PlaceTarget, PlacedPart, REMOVE_THIS_WHEN, SHARED_DRAW_GROUP, SentenceChip,
+    SentencePart, Sentences, UNIT_PLACEHOLDER, add_inside_label, add_inside_name, add_value_name, always_name,
+    card_header, condition_arrow_name, count_used_as_draw, delete_line, for_each_change_name, for_each_optional_name,
     for_each_optional_tooltip, for_each_words, from_tooltip, line_actions_name, line_count, line_list_name, line_name,
     line_prefix, line_word, move_into_label, move_into_name, move_line_down, move_line_up, operation_words,
     otherwise_notice, otherwise_tooltip, otherwise_words, remove_when_name, rename_field_name, rename_line,
-    result_below_tooltip, result_inside_tooltip, result_name_taken, sentence_text, use_for_each_label,
-    use_for_each_name, use_instead_label, use_instead_name, uses_result_below, uses_result_inside,
+    rename_result_name, result_below_tooltip, result_inside_tooltip, result_name_taken, sentence_text,
+    use_for_each_label, use_for_each_name, use_instead_label, use_instead_name, uses_result_below, uses_result_inside,
 };
 use henad_graph::sheet::sentence::{
     CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, RANDOM_VALUE_GROUP, add_choose_row_name, add_for_each_label,
@@ -77,28 +83,90 @@ use super::picker::{
 };
 use super::sheet_pane::SheetTrial;
 use super::widgets::{
-    CHIP_PADDING, DialogOutcome, NewParameterDialog, NumberUse, allocate_control, blank_shapes, blank_ui, chip_with_id,
-    message_ui, new_parameter_modal, refusal_text, set_name,
+    ARROW_WIDTH, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, add_button, arrow_control, blank_shapes,
+    blank_ui, caption, chip_with_id, dashed_rect, menu_button, message_ui, new_parameter_modal, note_button, notice_ui,
+    overlay, overlay_group, overlay_item, overlay_title, refusal_text, select_control, set_name, small_label,
+    text_control,
 };
 use super::{LineFires, SheetEditor, accessible_group};
-use crate::icons::material_design_icons::{MDI_CHEVRON_DOWN, MDI_DOTS_HORIZONTAL, MDI_INFORMATION};
+use crate::init::semibold_font;
 use crate::ui::mcs;
-use crate::ui::sweep::layout::add_button;
 
-/// Indent in points of a line for each block around it.
+// The layout of a card
+
+/// Width in points of the bar at the left edge of a row, in the hue of the line's kind.
+const KIND_BAR_WIDTH: f32 = 3.0;
+
+/// Width in points of the gutter of line numbers, between the kind bar and the body of a row.
+const GUTTER_WIDTH: f32 = 30.0;
+
+/// Distance in points from the right edge of a line number to the body of its row. The bracket of a competing group
+/// runs in it.
+const NUMBER_GAP: f32 = 9.0;
+
+/// Indent in points of a line's body for each block around it.
 const INDENT: f32 = 20.0;
 
-/// Width in points of the column of line numbers.
-const NUMBER_WIDTH: f32 = 22.0;
+/// Distance in points from the start of a level's indent to its guide.
+const GUIDE_OFFSET: f32 = 5.0;
+
+/// Padding in points above and below the contents of a row.
+const ROW_PADDING: f32 = 4.0;
+
+/// Height in points of one row of a sentence. A chip is [`CHIP_HEIGHT`] high. Two rows of chips never touch.
+const SENTENCE_ROW: f32 = 24.0;
+
+/// Start and length in points of the dash in the indent of an alternative of a Choose or a Depending on, level with its
+/// first row.
+const ALTERNATIVE_DASH: (f32, f32) = (6.0, 7.0);
+
+/// Space in points between two cards.
+const CARD_GAP: f32 = 12.0;
+
+/// Size in points of the words and chips of a sentence.
+const SENTENCE_SIZE: f32 = 13.0;
+
+/// Size in points of the law.
+const LAW_SIZE: f32 = 12.0;
+
+/// Inset in points of the law's bar from the card's left edge, and of the title from it.
+const CARD_INSET: f32 = 10.0;
+
+/// Width in points of the column at the right of a row that holds the line's menu.
+const MENU_WIDTH: f32 = 28.0;
+
+/// Gap in points between the body of a row and the column at its right.
+const TAIL_GAP: f32 = 6.0;
 
 /// Width in points of the column at the right of a card that runs each tick, which holds the fire count of each line.
 const COUNT_WIDTH: f32 = 72.0;
 
-/// Distance in points from the left edge of the rows to the bracket of a competing group, inside the pane's margin.
-const BRACKET_OFFSET: f32 = 5.0;
-
 /// Width in points of the field that renames a result.
 const RENAME_WIDTH: f32 = 200.0;
+
+/// Thickness in points of the mark in the gutter of the row that holds the keyboard focus.
+const FOCUS_MARK_WIDTH: f32 = 2.0;
+
+/// Length in points of the mark in the gutter of the row that holds the keyboard focus.
+const FOCUS_MARK_LENGTH: f32 = 14.0;
+
+/// Size in points of a note under a line.
+const NOTE_SIZE: f32 = 11.5;
+
+/// Returns the hue of the bar of a line of the group `button`, the hue's 500 step. The square on that add button
+/// shows it too.
+///
+/// This is the one place a hue names a kind of line in place of a state.
+pub(super) fn kind_hue(button: AddButton) -> Color32 {
+    match button {
+        AddButton::LookAround => mcs::BLUE_500,
+        AddButton::Chance => mcs::PURPLE_500,
+        AddButton::YesOrNo => mcs::YELLOW_500,
+        AddButton::Calculate => mcs::GRAY_500,
+        AddButton::Change => mcs::GREEN_500,
+        _ => mcs::GRAY_100,
+    }
+}
 
 // State between frames
 
@@ -286,7 +354,8 @@ pub fn card_pane(
         let document = sheet.builder.document();
         let state = &mut sheet.card;
         for notice in [&state.tick_notice, &state.otherwise_notice].into_iter().flatten() {
-            ui.add(Label::new(format!("{MDI_INFORMATION} {notice}")).wrap());
+            notice_ui(ui, notice);
+            ui.add_space(4.0);
         }
         let mut values = parameter_defaults(document);
         for trial in trials {
@@ -300,7 +369,12 @@ pub fn card_pane(
             fires,
             counted: &sheet.counted,
         };
-        cards_ui(ui, document, &shown, state, &mut pending);
+        ui.scope(|ui| {
+            ui.style_mut()
+                .text_styles
+                .insert(TextStyle::Body, FontId::proportional(SENTENCE_SIZE));
+            cards_ui(ui, document, &shown, state, &mut pending);
+        });
         if let Some(refusal) = &state.refusal {
             message_ui(ui, refusal);
         }
@@ -487,15 +561,17 @@ fn cards_ui(
         && !has_tick_card(every)
     {
         // A blank model holds no card. Its first line adds the card that runs each tick.
-        ui.label(RichText::new(card_header(&sentences.thing_word(every))).strong());
-        ui.weak(BLANK_MODEL_CARD);
-        add_buttons_ui(ui, document, state, None, every, pending);
-        ui.add_space(16.0);
+        card_frame(ui, |ui| {
+            title_bar_ui(ui, &card_header(&sentences.thing_word(every)), None, None);
+            empty_card_ui(ui, BLANK_MODEL_CARD);
+            footer_ui(ui, None, |ui| add_buttons_ui(ui, document, state, None, every, pending));
+        });
+        ui.add_space(CARD_GAP);
     }
     let mut overridden: Vec<(String, String)> = Vec::new();
     for (index, card) in document.cards.iter().enumerate() {
         if index > 0 {
-            ui.add_space(16.0);
+            ui.add_space(CARD_GAP);
         }
         let lines = card_lines(document, &sentences, report, index);
         overridden.extend(
@@ -512,7 +588,7 @@ fn cards_ui(
             values,
             highlight: &highlight,
             fires: shown.fires.filter(|_| card.runs == CardRuns::EachTick),
-            counted: card.runs == CardRuns::EachTick && card.line_tables.keys().any(|id| shown.counted.contains(id)),
+            counted: shown.counted,
         };
         card_ui(ui, &drawing, &lines, state, &mut hovered, pending);
     }
@@ -570,13 +646,13 @@ struct CardDrawing<'a> {
     /// Fire counts of the run of the sheet on a card that runs each tick, `None` on any other card or while the run
     /// counts none.
     fires: Option<&'a LineFires>,
-    /// Whether the card runs each tick and holds a line with a fire count. The card then keeps a column at its right
-    /// for the counts, whether or not the run has counted a tick.
-    counted: bool,
+    /// Ids of the lines with a fire count in the last lowering of the sheet. Such a line on a card that runs each tick
+    /// keeps a column at its right for its count, whether or not the run has counted a tick.
+    counted: &'a BTreeSet<String>,
 }
 
-/// Draws the heading of the card of `drawing`, the law under a card that runs every tick, the numbered `lines` and the
-/// add buttons.
+/// Draws the card of `drawing` in its frame: the title bar, the law under a card that runs every tick, a row for each
+/// of the numbered `lines` and the footer of add buttons.
 ///
 /// The ids of the lines that a hovered or focused control names are added to `hovered`.
 fn card_ui(
@@ -589,51 +665,156 @@ fn card_ui(
 ) {
     let card = drawing.card;
     let each_tick = card.runs == CardRuns::EachTick;
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(drawing.sentences.card_heading(card)).strong());
-        ui.weak(line_count(lines.len()));
-        if each_tick {
-            let agents = !matches!(card.every.as_str(), "cells" | "ground");
-            help_button(ui, if agents { Help::AgentLines } else { Help::Lines });
-        }
-    });
-    if each_tick {
-        Frame::NONE
-            .fill(mcs::GRAY_900)
-            .inner_margin(Margin::symmetric(8, 6))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.add(Label::new(RichText::new(LAW).weak()).wrap());
-            });
-    }
-    ui.add_space(4.0);
-    if lines.is_empty() {
-        ui.weak(if each_tick { BLANK_MODEL_CARD } else { BUTTON_CARD_EMPTY });
-    }
+    let heading = drawing.sentences.card_heading(card);
+    let agents = !matches!(card.every.as_str(), "cells" | "ground");
+    let help = each_tick.then_some(if agents { Help::AgentLines } else { Help::Lines });
     let list_name = line_list_name(button_of(drawing.document, card));
     let relations = CardRelations::new(drawing.document, card);
     let report = drawing.report;
     let notes = relations.notes(drawing.sentences, |line| !report.is_skipped(line));
     let closing = closing_blocks(&relations, lines);
-    let list = ui.scope(|ui| {
-        let mut rows = Vec::with_capacity(lines.len());
-        for (index, line) in lines.iter().enumerate() {
-            rows.push(line_ui(ui, drawing, &relations, &notes, line, state, hovered, pending));
-            for block in closing.get(&index).into_iter().flatten() {
-                add_inside_ui(ui, drawing, block, state, pending);
+    card_frame(ui, |ui| {
+        title_bar_ui(ui, &heading, Some(lines.len()), help);
+        if each_tick {
+            law_ui(ui);
+        }
+        if lines.is_empty() {
+            empty_card_ui(ui, if each_tick { BLANK_MODEL_CARD } else { BUTTON_CARD_EMPTY });
+        }
+        let list = ui.scope(|ui| {
+            let mut rows = Vec::with_capacity(lines.len());
+            for (index, line) in lines.iter().enumerate() {
+                let row = RowPlace {
+                    first: index == 0,
+                    depth: line.depth,
+                };
+                rows.push(line_ui(
+                    ui, drawing, &relations, &notes, line, &row, state, hovered, pending,
+                ));
+                for block in closing.get(&index).into_iter().flatten() {
+                    add_inside_ui(ui, drawing, block, state, pending);
+                }
             }
-        }
-        for bracket in brackets(&relations, lines) {
-            bracket_ui(ui, &rows, &bracket);
-        }
-        ui.unique_id()
+            for bracket in brackets(&relations, lines) {
+                bracket_ui(ui, &rows, &bracket);
+            }
+            ui.unique_id()
+        });
+        accessible_group(ui.ctx(), list.inner, Role::List, &list_name, list.response.rect);
+        let note = card
+            .line_tables
+            .values()
+            .any(|line| is_block(line.kind))
+            .then_some(ADD_AT_END_NOTE);
+        footer_ui(ui, note, |ui| {
+            add_buttons_ui(ui, drawing.document, state, Some(card), &card.every, pending);
+        });
     });
-    accessible_group(ui.ctx(), list.inner, Role::List, &list_name, list.response.rect);
-    if card.line_tables.values().any(|line| is_block(line.kind)) {
-        ui.add_space(4.0);
-        ui.weak(ADD_AT_END_NOTE);
-    }
-    add_buttons_ui(ui, drawing.document, state, Some(card), &card.every, pending);
+}
+
+/// Draws a card's frame, a framed region of gray 900 inside a hairline, with `add` inside it, and returns what `add`
+/// returns.
+fn card_frame<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    Frame::NONE
+        .fill(mcs::GRAY_900)
+        .stroke(Stroke::new(1.0, mcs::GRAY_800))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui)
+        })
+        .inner
+}
+
+/// Draws a card's title row, with a hairline under it: the `heading` in gray 100 and the semibold face, the help `help`
+/// beside it where the card has one, and the number of lines `count` as a small upper-case label at the right edge.
+fn title_bar_ui(ui: &mut Ui, heading: &str, count: Option<usize>, help: Option<Help>) {
+    Frame::NONE
+        .inner_margin(Margin {
+            left: CARD_INSET as i8,
+            right: CARD_INSET as i8,
+            top: 6,
+            bottom: 6,
+        })
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            Sides::new().shrink_left().wrap().show(
+                ui,
+                |ui| {
+                    let font = semibold_font(ui.ctx(), TextStyle::Body.resolve(ui.style()).size);
+                    ui.add(Label::new(RichText::new(heading).font(font).color(mcs::GRAY_100)));
+                    if let Some(help) = help {
+                        help_button(ui, help);
+                    }
+                },
+                |ui| {
+                    if let Some(count) = count {
+                        caption(ui, &line_count(count));
+                    }
+                },
+            );
+        });
+    rule_ui(ui);
+}
+
+/// Draws a hairline across `ui`.
+fn rule_ui(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().rect_filled(rect, CornerRadius::ZERO, mcs::GRAY_800);
+}
+
+/// Draws the law of a card that runs each tick in gray 400, after a bar of 2 points of gray 600, with a hairline under
+/// it.
+fn law_ui(ui: &mut Ui) {
+    let response = Frame::NONE
+        .inner_margin(Margin {
+            left: (CARD_INSET * 2.0) as i8,
+            right: CARD_INSET as i8,
+            top: 6,
+            bottom: 6,
+        })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let words = RichText::new(LAW).size(LAW_SIZE).color(mcs::GRAY_400);
+            ui.add(Label::new(words).wrap());
+        })
+        .response;
+    let place = response.rect.shrink2(vec2(0.0, 6.0));
+    let bar = Rect::from_min_size(pos2(place.left() + CARD_INSET, place.top()), vec2(2.0, place.height()));
+    ui.painter().rect_filled(bar, CornerRadius::ZERO, mcs::GRAY_600);
+    rule_ui(ui);
+}
+
+/// Draws `words` in a dashed box where the lines of an empty card would be: gray 500 dashes around words in gray 400.
+fn empty_card_ui(ui: &mut Ui, words: &str) {
+    Frame::NONE.inner_margin(Margin::same(8)).show(ui, |ui| {
+        let response = Frame::NONE
+            .inner_margin(Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(Label::new(RichText::new(words).color(mcs::GRAY_400)).wrap());
+            })
+            .response;
+        ui.painter()
+            .extend(dashed_rect(response.rect, Stroke::new(1.0, mcs::GRAY_500)));
+    });
+}
+
+/// Draws a card's footer under a hairline: `note` in the weak text colour where one is given, then what `add` draws,
+/// the add buttons.
+fn footer_ui(ui: &mut Ui, note: Option<&str>, add: impl FnOnce(&mut Ui)) {
+    rule_ui(ui);
+    Frame::NONE.inner_margin(Margin::same(8)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        if let Some(note) = note {
+            let words = RichText::new(note)
+                .size(NOTE_SIZE)
+                .color(ui.visuals().weak_text_color());
+            ui.add(Label::new(words).wrap());
+            ui.add_space(6.0);
+        }
+        add(ui);
+    });
 }
 
 /// Returns whether a line of `kind` holds lines: a When or a Repeat.
@@ -673,11 +854,8 @@ pub fn competing_brackets(document: &SheetDocument, card_index: usize) -> Vec<Ve
         .collect()
 }
 
-/// Draws the thin bracket that joins the rows `rows` of the lines of `bracket`, indices in `lines`, in the margin left
-/// of the rows.
-///
-/// A row that wraps starts its next lines at the left edge of the card, under the line numbers. The margin is the one
-/// place beside the rows that no text reaches.
+/// Draws the thin bracket that joins the rows `rows` of the lines of `bracket`, indices in `lines`, in the gutter
+/// between the line numbers and the bodies of the rows.
 fn bracket_ui(ui: &Ui, rows: &[Rect], bracket: &[usize]) {
     let (Some(&first), Some(&last)) = (bracket.first(), bracket.last()) else {
         return;
@@ -685,22 +863,19 @@ fn bracket_ui(ui: &Ui, rows: &[Rect], bracket: &[usize]) {
     let (Some(top), Some(bottom)) = (rows.get(first), rows.get(last)) else {
         return;
     };
-    let x = top.left() - BRACKET_OFFSET;
-    let (y0, y1) = (top.top() + 3.0, bottom.bottom() - 3.0);
-    let stroke = Stroke::new(1.0, mcs::GRAY_500);
-    let clip = ui.clip_rect();
-    let painter = ui.painter().with_clip_rect(Rect::from_min_max(
-        Pos2::new(clip.left().min(x - 1.0), clip.top()),
-        clip.max,
-    ));
-    painter.add(Shape::line(
+    let x = top.left() + KIND_BAR_WIDTH + GUTTER_WIDTH - NUMBER_GAP / 2.0;
+    let (y0, y1) = (
+        top.top() + ROW_PADDING + 4.0,
+        bottom.top() + ROW_PADDING + SENTENCE_ROW - 4.0,
+    );
+    ui.painter().add(Shape::line(
         vec![
             Pos2::new(x + 3.0, y0),
             Pos2::new(x, y0),
             Pos2::new(x, y1),
             Pos2::new(x + 3.0, y1),
         ],
-        stroke,
+        Stroke::new(1.0, mcs::GRAY_500),
     ));
 }
 
@@ -709,6 +884,8 @@ fn bracket_ui(ui: &Ui, rows: &[Rect], bracket: &[usize]) {
 struct ClosingBlock {
     /// Id of the When line.
     id: String,
+    /// Kind of the block's line, a When or a Repeat.
+    kind: LineKind,
     /// Number of the When line on its card.
     number: usize,
     /// Number of blocks around the lines inside the block.
@@ -721,9 +898,13 @@ struct ClosingBlock {
 fn closing_blocks(relations: &CardRelations<'_>, lines: &[CardLine]) -> BTreeMap<usize, Vec<ClosingBlock>> {
     let mut closing: BTreeMap<usize, Vec<ClosingBlock>> = BTreeMap::new();
     for (index, line) in lines.iter().enumerate() {
-        if relations.line(&line.id).is_none_or(|data| !is_block(data.kind)) {
+        let Some(kind) = relations
+            .line(&line.id)
+            .map(|data| data.kind)
+            .filter(|kind| is_block(*kind))
+        else {
             continue;
-        }
+        };
         let last = lines
             .iter()
             .enumerate()
@@ -733,6 +914,7 @@ fn closing_blocks(relations: &CardRelations<'_>, lines: &[CardLine]) -> BTreeMap
             .map_or(index, |(last, _)| last);
         closing.entry(last).or_default().push(ClosingBlock {
             id: line.id.clone(),
+            kind,
             number: line.number,
             depth: line.depth + 1,
         });
@@ -743,8 +925,8 @@ fn closing_blocks(relations: &CardRelations<'_>, lines: &[CardLine]) -> BTreeMap
     closing
 }
 
-/// Draws the row that ends `block`, "+ Add inside line 4", indented to the block's inner level. Its menu, "Add a
-/// line inside line 4", lists every kind of line in groups, and an item adds its line at the end of the block.
+/// Draws the row that ends `block`, "+ Add inside line 4", indented to the block's inner level. Its menu, "Add a line
+/// inside line 4", lists every kind of line in groups, and an item adds its line at the end of the block.
 ///
 /// On a card that runs once the menu holds the Change group alone, as the card's own add buttons offer "+ Change"
 /// alone.
@@ -762,35 +944,68 @@ fn add_inside_ui(
     let groups = add_inside_groups(drawing.card);
     let agents = drawing.card.every != "cells";
     let id = state.widgets.with(("add inside", &block.id));
-    let chosen = ui
-        .horizontal(|ui| {
-            ui.add_space(INDENT * block.depth as f32 + NUMBER_WIDTH);
-            let response = add_button(
-                ui,
-                true,
-                Button::new(label.as_str()).wrap_mode(egui::TextWrapMode::Extend),
-                &label,
-            );
-            let popup = Popup::menu(&response).id(id.with("menu")).show(|ui| {
-                let menu = ui.scope(|ui| {
-                    ui.strong(&title);
+    let menu_id = id.with("menu");
+    let ground = ui.painter().add(Shape::Noop);
+    let top = ui.cursor().top();
+    let (left, right) = (ui.max_rect().left(), ui.max_rect().right());
+    let body_left = left + KIND_BAR_WIDTH + GUTTER_WIDTH + INDENT * block.depth as f32;
+    let mut row = ui.new_child(
+        UiBuilder::new()
+            .max_rect(Rect::from_min_max(
+                pos2(body_left, top + ROW_PADDING),
+                pos2(right - TAIL_GAP, top + ROW_PADDING + SENTENCE_ROW),
+            ))
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    let open = Popup::is_id_open(row.ctx(), menu_id);
+    let response = add_button(&mut row, &label, &label, None, open);
+    let chosen = Popup::menu(&response)
+        .id(menu_id)
+        .frame(Frame::NONE)
+        .show(|ui| {
+            let menu = overlay(ui, |ui| {
+                ui.scope(|ui| {
+                    overlay_title(ui, &title);
                     let mut chosen = None;
                     for &button in groups {
-                        ui.add_space(4.0);
-                        ui.label(RichText::new(button.group()).weak().small());
+                        overlay_group(ui, button.group());
                         if let Some(item) = add_items_ui(ui, button, agents, states) {
                             chosen = Some(item);
                         }
                     }
                     (chosen, ui.unique_id())
-                });
-                let (chosen, menu_id) = menu.inner;
-                accessible_group(ui.ctx(), menu_id, Role::Dialog, &title, menu.response.rect);
-                chosen
-            })?;
-            popup.inner
+                })
+            });
+            let (chosen, menu_id) = menu.inner;
+            accessible_group(ui.ctx(), menu_id, Role::Dialog, &title, menu.response.rect);
+            chosen
         })
-        .inner;
+        .and_then(|popup| popup.inner);
+    let rect = Rect::from_min_max(
+        pos2(left, top),
+        pos2(
+            right,
+            row.min_rect().bottom().max(top + ROW_PADDING + SENTENCE_ROW) + ROW_PADDING,
+        ),
+    );
+    ui.advance_cursor_after_rect(rect);
+    paint_row(
+        ui,
+        rect,
+        ground,
+        &RowPaint {
+            depth: block.depth,
+            separator: true,
+            highlight: false,
+        },
+    );
+    // The row closes the block. Its bar takes the hue of the block's line.
+    let bar = Rect::from_min_size(rect.min, vec2(KIND_BAR_WIDTH, rect.height()));
+    ui.painter()
+        .rect_filled(bar, CornerRadius::ZERO, kind_hue(AddButton::for_kind(block.kind)));
+    if response.has_focus() {
+        focus_mark(ui, rect);
+    }
     if let Some(item) = chosen {
         *pending = Some(add_line_edit(
             Some(drawing.card.id.clone()),
@@ -799,6 +1014,57 @@ fn add_inside_ui(
             &drawing.card.every,
         ));
     }
+}
+
+/// Where a row sits on its card.
+struct RowPlace {
+    /// Whether the row is the first of the card, with no separator above it.
+    first: bool,
+    /// Number of blocks around the row.
+    depth: usize,
+}
+
+/// How a row is painted.
+struct RowPaint {
+    /// Number of blocks around the row. Each draws a guide down the row.
+    depth: usize,
+    /// Whether a separator runs along the row's top.
+    separator: bool,
+    /// Whether the row is highlighted as a line that a hovered or focused control names.
+    highlight: bool,
+}
+
+/// Paints the row `rect` as `paint` says: the blue 950 tint of a highlighted line into the empty shape `ground`, the
+/// hairline at its top and the guide of each block around it.
+///
+/// The guides of consecutive rows meet, so each runs unbroken down its block.
+fn paint_row(ui: &Ui, rect: Rect, ground: egui::layers::ShapeIdx, paint: &RowPaint) {
+    if paint.highlight {
+        ui.painter()
+            .set(ground, Shape::rect_filled(rect, CornerRadius::ZERO, mcs::BLUE_950));
+    }
+    let painter = ui.painter();
+    let hairline = Stroke::new(1.0, mcs::GRAY_800);
+    if paint.separator {
+        painter.hline(rect.x_range(), rect.top() + 0.5, hairline);
+    }
+    let base = rect.left() + KIND_BAR_WIDTH + GUTTER_WIDTH + GUIDE_OFFSET;
+    for level in 0..paint.depth {
+        let x = base + INDENT * level as f32 + 0.5;
+        painter.vline(x, rect.y_range(), hairline);
+    }
+}
+
+/// Paints the mark of the row `rect` that holds the keyboard focus: a line of 2 points of blue 500 under its number in
+/// the gutter.
+fn focus_mark(ui: &Ui, rect: Rect) {
+    let right = rect.left() + KIND_BAR_WIDTH + GUTTER_WIDTH - NUMBER_GAP;
+    let bottom = rect.top() + ROW_PADDING + SENTENCE_ROW - 3.0;
+    let mark = Rect::from_min_max(
+        pos2(right - FOCUS_MARK_LENGTH, bottom - FOCUS_MARK_WIDTH),
+        pos2(right, bottom),
+    );
+    ui.painter().rect_filled(mark, CornerRadius::ZERO, mcs::BLUE_500);
 }
 
 /// Returns the groups of the menu of a block's add row on `card`: the Change group alone on a card that runs once, and
@@ -835,7 +1101,7 @@ pub fn card_buttons(
         values: &values,
         highlight: &[],
         fires: None,
-        counted: false,
+        counted: &BTreeSet::new(),
     };
     let relations = CardRelations::new(document, card);
     let notes = relations.notes(sentences, |line| !report.is_skipped(line));
@@ -889,6 +1155,8 @@ fn button_of<'a>(document: &'a SheetDocument, card: &SheetCard) -> Option<&'a st
 
 /// Draws the add buttons under `card`, or under the heading of the card that runs each tick over `every` while there is
 /// none. A card that runs once offers "+ Change" alone, and a card over agents adds "+ Repeat...".
+///
+/// Each button shows a square in the hue of the lines it adds. The buttons are the legend of the rows' bars.
 fn add_buttons_ui(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -906,26 +1174,26 @@ fn add_buttons_ui(
     };
     let states = pattern_states(document, every);
     let card_id = card.map(|card| card.id.clone());
-    ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
         for button in buttons {
             let id = state.widgets.with(("add", card_id.as_deref(), button.label()));
-            let response = add_button(
-                ui,
-                true,
-                Button::new(button.label()).wrap_mode(egui::TextWrapMode::Extend),
-                button.label(),
-            )
-            .on_hover_text(button.tooltip_for(agents));
+            let menu_id = id.with("menu");
+            let open = Popup::is_id_open(ui.ctx(), menu_id);
+            let response = add_button(ui, button.label(), button.label(), Some(kind_hue(*button)), open)
+                .on_hover_text(button.tooltip_for(agents));
             let chosen = Popup::menu(&response)
-                .id(id.with("menu"))
+                .id(menu_id)
+                .frame(Frame::NONE)
                 .show(|ui| {
-                    add_menu_ui(
-                        ui,
-                        *button,
-                        agents,
-                        states.as_ref().map(|(new, old)| (new.as_str(), old.as_str())),
-                    )
+                    overlay(ui, |ui| {
+                        add_menu_ui(
+                            ui,
+                            *button,
+                            agents,
+                            states.as_ref().map(|(new, old)| (new.as_str(), old.as_str())),
+                        )
+                    })
                 })
                 .and_then(|popup| popup.inner);
             if let Some(item) = chosen {
@@ -940,7 +1208,7 @@ fn add_buttons_ui(
 ///
 /// The pattern is painted, so it stays out of the accessibility tree and the item is named by its label alone.
 fn add_menu_ui(ui: &mut Ui, button: AddButton, agents: bool, states: Option<(&str, &str)>) -> Option<AddItem> {
-    ui.strong(button.heading_for(agents));
+    overlay_title(ui, button.heading_for(agents));
     add_items_ui(ui, button, agents, states)
 }
 
@@ -955,19 +1223,17 @@ fn add_items_ui(ui: &mut Ui, button: AddButton, agents: bool, states: Option<(&s
             _ => None,
         };
         if let Some(group) = group {
-            ui.add_space(4.0);
-            ui.label(RichText::new(group).weak().small());
+            overlay_group(ui, group);
         }
-        if ui.add(Button::new(item.label()).frame(false)).clicked() {
+        let pattern = item.pattern(states);
+        let row = OverlayItem {
+            label: item.label(),
+            detail: Some(&pattern),
+            ..OverlayItem::default()
+        };
+        if overlay_item(ui, &row).clicked() {
             chosen = Some(*item);
         }
-        let font = TextStyle::Small.resolve(ui.style());
-        let galley = ui
-            .painter()
-            .layout_no_wrap(item.pattern(states), font, ui.visuals().weak_text_color());
-        let (_, rect) = ui.allocate_space(galley.size() + vec2(8.0, 0.0));
-        ui.painter()
-            .galley(rect.left_top() + vec2(8.0, 0.0), galley, ui.visuals().weak_text_color());
     }
     chosen
 }
@@ -1683,18 +1949,24 @@ struct LineDrawing<'a> {
     arrow_drawn: bool,
 }
 
-/// Draws `line`: its number, its sentence part by part, its menu, its rename field and its notes under it, with the
-/// relation notes of the card among them. Returns the row of the sentence.
+/// Draws the row of `line` at `place`: the bar in the hue of its kind, its number, its sentence part by part with its
+/// rename field and its notes under it, the relation notes of the card among them, then its fire count and its menu at
+/// the row's top. Returns the row.
+///
+/// The body of the row is a column of its own, so a wrapped sentence and the notes start at the body's left edge, right
+/// of the number. A line inside a block moves its body right one indent per level, and its number and bar stay.
 #[expect(
     clippy::too_many_arguments,
     reason = "the card, its relations and notes, the line and the pane's state each take a part"
 )]
+#[expect(clippy::too_many_lines, reason = "the columns of one row read best in one place")]
 fn line_ui(
     ui: &mut Ui,
     drawing: &CardDrawing<'_>,
     relations: &CardRelations<'_>,
     relation_notes: &[RelationNote],
     line: &CardLine,
+    place: &RowPlace,
     state: &mut CardState,
     hovered: &mut Vec<String>,
     pending: &mut Option<CardEdit>,
@@ -1709,7 +1981,7 @@ fn line_ui(
         line_id: &line.id,
         line: line_data,
     };
-    let background = ui.painter().add(Shape::Noop);
+    let ground = ui.painter().add(Shape::Noop);
     let mut gathered = LineDrawing {
         hovered,
         for_each_shapes: Vec::new(),
@@ -1718,91 +1990,233 @@ fn line_ui(
         closed_empty: false,
         arrow_drawn: false,
     };
-    let column = if drawing.counted { COUNT_WIDTH } else { 0.0 };
-    let right = ui.max_rect().right();
-    let row = ui.horizontal_wrapped(|ui| {
-        ui.set_max_width((ui.available_width() - column).max(0.0));
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.add_space(INDENT * line.depth as f32);
-        ui.add_sized(
-            [NUMBER_WIDTH, ui.spacing().interact_size.y],
-            Label::new(RichText::new(line.number.to_string()).weak()),
-        );
-        for (index, part) in line.parts.iter().enumerate() {
-            let place = line.places.get(index).cloned().flatten();
-            let parts = PartDrawing {
-                context: &context,
-                line,
-                index,
-                place,
-            };
-            part_ui(ui, &parts, part, state, &mut gathered, pending);
-            if let Some(place) = parts.place.as_ref().and_then(|place| list_end(line_data, place)) {
-                let plus = PartDrawing {
-                    place: Some(place),
-                    ..parts
-                };
-                add_value_ui(ui, &plus, state, &mut gathered, pending);
-            }
-        }
-        if line_data.kind == LineKind::Choose {
-            let parts = PartDrawing {
-                context: &context,
-                line,
-                index: line.parts.len(),
-                place: Some(PartPlace {
-                    target: PlaceTarget::Slot(format!("row.{}.value", line_data.rows.len())),
-                    want: Some(Blank::Value),
-                }),
-            };
-            add_row_ui(ui, &parts, state, &mut gathered, pending);
-        }
-        if line_data.around == Some(Around::AgentsWithin) && line_data.kind == LineKind::LookAround {
-            let parts = PartDrawing {
-                context: &context,
-                line,
-                index: line.parts.len(),
-                place: None,
-            };
-            add_summary_ui(ui, &parts, state, &mut gathered, pending);
-        }
-        ui.add_space(6.0);
-        line_menu_ui(ui, drawing.document, relations, line, line_data, state, pending);
-        ui.unique_id()
-    });
-    let rect = row.response.rect;
-    accessible_group(ui.ctx(), row.inner, Role::Group, &line.label(), rect);
-    fire_count_ui(ui, drawing, line, rect.top(), right);
-    if drawing.highlight.contains(&line.id) {
-        ui.painter()
-            .set(background, Shape::rect_filled(rect, CornerRadius::ZERO, mcs::BLUE_950));
-    }
-    // The empty "for each ..." blank stays in the accessibility tree, and is painted only on a hovered or focused line.
-    if gathered.focused || ui.rect_contains_pointer(rect) {
-        for (shape, blank) in gathered.for_each_shapes.drain(..) {
-            ui.painter()
-                .set(shape, Shape::Vec(blank_shapes(ui, blank, FOR_EACH_BLANK_WORDS)));
-        }
-    }
-    end_filling(ui, state, &line.id, rect, &gathered);
+    let top = ui.cursor().top();
+    let (left, right) = (ui.max_rect().left(), ui.max_rect().right());
+    let gutter_right = left + KIND_BAR_WIDTH + GUTTER_WIDTH;
+    let body_left = gutter_right + INDENT * place.depth as f32;
+    let counted = drawing.card.runs == CardRuns::EachTick && drawing.counted.contains(&line.id);
+    let column = if counted { COUNT_WIDTH } else { 0.0 };
+    let tail_left = right - MENU_WIDTH - column;
+    let body_right = (tail_left - TAIL_GAP).max(body_left + INDENT);
+    let mut row = ui.new_child(
+        UiBuilder::new()
+            .id_salt(("henad_card_row", &line.id))
+            .max_rect(Rect::from_min_max(pos2(left, top), pos2(right, f32::INFINITY)))
+            .layout(Layout::top_down(Align::Min)),
+    );
+    let mut body = row.new_child(
+        UiBuilder::new()
+            .max_rect(Rect::from_min_max(
+                pos2(body_left, top + ROW_PADDING),
+                pos2(body_right, f32::INFINITY),
+            ))
+            .layout(Layout::top_down(Align::Min)),
+    );
+    body.spacing_mut().item_spacing.y = 0.0;
+    sentence_ui(&mut body, &context, line, state, &mut gathered, pending);
+    let sentence_bottom = body.min_rect().bottom().max(top + ROW_PADDING + SENTENCE_ROW);
+    // The menu follows the sentence on the keyboard path, before the notes' buttons. Its glyph is painted once the
+    // row's size is known.
+    let menu_rect = Rect::from_min_size(
+        pos2(right - MENU_WIDTH, top + ROW_PADDING),
+        vec2(MENU_WIDTH - 4.0, SENTENCE_ROW),
+    );
+    let tail = row.new_child(
+        UiBuilder::new()
+            .max_rect(menu_rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    let menu = line_menu_ui(&tail, drawing.document, relations, line, line_data, state, pending);
+    let sentence_rect = Rect::from_min_max(pos2(left, top), pos2(right, sentence_bottom));
+    end_filling(ui, state, &line.id, sentence_rect, &gathered);
+    // The rename field and the notes sit under the sentence, where the columns of the fire count and the menu end, so
+    // they take the width up to the row's right padding.
+    let mut under = row.new_child(
+        UiBuilder::new()
+            .max_rect(Rect::from_min_max(
+                pos2(body_left, sentence_bottom),
+                pos2(right - TAIL_GAP - 4.0, f32::INFINITY),
+            ))
+            .layout(Layout::top_down(Align::Min)),
+    );
+    under.spacing_mut().item_spacing.y = 0.0;
     if state.renaming.as_ref().is_some_and(|renaming| renaming.line == line.id) {
-        rename_ui(ui, line, state, pending);
+        gathered.focused |= rename_ui(&mut under, line, state, pending);
     }
     let filling = state.filling.contains(&line.id);
-    notes_ui(
-        ui,
+    gathered.focused |= notes_ui(
+        &mut under,
         line,
         line_data,
         card_notes(drawing, line, line_data, relation_notes, filling),
         pending,
     );
+    let bottom = under.min_rect().bottom().max(sentence_bottom) + ROW_PADDING;
+    let rect = Rect::from_min_max(pos2(left, top), pos2(right, bottom));
+    number_ui(
+        &mut row,
+        line.number,
+        Rect::from_min_max(pos2(left, top), pos2(gutter_right, bottom)),
+    );
+    fire_count_ui(
+        &mut row,
+        drawing,
+        line,
+        Rect::from_min_size(
+            pos2(tail_left, top + ROW_PADDING),
+            vec2(column - TAIL_GAP, SENTENCE_ROW),
+        ),
+    );
+    accessible_group(ui.ctx(), row.unique_id(), Role::Group, &line.label(), rect);
+    ui.advance_cursor_after_rect(rect);
+    paint_row(
+        ui,
+        rect,
+        ground,
+        &RowPaint {
+            depth: place.depth,
+            separator: !place.first,
+            highlight: drawing.highlight.contains(&line.id),
+        },
+    );
+    kind_bar_ui(ui, line_data.kind, rect);
+    let focused = gathered.focused || menu.has_focus();
+    if focused {
+        focus_mark(ui, rect);
+    }
+    // The empty "for each ..." blank is quiet until its line is hovered or focused.
+    let quiet = !(focused || ui.rect_contains_pointer(rect));
+    for (shape, blank) in gathered.for_each_shapes.drain(..) {
+        ui.painter()
+            .set(shape, Shape::Vec(blank_shapes(ui, blank, FOR_EACH_BLANK_WORDS, quiet)));
+    }
     rect
 }
 
-/// Draws the fire count of `line` in grey at the right of the card, in the column of [`COUNT_WIDTH`] that ends at
-/// `right`, level with the row's top at `top`, when the card's counts hold one for the line. Its hover text and
-/// accessible description name the line, the number of things the card runs on and the tick.
-fn fire_count_ui(ui: &mut Ui, drawing: &CardDrawing<'_>, line: &CardLine, top: f32, right: f32) {
+/// Draws the sentence of `line` part by part in rows of [`SENTENCE_ROW`], each alternative of a Choose or a Depending
+/// on in rows of its own, indented once, with a dash in the indent of its first row.
+fn sentence_ui(
+    ui: &mut Ui,
+    context: &LineContext<'_>,
+    line: &CardLine,
+    state: &mut CardState,
+    gathered: &mut LineDrawing<'_>,
+    pending: &mut Option<CardEdit>,
+) {
+    let line_data = context.line;
+    let mut segments: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
+    for (index, part) in line.parts.iter().enumerate() {
+        if *part == SentencePart::Alternative {
+            segments.push((start, index));
+            start = index + 1;
+        }
+    }
+    segments.push((start, line.parts.len()));
+    let last = segments.len() - 1;
+    for (segment, &(from, until)) in segments.iter().enumerate() {
+        let mut draw = |ui: &mut Ui| {
+            ui.spacing_mut().interact_size.y = SENTENCE_ROW;
+            ui.spacing_mut().item_spacing = Vec2::ZERO;
+            ui.horizontal_wrapped(|ui| {
+                for index in from..until {
+                    let Some(part) = line.parts.get(index) else {
+                        continue;
+                    };
+                    let place = line.places.get(index).cloned().flatten();
+                    let parts = PartDrawing {
+                        context,
+                        line,
+                        index,
+                        place,
+                    };
+                    part_ui(ui, &parts, part, state, gathered, pending);
+                    if let Some(place) = parts.place.as_ref().and_then(|place| list_end(line_data, place)) {
+                        let plus = PartDrawing {
+                            place: Some(place),
+                            ..parts
+                        };
+                        add_value_ui(ui, &plus, state, gathered, pending);
+                    }
+                }
+                if segment != last {
+                    return;
+                }
+                if line_data.kind == LineKind::Choose {
+                    let parts = PartDrawing {
+                        context,
+                        line,
+                        index: line.parts.len(),
+                        place: Some(PartPlace {
+                            target: PlaceTarget::Slot(format!("row.{}.value", line_data.rows.len())),
+                            want: Some(Blank::Value),
+                        }),
+                    };
+                    add_row_ui(ui, &parts, state, gathered, pending);
+                }
+                if line_data.around == Some(Around::AgentsWithin) && line_data.kind == LineKind::LookAround {
+                    let parts = PartDrawing {
+                        context,
+                        line,
+                        index: line.parts.len(),
+                        place: None,
+                    };
+                    add_summary_ui(ui, &parts, state, gathered, pending);
+                }
+            });
+        };
+        let indent = if segment == 0 { 0.0 } else { INDENT };
+        let mut place = ui.available_rect_before_wrap();
+        place.min.x += indent;
+        if segment > 0 {
+            // A dash in the indent marks the row an alternative starts on, so the rows it wraps onto read as its own.
+            let y = place.top() + SENTENCE_ROW / 2.0;
+            let dash = pos2(place.left() - INDENT + ALTERNATIVE_DASH.0, y);
+            ui.painter()
+                .hline(dash.x..=dash.x + ALTERNATIVE_DASH.1, y, Stroke::new(1.0, mcs::GRAY_500));
+        }
+        let mut column = ui.new_child(UiBuilder::new().max_rect(place).layout(Layout::top_down(Align::Min)));
+        draw(&mut column);
+        ui.advance_cursor_after_rect(column.min_rect());
+    }
+}
+
+/// Draws the number `number` of a line, right-aligned in the gutter of the row `rect` and level with its first row.
+fn number_ui(ui: &mut Ui, number: usize, rect: Rect) {
+    let place = Rect::from_min_max(
+        pos2(rect.left() + KIND_BAR_WIDTH, rect.top() + ROW_PADDING),
+        pos2(rect.right() - NUMBER_GAP, rect.top() + ROW_PADDING + SENTENCE_ROW),
+    );
+    let mut column = ui.new_child(
+        UiBuilder::new()
+            .max_rect(place)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    column.add(Label::new(small_label(number.to_string())).selectable(false));
+}
+
+/// Paints the bar in the hue of the kind of a line of `kind` at the left edge of its row `rect`. The bar and the
+/// gutter beside it show the kind's word as their hover text.
+fn kind_bar_ui(ui: &Ui, kind: LineKind, rect: Rect) {
+    let group = AddButton::for_kind(kind);
+    let bar = Rect::from_min_size(rect.min, vec2(KIND_BAR_WIDTH, rect.height()));
+    ui.painter().rect_filled(bar, CornerRadius::ZERO, kind_hue(group));
+    let gutter = Rect::from_min_size(
+        rect.min,
+        vec2(KIND_BAR_WIDTH + GUTTER_WIDTH - NUMBER_GAP, rect.height()),
+    );
+    ui.interact(
+        gutter,
+        ui.id().with(("henad_kind_bar", rect.top().to_bits())),
+        Sense::hover(),
+    )
+    .on_hover_text(group.group());
+}
+
+/// Draws the fire count of `line` in grey, right-aligned in `place`, the column of [`COUNT_WIDTH`] at the row's top,
+/// when the card's counts hold one for the line. Its hover text and accessible description name the line, the number
+/// of things the card runs on and the tick.
+fn fire_count_ui(ui: &mut Ui, drawing: &CardDrawing<'_>, line: &CardLine, place: Rect) {
     let Some(fires) = drawing.fires else {
         return;
     };
@@ -1810,10 +2224,6 @@ fn fire_count_ui(ui: &mut Ui, drawing: &CardDrawing<'_>, line: &CardLine, top: f
         return;
     };
     let thing = drawing.sentences.thing_word(&drawing.card.every);
-    let place = Rect::from_min_max(
-        Pos2::new(right - COUNT_WIDTH, top),
-        Pos2::new(right, top + ui.spacing().interact_size.y),
-    );
     let description = fire_count_description(&line.prefix, count, &thing, fires.tick);
     // A child placed over the row's top takes no space, so the notes under the row keep their place.
     let mut column = ui.new_child(
@@ -1821,35 +2231,41 @@ fn fire_count_ui(ui: &mut Ui, drawing: &CardDrawing<'_>, line: &CardLine, top: f
             .max_rect(place)
             .layout(Layout::right_to_left(Align::Center)),
     );
-    let label = column.add(Label::new(RichText::new(fire_count(count)).weak()).selectable(false));
+    let label = column.add(Label::new(small_label(fire_count(count))).selectable(false));
     ui.ctx()
         .accesskit_node_builder(label.id, |node| node.set_description(description.as_str()));
     label.on_hover_text(description);
 }
 
-/// Draws `notes` under `line`, each note's button running its edit.
-fn notes_ui(ui: &mut Ui, line: &CardLine, line_data: &SheetLine, notes: Vec<LineNote>, pending: &mut Option<CardEdit>) {
+/// Draws `notes` under `line`, each note's button running its edit, and returns whether a note's button holds the
+/// keyboard focus.
+fn notes_ui(
+    ui: &mut Ui,
+    line: &CardLine,
+    line_data: &SheetLine,
+    notes: Vec<LineNote>,
+    pending: &mut Option<CardEdit>,
+) -> bool {
+    let mut focused = false;
     for note in notes {
         let color = match note.color {
             NoteColor::Amber => ui.visuals().warn_fg_color,
             NoteColor::Red => ui.visuals().error_fg_color,
             NoteColor::Grey => ui.visuals().weak_text_color(),
         };
+        ui.add_space(3.0);
         ui.horizontal_wrapped(|ui| {
-            ui.add_space(INDENT * line.depth as f32 + NUMBER_WIDTH);
-            let label = ui.add(Label::new(RichText::new(note.text.as_str()).color(color)).wrap());
+            ui.spacing_mut().item_spacing = vec2(6.0, 2.0);
+            let words = RichText::new(note.text.as_str()).size(NOTE_SIZE).color(color);
+            let label = ui.add(Label::new(words).wrap());
             if let Some(description) = &note.description {
                 ui.ctx()
                     .accesskit_node_builder(label.id, |node| node.set_description(description.as_str()));
                 label.on_hover_text(description.as_str());
             }
             if let Some(action) = note.action {
-                let button = add_button(
-                    ui,
-                    true,
-                    Button::new(&action.label).wrap_mode(egui::TextWrapMode::Extend),
-                    &action.name,
-                );
+                let button = note_button(ui, &action.label, &action.name, NOTE_SIZE);
+                focused |= button.has_focus();
                 if button.clicked() {
                     let after = match action.edit {
                         // The count moves into "for each", and the emptied chance or rate opens its picker.
@@ -1866,6 +2282,7 @@ fn notes_ui(ui: &mut Ui, line: &CardLine, line_data: &SheetLine, notes: Vec<Line
             }
         });
     }
+    focused
 }
 
 /// Returns the target of the chance or rate that line `line` draws with, on the line or in its condition.
@@ -1931,49 +2348,35 @@ fn part_ui(
         .map(|place| state.control_id(&line.id, &place.target, tag));
     let response = match part {
         SentencePart::Text(words) => {
-            ui.label(words.as_str());
+            text_ui(ui, words);
+            return;
+        }
+        SentencePart::Keyword(words) => {
+            words_ui(ui, words, &Words::lead(ui), Sense::hover());
+            return;
+        }
+        SentencePart::ResultName(name) => {
+            let response = result_name_ui(ui, drawing, name, state);
+            gathered.focused |= response.has_focus();
             return;
         }
         // A word that does not wrap moves to the next row whole when the row has no room left for it.
         SentencePart::ConditionWord(words) => {
-            ui.add(Label::new(RichText::new(*words).strong()).extend());
-            if !gathered.arrow_drawn && takes_condition(drawing.context.line.kind) {
-                gathered.arrow_drawn = true;
-                condition_arrow_ui(ui, drawing, state, gathered, pending);
-            }
+            condition_word_ui(ui, drawing, words, state, gathered, pending);
             return;
         }
         SentencePart::From => {
             let context = drawing.context;
             let thing = context.sentences.thing_word(&context.relations.card().every);
-            ui.add(Label::new(FROM_WORD).extend())
-                .on_hover_text(from_tooltip(&thing));
+            let look = Words {
+                dotted: true,
+                whole: true,
+                ..Words::plain(ui)
+            };
+            words_ui(ui, FROM_WORD, &look, Sense::hover()).on_hover_text(from_tooltip(&thing));
             return;
         }
-        SentencePart::Chip(chip) => {
-            let red = line
-                .red_chips
-                .iter()
-                .find(|(red, _)| *red == drawing.index)
-                .map(|(_, tooltip)| tooltip);
-            let swatch = line
-                .swatches
-                .iter()
-                .find(|(state, _)| *state == drawing.index)
-                .map(|(_, color)| *color);
-            let shown = draft_chip(drawing, state, chip);
-            let response = chip_with_id(ui, id, &shown, red.is_some(), swatch);
-            let response = match red {
-                Some(tooltip) => response.on_hover_text(tooltip.as_str()),
-                None => response,
-            };
-            if let ChipKind::Result(result) = &shown.kind
-                && (response.contains_pointer() || response.has_focus())
-            {
-                gathered.hovered.push(result.clone());
-            }
-            response
-        }
+        SentencePart::Chip(chip) => chip_part_ui(ui, drawing, id, chip, state, gathered),
         SentencePart::Blank(blank) => {
             match draft_value(drawing, state) {
                 // A value chosen for an empty Calculate line shows as its chip until the formula is written.
@@ -1989,9 +2392,9 @@ fn part_ui(
                 }
                 _ => words.clone(),
             };
-            select_ui(ui, id, select_words(*select, &words), &name, words.is_empty())
+            select_control(ui, id, select_words(*select, &words), &name, words.is_empty())
         }
-        SentencePart::Always => text_control(ui, id, ALWAYS, mcs::GRAY_400, &name).on_hover_text(ALWAYS_TOOLTIP),
+        SentencePart::Always => text_control(ui, id, ALWAYS, &name, SENTENCE_ROW).on_hover_text(ALWAYS_TOOLTIP),
         SentencePart::Otherwise(lines) => lead_word_ui(
             ui,
             &otherwise_words(lines),
@@ -2010,7 +2413,7 @@ fn part_ui(
             }
             response.on_hover_text(for_each_optional_tooltip(*draw))
         }
-        SentencePart::ForEach(_) => text_control(ui, id, FOR_EACH_WORDS, mcs::GRAY_100, &name),
+        SentencePart::ForEach(_) => text_control(ui, id, FOR_EACH_WORDS, &name, SENTENCE_ROW),
         _ => return,
     };
     gathered.focused |= response.has_focus();
@@ -2020,12 +2423,191 @@ fn part_ui(
     control_picker(ui, drawing, place, part, &response, id, state, gathered, pending);
 }
 
-/// Draws the muted word `words` that leads a change, "otherwise (when line 2 does not apply)" or "or", focusable and
-/// described by `tooltip`. Hovering or focusing it highlights the lines `lines` on the next frame.
+/// Adds the chip `chip` of the part being drawn under the widget id `id`, red with its tooltip when its line cannot use
+/// it, and returns its response. Hovering or focusing a result chip highlights the result's line on the next frame.
+fn chip_part_ui(
+    ui: &mut Ui,
+    drawing: &PartDrawing<'_>,
+    id: Option<Id>,
+    chip: &SentenceChip,
+    state: &CardState,
+    gathered: &mut LineDrawing<'_>,
+) -> Response {
+    let line = drawing.line;
+    let red = line
+        .red_chips
+        .iter()
+        .find(|(red, _)| *red == drawing.index)
+        .map(|(_, tooltip)| tooltip);
+    let swatch = line
+        .swatches
+        .iter()
+        .find(|(state, _)| *state == drawing.index)
+        .map(|(_, color)| *color);
+    let shown = draft_chip(drawing, state, chip);
+    let response = chip_with_id(ui, id, &shown, red.is_some(), swatch);
+    let response = match red {
+        Some(tooltip) => response.on_hover_text(tooltip.as_str()),
+        None => response,
+    };
+    if let ChipKind::Result(result) = &shown.kind
+        && (response.contains_pointer() || response.has_focus())
+    {
+        gathered.hovered.push(result.clone());
+    }
+    response
+}
+
+/// How the words of a sentence are set.
+struct Words {
+    /// Font of the words.
+    font: FontId,
+    /// Colour of the words.
+    color: Color32,
+    /// Whether the words are set in italics.
+    italics: bool,
+    /// Whether a dotted line runs under the words, as under words that show a tooltip.
+    dotted: bool,
+    /// Whether the words stay on one row, and move to the next row whole when the row has no room left for them.
+    whole: bool,
+}
+
+impl Words {
+    /// Returns the look of a sentence's plain words.
+    fn plain(ui: &Ui) -> Self {
+        Self {
+            font: TextStyle::Body.resolve(ui.style()),
+            color: ui.visuals().text_color(),
+            italics: false,
+            dotted: false,
+            whole: false,
+        }
+    }
+
+    /// Returns the look of a line's lead words, gray 100 in the semibold face.
+    fn lead(ui: &Ui) -> Self {
+        Self {
+            font: semibold_font(ui.ctx(), TextStyle::Body.resolve(ui.style()).size),
+            color: mcs::GRAY_100,
+            ..Self::plain(ui)
+        }
+    }
+}
+
+/// Adds `words` set as `look` says, a label sensing `sense`, and returns its response.
+///
+/// Each row of the words is [`SENTENCE_ROW`] high with the words in its middle, level with the chips beside them. egui
+/// puts the extra height of a row under its words and draws no dotted underline, so the label is laid out here and
+/// painted lower by half the extra height.
+fn words_ui(ui: &mut Ui, words: &str, look: &Words, sense: Sense) -> Response {
+    let mut text = RichText::new(words)
+        .font(look.font.clone())
+        .color(look.color)
+        .line_height(Some(SENTENCE_ROW));
+    if look.italics {
+        text = text.italics();
+    }
+    let mut label = Label::new(text).selectable(false).sense(sense);
+    if look.whole {
+        label = label.extend();
+    }
+    let (position, galley, response) = label.layout_in_ui(ui);
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, ui.is_enabled(), galley.text()));
+    if ui.is_rect_visible(response.rect) {
+        let height = ui.fonts_mut(|fonts| fonts.row_height(&look.font));
+        let position = position + vec2(0.0, ((SENTENCE_ROW - height) / 2.0).round());
+        let painter = ui.painter();
+        if look.dotted {
+            for row in &galley.rows {
+                let rect = row.rect_without_leading_space().translate(position.to_vec2());
+                let y = rect.top() + height - 1.0;
+                painter.extend(Shape::dotted_line(
+                    &[pos2(rect.left() + 1.0, y), pos2(rect.right() - 1.0, y)],
+                    look.color,
+                    3.0,
+                    0.6,
+                ));
+            }
+        }
+        painter.galley(position, galley, look.color);
+    }
+    response
+}
+
+/// Draws the plain words `words` of a sentence. Closing punctuation at their start stays on the row of the part before
+/// it, so a row never starts with ")" or ";", and a space that ends a full row takes no row of its own.
+fn text_ui(ui: &mut Ui, words: &str) {
+    let space = ui.fonts_mut(|fonts| fonts.glyph_width(&TextStyle::Body.resolve(ui.style()), ' '));
+    if words.trim().is_empty() && ui.available_size_before_wrap().x < space * words.len() as f32 {
+        // A space at the end of a full row takes no row of its own.
+        let rect = Rect::from_min_size(ui.cursor().min, vec2(0.0, SENTENCE_ROW));
+        let response = ui.allocate_rect(rect, Sense::hover());
+        response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, ui.is_enabled(), words));
+        return;
+    }
+    let rest = words.trim_start_matches([',', ';', ':', ')', '.']);
+    let attached = &words[..words.len() - rest.len()];
+    if attached.is_empty() {
+        words_ui(ui, words, &Words::plain(ui), Sense::hover());
+        return;
+    }
+    let look = Words::plain(ui);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(attached.to_owned(), look.font.clone(), look.color);
+    // Placed at the cursor without the wrap check of the layout. The punctuation may reach a few points into the
+    // gap at the row's right.
+    let rect = Rect::from_min_size(ui.cursor().min, vec2(galley.size().x, SENTENCE_ROW));
+    let response = ui.allocate_rect(rect, Sense::hover());
+    ui.painter().galley(
+        pos2(rect.left(), rect.center().y - galley.size().y / 2.0),
+        galley,
+        look.color,
+    );
+    // One label keeps all of `words`, as before the punctuation was set apart.
+    let label = if rest.is_empty() {
+        response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, ui.is_enabled(), words));
+        response
+    } else {
+        words_ui(ui, rest, &look, Sense::hover())
+    };
+    ui.ctx().accesskit_node_builder(label.id, |node| node.set_value(words));
+}
+
+/// Draws the name `name` that a result line works out as the line's result chip, and returns its response. Pressing it
+/// opens the field that renames the line, as the line's menu does.
+fn result_name_ui(ui: &mut Ui, drawing: &PartDrawing<'_>, name: &str, state: &mut CardState) -> Response {
+    let line = drawing.line;
+    let id = state.widgets.with((&line.id, "result name"));
+    let chip = SentenceChip {
+        kind: ChipKind::Result(line.id.clone()),
+        lead: "",
+        name: name.to_owned(),
+    };
+    let response = chip_with_id(ui, Some(id), &chip, false, None).on_hover_text(rename_line(&line.word));
+    set_name(ui, response.id, &rename_result_name(&line.prefix, name));
+    if response.clicked() {
+        state.renaming = Some(Renaming {
+            line: line.id.clone(),
+            text: name.to_owned(),
+            message: None,
+            focused: false,
+        });
+    }
+    response
+}
+
+/// Draws the word `words` that leads a change, "otherwise (when line 2 does not apply)" or "or", in the weak text colour
+/// and in italics with a dotted line under it, focusable and described by `tooltip`. Hovering or focusing it highlights
+/// the lines `lines` on the next frame.
 fn lead_word_ui(ui: &mut Ui, words: &str, tooltip: &str, lines: &[String], gathered: &mut LineDrawing<'_>) -> Response {
-    let response = ui
-        .add(Label::new(RichText::new(words).weak()).sense(Sense::click()))
-        .on_hover_text(tooltip);
+    let look = Words {
+        color: ui.visuals().weak_text_color(),
+        italics: true,
+        dotted: true,
+        ..Words::plain(ui)
+    };
+    let response = words_ui(ui, words, &look, Sense::click()).on_hover_text(tooltip);
     ui.ctx().accesskit_node_builder(response.id, |node| {
         node.set_label(words);
         node.set_description(tooltip);
@@ -2066,15 +2648,18 @@ fn control_picker(
     if !was_open && !response.clicked() {
         return;
     }
-    if let SentencePart::Select(..) = part {
-        let chosen = select_popup(ui, drawing, place, response, popup_id);
+    if let SentencePart::Select(_, words) = part {
+        let chosen = select_popup(ui, drawing, place, response, popup_id, words);
         gathered.picker_open |= Popup::is_id_open(ui.ctx(), popup_id);
         if let Some(option) = chosen {
             *pending = select_edit(drawing, state, place, option);
         }
         return;
     }
-    let picker = place_picker(drawing, place, part);
+    let mut picker = place_picker(drawing, place, part);
+    if let SentencePart::Chip(chip) = part {
+        picker.current = Some(chip.name.clone());
+    }
     let mut open = false;
     let choice = picker.show(ui, response, popup_id, &mut open);
     gathered.picker_open |= open;
@@ -2082,33 +2667,6 @@ fn control_picker(
     if let Some(choice) = choice {
         *pending = choice_edit(drawing, state, place, &choice);
     }
-}
-
-/// Adds a frameless button showing `text` in `color`, named `name`, under the widget id `id` when one is given, and
-/// returns its response.
-///
-/// It is laid out as one unbroken piece, so a row that has no room for it moves it to the next row whole.
-fn text_control(ui: &mut Ui, id: Option<Id>, text: &str, color: Color32, name: &str) -> Response {
-    let font = TextStyle::Body.resolve(ui.style());
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
-    let size = galley.size() + CHIP_PADDING * 2.0;
-    let height = size.y.max(ui.spacing().interact_size.y - 2.0);
-    let (rect, response) = allocate_control(ui, id, vec2(size.x, height));
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        if response.has_focus() || response.hovered() {
-            painter.rect_stroke(
-                rect,
-                CornerRadius::ZERO,
-                Stroke::new(1.0, mcs::GRAY_500),
-                egui::StrokeKind::Inside,
-            );
-        }
-        let position = Pos2::new(rect.left() + CHIP_PADDING.x, rect.center().y - galley.size().y / 2.0);
-        painter.galley(position, galley, color);
-    }
-    response
 }
 
 /// Returns the place after the last item of the list `place` is an item of, the place of "+" after the list, `None`
@@ -2156,7 +2714,7 @@ fn add_value_ui(
     };
     let id = state.control_id(&drawing.line.id, &place.target, 0);
     ui.add_space(4.0);
-    let response = text_control(ui, Some(id), "+", mcs::GRAY_100, &add_value_name(&drawing.line.prefix));
+    let response = text_control(ui, Some(id), "+", &add_value_name(&drawing.line.prefix), SENTENCE_ROW);
     gathered.focused |= response.has_focus();
     let blank = SentencePart::Blank(place.want.unwrap_or(Blank::NumberList));
     control_picker(ui, drawing, place, &blank, &response, id, state, gathered, pending);
@@ -2180,8 +2738,8 @@ fn add_row_ui(
         ui,
         Some(id),
         "+",
-        mcs::GRAY_100,
         &add_choose_row_name(&drawing.line.prefix),
+        SENTENCE_ROW,
     );
     gathered.focused |= response.has_focus();
     control_picker(
@@ -2210,7 +2768,7 @@ fn add_summary_ui(
     let target = PlaceTarget::Slot("summaries".to_owned());
     let id = state.control_id(&line.id, &target, 3);
     ui.add_space(4.0);
-    let response = text_control(ui, Some(id), "+", mcs::GRAY_100, &add_summary_name(&line.prefix));
+    let response = text_control(ui, Some(id), "+", &add_summary_name(&line.prefix), SENTENCE_ROW);
     gathered.focused |= response.has_focus();
     let popup_id = id.with("picker");
     if !Popup::is_id_open(ui.ctx(), popup_id) && !response.clicked() {
@@ -2260,7 +2818,7 @@ fn condition_arrow_ui(
     let target = PlaceTarget::Slot("condition".to_owned());
     let id = state.control_id(&line.id, &target, 2);
     let name = condition_arrow_name(&line.prefix);
-    let response = select_ui(ui, Some(id), "", &name, true).on_hover_text(CONDITION_ARROW_TOOLTIP);
+    let response = arrow_control(ui, id, &name, SENTENCE_ROW).on_hover_text(CONDITION_ARROW_TOOLTIP);
     gathered.focused |= response.has_focus();
     let popup_id = id.with("picker");
     let was_open = Popup::is_id_open(ui.ctx(), popup_id);
@@ -2277,6 +2835,40 @@ fn condition_arrow_ui(
     gathered.picker_open |= open;
     if let Some(choice) = choice {
         *pending = choice_edit(drawing, state, &place, &choice);
+    }
+}
+
+/// Draws the condition word `words` in the semibold face, and after the first condition word of a line that takes a
+/// condition its arrow, on the word's row.
+fn condition_word_ui(
+    ui: &mut Ui,
+    drawing: &PartDrawing<'_>,
+    words: &str,
+    state: &mut CardState,
+    gathered: &mut LineDrawing<'_>,
+    pending: &mut Option<CardEdit>,
+) {
+    let look = Words {
+        whole: true,
+        ..Words::lead(ui)
+    };
+    let arrow = !gathered.arrow_drawn && takes_condition(drawing.context.line.kind);
+    if arrow {
+        // Both move to the next row when the row has no room for the word and its arrow.
+        let width = ui
+            .painter()
+            .layout_no_wrap(words.to_owned(), look.font.clone(), look.color)
+            .size()
+            .x;
+        let room = ui.available_size_before_wrap().x;
+        if room < width + ARROW_WIDTH && room < ui.available_width() {
+            ui.end_row();
+        }
+    }
+    words_ui(ui, words, &look, Sense::hover());
+    if arrow {
+        gathered.arrow_drawn = true;
+        condition_arrow_ui(ui, drawing, state, gathered, pending);
     }
 }
 
@@ -2441,13 +3033,15 @@ fn rate_unit(document: &SheetDocument, line: &SheetLine) -> Option<String> {
 
 // The selects
 
-/// Draws the options of the select at `place` under `anchor`, and returns the option chosen.
+/// Draws the options of the select at `place` under `anchor`, the option that shows `current` marked, and returns the
+/// option chosen.
 fn select_popup(
     ui: &Ui,
     drawing: &PartDrawing<'_>,
     place: &PartPlace,
     anchor: &Response,
     popup_id: Id,
+    current: &str,
 ) -> Option<SelectOption> {
     let line = drawing.context.line;
     let options = match &place.target {
@@ -2512,17 +3106,25 @@ fn select_popup(
         .id(popup_id)
         .open_memory(None)
         .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .frame(Frame::NONE)
         .show(|ui| {
-            let mut chosen = None;
-            for (words, option) in &options {
-                if ui.add(Button::new(words).frame(false)).clicked() {
-                    chosen = Some(*option);
+            overlay(ui, |ui| {
+                let mut chosen = None;
+                for (words, option) in &options {
+                    let row = OverlayItem {
+                        label: words,
+                        current: words.as_str() == current,
+                        ..OverlayItem::default()
+                    };
+                    if overlay_item(ui, &row).clicked() {
+                        chosen = Some(*option);
+                    }
                 }
-            }
-            if chosen.is_some() {
-                ui.close();
-            }
-            chosen
+                if chosen.is_some() {
+                    ui.close();
+                }
+                chosen
+            })
         })?;
     popup.inner
 }
@@ -2608,55 +3210,6 @@ fn select_words(select: LineSelect, words: &str) -> &str {
     }
 }
 
-/// Adds a select inside a line showing `words` and a chevron, named `name`, under the widget id `id` when one is given,
-/// and returns its response. An `empty` select shows its words in grey.
-fn select_ui(ui: &mut Ui, id: Option<Id>, words: &str, name: &str, empty: bool) -> Response {
-    let font = TextStyle::Body.resolve(ui.style());
-    let color = if empty { mcs::GRAY_400 } else { mcs::GRAY_100 };
-    let painter = ui.painter();
-    let text = painter.layout_no_wrap(words.to_owned(), font.clone(), color);
-    let chevron = painter.layout_no_wrap(format!(" {MDI_CHEVRON_DOWN}"), font, mcs::GRAY_400);
-    let width = text.size().x + chevron.size().x + CHIP_PADDING.x * 2.0;
-    let height = (text.size().y + CHIP_PADDING.y * 2.0).max(ui.spacing().interact_size.y - 2.0);
-    let (rect, response) = allocate_control(ui, id, vec2(width, height));
-    response.widget_info(|| WidgetInfo {
-        current_text_value: (!words.is_empty()).then(|| words.to_owned()),
-        ..WidgetInfo::labeled(
-            if words.is_empty() {
-                WidgetType::Button
-            } else {
-                WidgetType::ComboBox
-            },
-            true,
-            name,
-        )
-    });
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        let outline = if response.has_focus() || response.hovered() {
-            mcs::GRAY_300
-        } else {
-            mcs::GRAY_700
-        };
-        painter.rect_stroke(
-            rect,
-            CornerRadius::ZERO,
-            Stroke::new(1.0, outline),
-            egui::StrokeKind::Inside,
-        );
-        let text_size = text.size();
-        let left = Pos2::new(rect.left() + CHIP_PADDING.x, rect.center().y - text_size.y / 2.0);
-        painter.galley(left, text, color);
-        let chevron_size = chevron.size();
-        painter.galley(
-            Pos2::new(left.x + text_size.x, rect.center().y - chevron_size.y / 2.0),
-            chevron,
-            mcs::GRAY_400,
-        );
-    }
-    response
-}
-
 // The line menu and the rename field
 
 /// A tool of a line's menu.
@@ -2680,73 +3233,29 @@ enum LineTool {
     Delete,
 }
 
-/// Draws the menu of `line`, "Line 2 actions": Rename on a result line, Move up and Move down where the outline
-/// lets the line move, Draw new numbers on a line that draws, Change to a rate or Change to a chance on a line whose
-/// typed chance or rate can change, and Delete.
+/// Draws the menu of `line`, "Line 2 actions": Rename on a result line, Move up and Move down, Draw new numbers on a
+/// line that draws, Change to a rate or Change to a chance on a line whose typed chance or rate can change, and Delete.
+/// Returns the response of its button. The button fills the place `ui` gives it.
+///
+/// Move up and Move down stay in the menu where the outline keeps the line in place, weak, with the reason as their
+/// tooltip.
 fn line_menu_ui(
-    ui: &mut Ui,
+    ui: &Ui,
     document: &SheetDocument,
     relations: &CardRelations<'_>,
     line: &CardLine,
     line_data: &SheetLine,
     state: &mut CardState,
     pending: &mut Option<CardEdit>,
-) {
+) -> Response {
     let id = state.widgets.with((&line.id, "menu"));
-    let response = text_control(
-        ui,
-        Some(id),
-        MDI_DOTS_HORIZONTAL,
-        mcs::GRAY_400,
-        &line_actions_name(&line.prefix),
-    );
-    let is_result = is_result_line(line_data.kind);
-    let looks_at_agents = line_data.around == Some(Around::AgentsWithin);
+    let popup_id = id.with("popup");
+    let response = menu_button(ui, id, popup_id, &line_actions_name(&line.prefix), ui.max_rect());
     let includes_me = line_data.include_me == Some(true);
-    let (up, down) = can_move(relations, &line.id);
-    let draws = holds_draw(line_data);
-    let change = conversion(document, &line.id);
-    let is_when = line_data.kind == LineKind::When;
     let chosen = Popup::menu(&response)
-        .id(id.with("popup"))
-        .show(|ui| {
-            let mut chosen = None;
-            let mut tool = |ui: &mut Ui, shown: bool, enabled: bool, words: String, tool: LineTool| {
-                if shown && ui.add_enabled(enabled, Button::new(words)).clicked() {
-                    chosen = Some(tool);
-                }
-            };
-            tool(ui, is_result, true, rename_line(&line.word), LineTool::Rename);
-            let include = if includes_me {
-                leave_me_out_tool(&line.word)
-            } else {
-                include_me_tool(&line.word)
-            };
-            tool(ui, looks_at_agents, true, include, LineTool::IncludeMe);
-            tool(ui, true, up, move_line_up(&line.word), LineTool::MoveUp);
-            tool(ui, true, down, move_line_down(&line.word), LineTool::MoveDown);
-            tool(ui, draws, true, DRAW_NEW_NUMBERS.to_owned(), LineTool::DrawNewNumbers);
-            let to_rate = change == Some(DrawKind::Rate);
-            tool(ui, to_rate, true, CHANGE_TO_RATE.to_owned(), LineTool::ChangeToRate);
-            let to_chance = change == Some(DrawKind::Chance);
-            tool(
-                ui,
-                to_chance,
-                true,
-                CHANGE_TO_CHANCE.to_owned(),
-                LineTool::ChangeToChance,
-            );
-            let delete = ui.button(delete_line(&line.word));
-            let delete = if is_when {
-                delete.on_hover_text(DELETE_WHEN_TOOLTIP)
-            } else {
-                delete
-            };
-            if delete.clicked() {
-                chosen = Some(LineTool::Delete);
-            }
-            chosen
-        })
+        .id(popup_id)
+        .frame(Frame::NONE)
+        .show(|ui| overlay(ui, |ui| line_tools_ui(ui, document, relations, line, line_data)))
         .and_then(|popup| popup.inner);
     let edit = |edit: SheetEdit| Some(CardEdit::commands(vec![edit], After::Stay));
     let line_id = line.id.clone();
@@ -2784,6 +3293,81 @@ fn line_menu_ui(
         Some(LineTool::Delete) => *pending = edit(SheetEdit::DeleteLine { line: line_id }),
         None => {}
     }
+    response
+}
+
+/// Draws the tools of the menu of `line`, and returns the tool chosen.
+fn line_tools_ui(
+    ui: &mut Ui,
+    document: &SheetDocument,
+    relations: &CardRelations<'_>,
+    line: &CardLine,
+    line_data: &SheetLine,
+) -> Option<LineTool> {
+    let (up, down) = can_move(relations, &line.id);
+    let change = conversion(document, &line.id);
+    let mut chosen = None;
+    let mut tool = |ui: &mut Ui, shown: bool, refusal: Option<&str>, words: String, tool: LineTool| {
+        if !shown {
+            return;
+        }
+        let row = OverlayItem {
+            label: &words,
+            ..OverlayItem::default()
+        };
+        let response = ui.add_enabled_ui(refusal.is_none(), |ui| overlay_item(ui, &row)).inner;
+        if let Some(refusal) = refusal {
+            response.on_disabled_hover_text(refusal);
+        } else if response.clicked() {
+            chosen = Some(tool);
+        }
+    };
+    tool(
+        ui,
+        is_result_line(line_data.kind),
+        None,
+        rename_line(&line.word),
+        LineTool::Rename,
+    );
+    let include = if line_data.include_me == Some(true) {
+        leave_me_out_tool(&line.word)
+    } else {
+        include_me_tool(&line.word)
+    };
+    let looks_at_agents = line_data.around == Some(Around::AgentsWithin);
+    tool(ui, looks_at_agents, None, include, LineTool::IncludeMe);
+    let refusal = (!up).then_some(MOVE_UP_FIRST);
+    tool(ui, true, refusal, move_line_up(&line.word), LineTool::MoveUp);
+    let refusal = (!down).then_some(MOVE_DOWN_LAST);
+    tool(ui, true, refusal, move_line_down(&line.word), LineTool::MoveDown);
+    let draws = holds_draw(line_data);
+    tool(ui, draws, None, DRAW_NEW_NUMBERS.to_owned(), LineTool::DrawNewNumbers);
+    let to_rate = change == Some(DrawKind::Rate);
+    tool(ui, to_rate, None, CHANGE_TO_RATE.to_owned(), LineTool::ChangeToRate);
+    let to_chance = change == Some(DrawKind::Chance);
+    tool(
+        ui,
+        to_chance,
+        None,
+        CHANGE_TO_CHANCE.to_owned(),
+        LineTool::ChangeToChance,
+    );
+    ui.add_space(4.0);
+    let words = delete_line(&line.word);
+    let row = OverlayItem {
+        label: &words,
+        ..OverlayItem::default()
+    };
+    let delete = overlay_item(ui, &row);
+    let delete = if line_data.kind == LineKind::When {
+        delete.on_hover_text(DELETE_WHEN_TOOLTIP)
+    } else {
+        delete
+    };
+    if delete.clicked() {
+        chosen = Some(LineTool::Delete);
+    }
+    chosen
 }
 
 /// Returns whether line `line_id` can move up and whether it can move down in the outline of its card.
@@ -2801,16 +3385,20 @@ fn can_move(relations: &CardRelations<'_>, line_id: &str) -> (bool, bool) {
     (up, down)
 }
 
-/// Draws the field that renames `line`, under it. Enter or leaving the field keeps the name, and Escape cancels.
-fn rename_ui(ui: &mut Ui, line: &CardLine, state: &mut CardState, pending: &mut Option<CardEdit>) {
+/// Draws the field that renames `line`, under it, and returns whether the field holds the keyboard focus. Enter or
+/// leaving the field keeps the name, and Escape cancels.
+fn rename_ui(ui: &mut Ui, line: &CardLine, state: &mut CardState, pending: &mut Option<CardEdit>) -> bool {
     let Some(renaming) = &mut state.renaming else {
-        return;
+        return false;
     };
     let mut keep = None;
     let mut cancel = false;
+    let mut focused = false;
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.add_space(INDENT * line.depth as f32 + NUMBER_WIDTH);
-        let field = ui.add(TextEdit::singleline(&mut renaming.text).desired_width(RENAME_WIDTH));
+        let width = RENAME_WIDTH.min(ui.available_width());
+        let field = ui.add(TextEdit::singleline(&mut renaming.text).desired_width(width));
+        focused = field.has_focus();
         set_name(ui, field.id, &rename_field_name(&line.prefix));
         if !renaming.focused {
             field.request_focus();
@@ -2825,21 +3413,18 @@ fn rename_ui(ui: &mut Ui, line: &CardLine, state: &mut CardState, pending: &mut 
         }
     });
     if let Some(message) = &renaming.message {
-        ui.horizontal(|ui| {
-            ui.add_space(INDENT * line.depth as f32 + NUMBER_WIDTH);
-            message_ui(ui, message);
-        });
+        message_ui(ui, message);
     }
     if cancel {
         state.renaming = None;
-        return;
+        return focused;
     }
     let Some(name) = keep else {
-        return;
+        return focused;
     };
     if name.is_empty() {
         state.renaming = None;
-        return;
+        return focused;
     }
     let mut edit = CardEdit::commands(
         vec![SheetEdit::RenameResult {
@@ -2850,6 +3435,7 @@ fn rename_ui(ui: &mut Ui, line: &CardLine, state: &mut CardState, pending: &mut 
     );
     edit.rename = true;
     *pending = Some(edit);
+    focused
 }
 
 // The New parameter dialog
@@ -2910,5 +3496,40 @@ fn new_parameter_dialog(ui: &Ui, document: &SheetDocument, state: &mut CardState
             });
             state.new_parameter = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use henad_graph::sheet::sentence::{AddButton, AddItem};
+
+    use super::{kind_hue, new_line};
+
+    /// Every item of an add button's menus adds a line whose bar takes the button's hue. A Become from "+ Chance" is a
+    /// change and takes the Change hue. The five groups of lines that are no block take five hues.
+    #[test]
+    fn each_add_button_adds_lines_in_its_own_hue() {
+        for agents in [false, true] {
+            let (every, buttons): (&str, &[AddButton]) = if agents {
+                ("ant", &AddButton::AGENTS)
+            } else {
+                ("cells", &AddButton::ALL)
+            };
+            for &button in buttons {
+                for &item in button.items_for(agents) {
+                    let group = AddButton::for_kind(new_line(item, every).kind);
+                    let expected = match item {
+                        AddItem::BecomeWithChance | AddItem::BecomeAtRate => AddButton::Change,
+                        _ => button,
+                    };
+                    assert_eq!(group, expected, "{item:?}");
+                }
+            }
+        }
+        let hues: Vec<_> = AddButton::ALL[..5].iter().map(|button| kind_hue(*button)).collect();
+        for (index, hue) in hues.iter().enumerate() {
+            assert!(!hues[index + 1..].contains(hue), "{hues:?}");
+        }
+        assert_eq!(kind_hue(AddButton::When), kind_hue(AddButton::Repeat));
     }
 }

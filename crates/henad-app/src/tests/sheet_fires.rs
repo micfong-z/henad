@@ -4,7 +4,7 @@
 use egui::accesskit::Role;
 use henad_graph::sheet::document::{SheetLiteral, SheetValue, Slot};
 use henad_graph::sheet::edit::SheetEdit;
-use henad_graph::sheet::sentence::fire_count;
+use henad_graph::sheet::sentence::{add_value_name, fire_count, for_each_optional_name};
 use henad_graph::sheet::{SheetFile, starters};
 use web_time::Instant;
 
@@ -56,6 +56,15 @@ fn count_labels(harness: &mut Harness) -> Vec<Node> {
         .collect();
     labels.sort_by(|a, b| top(a).total_cmp(&top(b)));
     labels
+}
+
+/// Returns the bounds of the control named `name` in `nodes`, or panics.
+fn control_bounds(nodes: &[Node], name: &str) -> egui::Rect {
+    nodes
+        .iter()
+        .find(|node| node.role == Role::Button && node.label == name)
+        .and_then(|node| node.bounds)
+        .unwrap_or_else(|| panic!("no control named {name}"))
 }
 
 /// Returns the bounds of the line whose accessible label starts with `prefix` in `nodes`, or panics.
@@ -121,7 +130,8 @@ fn the_change_lines_show_their_counts_while_playing_and_keep_them_when_paused() 
             );
         }
 
-        // The count takes no room of its own, so the order note under line 3 stays below the line's rows.
+        // The count takes no room of its own, so the order note under line 3 stays below the line's sentence, inside
+        // the line's row.
         let nodes = harness.settle();
         let line_3 = line_bounds(&nodes, "Line 3: ");
         // The column of counts is kept before the first count, so the line does not move when the counts appear.
@@ -131,10 +141,22 @@ fn the_change_lines_show_their_counts_while_playing_and_keep_them_when_paused() 
             .find(|node| node.value.starts_with("Lines 2 and 3 change different cells"))
             .and_then(|node| node.bounds)
             .expect("the order note");
-        assert!(line_3.height() > 30.0, "{name}: line 3 wraps, {line_3:?}");
+        // The last control of line 3: Game of Life's "+" after its list, SIR's optional "for each".
+        let last_name = if name == "game_of_life.toml" {
+            add_value_name("Line 3")
+        } else {
+            for_each_optional_name("Line 3")
+        };
+        let last = control_bounds(&nodes, &last_name);
         assert!(
-            note.top() >= line_3.bottom(),
-            "{name}: the note at {note:?} overlaps line 3 at {line_3:?}"
+            last.top() > line_3.top() + 30.0,
+            "{name}: line 3 wraps, {last:?} in {line_3:?}"
+        );
+        assert!(
+            line_3.contains_rect(note)
+                && note.top() >= last.bottom()
+                && note.top() >= shown[1].bounds.expect("a count").bottom(),
+            "{name}: the note at {note:?} overlaps the sentence of line 3 at {line_3:?}"
         );
 
         // Pause, then let any snapshot in flight land.
@@ -221,7 +243,13 @@ fn an_edit_hides_the_counts_and_a_blank_keeps_the_column() {
     harness.app.sim_running = true;
     wait_for_counts(&mut harness);
     assert_eq!(count_labels(&mut harness).len(), 2);
-    let counting = line_bounds(&harness.settle(), "Line 3: ").size();
+    // The sentence of line 3 keeps its rows while the last control stays where it was in the line.
+    let sentence = |nodes: &[Node]| {
+        let line = line_bounds(nodes, "Line 3: ");
+        let last = control_bounds(nodes, &add_value_name("Line 3"));
+        (line.width(), last.translate(-line.min.to_vec2()))
+    };
+    let counting = sentence(&harness.settle());
 
     let four = Slot::Filled(SheetValue::Literal(SheetLiteral::Number(4.0)));
     set_slot(&mut harness, "l2", "condition.right", four);
@@ -229,7 +257,7 @@ fn an_edit_hides_the_counts_and_a_blank_keeps_the_column() {
         count_labels(&mut harness).is_empty(),
         "the run is the sheet before the edit"
     );
-    assert_eq!(line_bounds(&harness.settle(), "Line 3: ").size(), counting);
+    assert_eq!(sentence(&harness.settle()), counting);
 
     set_slot(&mut harness, "l2", "condition.right", Slot::Blank);
     let EditorModel::Sheet(sheet) = &harness.app.editor.model else {
@@ -239,9 +267,9 @@ fn an_edit_hides_the_counts_and_a_blank_keeps_the_column() {
     assert_eq!(file.fire_lines().lines(), ["l3"]);
     assert!(count_labels(&mut harness).is_empty());
     assert_eq!(
-        line_bounds(&harness.settle(), "Line 3: ").size(),
+        sentence(&harness.settle()),
         counting,
-        "line 3 keeps its size while line 2 is blank"
+        "line 3 keeps its sentence's rows while line 2 is blank"
     );
     harness.app.offload_simulation();
 }

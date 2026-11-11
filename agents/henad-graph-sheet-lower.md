@@ -1,8 +1,9 @@
 # henad-graph: the sheet lowering
 
 `agents/henad-graph-sheet.md` holds the rest of the sheet module: the document, reader, writer,
-wording table, relations, checker and `SheetFile`. `sheet/lower/` is private, and `sheet` re-exports
-`LineMap`, `NodeOrigin` and `NodeOwner` from `lower/table.rs`. `Lowered` holds the document, the
+relations, checker and `SheetFile`, and `agents/henad-graph-sheet-wording.md` the wording table.
+`sheet/lower/` is private, and `sheet` re-exports `LineMap`, `NodeOrigin` and `NodeOwner` from
+`lower/table.rs`. `Lowered` holds the document, the
 `LineMap` and the `FaultNames` of the looks at agents.
 
 The `Builder` (`lower/mod.rs`) lowers over one kind of thing, `check::Thing`: the cells, or the one

@@ -13,18 +13,20 @@ use std::collections::BTreeMap;
 use egui::accesskit::Role;
 use egui::epaint::CubicBezierShape;
 use egui::{Align2, Color32, CornerRadius, FontId, Galley, Painter, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui};
-use egui::{Button, ScrollArea, pos2, vec2};
+use egui::{Button, ScrollArea, TextStyle, pos2, vec2};
 use henad_graph::sheet::ConvertRefusal;
 use henad_graph::sheet::check::SheetReport;
 use henad_graph::sheet::document::{LineKind, SheetDocument};
 use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
-    ChipKind, DIAGRAM_NOTE, EDIT_AS_NODE_GRAPH, SentenceChip, SentencePart, Sentences, diagram_name, inside_line_frame,
-    line_count,
+    AddButton, ChipKind, DIAGRAM_NOTE, EDIT_AS_NODE_GRAPH, SentenceChip, SentencePart, Sentences, diagram_name,
+    inside_line_frame, line_count,
 };
 
 use super::accessible_group;
-use super::card_pane::card_lines;
+use super::card_pane::{card_lines, kind_hue};
+use super::widgets::caption;
+use crate::init::semibold_font;
 use crate::ui::mcs;
 use crate::ui::sweep::layout::add_button;
 
@@ -55,6 +57,9 @@ const PIN_RADIUS: f32 = 4.0;
 /// Size in points of the text of a box.
 const TEXT_SIZE: f32 = 12.0;
 
+/// Width in points of the bar at the left edge of a box, in the hue of its line's kind.
+const KIND_BAR_WIDTH: f32 = 3.0;
+
 /// One box of the Diagram: a line of a card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagramBox {
@@ -75,6 +80,8 @@ pub struct DiagramBox {
     pub parent: Option<String>,
     /// Whether the line is a When.
     pub when: bool,
+    /// Group of the line's kind, whose hue the box's bar takes as the card's row does.
+    pub group: AddButton,
 }
 
 /// Returns the boxes of card `card_index` of `document`, one per line in display order.
@@ -117,6 +124,7 @@ pub fn diagram_boxes(
                 reads,
                 parent: relations.parent(&line.id).map(str::to_owned),
                 when: line_relation.is_some_and(|relation| relation.kind == LineKind::When),
+                group: line_relation.map_or(AddButton::Change, |relation| AddButton::for_kind(relation.kind)),
                 id: line.id,
             }
         })
@@ -225,8 +233,13 @@ pub fn diagram_ui(
         ui.add_space(12.0);
         let boxes = diagram_boxes(document, &sentences, report, index);
         ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new(sentences.card_heading(card)).strong());
-            ui.weak(line_count(boxes.len()));
+            let font = semibold_font(ui.ctx(), TextStyle::Body.resolve(ui.style()).size);
+            ui.label(
+                egui::RichText::new(sentences.card_heading(card))
+                    .font(font)
+                    .color(mcs::GRAY_100),
+            );
+            caption(ui, &line_count(boxes.len()));
         });
         if boxes.is_empty() {
             continue;
@@ -242,7 +255,7 @@ pub fn diagram_ui(
 fn card_diagram(ui: &mut Ui, boxes: &[DiagramBox]) {
     let columns = columns(boxes);
     let font = FontId::proportional(TEXT_SIZE);
-    let text_width = BOX_WIDTH - PADDING * 2.0;
+    let text_width = BOX_WIDTH - PADDING * 2.0 - KIND_BAR_WIDTH;
     let galleys: Vec<std::sync::Arc<Galley>> = boxes
         .iter()
         .map(|line| {
@@ -395,12 +408,14 @@ fn paint_box(painter: &Painter, line: &DiagramBox, placed: &PlacedBox, font: &Fo
     let header = Rect::from_min_size(rect.min, vec2(rect.width(), ROW_HEIGHT));
     painter.rect_filled(header.shrink(1.0), CornerRadius::ZERO, mcs::GRAY_800);
     painter.text(
-        header.left_center() + vec2(PADDING, 0.0),
+        header.left_center() + vec2(PADDING + KIND_BAR_WIDTH, 0.0),
         Align2::LEFT_CENTER,
         &line.prefix,
         FontId::proportional(TEXT_SIZE),
         mcs::GRAY_100,
     );
+    let bar = Rect::from_min_size(rect.min, vec2(KIND_BAR_WIDTH, rect.height()));
+    painter.rect_filled(bar, CornerRadius::ZERO, kind_hue(line.group));
     let mut top = rect.top() + ROW_HEIGHT;
     if let Some(result) = &line.result {
         let pin = placed.output_pin();
@@ -415,7 +430,7 @@ fn paint_box(painter: &Painter, line: &DiagramBox, placed: &PlacedBox, font: &Fo
         top += ROW_HEIGHT;
     }
     painter.galley(
-        pos2(rect.left() + PADDING, top + PADDING / 2.0),
+        pos2(rect.left() + PADDING + KIND_BAR_WIDTH, top + PADDING / 2.0),
         placed.sentence.clone(),
         mcs::GRAY_200,
     );
@@ -466,6 +481,8 @@ fn paint_arrow(painter: &Painter, start: Pos2, end: Pos2, color: Color32) {
 
 #[cfg(test)]
 mod tests {
+    use henad_graph::sheet::sentence::AddButton;
+
     use super::{DiagramBox, columns};
 
     fn line(id: &str, reads: &[&str], parent: Option<&str>) -> DiagramBox {
@@ -481,6 +498,7 @@ mod tests {
                 .collect(),
             parent: parent.map(str::to_owned),
             when: false,
+            group: AddButton::Change,
         }
     }
 

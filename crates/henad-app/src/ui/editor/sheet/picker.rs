@@ -10,7 +10,7 @@
 //! A *result above* a line is the result of a line higher on its card. A result worked out inside a When is open only
 //! to the lines after it inside that When.
 
-use egui::{Button, Id, Key, Popup, PopupCloseBehavior, Response, RichText, ScrollArea, TextEdit, Ui};
+use egui::{Color32, Frame, Id, Key, Popup, PopupCloseBehavior, Response, RichText, ScrollArea, TextEdit, Ui};
 use henad_core::metadata::TimeUnit;
 use henad_graph::sheet::check::changes_property;
 use henad_graph::sheet::document::{
@@ -39,7 +39,9 @@ use henad_graph::sheet::sentence::{
 };
 
 use super::accessible_group;
-use super::widgets::{NumberUse, message_ui, set_name};
+use super::widgets::{
+    NumberUse, OverlayItem, color32, message_ui, overlay, overlay_group, overlay_item, overlay_title, set_name,
+};
 
 /// Width in points of a picker.
 const PICKER_WIDTH: f32 = 300.0;
@@ -93,8 +95,10 @@ pub struct PickerItem {
     pub label: String,
     /// Accessible name of the item when it differs from its words, `None` otherwise.
     pub name: Option<String>,
-    /// Grey words under the item, out of its name.
+    /// Grey words under the item, its accessible description.
     pub detail: Option<String>,
+    /// Colour of a state's swatch before the words, `None` for an item that is no state.
+    pub swatch: Option<Color32>,
     /// Value choosing the item puts in the place.
     pub choice: Choice,
 }
@@ -138,6 +142,9 @@ pub struct CardPicker {
     pub remove: Option<&'static str>,
     /// Text the picker shows when it offers nothing.
     pub empty: &'static str,
+    /// Words of the item that names the value the place holds, `None` while it holds none. That item takes the tinted
+    /// fill and a check.
+    pub current: Option<String>,
 }
 
 impl CardPicker {
@@ -152,6 +159,7 @@ impl CardPicker {
             list_box: false,
             remove: None,
             empty,
+            current: None,
         }
     }
 
@@ -170,17 +178,20 @@ impl CardPicker {
             .open_memory(None)
             .close_behavior(PopupCloseBehavior::IgnoreClicks)
             .width(PICKER_WIDTH)
+            .frame(Frame::NONE)
             .show(|ui| {
-                // A long picker scrolls. A short one takes its own height. A scroll area lags a frame behind it.
-                let choice = if self.groups.iter().map(|group| group.items.len()).sum::<usize>() > LONG_PICKER {
-                    ScrollArea::vertical()
-                        .max_height(PICKER_HEIGHT)
-                        .show(ui, |ui| self.contents(ui, popup_id))
-                        .inner
-                } else {
-                    self.contents(ui, popup_id)
-                };
-                (choice, ui.unique_id())
+                overlay(ui, |ui| {
+                    // A long picker scrolls. A short one takes its own height. A scroll area lags a frame behind it.
+                    let choice = if self.groups.iter().map(|group| group.items.len()).sum::<usize>() > LONG_PICKER {
+                        ScrollArea::vertical()
+                            .max_height(PICKER_HEIGHT)
+                            .show(ui, |ui| self.contents(ui, popup_id))
+                            .inner
+                    } else {
+                        self.contents(ui, popup_id)
+                    };
+                    (choice, ui.unique_id())
+                })
             });
         let Some(popup) = popup else {
             *open = false;
@@ -221,9 +232,10 @@ impl CardPicker {
     /// Draws what the picker offers, and returns the choice made.
     fn contents(&self, ui: &mut Ui, popup_id: Id) -> Option<Choice> {
         let mut choice = None;
-        ui.strong(&self.title);
+        overlay_title(ui, &self.title);
         if let Some(lead) = &self.lead {
             ui.add(egui::Label::new(RichText::new(lead).weak()).wrap());
+            ui.add_space(4.0);
         }
         let mut offered = false;
         if let Some(number_box) = self.number_box.as_ref().filter(|number_box| number_box.first) {
@@ -243,27 +255,31 @@ impl CardPicker {
                 continue;
             }
             offered = true;
-            ui.add_space(4.0);
-            ui.label(RichText::new(&group.heading).weak().small());
+            overlay_group(ui, &group.heading);
             for item in &group.items {
-                let button = ui.add(Button::new(&item.label).frame(false));
-                if let Some(name) = &item.name {
-                    set_name(ui, button.id, name);
-                }
-                if button.clicked() {
+                let row = OverlayItem {
+                    label: &item.label,
+                    name: item.name.as_deref(),
+                    detail: item.detail.as_deref(),
+                    described: true,
+                    current: self.current.as_deref() == Some(item.label.as_str()),
+                    swatch: item.swatch,
+                };
+                if overlay_item(ui, &row).clicked() {
                     choice = Some(item.choice.clone());
-                }
-                if let Some(detail) = &item.detail {
-                    ui.horizontal(|ui| {
-                        ui.add_space(8.0);
-                        ui.add(egui::Label::new(RichText::new(detail).weak().small()).wrap());
-                    });
                 }
             }
         }
+        if self.new_parameter || self.number_box.as_ref().is_some_and(|number_box| !number_box.first) {
+            ui.add_space(4.0);
+        }
         if self.new_parameter {
             offered = true;
-            if ui.add(Button::new(NEW_PARAMETER).frame(false)).clicked() {
+            let row = OverlayItem {
+                label: NEW_PARAMETER,
+                ..OverlayItem::default()
+            };
+            if overlay_item(ui, &row).clicked() {
                 choice = Some(Choice::NewParameter);
             }
         }
@@ -277,7 +293,11 @@ impl CardPicker {
         if let Some(remove) = self.remove {
             offered = true;
             ui.add_space(4.0);
-            if ui.add(Button::new(remove).frame(false)).clicked() {
+            let row = OverlayItem {
+                label: remove,
+                ..OverlayItem::default()
+            };
+            if overlay_item(ui, &row).clicked() {
                 choice = Some(Choice::Remove);
             }
         }
@@ -352,7 +372,7 @@ fn number_box_ui(ui: &mut Ui, popup_id: Id, number_box: &NumberBox) -> Option<Sh
 /// Draws the list box of the picker `popup_id`, and returns the numbers typed once Enter or Use is pressed on text
 /// that reads as one or more numbers.
 fn list_box_ui(ui: &mut Ui, popup_id: Id) -> Option<Vec<SheetLiteral>> {
-    ui.label(RichText::new(LIST_GROUP).weak().small());
+    overlay_group(ui, LIST_GROUP);
     ui.weak(LIST_HINT);
     let id = popup_id.with(LIST_BOX_ID);
     let mut draft: BoxDraft = ui.data(|data| data.get_temp(id)).unwrap_or_default();
@@ -511,6 +531,7 @@ impl LineContext<'_> {
                     },
                     name: None,
                     detail: Some(result_description(number, &self.sentences.result_words(line))),
+                    swatch: None,
                     choice: Choice::Value(SheetValue::Chip(SheetChip::Result {
                         line: id.to_owned(),
                         part: None,
@@ -560,6 +581,7 @@ impl LineContext<'_> {
                     label: self.sentences.value(&value, None),
                     name: None,
                     detail: Some(detail.clone()),
+                    swatch: None,
                     choice: Choice::Value(value),
                 }
             }));
@@ -627,6 +649,7 @@ impl LineContext<'_> {
                 } else {
                     this_cells_property(&property.name)
                 }),
+                swatch: None,
                 choice: Choice::Value(SheetValue::Chip(SheetChip::My(property.id.clone()))),
             });
             if agents && let Some(last) = self.last_change_above(property) {
@@ -634,6 +657,7 @@ impl LineContext<'_> {
                     label: my_new_property_item(&property.name),
                     name: None,
                     detail: Some(my_new_detail(&thing, &property.name, last)),
+                    swatch: None,
                     choice: Choice::Value(SheetValue::Chip(SheetChip::MyNew(property.id.clone()))),
                 });
             }
@@ -668,6 +692,7 @@ impl LineContext<'_> {
                     label: length_of_item(&property.name),
                     name: None,
                     detail: Some(this_things_property(&thing, &property.name)),
+                    swatch: None,
                     choice: Choice::Value(SheetValue::Phrase(Box::new(formula))),
                 }
             })
@@ -684,6 +709,7 @@ impl LineContext<'_> {
                 label: their_property_item(&property.name),
                 name: None,
                 detail: None,
+                swatch: None,
                 choice: Choice::Value(SheetValue::Chip(SheetChip::Their(property.id.clone()))),
             })
             .collect();
@@ -698,6 +724,7 @@ impl LineContext<'_> {
                 label: relation_words(relation).to_owned(),
                 name: None,
                 detail: None,
+                swatch: None,
                 choice: Choice::Value(SheetValue::Chip(SheetChip::Relation(relation))),
             }),
         );
@@ -731,6 +758,7 @@ impl LineContext<'_> {
                         Some(unit) => format!("{value} {unit}"),
                         None => value,
                     }),
+                    swatch: None,
                     choice: Choice::Value(SheetValue::Chip(SheetChip::Param(parameter.id.clone()))),
                 }
             })
@@ -758,6 +786,7 @@ impl LineContext<'_> {
                         label: shared_state_name(&owner.name, &state.name, shared),
                         name: None,
                         detail: None,
+                        swatch: Some(color32(state.color)),
                         choice: Choice::State {
                             property: owner.id.clone(),
                             state: state.id.clone(),
@@ -840,6 +869,7 @@ pub fn picker_for(
                 label: ANY_STATE.to_owned(),
                 name: None,
                 detail: None,
+                swatch: None,
                 choice: Choice::AnyState,
             }];
             items.extend(context.states(property));
@@ -940,6 +970,7 @@ fn ground_number_items(context: &LineContext<'_>) -> Vec<PickerItem> {
             label: property.name.clone(),
             name: None,
             detail: None,
+            swatch: None,
             choice: Choice::Property(property.id.clone()),
         })
         .collect()
@@ -955,6 +986,7 @@ fn event_items(context: &LineContext<'_>) -> Vec<PickerItem> {
             label: event.name.clone(),
             name: None,
             detail: None,
+            swatch: None,
             choice: Choice::Event(event.id.clone()),
         })
         .collect()
@@ -1023,6 +1055,7 @@ fn new_values(arrow: bool) -> Vec<PickerItem> {
         label: AddItem::RandomNumber.pattern(None),
         name: None,
         detail: None,
+        swatch: None,
         choice: Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomNumber)))),
     }];
     if arrow {
@@ -1030,6 +1063,7 @@ fn new_values(arrow: bool) -> Vec<PickerItem> {
             label: AddItem::RandomDirection.pattern(None),
             name: None,
             detail: None,
+            swatch: None,
             choice: Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomDirection)))),
         });
     }
@@ -1046,6 +1080,7 @@ fn property_items(context: &LineContext<'_>, keep: impl Fn(&SheetProperty) -> bo
             label: property.name.clone(),
             name: None,
             detail: None,
+            swatch: None,
             choice: Choice::Property(property.id.clone()),
         })
         .collect()
@@ -1083,12 +1118,14 @@ pub fn choose_when(context: &LineContext<'_>, otherwise: &[usize]) -> CardPicker
                 label: OTHERWISE.to_owned(),
                 name: Some(otherwise_item_name(otherwise)),
                 detail: Some(otherwise_description(otherwise)),
+                swatch: None,
                 choice: Choice::Condition(item),
             },
             _ => PickerItem {
                 label: item.label(on_when),
                 name: None,
                 detail: item.description().map(str::to_owned),
+                swatch: None,
                 choice: Choice::Condition(item),
             },
         })
@@ -1217,6 +1254,7 @@ pub fn summary_picker() -> CardPicker {
                 label: summary_item(kind),
                 name: None,
                 detail: None,
+                swatch: None,
                 choice: Choice::Summary(kind),
             })
             .collect(),

@@ -6,8 +6,9 @@
 //! offer says what is missing. A typed number takes a trailing "%" as a percent ("30%" is 0.3).
 
 use egui::{
-    Button, Color32, CornerRadius, Id, Key, Modal, Popup, PopupCloseBehavior, Pos2, Rect, Response, RichText, Sense,
-    Shape, Stroke, TextEdit, TextStyle, Ui, Vec2, WidgetInfo, WidgetType, vec2,
+    Button, Color32, CornerRadius, FontId, Frame, Id, Key, Margin, Modal, Popup, PopupCloseBehavior, Pos2, Rect,
+    Response, RichText, Sense, Shape, Stroke, StrokeKind, TextEdit, TextStyle, Ui, Vec2, WidgetInfo, WidgetType, pos2,
+    vec2,
 };
 use henad_graph::sheet::document::{ParameterType, SheetLiteral};
 use henad_graph::sheet::edit::{IdSpace, PALETTE_COLORS, SheetEditError, is_reserved_name};
@@ -23,12 +24,567 @@ use henad_graph::sheet::sentence::{
 use henad_graph::value::Color;
 
 use super::accessible_group;
-use crate::icons::material_design_icons::MDI_TUNE_VERTICAL;
+use crate::icons::material_design_icons::{
+    MDI_CHECK, MDI_CHEVRON_DOWN, MDI_DOTS_HORIZONTAL, MDI_INFORMATION, MDI_TUNE_VERTICAL,
+};
 use crate::ui::mcs;
 use crate::ui::sweep::layout::filled_button;
 
-/// Padding in points inside a chip, a blank or a select.
-pub const CHIP_PADDING: Vec2 = vec2(4.0, 1.0);
+/// Padding in points at each side of the words of a chip, a blank or a select.
+pub const CHIP_PADDING: f32 = 5.0;
+
+/// Height in points of a chip, a blank or a select.
+pub const CHIP_HEIGHT: f32 = 20.0;
+
+/// Gap in points between a chip's glyph, swatch or lead word and its name.
+const CHIP_GAP: f32 = 4.0;
+
+/// Side in points of the swatch of a state chip.
+const CHIP_SWATCH: f32 = 9.0;
+
+/// Width in points of the keyboard focus outline.
+const FOCUS_WIDTH: f32 = 1.5;
+
+/// Padding in points inside an overlay, and at the sides of its items.
+const OVERLAY_PADDING: f32 = 6.0;
+
+/// Height in points of an item of an overlay with no grey words under it.
+const OVERLAY_ROW: f32 = 22.0;
+
+/// Width in points of the column at the left of an overlay's items that holds the check of the current value.
+const MARK_COLUMN: f32 = 16.0;
+
+/// Size in points of the small mono labels of the editor: group labels, line numbers and counts.
+pub const SMALL_LABEL: f32 = 11.0;
+
+/// Size in points of the grey words under an item of an overlay.
+const OVERLAY_DETAIL: f32 = 11.5;
+
+/// Side in points of the square of a kind's hue on an add button.
+const ADD_SQUARE: f32 = 6.0;
+
+/// Side in points of the chevron box after a condition word.
+const ARROW_SIDE: f32 = 14.0;
+
+/// Width in points of the place of the chevron box after a condition word, its box with a gap at each side.
+pub const ARROW_WIDTH: f32 = ARROW_SIDE + 4.0;
+
+// Custom components
+//
+// Each control the sheet editor paints itself is drawn by one function here, and no call site passes a colour. The
+// colours follow the palette in `agents/ui.md`: a tinted fill is a hue's 900 with its 200 for text, a line or an
+// outline in a hue is its 500, a neutral chip is gray 800 with gray 100 text, a neutral outline gray 700, an empty slot
+// gray 500 dashes around a gray 400 word, a hairline gray 800, and an overlay the window fill inside gray 600.
+
+/// Paints the keyboard focus outline of a control whose border is `rect`: 1.5 points of blue 500 outside the border.
+pub fn focus_ring(ui: &Ui, rect: Rect) {
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::ZERO,
+        Stroke::new(FOCUS_WIDTH, mcs::BLUE_500),
+        StrokeKind::Outside,
+    );
+}
+
+/// Returns `text` as a small mono label in gray 400, for metadata such as a line number or a fire count.
+pub fn small_label(text: impl Into<String>) -> RichText {
+    RichText::new(text)
+        .font(FontId::monospace(SMALL_LABEL))
+        .color(mcs::GRAY_400)
+}
+
+/// Adds `text` as a small upper-case mono label in gray 400, for a title or a count, and returns its response. The
+/// label keeps `text` as written for its accessible value, as a label of `text` would hold.
+pub fn caption(ui: &mut Ui, text: &str) -> Response {
+    let label = ui.add(egui::Label::new(small_label(text.to_uppercase())).selectable(false));
+    ui.ctx().accesskit_node_builder(label.id, |node| node.set_value(text));
+    label
+}
+
+/// Draws `add` inside the frame of an overlay, a menu or a picker: the theme's window fill inside a 1 point gray 600
+/// border, with no shadow, and returns what `add` returns.
+///
+/// egui fades an area in over its first frames. The overlay sets the opacity back to whole, so the text under it never
+/// shows through. The overlay's popup takes [`Frame::NONE`].
+pub fn overlay<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.set_opacity(1.0);
+    Frame::NONE
+        .fill(ui.visuals().window_fill)
+        .stroke(Stroke::new(1.0, mcs::GRAY_600))
+        .inner_margin(Margin::same(OVERLAY_PADDING as i8))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui)
+        })
+        .inner
+}
+
+/// Draws the title of an overlay as a small upper-case mono label, with a hairline under it across the overlay.
+pub fn overlay_title(ui: &mut Ui, title: &str) {
+    ui.add_space(2.0);
+    caption(ui, title);
+    ui.add_space(4.0);
+    overlay_rule(ui);
+}
+
+/// Draws the label of a group of an overlay's items as a small upper-case mono label, with a hairline above it across
+/// the overlay.
+pub fn overlay_group(ui: &mut Ui, label: &str) {
+    ui.add_space(4.0);
+    overlay_rule(ui);
+    ui.add_space(4.0);
+    caption(ui, label);
+    ui.add_space(2.0);
+}
+
+/// Draws a hairline across an overlay, through its padding at both sides.
+fn overlay_rule(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width().min(1.0), 1.0), Sense::hover());
+    let across = ui.max_rect().union(rect).x_range().expand(OVERLAY_PADDING);
+    ui.painter()
+        .hline(across, rect.center().y, Stroke::new(1.0, mcs::GRAY_800));
+}
+
+/// One item of an overlay.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OverlayItem<'a> {
+    /// Words of the item. They name it too, unless `name` gives a name of its own.
+    pub label: &'a str,
+    /// Accessible name of the item when it differs from its words, `None` otherwise.
+    pub name: Option<&'a str>,
+    /// Grey words under the item, `None` for none.
+    pub detail: Option<&'a str>,
+    /// Whether the grey words are the item's accessible description. Otherwise they stay out of the tree.
+    pub described: bool,
+    /// Whether the item is the current value of what the overlay sets. It then takes the tinted fill and a check.
+    pub current: bool,
+    /// Colour of a state's swatch before the words, `None` for an item that is no state.
+    pub swatch: Option<Color32>,
+}
+
+/// Adds `item` as a full-width row of an overlay and returns its response.
+///
+/// The row takes the gray 800 fill and the theme's hover text under the pointer and under keyboard focus, and the focus
+/// outline inside its edge while it holds the focus. A current value fills blue 900 with its words in blue 200 after a check.
+/// Inside a disabled `Ui` the words are weak and the row takes no hover and no click.
+pub fn overlay_item(ui: &mut Ui, item: &OverlayItem<'_>) -> Response {
+    let enabled = ui.is_enabled();
+    let body = TextStyle::Body.resolve(ui.style());
+    let swatch_width = item.swatch.map_or(0.0, |_| CHIP_SWATCH + CHIP_GAP);
+    let indent = MARK_COLUMN + swatch_width;
+    let label = ui
+        .painter()
+        .layout_no_wrap(item.label.to_owned(), body, Color32::PLACEHOLDER);
+    let label_size = label.size();
+    let wrap = (ui.available_width() - indent).max(160.0);
+    let weak = ui.visuals().weak_text_color();
+    let detail = item.detail.map(|detail| {
+        ui.painter()
+            .layout(detail.to_owned(), FontId::proportional(OVERLAY_DETAIL), weak, wrap)
+    });
+    let detail_size = detail.as_ref().map_or(Vec2::ZERO, |galley| galley.size());
+    let content = label_size.y + detail_size.y;
+    let height = (content + 6.0).max(OVERLAY_ROW);
+    let (id, rect) = ui.allocate_space(vec2(indent + label_size.x.max(detail_size.x), height));
+    // The row runs across the overlay, through the overlay's padding at both sides.
+    let row = Rect::from_x_y_ranges(
+        ui.max_rect().union(rect).x_range().expand(OVERLAY_PADDING),
+        rect.y_range(),
+    );
+    let response = ui.interact(row, id, Sense::click());
+    let name = item.name.unwrap_or(item.label);
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, name));
+    if let Some(detail) = item.detail.filter(|_| item.described) {
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_description(detail));
+    }
+    if ui.is_rect_visible(row) {
+        let active = enabled && (response.hovered() || response.has_focus());
+        let visuals = ui.visuals();
+        let (fill, text_color) = if !enabled {
+            (None, visuals.weak_text_color())
+        } else if item.current {
+            (Some(mcs::BLUE_900), mcs::BLUE_200)
+        } else if active {
+            (Some(mcs::GRAY_800), visuals.widgets.hovered.text_color())
+        } else {
+            (None, visuals.widgets.inactive.text_color())
+        };
+        let painter = ui.painter();
+        if let Some(fill) = fill {
+            painter.rect_filled(row, CornerRadius::ZERO, fill);
+        }
+        if response.has_focus() {
+            painter.rect_stroke(
+                row,
+                CornerRadius::ZERO,
+                Stroke::new(FOCUS_WIDTH, mcs::BLUE_500),
+                StrokeKind::Inside,
+            );
+        }
+        let top = row.top() + (height - content) / 2.0;
+        let line_center = top + label_size.y / 2.0;
+        if item.current {
+            painter.text(
+                pos2(row.left() + OVERLAY_PADDING, line_center),
+                egui::Align2::LEFT_CENTER,
+                MDI_CHECK,
+                FontId::proportional(SMALL_LABEL),
+                mcs::BLUE_200,
+            );
+        }
+        let mut x = rect.left() + MARK_COLUMN;
+        if let Some(color) = item.swatch {
+            swatch(painter, pos2(x + CHIP_SWATCH / 2.0, line_center), color);
+            x += swatch_width;
+        }
+        painter.galley(pos2(x, top), label, text_color);
+        if let Some(detail) = detail {
+            painter.galley(pos2(x, top + label_size.y), detail, weak);
+        }
+    }
+    response
+}
+
+/// Paints a state's swatch of the colour `color` centred on `center`: a small square inside a gray 700 outline.
+fn swatch(painter: &egui::Painter, center: Pos2, color: Color32) {
+    let square = Rect::from_center_size(center, Vec2::splat(CHIP_SWATCH));
+    painter.rect_filled(square, CornerRadius::ZERO, color);
+    painter.rect_stroke(
+        square,
+        CornerRadius::ZERO,
+        Stroke::new(1.0, mcs::GRAY_700),
+        StrokeKind::Inside,
+    );
+}
+
+/// Returns whether the popup of the control `id` is open.
+fn picker_open(ui: &Ui, id: Option<Id>) -> bool {
+    id.is_some_and(|id| Popup::is_id_open(ui.ctx(), id.with("picker")))
+}
+
+/// Adds a text control showing `text` in the weak text colour, named `name`, under the widget id `id` when one is
+/// given, and returns its response: "always", "for each" and the "+" after a list.
+///
+/// Its hit area is as high as the row of the sentence `row`. A gray 700 outline shows under the pointer and while
+/// its picker is open, and keyboard focus draws the focus outline. It is laid out as one unbroken piece, so a row that
+/// has no room for it moves it to the next row whole.
+pub fn text_control(ui: &mut Ui, id: Option<Id>, text: &str, name: &str, row: f32) -> Response {
+    let font = TextStyle::Body.resolve(ui.style());
+    let color = ui.visuals().weak_text_color();
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
+    let width = galley.size().x + 6.0;
+    let (rect, response) = allocate_control(ui, id, vec2(width, row));
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
+    if ui.is_rect_visible(rect) {
+        let boxed = Rect::from_center_size(rect.center(), vec2(width, CHIP_HEIGHT));
+        let painter = ui.painter();
+        if response.hovered() || picker_open(ui, id) {
+            painter.rect_stroke(
+                boxed,
+                CornerRadius::ZERO,
+                Stroke::new(1.0, mcs::GRAY_700),
+                StrokeKind::Inside,
+            );
+        }
+        painter.galley(
+            Pos2::new(boxed.left() + 3.0, boxed.center().y - galley.size().y / 2.0),
+            galley,
+            color,
+        );
+        if response.has_focus() {
+            focus_ring(ui, boxed);
+        }
+    }
+    response
+}
+
+/// Adds an inline select showing `words` and a chevron, named `name`, under the widget id `id` when one is given, and
+/// returns its response.
+///
+/// A filled select has a gray 700 outline, gray 400 under the pointer and blue 500 while its options are open. An
+/// `empty` select is dashed gray 500 around its words in gray 400, as a blank is.
+pub fn select_control(ui: &mut Ui, id: Option<Id>, words: &str, name: &str, empty: bool) -> Response {
+    let font = TextStyle::Body.resolve(ui.style());
+    let color = if empty { mcs::GRAY_400 } else { mcs::GRAY_100 };
+    let weak = ui.visuals().weak_text_color();
+    let painter = ui.painter();
+    let text = painter.layout_no_wrap(words.to_owned(), font, color);
+    let chevron = painter.layout_no_wrap(MDI_CHEVRON_DOWN.to_owned(), FontId::proportional(SMALL_LABEL), weak);
+    let width = CHIP_PADDING + text.size().x + CHIP_GAP + chevron.size().x + 3.0;
+    let (rect, response) = allocate_control(ui, id, vec2(width, CHIP_HEIGHT));
+    response.widget_info(|| WidgetInfo {
+        current_text_value: (!words.is_empty()).then(|| words.to_owned()),
+        ..WidgetInfo::labeled(
+            if words.is_empty() {
+                WidgetType::Button
+            } else {
+                WidgetType::ComboBox
+            },
+            true,
+            name,
+        )
+    });
+    if ui.is_rect_visible(rect) {
+        let open = picker_open(ui, id);
+        let outline = if open {
+            Some(mcs::BLUE_500)
+        } else if response.hovered() {
+            Some(mcs::GRAY_400)
+        } else {
+            (!empty).then_some(mcs::GRAY_700)
+        };
+        let painter = ui.painter();
+        match outline {
+            Some(outline) => {
+                painter.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, outline), StrokeKind::Inside);
+            }
+            None => painter.extend(dashed_rect(rect, Stroke::new(1.0, mcs::GRAY_500))),
+        }
+        let left = Pos2::new(rect.left() + CHIP_PADDING, rect.center().y - text.size().y / 2.0);
+        let chevron_left = left.x + text.size().x + CHIP_GAP;
+        painter.galley(left, text, color);
+        painter.galley(
+            Pos2::new(chevron_left, rect.center().y - chevron.size().y / 2.0),
+            chevron,
+            weak,
+        );
+        if response.has_focus() {
+            focus_ring(ui, rect);
+        }
+    }
+    response
+}
+
+/// Adds the chevron box after a condition word, named `name` under the widget id `id`, and returns its response.
+///
+/// The box is 14 points square, close after the word. Its hit area is as high as the row of the sentence `row`. The
+/// outline is gray 700, gray 400 under the pointer and blue 500 while "Choose when" is open.
+pub fn arrow_control(ui: &mut Ui, id: Id, name: &str, row: f32) -> Response {
+    let (rect, response) = allocate_control(ui, Some(id), vec2(ARROW_WIDTH, row));
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
+    if ui.is_rect_visible(rect) {
+        let boxed = Rect::from_center_size(
+            pos2(rect.left() + 3.0 + ARROW_SIDE / 2.0, rect.center().y),
+            Vec2::splat(ARROW_SIDE),
+        );
+        let outline = if picker_open(ui, Some(id)) {
+            mcs::BLUE_500
+        } else if response.hovered() {
+            mcs::GRAY_400
+        } else {
+            mcs::GRAY_700
+        };
+        let painter = ui.painter();
+        painter.rect_stroke(boxed, CornerRadius::ZERO, Stroke::new(1.0, outline), StrokeKind::Inside);
+        painter.text(
+            boxed.center(),
+            egui::Align2::CENTER_CENTER,
+            MDI_CHEVRON_DOWN,
+            FontId::proportional(SMALL_LABEL),
+            ui.visuals().text_color(),
+        );
+        if response.has_focus() {
+            focus_ring(ui, boxed);
+        }
+    }
+    response
+}
+
+/// Adds the menu button of a line, a dots glyph in the weak text colour, as large as `rect`, named `name` under the
+/// widget id `id`, and returns its response. The menu is the popup `popup_id`.
+///
+/// The button takes the theme's hover fill under the pointer and the tinted fill while its menu is open.
+pub fn menu_button(ui: &Ui, id: Id, popup_id: Id, name: &str, rect: Rect) -> Response {
+    let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
+    if ui.is_rect_visible(rect) {
+        let open = Popup::is_id_open(ui.ctx(), popup_id);
+        let painter = ui.painter();
+        let (fill, color) = if open {
+            (Some(mcs::BLUE_900), mcs::BLUE_200)
+        } else if response.hovered() {
+            (
+                Some(ui.visuals().widgets.hovered.weak_bg_fill),
+                ui.visuals().strong_text_color(),
+            )
+        } else {
+            (None, ui.visuals().weak_text_color())
+        };
+        if let Some(fill) = fill {
+            painter.rect_filled(rect, CornerRadius::ZERO, fill);
+        }
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            MDI_DOTS_HORIZONTAL,
+            TextStyle::Body.resolve(ui.style()),
+            color,
+        );
+        if response.has_focus() {
+            focus_ring(ui, rect.shrink(2.0));
+        }
+    }
+    response
+}
+
+/// Adds an add button showing `words`, named `name`, and returns its response: a dashed gray 500 outline around the
+/// words, with the square of the kind's colour `kind` before them on a card's add buttons.
+///
+/// The outline turns solid under the pointer and blue 500 while the menu it opens is `open`.
+pub fn add_button(ui: &mut Ui, words: &str, name: &str, kind: Option<Color32>, open: bool) -> Response {
+    let font = TextStyle::Body.resolve(ui.style());
+    let color = ui.visuals().text_color();
+    let galley = ui.painter().layout_no_wrap(words.to_owned(), font, color);
+    let square = kind.map_or(0.0, |_| ADD_SQUARE + 5.0);
+    let size = vec2(galley.size().x + square + 12.0, OVERLAY_ROW - 2.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), name));
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        if open {
+            painter.rect_stroke(
+                rect,
+                CornerRadius::ZERO,
+                Stroke::new(1.0, mcs::BLUE_500),
+                StrokeKind::Inside,
+            );
+        } else if response.hovered() {
+            painter.rect_stroke(
+                rect,
+                CornerRadius::ZERO,
+                Stroke::new(1.0, mcs::GRAY_500),
+                StrokeKind::Inside,
+            );
+        } else {
+            painter.extend(dashed_rect(rect, Stroke::new(1.0, mcs::GRAY_500)));
+        }
+        let mut x = rect.left() + 6.0;
+        if let Some(kind) = kind {
+            let square = Rect::from_min_size(pos2(x, rect.center().y - ADD_SQUARE / 2.0), Vec2::splat(ADD_SQUARE));
+            painter.rect_filled(square, CornerRadius::ZERO, kind);
+            x += ADD_SQUARE + 5.0;
+        }
+        painter.galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, color);
+        if response.has_focus() {
+            focus_ring(ui, rect);
+        }
+    }
+    response
+}
+
+/// Adds the small button of a note, showing `words` and named `name`, and returns its response: a gray 700 outline
+/// around the words at the note's size, gray 400 under the pointer.
+pub fn note_button(ui: &mut Ui, words: &str, name: &str, size: f32) -> Response {
+    let color = ui.visuals().text_color();
+    let galley = ui
+        .painter()
+        .layout_no_wrap(words.to_owned(), FontId::proportional(size), color);
+    let (rect, response) = ui.allocate_exact_size(galley.size() + vec2(10.0, 4.0), Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), name));
+    if ui.is_rect_visible(rect) {
+        let outline = if response.hovered() {
+            mcs::GRAY_400
+        } else {
+            mcs::GRAY_700
+        };
+        let painter = ui.painter();
+        painter.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, outline), StrokeKind::Inside);
+        painter.galley(rect.min + vec2(5.0, 2.0), galley, color);
+        if response.has_focus() {
+            focus_ring(ui, rect);
+        }
+    }
+    response
+}
+
+/// Adds one segment of a segmented toggle showing `words`, selected while `selected` holds, and
+/// returns its response: weak text while off, lighter under the pointer, and the text colour over a 2 point blue 500
+/// line while on.
+///
+/// A `focusable` segment is a button on the keyboard path. Any other segment is a label that a click still presses.
+pub fn toggle_label(ui: &mut Ui, words: &str, selected: bool, focusable: bool) -> Response {
+    let font = TextStyle::Body.resolve(ui.style());
+    let galley = ui
+        .painter()
+        .layout_no_wrap(words.to_owned(), font, Color32::PLACEHOLDER);
+    let sense = if focusable { Sense::click() } else { Sense::CLICK };
+    let (rect, response) = ui.allocate_exact_size(galley.size() + vec2(8.0, 6.0), sense);
+    response.widget_info(|| {
+        if focusable {
+            WidgetInfo::selected(WidgetType::Button, true, selected, words)
+        } else {
+            WidgetInfo::labeled(WidgetType::Label, true, words)
+        }
+    });
+    if ui.is_rect_visible(rect) {
+        let color = if selected {
+            ui.visuals().text_color()
+        } else if response.hovered() {
+            ui.visuals().widgets.hovered.text_color()
+        } else {
+            ui.visuals().weak_text_color()
+        };
+        let painter = ui.painter();
+        painter.galley(rect.min + vec2(4.0, 2.0), galley, color);
+        if selected {
+            let line = Rect::from_min_max(pos2(rect.left(), rect.bottom() - 2.0), rect.right_bottom());
+            painter.rect_filled(line, CornerRadius::ZERO, mcs::BLUE_500);
+        }
+        if response.has_focus() {
+            focus_ring(ui, rect);
+        }
+    }
+    response
+}
+
+/// Paints the hairline between two segments of a segmented toggle, as high as their words.
+pub fn segment_rule(ui: &mut Ui) {
+    let height = TextStyle::Body.resolve(ui.style()).size;
+    let (rect, _) = ui.allocate_exact_size(vec2(1.0, height), Sense::hover());
+    ui.painter()
+        .vline(rect.center().x, rect.y_range(), Stroke::new(1.0, mcs::GRAY_800));
+}
+
+/// Adds an information notice: a row with a 2 point blue 500 bar and an information icon in blue 500 before `text` in
+/// the text colour. The row reads as one label, the icon, a space and the text.
+pub fn notice_ui(ui: &mut Ui, text: &str) {
+    let font = TextStyle::Body.resolve(ui.style());
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        MDI_INFORMATION,
+        0.0,
+        egui::TextFormat {
+            font_id: font.clone(),
+            color: mcs::BLUE_500,
+            ..Default::default()
+        },
+    );
+    job.append(
+        &format!(" {text}"),
+        0.0,
+        egui::TextFormat {
+            font_id: font,
+            color: ui.visuals().text_color(),
+            ..Default::default()
+        },
+    );
+    let row = Frame::NONE
+        .inner_margin(Margin {
+            left: 8,
+            right: 4,
+            top: 3,
+            bottom: 3,
+        })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(job).wrap());
+        })
+        .response
+        .rect;
+    let bar = Rect::from_min_size(row.min, vec2(2.0, row.height()));
+    ui.painter().rect_filled(bar, CornerRadius::ZERO, mcs::BLUE_500);
+}
 
 /// Width in points of a picker.
 const PICKER_WIDTH: f32 = 280.0;
@@ -64,94 +620,111 @@ pub fn color32(color: Color) -> Color32 {
     Color32::from_rgba_unmultiplied(red, green, blue, alpha)
 }
 
-/// Colours of a chip: its fill, its text and its grey lead word.
+/// Colours of a chip: its fill, its outline, its name and its glyph or lead word.
 struct ChipColors {
     /// Fill of the chip.
     fill: Color32,
+    /// Outline of the chip, `None` for none.
+    outline: Option<Color32>,
     /// Colour of the chip's name.
     text: Color32,
     /// Colour of the lead word and of the slider mark.
     lead: Color32,
 }
 
-/// Returns the colours of a chip of `kind`, red for a result that its line cannot use.
-fn chip_colors(kind: &ChipKind, red: bool) -> ChipColors {
-    match (kind, red) {
-        (_, true) => ChipColors {
-            fill: mcs::RED_900,
-            text: mcs::RED_200,
-            lead: mcs::RED_300,
-        },
-        (ChipKind::Result(_), false) => ChipColors {
-            fill: mcs::BLUE_900,
-            text: mcs::BLUE_200,
-            lead: mcs::BLUE_300,
-        },
-        _ => ChipColors {
-            fill: mcs::GRAY_800,
-            text: mcs::GRAY_100,
-            lead: mcs::GRAY_400,
-        },
+/// Returns the colours of a chip of `kind`: red for a result that its line cannot use, blue for a result and for any
+/// chip whose picker is `open`, with a blue 500 outline while open, and neutral otherwise.
+fn chip_colors(kind: &ChipKind, red: bool, open: bool) -> ChipColors {
+    let (fill, text, lead) = match (kind, red, open) {
+        (_, true, _) => (mcs::RED_900, mcs::RED_200, mcs::RED_200),
+        (ChipKind::Result(_), false, _) | (_, false, true) => (mcs::BLUE_900, mcs::BLUE_200, mcs::BLUE_200),
+        _ => (mcs::GRAY_800, mcs::GRAY_100, mcs::GRAY_400),
+    };
+    ChipColors {
+        fill,
+        outline: open.then_some(mcs::BLUE_500),
+        text,
+        lead,
     }
 }
 
 /// Adds the chip of `chip`, a button named by its visible text, and returns its response.
 ///
-/// A result chip fills blue, or red when `red` holds. A parameter chip carries a slider mark, a state chip a swatch of
-/// the colour `swatch`, and a property chip its lead word ("my") in grey. Clicking a chip does nothing.
+/// A result chip is blue, or red and struck through when `red` holds, and every other chip neutral. A parameter chip
+/// carries a slider mark, a state chip a swatch of the colour `swatch`, a property chip its lead word ("my"), "any
+/// state" is in italics and a number in the mono face. Clicking a chip does nothing.
 pub fn chip_ui(ui: &mut Ui, chip: &SentenceChip, red: bool, swatch: Option<Color32>) -> Response {
     chip_with_id(ui, None, chip, red, swatch)
 }
 
 /// Adds the chip of `chip` as [`chip_ui`] does, under the widget id `id` when one is given, so another frame can open
 /// its picker or give it the focus.
+///
+/// Under the pointer the chip takes a 1 point outline in its text colour, and while the picker of `id` is open the
+/// blue tinted fill inside a blue 500 outline. The eye then finds what the picker edits.
 pub fn chip_with_id(ui: &mut Ui, id: Option<Id>, chip: &SentenceChip, red: bool, swatch: Option<Color32>) -> Response {
-    let colors = chip_colors(&chip.kind, red);
-    let font = TextStyle::Body.resolve(ui.style());
+    let open = picker_open(ui, id);
+    let colors = chip_colors(&chip.kind, red, open);
+    let body = TextStyle::Body.resolve(ui.style());
+    let font = if chip.kind == ChipKind::Literal {
+        FontId::monospace(body.size - 1.0)
+    } else {
+        body.clone()
+    };
     let painter = ui.painter();
     let mark = matches!(chip.kind, ChipKind::Parameter(_))
-        .then(|| painter.layout_no_wrap(format!("{MDI_TUNE_VERTICAL} "), font.clone(), colors.lead));
-    let lead =
-        (!chip.lead.is_empty()).then(|| painter.layout_no_wrap(format!("{} ", chip.lead), font.clone(), colors.lead));
-    let name = painter.layout_no_wrap(chip.name.clone(), font.clone(), colors.text);
-    let swatch_side = font.size * 0.75;
-    let swatch_width = if swatch.is_some() { swatch_side + 4.0 } else { 0.0 };
-    let width = CHIP_PADDING.x * 2.0
+        .then(|| painter.layout_no_wrap(MDI_TUNE_VERTICAL.to_owned(), body.clone(), colors.lead));
+    let lead = (!chip.lead.is_empty()).then(|| painter.layout_no_wrap(chip.lead.to_owned(), body.clone(), colors.lead));
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &chip.name,
+        0.0,
+        egui::TextFormat {
+            font_id: font,
+            color: colors.text,
+            italics: chip.kind == ChipKind::AnyState,
+            ..Default::default()
+        },
+    );
+    let name = painter.layout_job(job);
+    let swatch_width = if swatch.is_some() { CHIP_SWATCH + CHIP_GAP } else { 0.0 };
+    let width = CHIP_PADDING * 2.0
         + swatch_width
-        + mark.as_ref().map_or(0.0, |galley| galley.size().x)
-        + lead.as_ref().map_or(0.0, |galley| galley.size().x)
+        + mark.as_ref().map_or(0.0, |galley| galley.size().x + CHIP_GAP)
+        + lead.as_ref().map_or(0.0, |galley| galley.size().x + CHIP_GAP)
         + name.size().x;
-    let height = (name.size().y + CHIP_PADDING.y * 2.0).max(ui.spacing().interact_size.y - 2.0);
-    let (rect, response) = allocate_control(ui, id, vec2(width, height));
+    let (rect, response) = allocate_control(ui, id, vec2(width, CHIP_HEIGHT));
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, chip.text()));
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::ZERO, colors.fill);
-        if response.has_focus() || response.hovered() {
-            painter.rect_stroke(
-                rect,
-                CornerRadius::ZERO,
-                Stroke::new(1.0, colors.text),
-                egui::StrokeKind::Inside,
-            );
+        let outline = if response.hovered() && !open {
+            Some(colors.text)
+        } else {
+            colors.outline
+        };
+        if let Some(outline) = outline {
+            painter.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, outline), StrokeKind::Inside);
         }
-        let mut x = rect.left() + CHIP_PADDING.x;
+        let mut x = rect.left() + CHIP_PADDING;
         let center_y = rect.center().y;
         if let Some(color) = swatch {
-            let square = Rect::from_center_size(Pos2::new(x + swatch_side / 2.0, center_y), Vec2::splat(swatch_side));
-            painter.rect_filled(square, CornerRadius::ZERO, color);
-            painter.rect_stroke(
-                square,
-                CornerRadius::ZERO,
-                Stroke::new(1.0, mcs::GRAY_600),
-                egui::StrokeKind::Inside,
-            );
+            self::swatch(painter, Pos2::new(x + CHIP_SWATCH / 2.0, center_y), color);
             x += swatch_width;
         }
-        for galley in [mark, lead, Some(name)].into_iter().flatten() {
+        for galley in [mark, lead].into_iter().flatten() {
             let size = galley.size();
-            painter.galley(Pos2::new(x, center_y - size.y / 2.0), galley, colors.text);
-            x += size.x;
+            painter.galley(Pos2::new(x, center_y - size.y / 2.0), galley, colors.lead);
+            x += size.x + CHIP_GAP;
+        }
+        let size = name.size();
+        let name_rect = Rect::from_min_size(Pos2::new(x, center_y - size.y / 2.0), size);
+        painter.galley(name_rect.min, name, colors.text);
+        if red {
+            painter.hline(name_rect.x_range(), center_y, Stroke::new(1.0, colors.text));
+        }
+        if response.has_focus() {
+            focus_ring(ui, rect);
         }
     }
     response
@@ -160,7 +733,8 @@ pub fn chip_with_id(ui: &mut Ui, id: Option<Id>, chip: &SentenceChip, red: bool,
 /// Adds a dashed blank showing `word`, named `name`, and returns its response with the index of its shapes.
 ///
 /// A blank with `painted` false is laid out and named but not painted, and returns the index of an empty shape that
-/// the caller fills to paint it. The blank takes the widget id `id` when one is given.
+/// the caller fills to paint it. The blank takes the widget id `id` when one is given. Under the pointer its outline
+/// turns solid and its word gray 200, and while the picker of `id` is open it takes the blue tinted fill.
 pub fn blank_ui(
     ui: &mut Ui,
     id: Option<Id>,
@@ -170,27 +744,57 @@ pub fn blank_ui(
 ) -> (Option<egui::layers::ShapeIdx>, Response) {
     let font = TextStyle::Body.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(word.to_owned(), font, mcs::GRAY_400);
-    let size = galley.size() + CHIP_PADDING * 2.0;
-    let height = size.y.max(ui.spacing().interact_size.y - 2.0);
-    let (rect, response) = allocate_control(ui, id, vec2(size.x, height));
+    let (rect, response) = allocate_control(ui, id, vec2(galley.size().x + CHIP_PADDING * 2.0, CHIP_HEIGHT));
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
-    if painted {
-        if ui.is_rect_visible(rect) {
-            let shapes = blank_shapes(ui, rect, word);
-            ui.painter().extend(shapes);
-            if response.has_focus() {
-                ui.painter().rect_stroke(
-                    rect,
-                    CornerRadius::ZERO,
-                    Stroke::new(1.0, mcs::GRAY_200),
-                    egui::StrokeKind::Inside,
-                );
-            }
-        }
-        (None, response)
-    } else {
-        (Some(ui.painter().add(Shape::Noop)), response)
+    if !painted {
+        return (Some(ui.painter().add(Shape::Noop)), response);
     }
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        if picker_open(ui, id) {
+            painter.rect_filled(rect, CornerRadius::ZERO, mcs::BLUE_900);
+            painter.add(blank_word(ui, rect, word, mcs::BLUE_200));
+        } else if response.hovered() {
+            painter.rect_stroke(
+                rect,
+                CornerRadius::ZERO,
+                Stroke::new(1.0, mcs::GRAY_500),
+                StrokeKind::Inside,
+            );
+            painter.add(blank_word(ui, rect, word, mcs::GRAY_200));
+        } else {
+            painter.extend(blank_shapes(ui, rect, word, false));
+        }
+        if response.has_focus() {
+            focus_ring(ui, rect);
+        }
+    }
+    (None, response)
+}
+
+/// Returns the shapes of a rectangle outlined with dashes of `stroke` along the inside of `rect`.
+pub fn dashed_rect(rect: Rect, stroke: Stroke) -> Vec<Shape> {
+    let rect = rect.shrink(stroke.width / 2.0);
+    let corners = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+        rect.left_top(),
+    ];
+    Shape::dashed_line(&corners, stroke, 3.0, 2.0)
+}
+
+/// Returns the shape of the word `word` of a blank in `rect`, in `color`.
+fn blank_word(ui: &Ui, rect: Rect, word: &str, color: Color32) -> Shape {
+    let font = TextStyle::Body.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(word.to_owned(), font, color);
+    let size = galley.size();
+    Shape::galley(
+        Pos2::new(rect.left() + CHIP_PADDING, rect.center().y - size.y / 2.0),
+        galley,
+        color,
+    )
 }
 
 /// Allocates a clickable control of `size`, under the widget id `id` when one is given, and returns its rectangle and
@@ -205,25 +809,17 @@ pub fn allocate_control(ui: &mut Ui, id: Option<Id>, size: Vec2) -> (Rect, Respo
     }
 }
 
-/// Returns the shapes of a dashed blank showing `word` in `rect`.
-pub fn blank_shapes(ui: &Ui, rect: Rect, word: &str) -> Vec<Shape> {
-    let font = TextStyle::Body.resolve(ui.style());
-    let galley = ui.painter().layout_no_wrap(word.to_owned(), font, mcs::GRAY_400);
-    let stroke = Stroke::new(1.0, mcs::GRAY_500);
-    let corners = [
-        rect.left_top(),
-        rect.right_top(),
-        rect.right_bottom(),
-        rect.left_bottom(),
-        rect.left_top(),
-    ];
-    let mut shapes = Shape::dashed_line(&corners, stroke, 3.0, 2.0);
-    let size = galley.size();
-    shapes.push(Shape::galley(
-        Pos2::new(rect.left() + CHIP_PADDING.x, rect.center().y - size.y / 2.0),
-        galley,
-        mcs::GRAY_400,
-    ));
+/// Returns the shapes of a dashed blank showing `word` in `rect`: gray 500 dashes around the word in gray 400, or
+/// while `quiet` holds, as an optional blank is until its line is hovered, gray 700 dashes around the word in the weak
+/// text colour.
+pub fn blank_shapes(ui: &Ui, rect: Rect, word: &str, quiet: bool) -> Vec<Shape> {
+    let (dashes, color) = if quiet {
+        (mcs::GRAY_700, ui.visuals().weak_text_color())
+    } else {
+        (mcs::GRAY_500, mcs::GRAY_400)
+    };
+    let mut shapes = dashed_rect(rect, Stroke::new(1.0, dashes));
+    shapes.push(blank_word(ui, rect, word, color));
     shapes
 }
 

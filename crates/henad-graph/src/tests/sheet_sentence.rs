@@ -1704,10 +1704,14 @@ fn the_parts_of_a_life_line_name_each_chip_select_and_word() {
         )
     };
     let text = |words: &str| SentencePart::Text(words.to_owned());
+    let lead = |words: &str| SentencePart::Keyword(words.to_owned());
     assert_eq!(
         sentences.line_parts("l1", &[]),
         [
-            text("Alive neighbours = count of "),
+            SentencePart::ResultName("Alive neighbours".to_owned()),
+            text(" = "),
+            lead("count of"),
+            text(" "),
             SentencePart::Select(LineSelect::WhichCells, "the 8 cells around me".to_owned()),
             text(" whose "),
             chip(ChipKind::Property("status".to_owned()), "Status"),
@@ -1718,7 +1722,8 @@ fn the_parts_of_a_life_line_name_each_chip_select_and_word() {
     assert_eq!(
         sentences.line_parts("l2", &[]),
         [
-            text("Become "),
+            lead("Become"),
+            text(" "),
             state("alive", "Alive"),
             text(" "),
             SentencePart::From,
@@ -1742,7 +1747,8 @@ fn the_parts_of_a_life_line_name_each_chip_select_and_word() {
     assert_eq!(
         sentences.line_parts("l4", &[]),
         [
-            text("Become "),
+            lead("Become"),
+            text(" "),
             state("dead", "Dead"),
             text(" "),
             SentencePart::From,
@@ -1762,7 +1768,8 @@ fn otherwise_blanks_and_the_empty_for_each_are_parts_of_their_own() {
     let sentences = Sentences::new(&fire);
     let parts = sentences.line_parts("l3", &[2]);
     assert_eq!(parts.first(), Some(&SentencePart::Otherwise(vec![2])));
-    assert_eq!(parts.get(1), Some(&SentencePart::Text(" become ".to_owned())));
+    assert_eq!(parts.get(1), Some(&SentencePart::Text(" ".to_owned())));
+    assert_eq!(parts.get(2), Some(&SentencePart::Keyword("become".to_owned())));
     assert_eq!(parts.last(), Some(&SentencePart::ForEachBlank(DrawKind::Chance)));
     assert_eq!(
         sentence_text(&parts),
@@ -1799,6 +1806,85 @@ fn no_line_of_a_test_sheet_holds_two_adjacent_word_parts() {
             }
         }
     }
+}
+
+/// Every line of every sheet reads as the sentence the sheet's comment above its table holds, the comment the writer
+/// wrote before lead words, result names and alternatives were parts of their own. Each change line leads with its
+/// verb, each named result line with its name, and each alternative of a Choose or a Depending on opens with a part
+/// that reads as nothing.
+#[test]
+fn lead_words_result_names_and_alternatives_leave_every_sentence_as_written() {
+    use crate::sheet::relations::CardRelations;
+    use crate::sheet::sentence::{SentencePart, sentence_text};
+
+    let mut leads = 0;
+    let mut alternatives = 0;
+    for (file_name, text) in sheets() {
+        let sheet = document(file_name);
+        let sentences = Sentences::new(&sheet);
+        let rows: Vec<&str> = text.lines().collect();
+        for card in &sheet.cards {
+            let relations = CardRelations::new(&sheet, card);
+            for (id, line) in &card.line_tables {
+                let header = format!("[card.line.{id}]");
+                let comment = rows
+                    .iter()
+                    .position(|row| *row == header)
+                    .and_then(|index| index.checked_sub(1))
+                    .and_then(|index| rows[index].strip_prefix("# "))
+                    .unwrap_or_else(|| panic!("{file_name} {id}: no comment above the line"));
+                let parts = sentences.line_parts(id, &relations.otherwise_numbers(id));
+                assert_eq!(sentence_text(&parts), comment, "{file_name} {id}");
+                let words: String = parts
+                    .iter()
+                    .map(|part| match part {
+                        SentencePart::Keyword(words) | SentencePart::ResultName(words) => words.clone(),
+                        SentencePart::Alternative => String::new(),
+                        other => other.text(),
+                    })
+                    .collect();
+                assert_eq!(words, comment, "{file_name} {id}");
+                let has = |wanted: fn(&SentencePart) -> bool| parts.iter().any(wanted);
+                if matches!(
+                    line.kind,
+                    LineKind::Become
+                        | LineKind::Set
+                        | LineKind::Steer
+                        | LineKind::KeepBetween
+                        | LineKind::Move
+                        | LineKind::Leave
+                        | LineKind::Record
+                        | LineKind::Repeat
+                ) {
+                    assert!(has(|part| matches!(part, SentencePart::Keyword(_))), "{file_name} {id}");
+                    leads += 1;
+                }
+                if let Some(name) = &line.name
+                    && comment.starts_with(&format!("{name} = "))
+                {
+                    assert_eq!(
+                        parts.first(),
+                        Some(&SentencePart::ResultName(name.clone())),
+                        "{file_name} {id}"
+                    );
+                }
+                if matches!(line.kind, LineKind::Choose | LineKind::DependingOn) {
+                    let count = parts.iter().filter(|part| **part == SentencePart::Alternative).count();
+                    let expected = if line.kind == LineKind::Choose {
+                        line.rows.len() + 1
+                    } else {
+                        comment.matches(" -> ").count()
+                    };
+                    assert_eq!(count, expected, "{file_name} {id}");
+                    alternatives += count;
+                }
+            }
+        }
+    }
+    assert!(
+        leads > 20 && alternatives >= 5,
+        "{leads} lead words, {alternatives} alternatives"
+    );
 }
 
 #[test]
@@ -1838,7 +1924,10 @@ fn every_control_of_a_life_line_is_placed_at_the_slot_or_field_it_shows() {
             .filter(|placed| {
                 !matches!(
                     placed.part,
-                    sentence::SentencePart::Text(_) | sentence::SentencePart::From
+                    sentence::SentencePart::Text(_)
+                        | sentence::SentencePart::Keyword(_)
+                        | sentence::SentencePart::ResultName(_)
+                        | sentence::SentencePart::From
                 )
             })
             .map(|placed| (placed.part.text(), placed.place))
