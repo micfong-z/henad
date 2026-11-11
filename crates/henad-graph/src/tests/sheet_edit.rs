@@ -8,7 +8,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use henad_core::authoring::primitives::rng::xorshift64;
 use henad_core::metadata::TimeUnit;
 
-use super::sheet_document::sheets;
+use super::sheet_document::{sheet_text, sheets};
 use super::sheet_writer::assert_hunks;
 use crate::keys::KeyStream;
 use crate::sheet::check;
@@ -81,15 +81,6 @@ fn a_new_property_type_clears_every_reference_and_keeps_the_place() {
             })
             .is_err()
     );
-}
-
-/// Returns the sheet `file_name` of [`sheets`].
-fn sheet_text(file_name: &str) -> &'static str {
-    sheets()
-        .into_iter()
-        .find(|(name, _)| *name == file_name)
-        .map(|(_, text)| text)
-        .unwrap_or_else(|| panic!("no sheet {file_name}"))
 }
 
 /// Reads `text`, which must read.

@@ -575,7 +575,7 @@ pub fn parameter_rate_unit(parameter: &SheetParameter) -> Option<TimeUnit> {
 }
 
 /// Returns the number typed in `slot`, `None` for a slot that holds no typed number.
-fn typed_number(slot: &Slot) -> Option<f64> {
+pub(in crate::sheet) fn typed_number(slot: &Slot) -> Option<f64> {
     match slot.value()? {
         SheetValue::Literal(literal) => literal.number(),
         _ => None,

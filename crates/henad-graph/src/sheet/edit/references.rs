@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 
+use super::lines::{SLOT_KEYS, slots_mut};
 use crate::sheet::document::{SheetChip, SheetDocument, SheetLine, SheetProperty, SheetValue, Slot};
 
 /// An item whose references change.
@@ -209,11 +210,17 @@ impl<'a> Walker<'a> {
 
     /// Applies the change to an optional field holding an id, when `is_target` holds for it.
     fn field(&self, field: &mut Option<String>, is_target: impl Fn(&str) -> bool) {
-        if let Some(id) = field
-            && is_target(id)
-            && self.hit(id)
-        {
+        if self.names_cleared(field, is_target) {
             *field = None;
+        }
+    }
+
+    /// Applies the change to an optional field holding an id, when `is_target` holds for it, and returns true when the
+    /// reference is to be cleared.
+    fn names_cleared(&self, field: &mut Option<String>, is_target: impl Fn(&str) -> bool) -> bool {
+        match field {
+            Some(id) if is_target(id) => self.hit(id),
+            _ => false,
         }
     }
 
@@ -337,31 +344,14 @@ impl<'a> Walker<'a> {
         self.formula(&mut line.formula);
         let compared = compared_property(&line.left).map(str::to_owned);
         let compared = compared.as_deref();
-        for slot in [
-            &mut line.distance,
-            &mut line.place,
-            &mut line.tolerance,
-            &mut line.chance,
-            &mut line.rate,
-            &mut line.tries,
-            &mut line.low,
-            &mut line.high,
-            &mut line.length,
-            &mut line.times,
-            &mut line.strength,
-            &mut line.minimum,
-            &mut line.maximum,
-            &mut line.amount,
-            &mut line.only,
-            &mut line.whose,
-            &mut line.condition,
-            &mut line.otherwise,
-        ] {
-            self.slot(slot, None);
+        for (key, slot) in SLOT_KEYS.into_iter().zip(slots_mut(line)) {
+            let slot_about = match key {
+                "right" => compared,
+                "value" => about,
+                _ => None,
+            };
+            self.slot(slot, slot_about);
         }
-        self.slot(&mut line.right, compared);
-        self.slot(&mut line.left, None);
-        self.slot(&mut line.value, about);
         let branches = std::mem::take(&mut line.branches);
         for (mut state, mut value) in branches {
             if self.is_state(about, &state) && self.hit(&mut state) {
@@ -462,26 +452,12 @@ impl<'a> Walker<'a> {
         document.measures.retain_mut(|measure| {
             self.slot(&mut measure.value, None);
             let property = measure.property.clone();
-            let mut keep = true;
-            for (field, is_target) in [
-                (
-                    &mut measure.over,
-                    &(|id: &str| self.is_thing(id)) as &dyn Fn(&str) -> bool,
-                ),
-                (&mut measure.property, &|id: &str| self.is_property(id)),
-                (&mut measure.state, &|state: &str| {
-                    self.is_state(property.as_deref(), state)
-                }),
-                (&mut measure.event, &|id: &str| self.is_event(id)),
-            ] {
-                if let Some(id) = field
-                    && is_target(id)
-                    && self.hit(id)
-                {
-                    keep = false;
-                }
-            }
-            keep
+            // `|` visits every field, and a rename reaches each of them.
+            let cleared = self.names_cleared(&mut measure.over, |id| self.is_thing(id))
+                | self.names_cleared(&mut measure.property, |id| self.is_property(id))
+                | self.names_cleared(&mut measure.state, |state| self.is_state(property.as_deref(), state))
+                | self.names_cleared(&mut measure.event, |id| self.is_event(id));
+            !cleared
         });
         let colors = std::mem::take(&mut document.colors);
         for (mut thing, mut rule) in colors {
@@ -505,23 +481,10 @@ impl<'a> Walker<'a> {
                 let property = step.property.clone();
                 self.slot(&mut step.value, property.as_deref());
                 step.properties.retain_mut(|id| !(self.is_property(id) && self.hit(id)));
-                let mut keep = true;
-                for (field, is_target) in [
-                    (
-                        &mut step.thing,
-                        &(|id: &str| self.is_thing(id)) as &dyn Fn(&str) -> bool,
-                    ),
-                    (&mut step.property, &|id: &str| self.is_property(id)),
-                    (&mut step.card, &|id: &str| self.is_card(id)),
-                ] {
-                    if let Some(id) = field
-                        && is_target(id)
-                        && self.hit(id)
-                    {
-                        keep = false;
-                    }
-                }
-                keep
+                let cleared = self.names_cleared(&mut step.thing, |id| self.is_thing(id))
+                    | self.names_cleared(&mut step.property, |id| self.is_property(id))
+                    | self.names_cleared(&mut step.card, |id| self.is_card(id));
+                !cleared
             });
         }
         for card in &mut document.cards {

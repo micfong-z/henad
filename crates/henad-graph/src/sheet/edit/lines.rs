@@ -42,45 +42,33 @@ pub(crate) enum RowSlot {
 /// Returns [`SheetEditError::Invalid`] for an empty path, an unknown key or an index that is not a number.
 pub(crate) fn parse_path(path: &str) -> Result<Vec<PathStep>, SheetEditError> {
     let invalid = || SheetEditError::Invalid(format!("'{path}' is no slot path"));
-    let index = |text: Option<&&str>| -> Option<usize> { text?.parse().ok() };
-    let segments: Vec<&str> = path.split('.').collect();
+    let index = |text: Option<&str>| -> Option<usize> { text?.parse().ok() };
+    let mut segments = path.split('.');
     let mut steps = Vec::new();
-    let mut position = 0;
-    while let Some(segment) = segments.get(position) {
-        match *segment {
-            "items" => {
-                steps.push(PathStep::Item(index(segments.get(position + 1)).ok_or_else(invalid)?));
-                position += 2;
-            }
+    while let Some(segment) = segments.next() {
+        let step = match segment {
+            "items" => PathStep::Item(index(segments.next()).ok_or_else(invalid)?),
             "row" => {
-                let row = index(segments.get(position + 1)).ok_or_else(invalid)?;
-                let slot = match segments.get(position + 2) {
-                    Some(&"value") => RowSlot::Value,
-                    Some(&"condition") => RowSlot::Condition,
+                let row = index(segments.next()).ok_or_else(invalid)?;
+                let slot = match segments.next() {
+                    Some("value") => RowSlot::Value,
+                    Some("condition") => RowSlot::Condition,
                     _ => return Err(invalid()),
                 };
-                steps.push(PathStep::Row(row, slot));
-                position += 3;
+                PathStep::Row(row, slot)
             }
-            "branches" => {
-                let state = segments.get(position + 1).ok_or_else(invalid)?;
-                steps.push(PathStep::Branch((*state).to_owned()));
-                position += 2;
-            }
+            "branches" => PathStep::Branch(segments.next().ok_or_else(invalid)?.to_owned()),
             "summaries" => {
-                let summary = index(segments.get(position + 1)).ok_or_else(invalid)?;
-                if segments.get(position + 2) != Some(&"value") {
+                let summary = index(segments.next()).ok_or_else(invalid)?;
+                if segments.next() != Some("value") {
                     return Err(invalid());
                 }
-                steps.push(PathStep::Summary(summary));
-                position += 3;
+                PathStep::Summary(summary)
             }
-            name if SLOT_KEYS.contains(&name) => {
-                steps.push(PathStep::Slot(name.to_owned()));
-                position += 1;
-            }
+            name if SLOT_KEYS.contains(&name) => PathStep::Slot(name.to_owned()),
             _ => return Err(invalid()),
-        }
+        };
+        steps.push(step);
     }
     if steps.is_empty() {
         return Err(invalid());
@@ -88,8 +76,8 @@ pub(crate) fn parse_path(path: &str) -> Result<Vec<PathStep>, SheetEditError> {
     Ok(steps)
 }
 
-/// Keys of the slots of a line, in the order of the author format.
-const SLOT_KEYS: [&str; 21] = [
+/// Keys of the slots of a line, in the order of the author format and of [`slots_mut`].
+pub(super) const SLOT_KEYS: [&str; 21] = [
     "distance",
     "place",
     "left",
@@ -113,60 +101,63 @@ const SLOT_KEYS: [&str; 21] = [
     "otherwise",
 ];
 
+/// Returns the slots of `line`, mutable, in the order of [`SLOT_KEYS`].
+pub(super) fn slots_mut(line: &mut SheetLine) -> [&mut Slot; 21] {
+    [
+        &mut line.distance,
+        &mut line.place,
+        &mut line.left,
+        &mut line.right,
+        &mut line.tolerance,
+        &mut line.chance,
+        &mut line.rate,
+        &mut line.tries,
+        &mut line.low,
+        &mut line.high,
+        &mut line.length,
+        &mut line.times,
+        &mut line.value,
+        &mut line.strength,
+        &mut line.minimum,
+        &mut line.maximum,
+        &mut line.amount,
+        &mut line.only,
+        &mut line.whose,
+        &mut line.condition,
+        &mut line.otherwise,
+    ]
+}
+
 /// Returns the slot of `line` with the key `name`.
 pub(super) fn slot_mut<'a>(line: &'a mut SheetLine, name: &str) -> Option<&'a mut Slot> {
-    Some(match name {
-        "distance" => &mut line.distance,
-        "place" => &mut line.place,
-        "left" => &mut line.left,
-        "right" => &mut line.right,
-        "tolerance" => &mut line.tolerance,
-        "chance" => &mut line.chance,
-        "rate" => &mut line.rate,
-        "tries" => &mut line.tries,
-        "low" => &mut line.low,
-        "high" => &mut line.high,
-        "length" => &mut line.length,
-        "times" => &mut line.times,
-        "value" => &mut line.value,
-        "strength" => &mut line.strength,
-        "minimum" => &mut line.minimum,
-        "maximum" => &mut line.maximum,
-        "amount" => &mut line.amount,
-        "only" => &mut line.only,
-        "whose" => &mut line.whose,
-        "condition" => &mut line.condition,
-        "otherwise" => &mut line.otherwise,
-        _ => return None,
-    })
+    SLOT_KEYS
+        .into_iter()
+        .zip(slots_mut(line))
+        .find_map(|(key, slot)| (key == name).then_some(slot))
 }
 
 /// Returns the value at `step` of `line`, `None` when the line holds none there.
 pub(crate) fn value_mut<'a>(line: &'a mut SheetLine, step: &PathStep) -> Option<&'a mut SheetValue> {
     match step {
-        PathStep::Slot(name) => match slot_mut(line, name)? {
-            Slot::Filled(value) => Some(value),
-            Slot::Blank => None,
-        },
+        PathStep::Slot(name) => filled_mut(slot_mut(line, name)?),
         PathStep::Item(index) => line.items.get_mut(*index),
         PathStep::Row(index, slot) => {
             let row = line.rows.get_mut(*index)?;
             match slot {
-                RowSlot::Value => match &mut row.value {
-                    Slot::Filled(value) => Some(value),
-                    Slot::Blank => None,
-                },
-                RowSlot::Condition => match &mut row.condition {
-                    Slot::Filled(value) => Some(value),
-                    Slot::Blank => None,
-                },
+                RowSlot::Value => filled_mut(&mut row.value),
+                RowSlot::Condition => filled_mut(&mut row.condition),
             }
         }
         PathStep::Branch(state) => line.branches.get_mut(state),
-        PathStep::Summary(index) => match &mut line.summaries.get_mut(*index)?.value {
-            Slot::Filled(value) => Some(value),
-            Slot::Blank => None,
-        },
+        PathStep::Summary(index) => filled_mut(&mut line.summaries.get_mut(*index)?.value),
+    }
+}
+
+/// Returns the value in `slot`, `None` for a blank slot.
+fn filled_mut(slot: &mut Slot) -> Option<&mut SheetValue> {
+    match slot {
+        Slot::Filled(value) => Some(value),
+        Slot::Blank => None,
     }
 }
 
@@ -245,35 +236,8 @@ pub(super) fn value_depth(value: &SheetValue) -> usize {
 
 /// Returns the depth of the tables and lists below a line's own table, counted generously.
 pub(super) fn line_depth(line: &SheetLine) -> usize {
-    let slots = [
-        &line.distance,
-        &line.place,
-        &line.left,
-        &line.right,
-        &line.tolerance,
-        &line.chance,
-        &line.rate,
-        &line.tries,
-        &line.low,
-        &line.high,
-        &line.length,
-        &line.times,
-        &line.value,
-        &line.strength,
-        &line.minimum,
-        &line.maximum,
-        &line.amount,
-        &line.only,
-        &line.whose,
-        &line.condition,
-        &line.otherwise,
-    ];
-    let slot_depth = slots
-        .into_iter()
-        .filter_map(Slot::value)
-        .map(value_depth)
-        .max()
-        .unwrap_or(0);
+    // The slot values include those of the items, branches, rows and summaries. Each counts again below, deeper.
+    let slot_depth = line.slot_values().map(value_depth).max().unwrap_or(0);
     let items = line.items.iter().map(|item| 2 + value_depth(item)).max().unwrap_or(0);
     let branches = line
         .branches
@@ -310,6 +274,20 @@ pub(super) fn parent_of(card: &SheetCard, line_id: &str) -> Option<String> {
         .iter()
         .find(|(_, line)| line.lines.iter().any(|inner| inner == line_id))
         .map(|(id, _)| id.clone())
+}
+
+/// Returns the block lines of `card` around a line inside `parent`, nearest first: `parent` itself, then each block that
+/// lists the one before, up to the top of the card.
+pub(super) fn ancestors<'a>(
+    card: &'a SheetCard,
+    parent: Option<&str>,
+) -> impl Iterator<Item = &'a SheetLine> + use<'a> {
+    let first = parent.and_then(|id| card.line_tables.get_key_value(id));
+    std::iter::successors(first, move |(id, _)| {
+        let outer = parent_of(card, id)?;
+        card.line_tables.get_key_value(outer.as_str())
+    })
+    .map(|(_, line)| line)
 }
 
 /// Returns the list of line ids that holds the lines inside `parent`, or the card's top-level list for `None`.

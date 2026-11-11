@@ -30,6 +30,19 @@ pub struct ChangeGroup {
     pub changed: Vec<NodeId>,
 }
 
+impl ChangeGroup {
+    /// Returns the group of the frame titled `title` on the canvas `scope`, with no node yet.
+    fn empty(scope: &str, title: Option<String>) -> Self {
+        Self {
+            scope: scope.to_owned(),
+            title,
+            added: Vec::new(),
+            removed: Vec::new(),
+            changed: Vec::new(),
+        }
+    }
+}
+
 /// Reason the changes of a copy cannot be listed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -101,20 +114,12 @@ pub fn changes_since_conversion(copy: &GraphFile, original: &SheetFile) -> Resul
     let mut unframed: BTreeMap<String, ChangeGroup> = BTreeMap::new();
     let mut record = |scope: &str, node: NodeId, kind: fn(&mut ChangeGroup) -> &mut Vec<NodeId>| {
         let group = match frame_of(scope, node) {
-            Some(position) => framed.entry(position).or_insert_with(|| ChangeGroup {
-                scope: order[position].scope.clone(),
-                title: Some(order[position].title.clone()),
-                added: Vec::new(),
-                removed: Vec::new(),
-                changed: Vec::new(),
-            }),
-            None => unframed.entry(scope.to_owned()).or_insert_with(|| ChangeGroup {
-                scope: scope.to_owned(),
-                title: None,
-                added: Vec::new(),
-                removed: Vec::new(),
-                changed: Vec::new(),
-            }),
+            Some(position) => framed
+                .entry(position)
+                .or_insert_with(|| ChangeGroup::empty(&order[position].scope, Some(order[position].title.clone()))),
+            None => unframed
+                .entry(scope.to_owned())
+                .or_insert_with(|| ChangeGroup::empty(scope, None)),
         };
         kind(group).push(node);
     };

@@ -28,11 +28,11 @@ and `sheet` re-exports `SheetFile`. `sheet/lower/` is private, and `sheet` re-ex
 `NodeOrigin` and `NodeOwner` from `lower/table.rs`. `SheetLine::slot_values` (crate-private,
 `document.rs`) returns every value in a line's slots, for the checker and the lowering.
 `sheet/edit/` is public (`sheet::edit`), the edit commands that `agents/henad-graph-sheet-edit.md`
-describes: `mod.rs` holds `SheetBuilder`, `SheetEdit`, `LineField`, `SheetItem`, `MoveDirection`,
-`SheetEditError`, `IdSpace`, `mint_id`, `STATE_COLORS`, `MEASURE_COLORS` and
-`suggested_state_color`; `names.rs` `automatic_name` and the rule that keeps names up to date;
-`references.rs` every place an id is named; `lines.rs` slot paths, phrase depth and the outline
-moves.
+describes: `mod.rs` holds `SheetBuilder` and re-exports `SheetEdit`, `LineField`, `SheetItem`,
+`MoveDirection` and `SheetEditError` from `command.rs`, `IdSpace` and `mint_id` from `ids.rs`, and
+`STATE_COLORS`, `MEASURE_COLORS` and `suggested_state_color` from `colors.rs`; `names.rs`
+`automatic_name` and the rule that keeps names up to date; `references.rs` every place an id is
+named; `lines.rs` slot paths, phrase depth and the outline moves.
 `sheet/convert.rs` and `sheet/changes.rs` are private, the conversion to a node graph copy that
 `agents/henad-graph-sheet-convert.md` describes.
 `sheet/rates.rs` is public (`sheet::rates`): `chance_from_rate`, `rate_from_chance`, `tick_in` (one

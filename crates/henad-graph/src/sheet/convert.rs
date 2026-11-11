@@ -23,6 +23,7 @@ use super::document::{CardRuns, ColorRuleKind, LineKind, MeasureRule, PropertyTy
 use super::relations::CardRelations;
 use super::sentence::{self, Sentences, SheetSection};
 use super::{KIND_SHEET, NodeOwner, SheetFile};
+use crate::document::Pass;
 use crate::editor::{EditorRegion, FrameLayout, ModelOrigin, NoteLayout};
 use crate::file::{CODE_FORMAT, GraphFile, GraphFileError};
 use crate::ids::NodeId;
@@ -395,7 +396,7 @@ pub(super) fn frames(sheet: &SheetFile, report: &SheetReport) -> Vec<FrameLayout
     for pass in &sheet.lowered().document().passes {
         let scope = format!("pass.{}", pass.id);
         let mut groups: Vec<(Origins, Vec<NodeId>)> = Vec::new();
-        for (node, origins) in pass_origins(sheet, &lines, &pass.id) {
+        for (node, origins) in pass_origins(sheet, &lines, pass) {
             match groups.iter_mut().find(|(known, _)| *known == origins) {
                 Some((_, members)) => members.push(node),
                 None => groups.push((origins, vec![node])),
@@ -425,7 +426,7 @@ pub(super) fn frames(sheet: &SheetFile, report: &SheetReport) -> Vec<FrameLayout
     frames
 }
 
-/// Returns each node of the pass `pass_id` of the lowered graph of `sheet` with the origins of its group, in id order.
+/// Returns each node of `pass`, a pass of the lowered graph of `sheet`, with the origins of its group, in id order.
 ///
 /// A node a line owns belongs to that line. The change of a property belongs to the lines that write it, a start,
 /// measure, colour rule or button step to its part of the sheet, and a count shared by measures to those measures.
@@ -433,11 +434,8 @@ pub(super) fn frames(sheet: &SheetFile, report: &SheetReport) -> Vec<FrameLayout
 /// belongs to the group its readers share once each of them has one: the lines they belong to together, or one part of
 /// the sheet. A node whose readers never all get a group, such as the last node of a chain that no node reads, takes
 /// the group its feeders share. A node whose readers or feeders share neither stands alone.
-fn pass_origins(sheet: &SheetFile, lines: &SheetLines<'_>, pass_id: &str) -> Vec<(NodeId, Origins)> {
+fn pass_origins(sheet: &SheetFile, lines: &SheetLines<'_>, pass: &Pass) -> Vec<(NodeId, Origins)> {
     let map = sheet.line_map();
-    let Some(pass) = sheet.lowered().document().passes.iter().find(|pass| pass.id == pass_id) else {
-        return Vec::new();
-    };
     let nodes = &pass.body.nodes;
     let index_of: HashMap<NodeId, usize> = nodes.iter().enumerate().map(|(index, node)| (node.id, index)).collect();
     let mut readers: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];

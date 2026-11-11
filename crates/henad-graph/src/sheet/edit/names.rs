@@ -304,7 +304,7 @@ pub fn automatic_summary_name(document: &SheetDocument, summary: &LookSummary) -
 /// and so on after the names typed by hand. A summary whose automatic name the edit left alone takes its name before
 /// one whose automatic name the edit changed.
 pub(super) fn update_summary_names(before: &SheetDocument, after: &mut SheetDocument) {
-    let mut renames: Vec<(String, String, String)> = Vec::new();
+    let mut renames = Vec::new();
     for card_index in 0..after.cards.len() {
         let ids: Vec<String> = after.cards[card_index].line_tables.keys().cloned().collect();
         for id in ids {
@@ -315,78 +315,111 @@ pub(super) fn update_summary_names(before: &SheetDocument, after: &mut SheetDocu
             if line.around != Some(Around::AgentsWithin) || line.summaries.is_empty() {
                 continue;
             }
-            let follows: Vec<bool> = line
-                .summaries
-                .iter()
-                .enumerate()
-                .map(
-                    |(index, summary)| match old_line.and_then(|old| old.summaries.get(index)) {
-                        Some(old) if old.name == summary.name => {
-                            is_numbered(&old.name, &automatic_summary_name(before, old))
-                        }
-                        _ => summary.name.is_empty() || summary.name == automatic_summary_name(after, summary),
-                    },
-                )
-                .collect();
-            let bases: Vec<String> = line
-                .summaries
-                .iter()
-                .map(|summary| automatic_summary_name(after, summary))
-                .collect();
-            // A summary is steady when the line held it, by id, before the edit with the same automatic name.
-            let steady: Vec<bool> = line
-                .summaries
-                .iter()
-                .zip(&bases)
-                .map(|(summary, base)| {
-                    old_line
-                        .and_then(|old| {
-                            old.summaries
-                                .iter()
-                                .find(|old| !old.id.is_empty() && old.id == summary.id)
-                        })
-                        .is_some_and(|old| automatic_summary_name(before, old) == *base)
-                })
-                .collect();
-            let taken: HashSet<String> = line
-                .summaries
-                .iter()
-                .zip(&follows)
-                .filter(|(_, follows)| !**follows)
-                .map(|(summary, _)| summary.name.to_lowercase())
-                .collect();
-            let names = summary_names(&bases, &follows, &steady, taken);
-            let Some(line) = after.cards[card_index].line_tables.get_mut(&id) else {
-                continue;
-            };
-            // A summary whose name changes, or that has no id yet, takes the id minted from its name, unique within
-            // the line. Every other summary keeps its id.
-            let mut renamed = Vec::with_capacity(names.len());
-            for (summary, name) in line.summaries.iter_mut().zip(names) {
-                let changed = name.as_ref().is_some_and(|name| *name != summary.name);
-                if let Some(name) = name {
-                    summary.name = name;
-                }
-                renamed.push(changed || summary.id.is_empty());
-            }
-            let mut held: Vec<String> = line
-                .summaries
-                .iter()
-                .zip(&renamed)
-                .filter(|(_, renamed)| !**renamed)
-                .map(|(summary, _)| summary.id.clone())
-                .collect();
-            for (summary, _) in line.summaries.iter_mut().zip(&renamed).filter(|(_, renamed)| **renamed) {
-                let minted = summary_id(&summary.name, &held);
-                if minted != summary.id && !summary.id.is_empty() {
-                    renames.push((id.clone(), summary.id.clone(), minted.clone()));
-                }
-                summary.id.clone_from(&minted);
-                held.push(minted);
+            let names = summary_names_of(before, after, old_line, line);
+            if let Some(line) = after.cards[card_index].line_tables.get_mut(&id) {
+                take_summary_names(line, names, &id, &mut renames);
             }
         }
     }
     rename_summaries(after, renames);
+}
+
+/// A new id of a summary, written into every reference to its old id.
+struct SummaryRename {
+    /// Id of the summary's line.
+    line: String,
+    /// Id of the summary before the edit.
+    old: String,
+    /// Id of the summary after the edit.
+    new: String,
+}
+
+/// Returns the name of each summary of `line`, a look at agents of `after`, `None` for one that does not follow its
+/// automatic name, where `old_line` is the line in `before`, the sheet before the edit.
+fn summary_names_of(
+    before: &SheetDocument,
+    after: &SheetDocument,
+    old_line: Option<&SheetLine>,
+    line: &SheetLine,
+) -> Vec<Option<String>> {
+    let follows: Vec<bool> = line
+        .summaries
+        .iter()
+        .enumerate()
+        .map(
+            |(index, summary)| match old_line.and_then(|old| old.summaries.get(index)) {
+                Some(old) if old.name == summary.name => is_numbered(&old.name, &automatic_summary_name(before, old)),
+                _ => summary.name.is_empty() || summary.name == automatic_summary_name(after, summary),
+            },
+        )
+        .collect();
+    let bases: Vec<String> = line
+        .summaries
+        .iter()
+        .map(|summary| automatic_summary_name(after, summary))
+        .collect();
+    // A summary is steady when the line held it, by id, before the edit with the same automatic name.
+    let steady: Vec<bool> = line
+        .summaries
+        .iter()
+        .zip(&bases)
+        .map(|(summary, base)| {
+            old_line
+                .and_then(|old| {
+                    old.summaries
+                        .iter()
+                        .find(|old| !old.id.is_empty() && old.id == summary.id)
+                })
+                .is_some_and(|old| automatic_summary_name(before, old) == *base)
+        })
+        .collect();
+    let taken: HashSet<String> = line
+        .summaries
+        .iter()
+        .zip(&follows)
+        .filter(|(_, follows)| !**follows)
+        .map(|(summary, _)| summary.name.to_lowercase())
+        .collect();
+    summary_names(&bases, &follows, &steady, taken)
+}
+
+/// Gives each summary of `line`, the line `line_id`, its name of `names`, and the id minted from its name when that
+/// changes, and adds each new id of a summary that held one to `renames`.
+fn take_summary_names(
+    line: &mut SheetLine,
+    names: Vec<Option<String>>,
+    line_id: &str,
+    renames: &mut Vec<SummaryRename>,
+) {
+    // A summary whose name changes, or that has no id yet, takes the id minted from its name, unique within the line.
+    // Every other summary keeps its id.
+    let mut renamed = Vec::with_capacity(names.len());
+    for (summary, name) in line.summaries.iter_mut().zip(names) {
+        let changed = name.as_ref().is_some_and(|name| *name != summary.name);
+        if let Some(name) = name {
+            summary.name = name;
+        }
+        renamed.push(changed || summary.id.is_empty());
+    }
+    let mut held: Vec<String> = line
+        .summaries
+        .iter()
+        .zip(&renamed)
+        .filter(|(_, renamed)| !**renamed)
+        .map(|(summary, _)| summary.id.clone())
+        .collect();
+    for (summary, _) in line.summaries.iter_mut().zip(&renamed).filter(|(_, renamed)| **renamed) {
+        let minted = summary_id(&summary.name, &held);
+        if minted != summary.id && !summary.id.is_empty() {
+            renames.push(SummaryRename {
+                line: line_id.to_owned(),
+                old: summary.id.clone(),
+                new: minted.clone(),
+            });
+        }
+        summary.id.clone_from(&minted);
+        held.push(minted);
+    }
 }
 
 /// Returns the name of each summary of a line whose automatic names are `bases`, `None` for one that does not follow
@@ -425,14 +458,13 @@ fn free_name(base: &str, taken: &mut HashSet<String>) -> String {
     name
 }
 
-/// Writes each new summary id of `renames`, `(line, old id, new id)` triples, into every reference of `document` to
-/// the old id.
+/// Writes each new summary id of `renames` into every reference of `document` to the old id.
 ///
 /// A new id can be the old id of another summary of the same line. Each old id first moves to an id that no summary
 /// holds, and no reference is renamed twice.
-fn rename_summaries(document: &mut SheetDocument, renames: Vec<(String, String, String)>) {
+fn rename_summaries(document: &mut SheetDocument, renames: Vec<SummaryRename>) {
     let mut parked = Vec::with_capacity(renames.len());
-    for (index, (line, old, new)) in renames.into_iter().enumerate() {
+    for (index, SummaryRename { line, old, new }) in renames.into_iter().enumerate() {
         let free = format!("{RESERVED_PREFIX}summary_{index}");
         change_references(
             document,
@@ -442,10 +474,10 @@ fn rename_summaries(document: &mut SheetDocument, renames: Vec<(String, String, 
             },
             Change::Rename(&free),
         );
-        parked.push((line, free, new));
+        parked.push(SummaryRename { line, old: free, new });
     }
-    for (line, free, new) in parked {
-        change_references(document, &Target::Summary { line, summary: free }, Change::Rename(&new));
+    for SummaryRename { line, old, new } in parked {
+        change_references(document, &Target::Summary { line, summary: old }, Change::Rename(&new));
     }
 }
 

@@ -4,6 +4,12 @@
 `SheetDocument`. `agents/henad-graph-sheet.md` holds the document, its modules and the checker the
 commands leave meaning to, and `agents/henad-graph-edit.md` holds `KeyStream`.
 
+Files: `mod.rs` holds `SheetBuilder` and `Draft` with `run`, `finish`, the keys and the lookups,
+`command.rs` `SheetEdit`, `SheetItem`, `LineField` and `SheetEditError`, `declarations.rs` the
+commands on properties, states, parameters, measures, events, buttons and cards (`rename`,
+`change_id`, `delete`), `line_commands.rs` the commands on lines with `unit_in_text`, the rate
+units and `condition_phrase`, `ids.rs` `IdSpace` and `mint_id`, and `colors.rs` the default colours.
+
 **Edit commands.** `SheetBuilder` holds a `SheetDocument` and a `KeyStream` (`new` seeds it from
 entropy, `with_key_seed` from a seed), and `apply(SheetEdit)` runs one command on a copy (`Draft`),
 so a refused command changes nothing, then returns the ids it made. A command checks structure (ids,
