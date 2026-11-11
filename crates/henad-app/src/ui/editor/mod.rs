@@ -21,16 +21,21 @@ pub mod graph;
 pub mod preview;
 pub mod sheet;
 
-use egui::{Button, CentralPanel, Frame, Label, Margin, Panel, RichText, ScrollArea, Sense};
+use egui::{Button, CentralPanel, Frame, Label, Margin, Modal, Panel, RichText, ScrollArea, Sense};
 use henad_compute::entry::{ModelEntry, ModelSet};
 use henad_compute::fault::{Fault, FaultKind};
 use henad_compute::gpu::runtime_grid::GridRule;
 use henad_core::diagnostic::CodeDiagnostic;
-use henad_core::provenance::{ModelCode, ModelSource};
+use henad_core::explore::fingerprint::fnv1a64;
+use henad_core::provenance::{CodeOrigin, ModelCode, ModelSource};
 use henad_explore::model_file::ModelFile;
 use henad_graph::model_text::read_header;
 use henad_graph::sheet::document::SheetDocument;
-use henad_graph::sheet::sentence::{PREVIEW_WAITS as SHEET_PREVIEW_WAITS, SHEET_EMPTY, WORLD_EMPTY};
+use henad_graph::sheet::edit::{IdSpace, mint_id};
+use henad_graph::sheet::sentence::{
+    CANCEL, DISCARD_CHANGES, PREVIEW_WAITS as SHEET_PREVIEW_WAITS, SAVE_MODEL, SHEET_EMPTY, WORLD_EMPTY,
+    unsaved_changes,
+};
 use henad_graph::sheet::{KIND_SHEET, ParsedSheet, SHEET_CODE_FORMAT};
 use henad_graph::starters::{Starter, agent_starters, starters};
 use henad_graph::{GraphFile, KIND_GRAPH};
@@ -43,7 +48,7 @@ use crate::state::{AppState, PreviewRun, too_large_message};
 use crate::ui::dock::Tab;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
 use crate::ui::params::sheet_number;
-use crate::ui::sweep::layout::add_button;
+use crate::ui::sweep::layout::{add_button, filled_button};
 use preview::{PREVIEW_WAITS, PreviewState};
 
 /// Text the Editor shows on an adapter that cannot run compute shaders.
@@ -109,6 +114,20 @@ impl EditorModel {
             Self::Rule(text) => text.clone(),
             Self::Graph(graph) => graph.text(),
             Self::Sheet(sheet) => sheet.text().to_owned(),
+        }
+    }
+
+    /// Returns a mark of the model's document that changes with every edit: a hash of a grid rule's or a sheet's
+    /// text, or the revision of a graph, which every edit, undo and redo moves on.
+    ///
+    /// Note that a graph edited back to an earlier document keeps a new mark, where a text edited back takes its old
+    /// mark again.
+    pub fn edit_mark(&self) -> u64 {
+        match self {
+            Self::Empty => fnv1a64(&[]),
+            Self::Rule(text) => fnv1a64(text.as_bytes()),
+            Self::Graph(graph) => graph.revision(),
+            Self::Sheet(sheet) => fnv1a64(sheet.text().as_bytes()),
         }
     }
 
@@ -208,6 +227,17 @@ pub struct EditorPanel {
     /// Source of the entry the last Apply installed. A fault of a run built from it belongs to the edit until the run
     /// passes tick 0.
     applied: Option<ModelSource>,
+    /// Edit mark of the model at the last Apply, [`EditorModel::edit_mark`]. An edit since then drops an outcome that
+    /// reads as applied.
+    applied_mark: Option<u64>,
+    /// Edit mark of the model when it was opened, made or last saved. Apply leaves it alone.
+    saved_mark: u64,
+    /// Edit mark of the model when Save model started, until the save reports.
+    saving: Option<u64>,
+    /// Action that replaces the models, waiting on the unsaved changes dialog, `None` while the dialog is closed.
+    pub ask: Option<Replacement>,
+    /// Action that replaces the models, waiting for the saves that the dialog's Save model started.
+    after_save: Option<AfterSave>,
     /// Character of the text the code view scrolls to on its next frame, after a press on a diagnostic.
     scroll_to: Option<usize>,
     /// Whether the code field's undo history is cleared on its next frame, after the text was replaced from outside
@@ -331,8 +361,11 @@ impl EditorPanel {
         self.file_name = file_name;
         self.outcome = None;
         self.applied = None;
+        self.applied_mark = None;
         self.scroll_to = None;
         self.preview = preview::Preview::default();
+        self.saved_mark = self.model.edit_mark();
+        self.saving = None;
         self.replace_view();
     }
 
@@ -346,8 +379,11 @@ impl EditorPanel {
         self.file_name = file_name;
         self.outcome = None;
         self.applied = None;
+        self.applied_mark = None;
         self.scroll_to = None;
         self.preview = preview::Preview::default();
+        self.saved_mark = self.model.edit_mark();
+        self.saving = None;
     }
 
     /// Replaces the Editor's model with `model`, from no file, and clears the file status line.
@@ -370,8 +406,11 @@ impl EditorPanel {
         self.file_name = file_name;
         self.outcome = None;
         self.applied = None;
+        self.applied_mark = None;
         self.scroll_to = None;
         self.preview = preview::Preview::default();
+        self.saved_mark = self.model.edit_mark();
+        self.saving = None;
     }
 
     /// Forgets the file path, the counterpart, the original read from beside the file, the banner and the conversion
@@ -391,11 +430,58 @@ impl EditorPanel {
     pub fn settle_swap(&mut self) {
         self.outcome = None;
         self.applied = None;
+        self.applied_mark = None;
         self.scroll_to = None;
         self.preview = preview::Preview::default();
         self.banner = None;
         self.convert = None;
         self.show_changes = false;
+    }
+
+    /// Returns whether the model shown holds edits since it was opened, made or last saved. An empty model holds none.
+    pub fn is_unsaved(&self) -> bool {
+        !self.model.is_empty() && self.model.edit_mark() != self.saved_mark
+    }
+
+    /// Returns the names of the models that hold unsaved edits: the model shown, then the model held beside it.
+    pub fn unsaved_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        if self.is_unsaved() {
+            names.push(model_name(&self.model, self.file_name.as_deref()));
+        }
+        if let Some(counterpart) = self.counterpart.as_ref().filter(|counterpart| counterpart.is_unsaved()) {
+            names.push(model_name(&counterpart.model, counterpart.file_name.as_deref()));
+        }
+        names
+    }
+
+    /// Takes the outcome of the save of the model shown or of the counterpart, by `target`, with the file name it
+    /// saved under or `None` for a save that saved nothing.
+    ///
+    /// A saved model takes the file name and reads as saved at the edit mark it had when the save started.
+    pub fn save_finished(&mut self, target: SaveTarget, saved: Option<String>) {
+        match target {
+            SaveTarget::Model => {
+                let mark = self.saving.take();
+                if let Some(name) = saved {
+                    self.file_name = Some(name);
+                    // The file was saved where the dialog chose, which can be another folder.
+                    self.file_path = None;
+                    self.saved_mark = mark.unwrap_or(self.saved_mark);
+                }
+            }
+            SaveTarget::Counterpart => {
+                if let Some(counterpart) = self.counterpart.as_mut() {
+                    let mark = counterpart.saving.take();
+                    if let Some(name) = saved {
+                        counterpart.file_name = Some(name);
+                        counterpart.file_path = None;
+                        counterpart.saved_mark = mark.unwrap_or(counterpart.saved_mark);
+                    }
+                }
+            }
+            SaveTarget::Export | SaveTarget::SweepSpec | SaveTarget::SweepResults(_) => {}
+        }
     }
 
     /// Clears the code field's undo history and returns the view to the top left on the field's next frame, after
@@ -413,13 +499,28 @@ impl EditorPanel {
     /// An outcome that read as applied waits for Build once nothing is loaded, as after Cancel or Offload.
     ///
     /// An outcome that waits for Build is dropped once Build builds another model, as while it replays the preview of
-    /// the Editor's sheet. `next_build` is `None` then.
+    /// the Editor's sheet. `next_build` is `None` then. An outcome that reads as applied or unchanged is dropped once
+    /// the model is edited since the Apply.
     pub fn settle_outcome(
         &mut self,
         loaded: Option<&ModelSource>,
         next_build: Option<&ModelSource>,
         rebuild_pending: bool,
     ) {
+        let edited = self.applied_mark.is_some_and(|mark| mark != self.model.edit_mark());
+        let applied = matches!(
+            self.outcome,
+            Some(
+                ApplyOutcome::Applied
+                    | ApplyOutcome::AwaitingRebuild
+                    | ApplyOutcome::Installed
+                    | ApplyOutcome::Unchanged
+            )
+        );
+        if edited && applied {
+            self.outcome = None;
+            return;
+        }
         let waiting = matches!(
             self.outcome,
             Some(ApplyOutcome::AwaitingRebuild | ApplyOutcome::Installed)
@@ -436,6 +537,41 @@ impl EditorPanel {
         }
     }
 }
+
+/// Action that replaces the Editor's models. It waits on the unsaved changes dialog while a model the Editor holds has
+/// unsaved edits.
+#[derive(Debug)]
+pub enum Replacement {
+    /// Opens the New model dialog.
+    NewModel,
+    /// Opens the Life starter as a grid rule.
+    NewGridRule,
+    /// Opens the graph starter with this file name.
+    NewGraphModel(&'static str),
+    /// Opens a dialog that picks a model file.
+    OpenModel,
+    /// Opens a model read from a model's recorded code, as Open in Editor and Edit model do.
+    Open(EditableModel),
+}
+
+/// Replacement waiting for the saves that the unsaved changes dialog's Save model started.
+#[derive(Debug)]
+struct AfterSave {
+    replacement: Replacement,
+    /// Saves yet to report, the one that runs now first.
+    remaining: Vec<SaveTarget>,
+}
+
+/// Choice made in the unsaved changes dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnsavedChoice {
+    Save,
+    Discard,
+    Cancel,
+}
+
+/// Width in points of the unsaved changes dialog.
+const UNSAVED_DIALOG_WIDTH: f32 = 420.0;
 
 /// Request from the Editor, applied once the tab has drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1000,10 +1136,10 @@ pub fn diagnostic_text(diagnostic: &CodeDiagnostic) -> String {
 /// Applies `request`, once the tab has drawn.
 fn apply_request(ctx: &egui::Context, app: &mut AppState, request: EditorRequest) {
     match request {
-        EditorRequest::NewModel => sheet::new_model::open_new_model(app),
-        EditorRequest::NewGridRule => new_grid_rule(app),
-        EditorRequest::NewGraphModel(file_name) => new_graph_model(app, file_name),
-        EditorRequest::OpenModel => open_model(app),
+        EditorRequest::NewModel => replace_model(app, Replacement::NewModel),
+        EditorRequest::NewGridRule => replace_model(app, Replacement::NewGridRule),
+        EditorRequest::NewGraphModel(file_name) => replace_model(app, Replacement::NewGraphModel(file_name)),
+        EditorRequest::OpenModel => replace_model(app, Replacement::OpenModel),
         EditorRequest::PickImport => app.open_file(OpenTarget::Function),
         EditorRequest::SaveModel => save_model(app),
         EditorRequest::Apply => apply(app),
@@ -1029,26 +1165,75 @@ pub fn move_cursor_to(ctx: &egui::Context, panel: &mut EditorPanel, line: u32, c
     panel.scroll_to = Some(index);
 }
 
+/// Returns the id a new model of the Editor takes in place of `id`: `id` itself while no model of `models` holds it
+/// as compiled code, and otherwise `prefix` and `id`, such as `sheet_game_of_life`, numbered by [`mint_id`] while a
+/// compiled model holds that too.
+///
+/// A model applied from the Editor earlier is runtime code, and a new model under its id replaces it on Apply.
+pub fn new_model_id(models: &ModelSet, id: &str, prefix: &str) -> String {
+    let compiled = |candidate: &str| {
+        models
+            .get(candidate)
+            .is_some_and(|entry| entry.source().origin() == CodeOrigin::Compiled)
+    };
+    if !compiled(id) {
+        return id.to_owned();
+    }
+    let prefixed = if id.starts_with(prefix) {
+        id.to_owned()
+    } else {
+        format!("{prefix}{id}")
+    };
+    mint_id(&prefixed, IdSpace::Card, compiled).unwrap_or(prefixed)
+}
+
 /// Returns the text of the Life starter, the model file of [`GridRule::life`].
 pub fn life_starter() -> String {
+    rule_text(GridRule::life())
+}
+
+/// Returns the model file text of `rule`.
+fn rule_text(rule: GridRule) -> String {
     // The Life starter holds no text a model file cannot hold.
-    ModelFile::from_rule(GridRule::life()).map_or_else(|_| String::new(), |file| file.to_toml())
+    ModelFile::from_rule(rule).map_or_else(|_| String::new(), |file| file.to_toml())
 }
 
 /// Replaces the Editor's text with the Life starter and brings the Editor to the front.
+///
+/// The rule takes another id than `life_rule` while a compiled model of the app's set holds it ([`new_model_id`]).
 pub fn new_grid_rule(app: &mut AppState) {
-    app.editor.load(life_starter(), None);
+    let mut rule = GridRule::life();
+    let id = new_model_id(&app.models, &rule.id, "");
+    let text = if id == rule.id {
+        life_starter()
+    } else {
+        rule.id = id;
+        rule_text(rule)
+    };
+    app.editor.load(text, None);
     app.editor.file_status = None;
     app.focus_request = Some(Tab::Editor);
 }
 
 /// Replaces the Editor's model with the starter whose file is named `file_name`, and brings the Editor to the front.
+///
+/// The graph takes another id than the starter's while a compiled model of the app's set holds it ([`new_model_id`]).
 pub fn new_graph_model(app: &mut AppState, file_name: &str) {
-    let Some(file) = henad_graph::starters::starter(file_name).and_then(|starter| GraphFile::parse(starter.text).ok())
+    let Some(mut file) =
+        henad_graph::starters::starter(file_name).and_then(|starter| GraphFile::parse(starter.text).ok())
     else {
         app.editor.file_status = Some(format!("Starter {file_name} does not read"));
         return;
     };
+    let id = new_model_id(&app.models, &file.document().target.id, "node_");
+    if id != file.document().target.id {
+        let mut document = file.document().clone();
+        document.id.clone_from(&id);
+        document.target.id = id;
+        if let Ok(renamed) = GraphFile::from_document(&document, file.editor()) {
+            file = renamed;
+        }
+    }
     app.editor.load_graph(&file, None);
     app.editor.file_status = None;
     app.focus_request = Some(Tab::Editor);
@@ -1092,7 +1277,7 @@ pub fn can_edit(entry: &ModelEntry) -> bool {
 }
 
 /// Replaces the Editor's model with the selected model, its sheet when it was built from one, and brings the Editor
-/// to the front.
+/// to the front. A model of the Editor with unsaved edits asks first, as [`replace_model`] does.
 ///
 /// The model stays, edits since included, when the selected model's code is the code the Editor applied last.
 pub fn edit_model(app: &mut AppState) {
@@ -1103,10 +1288,11 @@ pub fn edit_model(app: &mut AppState) {
     let Some(model) = editable_model(entry.source().author(), entry.source().code()) else {
         return;
     };
-    if !applied {
-        app.editor.load_model(model);
+    if applied {
+        app.focus_request = Some(Tab::Editor);
+    } else {
+        replace_model(app, Replacement::Open(model));
     }
-    app.focus_request = Some(Tab::Editor);
 }
 
 /// Replaces the Editor's model with `model`, from no file, and brings the Editor to the front.
@@ -1128,7 +1314,24 @@ pub fn save_model(app: &mut AppState) {
     }
     let name = save_name(&app.editor);
     let bytes = app.editor.model.file_text().into_bytes();
+    app.editor.saving = Some(app.editor.model.edit_mark());
     app.save_as(SaveTarget::Model, &name, bytes);
+}
+
+/// Opens a dialog that saves the model the Editor holds beside the one shown, as [`save_model`] saves the one shown.
+fn save_counterpart(app: &mut AppState) {
+    let Some(counterpart) = app
+        .editor
+        .counterpart
+        .as_mut()
+        .filter(|counterpart| !counterpart.model.is_empty())
+    else {
+        return;
+    };
+    let name = save_name_of(&counterpart.model, counterpart.file_name.as_deref());
+    let bytes = counterpart.model.file_text().into_bytes();
+    counterpart.saving = Some(counterpart.model.edit_mark());
+    app.save_as(SaveTarget::Counterpart, &name, bytes);
 }
 
 /// Returns the file name a save of the Editor's text suggests: the name it was opened or saved under, then the model's
@@ -1136,14 +1339,159 @@ pub fn save_model(app: &mut AppState) {
 ///
 /// A sheet suggests its id even while it holds errors.
 pub fn save_name(panel: &EditorPanel) -> String {
-    if let Some(name) = &panel.file_name {
-        return name.clone();
+    save_name_of(&panel.model, panel.file_name.as_deref())
+}
+
+/// Returns the file name a save of `model`, from the file `file_name`, suggests, as [`save_name`] does.
+fn save_name_of(model: &EditorModel, file_name: Option<&str>) -> String {
+    if let Some(name) = file_name {
+        return name.to_owned();
     }
-    if let Some(sheet) = panel.model.sheet() {
+    if let Some(sheet) = model.sheet() {
         return format!("{}.toml", sheet.document().sheet.id);
     }
-    ModelFile::parse(&panel.model.file_text())
+    ModelFile::parse(&model.file_text())
         .map_or_else(|_| FALLBACK_FILE_NAME.to_owned(), |file| format!("{}.toml", file.id()))
+}
+
+/// Returns the name the unsaved changes dialog gives `model`, from the file `file_name`: a sheet's or a graph's name,
+/// or the file name a grid rule saves under.
+fn model_name(model: &EditorModel, file_name: Option<&str>) -> String {
+    match model {
+        EditorModel::Sheet(sheet) => sheet.document().sheet.name.clone(),
+        EditorModel::Graph(graph) => graph.document().name.clone(),
+        EditorModel::Empty | EditorModel::Rule(_) => save_name_of(model, file_name),
+    }
+}
+
+/// Runs `replacement` at once while no model the Editor holds has unsaved edits, and otherwise opens the unsaved
+/// changes dialog, which runs it once the edits are saved or discarded.
+pub fn replace_model(app: &mut AppState, replacement: Replacement) {
+    if app.editor.unsaved_names().is_empty() {
+        run_replacement(app, replacement);
+    } else {
+        app.editor.ask = Some(replacement);
+    }
+}
+
+/// Runs `replacement` without asking.
+fn run_replacement(app: &mut AppState, replacement: Replacement) {
+    match replacement {
+        Replacement::NewModel => sheet::new_model::open_new_model(app),
+        Replacement::NewGridRule => new_grid_rule(app),
+        Replacement::NewGraphModel(file_name) => new_graph_model(app, file_name),
+        Replacement::OpenModel => open_model(app),
+        Replacement::Open(model) => open_editable(app, model),
+    }
+}
+
+/// Starts the save of the model shown, for [`SaveTarget::Model`], or of the model held beside it.
+fn save_target(app: &mut AppState, target: SaveTarget) {
+    if target == SaveTarget::Counterpart {
+        save_counterpart(app);
+    } else {
+        save_model(app);
+    }
+}
+
+/// Carries on with the replacement waiting for the saves the unsaved changes dialog started, once the save for
+/// `target` reports whether it `saved`.
+///
+/// The next save starts, or the replacement runs once each model is saved. A save that saved nothing, as a canceled
+/// dialog, drops the replacement, and the models stay.
+pub fn continue_replacement(app: &mut AppState, target: SaveTarget, saved: bool) {
+    let Some(after) = app.editor.after_save.as_mut() else {
+        return;
+    };
+    if after.remaining.first() != Some(&target) {
+        return;
+    }
+    if !saved {
+        app.editor.after_save = None;
+        return;
+    }
+    after.remaining.remove(0);
+    match after.remaining.first().copied() {
+        Some(next) => save_target(app, next),
+        None => {
+            if let Some(after) = app.editor.after_save.take() {
+                run_replacement(app, after.replacement);
+            }
+        }
+    }
+}
+
+/// Draws the unsaved changes dialog while a replacement waits on it: a sentence naming each model with unsaved edits,
+/// then Cancel, Discard changes and Save model.
+///
+/// Save model saves each such model, the one shown first, and runs the replacement once both are saved. Discard
+/// changes runs it at once. Cancel, Escape and a click outside close the dialog and keep the models.
+pub fn unsaved_modal(ctx: &egui::Context, app: &mut AppState) {
+    if app.editor.ask.is_none() {
+        return;
+    }
+    let names = app.editor.unsaved_names();
+    if names.is_empty() {
+        // The edits went, as after Undo back to the saved text, and nothing is left to lose.
+        if let Some(replacement) = app.editor.ask.take() {
+            run_replacement(app, replacement);
+        }
+        return;
+    }
+    let sentence = unsaved_changes(&names);
+    let mut choice = None;
+    let response = Modal::new(egui::Id::new("henad_unsaved_modal")).show(ctx, |ui| {
+        ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+            node.set_role(egui::accesskit::Role::Dialog);
+            node.set_label(sentence.as_str());
+        });
+        ui.set_max_width(UNSAVED_DIALOG_WIDTH);
+        ui.label(&sentence);
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            if ui.button(CANCEL).clicked() {
+                choice = Some(UnsavedChoice::Cancel);
+            }
+            if ui.button(DISCARD_CHANGES).clicked() {
+                choice = Some(UnsavedChoice::Discard);
+            }
+            if ui.add(filled_button(SAVE_MODEL.to_owned())).clicked() {
+                choice = Some(UnsavedChoice::Save);
+            }
+        });
+    });
+    if choice.is_none() && response.should_close() {
+        choice = Some(UnsavedChoice::Cancel);
+    }
+    let Some(choice) = choice else {
+        return;
+    };
+    let Some(replacement) = app.editor.ask.take() else {
+        return;
+    };
+    match choice {
+        UnsavedChoice::Cancel => {}
+        UnsavedChoice::Discard => run_replacement(app, replacement),
+        UnsavedChoice::Save => {
+            let mut remaining = Vec::new();
+            if app.editor.is_unsaved() {
+                remaining.push(SaveTarget::Model);
+            }
+            if app
+                .editor
+                .counterpart
+                .as_ref()
+                .is_some_and(|counterpart| counterpart.is_unsaved())
+            {
+                remaining.push(SaveTarget::Counterpart);
+            }
+            let first = remaining.first().copied();
+            app.editor.after_save = Some(AfterSave { replacement, remaining });
+            if let Some(first) = first {
+                save_target(app, first);
+            }
+        }
+    }
 }
 
 /// Handles the result of an Open model dialog. The picked file replaces the Editor's model, and is applied only on
@@ -1260,6 +1608,7 @@ pub fn apply(app: &mut AppState) {
 
     app.editor.outcome = None;
     app.editor.applied = Some(source.clone());
+    app.editor.applied_mark = Some(app.editor.model.edit_mark());
     if unchanged && author_changed {
         let mut models = ModelSet::new(henad_core::build_info!());
         if models.insert(entry.clone()).is_ok() {

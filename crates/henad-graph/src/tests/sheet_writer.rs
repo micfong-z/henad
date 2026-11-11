@@ -64,6 +64,9 @@ fn the_rust_writer_agrees_with_check_py_apart_from_comments() {
     ];
     for (file_name, expected) in golden {
         let mut document = read(sheet_text(file_name));
+        // The starters take the id `sheet_<name>`, and the format's examples the name alone.
+        let example_id = document.sheet.id.strip_prefix("sheet_").map(str::to_owned);
+        document.sheet.id = example_id.unwrap_or_else(|| panic!("{file_name}: a starter's id starts with sheet_"));
         // The ants starter holds a note on its slower trail, which the format's example lacks.
         for card in &mut document.cards {
             for line in card.line_tables.values_mut() {
@@ -95,7 +98,7 @@ width = 1024
 next_line = 5
 purpose = "Conway's Game of Life. Pattern to look for: gliders and other shapes that persist and travel."
 name = "Game of Life"
-id = "game_of_life"
+id = "sheet_game_of_life"
 version = 1
 
 [[parameter]]

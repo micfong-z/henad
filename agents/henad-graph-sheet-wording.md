@@ -16,9 +16,10 @@ example, `SheetSection::shown` for a world of cells or of agents, the World and 
 property form and its checks, Starts as with `StartsField` and the `starts_*_place` functions, the
 Parameters, Measures, Colours and Buttons words, `SHEET_EMPTY`, and the Agents, Ground and Events
 words), the New model and New parameter dialogs (`STARTER_CHOICES` with every starter's
-description), the top bar, the world tabs (`tick_counter`, the tried-value words, `PLOT_EMPTY`,
-`WORLD_EMPTY`), the Diagram and the conversion. Rows the wording table marks "Not built" are left
-out. The rate notes are templates taking numbers already formatted (`rate_note`,
+description), the Editor's unsaved changes dialog (`unsaved_changes`, `SAVE_MODEL`,
+`DISCARD_CHANGES`), the top bar, the world tabs (`tick_counter`, the tried-value words,
+`PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion. Rows the wording table marks "Not
+built" are left out. The rate notes are templates taking numbers already formatted (`rate_note`,
 `rate_for_each_note`, `worked_out_rate_note`, `growing_rate_note`, `chance_for_each_note`,
 `growing_chance_note`, `competing_note`, `mean_stay_note`), which `sheet::rates` fills. The groups
 of `sentence.rs` from "Errors on a rate in a button's card" on hold the remaining errors and words

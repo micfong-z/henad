@@ -67,7 +67,8 @@ fn small_button(ui: &mut Ui, icon: &str, name: &str, tooltip: &str) -> bool {
 /// Draws the world table: the grid size and boundary, or the agent count and the world size.
 ///
 /// The fields show the world of the edits that wait for the primary button. Otherwise a dragged field would show the
-/// document's value until the button goes up.
+/// document's value until the button goes up. A field clamps the values typed or dragged into it alone. A value the
+/// file holds outside the range is drawn as it is and left to the checker.
 fn world_table_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequest>) {
     let mut world = graph.shown_world();
     let changed = match &mut world {
@@ -77,12 +78,20 @@ fn world_table_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequ
             ui.horizontal(|ui| {
                 ui.label("Size");
                 changed |= ui
-                    .add(DragValue::new(&mut grid.width).range(1..=MAX_GRID_SIDE))
+                    .add(
+                        DragValue::new(&mut grid.width)
+                            .range(1..=MAX_GRID_SIDE)
+                            .clamp_existing_to_range(false),
+                    )
                     .on_hover_text("Default grid width in cells")
                     .changed();
                 ui.label("by");
                 changed |= ui
-                    .add(DragValue::new(&mut grid.height).range(1..=MAX_GRID_SIDE))
+                    .add(
+                        DragValue::new(&mut grid.height)
+                            .range(1..=MAX_GRID_SIDE)
+                            .clamp_existing_to_range(false),
+                    )
                     .on_hover_text("Default grid height in cells")
                     .changed();
             });
@@ -110,19 +119,31 @@ fn world_table_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequ
             ui.horizontal(|ui| {
                 ui.label("Agents");
                 changed |= ui
-                    .add(DragValue::new(&mut agents.count).range(1..=agents.max_count))
+                    .add(
+                        DragValue::new(&mut agents.count)
+                            .range(1..=agents.max_count)
+                            .clamp_existing_to_range(false),
+                    )
                     .on_hover_text("Default number of agents")
                     .changed();
             });
             ui.horizontal(|ui| {
                 ui.label("Size");
                 changed |= ui
-                    .add(DragValue::new(&mut agents.width).range(1.0..=f32::MAX))
+                    .add(
+                        DragValue::new(&mut agents.width)
+                            .range(1.0..=f32::MAX)
+                            .clamp_existing_to_range(false),
+                    )
                     .on_hover_text("Default world width")
                     .changed();
                 ui.label("by");
                 changed |= ui
-                    .add(DragValue::new(&mut agents.height).range(1.0..=f32::MAX))
+                    .add(
+                        DragValue::new(&mut agents.height)
+                            .range(1.0..=f32::MAX)
+                            .clamp_existing_to_range(false),
+                    )
                     .on_hover_text("Default world height")
                     .changed();
             });
@@ -193,7 +214,14 @@ fn params_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequest>)
                     });
                     ui.horizontal(|ui| {
                         ui.label("Default");
-                        changed |= ui.add(DragValue::new(default).speed(0.01).range(*min..=*max)).changed();
+                        changed |= ui
+                            .add(
+                                DragValue::new(default)
+                                    .speed(0.01)
+                                    .range(*min..=*max)
+                                    .clamp_existing_to_range(false),
+                            )
+                            .changed();
                     });
                     changed
                 }
@@ -206,7 +234,13 @@ fn params_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequest>)
                     });
                     ui.horizontal(|ui| {
                         ui.label("Default");
-                        changed |= ui.add(DragValue::new(default).range(*min..=*max)).changed();
+                        changed |= ui
+                            .add(
+                                DragValue::new(default)
+                                    .range(*min..=*max)
+                                    .clamp_existing_to_range(false),
+                            )
+                            .changed();
                     });
                     changed
                 }

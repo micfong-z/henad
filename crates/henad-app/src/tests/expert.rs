@@ -276,10 +276,10 @@ fn converting_game_of_life_opens_the_copy_with_frames_titled_by_line_and_the_ban
     convert_life(&mut harness);
     let graph = harness.app.editor.model.graph().expect("the copy opens in the Editor");
     assert_eq!(graph.document().name, "Game of Life (expert)");
-    assert_eq!(graph.document().id, "game_of_life_expert");
+    assert_eq!(graph.document().id, "sheet_game_of_life_expert");
     assert_eq!(
         harness.app.editor.file_name.as_deref(),
-        Some("game_of_life_expert.toml")
+        Some("sheet_game_of_life_expert.toml")
     );
     let frames = graph.editor_region().frames();
     assert!(frames.iter().any(|frame| frame.title == LINE_2), "{frames:?}");
@@ -450,18 +450,18 @@ fn a_sheet_with_a_file_has_its_copy_written_beside_it_and_found_again() {
     let text = starter_text("game_of_life.toml");
     std::fs::write(&sheet_path, text).expect("the sheet is written");
     // A file of the first copy's name is taken, and the copy takes the next.
-    std::fs::write(folder.0.join("game_of_life_expert.toml"), "taken").expect("a taken file");
+    std::fs::write(folder.0.join("sheet_game_of_life_expert.toml"), "taken").expect("a taken file");
     open_text(&mut harness.app.editor, text.to_owned(), Some("life.toml".to_owned()));
     harness.app.editor.file_path = Some(sheet_path);
     harness.settle();
     harness.click(MODEL_ACTIONS);
     harness.click(CONVERT_HEADING);
     harness.click(CONVERT);
-    let copy_path = folder.0.join("game_of_life_expert_2.toml");
+    let copy_path = folder.0.join("sheet_game_of_life_expert_2.toml");
     assert_eq!(harness.app.editor.file_path.as_ref(), Some(&copy_path));
     assert_eq!(
         harness.app.editor.file_status.as_deref(),
-        Some("Saved game_of_life_expert_2.toml")
+        Some("Saved sheet_game_of_life_expert_2.toml")
     );
     let copy_text = std::fs::read_to_string(&copy_path).expect("the copy is written");
 
@@ -469,7 +469,7 @@ fn a_sheet_with_a_file_has_its_copy_written_beside_it_and_found_again() {
     open_text(
         &mut harness.app.editor,
         copy_text,
-        Some("game_of_life_expert_2.toml".to_owned()),
+        Some("sheet_game_of_life_expert_2.toml".to_owned()),
     );
     harness.app.editor.file_path = Some(copy_path.clone());
     find_original(&mut harness.app.editor);
@@ -482,7 +482,7 @@ fn a_sheet_with_a_file_has_its_copy_written_beside_it_and_found_again() {
         .model
         .sheet()
         .expect("the sheet opens from beside the copy");
-    assert_eq!(sheet.document().sheet.id, "game_of_life");
+    assert_eq!(sheet.document().sheet.id, "sheet_game_of_life");
     assert_eq!(harness.app.editor.file_name.as_deref(), Some("life.toml"));
 
     // Without the sheet beside it, the copy says so and offers nothing to open.

@@ -129,7 +129,10 @@ fn the_lowered_agent_sheets_bind_at_most_8_storage_buffers() {
         // The ants' tick pass sits at the limit: three lanes and the Heading, the trails and their deposits, the
         // ground and the counters.
         if name == "ants.toml" {
-            let tick = demand.passes.iter().find(|pass| pass.label == "ants_tick_ant_tick");
+            let tick = demand
+                .passes
+                .iter()
+                .find(|pass| pass.label == "sheet_ants_tick_ant_tick");
             assert_eq!(tick.map(|pass| pass.storage), Some(8));
         }
     }

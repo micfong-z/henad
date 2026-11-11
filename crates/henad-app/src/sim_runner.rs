@@ -8,6 +8,13 @@ use henad_compute::gpu::sim_thread::GpuSimThread;
 use henad_compute::runner::RunnerShutdown;
 use henad_compute::snapshot::Snapshot;
 
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::large_enum_variant,
+        reason = "the app holds one runner at a time, so a box per variant would save nothing"
+    )
+)]
 pub enum SimRunner {
     Cpu(SimThread),
     Gpu(GpuSimThread),

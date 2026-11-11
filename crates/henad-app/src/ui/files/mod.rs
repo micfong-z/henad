@@ -20,6 +20,8 @@ pub enum SaveTarget {
     SweepResults(u64),
     /// A model file, from the Editor.
     Model,
+    /// The model file of the model the Editor holds beside the one shown, from the unsaved changes dialog.
+    Counterpart,
 }
 
 /// Result of one save.

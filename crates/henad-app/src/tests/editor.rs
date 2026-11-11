@@ -11,6 +11,7 @@ use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::params::ParamValue;
 use henad_core::provenance::ModelSource;
 use henad_explore::model_file::ModelFile;
+use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::sentence::PREVIEW_WAITS as SHEET_PREVIEW_WAITS;
 use henad_graph::sheet::starters;
 use web_time::Instant;
@@ -195,6 +196,68 @@ fn applying_an_edit_installs_and_rebuilds_from_tick_zero() {
     );
 }
 
+/// "Model applied." and "Model unchanged." go once the model is edited after its Apply, a grid rule's text or a
+/// sheet, and the list asks for Apply again. A frame with no edit keeps them.
+#[test]
+fn an_edit_after_apply_drops_the_applied_line() {
+    let Some(mut app) = app_with_starter() else {
+        return;
+    };
+    let applied = ApplyOutcome::Applied.summary().0;
+    let unchanged = ApplyOutcome::Unchanged.summary().0;
+    let press_apply = "Press Apply to check and install the model.";
+    apply(&mut app);
+    app.wait_for_build();
+    assert!(shows(&editor_texts(&mut app), applied));
+    assert!(
+        shows(&editor_texts(&mut app), applied),
+        "a frame with no edit keeps the line"
+    );
+    let EditorModel::Rule(text) = &mut app.editor.model else {
+        panic!("the Editor holds the rule");
+    };
+    text.push_str("\n# Birth on 3, survival on 2 or 3.\n");
+    let texts = editor_texts(&mut app);
+    assert!(!shows(&texts, applied) && shows(&texts, press_apply), "{texts:?}");
+    assert_eq!(app.editor.outcome, None);
+
+    apply(&mut app);
+    assert_eq!(
+        app.editor.outcome,
+        Some(ApplyOutcome::Unchanged),
+        "a comment leaves the code"
+    );
+    assert!(shows(&editor_texts(&mut app), unchanged));
+    let EditorModel::Rule(text) = &mut app.editor.model else {
+        panic!("the Editor holds the rule");
+    };
+    text.push('\n');
+    assert!(!shows(&editor_texts(&mut app), unchanged));
+
+    let life = starters()
+        .iter()
+        .find(|starter| starter.file_name == "game_of_life.toml")
+        .expect("the Game of Life sheet");
+    open_text(&mut app.editor, life.text.to_owned(), None);
+    apply(&mut app);
+    app.wait_for_build();
+    assert!(shows(&editor_texts(&mut app), applied));
+    let EditorModel::Sheet(sheet) = &mut app.editor.model else {
+        panic!("the Editor holds the sheet");
+    };
+    sheet
+        .edit(false, true, |builder| {
+            builder
+                .apply(SheetEdit::SetPurpose {
+                    purpose: Some("Cells live and die by their neighbours.".to_owned()),
+                })
+                .map(drop)
+        })
+        .expect("the purpose is set");
+    let texts = editor_texts(&mut app);
+    assert!(!shows(&texts, applied) && shows(&texts, press_apply), "{texts:?}");
+}
+
 /// Builds the example SIR model on a 64 by 64 grid and steps it past tick 0.
 fn run_sir_past_tick_zero(app: &mut AppState) {
     app.select_model("sir");
@@ -293,7 +356,7 @@ fn a_sheet_applied_beside_another_run_drops_the_build_line_once_its_preview_load
 
     apply(&mut app);
     assert_eq!(app.preview(), None, "Apply replaced the preview");
-    assert_eq!(app.loaded_id(), Some("game_of_life"));
+    assert_eq!(app.loaded_id(), Some("sheet_game_of_life"));
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     app.wait_for_build();
     assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");

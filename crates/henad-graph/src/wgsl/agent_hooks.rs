@@ -261,7 +261,7 @@ impl AgentHooks for AgentGraphHooks {
         let dispatch = Dispatch {
             groups_x: ctx.groups_x,
             hash: ctx.geom.index,
-            texture: [ctx.geom.display.0, ctx.geom.display.1],
+            texture: ctx.geom.display.into(),
             counting: run.counting,
         };
         uniform.block.bytes(

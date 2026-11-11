@@ -2,13 +2,15 @@
 //! length, which no panel shows a slider for and the Sweep tab still varies.
 
 use henad_core::metadata::{TimeScale, TimeUnit};
-use henad_core::params::{ParamKind, ParamValue};
+use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use henad_graph::GraphFile;
 
 use crate::state::{AppState, default_values};
-use crate::tests::support::{accessible_names, set_of, sir_rates, step_past};
+use crate::tests::support::{accessible_names, accessible_texts, set_of, sir_rates, step_past};
 use crate::ui::editor::graph::GraphEditor;
 use crate::ui::editor::graph::world::world_ui;
+use crate::ui::export::{Recording, history_csv, start_recording};
+use crate::ui::model::model_ui;
 use crate::ui::params::params_ui;
 use crate::ui::playback::tick_counter;
 use crate::ui::sweep::draft::SweepDraft;
@@ -82,6 +84,76 @@ fn the_counter_names_the_days_of_a_timed_model_and_only_the_tick_of_another() {
     assert_eq!(tick_counter(&app), Some(format!("Tick {tick}")));
 }
 
+/// The Export tab's stats and recording write the `time` column of a timed model after `tick`, as `--export-stats`
+/// writes it, and a model with no time scale writes none.
+#[test]
+fn the_export_tab_writes_the_time_of_a_timed_model() {
+    let mut models = set_of(sir_rates());
+    let sir = henad_models::example_models()
+        .get("sir")
+        .cloned()
+        .expect("SIR is registered");
+    models.insert(sir).expect("the ids differ");
+    let Some(mut app) = AppState::headless(models, true) else {
+        return;
+    };
+    let (index, _) = tick_length();
+    let header = |csv: &[u8]| {
+        String::from_utf8(csv.to_vec())
+            .expect("CSV is UTF-8")
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    // Each sample goes to the history and the recording, as `HenadApp::logic` passes it.
+    let record = |app: &mut AppState| {
+        let snapshot = app.snapshot.take().expect("a snapshot");
+        if let Some(history) = &mut app.stats_history {
+            history.push_entries(&snapshot.stats, snapshot.tick);
+        }
+        app.record(&snapshot);
+        app.snapshot = Some(snapshot);
+    };
+
+    app.select_model(sir_rates().id());
+    app.param_values[index] = ParamValue::F32(0.5);
+    app.reset_simulation();
+    step_past(&mut app, 0);
+    start_recording(&mut app);
+    record(&mut app);
+    step_past(&mut app, 1);
+    record(&mut app);
+    let history = history_csv(&app).expect("a history").expect("one layout");
+    assert!(header(&history).starts_with("tick,time,"), "{}", header(&history));
+    let rows: Vec<String> = String::from_utf8(history)
+        .expect("CSV is UTF-8")
+        .lines()
+        .skip(1)
+        .map(|row| row.split(',').take(2).collect::<Vec<_>>().join(","))
+        .collect();
+    assert_eq!(rows, ["1,0.5", "2,1"], "half a day a tick");
+    app.stop_recording();
+    let Recording::Done { csv, .. } = &app.recording else {
+        panic!("the recording did not stop");
+    };
+    assert!(header(csv).starts_with("tick,time,"), "{}", header(csv));
+
+    app.recording = Recording::Off;
+    app.select_model("sir");
+    app.reset_simulation();
+    step_past(&mut app, 0);
+    start_recording(&mut app);
+    record(&mut app);
+    app.stop_recording();
+    let Recording::Done { csv, .. } = &app.recording else {
+        panic!("the recording did not stop");
+    };
+    assert!(!header(csv).contains("time"), "{}", header(csv));
+    let history = history_csv(&app).expect("a history").expect("one layout");
+    assert!(!header(&history).contains("time"), "{}", header(&history));
+}
+
 #[test]
 fn a_hidden_tick_length_has_no_slider_on_the_parameters_tab() {
     let entry = sir_rates();
@@ -99,6 +171,36 @@ fn a_hidden_tick_length_has_no_slider_on_the_parameters_tab() {
         !names.iter().any(|name| name.starts_with(TICK_LENGTH_LABEL)),
         "{names:?}"
     );
+}
+
+/// The Model tab's Parameters row counts the parameters the Parameters tab shows, the hidden tick length left out.
+#[test]
+fn the_model_tab_counts_the_parameters_the_parameters_tab_shows() {
+    let entry = sir_rates();
+    let Some(mut app) = AppState::headless(set_of(entry.clone()), true) else {
+        return;
+    };
+    app.select_model(entry.id());
+    // The row reads the count, and the number of those applied on reload in brackets.
+    let count = |params: &[&ParamDescriptor]| {
+        let reload = params.iter().filter(|param| !param.is_live()).count();
+        if reload == 0 {
+            params.len().to_string()
+        } else {
+            format!("{} ({reload} reload)", params.len())
+        }
+    };
+    let declared: Vec<&ParamDescriptor> = entry.param_descriptors().iter().collect();
+    let shown: Vec<&ParamDescriptor> = declared.iter().copied().filter(|param| !param.is_hidden()).collect();
+    assert_ne!(count(&shown), count(&declared), "the fixture hides its tick length");
+    // AccessKit lists the nodes in no order, so the row is found by its value.
+    let texts = accessible_texts(
+        |ui| model_ui(ui, &mut app),
+        |node| node.value().or_else(|| node.label()),
+    );
+    assert!(texts.contains(&"Parameters".to_owned()), "{texts:?}");
+    assert!(texts.contains(&count(&shown)), "{texts:?}");
+    assert!(!texts.contains(&count(&declared)), "{texts:?}");
 }
 
 #[test]

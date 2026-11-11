@@ -247,7 +247,10 @@ fn run_to_row(ui: &mut egui::Ui, app: &mut AppState, build_disabled_reason: Opti
 }
 
 /// Returns the reason Run cannot run the loaded model to the tick in the Run to tick field, or `None` when it can.
-fn run_refusal(app: &AppState, build_disabled_reason: Option<&str>, current: u64) -> Option<String> {
+///
+/// Run drives the preview of the Editor's sheet while Build replays it, and a tick behind the current one replays its
+/// start first.
+pub(crate) fn run_refusal(app: &AppState, build_disabled_reason: Option<&str>, current: u64) -> Option<String> {
     // While the sim plays, the loop runs ahead of `current` and might be past the tick already.
     if app.sim_running {
         return Some("Pause to run to a tick".to_owned());
@@ -255,7 +258,7 @@ fn run_refusal(app: &AppState, build_disabled_reason: Option<&str>, current: u64
     if app.code_pending() {
         return Some(format!("Model code changed. Press {MDI_RESTART}\u{a0}Build first."));
     }
-    if app.loaded_entry().is_some() && !app.selection_is_loaded() {
+    if app.loaded_entry().is_some() && !app.selection_is_loaded() && !app.build_replays_preview() {
         return Some(format!(
             "Selected model not loaded. Press {MDI_RESTART}\u{a0}Build first."
         ));

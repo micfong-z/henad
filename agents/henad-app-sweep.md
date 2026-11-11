@@ -46,7 +46,16 @@ reserves before any note comes, the `Reveal` that opens a section and scrolls to
 `ISSUE_DELAY`, the time a focused text field holds back the issue of its text. `builder.rs`
 draws the Design, Actions, Replicates and seeds, Run length, Outputs and Execution sections, and
 `parameters.rs` the parameter rows, the values editor and the options menu, each writing the
-row's `--vary` text, a list without spaces. `session.rs` wraps `henad_explore::handle::SweepRun`
+row's `--vary` text, a list without spaces. `SweepSession::start` refuses a sweep of the Editor's
+sheet (`editor_sheet_of`) on native when a
+config of its plan, or a search's fixed values, is past a work budget (`sheet_capacity_refusal`):
+the
+configs whose `SheetFile::shortfalls` differ from the entry's words, as a `CapacityError` in the
+sweep's own message, so the Start line names the sheet's lines and no pass. A config refused for
+another reason is left to the sweep's check on its own device
+(`a_sweep_past_the_work_budget_on_a_sheet_names_its_lines_and_no_pass`,
+`src/tests/sheet_agents.rs`).
+`session.rs` wraps `henad_explore::handle::SweepRun`
 (a thread on native, pumped from `HenadApp::logic` through `ui::sweep::update` in a browser, where
 the frame keeps repainting while it steps), pauses the live sim on start, and keeps the
 `KeptDraft` that started it for Save spec and the Plan panel. It hands `SweepRun` no device, so a
@@ -103,13 +112,15 @@ runtime code (`Manifest::code_matches`). `henad-app --open DIR` opens a folder a
 Open in Editor (`OPEN_IN_EDITOR`, `ResultsRequest::OpenInEditor`) shows in the toolbar while
 `ResultsStore::records_editable_code` holds, a check of the recorded formats alone. A press reads
 `ResultsStore::editable_model`, the recorded sheet (`ResultSet::author`) or else the recorded
-graph or grid rule, through the Editor's `editable_model`, and `editor::open_editable` loads it
-from no file and brings the Editor to the front. `RecordedModel` keeps the author text and the
+graph or grid rule, through the Editor's `editable_model`, and `editor::replace_model` loads it
+from no file, after the unsaved changes dialog when the Editor holds unsaved edits, and brings the
+Editor to the front. `RecordedModel` keeps the author text and the
 code: a sweep run in the app keeps those of the entry it started with, and a folder those its
 manifest holds. A text that does not read sets the status line. The Model tab's Edit model takes
 the same path over the selected entry (`edit_model`), so a model built from a sheet opens as the
 sheet. `open_in_editor_opens_the_sheet_a_sweep_recorded_or_else_its_graph`
-(`src/tests/sheet_editor.rs`) holds both.
+(`src/tests/sheet_editor.rs`) holds both, and that a folder of the Life sheet the app has not
+applied finds no entry under `sheet_game_of_life`, so its replay names the missing model.
 `ui/sweep/search.rs` draws the Search section of Search mode: the method, the objective or the
 PSE axes, the budget, and each method's other settings in a nested Method settings section. An
 output picked there that the runs do not record joins the Outputs section, and Use range from

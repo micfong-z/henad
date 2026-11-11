@@ -48,7 +48,7 @@ pub(super) fn sheet(harness: &Harness) -> &SheetEditor {
 }
 
 /// Sheet in the harness's Editor, to change.
-fn sheet_mut(harness: &mut Harness) -> &mut SheetEditor {
+pub(super) fn sheet_mut(harness: &mut Harness) -> &mut SheetEditor {
     match &mut harness.app.editor.model {
         EditorModel::Sheet(sheet) => sheet,
         _ => panic!("no sheet"),

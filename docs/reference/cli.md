@@ -205,11 +205,11 @@ An edit that changes nothing but comments outside the step, the order of keys or
 A sheet runs as any model file does, under the id its `[sheet]` table gives it:
 
 ```bash
-cargo run --release -p henad-cli -- game_of_life \
+cargo run --release -p henad-cli -- sheet_game_of_life \
   --model-file crates/henad-graph/sheets/game_of_life.toml --steps 100
 ```
 
-The id of that example is `game_of_life`, so the sheet replaces the example model of that id, and a note on stderr says so.
+The id of that sheet is `sheet_game_of_life`, so it runs beside the example model `game_of_life` and replaces nothing.
 With one `--model-file` the id can be left out, as for any model file.
 Each warning and error of a sheet prints at the table of the sheet it is about, a line's at its `[card.line.<id>]` table.
 A copy of the example whose line `l2` becomes a state that Status does not hold stops at that line's table:

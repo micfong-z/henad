@@ -50,6 +50,17 @@ pub struct Counterpart {
     pub file_name: Option<String>,
     /// Path of the model's file on native, `None` for a model with no file or in a browser.
     pub file_path: Option<PathBuf>,
+    /// Edit mark of the model when it was opened, made or last saved, as [`EditorPanel`] keeps it for the model shown.
+    pub saved_mark: u64,
+    /// Edit mark of the model when its save started, until the save reports.
+    pub saving: Option<u64>,
+}
+
+impl Counterpart {
+    /// Returns whether the model holds edits since it was opened, made or last saved. An empty model holds none.
+    pub fn is_unsaved(&self) -> bool {
+        !self.model.is_empty() && self.model.edit_mark() != self.saved_mark
+    }
 }
 
 /// State of a copy against its original, which the banner shows.
@@ -237,6 +248,8 @@ pub fn convert_sheet(app: &mut AppState) {
         model: std::mem::take(&mut panel.model),
         file_name: panel.file_name.take(),
         file_path: panel.file_path.take(),
+        saved_mark: panel.saved_mark,
+        saving: panel.saving.take(),
     };
     panel.load_graph(&copy, Some(copy_name));
     panel.file_path = copy_path;
@@ -469,6 +482,8 @@ pub fn swap_counterpart(panel: &mut EditorPanel) {
     std::mem::swap(&mut panel.model, &mut counterpart.model);
     std::mem::swap(&mut panel.file_name, &mut counterpart.file_name);
     std::mem::swap(&mut panel.file_path, &mut counterpart.file_path);
+    std::mem::swap(&mut panel.saved_mark, &mut counterpart.saved_mark);
+    std::mem::swap(&mut panel.saving, &mut counterpart.saving);
     panel.settle_swap();
 }
 
@@ -496,6 +511,8 @@ pub fn open_original_of(panel: &mut EditorPanel) {
                 model: std::mem::take(&mut panel.model),
                 file_name: panel.file_name.take(),
                 file_path: panel.file_path.take(),
+                saved_mark: panel.saved_mark,
+                saving: panel.saving.take(),
             };
             panel.load_sheet(SheetEditor::new(document), Some(origin.file.clone()));
             panel.file_path = Some(path);

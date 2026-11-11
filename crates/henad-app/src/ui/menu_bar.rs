@@ -31,7 +31,7 @@ pub(crate) fn file_menu(ui: &mut egui::Ui, app: &mut AppState) {
             .on_hover_text("Start new model in Editor")
             .clicked()
         {
-            editor::sheet::new_model::open_new_model(app);
+            editor::replace_model(app, editor::Replacement::NewModel);
             ui.close();
         }
         if ui
@@ -39,12 +39,12 @@ pub(crate) fn file_menu(ui: &mut egui::Ui, app: &mut AppState) {
             .on_hover_text("Open Game of Life rule in Editor")
             .clicked()
         {
-            editor::new_grid_rule(app);
+            editor::replace_model(app, editor::Replacement::NewGridRule);
             ui.close();
         }
         ui.menu_button(format!("{MDI_GRAPH_OUTLINE}  {NEW_NODE_GRAPH}"), |ui| {
             if let Some(file_name) = editor::starter_menu(ui) {
-                editor::new_graph_model(app, file_name);
+                editor::replace_model(app, editor::Replacement::NewGraphModel(file_name));
                 ui.close();
             }
         })
@@ -55,7 +55,7 @@ pub(crate) fn file_menu(ui: &mut egui::Ui, app: &mut AppState) {
             .on_hover_text("Open TOML model file in Editor")
             .clicked()
         {
-            editor::open_model(app);
+            editor::replace_model(app, editor::Replacement::OpenModel);
             ui.close();
         }
         let save = ui

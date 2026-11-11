@@ -9,7 +9,7 @@ use henad_core::diagnostic::DiagnosticSeverity;
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
 use henad_core::explore::spec::{BlockSpec, SweepSpec};
-use henad_core::provenance::ModelCode;
+use henad_core::provenance::{CodeOrigin, ModelCode};
 use henad_explore::handle::SweepOutput;
 use henad_explore::model_file::ModelFile;
 use henad_explore::progress::NoProgress;
@@ -36,7 +36,7 @@ use crate::ui::editor::sheet::sheet_pane::starts_text;
 use crate::ui::editor::{
     ApplyOutcome, EditorModel, apply, edit_model, new_grid_rule, open_text, preview_running_text, save_name,
 };
-use crate::ui::playback::{press_build, tick_counter};
+use crate::ui::playback::{press_build, run_refusal, tick_counter};
 use crate::ui::results::store::{ResultsSource, ResultsStore};
 use crate::ui::results::{open_folder, open_in_editor, poll};
 
@@ -199,14 +199,57 @@ fn apply_installs_and_builds_the_sheet() {
     apply(&mut app);
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     assert_eq!(app.preview(), None, "Apply replaces the preview");
-    assert_eq!(app.selected_model.as_deref(), Some("game_of_life"));
+    assert_eq!(app.selected_model.as_deref(), Some("sheet_game_of_life"));
     assert!(app.selection_is_loaded());
-    let installed = app.models.get("game_of_life").expect("the sheet is installed");
+    let installed = app.models.get("sheet_game_of_life").expect("the sheet is installed");
     assert!(app.editor.is_applied(installed.source()));
     app.wait_for_build();
     assert!(
         app.sim_thread.is_some() && app.fault.is_none(),
         "the applied sheet failed to build"
+    );
+    step_past(&mut app, 0);
+}
+
+#[test]
+fn applying_the_life_sheet_keeps_the_example_model_of_that_name() {
+    let Some(mut app) = app() else {
+        return;
+    };
+    let example = app
+        .models
+        .get("game_of_life")
+        .expect("the example Game of Life")
+        .clone();
+    assert_eq!(example.source().origin(), CodeOrigin::Compiled);
+    open(&mut app, starter_text("game_of_life.toml"));
+    settle(&mut app);
+    app.wait_for_build();
+    apply(&mut app);
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
+    assert_eq!(app.loaded_id(), Some("sheet_game_of_life"));
+    app.wait_for_build();
+
+    // The example keeps its id, its name and its compiled code beside the sheet, and builds that code.
+    let kept = app.models.get("game_of_life").expect("the example stays in the set");
+    assert_eq!(kept.name(), example.name());
+    assert_eq!(kept.source(), example.source());
+    assert_eq!(kept.source().origin(), CodeOrigin::Compiled);
+    assert_eq!(
+        app.models.get("sheet_game_of_life").map(ModelEntry::name),
+        Some(example.name())
+    );
+    app.select_model("game_of_life");
+    press_build(&mut app);
+    assert_eq!(app.loaded_id(), Some("game_of_life"));
+    app.wait_for_build();
+    assert!(
+        app.sim_thread.is_some() && app.fault.is_none(),
+        "the example failed to build"
+    );
+    assert_eq!(
+        app.loaded_entry().map(|entry| entry.source().origin()),
+        Some(CodeOrigin::Compiled)
     );
     step_past(&mut app, 0);
 }
@@ -228,13 +271,16 @@ fn save_writes_the_canonical_text_and_the_saved_file_reopens_to_the_same_documen
     }
 
     // A hand-edited sheet saves as its canonical text.
-    let edited =
-        starter_text("game_of_life.toml").replace("id = \"game_of_life\"\nname", "id    =   \"game_of_life\"\nname");
+    let edited = starter_text("game_of_life.toml").replace(
+        "id = \"sheet_game_of_life\"\nname",
+        "id    =   \"sheet_game_of_life\"\nname",
+    );
+    assert_ne!(edited, starter_text("game_of_life.toml"), "the id line was found");
     open(&mut app, &edited);
     assert_eq!(app.editor.model.file_text(), starter_text("game_of_life.toml"));
 
     app.editor.file_name = None;
-    assert_eq!(save_name(&app.editor), "game_of_life.toml");
+    assert_eq!(save_name(&app.editor), "sheet_game_of_life.toml");
 }
 
 #[test]
@@ -394,6 +440,41 @@ fn a_rebuild_replays_the_same_start() {
     assert_ne!(start_at(&mut app, 8), seven, "the seed draws the start");
 }
 
+/// Run to tick drives the preview of the Editor's sheet: Run is enabled while the preview shows, runs the preview to
+/// the tick, and replays its start for a tick behind the current one. Once another model is selected, Run waits for
+/// Build again.
+#[test]
+fn run_to_tick_drives_the_sheet_preview() {
+    let Some(mut app) = app() else {
+        return;
+    };
+    open(&mut app, starter_text("game_of_life.toml"));
+    settle(&mut app);
+    app.wait_for_build();
+    let first = tick_zero_stat(&mut app, "Alive");
+    assert_eq!(run_refusal(&app, None, 0), None);
+
+    app.run_to(5);
+    assert_eq!(wait_for_snapshot(&mut app, |tick| tick >= 5).tick, 5);
+    assert!(app.previews_editor_sheet());
+    assert_eq!(run_refusal(&app, None, 5), None);
+
+    app.run_to(2);
+    assert!(app.previews_editor_sheet(), "a tick behind replays the preview");
+    app.wait_for_build();
+    assert_eq!(wait_for_snapshot(&mut app, |tick| tick >= 2).tick, 2);
+
+    press_build(&mut app);
+    assert_eq!(
+        tick_zero_stat(&mut app, "Alive"),
+        first,
+        "the replay drew the same start"
+    );
+
+    app.select_model("boids");
+    assert!(run_refusal(&app, None, 0).is_some_and(|reason| reason.starts_with("Selected model not loaded")));
+}
+
 #[test]
 fn build_builds_another_selected_model_instead_of_the_sheet_preview() {
     let Some(mut app) = app() else {
@@ -548,7 +629,7 @@ fn new_model_opens_a_dialog_and_create_opens_the_chosen_sheet() {
         .sheet()
         .expect("Create opened a sheet")
         .document();
-    assert_eq!(document.sheet.id, "game_of_life");
+    assert_eq!(document.sheet.id, "sheet_game_of_life");
     assert_eq!(document.sheet.name, "My life");
     let labels = harness.labels();
     for line in [
@@ -1438,6 +1519,19 @@ fn open_in_editor_opens_the_sheet_a_sweep_recorded_or_else_its_graph() {
     let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-sheet-sweep-{}", std::process::id())));
     sweep_into(&app, &entry, &folder.0);
     open_results(&mut app, &folder.0);
+    // The sheet's id is its own, so a folder of a sheet the app has not applied finds no model of the set, and never
+    // the compiled example of the same name.
+    let store = app.results.store().expect("the folder's results");
+    assert_eq!(store.model_id, "sheet_game_of_life");
+    assert!(app.models.get(&store.model_id).is_none());
+    assert!(!store.schema_matches && !store.code_matches);
+    assert!(
+        store
+            .replay_refusal()
+            .is_some_and(|reason| reason.contains("sheet_game_of_life")),
+        "{:?}",
+        store.replay_refusal()
+    );
     new_grid_rule(&mut app);
     open_in_editor(&mut app);
     assert_eq!(sheet(&app).document(), &document, "the folder's sheet opens");

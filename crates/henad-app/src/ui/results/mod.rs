@@ -802,7 +802,7 @@ fn apply_request(ctx: &egui::Context, app: &mut AppState, request: Option<Result
 }
 
 /// Opens the model the held results ran in the Editor, the sheet they recorded or else their code, and brings the
-/// Editor to the front.
+/// Editor to the front. A model of the Editor with unsaved edits asks first.
 ///
 /// A recorded text that does not read is reported on the status line.
 pub fn open_in_editor(app: &mut AppState) {
@@ -810,7 +810,7 @@ pub fn open_in_editor(app: &mut AppState) {
         return;
     };
     match store.editable_model() {
-        Some(model) => editor::open_editable(app, model),
+        Some(model) => editor::replace_model(app, editor::Replacement::Open(model)),
         None => app.results.status = Some("Recorded model does not read".to_owned()),
     }
 }

@@ -8,6 +8,7 @@
 use std::fs;
 use std::io::{self, IsTerminal as _};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
@@ -33,13 +34,15 @@ use henad_core::explore::value::parse_overrides;
 use henad_explore::exec::{Concurrency, ExecutionLayout};
 use henad_explore::handle::SweepOutput;
 use henad_explore::merge::{MergeReport, merge};
+use henad_explore::model_file::ModelFile;
 use henad_explore::output::manifest::ResultCounts;
 use henad_explore::progress::{Progress, ProgressEvent, ProgressUpdate};
 use henad_explore::schema::backend_name;
-use henad_explore::search_run::{SearchOutline, SearchUpdate};
+use henad_explore::search_run::{SearchOutline, SearchPlan, SearchUpdate};
 use henad_explore::spec_file::{DesignTableFile, LoadedSpec};
 use henad_explore::sweep::{
-    Provenance, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, SweepWarning, plan_spec, run_spec,
+    ExploreError, Provenance, SpecSource, SweepEnd, SweepOptions, SweepOutline, SweepReport, SweepWarning, plan_spec,
+    run_spec,
 };
 
 use crate::json_report;
@@ -194,6 +197,9 @@ impl ExploreArgs {
 
 /// Runs a sweep of `entry` from the flags or `spec`, and returns the exit status.
 ///
+/// `file` is the model file that `entry` came from, if any. A sheet's configs past a work budget are then refused in
+/// the sheet's lines, as a single run of the sheet is.
+///
 /// The status is success when every run is `ok`, and [`SOME_RUNS_NOT_OK`] when the sweep ran to its end with some
 /// run in another status.
 ///
@@ -204,6 +210,7 @@ impl ExploreArgs {
 pub fn run(
     args: &Args,
     entry: &ModelEntry,
+    file: Option<&ModelFile>,
     gpu: Option<&GpuContext>,
     spec: Option<LoadedSpec>,
     provenance: Provenance,
@@ -213,17 +220,58 @@ pub fn run(
         eprintln!("!!! warning: debug build. Runs will step slowly and timings will be unreliable. Use --release !!!");
     }
     let mut reporter = Reporter::new(entry.name(), args, options.spec_source.path.is_some());
+    let in_sheet_words = |error| in_sheet_words(error, file, entry, &sweep, gpu);
     let report = match &args.explore.out {
         _ if args.explore.dry_run => {
-            plan_spec(entry, gpu, &sweep, args.explore.out.as_deref(), &options, &mut reporter)?
+            plan_spec(entry, gpu, &sweep, args.explore.out.as_deref(), &options, &mut reporter)
+                .map_err(in_sheet_words)?
         }
         Some(output_dir) => {
             let output = SweepOutput::Directory(output_dir.clone());
-            run_spec(entry, gpu, &sweep, output, &options, &mut reporter)?.report
+            run_spec(entry, gpu, &sweep, output, &options, &mut reporter)
+                .map_err(in_sheet_words)?
+                .report
         }
         None => bail!("a sweep needs an output directory unless it is a dry run"),
     };
     exit_status(report.end, &report.counts)
+}
+
+/// Returns `error` with the reasons of each config that the capacity check refused in the words of the sheet in
+/// `file`, as a single run of the sheet words them: work past a budget names the sheet's lines and no pass.
+///
+/// Any other error, an entry from no sheet, and a check on a device other than `gpu` are returned as they are.
+fn in_sheet_words(
+    error: ExploreError,
+    file: Option<&ModelFile>,
+    entry: &ModelEntry,
+    sweep: &SweepSpec,
+    gpu: Option<&GpuContext>,
+) -> ExploreError {
+    let (Some(sheet), Some(gpu)) = (file.and_then(ModelFile::sheet), gpu) else {
+        return error;
+    };
+    let ExploreError::Capacity(mut capacity) = error else {
+        return error;
+    };
+    // The check reads the configs of the plan that the sweep ran, or of a search's fixed values.
+    let schema = entry.schema();
+    let plan = if sweep.search.is_some() {
+        SearchPlan::new(sweep, &schema)
+            .ok()
+            .map(|search| Arc::clone(search.base()))
+    } else {
+        sweep.plan(&schema).ok().map(Arc::new)
+    };
+    if let Some(plan) = plan {
+        let limits = gpu.device.limits();
+        for refused in &mut capacity.refused {
+            if let Some(config) = plan.config(refused.config_id) {
+                refused.reasons = sheet.shortfalls(entry, &config.params, &limits);
+            }
+        }
+    }
+    ExploreError::Capacity(capacity)
 }
 
 /// Returns the sweep the flags or `spec` describe, and its options.

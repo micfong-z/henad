@@ -215,8 +215,9 @@ struct ButtonForm {
     original: String,
     /// Text of the Name field.
     name: String,
-    /// Whether the button runs its own lines once. Otherwise it starts properties again.
-    run_once: bool,
+    /// Whether the button runs its own lines once (`Some(true)`) or starts properties again (`Some(false)`). `None`
+    /// for a button whose steps only set properties everywhere, until a kind is chosen.
+    run_once: Option<bool>,
     /// Id of the property a Start again button starts again, `None` for every property.
     property: Option<String>,
     /// Message of the last refused Done, `None` while none shows.
@@ -232,7 +233,7 @@ impl ButtonForm {
             editing: None,
             original: String::new(),
             name: String::new(),
-            run_once: false,
+            run_once: Some(false),
             property: None,
             message: None,
             focus_name: true,
@@ -241,7 +242,12 @@ impl ButtonForm {
 
     /// Returns the form that changes `button`.
     fn edit(button: &SheetButton) -> Self {
-        let run_once = button.does.iter().any(|step| step.rule == ButtonStepRule::RunOnce);
+        let has = |rule| button.does.iter().any(|step| step.rule == rule);
+        let run_once = if has(ButtonStepRule::RunOnce) {
+            Some(true)
+        } else {
+            has(ButtonStepRule::StartAgain).then_some(false)
+        };
         let property = button
             .does
             .iter()
@@ -3001,8 +3007,8 @@ fn button_form(
         });
         ui.label(BUTTON_DOES);
         ui.horizontal(|ui| {
-            ui.radio_value(&mut form.run_once, false, START_AGAIN);
-            ui.add_enabled_ui(!form.run_once, |ui| {
+            ui.radio_value(&mut form.run_once, Some(false), START_AGAIN);
+            ui.add_enabled_ui(form.run_once == Some(false), |ui| {
                 let shown = form
                     .property
                     .as_deref()
@@ -3019,7 +3025,11 @@ fn button_form(
                 set_name(ui, combo.response.id, START_AGAIN_FOR);
             });
         });
-        ui.radio_value(&mut form.run_once, true, run_once(&thing_word));
+        ui.radio_value(&mut form.run_once, Some(true), run_once(&thing_word));
+        // The steps that set a property everywhere, which no control of the form changes and Done keeps.
+        if let Some(sets) = set_steps(document, form.editing.as_deref()) {
+            ui.weak(button_does(document, &sets));
+        }
         if let Some(message) = &form.message {
             message_ui(ui, message);
         }
@@ -3068,6 +3078,18 @@ fn check_button_form(document: &SheetDocument, form: &ButtonForm) -> Result<(), 
     Ok(())
 }
 
+/// Returns button `id` with its steps that set a property everywhere alone, `None` for a button with none or no
+/// button.
+fn set_steps(document: &SheetDocument, id: Option<&str>) -> Option<SheetButton> {
+    let mut button = document
+        .buttons
+        .iter()
+        .find(|button| Some(button.id.as_str()) == id)?
+        .clone();
+    button.does.retain(|step| step.rule == ButtonStepRule::SetEverywhere);
+    (!button.does.is_empty()).then_some(button)
+}
+
 /// Returns the step of a button that starts `property` again, or every property of `thing` for `None`.
 fn start_again_step(property: Option<String>, thing: &str) -> ButtonStep {
     let mut step = ButtonStep::new(ButtonStepRule::StartAgain);
@@ -3082,16 +3104,13 @@ fn start_again_step(property: Option<String>, thing: &str) -> ButtonStep {
 /// the button it edits.
 ///
 /// A button whose kind changes, from Start again to Run once or back, is deleted and added again under its new name,
-/// and a Run once button's card goes with it. A Start again button keeps the steps no control of the form sets, such
-/// as setting a property everywhere, and its new start-again step takes the place of the old ones.
+/// and a Run once button's card goes with it. The steps that set a property everywhere, which no control of the form
+/// sets, stay in their order, and the step of the new kind takes the place of the old one. A Start again button's
+/// new start-again step takes the place of the old ones. A button that only sets properties everywhere and was given no
+/// kind keeps its steps and takes the new name.
 fn button_edit(form: ButtonForm, thing: String) -> EditRun {
     Box::new(move |builder| {
         let name = form.name.trim().to_owned();
-        let rule = if form.run_once {
-            ButtonStepRule::RunOnce
-        } else {
-            ButtonStepRule::StartAgain
-        };
         let current = form.editing.as_ref().and_then(|id| {
             builder
                 .document()
@@ -3100,6 +3119,30 @@ fn button_edit(form: ButtonForm, thing: String) -> EditRun {
                 .find(|button| button.id == *id)
                 .cloned()
         });
+        let Some(run_once) = form.run_once else {
+            if let Some(current) = current.filter(|current| current.name != name) {
+                builder.apply(SheetEdit::Rename {
+                    item: SheetItem::Button(current.id),
+                    name,
+                })?;
+            }
+            return Ok(());
+        };
+        let rule = if run_once {
+            ButtonStepRule::RunOnce
+        } else {
+            ButtonStepRule::StartAgain
+        };
+        let is_set = |step: &ButtonStep| step.rule == ButtonStepRule::SetEverywhere;
+        // The set steps of the button before the edit, and the place of its first other step among its steps.
+        let sets: Vec<ButtonStep> = current
+            .iter()
+            .flat_map(|button| button.does.iter().filter(|step| is_set(step)).cloned())
+            .collect();
+        let kind_index = current
+            .as_ref()
+            .and_then(|button| button.does.iter().position(|step| !is_set(step)))
+            .unwrap_or_default();
         let id = match current {
             Some(current) if current.does.iter().any(|step| step.rule == rule) => {
                 if current.name != name {
@@ -3127,28 +3170,32 @@ fn button_edit(form: ButtonForm, thing: String) -> EditRun {
                     .unwrap_or_default()
             }
         };
-        if form.run_once {
-            return Ok(());
-        }
-        let kept: Vec<ButtonStep> = builder
+        let held: Vec<ButtonStep> = builder
             .document()
             .buttons
             .iter()
             .find(|button| button.id == id)
             .map(|button| button.does.clone())
             .unwrap_or_default();
-        let start_again_index = kept
-            .iter()
-            .position(|step| step.rule == ButtonStepRule::StartAgain)
-            .unwrap_or_default();
-        let mut does: Vec<ButtonStep> = kept
-            .into_iter()
-            .filter(|step| step.rule != ButtonStepRule::StartAgain)
-            .collect();
-        does.insert(
-            start_again_index.min(does.len()),
-            start_again_step(form.property, &thing),
-        );
+        let mut own: Vec<ButtonStep> = held.iter().filter(|step| !is_set(step)).cloned().collect();
+        if !run_once {
+            let start_again_index = own
+                .iter()
+                .position(|step| step.rule == ButtonStepRule::StartAgain)
+                .unwrap_or_default();
+            own.retain(|step| step.rule != ButtonStepRule::StartAgain);
+            own.insert(
+                start_again_index.min(own.len()),
+                start_again_step(form.property, &thing),
+            );
+        }
+        let mut does = sets;
+        for (offset, step) in own.into_iter().enumerate() {
+            does.insert((kind_index + offset).min(does.len()), step);
+        }
+        if does == held {
+            return Ok(());
+        }
         builder.apply(SheetEdit::SetButtonSteps { button: id, does }).map(drop)
     })
 }

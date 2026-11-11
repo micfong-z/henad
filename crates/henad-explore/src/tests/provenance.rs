@@ -907,7 +907,7 @@ mod sheet_text {
 
     /// Returns a sweep of the sheet over Initial density for 2 steps, with `replicates` replicates.
     fn sheet_spec(replicates: u64) -> SweepSpec {
-        let mut spec = SweepSpec::new("game_of_life");
+        let mut spec = SweepSpec::new("sheet_game_of_life");
         spec.blocks = vec![BlockSpec {
             design: DesignKind::Factorial,
             factors: vec![FactorSpec::param(

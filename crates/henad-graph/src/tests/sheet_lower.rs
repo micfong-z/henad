@@ -275,7 +275,7 @@ fn every_line_map_path_of_a_line_reads_as_an_edit_command_slot_path() {
 fn two_draws_with_one_key_are_an_error_naming_both() {
     // The start of `mood` holds no key and takes one derived from the sheet and property ids. The start of `status`
     // stores that key, so both draw the same numbers, which the checker cannot see and the lowering refuses.
-    let derived = (fnv1a64(b"game_of_life/mood") & 0xffff_ffff) as u32;
+    let derived = (fnv1a64(b"sheet_game_of_life/mood") & 0xffff_ffff) as u32;
     let text = edited(life(), "key = 2929187291", &format!("key = {derived}"));
     let text = edited(
         &text,
@@ -306,7 +306,7 @@ fn a_start_with_no_key_takes_one_from_the_sheet_and_property_ids() {
     let text = edited(life(), "key = 2929187291\n", "");
     let file = lowered(&text);
     assert_eq!(file.warnings().len(), 1, "{:?}", file.warnings());
-    let derived = (fnv1a64(b"game_of_life/status") & 0xffff_ffff) as u32;
+    let derived = (fnv1a64(b"sheet_game_of_life/status") & 0xffff_ffff) as u32;
     let path = (fnv1a64(b"starts_as.row") & 0xffff_ffff) as u32;
     let key = crate::normal::compose_key(derived, path);
     assert!(

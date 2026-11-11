@@ -143,6 +143,10 @@ pub struct AppState {
     /// Whether builds run inline on the calling thread, as they do in a browser. Test builds only.
     #[cfg(test)]
     pub inline_builds: bool,
+    /// Saves requested through [`Self::save_as`], each with its target and file name, which a test records instead of
+    /// opening a dialog, `None` to open one. [`Self::finish_save`] reports the first. Test builds only.
+    #[cfg(test)]
+    pub saves_requested: Option<Vec<(SaveTarget, String)>>,
     /// Runs and builds that did not stop in time, kept until their threads end. A build started meanwhile holds them
     /// too, and waits for them.
     stopping: Vec<Arc<Stopping>>,
@@ -352,6 +356,8 @@ impl AppState {
             building: None,
             #[cfg(test)]
             inline_builds: false,
+            #[cfg(test)]
+            saves_requested: Some(Vec::new()),
             stopping: Vec::new(),
             pools,
             ui_pool: UiPool::default(),
@@ -743,11 +749,12 @@ impl AppState {
 
     /// Steps the loaded model uncapped to `tick` and pauses there.
     ///
-    /// A tick behind the current one rebuilds first. Note that the rebuild builds the selected model, which is the
-    /// loaded one only while [`Self::selection_is_loaded`] holds.
+    /// A tick behind the current one rebuilds first, as Build does: the preview of the Editor's sheet replays its start
+    /// while [`Self::build_replays_preview`] holds, and otherwise the selected model is built. Note that the selected
+    /// model is the loaded one only while [`Self::selection_is_loaded`] holds.
     pub fn run_to(&mut self, tick: u64) {
         if self.snapshot.as_ref().is_some_and(|snap| tick < snap.tick) {
-            self.reset_simulation();
+            crate::ui::playback::press_build(self);
         }
         if !self.has_simulation() {
             return;
@@ -1046,12 +1053,19 @@ impl AppState {
     /// [`henad_graph::sheet::SheetFile::shortfalls`] words it, and no lowered pass is named.
     pub fn entry_shortfalls(&self, entry: &ModelEntry, values: &[ParamValue]) -> Vec<String> {
         let limits = &self.runtime.granted;
-        match self.editor.model.sheet().and_then(|sheet| sheet.file()) {
-            Some(file) if entry.source().code_hash() == Some(file.code().hash()) => {
-                file.shortfalls(entry, values, limits)
-            }
-            _ => entry.shortfalls(values, limits),
+        match self.editor_sheet_of(entry) {
+            Some(file) => file.shortfalls(entry, values, limits),
+            None => entry.shortfalls(values, limits),
         }
+    }
+
+    /// Sheet of the Editor when it builds `entry`, `None` for an entry of other code.
+    pub fn editor_sheet_of(&self, entry: &ModelEntry) -> Option<&henad_graph::sheet::SheetFile> {
+        self.editor
+            .model
+            .sheet()
+            .and_then(|sheet| sheet.file())
+            .filter(|file| entry.source().code_hash() == Some(file.code().hash()))
     }
 
     /// Returns the reason Build cannot build the selection, or `None` when it can.
@@ -1090,6 +1104,12 @@ impl AppState {
     /// Results can be polled via [`Self::poll_saves`].
     pub fn save_as(&mut self, target: SaveTarget, name: &str, bytes: Vec<u8>) {
         *self.save_status(target) = Some(format!("{SAVE_PENDING} {name}"));
+        // A test opens no dialog, and reports the save's outcome through `finish_save`.
+        #[cfg(test)]
+        if let Some(requested) = &mut self.saves_requested {
+            requested.push((target, name.to_owned()));
+            return;
+        }
         spawn_save(
             target,
             name.to_owned(),
@@ -1097,6 +1117,19 @@ impl AppState {
             self.saves.0.clone(),
             self.egui_ctx.clone(),
         );
+    }
+
+    /// Reports `result` as the outcome of the first save requested through [`Self::save_as`], and polls it, as a dialog
+    /// that ends would. Test builds only.
+    ///
+    /// # Panics
+    ///
+    /// Panics when no save was requested.
+    #[cfg(test)]
+    pub fn finish_save(&mut self, result: SaveResult) {
+        let (target, _) = self.saves_requested.as_mut().expect("saves are recorded").remove(0);
+        drop(self.saves.0.send(SaveOutcome { target, result }));
+        self.poll_saves();
     }
 
     /// Opens a dialog that saves the four files of a sweep, `files`, together, for the panel `target`.
@@ -1112,7 +1145,7 @@ impl AppState {
         match target {
             SaveTarget::Export => &mut self.export_status,
             SaveTarget::SweepSpec | SaveTarget::SweepResults(_) => &mut self.sweep.status,
-            SaveTarget::Model => &mut self.editor.file_status,
+            SaveTarget::Model | SaveTarget::Counterpart => &mut self.editor.file_status,
         }
     }
 
@@ -1126,12 +1159,12 @@ impl AppState {
             {
                 self.results.mark_files_saved(generation);
             }
-            if target == SaveTarget::Model
-                && let SaveResult::Saved(name) | SaveResult::Downloaded(name) = &result
-            {
-                self.editor.file_name = Some(name.clone());
-                // The file was saved where the dialog chose, which can be another folder.
-                self.editor.file_path = None;
+            let saved = match &result {
+                SaveResult::Saved(name) | SaveResult::Downloaded(name) => Some(name.clone()),
+                SaveResult::DownloadsStarted | SaveResult::Failed(_) | SaveResult::Canceled => None,
+            };
+            if matches!(target, SaveTarget::Model | SaveTarget::Counterpart) {
+                self.editor.save_finished(target, saved.clone());
             }
             *self.save_status(target) = Some(match result {
                 SaveResult::Saved(name) => format!("Saved {name}"),
@@ -1140,6 +1173,9 @@ impl AppState {
                 SaveResult::Failed(message) => format!("Save failed: {message}"),
                 SaveResult::Canceled => "Save canceled".to_owned(),
             });
+            if matches!(target, SaveTarget::Model | SaveTarget::Counterpart) {
+                crate::ui::editor::continue_replacement(self, target, saved.is_some());
+            }
         }
     }
 

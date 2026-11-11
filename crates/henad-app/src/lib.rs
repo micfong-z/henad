@@ -165,10 +165,9 @@ impl eframe::App for HenadApp {
         if let Some(snap) = fresh {
             // The loop can be past the target by the time it handles `RunTo`, and then pauses where it is. A second
             // run to the target sees this snapshot's tick, rebuilds, and stops there.
-            let passed_target = self
-                .state
-                .run_to_target
-                .filter(|&target| snap.tick > target && self.state.selection_is_loaded());
+            let passed_target = self.state.run_to_target.filter(|&target| {
+                snap.tick > target && (self.state.selection_is_loaded() || self.state.build_replays_preview())
+            });
             if self.state.run_to_target.is_some_and(|target| snap.tick >= target) {
                 self.state.run_to_target = None;
             }
@@ -229,6 +228,7 @@ impl eframe::App for HenadApp {
         ui::fault::fault_modal(ui.ctx(), &mut self.state);
         ui::rebuild::rebuild_modal(ui.ctx(), &mut self.state);
         ui::editor::sheet::new_model::new_model_modal(ui.ctx(), &mut self.state);
+        ui::editor::unsaved_modal(ui.ctx(), &mut self.state);
         ui::about::about_modal(ui.ctx(), &mut self.state);
 
         let mut dock_style = Style::from_egui(ui.style());

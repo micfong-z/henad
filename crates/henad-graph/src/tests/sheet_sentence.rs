@@ -1320,6 +1320,16 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
         ("Agents in open space", fixed(sentence::AGENTS_IN_OPEN_SPACE)),
         ("Untitled model", fixed(sentence::UNTITLED_MODEL)),
         ("Create", fixed(sentence::CREATE)),
+        (
+            "Game of Life has unsaved changes.",
+            sentence::unsaved_changes(&["Game of Life".to_owned()]),
+        ),
+        (
+            "Game of Life and Life copy have unsaved changes.",
+            sentence::unsaved_changes(&["Game of Life".to_owned(), "Life copy".to_owned()]),
+        ),
+        ("Save model", fixed(sentence::SAVE_MODEL)),
+        ("Discard changes", fixed(sentence::DISCARD_CHANGES)),
         // The New parameter dialog.
         ("New parameter", fixed(sentence::NEW_PARAMETER_HEADING)),
         (

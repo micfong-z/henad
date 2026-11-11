@@ -62,7 +62,7 @@ fn the_converted_game_of_life_runs_tick_for_tick_like_the_sheet_on_the_device() 
     let options = ConvertOptions::new(sheet.document(), "2026-11-07", |_, _| false);
     let copy = convert(&sheet, &options).unwrap_or_else(|error| panic!("{error}"));
     let copy_entry = entry_of(&copy.to_toml());
-    assert_eq!(copy_entry.id(), "game_of_life_expert");
+    assert_eq!(copy_entry.id(), "sheet_game_of_life_expert");
     let (expected, expected_alive) = life_run(&ctx, &entry_of(text));
     let alive = |words: &[u32]| words.iter().filter(|&&word| word == 1).count();
     assert!(alive(&expected[150]) > 0, "cells live before Clear");

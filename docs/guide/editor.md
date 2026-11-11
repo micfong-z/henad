@@ -31,9 +31,12 @@ Untick **Open models in the Editor layout** in the View menu to open the Editor 
 - Press <span class="ui" markdown>:material-graph-outline: New node graph</span> in the Editor and pick an example to open it as a node graph: Game of Life, Vote or SIR Epidemic on a grid, or Boids Flocking, Ant Foraging or Random Walk of agents.
 - In the menu bar, <span class="ui" markdown>:material-file-outline: File</span> holds New model, New grid rule, New node graph, Open model and Save model, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> toggles the Editor like any other tab and switches between the default layout and the Editor layout.
 
-New grid rule and Open model replace the Editor's text.
-Edit model replaces it too, but keeps the text, your edits since the last Apply included, while the selected rule runs the code the Editor applied last.
-Save what you want to keep first.
+New model, New grid rule, New node graph and Open model replace the Editor's model, and so does Open in Editor in the Results tab.
+Edit model replaces it too, but keeps the model, your edits since the last Apply included, while the selected model runs the code the Editor applied last.
+While the model holds changes you have not saved since you opened or made it, a dialog names it first, such as **Game of Life has unsaved changes.**
+Press <span class="ui">Save model</span> to save it and then replace it, <span class="ui">Discard changes</span> to replace it without saving, or <span class="ui">Cancel</span> to keep it.
+Apply does not save the model, and a save you cancel keeps it in the Editor.
+A sheet converted to a node graph is held beside its copy, and the dialog names it too while it holds unsaved changes.
 
 ## Sheets
 
@@ -271,10 +274,15 @@ A note the model's author wrote under a line comes last, in grey, as the ant for
 ### Running a sheet
 
 A sheet runs at a small size in the Viewport, paused at tick 0 with the start drawn.
-Press Play in the Playback tab to run it.
+Press Play in the Playback tab to run it, or type a tick into **Run to tick** and press <span class="ui" markdown>:material-fast-forward: Run</span> to run the preview to that tick.
+A tick behind the current one starts the preview again from the same start first.
 Until the first tick, a change redraws the start.
 After it, a change that builds starts the world again from tick 0, and a notice says so.
 Press <span class="ui" markdown>:material-check: Apply</span> to install the model at its own size, and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the sheet as a model file.
+A model made from a starter keeps the starter's id, and a blank model takes the id its name gives, such as `harbour_seals` for Harbour seals.
+Where a model built into the app already holds that id, such as the example model Game of Life holds `game_of_life`, the new model takes `sheet_` before it.
+The Game of Life starter's id is `sheet_game_of_life`, and so is the id of a blank model named Game of Life, so either model joins the model list beside the example, and the list shows the id after each of the two names.
+Apply of a new model therefore never replaces a model built into the app, while it does replace a model you applied before under the same id.
 A sheet that holds a problem still opens, with the problem under its line, or listed under the panes when no line holds it.
 [Sheets](../reference/model-files.md#sheets) in the model file reference describes the file.
 
@@ -489,6 +497,7 @@ What happens to the run depends on what was running:
   Once you select another model in the Model tab, Build builds that model, and the Editor reads **Press Apply to check and install the model.**
 
 Applying the code the run already runs changes nothing, and the Editor reads **Model unchanged.**
+Once you edit the model after Apply, the line goes, and the Editor reads **Press Apply to check and install the model.** again.
 
 ### Problems
 

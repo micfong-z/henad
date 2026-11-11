@@ -28,6 +28,21 @@ fn opening_refusal(ui: &mut egui::Ui, refusal: &OpeningRefusal, next_step: &str)
     ui.label(next_step);
 }
 
+/// Returns the label of each model in the model list, for `offered` as `(id, name)` pairs: the model's name, followed by
+/// its id in parentheses when another offered model has the same name.
+fn list_labels(offered: &[(String, String)]) -> Vec<String> {
+    offered
+        .iter()
+        .map(|(id, name)| {
+            if offered.iter().filter(|(_, other)| other == name).count() > 1 {
+                format!("{name} ({id})")
+            } else {
+                name.clone()
+            }
+        })
+        .collect()
+}
+
 pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let offered: Vec<(String, String)> = app
         .offered_models()
@@ -46,7 +61,15 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
         return;
     }
-    let selected_name = app.selected_entry().map_or("None", ModelEntry::name).to_owned();
+    let labels = list_labels(&offered);
+    let selected_name = offered
+        .iter()
+        .zip(&labels)
+        .find(|((id, _), _)| app.selected_model.as_deref() == Some(id.as_str()))
+        .map_or_else(
+            || app.selected_entry().map_or("None", ModelEntry::name).to_owned(),
+            |(_, label)| label.clone(),
+        );
     let mut picked = None;
 
     egui::ComboBox::from_label("Select Model")
@@ -54,9 +77,9 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
         // As tall as the window allows. The model list outgrows egui's default of 200 points.
         .height(ui.ctx().content_rect().height())
         .show_ui(ui, |ui| {
-            for (id, name) in &offered {
+            for ((id, _), label) in offered.iter().zip(&labels) {
                 let selected = app.selected_model.as_deref() == Some(id.as_str());
-                if ui.selectable_label(selected, name).clicked() && !selected {
+                if ui.selectable_label(selected, label).clicked() && !selected {
                     picked = Some(id.clone());
                 }
             }
@@ -131,7 +154,7 @@ fn editor_buttons(ui: &mut egui::Ui, app: &mut AppState) {
         )
         .on_hover_text("Start new model in Editor");
         if model.clicked() {
-            editor::sheet::new_model::open_new_model(app);
+            editor::replace_model(app, editor::Replacement::NewModel);
         }
         let new = add_button(
             ui,
@@ -141,7 +164,7 @@ fn editor_buttons(ui: &mut egui::Ui, app: &mut AppState) {
         )
         .on_hover_text("Open Game of Life rule in Editor");
         if new.clicked() {
-            editor::new_grid_rule(app);
+            editor::replace_model(app, editor::Replacement::NewGridRule);
         }
         if editable {
             let edit = add_button(
@@ -293,10 +316,17 @@ fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structur
     }
 }
 
+/// Adds the rows of the model's parameters, statistics and palettes.
+///
+/// The Parameters row counts the parameters the Parameters tab shows, a hidden tick length left out.
 fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) {
-    let descs: &[ParamDescriptor] = entry.param_descriptors();
-    let reload = descs.iter().filter(|desc| !desc.is_live()).count();
-    row(ui, rows, "Parameters", count_of(descs.len(), reload, "reload"));
+    let shown: Vec<&ParamDescriptor> = entry
+        .param_descriptors()
+        .iter()
+        .filter(|desc| !desc.is_hidden())
+        .collect();
+    let reload = shown.iter().filter(|desc| !desc.is_live()).count();
+    row(ui, rows, "Parameters", count_of(shown.len(), reload, "reload"));
 
     ui.label("Statistics");
     ui.horizontal(|ui| {
@@ -388,8 +418,28 @@ fn swatches(ui: &mut egui::Ui, colors: impl Iterator<Item = [u8; 4]>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_of, strip_id, topology_label};
+    use super::{count_of, list_labels, strip_id, topology_label};
     use henad_core::topology::TopologyHint;
+
+    /// An applied sheet of Game of Life sits beside the example of that name, and the list tells the two apart.
+    #[test]
+    fn the_model_list_names_the_ids_of_models_that_share_a_name() {
+        let offered: Vec<(String, String)> = [
+            ("sir", "SIR Epidemic"),
+            ("game_of_life", "Game of Life"),
+            ("sheet_game_of_life", "Game of Life"),
+        ]
+        .map(|(id, name)| (id.to_owned(), name.to_owned()))
+        .into();
+        assert_eq!(
+            list_labels(&offered),
+            [
+                "SIR Epidemic",
+                "Game of Life (game_of_life)",
+                "Game of Life (sheet_game_of_life)"
+            ]
+        );
+    }
 
     #[test]
     fn topology_names_every_layer_combination() {

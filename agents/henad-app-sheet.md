@@ -143,12 +143,18 @@ rule, gets a shaded rule in `form_edit`. Buttons: each with its name, `button_do
 (`start_again_for`, `run_once("cell")`), `EDIT` named `edit_button_name` and × named
 `delete_button_name`, the button form (`ButtonForm`, under the button it edits or at the end:
 `NEW_BUTTON` or `edit_button_name`, Name named `BUTTON_NAME_FIELD`, `BUTTON_DOES` with radios
-`START_AGAIN` beside a select named `START_AGAIN_FOR` and `run_once`, checked by
+`START_AGAIN` beside a select named `START_AGAIN_FOR` and `run_once`, then the button's set
+everywhere steps read-only as `button_does` words them (`set_steps`), checked by
 `check_button_form`), and `run_once_card` read-only under a Run once button (the card's heading,
-each line's number and sentence from `card_lines`, or `BUTTON_CARD_EMPTY`). `button_edit` adds with
+each line's number and sentence from `card_lines`, or `BUTTON_CARD_EMPTY`). `ButtonForm::run_once`
+is `None`, neither radio chosen, for a button whose steps only set everywhere. `button_edit` adds
+with
 `AddButton` and `SetButtonSteps` (one property as `properties`, every property as `thing =
-"cells"`), renames and sets steps, and deletes and adds again a button whose kind changes. A refusal
-shows as the form's message (`FormKind` on `Pending`).
+"cells"`), renames and sets steps, and deletes and adds again a button whose kind changes. It keeps
+the set everywhere steps in their order in every case, the new kind's step in the place of the old
+one, and renames alone a button that only sets while no kind is chosen
+(`the_button_form_keeps_the_steps_that_set_a_property_everywhere`, `src/tests/sheet_agents.rs`). A
+refusal shows as the form's message (`FormKind` on `Pending`).
 
 **A world of agents**. The pane works on a *thing*, `cells`, `ground` or the agent kind's id:
 `properties_of`, `find_property`, `all_properties` (also behind `starts_of` and
@@ -194,8 +200,8 @@ the cells (`COLOR_CELLS_BY`), or for the agents (`COLOR_AGENTS_BY`) and the grou
 (`ByHeading` with `BY_HEADING_NOTE`). The select's choice compares with the rule's own property, so
 a thing with no rule takes one from the property it shows. Buttons act on `measured_thing`: Run once
 reads `run_once(thing_word)`, Start again offers the thing's properties with a start and the
-ground's, `button_edit` keeps a button's other steps (set everywhere) and puts its start-again step
-in the old one's place, and `button_does` joins steps that set to one value
+ground's, `button_edit` keeps a button's set everywhere steps and puts its start-again step in the
+old one's place, and `button_does` joins steps that set to one value
 (`set_everywhere`, "Set To food and To home to 0 everywhere").
 
 The toolbar (`toolbar_ui`, a `Panel::top` above both panes): the model name as a frameless button
@@ -314,7 +320,8 @@ the loaded id is the sheet's. `load_preview` records the selection in `preview_s
 `press_build` run `preview::rebuild_preview` instead of `reset_simulation`: the same setup at the
 same seed (the preview's seed is `None`, the model's default), so the world starts again as it
 started before, paused. Build is enabled then whatever the selected model's `build_refusal`, with
-the tooltip `BUILD_SHEET_TOOLTIP`. Once the Model tab selects another model, Build builds that
+the tooltip `BUILD_SHEET_TOOLTIP`, and Run to tick runs the preview, replaying its start for a tick
+behind (`henad-app.md`). Once the Model tab selects another model, Build builds that
 model with its usual tooltip and refusal, as behind a graph's preview. After Apply the run is the
 selected model's, and Build builds it as for any model, at the Seed field's seed. While Build
 replays the preview, `settle_outcome` drops an `Installed` outcome ("Model applied. Press Build to
@@ -341,13 +348,15 @@ label "New model" through `accesskit_node_builder`, the heading `NEW_MODEL`, `ST
 label, Cancel and Create (`filled_button`, blue 700). Enter in Name creates, as Create does, and
 Cancel, Escape or a click on the backdrop closes it. `create_model(app, file_name, name)` reads the
 starter, runs `SheetEdit::SetSheetName` when the name differs (an empty name is `UNTITLED_MODEL`,
-and a refused one keeps the starter's name with the reason as the file status), loads the sheet with
-no file name and brings the Editor to the front. The world question of the dialog shows only
+and a refused one keeps the starter's name with the reason as the file status), loads the sheet
+under the id `new_model_id` gives (`agents/henad-app-editor.md`) with no file name and brings the
+Editor to the front. The world question of the dialog shows only
 under Blank, and Blank is offered first. `starter_choices` puts Blank first (`file_name`
 `None`, "Untitled model" as its name), and the world question (`WORLD_QUESTION`, `CELLS_ON_A_GRID`
 or `AGENTS_IN_OPEN_SPACE` into `made_of`) shows under Blank while it is chosen. `create_blank_model`
 loads `blank_model(name)`: 100 by 100 cells that wrap, the id minted from the name (or
-`untitled_model`), no property, parameter or card. `create_blank_agent_model` loads
+`untitled_model`, and `open_blank` passes it through `new_model_id`), no property, parameter or
+card. `create_blank_agent_model` loads
 `blank_agent_model(name)`: the same world made of agents, one kind `agent` named `BLANK_AGENT_NAME`
 with 1000 agents and room for a million, a Position that starts anywhere at random (through
 `SheetBuilder`, so its start takes a key) and a Heading.
@@ -357,7 +366,9 @@ with 1000 agents and room for a million, a Position that starts anywhere at rand
 at tick 0 in the preview run of its world, `PreviewRun::Grid` or `PreviewRun::Agents`, plays past
 it, applies and builds), `the_new_model_dialog_offers_every_starter_with_its_description`,
 `the_card_pane_reads_the_life_lines_as_their_sentences` (and the vote's "otherwise"),
-`apply_installs_and_builds_the_sheet`,
+`apply_installs_and_builds_the_sheet` (as `sheet_game_of_life`),
+`applying_the_life_sheet_keeps_the_example_model_of_that_name` (the example `game_of_life` keeps its
+compiled source beside the sheet and builds it),
 `save_writes_the_canonical_text_and_the_saved_file_reopens_to_the_same_document` (a hand-edited
 sheet saves canonical, and `save_name` without a file),
 `a_sheet_with_a_skipped_line_opens_and_previews` (Game of Life with line 2's old state blank),

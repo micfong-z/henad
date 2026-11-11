@@ -69,7 +69,7 @@ fn the_copy_takes_a_new_id_name_and_description() {
     let sheet = lowered(life());
     let copy = copy_of(&sheet);
     let document = copy.document();
-    assert_eq!(document.id, "game_of_life_expert");
+    assert_eq!(document.id, "sheet_game_of_life_expert");
     assert_eq!(document.name, "Game of Life (expert)");
     assert_eq!(
         document.description,
@@ -93,21 +93,21 @@ fn a_taken_id_or_name_numbers_the_copy() {
     let free = ConvertOptions::new(sheet.document(), DATE, |_, _| false);
     assert_eq!(
         (free.id.as_str(), free.name.as_str()),
-        ("game_of_life_expert", "Game of Life (expert)")
+        ("sheet_game_of_life_expert", "Game of Life (expert)")
     );
-    assert_eq!(free.file, "game_of_life.toml");
+    assert_eq!(free.file, "sheet_game_of_life.toml");
     assert_eq!(free.date, DATE);
-    let second = ConvertOptions::new(sheet.document(), DATE, |id, _| id == "game_of_life_expert");
+    let second = ConvertOptions::new(sheet.document(), DATE, |id, _| id == "sheet_game_of_life_expert");
     assert_eq!(
         (second.id.as_str(), second.name.as_str()),
-        ("game_of_life_expert_2", "Game of Life (expert 2)")
+        ("sheet_game_of_life_expert_2", "Game of Life (expert 2)")
     );
     let third = ConvertOptions::new(sheet.document(), DATE, |id, name| {
-        id == "game_of_life_expert_2" || name == "Game of Life (expert)"
+        id == "sheet_game_of_life_expert_2" || name == "Game of Life (expert)"
     });
     assert_eq!(
         (third.id.as_str(), third.name.as_str()),
-        ("game_of_life_expert_3", "Game of Life (expert 3)")
+        ("sheet_game_of_life_expert_3", "Game of Life (expert 3)")
     );
 }
 
@@ -127,9 +127,9 @@ fn the_copy_has_its_own_code_and_names_the_sheets() {
     assert_eq!(origin.code, format!("{:016x}", sheet.code().hash()));
     assert_eq!(origin.copy_code, format!("{:016x}", copy.code().hash()));
     assert_eq!(origin.kind, KIND_SHEET);
-    assert_eq!(origin.model, "game_of_life");
+    assert_eq!(origin.model, "sheet_game_of_life");
     assert_eq!(origin.name, "Game of Life");
-    assert_eq!(origin.file, "game_of_life.toml");
+    assert_eq!(origin.file, "sheet_game_of_life.toml");
     assert_eq!(origin.hash, format!("{:016x}", fnv1a64(sheet.to_toml().as_bytes())));
     assert_eq!(origin.converted, DATE);
 }

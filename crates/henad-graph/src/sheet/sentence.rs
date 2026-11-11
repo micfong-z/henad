@@ -3239,6 +3239,21 @@ pub const UNTITLED_MODEL: &str = "Untitled model";
 /// Primary action of the New model dialog.
 pub const CREATE: &str = "Create";
 
+// The dialog that asks before a model with unsaved changes is replaced
+
+/// Returns the sentence of the dialog that asks before New model or Open model replaces the models `names`, which
+/// hold unsaved changes, such as "Game of Life has unsaved changes."
+pub fn unsaved_changes(names: &[String]) -> String {
+    let verb = if names.len() == 1 { "has" } else { "have" };
+    format!("{} {verb} unsaved changes.", word_list(names))
+}
+
+/// Primary action of the unsaved changes dialog, which saves each model before it is replaced.
+pub const SAVE_MODEL: &str = "Save model";
+
+/// Action of the unsaved changes dialog that replaces the models without saving them.
+pub const DISCARD_CHANGES: &str = "Discard changes";
+
 // The New parameter dialog
 
 /// Heading of the New parameter dialog.

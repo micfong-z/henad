@@ -7,9 +7,10 @@ use egui::{Key, Modifiers};
 use henad_core::params::ParamValue;
 use henad_graph::sheet::SheetFile;
 use henad_graph::sheet::document::{
-    BlockedState, ButtonStepRule, ColorRuleKind, MadeOf, Marks, ParameterType, PropertyType, SheetLiteral, SheetValue,
-    Slot, StartRule,
+    BlockedState, ButtonStep, ButtonStepRule, ColorRuleKind, MadeOf, Marks, ParameterType, PropertyType, SheetLiteral,
+    SheetValue, Slot, StartRule,
 };
+use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::sentence::{
     ADD_BUTTON, ADD_EVENT, ADD_GROUND_PROPERTY_NAME, ADD_MEASURE, ADD_PARAMETER, AGENT_COUNT_NAME, AGENT_MAX_NAME,
     AGENT_NAME_FIELD, AGENT_NAME_MISSING, AGENTS_IN_OPEN_SPACE, ANYWHERE_AT_RANDOM, ARROW_KIND, AVERAGE_MEASURE,
@@ -21,15 +22,19 @@ use henad_graph::sheet::sentence::{
 use henad_graph::sheet::sentence::{MARKS_ADD_UP, MARKS_LARGEST, MARKS_NONE};
 
 use super::sheet_pane::{
-    TALL_SCREEN, assert_control_holds, center_of, choose, click, enter_into, field_value, sheet, shows,
+    TALL_SCREEN, assert_control_holds, center_of, choose, click, enter_into, field_value, sheet, sheet_mut, shows,
     starter_document, text, type_into,
 };
 use crate::state::default_values;
-use crate::tests::support::{Harness, Node, align_with_starter, forbidden_words, without_card_lines};
+use crate::tests::support::{Harness, Node, align_with_starter, forbidden_words, set_of, without_card_lines};
 use crate::ui::editor::EditorModel;
 use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::new_model::create_blank_agent_model;
 use crate::ui::params::notice_content;
+use crate::ui::sweep::session::{SessionExecution, SweepSession};
+use henad_core::explore::design::DesignKind;
+use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::spec::{BlockSpec, SweepSpec};
 
 /// Returns a harness whose Editor holds a blank model of agents on a tall screen, or `None` to skip on a machine
 /// without a device.
@@ -388,6 +393,75 @@ fn events_are_added_renamed_and_deleted_on_the_sheet() {
     assert!(shows(&mut harness, EVENTS_EMPTY));
 }
 
+/// The button form keeps the steps that set a property everywhere. It shows them, and Done neither drops nor rewrites
+/// them: on the ants' Reset colony as the starter holds it, on a button that only sets, and on a change of kind.
+#[test]
+fn the_button_form_keeps_the_steps_that_set_a_property_everywhere() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = TALL_SCREEN;
+    click(&mut harness, "New model");
+    click(&mut harness, "Ant foraging");
+    click(&mut harness, "Create");
+    harness.settle();
+    let steps = |harness: &Harness| {
+        sheet(harness)
+            .document()
+            .buttons
+            .iter()
+            .find(|button| button.name == "Reset colony")
+            .expect("the starter's Reset colony")
+            .does
+            .clone()
+    };
+    let sets: Vec<ButtonStep> = steps(&harness)
+        .into_iter()
+        .filter(|step| step.rule == ButtonStepRule::SetEverywhere)
+        .collect();
+    assert_eq!(sets.len(), 2, "{sets:?}");
+    let starter = text(&harness);
+    click(&mut harness, "Edit button Reset colony");
+    assert!(shows(&mut harness, "Set To food and To home to 0 everywhere"));
+    click(&mut harness, DONE);
+    harness.settle();
+    assert_eq!(text(&harness), starter);
+
+    let only_sets = sets.clone();
+    sheet_mut(&mut harness)
+        .edit(false, false, |builder| {
+            builder
+                .apply(SheetEdit::SetButtonSteps {
+                    button: "reset_colony".to_owned(),
+                    does: only_sets,
+                })
+                .map(drop)
+        })
+        .expect("the steps are set");
+    let only_sets = text(&harness);
+    click(&mut harness, "Edit button Reset colony");
+    assert!(shows(&mut harness, "Set To food and To home to 0 everywhere"));
+    click(&mut harness, DONE);
+    harness.settle();
+    assert_eq!(text(&harness), only_sets, "a button that only sets keeps its steps");
+
+    click(&mut harness, "Edit button Reset colony");
+    click(&mut harness, &run_once("ant"));
+    click(&mut harness, DONE);
+    harness.settle();
+    let after = steps(&harness);
+    assert_eq!(
+        after.first().map(|step| step.rule),
+        Some(ButtonStepRule::RunOnce),
+        "{after:?}"
+    );
+    assert_eq!(
+        after.get(1..),
+        Some(sets.as_slice()),
+        "the set steps follow the new step"
+    );
+}
+
 #[test]
 fn the_ant_starter_shows_its_ground_and_starts_ants_on_single_painted_cells() {
     let Some(mut harness) = Harness::new() else {
@@ -602,4 +676,42 @@ fn work_past_the_budget_on_a_sheet_names_its_lines_and_no_pass() {
         notice.detail
     );
     assert!(!notice.detail.contains(".."), "{}", notice.detail);
+}
+
+/// A sweep of the Editor's boids sheet with a config past the work budget is refused at Start in the sheet's lines, as
+/// Build refuses a single run, and names no pass.
+#[test]
+fn a_sweep_past_the_work_budget_on_a_sheet_names_its_lines_and_no_pass() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.app.editor.model = EditorModel::Sheet(Box::new(SheetEditor::new(starter_document("boids.toml"))));
+    let entry = match &mut harness.app.editor.model {
+        EditorModel::Sheet(sheet) => sheet.program().expect("the boids sheet compiles").entry(),
+        _ => unreachable!("the Editor holds the sheet"),
+    };
+    harness.app.install_models(&set_of(entry.clone()));
+    let mut spec = SweepSpec::new(entry.id());
+    spec.fixed = [("world_width", "200"), ("world_height", "200"), ("visual_range", "200")]
+        .map(|(id, value)| (id.to_owned(), value.to_owned()))
+        .to_vec();
+    spec.blocks = vec![BlockSpec {
+        design: DesignKind::Factorial,
+        factors: vec![FactorSpec::param(
+            "num_agents",
+            LevelSpec::Values(vec!["100".to_owned(), "70000".to_owned()]),
+        )],
+        design_seed: None,
+    }];
+    let Err(refusal) = SweepSession::start(&mut harness.app, spec, SessionExecution::default(), None) else {
+        panic!("the sweep started");
+    };
+    assert!(refusal.contains("1 config does not fit"), "{refusal}");
+    assert!(
+        refusal.contains("config 1: Lines 1 and 2, Flockmates and Too close: looks at too many birds at 70,000 birds."),
+        "{refusal}"
+    );
+    for word in ["pass", "units of work"] {
+        assert!(!refusal.contains(word), "{refusal}");
+    }
 }

@@ -315,3 +315,24 @@ fn a_gpu_entry_refuses_to_build_without_a_device() {
         );
     }
 }
+
+/// Every starter, sheet or graph, takes an id no example model holds. Otherwise Apply in the app or `--model-file` in
+/// henad-cli replaces the example of that id.
+#[test]
+fn no_starter_takes_the_id_of_an_example_model() {
+    let models = crate::example_models();
+    let starters = henad_graph::sheet::starters()
+        .iter()
+        .chain(henad_graph::starters::starters())
+        .chain(henad_graph::starters::agent_starters());
+    for starter in starters {
+        let file = henad_explore::model_file::ModelFile::parse(starter.text)
+            .unwrap_or_else(|error| panic!("{}: {error}", starter.file_name));
+        assert!(
+            models.get(file.id()).is_none(),
+            "{} takes the id '{}' of an example model",
+            starter.file_name,
+            file.id()
+        );
+    }
+}

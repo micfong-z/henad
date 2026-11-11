@@ -500,7 +500,7 @@ fn the_header_dispatches_on_the_kind() {
     let sheet = henad_graph::sheet::starters()[0].text;
     let read = ModelFile::parse(sheet).unwrap_or_else(|error| panic!("{error}"));
     assert!(matches!(read, ModelFile::Sheet(_)));
-    assert_eq!(read.id(), "game_of_life");
+    assert_eq!(read.id(), "sheet_game_of_life");
     let marked = sheet.replace("kind = \"sheet\"", "kind = \"graph\"");
     assert!(matches!(ModelFile::parse(&marked), Err(ModelFileError::Toml(_))));
 

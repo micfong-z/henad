@@ -693,13 +693,19 @@ fn a_sheet_model_file_runs_and_prints_its_problems_at_its_lines() {
     let sheet = argument(&life_sheet());
     let text = std::fs::read_to_string(life_sheet()).expect("the sheet starter is in the repository");
 
+    // The sheet's id is its own, so the sheet runs beside the example model `game_of_life` and replaces nothing.
     if has_device() {
         let output = run_ok(&["--model-file", &sheet, "--steps", "20"]);
-        assert!(
-            stderr(&output).contains("replaces the model 'game_of_life'"),
-            "{}",
-            stderr(&output)
-        );
+        assert!(!stderr(&output).contains("replaces the model"), "{}", stderr(&output));
+        let listed = stdout(&run_ok(&["--list", "--model-file", &sheet]));
+        for id in ["game_of_life", "sheet_game_of_life"] {
+            assert!(
+                listed
+                    .lines()
+                    .any(|line| line.trim_start().starts_with(&format!("{id} "))),
+                "{id} is listed: {listed}"
+            );
+        }
     }
 
     // A Become line that names a state the property does not hold is refused at the line's table, in the sheet's
@@ -770,6 +776,42 @@ fn a_sheet_past_the_work_budget_is_refused_at_its_lines() {
         message.contains("Lines 1 and 2, Flockmates and Too close: looks at too many birds at 70,000 birds."),
         "{message}"
     );
+    let words = message.replace(&sheet, "");
+    for word in ["node", "pass", "units of work"] {
+        assert!(!words.contains(word), "{message}");
+    }
+}
+
+/// A sweep's plan refuses the config of the boids sheet past the work budget in the sheet's lines, as a single run does,
+/// and leaves the config that fits alone.
+#[test]
+fn a_sweep_of_a_sheet_past_the_work_budget_is_refused_at_its_lines() {
+    if !has_device() {
+        return;
+    }
+    let sheet = argument(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../henad-graph/sheets/boids.toml"));
+    let output = run(&[
+        "--model-file",
+        &sheet,
+        "--dry-run",
+        "--steps",
+        "5",
+        "--vary",
+        "num_agents=100,70000",
+        "--set",
+        "world_width=200",
+        "--set",
+        "world_height=200",
+        "--set",
+        "visual_range=200",
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let message = stderr(&output);
+    assert!(
+        message.contains("config 1: Lines 1 and 2, Flockmates and Too close: looks at too many birds at 70,000 birds."),
+        "{message}"
+    );
+    assert!(message.contains("1 config does not fit"), "{message}");
     let words = message.replace(&sheet, "");
     for word in ["node", "pass", "units of work"] {
         assert!(!words.contains(word), "{message}");

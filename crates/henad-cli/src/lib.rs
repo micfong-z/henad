@@ -44,7 +44,7 @@
 //! henad-cli sir --vary infection_rate=0.1:0.5:0.1 --reps 5 --steps 500 --out sir-sweep
 //! henad-cli --spec crates/henad-explore/specs/sir_sweep.toml --out sir-sweep
 //! henad-cli --model-file crates/henad-explore/specs/models/life_rule.toml --vary density=0.1:0.5:0.1 --out life-sweep
-//! henad-cli game_of_life --model-file crates/henad-graph/sheets/game_of_life.toml --steps 100
+//! henad-cli sheet_game_of_life --model-file crates/henad-graph/sheets/game_of_life.toml --steps 100
 //! henad-cli --model-file crates/henad-graph/sheets/game_of_life.toml --print-lowered
 //! henad-cli --merge shard-0 shard-1 --out sir-sweep
 //! ```
@@ -466,7 +466,8 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
         Mode::Params => print!("{}", params_text(entry)),
         Mode::Explore => {
             let provenance = provenance(host, arguments);
-            return explore::run(args, entry, gpu_ctx.as_ref(), spec, provenance);
+            let file = files.iter().find(|file| file.id() == entry.id());
+            return explore::run(args, entry, file, gpu_ctx.as_ref(), spec, provenance);
         }
         _ => {
             let file = files.iter().find(|file| file.id() == entry.id());
@@ -1175,7 +1176,7 @@ mod tests {
             "--out",
             dir.arg(),
         ]);
-        let status = explore::run(&args, &entry, None, None, test_provenance()).expect("the sweep runs");
+        let status = explore::run(&args, &entry, None, None, None, test_provenance()).expect("the sweep runs");
         assert_eq!(status, 0);
 
         let overrides = parse_overrides(&args.set).expect("valid");
@@ -1218,7 +1219,7 @@ mod tests {
             "--out",
             dir.arg(),
         ]);
-        let status = explore::run(&args, &entry, None, None, test_provenance()).expect("the sweep runs");
+        let status = explore::run(&args, &entry, None, None, None, test_provenance()).expect("the sweep runs");
         assert_eq!(status, 0);
 
         let overrides = parse_overrides(&args.set).expect("valid");
@@ -1300,7 +1301,7 @@ mod tests {
             ];
             line.extend(shard.map(|shard| ["--shard", shard]).into_iter().flatten());
             let args = Args::parse_from(line);
-            explore::run(&args, &entry, None, None, test_provenance()).expect("the sweep runs")
+            explore::run(&args, &entry, None, None, None, test_provenance()).expect("the sweep runs")
         };
         let whole = dir.path.join("whole");
         assert_eq!(sweep(&whole, None), 0);
@@ -1676,7 +1677,8 @@ parameters for virus_network (Virus on a Network):
             "--out",
             dir.arg(),
         ]);
-        let status = explore::run(&args, &sir.entry, Some(&sir.ctx), None, test_provenance()).expect("the sweep runs");
+        let status =
+            explore::run(&args, &sir.entry, None, Some(&sir.ctx), None, test_provenance()).expect("the sweep runs");
         assert_eq!(status, 0);
 
         let exported = rows(sir.simulation(run_seed(7, 0), &sir.schedule(&[])), 4, 13);

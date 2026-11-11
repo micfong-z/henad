@@ -45,7 +45,10 @@ own here: henad-explore places each of its warnings and errors at the sheet's li
 the pass and node, so `located` prints the author line and no note. `with_model_files` returns
 each `ModelFile` beside the set, and `run_single` takes the file of its entry: the device check
 runs a sheet's `SheetFile::shortfalls`, so work past a budget names the sheet's lines and no pass
-(`a_sheet_past_the_work_budget_is_refused_at_its_lines`). A sweep's plan keeps the entry's words.
+(`a_sheet_past_the_work_budget_is_refused_at_its_lines`). `explore::run` takes the file too, and
+`in_sheet_words` rewords each config a sweep's capacity check refused (`ExploreError::Capacity`) by
+`SheetFile::shortfalls` over the config of the plan, or of a search's fixed values, on the device it
+passed the sweep (`a_sweep_of_a_sheet_past_the_work_budget_is_refused_at_its_lines`).
 `--print-lowered` (`Mode::PrintLowered`, checked first) takes exactly one `--model-file`
 (`parse_args` refuses another count with exit 2), requires it, conflicts with a model id, `--list`,
 `--params`, `--info`, `--json`, the exports, `--stats-every`, `--merge`, every sweep flag and every
@@ -69,9 +72,10 @@ the binary on copies of henad-explore's `specs/models/life_rule.toml`, and holds
 `a_graph_model_file_checks_runs_and_prints_its_problems`, which reads henad-graph's Life starter
 by path and sweeps it where a device is,
 `a_sheet_model_file_runs_and_prints_its_problems_at_its_lines` (henad-graph's
-`sheets/game_of_life.toml` by path: 20 steps where a device is, and a broken copy refused at
-`[card.line.l2]` with neither "node" nor "pass" in the output, and a copy with no property refused
-at `[world]` in the sheet's words, with no "lane" either) and
+`sheets/game_of_life.toml` by path, id `sheet_game_of_life`: 20 steps with no replace note and
+`--list` holding both it and the example `game_of_life` where a device is, and a broken copy
+refused at `[card.line.l2]` with neither "node" nor "pass" in the output, and a copy with no
+property refused at `[world]` in the sheet's words, with no "lane" either) and
 `print_lowered_prints_the_graph_a_sheet_lowers_to` (the printed text reads as a graph with the
 sheet's code, a graph prints itself, a grid rule is refused, the flag's conflicts).
 `a_model_file_error_points_at_its_line` and the two sheet tests run without a device, apart from the

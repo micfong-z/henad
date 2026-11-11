@@ -1,4 +1,7 @@
 //! Sheet starters: sheets a new model begins from, embedded in the crate.
+//!
+//! A starter of a model that henad-models also holds takes the id `sheet_<model>`, such as `sheet_game_of_life`, so
+//! the two sit in one model set.
 
 use crate::starters::Starter;
 

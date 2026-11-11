@@ -23,6 +23,8 @@ and a device-free test per port compares the seeded buffer with the CPU grid.
 over `example_models()` on a baseline device, check each model's skipped checks, and keep the
 guards for the example models alone: no GPU entry builds without a device, `gpu_sir`'s refusal
 at 6000 by 6000, each GPU entry's `GpuNeeds` against its widest pass, and the set's coverage.
+`no_starter_takes_the_id_of_an_example_model` reads every henad-graph starter, sheet and graph,
+through `ModelFile::parse` and holds its id apart from the ten.
 `gpu_boids` declares `REPLAYS_EXACTLY = false`, and its entry's `metadata().replays_exactly`
 reads it.
 `src/tests/graph_corpus.rs` holds the grid graph corpus to the stock models: henad-graph's starters

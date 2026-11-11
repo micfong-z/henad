@@ -47,14 +47,20 @@ once the loaded model runs the applied source, and from `Applied` to `Installed`
 loaded, as after Cancel of a build or Offload. `editor_ui` also passes it the source Build builds
 now, the selected entry's, or `None` while `build_replays_preview` holds, and an `Installed` outcome
 that source no longer matches is dropped to `None` ("Press Apply to check and install the model."):
-after another selection, or once a sheet's preview loads after Offload. `load` commits the loaded
-entry when the build starts, and the outcome reads `Applied` from then on. New grid rule loads
+after another selection, or once a sheet's preview loads after Offload. An `Applied`,
+`AwaitingRebuild`, `Installed` or `Unchanged` outcome is dropped once `EditorModel::edit_mark` (a
+hash
+of a rule's or a sheet's text, a graph's `revision`) differs from `applied_mark`, the mark Apply
+took. `load` commits the loaded entry when the build starts, and the outcome reads `Applied` from
+then on. New grid rule loads
 `life_starter()`, the canonical text of `GridRule::life()`, and Edit model, shown for a runtime
 entry whose code is in `GridRule::CODE_FORMAT`, its canonical text. Edit model and the Results tab's
 Open in Editor read through `editable_model(author, code)`, which returns an `EditableModel` (the
 sheet of a `henad-sheet/1` author text, else the graph or the grid rule of the code), and
-`EditorPanel::load_model` loads it from no file. `can_edit` is `editable_model(...).is_some()`. Open
-model and Save model go through `OpenTarget::Model` and `SaveTarget::Model`, a `.toml` file on
+`EditorPanel::load_model` loads it from no file. Each action that replaces the model asks first
+while it holds unsaved edits (`henad-app.md`, unsaved edits). `can_edit` is
+`editable_model(...).is_some()`. Open model and Save model go through `OpenTarget::Model` and
+`SaveTarget::Model`, a `.toml` file on
 native and a picked file or a download in a browser. Opening loads the text and applies nothing.
 `AppState::show_fault` gives a fault to the Editor (`EditorPanel::claims`) when it belongs to a run
 built from the applied source that has not passed tick 0, in place of the fault modal. A lost
@@ -72,6 +78,7 @@ the sizes as `ApplyOutcome::Faulted`. `reset_simulation`, `open_run` and `open_s
 since the engine's own assert would end a browser's page. `src/tests/editor.rs` holds
 `new_grid_rule_starts_from_the_life_starter`,
 `applying_an_edit_installs_and_rebuilds_from_tick_zero`,
+`an_edit_after_apply_drops_the_applied_line`,
 `applying_beside_another_run_past_tick_zero_waits_for_build`,
 `a_sheet_applied_beside_another_run_drops_the_build_line_once_its_preview_loads`,
 `a_graph_applied_beside_another_run_keeps_the_build_line_over_its_preview`,
@@ -98,6 +105,11 @@ preview, and `install`'s `settle_loaded` leaves a preview alone. `open_text` ope
 `kind = "graph"` and that `GraphFile::parse` reads on the canvas, and a graph that does not read in
 the code view, where Apply places its problems. `new_graph_model(app, file_name)` opens a starter,
 and Edit model opens a runtime entry whose code is `henad-graph/1` and records no sheet.
+`new_model_id(models, id, prefix)` gives a new model its id: `id` while no compiled entry of the set
+holds it, else `prefix` and `id` (`sheet_` for New model from Blank or a starter, `node_` for
+`new_graph_model`, none for New grid rule), numbered by `mint_id` while compiled code holds that
+too. A runtime entry holds no id, and a new model replaces it on Apply. `src/tests/model_ids.rs`
+holds it, with compiled models of the user's own beside the examples.
 `GraphEditor::new` places every body without placement through `arrange` (no undo step) and opens
 the first tick pass.
 
@@ -120,7 +132,9 @@ requests, then the open canvas syncs. This order is the guard of trap 8 of recor
 #62: a removal while a wire is in flight panics egui-snarl. `edit` runs commands on a clone, so a
 refused command changes nothing, and its message (capitalised, with a full stop) is `status`, a
 `GraphStatus` whose `warning` draws it in the theme's warn colour. A copy's "Copied N nodes." is a
-note (`GraphStatus::note`) in the text colour. `world.rs` leaves a hidden parameter out.
+note (`GraphStatus::note`) in the text colour. `world.rs` leaves a hidden parameter out, and its
+world table and parameter defaults set `clamp_existing_to_range(false)`, so a value the file holds
+outside a range is drawn as it is and left to the checker.
 `refresh` checks again, rebuilds `issues` and reopens the first pass when the open one is gone.
 The *code revision* counts changes of `GraphFile::code`'s hash, which `refresh` compares, so a
 `Move` or Arrange changes the revision and not the code revision. `preview_key` and the `program`
@@ -420,8 +434,9 @@ status), `src/tests/graph_preview.rs` the preview, the WGSL view, View in viewpo
 `the_submission_budget_refuses_apply_at_full_size_and_lets_the_preview_run`,
 `every_starter_previews_within_the_device_limits_and_the_work_budget`), and
 `src/tests/graph_canvas.rs` the canvas over a headless `egui::Context` (a fresh egui state per
-canvas, two drags as two undo steps, a dragged world field and the accessible bounds of a node among
-them, and the `Harness`, `accessible` and `accessible_with_role` that `src/tests/graph_regions.rs`
+canvas, two drags as two undo steps, a dragged world field, a world value outside its range kept
+(`the_world_panel_keeps_a_value_outside_its_range`) and the accessible bounds of a node among them,
+and the `Harness`, `accessible` and `accessible_with_role` that `src/tests/graph_regions.rs`
 and `src/tests/graph_functions.rs` share. `graph_regions.rs` holds the region tests: two halves in a
 frame, the Repeat button, nested frames, a drop into a frame with its blue stroke and Move out of
 region, the output half's drag, the bound from a constant count, an out-of-range bound left as it

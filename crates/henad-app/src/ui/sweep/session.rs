@@ -144,6 +144,10 @@ impl SweepSession {
             #[cfg(target_arch = "wasm32")]
             Some(_) => return Err("Writing results to a folder is unavailable in a browser".to_owned()),
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(refusal) = sheet_capacity_refusal(app, &entry, &spec) {
+            return Err(refusal);
+        }
         let mut options = SweepRunOptions::new(provenance(app.product.host));
         options.concurrency = execution.concurrency;
         options.memory_budget = execution.memory_budget;
@@ -311,6 +315,43 @@ impl SweepSession {
     pub fn abort(&mut self) {
         self.run.abort();
     }
+}
+
+/// Returns the refusal of a sweep of `spec` on `entry` when `entry` is the Editor's sheet and some config of the plan
+/// is past a work budget, worded as Build words a single run of the sheet: in the sheet's lines, with no pass.
+///
+/// The message reads as the sweep's own capacity check writes it. `None` for an entry of no sheet and for a plan
+/// whose configs keep within the budgets. A config refused only for another reason, such as a buffer past the device's
+/// size, is left to the sweep's check on its own device, which words it the same way.
+#[cfg(not(target_arch = "wasm32"))]
+fn sheet_capacity_refusal(app: &AppState, entry: &ModelEntry, spec: &SweepSpec) -> Option<String> {
+    use henad_explore::probe::{CapacityError, MAX_LISTED_CONFIGS, RefusedConfig};
+    use henad_explore::sweep::ExploreError;
+
+    let sheet = app.editor_sheet_of(entry)?;
+    let schema = entry.schema();
+    // A search checks the config of its fixed values, as the sweep's own check does.
+    let plan = if spec.search.is_some() {
+        Arc::clone(SearchPlan::new(spec, &schema).ok()?.base())
+    } else {
+        Arc::new(spec.plan(&schema).ok()?)
+    };
+    let limits = &app.runtime.granted;
+    let mut error = CapacityError {
+        refused: Vec::new(),
+        count: 0,
+    };
+    for (config_id, config) in (0_u64..).zip(plan.configs()) {
+        let reasons = sheet.shortfalls(entry, &config.params, limits);
+        if reasons == entry.shortfalls(&config.params, limits) {
+            continue;
+        }
+        error.count += 1;
+        if error.refused.len() < MAX_LISTED_CONFIGS {
+            error.refused.push(RefusedConfig { config_id, reasons });
+        }
+    }
+    (error.count > 0).then(|| describe_error(&ExploreError::Capacity(error)))
 }
 
 /// Returns the provenance a sweep's manifest records: `host`, the build of this app, with its command line.

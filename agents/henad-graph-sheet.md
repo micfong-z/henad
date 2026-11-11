@@ -153,7 +153,12 @@ packaging check refuses a path out of the crate: the grid sheets `game_of_life.t
 `vote.toml` ("Majority vote") and `forest_fire.toml`, which entered with the chances' lowering, then
 the agent sheets `random_walk.toml`, `boids.toml` and `bounded_confidence.toml`, which entered with
 the agent lowering, and `ants.toml`, which entered with the ground and holds a note under its last
-line on its slower trail formation (answer 13a). A sheet enters `sheets/` and `starters()` only in
+line on its slower trail formation (answer 13a). A starter of a model henad-models also holds takes
+the id `sheet_<model>` (`sheet_game_of_life`, `sheet_sir`, `sheet_boids`, `sheet_ants`), as the
+graph starters take `node_<model>`, so Apply or `--model-file` adds it beside the example instead of
+replacing it. The vote, forest fire, random walk and bounded confidence keep their file names
+as ids. henad-models' `no_starter_takes_the_id_of_an_example_model` holds every sheet and graph
+starter's id apart from `example_models()`. A sheet enters `sheets/` and `starters()` only in
 the milestone whose lowering runs it, and a test looping over `starters()` passes at every merge.
 The app's New model dialog lists only the starters whose world it offers (`starter_choices`), the
 grid sheets today. Until then a sheet is test data in `src/tests/sheets/`. `sir_chance.toml`,
@@ -300,7 +305,8 @@ and agent lowering, node ids, keys, the line table, the interim refusals and the
 tests sit in `src/tests/sheet_writer.rs`: `every_sheet_is_a_fixed_point`,
 `the_rust_writer_agrees_with_check_py_apart_from_comments` against `src/tests/golden/` (the
 reference writer's text for the four author-format examples with comment lines removed, each line's
-note dropped first since the ants starter holds one the example lacks; `golden/README.md` holds the
+note dropped first since the ants starter holds one the example lacks, and `sheet_` taken off each
+starter's id, since the examples hold the ids without it; `golden/README.md` holds the
 procedure, the script's SHA-256 and the rules in full),
 `a_hand_edited_sheet_reads_back_to_its_canonical_text`,
 `unusual_values_read_back_to_the_same_document`, `a_number_that_is_not_finite_is_refused`,

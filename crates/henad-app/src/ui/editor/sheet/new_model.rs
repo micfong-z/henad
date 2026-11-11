@@ -9,6 +9,10 @@
 //! A blank model is a world of 100 by 100 cells that wraps around, with no parameter and no card. A blank world of
 //! cells has no property. A blank world of agents holds 1000 agents called Agent, room for a million, each with a
 //! Position that starts anywhere at random and a Heading.
+//!
+//! A blank model takes the id its name mints, and a starter keeps its own. Where a model compiled into the app holds
+//! that id, such as the example `game_of_life`, the new model takes `sheet_` before it, so Apply adds it beside that
+//! model instead of replacing it.
 
 use egui::{Context, Id, Key, Modal, RichText, TextEdit};
 use henad_graph::sheet::ParsedSheet;
@@ -24,6 +28,7 @@ use henad_graph::sheet::sentence::{
 use super::SheetEditor;
 use crate::state::AppState;
 use crate::ui::dock::Tab;
+use crate::ui::editor::new_model_id;
 use crate::ui::sweep::layout::filled_button;
 
 /// Width in points of the dialog's content.
@@ -40,6 +45,10 @@ const BLANK_AGENT_COUNT: u32 = 1000;
 
 /// Largest number of agents a blank model of agents holds.
 const BLANK_AGENT_MAX: u32 = 1_000_000;
+
+/// Text before the id of a new sheet whose own id a compiled model holds, as before the ids of the sheet starters of
+/// example models.
+const SHEET_ID_PREFIX: &str = "sheet_";
 
 /// One starter the dialog offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,7 +281,11 @@ pub fn create_blank_agent_model(app: &mut AppState, name: &str) {
 }
 
 /// Opens the blank model `document` in the Editor with no file name, and brings the Editor to the front.
-fn open_blank(app: &mut AppState, document: SheetDocument) {
+///
+/// The model keeps the id its name mints unless a compiled model of the app's set holds it, and then takes `sheet_`
+/// before it ([`new_model_id`]).
+fn open_blank(app: &mut AppState, mut document: SheetDocument) {
+    document.sheet.id = new_model_id(&app.models, &document.sheet.id, SHEET_ID_PREFIX);
     app.editor.load_sheet(SheetEditor::new(document), None);
     app.editor.file_status = None;
     app.focus_request = Some(Tab::Editor);
@@ -282,7 +295,7 @@ fn open_blank(app: &mut AppState, document: SheetDocument) {
 /// to the front.
 ///
 /// An empty name takes [`UNTITLED_MODEL`]. A name the sheet refuses leaves the starter's name, and the Editor's status
-/// says why.
+/// says why. The model keeps the starter's id unless a compiled model of the app's set holds it ([`new_model_id`]).
 pub fn create_model(app: &mut AppState, file_name: &str, name: &str) {
     let Some(parsed) = henad_graph::sheet::starters()
         .iter()
@@ -294,6 +307,7 @@ pub fn create_model(app: &mut AppState, file_name: &str, name: &str) {
     };
     let name = if name.is_empty() { UNTITLED_MODEL } else { name };
     let mut document = parsed.into_document();
+    document.sheet.id = new_model_id(&app.models, &document.sheet.id, SHEET_ID_PREFIX);
     let mut status = None;
     if document.sheet.name != name {
         let mut builder = SheetBuilder::new(document.clone());

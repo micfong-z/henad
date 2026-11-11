@@ -38,7 +38,11 @@ and a browser keeps eframe's one key per origin. `ui/` has one file per panel or
 `time_axis.rs` holds the time axis the Charts tab, the Results tab's Series view and Playback
 share. The Export tab and the Editor live in directories, `export/` and `editor/`. The Export
 tab's `mod.rs` draws the tab and writes the stat series and final state, `image.rs` captures the
-viewport and `metadata.rs` builds the run details. `files/` holds the file dialogs: `save.rs` hands
+viewport and `metadata.rs` builds the run details. Save stats (`history_csv`) and Record
+(`start_recording`, `Recording::start`) give the `StatsWriter` the tick length of `loaded_time`,
+which adds the `time` column `--export-stats` writes
+(`tests/time_axis.rs`, `the_export_tab_writes_the_time_of_a_timed_model`). `files/` holds the file
+dialogs: `save.rs` hands
 bytes to a save dialog (several files go into one picked folder on native and download one by one in
 a browser), and `open.rs` reads picked files, or takes a picked folder on native. Each outcome
 carries a `SaveTarget` or `OpenTarget`, and `AppState::poll_saves` and `poll_opens` route it to
@@ -70,8 +74,21 @@ counterparts and the `Workspace` tests (`a_switch_keeps_the_changes_of_each_layo
 `a_request_for_the_editor_switches_layouts_only_while_the_checkbox_is_on`,
 `reset_layout_resets_the_layout_that_shows_alone`), and `menu_bar.rs`
 `the_view_menu_switches_layouts_by_name`. The menu bar's File menu holds New model, New grid rule,
-New node graph, Open model and Save model. `lib.rs` draws the New model dialog beside the fault and
-Rebuild model modals.
+New node graph, Open model and Save model. `lib.rs` draws the New model and unsaved changes dialogs
+beside the fault and Rebuild model modals.
+**Unsaved edits** of the Editor (`ui/editor/mod.rs`). Every load sets `saved_mark` to the model's
+`edit_mark`, a save that reports sets it to the mark `saving` took at its start, and Apply leaves
+it. `is_unsaved` holds for a non-empty model whose mark differs, and `Counterpart` keeps its own
+marks, swapped with the model. New model, New grid rule, New node graph and Open model (header, File
+menu, Model tab), Edit model of code the Editor did not apply, and Open in Editor go through
+`replace_model(app, Replacement)`, which runs the action at once when `unsaved_names` is empty and
+otherwise sets `EditorPanel::ask`. `unsaved_modal` (drawn from `lib.rs`) is a `Dialog` named by
+`sentence::unsaved_changes(names)` with Cancel, `DISCARD_CHANGES` and `SAVE_MODEL`
+(`filled_button`). Save model saves the model shown (`SaveTarget::Model`) and then the counterpart
+(`SaveTarget::Counterpart`) in turn (`AfterSave`): `poll_saves` passes each outcome to
+`save_finished` and `continue_replacement`, which runs the action once both saved and drops it on a
+save that saved nothing. In a test build `save_as` records each save in `saves_requested`, and
+`finish_save` reports it (`src/tests/unsaved.rs`).
 `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer drawn over the grid layer,
 and `painted.rs` carries a paint callback's wgpu handles past `CallbackTrait`'s `Send + Sync`
 bound. `edge_layer.rs` (with `edges.wgsl`) draws a network's
@@ -89,7 +106,10 @@ under its id is replaced. `selection_is_loaded` compares the id and the code thr
 (the `ModelSource` and the `schema_hash`), and `code_pending` holds for the same id under other
 code. `offered_models` hides a GPU model
 where the adapter has no compute, through `ModelSet::runnable`, and the app opens on the first
-offered model, or with none selected and `NO_MODEL_RUNS` in the Model panel. A missing id reads as
+offered model, or with none selected and `NO_MODEL_RUNS` in the Model panel. The Model panel's list
+(`model.rs`) shows each offered model's name, and its id in parentheses after the name when another
+offered model has the same name (`list_labels`), as an applied sheet starter has beside the example
+model it ports (`the_model_list_names_the_ids_of_models_that_share_a_name`). A missing id reads as
 `lookup_message` words it, "This build does not include model 'x'" or "Model 'x' needs a GPU with
 compute support, and this device has none", with no full stop. `select_model` loads the defaults
 and clears the schedule, or, for the loaded model, restores `loaded_values` (its built values with
@@ -102,8 +122,8 @@ the set lacks leaves no values. `AppState` also holds the values the next build 
 returns Build's disabled reason, which Playback shows. It shows a `SetupError` through
 `setup_message`, as it shows `INVALID_SEED` and a shortfall through `too_large_message`. Every
 shortfall goes through `AppState::entry_shortfalls`, which takes `SheetFile::shortfalls` when the
-Editor's sheet has the entry's code, so a sheet's work past a budget names its lines and no pass
-(`work_past_the_budget_on_a_sheet_names_its_lines_and_no_pass`).
+Editor's sheet has the entry's code (`editor_sheet_of`), so a sheet's work past a budget names its
+lines and no pass (`work_past_the_budget_on_a_sheet_names_its_lines_and_no_pass`).
 `reset_simulation` builds nothing while the check fails, and `open_run` refuses a replay
 `RunSetup::from_replay` refuses. `reset_simulation` builds the checked setup through the private
 `load`, which tears the old run down, pins the setup's entry, records `loaded_values`,
@@ -207,7 +227,9 @@ a decimal `u64` as `Some`. Anything else shows `INVALID_SEED` and disables Build
 model clears the schedule. Its entries index the previous model's actions. `params.rs` skips a
 hidden parameter (`ParamDescriptor::is_hidden`, a model's tick length), and shows "This model has
 no parameters." when every parameter is hidden. The graph editor's world panel skips it too and
-counts only the shown ones. The Sweep tab keeps a row per parameter, hidden ones included, so a
+counts only the shown ones, as the Model tab's Parameters row (`model.rs`, `interface_rows`) does
+(`the_model_tab_counts_the_parameters_the_parameters_tab_shows`). The Sweep tab keeps a row per
+parameter, hidden ones included, so a
 sweep varies a tick length (`a_hidden_tick_length_stays_a_sweep_factor`). The time axis:
 `AppState::loaded_time` returns a `time_axis::RunTime`, the unit of the loaded entry's
 `ModelMetadata::time` and the tick length among `loaded_values`, `None` for a model with no time
@@ -218,13 +240,17 @@ the `time` column of `--export-stats`. The Charts tab plots every stat at `plot_
 the y range, and draws a series of one sample as `Points` of radius 3, since a `Line` of one point
 draws nothing. `tests/time_axis.rs` holds the app-level tests over henad-models'
 `sir_rates.toml` fixture (`support::sir_rates`). `playback.rs` draws the Run to tick row.
-`AppState::run_to` rebuilds first for a tick behind the current one, then sends
-`SimCommand::RunTo` and sets `run_to_target`. Run is disabled while another model is selected,
-while the sim plays, and for a tick behind the current one while Build is disabled.
+`AppState::run_to` rebuilds first for a tick behind the current one through `press_build` (a
+replay of the Editor's sheet preview while `build_replays_preview` holds), then sends
+`SimCommand::RunTo` and sets `run_to_target`. Run (`run_refusal`) is disabled while another model
+is selected than the one loaded, unless Build replays the sheet's preview, which Run then drives
+(`run_to_tick_drives_the_sheet_preview`), while the sim plays, and for a tick behind the current one
+while Build is disabled.
 A playing loop runs ahead of the snapshot's tick, and a target between the two would pause past
 it. The progress line reads the target, Cancel sends `Pause`, and `HenadApp::logic` clears the
 target once a snapshot reaches it. A snapshot past the target makes `logic` call `run_to` again,
-and the second call rebuilds. Where the frame drives the sim (`!CAN_SPAWN_THREADS`), `logic`
+and the second call rebuilds, for the selection or the replayed preview. Where the frame drives the
+sim (`!CAN_SPAWN_THREADS`), `logic`
 keeps repainting while a run-to is pending. `AppState::open_run(Replay, OpenAt)` builds one sweep
 run from a `henad_core::explore::replay::Replay`. It selects the model, sets the params, seed
 and schedule, rebuilds, sends `RunTo` for `OpenAt::Tick`, and sets `focus_request` to the

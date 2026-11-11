@@ -4,7 +4,7 @@ kind = "sheet"
 
 [sheet]
 version = 1
-id = "ants"
+id = "sheet_ants"
 name = "Ant foraging"
 purpose = "Stigmergy: a colony finds a short path to food through trails alone. Pattern to look for: a trail forms between the nest and the food, around the rocks, and deliveries rise steadily."
 next_line = 17

@@ -12,6 +12,7 @@ use crate::icons::material_design_icons::{
 };
 use crate::state::AppState;
 use crate::ui::files::SaveTarget;
+use crate::ui::time_axis::RunTime;
 
 /// Recording of the stats the sim publishes, from the tick Record is pressed at until it stops.
 pub enum Recording {
@@ -31,10 +32,11 @@ pub enum Recording {
 }
 
 impl Recording {
-    /// Starts a recording at `from_tick`.
-    pub fn start(from_tick: u64) -> Self {
+    /// Starts a recording at `from_tick`. A run with a time scale, `time`, adds a `time` column after `tick`, as
+    /// `--export-stats` writes it.
+    pub fn start(from_tick: u64, time: Option<RunTime>) -> Self {
         Self::Running {
-            writer: StatsWriter::new(Vec::new()),
+            writer: stats_writer(time),
             from_tick,
             held: None,
         }
@@ -165,9 +167,7 @@ fn recording_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
                 .on_hover_text("Start stats capture")
                 .clicked()
             {
-                let from_tick = app.snapshot.as_ref().map_or(0, |snap| snap.tick);
-                app.recording = Recording::start(from_tick);
-                app.export_status = None;
+                start_recording(app);
             }
         }
         Recording::Running {
@@ -261,23 +261,47 @@ fn file_name(app: &AppState, export_type: &str, ext: &str) -> String {
     format!("henad-{model}-{export_type}-{tick}.{ext}")
 }
 
-fn export_history(app: &mut AppState) {
-    let Some(history) = &app.stats_history else {
-        return;
-    };
-    let mut writer = StatsWriter::new(Vec::new());
+/// Returns a writer of a stat series into memory, with a `time` column for a run with a time scale, `time`.
+fn stats_writer(time: Option<RunTime>) -> StatsWriter<Vec<u8>> {
+    let writer = StatsWriter::new(Vec::new());
+    match time {
+        Some(time) => writer.tick_length(time.tick_length),
+        None => writer,
+    }
+}
+
+/// Starts a recording at the current tick of the loaded run, with its time scale.
+pub fn start_recording(app: &mut AppState) {
+    let from_tick = app.snapshot.as_ref().map_or(0, |snap| snap.tick);
+    app.recording = Recording::start(from_tick, app.loaded_time());
+    app.export_status = None;
+}
+
+/// Returns the chart history of the loaded run as CSV, with the columns the headless runner writes, `None` with no
+/// history.
+///
+/// # Errors
+///
+/// Returns an error when a sample does not match the layout the first sample fixed.
+pub fn history_csv(app: &AppState) -> Option<Result<Vec<u8>, StatsWriteError>> {
+    let history = app.stats_history.as_ref()?;
+    let mut writer = stats_writer(app.loaded_time());
     for j in 0..history.len() {
         let (Some(entries), Some(tick)) = (history.entries(j), history.tick(j)) else {
             break;
         };
         if let Err(err) = writer.push(tick, &entries) {
-            app.export_status = Some(format!("Export failed: {err}"));
-            return;
+            return Some(Err(err));
         }
     }
-    match writer.into_inner() {
-        Ok((csv, _)) => app.save_as(SaveTarget::Export, &file_name(app, "stats", "csv"), csv),
-        Err(err) => app.export_status = Some(format!("Export failed: {err}")),
+    Some(writer.into_inner().map(|(csv, _)| csv))
+}
+
+fn export_history(app: &mut AppState) {
+    match history_csv(app) {
+        Some(Ok(csv)) => app.save_as(SaveTarget::Export, &file_name(app, "stats", "csv"), csv),
+        Some(Err(err)) => app.export_status = Some(format!("Export failed: {err}")),
+        None => {}
     }
 }
 
@@ -339,7 +363,7 @@ mod tests {
     /// tick, holding the action's stats, and stopping writes the last row out.
     #[test]
     fn a_publish_at_the_same_tick_replaces_the_held_row() {
-        let mut recording = Recording::start(5);
+        let mut recording = Recording::start(5, None);
         for (tick, value) in [(5, 1.0), (5, 2.0), (6, 3.0), (6, 3.0), (7, 4.0), (7, 5.0)] {
             recording.push(tick, &row(value)).expect("one series throughout");
         }

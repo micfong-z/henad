@@ -25,7 +25,7 @@ use henad_graph::sheet::sentence::is_forbidden_word;
 use crate::state::AppState;
 use crate::ui::about::about_modal;
 use crate::ui::editor::sheet::new_model::new_model_modal;
-use crate::ui::editor::{editor_ui, open_text};
+use crate::ui::editor::{editor_ui, open_text, unsaved_modal};
 use crate::ui::menu_bar::file_menu;
 
 /// SIR as an edit leaves its declarations: an infection rate capped at 0.5 with another default, no recovery rate, a
@@ -489,6 +489,7 @@ impl Harness {
             egui::MenuBar::new().ui(ui, |ui| file_menu(ui, app));
             editor_ui(ui, app);
             new_model_modal(ui.ctx(), app);
+            unsaved_modal(ui.ctx(), app);
             about_modal(ui.ctx(), app);
         });
         output.textures_delta.clear();

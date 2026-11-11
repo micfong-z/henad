@@ -766,7 +766,7 @@ A file whose id is that of a model the CLI already offers, such as `gpu_game_of_
 A [sheet](../reference/model-files.md#sheets) sweeps the same way, with its parameters named by their ids:
 
 ``` bash
-cargo run --release -p henad-cli -- game_of_life \
+cargo run --release -p henad-cli -- sheet_game_of_life \
   --model-file crates/henad-graph/sheets/game_of_life.toml \
   --vary initial_density=0.1:0.5:0.1 --reps 5 --steps 500 --out life-sheet-sweep
 ```

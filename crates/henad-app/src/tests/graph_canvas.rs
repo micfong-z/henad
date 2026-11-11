@@ -678,6 +678,63 @@ fn a_dragged_world_field_shows_its_value_before_the_release() {
     assert_eq!(width(&harness), 777);
 }
 
+/// The world table and a parameter's default keep a value the file holds outside their range: the frames after a load,
+/// and the frames that open the parameter's form, leave the document as it was read.
+#[test]
+fn the_world_panel_keeps_a_value_outside_its_range() {
+    let cases = [
+        (
+            "sir.toml",
+            [("width = 1024", "width = 20000"), ("default = 0.3", "default = 1.5")],
+            Some("Infection Rate"),
+        ),
+        (
+            "boids.toml",
+            [("count = 50000", "count = 2000000"), ("width = 1000.0", "width = 0.5")],
+            None,
+        ),
+    ];
+    for (name, edits, parameter) in cases {
+        let mut text = henad_graph::starters::starter(name).expect("a starter").text.to_owned();
+        for (old, new) in edits {
+            assert!(text.contains(old), "{name} holds {old}");
+            text = text.replacen(old, new, 1);
+        }
+        let file = GraphFile::parse(&text).expect("the file reads");
+        let mut harness = Harness {
+            context: Context::default(),
+            graph: GraphEditor::new(&file),
+            time: 0.0,
+            modifiers: Modifiers::NONE,
+        };
+        let read = harness.graph.text();
+        harness.settle();
+        assert!(harness.graph.text() == read, "{name}: a frame changed the file");
+        if let Some(parameter) = parameter {
+            // The parameter's chips on the canvas read its label too, and its form's header sits in the side panel
+            // at the left.
+            harness.context.enable_accesskit();
+            let output = harness.frame_output(Vec::new());
+            let update = output.platform_output.accesskit_update.expect("an AccessKit update");
+            let header = update
+                .nodes
+                .iter()
+                .filter(|(_, node)| node.label() == Some(parameter))
+                .filter_map(|(_, node)| node.bounds())
+                .min_by(|a, b| a.x0.total_cmp(&b.x0))
+                .expect("the parameter's header");
+            harness.click(Pos2::new(
+                header.x0 as f32 + 4.0,
+                f64::midpoint(header.y0, header.y1) as f32,
+            ));
+            assert!(
+                harness.graph.text() == read,
+                "{name}: the parameter's form changed the file"
+            );
+        }
+    }
+}
+
 #[test]
 fn accessible_bounds_of_a_node_follow_the_canvas_transform() {
     let mut harness = Harness::new("sir.toml");

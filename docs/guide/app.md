@@ -83,6 +83,7 @@ Use the dropdown to pick a model.
 Picking a model also loads its default parameters, discarding parameters set in the <span class="ui" markdown>:material-tune: Parameters</span> tab.
 
 The GPU model entries only appear when a suitable device is detected.
+When two models in the list share a name, such as the example Game of Life and a model applied from the Game of Life starter in the Editor, each shows its id after the name.
 
 See the [models reference](../reference/models.md) for more details on each model.
 
@@ -111,6 +112,7 @@ Structure
 
 Interface
 : How many parameters and [statistics](../authoring/statistics.md) the model declares, and the palette it uses.
+  The parameter count is the number the Parameters tab shows, and leaves out a hidden parameter such as a [tick length](../reference/model-files.md#time-scale).
   Palette information cannot be obtained directly for a GPU model.
   A network model adds an **Edge palette** row with the colours its edges can take.
 
@@ -408,6 +410,7 @@ The <span class="ui" markdown>:material-application-export: Export</span> tab wr
 <span class="ui" markdown>:material-tray-arrow-down: Save stats</span> writes the recorded history as CSV, one row per snapshot and one column per stat series.
 A vector stat becomes three columns, `.x`, `.y` and `.magnitude`.
 A histogram becomes one column per bucket plus `.total`.
+For a model with a [time scale](../reference/model-files.md#time-scale), a `time` column follows `tick`, the tick times the run's tick length, as `--export-stats` writes it.
 
 If Unlimited history is not enabled, a warning will be displayed as the oldest snapshots might have been lost over time.
 Turn on **Unlimited history** in the <span class="ui" markdown>:material-chart-line: Charts</span> tab to keep every snapshot.
@@ -416,7 +419,7 @@ Turn on **Unlimited history** in the <span class="ui" markdown>:material-chart-l
 
 <span class="ui" markdown>:material-record-circle-outline: Record</span> captures every snapshot from the moment it starts, independent of the history length setting in the <span class="ui" markdown>:material-chart-line: Charts</span> tab.
 
-<span class="ui" markdown>:material-stop: Stop</span> will stop recording, and <span class="ui" markdown>:material-tray-arrow-down: Save recording</span> will write the captured snapshots to CSV.
+<span class="ui" markdown>:material-stop: Stop</span> will stop recording, and <span class="ui" markdown>:material-tray-arrow-down: Save recording</span> will write the captured snapshots to CSV, with the columns of Save stats.
 
 ### Current state
 

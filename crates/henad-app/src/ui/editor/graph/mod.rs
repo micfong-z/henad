@@ -422,6 +422,11 @@ impl GraphEditor {
         editor
     }
 
+    /// Number of changes of the document since it was opened, every move, undo and redo included.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Builder that holds the document and its editor region.
     #[cfg(test)]
     pub fn builder(&self) -> &GraphBuilder {
