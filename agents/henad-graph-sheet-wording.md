@@ -1,8 +1,18 @@
 # henad-graph: the wording table and the sentences
 
-`sheet/sentence.rs` is public (`sheet::sentence`): every word the sheet editor shows, and the
-sentences of the cards' lines with their parts and places. `agents/henad-graph-sheet.md` holds the
-rest of the sheet module, and `agents/henad-app-card.md` the card that draws the parts.
+`sheet/sentence/` is public (`sheet::sentence`): every word the sheet editor shows, and the
+sentences of the cards' lines with their parts and places. `mod.rs` holds the module doc and
+re-exports every item of its private files, so each stays at `sheet::sentence::X`. `card.rs` holds
+the card's fixed words and templates (its frame, the add menus, the words of line sentences,
+comparisons, conditions and blanks, the Lines help and `FORBIDDEN_WORDS`), `pickers.rs` the
+pickers, their messages, typed numbers and result names, `notes.rs` the notes under a line and
+"otherwise", `rates.rs` the words and notes of rates and chances, competing rates, the long tick and
+rate conversion, `errors.rs` the errors and refusals with the cost words and fire counts, `sheet.rs`
+the sheet's sections and forms, `editor.rs` the New model, unsaved changes and New parameter
+dialogs, the top bar, the world tabs and the Diagram, `convert.rs` the conversion words, `grammar.rs` lists, articles,
+capitals, possessives, plurals and `thing_word`, `parts.rs` the part types and `sentences.rs` the
+`Parts` builder, `Sentences` and `competing_parts`. `agents/henad-graph-sheet.md` holds the rest of
+the sheet module, and `agents/henad-app-card.md` the card that draws the parts.
 
 **The wording table.** `sheet::sentence` holds every word the sheet editor shows, from the final
 editor's wording table: constants for fixed text and functions for templates, each named for what it
@@ -21,10 +31,10 @@ description), the Editor's unsaved changes dialog (`unsaved_changes`, `SAVE_MODE
 `PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion. Rows the wording table marks "Not
 built" are left out. The rate notes are templates taking numbers already formatted (`rate_note`,
 `rate_for_each_note`, `worked_out_rate_note`, `growing_rate_note`, `chance_for_each_note`,
-`growing_chance_note`, `competing_note`, `mean_stay_note`), which `sheet::rates` fills. The groups
-of `sentence.rs` from "Errors on a rate in a button's card" on hold the remaining errors and words
-(`RATE_IN_BUTTON_CARD`, `ONE_AGENT_KIND`, competing rates, the long tick, `chances_per_tick_note`,
-`long_tick_note`), with the interim refusals (`NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHANGE`,
+`growing_chance_note`, `competing_note`, `mean_stay_note`), which `sheet::rates` fills. The end of
+`rates.rs` holds the words of competing rates, the long tick (`long_tick_note`) and rate conversion
+(`chances_per_tick_note`), and `errors.rs` the remaining errors (`RATE_IN_BUTTON_CARD`,
+`ONE_AGENT_KIND`), with the interim refusals (`NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHANGE`,
 `NOT_YET_AGENT_WALLS`, `NOT_YET_BLOCKED_MOVE_BY`), the errors of the ground and the places
 (`ON_GROUND_CELLS`, `AHEAD_NEEDS_CELLS`, `SET_IN_REPEAT`), a property changed two ways
 (`set_already`, `steered_already`, `moved_by_already`, `moved_to_already`) and the words of a look

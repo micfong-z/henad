@@ -36,7 +36,7 @@
 pub(crate) mod agent_hooks;
 pub(crate) mod agents;
 pub(crate) mod emit;
-mod fault_names;
+pub(crate) mod fault_names;
 mod hooks;
 mod live;
 pub(crate) mod pack;

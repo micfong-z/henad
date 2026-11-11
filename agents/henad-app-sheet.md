@@ -85,8 +85,8 @@ whole number), and `changed_by` over the Become and Set lines of the cards that 
 chance draws each row on a line of its own (state select, `WITH_CHANCE`, the number, × named
 `remove_row_name`), "+ Add row" named `add_row_name` (the first state no row draws), and `OTHERWISE`
 with its select. A new by-chance start draws the second state with an empty chance, otherwise the
-first. A Number start shows `STARTS_AT` or `RANDOM_NUMBER_BETWEEN` .. `RANDOM_NUMBER_AND` (0 and 1
-to start). Each Starts as number (`start_number`) is a `commit_field` named
+first. A Number start shows `every_starts_at` or `RANDOM_NUMBER_BETWEEN` .. `RANDOM_NUMBER_AND` (0
+and 1 to start). Each Starts as number (`start_number`) is a `commit_field` named
 `starts_field_name(place, ...)` showing `literal_words` (a percent as typed), with "Use a parameter"
 (a text control) beside it opening `CHOOSE_A_PARAMETER`. A parameter chip replaces the field and
 reopens `Blank::picker_title` with the Number box. A row's empty field empties the chance, text that

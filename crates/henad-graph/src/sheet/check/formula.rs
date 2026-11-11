@@ -4,12 +4,18 @@
 //! value and `smaller` and `larger` of two. A reference is a bare id (a parameter), `l2` or `l2.amount` (a result or
 //! one part of it, or a property of the place it names), or `my.x` and `my_new.x` (a property of mine).
 //!
-//! [`parse`] returns the formula as a [`FormulaTree`], the form the lowering reads.
+//! [`parse`] returns the formula as a [`FormulaTree`], the form the lowering reads, and [`formula_chip`] the chip a
+//! reference names.
 
+use super::lines::line_number;
+use crate::sheet::document::{SheetChip, SheetDocument};
 use crate::sheet::limits::{MAX_FORMULA_DEPTH, MAX_FORMULA_NESTING};
 
 /// Functions of a formula, each with the number of values it takes.
 const FUNCTIONS: [(&str, usize); 4] = [("length", 1), ("direction", 1), ("smaller", 2), ("larger", 2)];
+
+/// Parts of a result that a reference such as `l2.amount` names beside the ids of a Look around line's summaries.
+pub(in crate::sheet) const RESULT_PARTS: [&str; 3] = ["amount", "open", "count"];
 
 /// A formula parsed: numbers, references, operators and calls, each operator holding its operands.
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +74,28 @@ pub(in crate::sheet) fn references(formula: &str) -> Result<Vec<&str>, String> {
 /// nest past [`MAX_FORMULA_DEPTH`].
 pub(in crate::sheet) fn parse(formula: &str) -> Result<FormulaTree<'_>, String> {
     parse_with_references(formula, true).map(|(tree, _)| tree)
+}
+
+/// Returns the chip a reference in a formula names.
+pub(in crate::sheet) fn formula_chip(reference: &str, document: &SheetDocument) -> SheetChip {
+    let (head, tail) = reference.split_once('.').unwrap_or((reference, ""));
+    match head {
+        "my" => return SheetChip::My(tail.to_owned()),
+        "my_new" => return SheetChip::MyNew(tail.to_owned()),
+        _ => {}
+    }
+    if line_number(head).is_none() {
+        return SheetChip::Param(reference.to_owned());
+    }
+    let is_part = RESULT_PARTS.contains(&tail)
+        || document
+            .line(head)
+            .is_some_and(|(_, line)| line.summaries.iter().any(|summary| summary.id == tail));
+    SheetChip::Result {
+        line: head.to_owned(),
+        part: (!tail.is_empty() && is_part).then(|| tail.to_owned()),
+        property: (!tail.is_empty() && !is_part).then(|| tail.to_owned()),
+    }
 }
 
 /// Returns `formula` parsed, with its references in the order they appear.
@@ -179,13 +207,13 @@ impl<'f> Parser<'f> {
     }
 
     /// Returns whether the next token is the symbol `symbol`.
-    fn at(&self, symbol: char) -> bool {
+    fn next_is(&self, symbol: char) -> bool {
         self.peek() == Some(&Token::Symbol(symbol))
     }
 
     /// Takes the symbol `symbol`.
     fn expect(&mut self, symbol: char) -> Result<(), String> {
-        if self.at(symbol) {
+        if self.next_is(symbol) {
             self.position += 1;
             Ok(())
         } else {
@@ -233,8 +261,8 @@ impl<'f> Parser<'f> {
     /// Reads a sum: terms joined by `+` and `-`.
     fn expression(&mut self) -> Result<FormulaTree<'f>, String> {
         let mut tree = self.term()?;
-        while self.at('+') || self.at('-') {
-            let symbol = if self.at('+') { '+' } else { '-' };
+        while self.next_is('+') || self.next_is('-') {
+            let symbol = if self.next_is('+') { '+' } else { '-' };
             self.position += 1;
             let right = self.term()?;
             tree = self.made(FormulaTree::Binary(symbol, Box::new(tree), Box::new(right)))?;
@@ -245,8 +273,8 @@ impl<'f> Parser<'f> {
     /// Reads a product: powers joined by `*` and `/`.
     fn term(&mut self) -> Result<FormulaTree<'f>, String> {
         let mut tree = self.power()?;
-        while self.at('*') || self.at('/') {
-            let symbol = if self.at('*') { '*' } else { '/' };
+        while self.next_is('*') || self.next_is('/') {
+            let symbol = if self.next_is('*') { '*' } else { '/' };
             self.position += 1;
             let right = self.power()?;
             tree = self.made(FormulaTree::Binary(symbol, Box::new(tree), Box::new(right)))?;
@@ -257,12 +285,12 @@ impl<'f> Parser<'f> {
     /// Reads a power. A power groups from the right, and a leading `-` negates the whole power, so `-x ^ 2` is
     /// `-(x ^ 2)`.
     fn power(&mut self) -> Result<FormulaTree<'f>, String> {
-        let negated = self.at('-');
+        let negated = self.next_is('-');
         if negated {
             self.position += 1;
         }
         let mut tree = self.atom()?;
-        if self.at('^') {
+        if self.next_is('^') {
             self.position += 1;
             self.open_group()?;
             let exponent = self.power()?;
@@ -299,7 +327,7 @@ impl<'f> Parser<'f> {
                 self.expect('(')?;
                 self.open_group()?;
                 let mut values = vec![self.expression()?];
-                while self.at(',') {
+                while self.next_is(',') {
                     self.position += 1;
                     values.push(self.expression()?);
                 }

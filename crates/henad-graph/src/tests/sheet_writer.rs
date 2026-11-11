@@ -12,7 +12,7 @@ use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::Sentences;
 use crate::sheet::{ParsedSheet, SheetWriteError, format_number};
 
-use super::sheet_document::{mutate, sheets};
+use super::sheet_document::{mutate, sheet_text, sheets};
 
 /// Reads `text`, which must read, and returns its document.
 fn read(text: &str) -> SheetDocument {
@@ -27,15 +27,6 @@ fn write(document: &SheetDocument) -> String {
     document
         .to_text()
         .unwrap_or_else(|error| panic!("the sheet does not write: {error}"))
-}
-
-/// Returns the sheet `file_name` of [`sheets`].
-fn sheet_text(file_name: &str) -> &'static str {
-    sheets()
-        .into_iter()
-        .find(|(name, _)| *name == file_name)
-        .map(|(_, text)| text)
-        .unwrap_or_else(|| panic!("no sheet {file_name}"))
 }
 
 /// Returns `text` without its comment lines.

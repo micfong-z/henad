@@ -19,13 +19,14 @@
 use std::fmt;
 
 use super::document::{
-    AgentKind, ButtonStep, ColorRule, LookSummary, PaintedShape, SheetButton, SheetCard, SheetChip, SheetDocument,
-    SheetLine, SheetLiteral, SheetMeasure, SheetParameter, SheetProperty, SheetValue, Slot, StartsAs,
+    AgentKind, ButtonStep, CELLS_ID, ColorRule, GROUND_ID, LookSummary, PaintedShape, SheetButton, SheetCard,
+    SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetMeasure, SheetParameter, SheetProperty, SheetValue, Slot,
+    StartsAs,
 };
 use super::relations::CardRelations;
 use super::sentence::Sentences;
 use crate::file::{FORMAT, FORMAT_VERSION};
-use crate::model_text::{color_hex, multiline_array, push_key, string_array, toml_string};
+use crate::model_text::{color_hex, multiline_array, push_key, string_array, toml_key, toml_string};
 
 /// Largest magnitude below which a whole number is written as an integer, 2^53.
 const WHOLE_LIMIT: f64 = 9_007_199_254_740_992.0;
@@ -166,6 +167,30 @@ impl Record {
         }
     }
 
+    /// Appends the record `record` as a standard table under `key`.
+    fn table(&mut self, key: &str, record: Self) {
+        self.entries.push((key.to_owned(), Entry::Table(record)));
+    }
+
+    /// Appends `rows` as an inline array with one element per line under `key`, and nothing when there is none.
+    fn rows(&mut self, key: &str, rows: Vec<String>) {
+        if !rows.is_empty() {
+            self.entries.push((key.to_owned(), Entry::Rows(rows)));
+        }
+    }
+
+    /// Appends the number `value` under `key` in the number rule when it is `Some`.
+    ///
+    /// # Errors
+    ///
+    /// Returns NaN or an infinity.
+    fn optional_number(&mut self, key: &str, value: Option<f64>) -> Result<(), SheetWriteError> {
+        if let Some(value) = value {
+            self.inline(key, number(key, value)?);
+        }
+        Ok(())
+    }
+
     /// Appends the records `records` as an array of tables under `key`, and nothing when there is none.
     fn tables(&mut self, key: &str, records: Vec<Self>) {
         if !records.is_empty() {
@@ -271,21 +296,13 @@ fn inline_record(record: &Record) -> String {
     }
 }
 
-/// Returns `key` as a bare key when TOML reads it bare, and as a basic string otherwise.
-fn toml_key(key: &str) -> String {
-    let bare = !key.is_empty()
-        && key
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
-    if bare { key.to_owned() } else { toml_string(key) }
-}
-
 /// Returns `comment` on one line, each control character made a space. A line break would end the TOML comment.
 fn comment_text(comment: &str) -> String {
     comment.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
-/// Returns the line ids `ids` sorted in line id order: `l<number>` by number, then any other id in lexical order.
+/// Returns the line ids `ids`, which come in lexical order, sorted in line id order: `l<number>` by number, then any
+/// other id in lexical order.
 fn line_order<'a>(ids: impl Iterator<Item = &'a String>) -> Vec<&'a String> {
     let mut ids: Vec<&String> = ids.collect();
     ids.sort_by_key(|id| {
@@ -293,7 +310,7 @@ fn line_order<'a>(ids: impl Iterator<Item = &'a String>) -> Vec<&'a String> {
             .strip_prefix('l')
             .filter(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
             .and_then(|digits| digits.parse::<u64>().ok());
-        (number.is_none(), number, (*id).clone())
+        (number.is_none(), number)
     });
     ids
 }
@@ -321,25 +338,25 @@ impl Writer<'_> {
         sheet.string("name", &document.sheet.name);
         sheet.optional_string("purpose", document.sheet.purpose.as_deref());
         sheet.inline("next_line", document.sheet.next_line.to_string());
-        top.entry("sheet", Some(Entry::Table(sheet)));
+        top.table("sheet", sheet);
 
         let mut world = Record::default();
         world.string("made_of", document.world.made_of.as_str());
         world.inline("width", document.world.width.to_string());
         world.inline("height", document.world.height.to_string());
         world.string("edges", document.world.edges.as_str());
-        top.entry("world", Some(Entry::Table(world)));
+        top.table("world", world);
 
         if let Some(time) = &document.time {
             let mut table = Record::default();
             table.inline("tick_length", number("tick_length", time.tick_length)?);
             table.string("tick_unit", time.tick_unit.as_str());
-            top.entry("time", Some(Entry::Table(table)));
+            top.table("time", table);
         }
         if let Some(cells) = &document.cells {
             let mut table = Record::default();
             table.tables("property", self.properties(cells)?);
-            top.entry("cells", Some(Entry::Table(table)));
+            top.table("cells", table);
         }
         let agents = document
             .agents
@@ -360,11 +377,9 @@ impl Writer<'_> {
                     )
                 })
                 .collect();
-            if !blocked.is_empty() {
-                table.entry("blocked", Some(Entry::Rows(blocked)));
-            }
+            table.rows("blocked", blocked);
             table.tables("property", self.properties(&ground.properties)?);
-            top.entry("ground", Some(Entry::Table(table)));
+            top.table("ground", table);
         }
         let events = document
             .events
@@ -428,15 +443,13 @@ impl Writer<'_> {
                 )
             })
             .collect();
-        if !states.is_empty() {
-            table.entry("states", Some(Entry::Rows(states)));
-        }
+        table.rows("states", states);
         if let Some(marks) = property.marks {
             table.string("marks", marks.as_str());
         }
-        table.entry("kept_per_tick", self.slot("kept_per_tick", &property.kept_per_tick)?);
+        self.put_slot(&mut table, "kept_per_tick", &property.kept_per_tick)?;
         if let Some(starts_as) = &property.starts_as {
-            table.entry("starts_as", Some(Entry::Table(self.starts_as(starts_as)?)));
+            table.table("starts_as", self.starts_as(starts_as)?);
         }
         table.optional_string("note", property.note.as_deref());
         Ok(table)
@@ -452,7 +465,7 @@ impl Writer<'_> {
         table.optional_string("base", starts_as.base.as_deref());
         table.optional_string("property", starts_as.property.as_deref());
         table.optional_string("state", starts_as.state.as_deref());
-        table.entry("value", self.slot("value", &starts_as.value)?);
+        self.put_slot(&mut table, "value", &starts_as.value)?;
         table.optional_string("otherwise", starts_as.otherwise.as_deref());
         let rows = starts_as
             .rows
@@ -460,7 +473,7 @@ impl Writer<'_> {
             .map(|row| {
                 let mut record = Record::default();
                 record.optional_string("state", row.state.as_deref());
-                record.entry("chance", self.slot("chance", &row.chance)?);
+                self.put_slot(&mut record, "chance", &row.chance)?;
                 Ok(record)
             })
             .collect::<Result<_, _>>()?;
@@ -492,7 +505,7 @@ impl Writer<'_> {
         table.optional_string("property", measure.property.as_deref());
         table.optional_string("state", measure.state.as_deref());
         table.optional_string("event", measure.event.as_deref());
-        table.entry("value", self.slot("value", &measure.value)?);
+        self.put_slot(&mut table, "value", &measure.value)?;
         Ok(table)
     }
 
@@ -504,14 +517,14 @@ impl Writer<'_> {
     /// Returns the key of a shading's end that holds a number that is not finite.
     fn colors(&self) -> Result<Vec<(String, Record)>, SheetWriteError> {
         let document = self.document;
-        let things: Vec<&str> = std::iter::once("cells")
+        let things: Vec<&str> = std::iter::once(CELLS_ID)
             .chain(document.agents.iter().map(|kind| kind.id.as_str()))
-            .chain(std::iter::once("ground"))
+            .chain(std::iter::once(GROUND_ID))
             .collect();
         let mut ids: Vec<&String> = document.colors.keys().collect();
         ids.sort_by_key(|id| {
             let place = things.iter().position(|thing| *thing == id.as_str());
-            (place.is_none(), place, (*id).clone())
+            (place.is_none(), place)
         });
         ids.into_iter()
             .map(|id| Ok((id.clone(), color_rule(&document.colors[id])?)))
@@ -542,7 +555,7 @@ impl Writer<'_> {
         }
         table.optional_string("property", step.property.as_deref());
         table.optional_string("card", step.card.as_deref());
-        table.entry("value", self.slot("value", &step.value)?);
+        self.put_slot(&mut table, "value", &step.value)?;
         Ok(table)
     }
 
@@ -585,7 +598,7 @@ impl Writer<'_> {
         table.optional_string("mode", line.mode.map(|mode| mode.as_str()));
         table.optional_string("around", line.around.map(|around| around.as_str()));
         table.optional_string("agent_kind", line.agent_kind.as_deref());
-        table.entry("distance", self.slot("distance", &line.distance)?);
+        self.put_slot(&mut table, "distance", &line.distance)?;
         if let Some(include_me) = line.include_me {
             table.inline("include_me", include_me.to_string());
         }
@@ -595,7 +608,7 @@ impl Writer<'_> {
         table.optional_string("pick", line.pick.map(|pick| pick.as_str()));
         table.optional_string("ranked_by", line.ranked_by.as_deref());
         table.optional_string("which", line.which.map(|which| which.as_str()));
-        table.entry("place", self.slot("place", &line.place)?);
+        self.put_slot(&mut table, "place", &line.place)?;
         table.optional_string("ground_property", line.ground_property.as_deref());
         table.optional_string("event", line.event.as_deref());
         table.optional_string("test", line.test.map(|test| test.as_str()));
@@ -604,10 +617,10 @@ impl Writer<'_> {
             ("right", &line.right),
             ("tolerance", &line.tolerance),
         ] {
-            table.entry(key, self.slot(key, slot)?);
+            self.put_slot(&mut table, key, slot)?;
         }
-        table.entry("chance", self.slot("chance", &line.chance)?);
-        table.entry("rate", self.slot("rate", &line.rate)?);
+        self.put_slot(&mut table, "chance", &line.chance)?;
+        self.put_slot(&mut table, "rate", &line.rate)?;
         table.optional_string("rate_unit", line.rate_unit.map(|unit| unit.as_str()));
         if line.rate_unit_from_tick {
             table.inline("rate_unit_from_tick", "true".to_owned());
@@ -618,7 +631,7 @@ impl Writer<'_> {
             ("high", &line.high),
             ("length", &line.length),
         ] {
-            table.entry(key, self.slot(key, slot)?);
+            self.put_slot(&mut table, key, slot)?;
         }
         table.optional_string("formula", line.formula.as_deref());
         for (key, slot) in [
@@ -632,7 +645,7 @@ impl Writer<'_> {
             ("whose", &line.whose),
             ("condition", &line.condition),
         ] {
-            table.entry(key, self.slot(key, slot)?);
+            self.put_slot(&mut table, key, slot)?;
         }
         if !line.branches.is_empty() {
             table.inline("branches", self.branches(line)?);
@@ -644,13 +657,13 @@ impl Writer<'_> {
             .iter()
             .map(|row| {
                 let mut record = Record::default();
-                record.entry("value", self.slot("value", &row.value)?);
-                record.entry("condition", self.slot("condition", &row.condition)?);
+                self.put_slot(&mut record, "value", &row.value)?;
+                self.put_slot(&mut record, "condition", &row.condition)?;
                 Ok(record)
             })
             .collect::<Result<_, _>>()?;
         table.tables("row", rows);
-        table.entry("otherwise", self.slot("otherwise", &line.otherwise)?);
+        self.put_slot(&mut table, "otherwise", &line.otherwise)?;
         if !line.lines.is_empty() {
             table.inline("lines", string_array(&line.lines));
         }
@@ -702,7 +715,7 @@ impl Writer<'_> {
                 record.string("id", &summary.id);
                 record.string("name", &summary.name);
                 record.optional_string("summary", summary.summary.map(|kind| kind.as_str()));
-                record.entry("value", self.slot("value", &summary.value)?);
+                self.put_slot(&mut record, "value", &summary.value)?;
                 Ok(record)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -722,18 +735,15 @@ impl Writer<'_> {
         if items.is_empty() {
             return Ok(None);
         }
-        if items
+        let records = items
             .iter()
-            .all(|item| matches!(item, SheetValue::Chip(_) | SheetValue::Phrase(_)))
-        {
-            let records = items
-                .iter()
-                .map(|item| match item {
-                    SheetValue::Phrase(phrase) => self.line(phrase),
-                    SheetValue::Chip(chip) => Ok(chip_record(chip)),
-                    SheetValue::Literal(_) | SheetValue::List(_) => Ok(Record::default()),
-                })
-                .collect::<Result<_, _>>()?;
+            .map(|item| match item {
+                SheetValue::Phrase(phrase) => self.line(phrase).map(Some),
+                SheetValue::Chip(chip) => Ok(Some(chip_record(chip))),
+                SheetValue::Literal(_) | SheetValue::List(_) => Ok(None),
+            })
+            .collect::<Result<Option<Vec<_>>, _>>()?;
+        if let Some(records) = records {
             return Ok(Some(Entry::Tables(records)));
         }
         let values = items
@@ -743,14 +753,16 @@ impl Writer<'_> {
         Ok(Some(Entry::Inline(format!("[{}]", values.join(", ")))))
     }
 
-    /// Returns the entry of `slot` under `key`: nothing for a blank slot, a standard table for a phrase, and an
-    /// inline value otherwise.
-    fn slot(&self, key: &str, slot: &Slot) -> Result<Option<Entry>, SheetWriteError> {
-        Ok(match slot.value() {
+    /// Appends `slot` to `table` under `key`: nothing for a blank slot, a standard table for a phrase, and an inline
+    /// value otherwise.
+    fn put_slot(&self, table: &mut Record, key: &str, slot: &Slot) -> Result<(), SheetWriteError> {
+        let entry = match slot.value() {
             None => None,
             Some(SheetValue::Phrase(phrase)) => Some(Entry::Table(self.line(phrase)?)),
             Some(value) => Some(Entry::Inline(self.inline_value(key, value)?)),
-        })
+        };
+        table.entry(key, entry);
+        Ok(())
     }
 
     /// Returns `value`, held under `key`, as an inline value, a phrase as an inline table.
@@ -820,9 +832,7 @@ fn parameter(parameter: &SheetParameter) -> Result<Record, SheetWriteError> {
     table.inline("min", number("min", parameter.min)?);
     table.inline("max", number("max", parameter.max)?);
     table.inline("default", number("default", parameter.default)?);
-    if let Some(step) = parameter.step {
-        table.inline("step", number("step", step)?);
-    }
+    table.optional_number("step", parameter.step)?;
     table.optional_string("unit", parameter.unit.as_deref());
     table.optional_string("format", parameter.format.map(|format| format.as_str()));
     table.optional_string("means", parameter.means.as_deref());
@@ -839,9 +849,7 @@ fn shape(shape: &PaintedShape) -> Result<Record, SheetWriteError> {
             table.inline(key, format!("[{}, {}]", number(key, x)?, number(key, y)?));
         }
     }
-    if let Some(angle) = shape.angle {
-        table.inline("angle", number("angle", angle)?);
-    }
+    table.optional_number("angle", shape.angle)?;
     Ok(table)
 }
 
@@ -866,19 +874,13 @@ fn color_rule(rule: &ColorRule) -> Result<Record, SheetWriteError> {
             )
         })
         .collect();
-    if !shades.is_empty() {
-        table.entry("shades", Some(Entry::Rows(shades)));
-    }
+    table.rows("shades", shades);
     table.optional_string("scale", rule.scale.map(|scale| scale.as_str()));
     if let Some(decades) = rule.decades {
         table.inline("decades", decades.to_string());
     }
     table.optional_string("hue", rule.hue.map(|hue| hue.as_str()));
-    if let Some(darkest) = rule.darkest {
-        table.inline("darkest", number("darkest", darkest)?);
-    }
-    if let Some(lightest) = rule.lightest {
-        table.inline("lightest", number("lightest", lightest)?);
-    }
+    table.optional_number("darkest", rule.darkest)?;
+    table.optional_number("lightest", rule.lightest)?;
     Ok(table)
 }

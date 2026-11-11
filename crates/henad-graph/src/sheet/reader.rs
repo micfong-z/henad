@@ -107,7 +107,7 @@ impl ParsedSheet {
         let places = SheetPlaces {
             root: match root.into_inner() {
                 SpanValue::Table(entries) => table_places(span, entries),
-                SpanValue::Leaf | SpanValue::Array(_) => TablePlaces::at(span),
+                SpanValue::Leaf | SpanValue::Array(_) => TablePlaces::empty(span),
             },
         };
         Ok(Self {
@@ -186,7 +186,7 @@ pub struct TablePlaces {
 
 impl TablePlaces {
     /// Returns the places of a table at `span` with no keys.
-    fn at(span: Range<usize>) -> Self {
+    fn empty(span: Range<usize>) -> Self {
         Self {
             table: span,
             keys: BTreeMap::new(),
@@ -271,11 +271,16 @@ fn named_option<T: StoredName>(raw: Option<&Spanned<String>>) -> Result<Option<T
 
 /// Returns `raw`, refusing a number that is not finite.
 fn finite(raw: &Spanned<f64>) -> Result<f64, Placed> {
-    let value = *raw.get_ref();
-    if value.is_finite() {
-        Ok(value)
+    finite_number(*raw.get_ref(), raw.span(), "number")
+}
+
+/// Returns `number`, refusing at `span` a number that is not finite, where `what` names it in the message, such as
+/// "percent".
+fn finite_number(number: f64, span: Range<usize>, what: &str) -> Result<f64, Placed> {
+    if number.is_finite() {
+        Ok(number)
     } else {
-        Err(Placed(format!("the number {value} is not finite"), raw.span()))
+        Err(Placed(format!("the {what} {number} is not finite"), span))
     }
 }
 
@@ -318,11 +323,7 @@ fn value(raw: Spanned<RawValue>) -> Result<SheetValue, Placed> {
     let span = raw.span();
     match raw.into_inner() {
         RawValue::Number(number) => {
-            if number.is_finite() {
-                Ok(SheetValue::Literal(SheetLiteral::Number(number)))
-            } else {
-                Err(Placed(format!("the number {number} is not finite"), span))
-            }
+            finite_number(number, span, "number").map(|number| SheetValue::Literal(SheetLiteral::Number(number)))
         }
         RawValue::Bool(value) => Ok(SheetValue::Literal(SheetLiteral::Bool(value))),
         RawValue::List(items) => {
@@ -343,8 +344,8 @@ fn value(raw: Spanned<RawValue>) -> Result<SheetValue, Placed> {
         RawValue::Table(mut table) => {
             if let Some(percent) = table.percent.take() {
                 table.into_percent(&percent).map(SheetValue::Literal)
-            } else if table.kind.is_some() {
-                Ok(SheetValue::Phrase(Box::new(table.into_line(span)?)))
+            } else if let Some(kind) = table.kind.take() {
+                Ok(SheetValue::Phrase(Box::new(table.into_line(&kind)?)))
             } else {
                 table.into_chip(span).map(SheetValue::Chip)
             }
@@ -964,7 +965,7 @@ fn nesting(value: &Spanned<SpanValue>, depth: usize) -> (usize, Range<usize>) {
 
 /// Returns the places of the table at `span` holding `entries`.
 fn table_places(span: Range<usize>, entries: Vec<(Spanned<String>, Spanned<SpanValue>)>) -> TablePlaces {
-    let mut places = TablePlaces::at(span);
+    let mut places = TablePlaces::empty(span);
     for (key, value) in entries {
         let key = key.into_inner();
         let value_span = value.span();
@@ -980,7 +981,7 @@ fn table_places(span: Range<usize>, entries: Vec<(Spanned<String>, Spanned<SpanV
                         let item_span = item.span();
                         match item.into_inner() {
                             SpanValue::Table(entries) => table_places(item_span, entries),
-                            SpanValue::Leaf | SpanValue::Array(_) => TablePlaces::at(item_span),
+                            SpanValue::Leaf | SpanValue::Array(_) => TablePlaces::empty(item_span),
                         }
                     })
                     .collect();
@@ -1005,42 +1006,15 @@ impl FileTable {
             named(&self.world.edges)?,
         );
         let mut document = SheetDocument::new(sheet, world);
-        document.time = match self.time {
-            Some(time) => Some(SheetTime::new(
-                finite(&time.tick_length)?,
-                named::<TimeUnit>(&time.tick_unit)?,
-            )),
-            None => None,
-        };
-        document.cells = match self.cells {
-            Some(cells) => Some(properties(cells.property)?),
-            None => None,
-        };
+        document.time = self.time.map(TimeTable::into_time).transpose()?;
+        document.cells = self.cells.map(|cells| properties(cells.property)).transpose()?;
         for agents in self.agents {
             let mut kind = AgentKind::new(agents.id, agents.name, agents.count, agents.max_count);
             kind.properties = properties(agents.property)?;
             document.agents.push(kind);
         }
-        document.ground = match self.ground {
-            Some(ground) => Some(SheetGround {
-                blocked: ground
-                    .blocked
-                    .into_iter()
-                    .map(|blocked| BlockedState::new(blocked.property, blocked.state))
-                    .collect(),
-                properties: properties(ground.property)?,
-            }),
-            None => None,
-        };
-        document.events = self
-            .events
-            .into_iter()
-            .map(|event| {
-                let mut sheet_event = SheetEvent::new(event.id, event.name);
-                sheet_event.means = event.means;
-                sheet_event
-            })
-            .collect();
+        document.ground = self.ground.map(GroundTable::into_ground).transpose()?;
+        document.events = self.events.into_iter().map(EventTable::into_event).collect();
         for parameter in self.parameters {
             document.parameters.push(parameter.into_parameter()?);
         }
@@ -1057,6 +1031,39 @@ impl FileTable {
             document.cards.push(card_of(card)?);
         }
         Ok(document)
+    }
+}
+
+impl TimeTable {
+    /// Returns the time scale the table declares.
+    fn into_time(self) -> Result<SheetTime, Placed> {
+        Ok(SheetTime::new(
+            finite(&self.tick_length)?,
+            named::<TimeUnit>(&self.tick_unit)?,
+        ))
+    }
+}
+
+impl GroundTable {
+    /// Returns the ground the table declares.
+    fn into_ground(self) -> Result<SheetGround, Placed> {
+        Ok(SheetGround {
+            blocked: self
+                .blocked
+                .into_iter()
+                .map(|blocked| BlockedState::new(blocked.property, blocked.state))
+                .collect(),
+            properties: properties(self.property)?,
+        })
+    }
+}
+
+impl EventTable {
+    /// Returns the event the table declares.
+    fn into_event(self) -> SheetEvent {
+        let mut event = SheetEvent::new(self.id, self.name);
+        event.means = self.means;
+        event
     }
 }
 
@@ -1145,11 +1152,11 @@ fn card_of(card: Spanned<CardTable>) -> Result<SheetCard, Placed> {
     sheet_card.lines = card.lines;
     for (line_id, table) in card.line {
         let span = table.span();
-        let table = table.into_inner();
-        if table.kind.is_none() {
+        let mut table = table.into_inner();
+        let Some(kind) = table.kind.take() else {
             return Err(Placed(format!("line {line_id} names no `kind`"), span));
-        }
-        sheet_card.line_tables.insert(line_id, table.into_line(span)?);
+        };
+        sheet_card.line_tables.insert(line_id, table.into_line(&kind)?);
     }
     Ok(sheet_card)
 }
@@ -1278,8 +1285,8 @@ impl ValueTable {
         .find_map(|(key, span)| span.map(|span| (key, span)))
     }
 
-    /// Returns the line or phrase the table holds, where `span` is the table's bytes and the table holds `kind`.
-    fn into_line(self, span: Range<usize>) -> Result<SheetLine, Placed> {
+    /// Returns the line or phrase the table holds, where `kind` is the table's `kind` key, taken out of it.
+    fn into_line(self, kind: &Spanned<String>) -> Result<SheetLine, Placed> {
         if let Some((key, key_span)) = self.chip_key() {
             return Err(Placed(
                 format!("`{key}` is a key of a chip, and a line or phrase cannot hold it"),
@@ -1292,10 +1299,7 @@ impl ValueTable {
                 percent.span(),
             ));
         }
-        let Some(kind) = self.kind else {
-            return Err(Placed("the table names no `kind`".to_owned(), span));
-        };
-        let mut line = SheetLine::new(named(&kind)?);
+        let mut line = SheetLine::new(named(kind)?);
         line.name = inner(self.name);
         line.key = inner(self.key);
         line.property = inner(self.property);
@@ -1374,12 +1378,7 @@ impl ValueTable {
                 key_span,
             ));
         }
-        let number = percent.get_ref().0;
-        if number.is_finite() {
-            Ok(SheetLiteral::Percent(number))
-        } else {
-            Err(Placed(format!("the percent {number} is not finite"), percent.span()))
-        }
+        finite_number(percent.get_ref().0, percent.span(), "percent").map(SheetLiteral::Percent)
     }
 
     /// Returns the chip the table holds, where `span` is the table's bytes and the table holds no `kind`.

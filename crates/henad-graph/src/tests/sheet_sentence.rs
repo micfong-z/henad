@@ -138,11 +138,6 @@ fn every_wording_table_entry_equals_the_final_words() {
         ("week", fixed(sentence::rate_unit_word(TimeUnit::Week))),
         ("month", fixed(sentence::rate_unit_word(TimeUnit::Month))),
         ("year", fixed(sentence::rate_unit_word(TimeUnit::Year))),
-        // Comparisons.
-        (
-            "is less than 2 or more than 3",
-            sentence::outside_words("", "2", "3").trim_start().to_owned(),
-        ),
         // Conditions and "Choose when".
         ("always", fixed(sentence::ALWAYS)),
         ("Line 2: choose when, now always", sentence::always_name("Line 2")),
@@ -295,7 +290,6 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::NO_NUMBER_RESULT),
         ),
         ("No property yet.", fixed(sentence::NO_PROPERTY)),
-        ("No Number property yet.", fixed(sentence::NO_NUMBER_PROPERTY)),
         (
             "No States property yet. Add one under Cells on the sheet.",
             fixed(sentence::NO_STATES_PROPERTY),
@@ -1111,7 +1105,7 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
         ("otherwise", fixed(sentence::OTHERWISE)),
         ("Status starts as, otherwise", sentence::starts_otherwise_name("Status")),
         ("A value", fixed(sentence::A_VALUE)),
-        ("Every cell starts at", fixed(sentence::STARTS_AT)),
+        ("Every cell starts at", sentence::every_starts_at("cell")),
         ("A random number", fixed(sentence::A_RANDOM_NUMBER)),
         ("A random number between", fixed(sentence::RANDOM_NUMBER_BETWEEN)),
         ("and", fixed(sentence::RANDOM_NUMBER_AND)),
@@ -1216,10 +1210,6 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
         // Colours.
         ("Colour cells by", fixed(sentence::COLOR_CELLS_BY)),
         ("Shade", fixed(sentence::SHADE)),
-        (
-            "from [value] (dark) to [value] (light)",
-            sentence::shade_range("[value]", "[value]"),
-        ),
         ("Darkest at value", fixed(sentence::DARKEST_NAME)),
         ("Lightest at value", fixed(sentence::LIGHTEST_NAME)),
         // Buttons on the sheet.

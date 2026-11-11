@@ -127,13 +127,15 @@ writes it, to the words that name it in the document the graph was lowered from,
 Flockmates" for a radius fold a sheet lowered. It writes its own `Debug` (the number of names).
 `AgentProgram::compile_with_fault_names(file, &names)` compiles as `compile` does, through the
 private `compile_named(file, probes, Option<&FaultNames>)` that `compile_with_probes` shares, and
-the fault messages of a named fold become `sheet::sentence::look_met_too_many` ("<words>: looked at
-more than 65536 agents around one agent, and the run stops. A larger world or a shorter distance
-looks at fewer") and `look_searches_too_far` ("<words>: would search more than 65536 cells around
-one agent, and the run stops. A shorter distance searches fewer"), naming no pass, node or line. A
-fold the table does not hold keeps the graph's message, and a graph file passes no table. The names
-change no shader, so the text and the code identity stay. henad-explore's `ModelFile` passes a
-sheet's `SheetFile::fault_names`.
+the fault messages of a named fold become `look_met_too_many` ("<words>: looked at more than 65536
+agents around one agent, and the run stops. A larger world or a shorter distance looks at fewer")
+and `look_searches_too_far` ("<words>: would search more than 65536 cells around one agent, and the
+run stops. A shorter distance searches fewer"), naming no pass, node or line. Both sit in
+`fault_names.rs`, a crate-visible module, so the compiler takes nothing from the sheet layer, and
+`sheet::sentence` re-exports them, which keeps them in the wording table and its test. A fold the
+table does not hold keeps the graph's message, and a graph file passes no table. The names change
+no shader, so the text and the code identity stay. henad-explore's `ModelFile` passes a sheet's
+`SheetFile::fault_names`.
 
 **Counters and deposits.** A step that adds to a counter declares `var<workgroup>
 henad_counter_tally`, one `atomic<u32>` slot per counter its passes add to, numbered in the order

@@ -24,8 +24,8 @@ use std::collections::HashMap;
 
 use super::check::is_result_kind;
 use super::document::{
-    Around, CompareTest, LineKind, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine, SheetLiteral,
-    SheetProperty, SheetValue, Slot, SummaryKind,
+    Around, CompareTest, LineKind, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine, SheetProperty,
+    SheetValue, Slot, SummaryKind,
 };
 use super::edit::automatic_name;
 use super::sentence::{
@@ -134,16 +134,14 @@ impl<'a> CardRelations<'a> {
         self.parents.get(line_id).copied()
     }
 
+    /// Returns the When and Repeat lines that hold line `line_id`, from its own block outwards.
+    fn ancestors(&self, line_id: &str) -> impl Iterator<Item = &'a str> {
+        std::iter::successors(self.parent(line_id), |&id| self.parent(id))
+    }
+
     /// Returns whether line `line_id` sits inside the block line `block_id`, directly or inside a block within it.
     pub fn is_within(&self, line_id: &str, block_id: &str) -> bool {
-        let mut parent = self.parent(line_id);
-        while let Some(id) = parent {
-            if id == block_id {
-                return true;
-            }
-            parent = self.parent(id);
-        }
-        false
+        self.ancestors(line_id).any(|id| id == block_id)
     }
 
     /// Returns whether lines `first` and `second` can both apply to one element: whether no value is tested by both
@@ -204,10 +202,7 @@ impl<'a> CardRelations<'a> {
             let Some(key) = self.group_key(id) else {
                 continue;
             };
-            match groups.iter_mut().find(|(other, _)| *other == key) {
-                Some((_, lines)) => lines.push(id),
-                None => groups.push((key, vec![id])),
-            }
+            push_grouped(&mut groups, key, id);
         }
         groups
             .into_iter()
@@ -230,14 +225,8 @@ impl<'a> CardRelations<'a> {
     /// Returns the Repeat line that holds line `line_id`, directly or inside a block within it, `None` for a line
     /// outside every Repeat.
     pub fn repeat_of(&self, line_id: &str) -> Option<&'a str> {
-        let mut parent = self.parent(line_id);
-        while let Some(id) = parent {
-            if self.line(id).is_some_and(|block| block.kind == LineKind::Repeat) {
-                return Some(id);
-            }
-            parent = self.parent(id);
-        }
-        None
+        self.ancestors(line_id)
+            .find(|&id| self.line(id).is_some_and(|block| block.kind == LineKind::Repeat))
     }
 
     /// Returns every test of one value that line `line_id` needs to apply: its own condition, the conditions of the
@@ -247,13 +236,11 @@ impl<'a> CardRelations<'a> {
         let Some(line) = self.line(line_id) else {
             return tests;
         };
-        self.collect_tests(&line.condition, &mut tests);
-        let mut parent = self.parent(line_id);
-        while let Some(id) = parent {
+        self.collect_tests(line.condition.value(), &mut tests);
+        for id in self.ancestors(line_id) {
             if let Some(block) = self.line(id).filter(|block| block.kind == LineKind::When) {
-                self.collect_tests(&block.condition, &mut tests);
+                self.collect_tests(block.condition.value(), &mut tests);
             }
-            parent = self.parent(id);
         }
         if line.kind == LineKind::Become
             && let (Some(property), Some(state)) = (line.property.as_deref(), line.start_state.as_deref())
@@ -269,15 +256,15 @@ impl<'a> CardRelations<'a> {
         tests
     }
 
-    /// Adds the tests of one value that the condition in `slot` holds to `tests`.
-    fn collect_tests(&self, slot: &Slot, tests: &mut Vec<ValueTest>) {
-        let Some(SheetValue::Phrase(phrase)) = slot.value() else {
+    /// Adds the tests of one value that the condition `value` holds to `tests`.
+    fn collect_tests(&self, value: Option<&SheetValue>, tests: &mut Vec<ValueTest>) {
+        let Some(SheetValue::Phrase(phrase)) = value else {
             return;
         };
         match phrase.kind {
             LineKind::AllOf => {
                 for item in &phrase.items {
-                    self.collect_tests(&Slot::Filled(item.clone()), tests);
+                    self.collect_tests(Some(item), tests);
                 }
             }
             LineKind::Compare => tests.extend(self.compare_test(phrase)),
@@ -387,7 +374,7 @@ impl<'a> CardRelations<'a> {
     /// `about`.
     fn fixed_number(&self, value: &SheetValue, about: Option<&str>) -> Option<f64> {
         match value {
-            SheetValue::Literal(literal @ (SheetLiteral::Number(_) | SheetLiteral::Percent(_))) => literal.number(),
+            SheetValue::Literal(literal) => literal.number(),
             SheetValue::Chip(SheetChip::State(state)) => self.state_index(about?, state),
             _ => None,
         }
@@ -492,10 +479,7 @@ impl<'a> CardRelations<'a> {
             if line.condition.is_blank() {
                 continue;
             }
-            match groups.iter_mut().find(|(key, _)| *key == (property, start)) {
-                Some((_, lines)) => lines.push(id),
-                None => groups.push(((property, start), vec![id])),
-            }
+            push_grouped(&mut groups, (property, start), id);
         }
         let mut notes = Vec::new();
         for ((property, _), lines) in groups {
@@ -563,38 +547,12 @@ impl<'a> CardRelations<'a> {
             let Some(most) = most_counted(count) else {
                 continue;
             };
-            let mut ends: Vec<&str> = Vec::new();
-            for x in 0..=most {
-                let mut end: Option<&str> = None;
-                let mut agree = true;
-                for state in &found.states {
-                    let mut result = state.id.as_str();
-                    for (&id, test) in lines.iter().zip(&tests) {
-                        let Some(line) = self.line(id) else {
-                            continue;
-                        };
-                        let from = line.start_state.as_deref();
-                        let applies = from == Some(ANY_STATE_ID) || from == Some(state.id.as_str());
-                        if applies && test.as_ref().is_none_or(|test| test.test.passes(f64::from(x))) {
-                            result = line.new_state.as_deref().unwrap_or(result);
-                            break;
-                        }
-                    }
-                    match end {
-                        None => end = Some(result),
-                        Some(other) if other != result => {
-                            agree = false;
-                            break;
-                        }
-                        Some(_) => {}
-                    }
-                }
-                let Some(end) = end.filter(|_| agree) else {
-                    ends.clear();
-                    break;
-                };
-                ends.push(end);
-            }
+            let Some(ends) = (0..=most)
+                .map(|x| self.end_state(&lines, &tests, found, x))
+                .collect::<Option<Vec<&str>>>()
+            else {
+                continue;
+            };
             let mut order: Vec<&str> = Vec::new();
             for end in &ends {
                 if !order.contains(end) {
@@ -625,6 +583,37 @@ impl<'a> CardRelations<'a> {
             });
         }
         notes
+    }
+
+    /// Returns the state every cell of `property` ends the tick in when the count that the Become `lines` test is `x`,
+    /// `None` when the end state depends on the cell's own state.
+    ///
+    /// `tests` holds each line's test of the count, `None` for a line that holds always. A cell takes the new state of
+    /// the first line from the top that changes its state and passes, and keeps its state when no line does.
+    fn end_state(
+        &self,
+        lines: &[&str],
+        tests: &[Option<ValueTest>],
+        property: &'a SheetProperty,
+        x: u32,
+    ) -> Option<&'a str> {
+        let mut ends = property.states.iter().map(|state| {
+            let mut result = state.id.as_str();
+            for (&id, test) in lines.iter().zip(tests) {
+                let Some(line) = self.line(id) else {
+                    continue;
+                };
+                let from = line.start_state.as_deref();
+                let applies = from == Some(ANY_STATE_ID) || from == Some(state.id.as_str());
+                if applies && test.as_ref().is_none_or(|test| test.test.passes(f64::from(x))) {
+                    result = line.new_state.as_deref().unwrap_or(result);
+                    break;
+                }
+            }
+            result
+        });
+        let first = ends.next()?;
+        ends.all(|end| end == first).then_some(first)
     }
 
     /// Returns the order notes: for a property with two or more Become lines on the card, every one running and
@@ -775,10 +764,7 @@ impl<'a> CardRelations<'a> {
             else {
                 continue;
             };
-            match groups.iter_mut().find(|(key, _)| *key == property) {
-                Some((_, lines)) => lines.push(id),
-                None => groups.push((property, vec![id])),
-            }
+            push_grouped(&mut groups, property, id);
         }
         groups
     }
@@ -812,7 +798,7 @@ impl<'a> CardRelations<'a> {
             if count.is_some_and(|count| count != line) {
                 return None;
             }
-            count = Some(self.order.iter().copied().find(|&known| known == line)?);
+            count = Some(*self.indices.get_key_value(line.as_str())?.0);
             tests.push(Some(test));
         }
         let source = self.line(count?).filter(|line| line.kind == LineKind::Count)?;
@@ -837,10 +823,7 @@ impl<'a> CardRelations<'a> {
 
     /// Returns the name of the result of `line`: its own name, its automatic name, or "result".
     fn result_name(&self, line: &SheetLine) -> String {
-        line.name
-            .clone()
-            .or_else(|| automatic_name(self.document, line))
-            .unwrap_or_else(|| "result".to_owned())
+        note_name(self.document, line).unwrap_or_else(|| "result".to_owned())
     }
 
     /// Returns the property and the state that `condition` tests as "my \[property\] is \[state\]", `None` for any
@@ -873,8 +856,22 @@ fn state_name<'b>(property: &'b SheetProperty, state: &'b str) -> &'b str {
         .map_or(state, |found| found.name.as_str())
 }
 
+/// Adds `value` to the group of `key` in `groups`, or adds a group of `key` holding `value` at the end.
+fn push_grouped<K: PartialEq, V>(groups: &mut Vec<(K, Vec<V>)>, key: K, value: V) {
+    match groups.iter_mut().find(|(other, _)| *other == key) {
+        Some((_, values)) => values.push(value),
+        None => groups.push((key, vec![value])),
+    }
+}
+
+/// Returns the name a note gives the result of `line`: its own name, or its automatic name, `None` for a line with
+/// neither.
+pub(super) fn note_name(document: &SheetDocument, line: &SheetLine) -> Option<String> {
+    line.name.clone().or_else(|| automatic_name(document, line))
+}
+
 /// Returns the most a Count line `count` can count: 8, 4 or 9 cells, `None` for a count of agents.
-fn most_counted(count: &SheetLine) -> Option<u32> {
+pub(super) fn most_counted(count: &SheetLine) -> Option<u32> {
     match count.around? {
         Around::Cells8 => Some(8),
         Around::Cells4 => Some(4),

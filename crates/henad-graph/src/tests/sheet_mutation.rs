@@ -6,7 +6,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use henad_core::diagnostic::DiagnosticSeverity;
 use henad_core::explore::fingerprint::fnv1a64;
 
-use super::sheet_document::{mutate, sheets};
+use super::sheet_document::{edited, mutate, sheets};
 use crate::sheet::check::SheetDiagnostic;
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{
@@ -14,25 +14,6 @@ use crate::sheet::sentence::{
     RATE_IN_BUTTON_CARD,
 };
 use crate::sheet::{ParsedSheet, check};
-
-/// Returns the sheet `file_name` of [`sheets`].
-fn sheet_text(file_name: &str) -> &'static str {
-    sheets()
-        .into_iter()
-        .find(|(name, _)| *name == file_name)
-        .map(|(_, text)| text)
-        .unwrap_or_else(|| panic!("no sheet {file_name}"))
-}
-
-/// Returns the sheet `file_name` with each `(old, new)` of `edits` applied, where each `old` occurs exactly once.
-fn edited(file_name: &str, edits: &[(&str, &str)]) -> String {
-    let mut text = sheet_text(file_name).to_owned();
-    for (old, new) in edits {
-        assert_eq!(text.matches(old).count(), 1, "{file_name}: {old:?} is not unique");
-        text = text.replacen(old, new, 1);
-    }
-    text
-}
 
 /// Kind of a diagnostic a mutation must produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

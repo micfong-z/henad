@@ -25,10 +25,9 @@ use henad_core::metadata::TimeUnit;
 use super::check::formula::{self, FormulaTree};
 use super::check::formula_chip;
 use super::document::{
-    CardRuns, CompareTest, LineKind, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetParameter, SheetTime,
-    SheetValue, Slot,
+    CardRuns, CompareTest, LineKind, SheetChip, SheetDocument, SheetLine, SheetParameter, SheetTime, SheetValue, Slot,
 };
-use super::relations::CardRelations;
+use super::relations::{CardRelations, most_counted, note_name};
 use super::sentence::{self, ANY_STATE_ID, Sentences};
 use super::writer::format_number;
 
@@ -179,7 +178,7 @@ fn rate_alone(relations: &CardRelations<'_>, line_id: &str, line: &SheetLine) ->
 /// Returns the number a value stands for when it is a typed number or a parameter, read from `values`.
 fn fixed_number(value: Option<&SheetValue>, values: &BTreeMap<String, f64>) -> Option<f64> {
     match value? {
-        SheetValue::Literal(literal @ (SheetLiteral::Number(_) | SheetLiteral::Percent(_))) => literal.number(),
+        SheetValue::Literal(literal) => literal.number(),
         SheetValue::Chip(SheetChip::Param(id)) => values.get(id).copied(),
         _ => None,
     }
@@ -187,16 +186,27 @@ fn fixed_number(value: Option<&SheetValue>, values: &BTreeMap<String, f64>) -> O
 
 /// Returns the Calculate line or phrase that a rate's value names, `None` for any other value.
 fn calculation<'d>(document: &'d SheetDocument, value: Option<&'d SheetValue>) -> Option<&'d SheetLine> {
-    let line = match value? {
-        SheetValue::Phrase(phrase) => phrase.as_ref(),
-        SheetValue::Chip(SheetChip::Result {
+    match value? {
+        SheetValue::Phrase(phrase) => Some(phrase.as_ref()).filter(|line| line.kind == LineKind::Calculate),
+        SheetValue::Chip(chip) => whole_result(document, chip, LineKind::Calculate),
+        _ => None,
+    }
+}
+
+/// Returns the line of `kind` whose whole result `chip` names, `None` for a part, a property, another kind or any
+/// other chip.
+fn whole_result<'d>(document: &'d SheetDocument, chip: &SheetChip, kind: LineKind) -> Option<&'d SheetLine> {
+    match chip {
+        SheetChip::Result {
             line,
             part: None,
             property: None,
-        }) => document.line(line)?.1,
-        _ => return None,
-    };
-    (line.kind == LineKind::Calculate).then_some(line)
+        } => document
+            .line(line)
+            .map(|(_, line)| line)
+            .filter(|line| line.kind == kind),
+        _ => None,
+    }
 }
 
 /// A Calculate of a fixed number times a count, in either order.
@@ -226,17 +236,9 @@ fn product<'d>(
         _ => None,
     };
     let count = |side: &FormulaTree<'_>| match side {
-        FormulaTree::Reference(reference) => match formula_chip(reference, document) {
-            SheetChip::Result {
-                line,
-                part: None,
-                property: None,
-            } => document
-                .line(&line)
-                .map(|(_, line)| line)
-                .filter(|line| line.kind == LineKind::Count),
-            _ => None,
-        },
+        FormulaTree::Reference(reference) => {
+            whole_result(document, &formula_chip(reference, document), LineKind::Count)
+        }
         _ => None,
     };
     let (fixed, count) = match (fixed(&left), count(&right)) {
@@ -246,27 +248,10 @@ fn product<'d>(
     Some(Product { fixed, count })
 }
 
-/// Returns the most a count line `count` can be when it counts the cells around, `None` otherwise.
-fn count_bound(count: &SheetLine) -> Option<u32> {
-    match count.around? {
-        super::document::Around::Cells8 => Some(8),
-        super::document::Around::Cells4 => Some(4),
-        super::document::Around::Block3x3 => Some(9),
-        super::document::Around::AgentsWithin => None,
-    }
-}
-
 /// Returns the Count line that the "for each" of the rate phrase `phrase` names, `None` for any other count.
 fn tries_count<'d>(document: &'d SheetDocument, phrase: &SheetLine) -> Option<&'d SheetLine> {
     match phrase.tries.value()? {
-        SheetValue::Chip(SheetChip::Result {
-            line,
-            part: None,
-            property: None,
-        }) => document
-            .line(line)
-            .map(|(_, line)| line)
-            .filter(|line| line.kind == LineKind::Count),
+        SheetValue::Chip(chip) => whole_result(document, chip, LineKind::Count),
         _ => None,
     }
 }
@@ -306,11 +291,7 @@ fn subject(document: &SheetDocument, relations: &CardRelations<'_>, line_id: &st
         LineKind::Set => sentence::set_subject(&thing),
         LineKind::When => sentence::when_subject(relations.number(line_id).unwrap_or(0), &thing),
         _ => {
-            let name = line
-                .name
-                .clone()
-                .or_else(|| super::edit::automatic_name(document, line))
-                .unwrap_or_default();
+            let name = note_name(document, line).unwrap_or_default();
             sentence::result_subject(&name, &thing)
         }
     }
@@ -337,7 +318,7 @@ pub fn largest_count_chance(
         }
         None => return None,
     };
-    let count = count_bound(count)?;
+    let count = most_counted(count)?;
     Some(LargestCount {
         chance: chance_from_rate(rate * f64::from(count), dt),
         count,
@@ -419,12 +400,7 @@ pub fn rate_note(document: &SheetDocument, line_id: &str, values: &BTreeMap<Stri
         .and_then(|calculated| product(document, calculated, values));
     let text = match product {
         Some(product) => {
-            let count_name = product
-                .count
-                .name
-                .clone()
-                .or_else(|| super::edit::automatic_name(document, product.count))
-                .unwrap_or_default();
+            let count_name = note_name(document, product.count).unwrap_or_default();
             sentence::worked_out_rate_note(
                 &tick,
                 &subject,
@@ -500,30 +476,18 @@ pub fn count_as_draw(document: &SheetDocument, line_id: &str) -> Option<(String,
     let (_, line) = document.line(line_id)?;
     let (phrase, draw) = match (chance_phrase(line), rate_phrase(line)) {
         (Some(phrase), _) => (phrase, sentence::DrawKind::Chance),
-        (None, Some(phrase)) if phrase.kind == LineKind::Rate => (phrase, sentence::DrawKind::Rate),
+        (None, Some(phrase)) => (phrase, sentence::DrawKind::Rate),
         _ => return None,
     };
     let value = match draw {
         sentence::DrawKind::Chance => phrase.chance.value(),
         sentence::DrawKind::Rate => phrase.rate.value(),
     };
-    let Some(SheetValue::Chip(SheetChip::Result {
-        line: count_id,
-        part: None,
-        property: None,
-    })) = value
-    else {
+    let Some(SheetValue::Chip(chip)) = value else {
         return None;
     };
-    let (_, count) = document.line(count_id)?;
-    if count.kind != LineKind::Count {
-        return None;
-    }
-    let name = count
-        .name
-        .clone()
-        .or_else(|| super::edit::automatic_name(document, count))?;
-    Some((name, draw))
+    let count = whole_result(document, chip, LineKind::Count)?;
+    Some((note_name(document, count)?, draw))
 }
 
 /// Returns the note of the competing group `group`, its line ids in display order, under its highest line.
@@ -613,7 +577,7 @@ pub fn parameter_rate_unit(parameter: &SheetParameter) -> Option<TimeUnit> {
 /// Returns the number typed in `slot`, `None` for a slot that holds no typed number.
 fn typed_number(slot: &Slot) -> Option<f64> {
     match slot.value()? {
-        SheetValue::Literal(literal @ (SheetLiteral::Number(_) | SheetLiteral::Percent(_))) => literal.number(),
+        SheetValue::Literal(literal) => literal.number(),
         _ => None,
     }
 }
@@ -732,7 +696,7 @@ pub fn grow_count(document: &SheetDocument, line_id: &str) -> Option<GrowCount> 
             return false;
         };
         count.kind == LineKind::Count
-            && count_bound(count).is_some()
+            && most_counted(count).is_some()
             && whose.test == Some(CompareTest::Is)
             && matches!(whose.left.value(), Some(SheetValue::Chip(SheetChip::Their(their))) if their == property)
             && matches!(whose.right.value(), Some(SheetValue::Chip(SheetChip::State(counted))) if counted == state)
@@ -744,13 +708,9 @@ pub fn grow_count(document: &SheetDocument, line_id: &str) -> Option<GrowCount> 
         open && relations.line(id).is_some_and(counts)
     })?;
     let (_, count) = document.line(found)?;
-    let name = count
-        .name
-        .clone()
-        .or_else(|| super::edit::automatic_name(document, count))?;
     Some(GrowCount {
         line: (*found).to_owned(),
-        name,
+        name: note_name(document, count)?,
     })
 }
 

@@ -210,6 +210,15 @@ impl LineEnds {
     }
 }
 
+/// Returns `key` as a bare key when TOML reads it bare, and as a basic string otherwise.
+pub(crate) fn toml_key(key: &str) -> String {
+    let bare = !key.is_empty()
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
+    if bare { key.to_owned() } else { toml_string(key) }
+}
+
 /// Returns `value` as a TOML basic string.
 pub fn toml_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);

@@ -9,8 +9,8 @@ use henad_core::params::ParamValue;
 use henad_core::provenance::ModelCode;
 
 use super::check::{Place, SheetDiagnostic, SheetReport, Thing, span_of};
-use super::document::{CardRuns, LineKind, MadeOf, SheetChip, SheetDocument, SheetValue};
-use super::lower::{self, Problem};
+use super::document::{CELLS_ID, CardRuns, LineKind, MadeOf, SheetChip, SheetDocument, SheetValue};
+use super::lower;
 use super::relations::CardRelations;
 use super::sentence::{self, Sentences};
 use super::{
@@ -108,8 +108,13 @@ impl SheetFile {
             .document()
             .to_text()
             .map_err(|error| SheetFileError::Format(Box::new(CodeDiagnostic::error(error.to_string()))))?;
-        let mut lowered =
-            lower::lower(parsed.document(), &report).map_err(|problems| invalid(placed(&parsed, problems)))?;
+        let mut lowered = lower::lower(parsed.document(), &report).map_err(|problems| {
+            invalid(
+                problems
+                    .into_iter()
+                    .map(|problem| placed_error(&parsed, &problem.place, problem.message)),
+            )
+        })?;
         edit(&mut lowered.document);
         let graph = GraphFile::from_document(&lowered.document, None).map_err(|error| {
             invalid([CodeDiagnostic::error(format!(
@@ -118,7 +123,7 @@ impl SheetFile {
             ))])
         })?;
         Ok(Self {
-            warnings: warnings(&report),
+            warnings: report.warnings().map(|warning| warning.diagnostic.clone()).collect(),
             parsed,
             lowered: graph.with_author(ModelCode::new(SHEET_CODE_FORMAT, canonical.clone())),
             canonical,
@@ -145,16 +150,11 @@ impl SheetFile {
         problems
             .into_iter()
             .map(|problem| {
-                let (card, line) = match &problem.place {
-                    Place::Line(card, line) => (Some(*card), Some(line.clone())),
-                    Place::Card(card) => (Some(*card), None),
-                    _ => (None, None),
-                };
-                let diagnostic = placed_error(parsed, &problem.place, problem.message);
+                let (card, line) = problem.place.card_and_line();
                 SheetDiagnostic {
-                    diagnostic,
+                    diagnostic: placed_error(parsed, &problem.place, problem.message),
                     card,
-                    line,
+                    line: line.map(str::to_owned),
                     skips_line: false,
                 }
             })
@@ -230,18 +230,10 @@ impl SheetFile {
         }
         let document = self.document();
         let sentences = Sentences::new(document);
-        let (things, count) = match document.world.made_of {
-            MadeOf::Agents => {
-                let kind = document.agents.first().map_or("agents", |kind| kind.id.as_str());
-                (
-                    sentence::plural(&sentences.thing_word(kind)),
-                    param_count(entry, params, &["num_agents"]),
-                )
-            }
-            MadeOf::Cells => (
-                sentence::plural(&sentences.thing_word("cells")),
-                param_count(entry, params, &["grid_width", "grid_height"]),
-            ),
+        let things = sentence::plural(&sentences.thing_word(world_thing(document)));
+        let count = match document.world.made_of {
+            MadeOf::Agents => param_count(entry, params, &["num_agents"]),
+            MadeOf::Cells => param_count(entry, params, &["grid_width", "grid_height"]),
         };
         let mut lines: Vec<String> = found
             .into_iter()
@@ -397,10 +389,6 @@ impl SheetFile {
     fn cost_words(&self, place: Option<&Place>) -> String {
         let document = self.document();
         let sentences = Sentences::new(document);
-        let world_thing = match document.world.made_of {
-            MadeOf::Agents => document.agents.first().map_or("agents", |kind| kind.id.as_str()),
-            MadeOf::Cells => "cells",
-        };
         match place {
             Some(Place::Line(card, line_id)) => {
                 let card = &document.cards[*card];
@@ -436,12 +424,12 @@ impl SheetFile {
             }
             Some(Place::Button(button)) => sentence::line_costs_too_much(
                 &document.buttons[*button].name,
-                &sentences.thing_word(world_thing),
+                &sentences.thing_word(world_thing(document)),
                 sentence::FEWER_LINES,
             ),
             _ => sentence::line_costs_too_much(
                 &sentence::each_tick(None),
-                &sentences.thing_word(world_thing),
+                &sentences.thing_word(world_thing(document)),
                 sentence::FEWER_LINES,
             ),
         }
@@ -523,25 +511,20 @@ fn invalid(errors: impl IntoIterator<Item = CodeDiagnostic>) -> SheetFileError {
     SheetFileError::Invalid(SheetErrors::new(first, errors))
 }
 
-/// Returns the warnings of `report`, already placed.
-fn warnings(report: &SheetReport) -> Vec<CodeDiagnostic> {
-    report.warnings().map(|warning| warning.diagnostic.clone()).collect()
-}
-
-/// Returns `problems` as errors placed in the text of `parsed`.
-fn placed(parsed: &ParsedSheet, problems: Vec<Problem>) -> Vec<CodeDiagnostic> {
-    problems
-        .into_iter()
-        .map(|problem| placed_error(parsed, &problem.place, problem.message))
-        .collect()
-}
-
 /// Returns the error `message` of the sheet `parsed`, placed at the table of `place` when the text holds one.
 fn placed_error(parsed: &ParsedSheet, place: &Place, message: String) -> CodeDiagnostic {
     let error = CodeDiagnostic::error(message);
     match span_of(parsed, place) {
         Some(span) => parsed.place(error, span),
         None => error,
+    }
+}
+
+/// Returns the id of the kind of thing the world of `document` is made of: its first kind of agent, or the cells.
+fn world_thing(document: &SheetDocument) -> &str {
+    match document.world.made_of {
+        MadeOf::Agents => document.agents.first().map_or("agents", |kind| kind.id.as_str()),
+        MadeOf::Cells => CELLS_ID,
     }
 }
 

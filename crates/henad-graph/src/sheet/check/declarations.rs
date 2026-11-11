@@ -3,12 +3,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::lines::{Context, Draw, LineState, ValueType, Want, line_number, value_draws, value_rates};
+use super::lines::{Context, Draw, ValueType, line_number, value_draws, value_rates};
 use super::{Checker, Place, Thing};
 use crate::ids::is_id;
 use crate::sheet::SHEET_VERSION;
 use crate::sheet::document::{
-    ButtonStepRule, CardRuns, ColorRuleKind, MadeOf, MeasureRule, PropertyType, SheetDocument, SheetProperty, StartRule,
+    ButtonStepRule, CELLS_ID, CardRuns, ColorRuleKind, GROUND_ID, MadeOf, MeasureRule, PropertyType, SheetDocument,
+    SheetProperty, StartRule,
 };
 use crate::sheet::format_number;
 use crate::sheet::limits::MAX_SHEET_ID_BYTES;
@@ -180,7 +181,7 @@ impl<'a> Claims<'a> {
             || line_number(id).is_some()
             || namespace == Namespace::Item
                 && (RESERVED_PARAMETER_IDS.contains(&id) || id.starts_with(RESERVED_PREFIX))
-            || namespace == Namespace::Thing && matches!(id, "cells" | "ground");
+            || namespace == Namespace::Thing && matches!(id, CELLS_ID | GROUND_ID);
         if reserved {
             checker.error(format!("the {what} id '{id}' is reserved"), place);
         }
@@ -206,8 +207,8 @@ fn check_ids(checker: &mut Checker<'_>) {
             &Place::AgentKind(index),
         );
     }
-    for (thing, properties) in thing_properties(document) {
-        for (index, property) in properties.iter().enumerate() {
+    for thing in Thing::all(document) {
+        for (index, property) in thing.properties(document).iter().enumerate() {
             let place = Place::Property(thing, index);
             claims.claim(checker, &property.id, "property", Namespace::Item, &place);
             check_states(checker, property, &place);
@@ -255,58 +256,19 @@ fn check_states(checker: &mut Checker<'_>, property: &SheetProperty, place: &Pla
     }
 }
 
-/// Returns each kind of thing of `document` with its properties: the cells, each kind of agent, then the ground.
-fn thing_properties(document: &SheetDocument) -> Vec<(Thing, &[SheetProperty])> {
-    let mut out: Vec<(Thing, &[SheetProperty])> = Vec::new();
-    if let Some(cells) = &document.cells {
-        out.push((Thing::Cells, cells));
-    }
-    for (index, kind) in document.agents.iter().enumerate() {
-        out.push((Thing::Agents(index), &kind.properties));
-    }
-    if let Some(ground) = &document.ground {
-        out.push((Thing::Ground, &ground.properties));
-    }
-    out
-}
-
-/// Returns the properties of the kind of thing `thing`, empty for a kind the sheet does not have.
-pub(super) fn properties_of_thing(document: &SheetDocument, thing: Thing) -> &[SheetProperty] {
-    match thing {
-        Thing::Cells => document.cells.as_deref().unwrap_or_default(),
-        Thing::Agents(index) => document
-            .agents
-            .get(index)
-            .map_or(&[], |kind| kind.properties.as_slice()),
-        Thing::Ground => document
-            .ground
-            .as_ref()
-            .map_or(&[], |ground| ground.properties.as_slice()),
-    }
-}
-
-/// Returns the id of the kind of thing `thing`.
-fn thing_id(document: &SheetDocument, thing: Thing) -> &str {
-    match thing {
-        Thing::Cells => "cells",
-        Thing::Agents(index) => document.agents.get(index).map_or("", |kind| kind.id.as_str()),
-        Thing::Ground => "ground",
-    }
-}
-
 /// Returns whether `id` names a kind of thing of `document`.
 fn is_thing(document: &SheetDocument, id: &str) -> bool {
-    id == "cells" && document.cells.is_some()
-        || id == "ground" && document.ground.is_some()
+    id == CELLS_ID && document.cells.is_some()
+        || id == GROUND_ID && document.ground.is_some()
         || document.agents.iter().any(|kind| kind.id == id)
 }
 
 /// Checks every property: its type, its states, its marks and how it starts.
 fn check_properties(checker: &mut Checker<'_>) {
     let document = checker.document;
-    for (thing, properties) in thing_properties(document) {
-        let thing_id = thing_id(document, thing);
-        for (index, property) in properties.iter().enumerate() {
+    for thing in Thing::all(document) {
+        let thing_id = thing.id(document);
+        for (index, property) in thing.properties(document).iter().enumerate() {
             check_property(checker, property, thing_id, &Place::Property(thing, index));
         }
     }
@@ -322,12 +284,12 @@ fn check_property<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, th
             place,
         );
     }
-    if matches!(kind, PropertyType::Position | PropertyType::Heading) && matches!(thing, "cells" | "ground") {
+    if matches!(kind, PropertyType::Position | PropertyType::Heading) && matches!(thing, CELLS_ID | GROUND_ID) {
         checker.error(format!("property '{id}': only agents have a {}", kind.as_str()), place);
     }
     let context = Context::outside(place.clone(), thing);
     if property.marks.is_some() || !property.kept_per_tick.is_blank() {
-        if thing != "ground" || kind != PropertyType::Number {
+        if thing != GROUND_ID || kind != PropertyType::Number {
             checker.error(
                 format!("property '{id}': marks and fading belong to a Number property of the ground"),
                 place,
@@ -336,13 +298,12 @@ fn check_property<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, th
         if property.marks.is_none() {
             checker.error(format!("property '{id}' fades and names no marks rule"), place);
         }
-        checker.slot(
+        checker.outside_slot(
             &property.kept_per_tick,
             &context,
-            Want::Blank(Blank::Number),
+            Blank::Number,
             Some(ValueType::Number),
             None,
-            &mut LineState::default(),
         );
     }
     check_start(checker, property, thing, place);
@@ -362,14 +323,7 @@ fn check_start<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, thing
     let mut draws = false;
     match start.rule {
         StartRule::Value => {
-            checker.slot(
-                &start.value,
-                &context,
-                Want::Blank(Blank::Value),
-                None,
-                Some(id),
-                &mut LineState::default(),
-            );
+            checker.outside_slot(&start.value, &context, Blank::Value, None, Some(id));
             draws = start.value.value().is_some_and(value_draws);
             if start.value.value().is_some_and(value_rates) {
                 checker.error(
@@ -400,14 +354,7 @@ fn check_start<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, thing
                         place,
                     );
                 }
-                checker.slot(
-                    &row.chance,
-                    &context,
-                    Want::Blank(Blank::Chance),
-                    Some(ValueType::Number),
-                    None,
-                    &mut LineState::default(),
-                );
+                checker.outside_slot(&row.chance, &context, Blank::Chance, Some(ValueType::Number), None);
                 checker.draw_range(&row.chance, &context, Draw::Chance);
             }
             check_state_field(checker, id, start.otherwise.as_deref(), "otherwise", place);
@@ -429,7 +376,7 @@ fn check_start<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, thing
                 checker.error(format!("property '{id}': on the ground starts a Position"), place);
             }
             let ground = start.property.as_deref().unwrap_or("");
-            match checker.property_of(ground, "ground") {
+            match checker.property_of(ground, GROUND_ID) {
                 None => checker.error(
                     format!("property '{id}' starts on '{ground}', which is no ground property"),
                     place,
@@ -528,14 +475,7 @@ fn check_measures(checker: &mut Checker<'_>) {
             }
         } else {
             let context = Context::outside(place.clone(), over);
-            checker.slot(
-                &measure.value,
-                &context,
-                Want::Blank(Blank::Value),
-                None,
-                None,
-                &mut LineState::default(),
-            );
+            checker.outside_slot(&measure.value, &context, Blank::Value, None, None);
         }
     }
 }
@@ -581,7 +521,7 @@ fn check_colors(checker: &mut Checker<'_>) {
                 }
             }
             ColorRuleKind::ByHeading => {
-                if matches!(thing.as_str(), "cells" | "ground") {
+                if matches!(thing.as_str(), CELLS_ID | GROUND_ID) {
                     checker.error(
                         format!("the color rule of '{thing}' reads a heading, which only agents have"),
                         &place,
@@ -634,14 +574,7 @@ fn check_buttons(checker: &mut Checker<'_>) {
                         None => checker.error(format!("button '{id}' sets '{property}', which is no property"), &place),
                         Some((_, owner)) => {
                             let context = Context::outside(place.clone(), owner);
-                            checker.slot(
-                                &step.value,
-                                &context,
-                                Want::Blank(Blank::Value),
-                                None,
-                                Some(property),
-                                &mut LineState::default(),
-                            );
+                            checker.outside_slot(&step.value, &context, Blank::Value, None, Some(property));
                         }
                     }
                 }

@@ -247,13 +247,7 @@ pub(super) fn update_names(before: &SheetDocument, after: &mut SheetDocument) {
         let Some(base) = new_names.get(&id) else {
             continue;
         };
-        let mut count = 1;
-        let mut name = sentence::repeated_result_name(base, count);
-        while taken.contains(&name.to_lowercase()) {
-            count += 1;
-            name = sentence::repeated_result_name(base, count);
-        }
-        taken.insert(name.to_lowercase());
+        let name = free_name(base, &mut taken);
         if let Some(line) = after.cards[index].line_tables.get_mut(&id) {
             line.name = Some(name);
         }
@@ -412,17 +406,23 @@ fn summary_names(
             if !follows[index] || steady[index] != steady_pass {
                 continue;
             }
-            let mut count = 1;
-            let mut name = sentence::repeated_result_name(base, count);
-            while taken.contains(&name.to_lowercase()) {
-                count += 1;
-                name = sentence::repeated_result_name(base, count);
-            }
-            taken.insert(name.to_lowercase());
-            names[index] = Some(name);
+            names[index] = Some(free_name(base, &mut taken));
         }
     }
     names
+}
+
+/// Returns the first of `base`, `base 2`, `base 3` and so on whose lower case `taken` does not hold, and adds its lower
+/// case to `taken`.
+fn free_name(base: &str, taken: &mut HashSet<String>) -> String {
+    let mut count = 1;
+    let mut name = sentence::repeated_result_name(base, count);
+    while taken.contains(&name.to_lowercase()) {
+        count += 1;
+        name = sentence::repeated_result_name(base, count);
+    }
+    taken.insert(name.to_lowercase());
+    name
 }
 
 /// Writes each new summary id of `renames`, `(line, old id, new id)` triples, into every reference of `document` to

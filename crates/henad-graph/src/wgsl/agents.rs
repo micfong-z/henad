@@ -29,7 +29,7 @@ use henad_core::params::ParamDescriptor;
 
 use super::agent_hooks::{AgentGraphHooks, BufferSource, WalkCharge};
 use super::emit::{AGENT_COLORS, AgentPlan, EmitInput, Emitted, FIRST_COUNTER, FieldPlan, LanePlan, Role};
-use super::fault_names::FaultNames;
+use super::fault_names::{FaultNames, look_met_too_many, look_searches_too_far};
 use super::hooks::{PassUniform, action_plans};
 use super::pack::{self, LaneBuffer, LaneEntry, LaneLayout};
 use super::probes::{self, Probes};
@@ -46,7 +46,6 @@ use crate::host::HostEvaluator;
 use crate::host::program::{Instruction, Operation, Program};
 use crate::ids::NodeId;
 use crate::node::{Combine, Node};
-use crate::sheet::sentence;
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, PortRef};
 
@@ -268,7 +267,7 @@ impl AgentProgram {
     /// in place of its pass, node and line.
     ///
     /// A sheet passes the names of its looks at agents, so a fold past its visit cap names the author line in the
-    /// words of [`sentence::look_met_too_many`], as "line 3, Flockmates: looked at more than 65536 agents around one
+    /// words of [`look_met_too_many`], as "line 3, Flockmates: looked at more than 65536 agents around one
     /// agent, and the run stops. A larger world or a shorter distance looks at fewer". The names change no shader and
     /// leave the file's text and its code identity alone.
     ///
@@ -393,8 +392,8 @@ impl AgentProgram {
                 let written = evaluator.origin(*node).map_or(*node, crate::normal::Origin::written);
                 if let Some(name) = names.and_then(|names| names.get(written)) {
                     return [
-                        sentence::look_met_too_many(name, crate::limits::MAX_FOLD_CANDIDATES),
-                        sentence::look_searches_too_far(name, crate::limits::MAX_WALK_CELLS),
+                        look_met_too_many(name, crate::limits::MAX_FOLD_CANDIDATES),
+                        look_searches_too_far(name, crate::limits::MAX_WALK_CELLS),
                     ];
                 }
                 let located = match evaluator.origin(*node) {

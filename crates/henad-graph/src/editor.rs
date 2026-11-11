@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use crate::ids::NodeId;
-use crate::model_text::toml_string;
+use crate::model_text::{toml_key, toml_string};
 
 /// Keys of the `[editor]` table written before every other key, in order.
 const LEADING_KEYS: [&str; 5] = ["version", "next_id", "node", "view", "function"];
@@ -826,15 +826,6 @@ fn natural_order(left: &str, right: &str) -> Ordering {
         (Err(_), Ok(_)) => Ordering::Greater,
         (Err(_), Err(_)) => left.cmp(right),
     }
-}
-
-/// Returns `key` bare when TOML allows it, and quoted otherwise.
-fn toml_key(key: &str) -> String {
-    let bare = !key.is_empty()
-        && key
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
-    if bare { key.to_owned() } else { toml_string(key) }
 }
 
 /// Appends the line `key = value` to `text`, or nothing for a value nested deeper than [`MAX_INLINE_DEPTH`].

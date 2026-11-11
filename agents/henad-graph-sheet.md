@@ -12,8 +12,9 @@ plain public data, every type `#[non_exhaustive]` with a constructor (`new`, or 
 `SheetGround`, `StartsAsRow` and `ChooseRow`), every enum with `ALL`, `as_str` and `parse` from the
 private `stored_names!` macro, which also implements the crate-private `StoredName` trait the reader
 reads names through. `SheetDocument` writes its own `Debug` ending in `finish_non_exhaustive`.
+`CELLS_ID` and `GROUND_ID` are the ids of the two fixed kinds of thing, `cells` and `ground`.
 `sheet/reader.rs` is private, and `sheet` re-exports `ParsedSheet`, `SheetPlaces` and `TablePlaces`.
-`sheet/starters.rs` is private, and `sheet` re-exports `starters`. `sheet/sentence.rs` is public
+`sheet/starters.rs` is private, and `sheet` re-exports `starters`. `sheet/sentence/` is public
 (`sheet::sentence`), the wording table and `Sentences`. `sheet/writer.rs` is private, and `sheet`
 re-exports `format_number`. `sheet/relations.rs` is public (`sheet::relations`), `CardRelations`.
 `sheet/check/` is public (`sheet::check`): `mod.rs` holds `check`, `SheetReport`, `SheetDiagnostic`,
@@ -63,14 +64,6 @@ unit a parameter's Unit names. The
 mean stay is a Become from a named state at a fixed rate with no "for each", its rate the whole
 condition and no block around it (`rate_alone`). A worked-out note names an unnamed Count by
 `edit::automatic_name`. `pub(super) shortest_f32` is the conversion commands' number.
-`sheet/limits.rs` holds the sheet's limits apart from `crate::limits`, so `library.lock` stays as it
-is: `MAX_SHEET_BYTES` (1 MiB), `MAX_NESTING` (24), `MAX_LINES_PER_CARD` (256), `MAX_NODES_PER_LINE`
-and `MAX_SHEET_NODES` (999 each, for the lowering's `n(1000k + j)` ids), `MAX_SHEET_ID_BYTES` (48,
-so `tick_<card>` and `button_<button>` stay within the IR's 64-byte ids) and `MAX_FORMULA_NESTING`
-(32 groups of parentheses, calls and `^` right sides, checked as the formula parser descends, so a
-deep formula is an error instead of a stack overflow) and `MAX_FORMULA_DEPTH` (16 operations nested
-in a formula the lowering writes, each operator, negation and call one level, since `math.expr`
-reads 64 levels and its text spends up to three per operation). The reader enforces the first three.
 
 **The document.** Tables follow the sheet's order: `sheet` (`SheetHeader`: version, id, name,
 purpose, next_line), `world` (`MadeOf`, width, height, `Edges`), `time` (`SheetTime` with
@@ -207,48 +200,7 @@ holds always (with its id and number, for `MoveConditionInto`), neither for a Wh
 none while it is blank) and under a result line inside one (`worked_out_everywhere_note`);
 `NothingInside` under an empty When. `check::holds_draw` is public for the card's Draw new numbers.
 
-**The checker.** `check::check(&document)` returns diagnostics with no span in a stable order (the
-tables outside the cards, then every card's line ids, then each card's lists and its lines in
-display order), and `ParsedSheet::check` places each at its table (`[card.line.l2]` for a line, the
-`[[parameter]]` header for a parameter) through `SheetPlaces` and sorts them by place.
-`SheetDiagnostic` holds the `CodeDiagnostic`, the card index, the line id and `skips_line`.
-`SheetReport` has `has_errors`, `errors`, `warnings`, `is_skipped`, `skip_note` and `skipped`.
-Errors (file-level, technical messages in the graph checker's style): version, the id grammar and
-`MAX_SHEET_ID_BYTES` for every id, the reserved ids (`my`, `my_new`, the formula and part words,
-`l<digits>`, and in the item namespace `grid_width`, `grid_height`, `num_agents`, `world_width`,
-`world_height`, `tick_length` and `henad_*`, for a kind of thing `cells` and `ground`, for a state
-`any_state`), a Look around's summary ids (grammar, length, the reserved words and `l<digits>`, one
-id per line), the namespaces of author-format section 2.2, line ids (form, below `next_line`, one
-card, one list, reachable, listed ids held), lines on a non-block kind, the world's kinds,
-`ONE_AGENT_KIND` on every agent kind after the first, property types, marks, starts (states, keys, a
-rate in a start), parameter defaults, measures, colour rules, buttons (a run-once step names a card
-that runs once), a card's kind of thing (`cells` in any grid world), a name on a change, `always` as
-a line or outside a condition, a When that is always, `outside` outside a condition, a phrase of a
-change kind, unknown parameters, states of another property, `their` and relations outside a look,
-results from another card or of a change line, parts, places, value types (a slot's expected type
-against a literal, chip or phrase, and `ARROW_COMPARED_WITH_NUMBER`), formulas, keys held twice, Count, Look around and Pick a cell
-inside a Repeat (`LOOK_IN_REPEAT`) or a run-once card, `RATE_IN_BUTTON_CARD`, a rate inside a
-Repeat, and the ranges from the wording table (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on
-literals, a percent divided by 100, `CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters).
-Agent-only fields with no editor words yet (a Steer or Move mode, a pick rule, `which`, an event,
-`agent_kind`, `include_me`) are errors when absent. Warnings that keep the line running: a draw with
-no key, two result lines with one name, and `SHEET_EMPTY` at `[world]` for a grid sheet with no
-cells property. Skip warnings, one per line, the first problem in the line's sentence order: a
-blank slot or select reads `not_run_choose` with `Blank::want` or `LineSelect::words` ("Not run yet:
-choose the old state"), Become's property counting as its new state; a result of a line no card
-holds reads the same; a result at or below its user reads `uses_result_below`; a result inside a
-When or Repeat that does not hold the user reads `uses_result_inside`; `my_new` at or above
-the last change reads `uses_result_below("my new X")`, and with no change at all as a blank. After
-the slots, in order: a result of a skipped line above reads `not_run_result_unfinished`, a rate with
-no `[time]` reads `NOT_RUN_TICK`, and a change, When or Repeat inside a skipped block, or any line
-with a skipped Repeat among its blocks at any depth, reads `not_run_when_unfinished` with the direct
-parent's number, or else the nearest skipped Repeat's. A result without a name reads as its sentence
-in a note. Outside the cards a blank or unusable value is an error. A value's type walk through
-results stops past `MAX_NESTING`. A rate whose `rate` is a parameter whose Unit names another unit
-(`edit::unit_in_text`) than the line's `rate_unit` warns `unit_mismatch` at the line and keeps
-running in the line's unit. A Record with no event, a Leave or a pick with no ground property
-and a Repeat with no times skip their line in the blank's words. `changes_property` is the rule of
-`my_new`, public for the card's picker.
+**The checker** and the sheet's limits have their own file, `agents/henad-graph-sheet-check.md`.
 
 **Sheet files.** `SheetFile::parse(text)` reads (the reader's errors), checks (the checker's errors
 as `SheetFileError::Invalid`, every one placed), lowers (the lowering's problems, also `Invalid`,
@@ -256,22 +208,22 @@ placed at their tables through `check::span_of`) and reads the lowered document 
 `GraphFile::from_document`. It keeps the `ParsedSheet` (text, places, line ends), the canonical text
 (`to_toml`), the checker's warnings placed (`warnings`, skip warnings included), the lowered
 `GraphFile` (`lowered`), the `LineMap` (`line_map`) and the `FaultNames` of its looks at agents
-(`fault_names`), and the `FireLines` of its change lines (`fire_lines`). `code()` is
-the lowered graph's `code()`: the IR's `name` is `[sheet] name`, both descriptions stay empty,
-and nothing else of the sheet text enters it. The lowered `GraphFile` records the canonical text as
-its author text (`GraphFile::author`, crate-private
-`with_author`) in `SHEET_CODE_FORMAT` (`henad-sheet/1`), and `GraphFile::source` adds it to the
-`ModelSource` every entry of the graph records. `GraphFile::from_code` and a graph read
-as a graph carry none (`a_lowered_sheet_records_its_canonical_text_outside_the_code`). `Invalid`
-holds a `SheetErrors`, never empty, since `SheetErrors::new` takes a first error and the rest.
+(`fault_names`), and the `FireLines` of its change lines (`fire_lines`). `code()` is the lowered
+graph's `code()`: the IR's `name` is `[sheet] name`, both descriptions stay empty, and nothing else
+of the sheet text enters it. The lowered `GraphFile` records the canonical text as its author text
+(`GraphFile::author`, crate-private `with_author`) in `SHEET_CODE_FORMAT` (`henad-sheet/1`), and
+`GraphFile::source` adds it to the `ModelSource` every entry of the graph records.
+`GraphFile::from_code` and a graph read as a graph carry none
+(`a_lowered_sheet_records_its_canonical_text_outside_the_code`). `Invalid` holds a `SheetErrors`,
+never empty, since `SheetErrors::new` takes a first error and the rest.
 `SheetFileError::diagnostics` returns every diagnostic, `diagnostic` the first, and `Display` writes
 each on its line. `SheetFile` and `LineMap` write their own `Debug`.
 `SheetFile::place_graph_diagnostic` maps a diagnostic of the lowered graph (its checker, host
-evaluator or compiler) back into the sheet: a node through `LineMap` to its line's table,
-found by the card whose `line_tables` hold the line, a node the sheet owns by the first two segments
-of its slot path (`cells.<property>`, `agents.<property>`, `measure.<id>`, `button.<id>`,
-`card.<id>`, `color.<thing>`), a node the map does not know (a normalisation copy, a planted node)
-to `[sheet]`, and a diagnostic with a pass and no node by the pass id (`tick_<card>`, `button_<id>`,
+evaluator or compiler) back into the sheet: a node through `LineMap` to its line's table, found by
+the card whose `line_tables` hold the line, a node the sheet owns by the first two segments of its
+slot path (`cells.<property>`, `agents.<property>`, `measure.<id>`, `button.<id>`, `card.<id>`,
+`color.<thing>`), a node the map does not know (a normalisation copy, a planted node) to `[sheet]`,
+and a diagnostic with a pass and no node by the pass id (`tick_<card>`, `button_<id>`,
 `restart_<id>`) or to `[sheet]`. Its old span, line and column are replaced and its `pass` and
 `node` cleared, so henad-cli's `located` prints no node id, and `--print-lowered` keeps the graph
 within reach. henad-explore's `ModelFile` calls it for a sheet's entry errors, and leaves the
@@ -281,28 +233,28 @@ names its author lines. `SheetFile::shortfalls(entry, params, limits)` is the on
 entry's shortfalls, with the work lines (any line holding "units of work") replaced when the
 heaviest submission or a host run passes its budget. A submission past `SUBMISSION_WORK_BUDGET`
 names each fold of the heaviest step's pass (label `<sheet id>_<pass id>`) by its `FaultNames` words
-through `look_costs_too_much` ("Line 1, Flockmates: looks at too many birds at 1,000,000 birds. Use a
-shorter distance or fewer birds."), or the card through `card_costs_too_much` when the
-pass holds no fold. A host run past `HOST_WORK_BUDGET` reads `start_costs_too_much`. The population
-is `num_agents`, or `grid_width` times `grid_height`, read from the entry's parameters. A buffer a
-line names takes its properties' names (`with_property_names`). The checker's per-element cost (V22)
-is placed at the heaviest node's line by `place_graph_diagnostic`,
-which recognises it by `check::is_pass_cost` (the message's start and its `MAX_PASS_COST` end, built
-in `check/cost.rs` beside the message), rewords it through `SheetFile::cost_words` and drops its
-note: `line_costs_too_much` names the line by `look_name` ("Line 1: too much work for one walker. Set a
-smaller maximum for Steps per tick."), with `smaller_maximum` for a Repeat over a
-parameter, `FEWER_TIMES` for a Repeat of a number and `FEWER_LINES` for any other line, or names the
-card by its heading or a button by its name. `SheetFile::lowering_problems(parsed, report)` returns
-the lowering's problems of a sheet that checks, each a `SheetDiagnostic` with its card and line,
-which the card draws under the line. `SheetFile::parse_planted` (`#[cfg(test)]`,
-crate-private) lowers with a closure run on the lowered document before it is read back, which the
-mapping tests use to plant a node the checker refuses.
+through `look_costs_too_much` ("Line 1, Flockmates: looks at too many birds at 1,000,000 birds. Use
+a shorter distance or fewer birds."), or the card through `card_costs_too_much` when the pass holds
+no fold. A host run past `HOST_WORK_BUDGET` reads `start_costs_too_much`. The population is
+`num_agents`, or `grid_width` times `grid_height`, read from the entry's parameters. A buffer a line
+names takes its properties' names (`with_property_names`). The checker's per-element cost (V22) is
+placed at the heaviest node's line by `place_graph_diagnostic`, which recognises it by
+`check::is_pass_cost` (the message's start and its `MAX_PASS_COST` end, built in `check/cost.rs`
+beside the message), rewords it through `SheetFile::cost_words` and drops its note:
+`line_costs_too_much` names the line by `look_name` ("Line 1: too much work for one walker. Set a
+smaller maximum for Steps per tick."), with `smaller_maximum` for a Repeat over a parameter,
+`FEWER_TIMES` for a Repeat of a number and `FEWER_LINES` for any other line, or names the card by
+its heading or a button by its name. `SheetFile::lowering_problems(parsed, report)` returns the
+lowering's problems of a sheet that checks, each a `SheetDiagnostic` with its card and line, which
+the card draws under the line. `SheetFile::parse_planted` (`#[cfg(test)]`, crate-private) lowers
+with a closure run on the lowered document before it is read back, which the mapping tests use to
+plant a node the checker refuses.
 
 **The lowering** (`sheet/lower/`) has its own file, `agents/henad-graph-sheet-lower.md`: the grid
 and agent lowering, node ids, keys, the line table, the interim refusals and their tests.
 
-**Tests** of the wording table and the sentences are in `agents/henad-graph-sheet-wording.md`. Writer
-tests sit in `src/tests/sheet_writer.rs`: `every_sheet_is_a_fixed_point`,
+**Tests** of the wording table and the sentences are in `agents/henad-graph-sheet-wording.md`.
+Writer tests sit in `src/tests/sheet_writer.rs`: `every_sheet_is_a_fixed_point`,
 `the_rust_writer_agrees_with_check_py_apart_from_comments` against `src/tests/golden/` (the
 reference writer's text for the four author-format examples with comment lines removed, each line's
 note dropped first since the ants starter holds one the example lacks, and `sheet_` taken off each
@@ -313,44 +265,33 @@ procedure, the script's SHA-256 and the rules in full),
 `numbers_follow_the_sheet_number_rule`, `every_line_sentence_equals_its_comment`, the three diffs of
 the author format (a new waning line in four hunks, a Steer reorder in one, a parameter rename in
 two, through a line diff in the test) and `every_readable_mutation_writes_text_that_reads_back` over
-the reader's mutation corpus. Checker tests sit in `src/tests/sheet_mutation.rs` (the 25 cases of
-the author format's mutation run, one test each on a committed sheet edited in the test, each
-asserting error, warning or skip and its table; the rate in a run-once card; the chance and rate
-ranges;
-`the_sheet_checker_never_panics_on_the_mutation_corpus`, whose edits each sheet draws from its own
-seed, so a sheet added to the corpus leaves the others' edits alone) and `src/tests/sheet_check.rs`
-(`every_sheet_checks_clean`, file order, the otherwise rule with exclusive and overlapping tests,
-the starters, the forest fire, the ants' Set lines, competing groups, skipped lines and blocks, the
-When scope, `every_skip_note_equals_its_wording_table_entry`, reserved ids, the second agent kind,
-the empty grid sheet, and the relation notes:
-`the_order_note_shows_on_game_of_life_and_sir_and_not_on_the_vote_or_the_forest_fire`,
-`the_vote_is_covered_and_a_gap_between_two_thresholds_is_named` (with skipped lines that take the
-gap note away) and `a_when_offers_to_fold_into_its_lines_and_notes_what_holds_inside_it`). Rate
-tests sit in `src/tests/sheet_rates.rs`: the known chances (0.2592, 0.9093 with 8, a rate per week
-in days, the competing 0.5034 and its half, the number rule), the uniform block of the SIR tick
-shader (no `exp`, 1 - e^(-0.1) with e^(-0.1) one f32 step from the true value, the `math.powi`
-table within 3 steps, since its powers are f32 `powi` of the base), the competing thresholds at a
-tick of 7 days, a group with a worked-out rate splitting on the host, the rates SIR conserving its
-cells at half a day, `a_tick_length_override_keeps_the_code_and_the_keys`, the factor of a rate per
-week, every other form of rate, a rate in an any of drawing alone, the notes of the wording
-table (`rate_notes_match_the_spec_examples`, `worked_out_rate_notes_match_the_spec_examples`), the
-two conversion commands and their refusals, the unit mismatch warning, and
-`a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named`. Reader tests sit in `src/tests/sheet_document.rs`, over eleven sheets: the eight
-starters, and three test sheets in `src/tests/sheets/`. `sir.toml`, `boids.toml` and `ants.toml` are
-the author format's examples, and `random_walk.toml`, `bounded_confidence.toml` and
-`sir_chance.toml` (SIR with chances per tick, sheet id `sir_chance`) were written from the models
-of henad-models' `tests/fixtures/lowered/round1/`, as `vote.toml` and `forest_fire.toml` were. The
-random walk's measure is "Average of Position" (`average_of_position`), the name the sheet editor's
-average gives it. `mobile_sir.toml` holds a chance once for each infected person within reach, in a
-world 1 cell wide so every person reaches every other. Every sheet holds `always` and `any_state`
-written in, Game of Life's Clear is a Run once card holding "Become Dead from any state, always",
-and both SIR sheets name their button `new_outbreak`, "New outbreak". The written sheets' keys were
-minted at random. Their text is the writer's canonical text, comments included. The bounded
-confidence colour rule is `shaded` over `opinion` with no colours, since the schema holds no ramp.
-The test helper `sheets()` lists the starters from `starters()`, then the test sheets, so every
-starter is among the sheets the tests read. `starters_returns_the_grid_sheets_then_the_agent_sheets`
-holds the list and each starter's world, and `the_sheets_written_from_round_1_read_their_values` a
-value of each written sheet. `every_sheet_reads` (places on every line table, the ants' chip in
+the reader's mutation corpus. Checker tests are in `agents/henad-graph-sheet-check.md`. Rate tests
+sit in `src/tests/sheet_rates.rs`: the known chances (0.2592, 0.9093 with 8, a rate per week in
+days, the competing 0.5034 and its half, the number rule), the uniform block of the SIR tick shader
+(no `exp`, 1 - e^(-0.1) with e^(-0.1) one f32 step from the true value, the `math.powi` table within
+3 steps, since its powers are f32 `powi` of the base), the competing thresholds at a tick of 7 days,
+a group with a worked-out rate splitting on the host, the rates SIR conserving its cells at half a
+day, `a_tick_length_override_keeps_the_code_and_the_keys`, the factor of a rate per week, every
+other form of rate, a rate in an any of drawing alone, the notes of the wording table
+(`rate_notes_match_the_spec_examples`, `worked_out_rate_notes_match_the_spec_examples`), the two
+conversion commands and their refusals, the unit mismatch warning, and
+`a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named`. Reader tests sit in
+`src/tests/sheet_document.rs`, over eleven sheets: the eight starters, and three test sheets in
+`src/tests/sheets/`. `sir.toml`, `boids.toml` and `ants.toml` are the author format's examples, and
+`random_walk.toml`, `bounded_confidence.toml` and `sir_chance.toml` (SIR with chances per tick,
+sheet id `sir_chance`) were written from the models of henad-models'
+`tests/fixtures/lowered/round1/`, as `vote.toml` and `forest_fire.toml` were. The random walk's
+measure is "Average of Position" (`average_of_position`), the name the sheet editor's average gives
+it. `mobile_sir.toml` holds a chance once for each infected person within reach, in a world 1 cell
+wide so every person reaches every other. Every sheet holds `always` and `any_state` written in,
+Game of Life's Clear is a Run once card holding "Become Dead from any state, always", and both SIR
+sheets name their button `new_outbreak`, "New outbreak". The written sheets' keys were minted at
+random. Their text is the writer's canonical text, comments included. The bounded confidence colour
+rule is `shaded` over `opinion` with no colours, since the schema holds no ramp. The test helper
+`sheets()` lists the starters from `starters()`, then the test sheets, so every starter is among the
+sheets the tests read. `starters_returns_the_grid_sheets_then_the_agent_sheets` holds the list and
+each starter's world, and `the_sheets_written_from_round_1_read_their_values` a value of each
+written sheet. `every_sheet_reads` (places on every line table, the ants' chip in
 `[[card.line.l7.row.condition.items]]`, and a depth at most half the limit),
 `every_table_reads_its_values`, `a_sheet_with_an_unknown_key_is_refused_on_the_key` (also with
 `\r\n` line ends), `a_newer_sheet_version_is_refused_on_its_key`,

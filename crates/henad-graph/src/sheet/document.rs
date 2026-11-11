@@ -15,6 +15,12 @@ use henad_core::metadata::TimeUnit;
 
 use crate::value::Color;
 
+/// Id of the cells of a grid world as a kind of thing, the `every` of a card over cells.
+pub const CELLS_ID: &str = "cells";
+
+/// Id of the ground under agents as a kind of thing.
+pub const GROUND_ID: &str = "ground";
+
 /// A sheet: the author document of a model, from its header to its cards.
 #[derive(Clone, PartialEq)]
 #[non_exhaustive]

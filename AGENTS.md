@@ -65,7 +65,8 @@ characters, and a file that grows past that splits by subsystem, as henad-app's 
 | henad-graph: graph models, IR, checker, host evaluator, starters | `agents/henad-graph.md` |
 | henad-graph's edit commands and the `[editor]` region | `agents/henad-graph-edit.md` |
 | henad-graph's WGSL compiler of grid and agents graphs | `agents/henad-graph-wgsl.md` |
-| henad-graph's sheets: the author document, its reader, writer, checker and limits | `agents/henad-graph-sheet.md` |
+| henad-graph's sheets: the author document, its reader and writer, relations, rates and sheet files | `agents/henad-graph-sheet.md` |
+| henad-graph's sheet checker and the sheet's limits | `agents/henad-graph-sheet-check.md` |
 | henad-graph's wording table, and the sentences of the lines with their parts and places | `agents/henad-graph-sheet-wording.md` |
 | henad-graph's sheet lowering: grid and agent sheets, ids, keys, the line table, refusals, fire lines | `agents/henad-graph-sheet-lower.md` |
 | henad-graph's sheet edit commands | `agents/henad-graph-sheet-edit.md` |

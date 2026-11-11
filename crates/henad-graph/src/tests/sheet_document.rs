@@ -45,6 +45,16 @@ pub(crate) fn sheet_text(file_name: &str) -> &'static str {
         .unwrap_or_else(|| panic!("no sheet {file_name}"))
 }
 
+/// Returns the sheet `file_name` with each `(old, new)` of `edits` applied, where each `old` occurs exactly once.
+pub(crate) fn edited(file_name: &str, edits: &[(&str, &str)]) -> String {
+    let mut text = sheet_text(file_name).to_owned();
+    for (old, new) in edits {
+        assert_eq!(text.matches(old).count(), 1, "{file_name}: {old:?} is not unique");
+        text = text.replacen(old, new, 1);
+    }
+    text
+}
+
 /// The copies of `sir_chance.toml` and `sird.toml` in henad-models' `tests/fixtures/sheets/` and henad-app's
 /// `src/tests/sheets/` equal the test sheets here byte for byte.
 ///

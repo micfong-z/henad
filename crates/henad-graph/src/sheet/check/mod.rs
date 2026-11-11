@@ -24,11 +24,12 @@ use std::ops::Range;
 use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
 
 use super::ParsedSheet;
-use super::document::{SheetCard, SheetDocument, SheetParameter, SheetProperty};
+use super::document::{CELLS_ID, GROUND_ID, SheetCard, SheetDocument, SheetParameter, SheetProperty};
 use super::relations::CardRelations;
 use super::sentence::Sentences;
 
-pub(super) use self::lines::formula_chip;
+pub(super) use self::formula::formula_chip;
+pub(super) use self::lines::governing_property;
 
 /// Result of checking a sheet.
 #[derive(Debug, Clone, Default)]
@@ -140,17 +141,13 @@ fn report(document: &SheetDocument, parsed: Option<&ParsedSheet>) -> SheetReport
                 (Some(parsed), Some(span)) => parsed.place(base, span),
                 _ => base,
             };
-            let (card, line) = match finding.place {
-                Place::Card(card) => (Some(card), None),
-                Place::Line(card, line) => (Some(card), Some(line)),
-                _ => (None, None),
-            };
+            let (card, line) = finding.place.card_and_line();
             (
                 start,
                 SheetDiagnostic {
                     diagnostic,
                     card,
-                    line,
+                    line: line.map(str::to_owned),
                     skips_line: finding.skip,
                 },
             )
@@ -215,6 +212,17 @@ pub(super) enum Place {
     Line(usize, String),
 }
 
+impl Place {
+    /// Returns the index of the card and the id of the line the place is in, `None` for a place outside them.
+    pub(super) fn card_and_line(&self) -> (Option<usize>, Option<&str>) {
+        match self {
+            Self::Card(card) => (Some(*card), None),
+            Self::Line(card, line) => (Some(*card), Some(line)),
+            _ => (None, None),
+        }
+    }
+}
+
 /// A kind of thing whose properties a sheet lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Thing {
@@ -224,6 +232,45 @@ pub(super) enum Thing {
     Agents(usize),
     /// The ground under agents.
     Ground,
+}
+
+impl Thing {
+    /// Returns each kind of thing of `document`: the cells, each kind of agent, then the ground.
+    fn all(document: &SheetDocument) -> Vec<Self> {
+        let mut things = Vec::new();
+        if document.cells.is_some() {
+            things.push(Self::Cells);
+        }
+        things.extend((0..document.agents.len()).map(Self::Agents));
+        if document.ground.is_some() {
+            things.push(Self::Ground);
+        }
+        things
+    }
+
+    /// Returns the id of the kind of thing in `document`: `cells`, `ground` or the agent kind's id.
+    fn id(self, document: &SheetDocument) -> &str {
+        match self {
+            Self::Cells => CELLS_ID,
+            Self::Agents(index) => document.agents.get(index).map_or("", |kind| kind.id.as_str()),
+            Self::Ground => GROUND_ID,
+        }
+    }
+
+    /// Returns the properties of the kind of thing in `document`, empty for a kind the sheet does not have.
+    fn properties(self, document: &SheetDocument) -> &[SheetProperty] {
+        match self {
+            Self::Cells => document.cells.as_deref().unwrap_or_default(),
+            Self::Agents(index) => document
+                .agents
+                .get(index)
+                .map_or(&[], |kind| kind.properties.as_slice()),
+            Self::Ground => document
+                .ground
+                .as_ref()
+                .map_or(&[], |ground| ground.properties.as_slice()),
+        }
+    }
 }
 
 /// One problem found, before it is placed.
@@ -267,9 +314,11 @@ impl<'a> Checker<'a> {
     /// Creates the state of a check of `document`.
     fn new(document: &'a SheetDocument) -> Self {
         let mut properties = HashMap::new();
-        for (thing, list) in things(document) {
-            for property in list {
-                properties.entry(property.id.as_str()).or_insert((property, thing));
+        for thing in Thing::all(document) {
+            for property in thing.properties(document) {
+                properties
+                    .entry(property.id.as_str())
+                    .or_insert((property, thing.id(document)));
             }
         }
         let mut parameters = HashMap::new();
@@ -366,20 +415,4 @@ impl<'a> Checker<'a> {
             },
         }
     }
-}
-
-/// Returns each kind of thing of `document` with its id and properties: the cells, each kind of agent, then the
-/// ground.
-fn things(document: &SheetDocument) -> Vec<(&str, &[SheetProperty])> {
-    let mut out: Vec<(&str, &[SheetProperty])> = Vec::new();
-    if let Some(cells) = &document.cells {
-        out.push(("cells", cells));
-    }
-    for kind in &document.agents {
-        out.push((kind.id.as_str(), &kind.properties));
-    }
-    if let Some(ground) = &document.ground {
-        out.push(("ground", &ground.properties));
-    }
-    out
 }
