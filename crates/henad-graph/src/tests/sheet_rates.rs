@@ -1149,3 +1149,47 @@ fn a_lower_line_of_a_competing_group_reads_or() {
         "Almost 1 with 8. This tick is long for this rate. A shorter tick follows the rate more closely."
     );
 }
+
+#[test]
+fn change_to_a_rate_is_refused_on_a_card_that_runs_once_as_the_card_offers_it() {
+    use crate::sheet::check;
+    use crate::sheet::document::LineKind;
+    use crate::sheet::edit::SheetEditError;
+    use crate::sheet::rates::conversion;
+    use crate::sheet::sentence::DrawKind;
+
+    let document = |text: &str| ParsedSheet::parse(text).expect("the sheet reads").into_document();
+    // Line 4, on the card of New outbreak, becomes Infected with a typed chance. The card runs once.
+    let typed_outbreak = edited(
+        sheet_text("sir.toml"),
+        "kind = \"chance\"\nchance = { param = \"initial_infected\" }\n",
+        "kind = \"chance\"\nchance = 0.01\n",
+    );
+    let mut builder = SheetBuilder::new(document(&typed_outbreak));
+    assert_eq!(conversion(builder.document(), "l4"), None);
+    let before = builder.document().to_text().expect("the sheet writes");
+    assert_eq!(
+        builder.apply(SheetEdit::ChangeToRate { line: "l4".to_owned() }),
+        Err(SheetEditError::Invalid(sentence::RATE_IN_BUTTON_CARD.to_owned()))
+    );
+    assert_eq!(builder.document().to_text().expect("the sheet writes"), before);
+    // Line 3 of a card that runs each tick changes its typed chance to a rate, which the checker takes.
+    let chance = edited(
+        sheet_text("sir_chance.toml"),
+        "chance = { param = \"recovery_chance\" }",
+        "chance = 0.01",
+    );
+    let timed = edited(
+        &chance,
+        "edges = \"wrap\"\n",
+        "edges = \"wrap\"\n\n[time]\ntick_length = 1\ntick_unit = \"day\"\n",
+    );
+    let mut builder = SheetBuilder::new(document(&timed));
+    assert_eq!(conversion(builder.document(), "l3"), Some(DrawKind::Rate));
+    builder
+        .apply(SheetEdit::ChangeToRate { line: "l3".to_owned() })
+        .expect("line 3 changes to a rate");
+    assert_eq!(condition_phrase(&builder, "l3").kind, LineKind::Rate);
+    let report = check::check(builder.document());
+    assert!(!report.has_errors(), "{report:?}");
+}

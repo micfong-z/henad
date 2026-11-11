@@ -52,9 +52,11 @@ digit), cuts to `MAX_SHEET_ID_BYTES`, refuses an id `IdSpace::is_reserved` holds
 takes `_2`, `_3` against a clash. `IdSpace` is `Item` (properties, parameters, measures, events: the
 checker's reserved words, `l<digits>`, the IR's parameter ids, `tick_length`, `henad_*`), `Thing`
 (also `cells`, `ground`), `Button`, `Card` and `State` (`any_state` alone). A button that runs once
-mints against buttons and cards together. `ChangeId` checks the grammar, the length, the reservation
-and the namespace, then rewrites every reference; a card of the button's id that the button runs and
-an agent kind's tick card follow. A suffixed id that is reserved (`henad_2`) is refused like a
+mints against buttons and cards together. `ChangeId` checks the grammar, the length, the reservation,
+that the sheet holds the item under its kind (else `Missing` in `missing`'s words, as `Delete` says
+it, also for an id another kind holds and for the item's own id) and the namespace, then rewrites
+every reference; a card of the button's id that the button runs and an agent kind's tick card
+follow. A suffixed id that is reserved (`henad_2`) is refused like a
 reserved base. `is_reserved_name(name, space)` lets a form refuse such a name first, in the words of
 `sentence::name_reserved` ("Henad uses the name Count itself. Choose another name."). Lines take `l<next_line>`, and `next_line` grows past it, so a deleted number
 never comes back. After a command, every line it touched that draws gets a key no other draw holds
@@ -118,10 +120,11 @@ absent, and gives a parameter with no unit in the rate's `rate` slot `unit_sugge
 into a rate and back, keeping the chance per tick through `sheet::rates` (`rate_from_chance` with
 the tick's length, `chance_from_rate` with `tick_in` of the rate's unit). Each refuses a sheet with
 no `[time]`, a value that is no typed number (a parameter or a result), a chance outside 0 to below
-1 and a rate with no unit. The rate takes the tick's unit, marked, the chance clears the unit and
-the mark, both keep `tries` and the line's key, and the number is written as the shortest decimal
-that reads back as the same `f32` (`rates::shortest_f32`), so 1 - e^(-0.1) turns into 0.1 per day
-and back into the same chance.
+1 and a rate with no unit, and `ChangeToRate` a chance on a card that runs once in the words of
+`sentence::RATE_IN_BUTTON_CARD`, where `rates::conversion` offers no rate either. The rate takes the
+tick's unit, marked, the chance clears the unit and the mark, both keep `tries` and the line's key,
+and the number is written as the shortest decimal that reads back as the same `f32`
+(`rates::shortest_f32`), so 1 - e^(-0.1) turns into 0.1 per day and back into the same chance.
 
 Names (`names.rs`): `automatic_name(document, line)` follows the wording table's result names
 (Count, Total or average as a cells Look around with one total or average summary, chance and rate
@@ -154,6 +157,8 @@ sheets (the waning line through `AddParameter`, `SetParameter`, `AddLine` with t
 `a_rename_changes_one_name_and_the_comments_that_show_it`,
 `change_id_rewrites_every_reference_and_nothing_else` (a parameter, a property, a button and its
 card, a state and a parameter in formulas, each the old text with the quoted id replaced),
+`a_new_id_for_an_item_the_sheet_does_not_hold_is_refused_and_changes_nothing` (every kind of item,
+mostly ids another kind holds, to a new id and to its own),
 `a_deleted_line_number_is_never_minted_again`,
 `a_new_property_type_clears_every_reference_and_keeps_the_place`,
 `id_minting_follows_its_known_answers`, `every_starter_id_follows_the_minting_rule` (every committed

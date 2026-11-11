@@ -10,12 +10,12 @@ use super::references::{Change, Target, change_references};
 use super::{Draft, LineField, SheetEditError, clean_name, missing, refuse_taken};
 use crate::sheet::check::is_result_kind;
 use crate::sheet::document::{
-    Around, CompareTest, LineKind, LookSummary, SheetChip, SheetLine, SheetLiteral, SheetTime, SheetValue, Slot,
-    SummaryKind,
+    Around, CardRuns, CompareTest, LineKind, LookSummary, SheetChip, SheetLine, SheetLiteral, SheetTime, SheetValue,
+    Slot, SummaryKind,
 };
 use crate::sheet::limits::MAX_LINES_PER_CARD;
 use crate::sheet::rates::{chance_from_rate, rate_from_chance, shortest_f32, tick_in, typed_number};
-use crate::sheet::sentence::{ANY_STATE_ID, ConditionItem, rate_unit_word, unit_suggestion};
+use crate::sheet::sentence::{ANY_STATE_ID, ConditionItem, RATE_IN_BUTTON_CARD, rate_unit_word, unit_suggestion};
 
 /// Returns the first unit of time that `text` names as "per second" to "per year", `None` when it names none.
 ///
@@ -471,6 +471,8 @@ impl Draft {
 
     /// Turns the chance of line `line_id` into a rate for `into` [`LineKind::Rate`], or its rate into a chance for
     /// `into` [`LineKind::Chance`], keeping its chance per tick.
+    ///
+    /// A chance on a card that runs once is refused in the words of [`RATE_IN_BUTTON_CARD`]. The card has no duration.
     pub(super) fn change_draw(&mut self, line_id: &str, into: LineKind) -> Result<(), SheetEditError> {
         let time = self
             .document
@@ -481,6 +483,7 @@ impl Draft {
         } else {
             LineKind::Rate
         };
+        let runs_once = self.document.cards[self.card_of_line(line_id)?].runs == CardRuns::Once;
         let line = self.line_mut(line_id)?;
         let holder = draw_phrase_mut(line, |kind| kind == from)
             .ok_or_else(|| SheetEditError::Invalid(format!("line '{line_id}' holds no {}", from.as_str())))?;
@@ -497,6 +500,9 @@ impl Draft {
                 return Err(SheetEditError::Invalid(format!(
                     "a chance of {typed} gives no rate, which needs a chance from 0 to below 1"
                 )));
+            }
+            if runs_once {
+                return Err(SheetEditError::Invalid(RATE_IN_BUTTON_CARD.to_owned()));
             }
             rate_from_chance(typed, time.tick_length)
         } else {

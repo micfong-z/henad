@@ -245,7 +245,8 @@ pub enum SheetEdit {
     /// Gives an item a new id and rewrites every reference to it.
     ///
     /// A card that holds a button's id and that the button runs takes the new id too, and so does the tick card of a
-    /// kind of agent.
+    /// kind of agent. An item the sheet does not hold under its kind is [`SheetEditError::Missing`], even when another
+    /// kind of item holds its id.
     ChangeId {
         /// The item.
         item: SheetItem,
@@ -438,7 +439,9 @@ pub enum SheetEdit {
     ///
     /// The line is a chance line or a change whose condition is a chance, and the chance is a typed number below 1.
     /// The rate takes the tick's unit, marked as taken from the tick, keeps the line's "for each" and its key, and is
-    /// written as the shortest number that reads back as the same `f32`. The sheet's tick needs a length.
+    /// written as the shortest number that reads back as the same `f32`. The sheet's tick needs a length. A card that
+    /// runs once takes no rate, and a chance there is refused in the words of
+    /// [`RATE_IN_BUTTON_CARD`](crate::sheet::sentence::RATE_IN_BUTTON_CARD).
     ChangeToRate {
         /// Id of the line.
         line: String,

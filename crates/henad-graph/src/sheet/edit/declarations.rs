@@ -461,6 +461,27 @@ impl Draft {
         Ok(())
     }
 
+    /// Returns an error unless the sheet holds `item` under its kind.
+    ///
+    /// Note that an id held by another kind of item counts as missing, as a property's id given as a parameter's.
+    fn require_item(&self, item: &SheetItem) -> Result<(), SheetEditError> {
+        let document = &self.document;
+        let (what, id, held) = match item {
+            SheetItem::Property(id) => ("property", id, self.property(id).is_some()),
+            SheetItem::State { property, state } => {
+                let holder = self.property(property).ok_or_else(|| missing("property", property))?;
+                ("state", state, holder.states.iter().any(|known| known.id == *state))
+            }
+            SheetItem::Parameter(id) => ("parameter", id, document.parameters.iter().any(|known| known.id == *id)),
+            SheetItem::Measure(id) => ("measure", id, document.measures.iter().any(|known| known.id == *id)),
+            SheetItem::Event(id) => ("event", id, document.events.iter().any(|known| known.id == *id)),
+            SheetItem::Button(id) => ("button", id, document.buttons.iter().any(|known| known.id == *id)),
+            SheetItem::Card(id) => ("card", id, document.cards.iter().any(|known| known.id == *id)),
+            SheetItem::AgentKind(id) => ("kind of agent", id, document.agents.iter().any(|known| known.id == *id)),
+        };
+        if held { Ok(()) } else { Err(missing(what, id)) }
+    }
+
     /// Gives `item` the id `id` and rewrites every reference to it.
     #[expect(clippy::too_many_lines, reason = "one arm per kind of item reads best as one table")]
     pub(super) fn change_id(&mut self, item: &SheetItem, id: &str) -> Result<(), SheetEditError> {
@@ -482,6 +503,7 @@ impl Draft {
         if space.is_reserved(id) {
             return Err(SheetEditError::Reserved(id.to_owned()));
         }
+        self.require_item(item)?;
         let taken = |held: bool| {
             if held {
                 Err(SheetEditError::Taken(format!("the id '{id}' is already held")))
@@ -494,11 +516,7 @@ impl Draft {
                 if old == id {
                     return Ok(());
                 }
-                let items = self.item_ids();
-                if !items.contains(old.as_str()) {
-                    return Err(missing("item", old));
-                }
-                taken(items.contains(id))?;
+                taken(self.item_ids().contains(id))?;
                 match item {
                     SheetItem::Property(_) => {
                         change_references(&mut self.document, &Target::Property(old.clone()), Change::Rename(id));
@@ -532,9 +550,6 @@ impl Draft {
                     return Ok(());
                 }
                 let holder = self.property(property).ok_or_else(|| missing("property", property))?;
-                if !holder.states.iter().any(|known| known.id == *state) {
-                    return Err(missing("state", state));
-                }
                 taken(holder.states.iter().any(|known| known.id == id))?;
                 change_references(
                     &mut self.document,
@@ -557,9 +572,6 @@ impl Draft {
                 if old == id {
                     return Ok(());
                 }
-                if !self.document.buttons.iter().any(|button| button.id == *old) {
-                    return Err(missing("button", old));
-                }
                 taken(self.document.buttons.iter().any(|button| button.id == id))?;
                 let card_follows = self.document.cards.iter().any(|card| card.id == *old)
                     && self.document.buttons.iter().any(|button| {
@@ -581,18 +593,12 @@ impl Draft {
                 if old == id {
                     return Ok(());
                 }
-                if !self.document.cards.iter().any(|card| card.id == *old) {
-                    return Err(missing("card", old));
-                }
                 taken(self.document.cards.iter().any(|card| card.id == id))?;
                 self.rename_card(old, id);
             }
             SheetItem::AgentKind(old) => {
                 if old == id {
                     return Ok(());
-                }
-                if !self.document.agents.iter().any(|kind| kind.id == *old) {
-                    return Err(missing("kind of agent", old));
                 }
                 taken(self.document.agents.iter().any(|kind| kind.id == id))?;
                 let old_tick = Self::tick_card_id(old);

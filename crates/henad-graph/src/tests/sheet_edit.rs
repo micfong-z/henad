@@ -2566,3 +2566,57 @@ fn a_choose_row_takes_its_condition_from_choose_when() {
         Err(SheetEditError::Missing(_))
     ));
 }
+
+#[test]
+fn a_new_id_for_an_item_the_sheet_does_not_hold_is_refused_and_changes_nothing() {
+    // Each id but the last two is held by an item of another kind: Carrying food is a measure and a state of Cargo,
+    // Delivery an event, Momentum a parameter, Ant tick a card, Reset colony a button and Cargo a property.
+    let state = |property: &str, state: &str| SheetItem::State {
+        property: property.to_owned(),
+        state: state.to_owned(),
+    };
+    let cases = [
+        (SheetItem::Property("delivery".to_owned()), "property 'delivery'"),
+        (state("cargo", "nest"), "state 'nest'"),
+        (state("heading", "searching"), "state 'searching'"),
+        (state("nothing", "searching"), "property 'nothing'"),
+        (
+            SheetItem::Parameter("carrying_food".to_owned()),
+            "parameter 'carrying_food'",
+        ),
+        (SheetItem::Measure("delivery".to_owned()), "measure 'delivery'"),
+        (SheetItem::Event("momentum".to_owned()), "event 'momentum'"),
+        (SheetItem::Button("ant_tick".to_owned()), "button 'ant_tick'"),
+        (SheetItem::Card("reset_colony".to_owned()), "card 'reset_colony'"),
+        (SheetItem::AgentKind("cargo".to_owned()), "kind of agent 'cargo'"),
+        (SheetItem::Parameter("nothing".to_owned()), "parameter 'nothing'"),
+        (SheetItem::Card("nothing".to_owned()), "card 'nothing'"),
+    ];
+    let old = sheet_text("ants.toml");
+    let mut builder = builder_of("ants.toml");
+    for (item, named) in cases {
+        let held = match &item {
+            SheetItem::State { state, .. } => state.clone(),
+            SheetItem::Property(id)
+            | SheetItem::Parameter(id)
+            | SheetItem::Measure(id)
+            | SheetItem::Event(id)
+            | SheetItem::Button(id)
+            | SheetItem::Card(id)
+            | SheetItem::AgentKind(id) => id.clone(),
+        };
+        // A new id, and the id the item would hold already: neither changes an item the sheet does not hold.
+        for id in ["fresh_id".to_owned(), held] {
+            let refused = builder.apply(SheetEdit::ChangeId {
+                item: item.clone(),
+                id: id.clone(),
+            });
+            assert_eq!(
+                refused,
+                Err(SheetEditError::Missing(format!("the sheet has no {named}"))),
+                "{item:?} to '{id}'"
+            );
+            assert_eq!(write(builder.document()), old, "{item:?} to '{id}'");
+        }
+    }
+}
