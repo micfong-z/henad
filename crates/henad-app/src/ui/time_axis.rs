@@ -6,7 +6,7 @@
 
 use henad_core::metadata::{TimeScale, TimeUnit};
 
-use crate::ui::sweep::draft::capitalize;
+use crate::ui::text::capitalize;
 
 /// Unit and tick length of one run of a model with a time scale.
 #[derive(Debug, Clone, Copy, PartialEq)]

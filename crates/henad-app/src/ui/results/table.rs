@@ -12,8 +12,9 @@ use crate::icons::material_design_icons::{
 };
 use crate::state::OpenAt;
 use crate::ui::results::ResultsRequest;
-use crate::ui::results::plot::{format_significant, labeled_combo, refresh_due, text_width};
+use crate::ui::results::plot::{cache_stale, format_significant, labeled_combo};
 use crate::ui::results::store::{ResultsStore, RunsColumn, RunsFilter, RunsSort};
+use crate::ui::text::text_width;
 
 /// Warning shown beside Open and on the opened run's line for a run of a model that does not replay exactly.
 pub const INEXACT_REPLAY: &str =
@@ -280,10 +281,12 @@ impl TableView {
             let settings_changed = order.filter != filter
                 || order.sort != sort
                 || (filter == RunsFilter::SelectedConfigs && order.selected_configs != *selected_configs);
-            if settings_changed || order.revision == store.revision() {
-                return settings_changed;
-            }
-            refresh_due(ctx, order.sorted_at)
+            cache_stale(
+                ctx,
+                settings_changed,
+                order.revision != store.revision(),
+                order.sorted_at,
+            )
         });
         if stale {
             self.cache = None;
@@ -392,7 +395,7 @@ const STAMP_COMMIT_HINT: &str = "Call henad_build::stamp_commit in the model cra
 /// compared after it. The list is empty when the model's declarations and every recorded build match the current
 /// ones.
 pub(crate) fn replay_warnings(store: &ResultsStore) -> Vec<(String, Option<&'static str>)> {
-    let noun = if store.is_search() { "search" } else { "sweep" };
+    let noun = store.mode().noun();
     let changed = if store.schema_matches {
         match store.changed_builds.as_slice() {
             [] => None,

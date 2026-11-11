@@ -7,7 +7,7 @@ area holding the form or the progress. The header and footer keep their ids and 
 state, and the last slot of the footer holds Start, then Pause or Resume, then Show results. A
 press or a link sends a `SweepRequest`, applied once every panel has drawn. `dock.rs` turns off
 `egui_dock`'s scroll bars for the tab and titles it with the session's state, as in "Sweep 42%".
-`draft.rs` is pure and unit-tested: a `SweepDraft` per model holds the builder's fields as typed,
+`draft/` is pure and unit-tested: a `SweepDraft` per model holds the builder's fields as typed,
 level text read by `LevelSpec::parse`, and converts to a `SweepSpec` (the Parameters panel values
 fill every parameter it does not vary) and back, TOML through
 `henad_explore::spec_file::SpecFile`. "One at a time" writes one factorial block per varied
@@ -16,6 +16,12 @@ factor, since a spec cannot fix a parameter that any block varies. `from_spec` r
 shape and refuses other multi-block specs. `SweepDraft::check` collects every issue its pre-pass
 finds before it plans, each a `DraftIssue` with the `DraftSite` of its row and an `IssueKind`:
 `Missing` for input not given yet, `Invalid` for input the plan refuses. Both block Start.
+`draft/mod.rs` holds the draft's types, `check.rs` the check and the placing of plan errors on
+rows, `spec.rs` the conversion to and from a spec, `levels.rs` the levels, previews and estimates,
+and `messages.rs` the wording of errors.
+`ExploreMode` (`draft/`) tells a sweep from a search for a draft, a session
+(`SweepSession::mode`) and a results store (`ResultsStore::mode`), and every text that names one
+takes its word from `ExploreMode::noun` ("sweep") or `ExploreMode::title` ("Sweep").
 `SweepPanel::cached_check` plans the draft only when it or the panel values change, and caps a
 sweep at `MAX_DRAFT_RUNS`. The panel learns each model's stat columns from one build at its
 default values (`ColumnsBuild` in `mod.rs`), on a thread named `henad-stat-columns` whose report
@@ -31,6 +37,8 @@ default kind is accepted for the sweep's own probe to check.
 `row_levels` caps at `MAX_DRAFT_LEVELS` only a range the draft lists, and a range with no step
 under a sampled design or a search can be any size. `SweepDraft::tick_source` (`TickSource`)
 gives an action's tick as fixed, varied or taken from the design table's `action.<name>` column.
+`SweepDraft::table_columns` lists the columns a design table sets, `None` for a draft that runs
+no table, and every site that tells a held parameter from a set one reads it.
 Save spec (`to_toml`) writes through `henad_explore::spec_file::LoadedSpec::to_toml`, with the
 draft's execution table. It also refuses what the loader would, a reversed window or a threshold
 that is not finite, and reads its own TOML back as a check. The draft keeps a loaded spec's `[execution]`
@@ -68,15 +76,20 @@ Edit sweep, Save results and Show results. Show results sets `focus_request` to 
 on a run sets it to Viewport. Show failed runs and Show in Results go through
 `ResultsPanel::show_failed_runs` and `ResultsPanel::select_candidate`. Events go to
 `ui/results/`, the Results tab, whose `ResultsPanel` also keeps the in-memory files of the last
-sweep for Save results. `store.rs` (`ResultsStore`) holds every run of the sweep, or of a folder
+sweep for Save results. `store/` (`ResultsStore`) holds every run of the sweep, or of a folder
 read through `henad_explore::result_set::ResultSet`, the configs with their axes (the value
-columns that take more than one value), and a `SeriesCache` of series within
-`DEFAULT_SERIES_BUDGET` bytes. It computes the Series view's replicate bands (`SeriesBand`), the
-Response view's points and the heatmap's cells, each pooling a config's runs that did not fail
-in order of run id, and the runs table's order. `summary.csv` pools in `runs.csv` order, which a
-resume can leave out of run-id order, and the last digits can then differ. The other views cache
-on `ResultsStore::revision`, and the Series view on the drawn configs' counts of runs and held
-series plus `ResultsStore::replaced_count`, the runs a resumed sweep's rerun replaced.
+columns that take more than one value, `axes.rs`), and a `SeriesCache` of series within
+`DEFAULT_SERIES_BUDGET` bytes (`series_cache.rs`). It computes the Series view's replicate bands
+(`SeriesBand`), the Response view's points and the heatmap's cells, each pooling a config's runs
+that did not fail in order of run id, and the runs table's order (`statistics.rs`). `mod.rs`
+keeps the struct, its constructors and accessors and the tests, `recorded.rs` the recorded model
+and its comparison with the entry, and `replay.rs` the replays and the command line.
+`summary.csv` pools in `runs.csv` order, which a resume can leave out of run-id order, and the
+last digits can then differ. The other views cache on `ResultsStore::revision`, and the Series
+view on the drawn configs' counts of runs and held series plus `ResultsStore::replaced_count`,
+the runs a resumed sweep's rerun replaced.
+`plot::cache_stale` paces all four: a change of settings computes at once, a change of the store
+at most once per `REFRESH_INTERVAL`.
 For a model with a time scale, `ResultsStore` keeps the entry's `TimeScale` (from the entry at
 construction and in `model_changed`, `None` for a folder whose model this device lacks), and
 `config_time` reads a config's tick length from its value column. `time_unit` and `config_time`
@@ -86,13 +99,15 @@ run line at `time_axis::plot_x` of the config's own tick length, labels the x ax
 `time_axis::axis_label`, and drops its cache when `time_unit` changes.
 `series.rs` draws a `FilledArea` band and a centre line per config, `response.rs` caches each
 line as a `PlottedLine` and draws its whiskers as one `Whiskers` item with the line's id, so the
-legend hides both, and `heatmap.rs` draws the grid. `plot.rs` holds the palette, `decimate` (the
-lowest and highest point of each bucket), the heatmap scale and `HeatmapTiles`, the plot item the
-Heatmap view and the PSE grid draw through. It borrows the values, and a cell without a value, or
-an empty PSE cell, draws as `NO_DATA_COLOR`. `table.rs` draws the runs with
-`egui_extras::TableBuilder`, and the detail strip whose Open and Open at end go through
-`AppState::open_run`. Open at end steps to the run's recorded ticks, which a stop condition can
-bring early. The store refuses to replay a run whose plan gives another run key than its row,
+legend hides both, and `heatmap.rs` draws the grid. `labels.rs` names output kinds, output
+columns and actions for both tabs, and `ui/text.rs` holds the text helpers the app shares
+(`describe_error`, `capitalize`, `format_duration`, `folder_name`, `text_width`). `plot.rs` holds
+the palette, `decimate` (the lowest and highest point of each bucket), the heatmap scale and
+`HeatmapTiles`, the plot item the Heatmap view and the PSE grid draw through. It borrows the
+values, and a cell without a value, or an empty PSE cell, draws as `NO_DATA_COLOR`. `table.rs`
+draws the runs with `egui_extras::TableBuilder`, and the detail strip whose Open and Open at end go
+through `AppState::open_run`. Open at end steps to the run's recorded ticks, which a stop condition
+can bring early. The store refuses to replay a run whose plan gives another run key than its row,
 while the model's schema matches the sweep's. A folder whose manifest records more than
 `MAX_PLANNED_CONFIGS` configs is never planned, lists its configs from `runs.csv` alone and
 refuses every replay, on native and in a browser. After a model change the replay opens under the
@@ -124,7 +139,7 @@ applied finds no entry under `sheet_game_of_life`, so its replay names the missi
 `ui/sweep/search.rs` draws the Search section of Search mode: the method, the objective or the
 PSE axes, the budget, and each method's other settings in a nested Method settings section. An
 output picked there that the runs do not record joins the Outputs section, and Use range from
-results reads `ResultsStore::output_range`. `SearchDraft` (`draft.rs`) keeps the settings of
+results reads `ResultsStore::output_range`. `SearchDraft` (`draft/`) keeps the settings of
 every method across a switch. `ui/results/search.rs` is the Search view: the best so
 far against evaluations for random search and hill climbing, the best, median and worst of each
 generation for the genetic algorithm, and the PSE grid, where a click selects the first run of a
@@ -137,3 +152,6 @@ axis, a text that is not a finite number to a numeric axis, or a candidate id at
 held. Runs that land before their candidate is told wait in `unassigned_runs`. A new level on a
 numeric axis moves every level above it, and an `f32` search costs time linear in its levels per
 frame.
+The tests of both tabs take SIR (`sir`), a run outcome to update (`finished_run`) and a folder
+removed when dropped (`ScratchFolder`) from `src/tests/support.rs`, and a model's default values
+from `state::default_values`.

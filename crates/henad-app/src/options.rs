@@ -13,7 +13,7 @@ use henad_core::explore::replay::Replay;
 use henad_core::provenance::BuildInfo;
 
 use crate::state::OpenAt;
-use crate::ui::sweep::draft::error_chain;
+use crate::ui::text::error_chain;
 
 /// Henad's icon, the default of [`AppOptions::icon_png`].
 const HENAD_ICON_PNG: &[u8] = include_bytes!("../assets/icon-256.png");

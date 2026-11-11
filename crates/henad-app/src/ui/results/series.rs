@@ -9,9 +9,9 @@ use henad_core::metadata::TimeUnit;
 use web_time::Instant;
 
 use crate::ui::results::ResultsRequest;
-use crate::ui::results::plot::{MAX_PLOT_POINTS, config_color, decimate, labeled_combo, refresh_due};
+use crate::ui::results::plot::{MAX_PLOT_POINTS, cache_stale, config_color, decimate, labeled_combo};
 use crate::ui::results::store::{BandKind, ResultsStore, SeriesBand};
-use crate::ui::sweep::draft::capitalize;
+use crate::ui::text::capitalize;
 use crate::ui::time_axis::{axis_label, plot_x};
 use crate::ui::{plural, show_plot};
 
@@ -311,10 +311,7 @@ impl SeriesView {
                 || cache.configs != configs
                 || cache.time_unit != time_unit;
             let runs_changed = cache.run_counts != run_counts || cache.replaced_runs != replaced_runs;
-            if settings_changed || !runs_changed {
-                return settings_changed;
-            }
-            refresh_due(ctx, cache.computed_at)
+            cache_stale(ctx, settings_changed, runs_changed, cache.computed_at)
         });
         if stale {
             self.cache = None;
@@ -454,15 +451,14 @@ mod tests {
     use std::sync::Arc;
 
     use henad_core::explore::measure::SeriesBuffer;
-    use henad_core::explore::outcome::{RunOutcome, RunStatus, StopReason};
+    use henad_core::explore::outcome::RunOutcome;
     use henad_core::explore::plan::Plan;
     use henad_core::explore::spec::SweepSpec;
     use henad_core::metadata::TimeUnit;
-    use henad_models::example_models;
 
     use super::{ConfigBand, SeriesPlot, SeriesView, center_line, draw_plot, thin_band};
     use crate::state::default_values;
-    use crate::tests::support::sir_rates;
+    use crate::tests::support::{finished_run, sir, sir_rates};
     use crate::ui::results::plot::{MAX_PLOT_POINTS, REFRESH_INTERVAL};
     use crate::ui::results::store::{BandKind, ResultsStore, SeriesBand};
     use crate::ui::sweep::draft::SweepDraft;
@@ -569,17 +565,11 @@ mod tests {
         series.push(0, &[0.0, infected, 0.0]);
         series.push(10, &[0.0, infected, 0.0]);
         RunOutcome {
-            run,
-            run_key: plan.run_key(&run),
-            status: RunStatus::Ok,
-            stop_reason: StopReason::Steps,
             ticks: 10,
             population: 256,
-            build_ms: 1.0,
             wall_ms: 2.0,
-            reducers: Vec::new(),
             series,
-            note: None,
+            ..finished_run(run, plan.run_key(&run))
         }
     }
 
@@ -648,7 +638,7 @@ mod tests {
         assert!(texts.iter().any(|text| text == "Day"), "{texts:?}");
         assert!(!texts.iter().any(|text| text == "Tick"), "{texts:?}");
 
-        let untimed = example_models().get("sir").cloned().expect("SIR is registered");
+        let untimed = sir();
         let untimed_plan = Arc::new(SweepSpec::new("sir").plan(&untimed.schema()).expect("a valid spec"));
         let store = ResultsStore::for_sweep(untimed_plan, &untimed, None, usize::MAX);
         assert_eq!((store.time_unit(), store.config_time(0)), (None, None));
@@ -656,7 +646,7 @@ mod tests {
 
     #[test]
     fn a_rerun_that_replaces_a_run_refreshes_its_band() {
-        let sir = example_models().get("sir").cloned().expect("SIR is registered");
+        let sir = sir();
         let mut spec = SweepSpec::new("sir");
         spec.run.steps = 10;
         spec.run.replicates = 2;

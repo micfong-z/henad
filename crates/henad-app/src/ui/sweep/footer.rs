@@ -9,7 +9,8 @@ use std::path::Path;
 
 use egui::containers::Sides;
 use egui::{
-    Button, Id, Key, KeyboardShortcut, Margin, Modal, Modifiers, Popup, PopupCloseBehavior, ProgressBar, RichText, vec2,
+    Button, Id, Key, KeyboardShortcut, Margin, Modal, Modifiers, Popup, PopupCloseBehavior, ProgressBar, RichText,
+    TextStyle, vec2,
 };
 use henad_explore::handle::SweepProgress;
 
@@ -17,16 +18,16 @@ use crate::icons::material_design_icons::{
     MDI_ALERT, MDI_CHART_BOX_OUTLINE, MDI_FOLDER_OUTLINE, MDI_MEMORY, MDI_PAUSE, MDI_PENCIL_OUTLINE, MDI_PLAY,
     MDI_STOP, MDI_TRAY_ARROW_DOWN,
 };
-use crate::ui::sweep::draft::{DraftMode, DraftSite, IssueKind, MAX_DRAFT_RUNS, MAX_MEMORY_SERIES_BYTES};
-use crate::ui::sweep::header::{edit_label, noun, separator_width};
+use crate::ui::sweep::draft::{DraftSite, ExploreMode, IssueKind, PlanCounts, near_run_limit, near_series_limit};
+use crate::ui::sweep::header::{edit_label, separator_width};
 use crate::ui::sweep::layout::{
     FOOTER_ICONS_ONLY_BELOW, IssueCount, Reveal, add_button, destructive_button, filled_button, issue_color,
-    issue_icon, text_width, truncated_label,
+    issue_icon, truncated_label,
 };
-use crate::ui::sweep::plan::folder_name;
-use crate::ui::sweep::progress::{SessionResult, abort_text, bar_text, finished_fraction, resume_text};
+use crate::ui::sweep::progress::{SessionResult, abort_resume_text, abort_text, bar_text, finished_fraction};
 use crate::ui::sweep::session::SessionState;
 use crate::ui::sweep::{CheckSummary, IssueLine, SweepRequest};
+use crate::ui::text::{folder_name, text_width};
 use crate::ui::{add_progress_bar, mcs, plural};
 
 /// Id of the footer panel.
@@ -71,7 +72,7 @@ pub struct StatusLine {
 
 /// Contents of the builder's footer.
 pub struct BuilderFooter<'a> {
-    pub mode: DraftMode,
+    pub mode: ExploreMode,
     pub summary: &'a CheckSummary,
     /// Reason the last press of Start failed.
     pub start_failure: Option<&'a str>,
@@ -90,7 +91,6 @@ pub struct BuilderFooter<'a> {
 impl BuilderFooter<'_> {
     /// Returns the first line of the footer.
     pub fn status_line(&self) -> StatusLine {
-        let noun = noun(self.mode);
         if let Some(failure) = self.start_failure {
             return StatusLine {
                 text: format!("{MDI_ALERT} {failure}"),
@@ -99,11 +99,7 @@ impl BuilderFooter<'_> {
             };
         }
         if let Some(first) = self.summary.lines.first() {
-            let lead = if noun == "search" {
-                "Search not ready."
-            } else {
-                "Sweep not ready."
-            };
+            let lead = format!("{} not ready.", self.mode.title());
             return match first.kind {
                 IssueKind::Invalid => StatusLine {
                     text: format!("{MDI_ALERT} {lead} {}", first.text),
@@ -124,22 +120,10 @@ impl BuilderFooter<'_> {
                 tooltip: None,
             };
         };
-        let near_runs = counts.2 >= MAX_DRAFT_RUNS / 2;
-        let near_memory = self.folder.is_none()
-            && self
-                .summary
-                .series_bytes
-                .is_some_and(|bytes| bytes >= MAX_MEMORY_SERIES_BYTES / 2);
-        let tooltip = if near_runs {
-            Some(format!("Near the app's limit of {MAX_DRAFT_RUNS} runs"))
-        } else if near_memory {
-            Some(format!(
-                "Series near the memory limit of {}",
-                henad_core::helpers::fmt_bytes(MAX_MEMORY_SERIES_BYTES)
-            ))
-        } else {
-            None
-        };
+        let tooltip = near_run_limit(counts.runs).or_else(|| {
+            let bytes = self.summary.series_bytes?;
+            near_series_limit(bytes, self.folder.is_none())
+        });
         StatusLine {
             text: ready_sentence(self.mode, counts, self.steps_per_run),
             tone: if tooltip.is_some() {
@@ -154,10 +138,15 @@ impl BuilderFooter<'_> {
 
 /// Returns the total of a plan in `mode` with `counts` of configurations or evaluations, replicates and runs, as in
 /// "45 runs: 15 configurations × 3 replicates, 1100 steps each".
-pub fn ready_sentence(mode: DraftMode, (configs, replicates, runs): (u64, u64, u64), steps_per_run: u64) -> String {
+pub fn ready_sentence(mode: ExploreMode, counts: PlanCounts, steps_per_run: u64) -> String {
+    let PlanCounts {
+        configs,
+        replicates,
+        runs,
+    } = counts;
     let configs_noun = match mode {
-        DraftMode::Sweep => "configuration",
-        DraftMode::Search => "evaluation",
+        ExploreMode::Sweep => "configuration",
+        ExploreMode::Search => "evaluation",
     };
     format!(
         "{runs} {}: {configs} {} × {replicates} {}, {steps_per_run} {} each",
@@ -195,7 +184,7 @@ pub fn start_refusal(lines: &[IssueLine]) -> String {
 /// Draws the footer of the builder.
 pub fn builder_footer(ui: &mut egui::Ui, footer: &BuilderFooter<'_>, request: &mut Option<SweepRequest>) {
     let compact = ui.available_width() < FOOTER_ICONS_ONLY_BELOW;
-    let noun = noun(footer.mode);
+    let noun = footer.mode.noun();
     let ready = footer.summary.counts.is_some() && footer.summary.lines.is_empty();
     let line = footer.status_line();
     ui.add_enabled_ui(!footer.modal_open, |ui| {
@@ -212,7 +201,7 @@ pub fn builder_footer(ui: &mut egui::Ui, footer: &BuilderFooter<'_>, request: &m
                     label.on_hover_text(tooltip);
                 }
             },
-            |ui| chips(ui, footer, noun),
+            |ui| chips(ui, footer),
         );
         if let Some(reveal) = reveal {
             *request = Some(SweepRequest::Reveal(reveal));
@@ -257,7 +246,7 @@ pub fn builder_footer(ui: &mut egui::Ui, footer: &BuilderFooter<'_>, request: &m
 /// Draws the chips that count the warnings and the problems, each opening a list of its entries, from right to left.
 ///
 /// Returns the reveal for the row of a problem picked from a list.
-fn chips(ui: &mut egui::Ui, footer: &BuilderFooter<'_>, noun: &str) -> Option<Reveal> {
+fn chips(ui: &mut egui::Ui, footer: &BuilderFooter<'_>) -> Option<Reveal> {
     let mut reveal = None;
     if let Some((kind, count)) = problems_chip(&footer.summary.lines) {
         let color = issue_color(ui, kind);
@@ -268,11 +257,7 @@ fn chips(ui: &mut egui::Ui, footer: &BuilderFooter<'_>, noun: &str) -> Option<Re
             &count,
         )
         .on_hover_text("Show problems");
-        let title = if noun == "search" {
-            "Search not ready"
-        } else {
-            "Sweep not ready"
-        };
+        let title = format!("{} not ready", footer.mode.title());
         Popup::from_toggle_button_response(&chip)
             .id(Id::new("henad_sweep_problems_popup"))
             .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
@@ -323,7 +308,7 @@ fn destination(ui: &mut egui::Ui, footer: &BuilderFooter<'_>) -> bool {
         return false;
     }
     // The text truncates to the space that the link leaves free.
-    let link_width = text_width(ui, "Change") + ui.spacing().item_spacing.x;
+    let link_width = text_width(ui, "Change", TextStyle::Body) + ui.spacing().item_spacing.x;
     let text_room = vec2(
         (ui.available_width() - link_width).max(0.0),
         ui.spacing().interact_size.y,
@@ -382,8 +367,7 @@ fn show_results_button(ui: &mut egui::Ui, compact: bool, ended: bool) -> egui::R
 
 /// Contents of a session's footer.
 pub struct SessionFooter<'a> {
-    /// "sweep" or "search".
-    pub noun: &'static str,
+    pub mode: ExploreMode,
     pub state: SessionState,
     pub progress: &'a SweepProgress,
     /// End of the session, `None` while it runs.
@@ -420,15 +404,15 @@ fn running_rows(ui: &mut egui::Ui, footer: &SessionFooter<'_>, compact: bool, re
     };
     add_progress_bar(ui, bar, fill);
 
-    let noun = footer.noun;
+    let noun = footer.mode.noun();
     let (show, pressed) = Sides::new().shrink_left().show(
         ui,
         |ui| show_results_button(ui, compact, false).clicked(),
         |ui| {
             let pause_text = format!("{MDI_PAUSE} Pause");
             let resume_text = format!("{MDI_PLAY} Resume");
-            let slot =
-                text_width(ui, &pause_text).max(text_width(ui, &resume_text)) + 2.0 * ui.spacing().button_padding.x;
+            let slot = text_width(ui, &pause_text, TextStyle::Body).max(text_width(ui, &resume_text, TextStyle::Body))
+                + 2.0 * ui.spacing().button_padding.x;
             let (text, name, tooltip, next) = if state.is_paused() {
                 (resume_text, "Resume", format!("Continue {noun}"), SweepRequest::Resume)
             } else {
@@ -472,7 +456,7 @@ fn ended_rows(
     let fill = if result.failed { mcs::RED_700 } else { mcs::BLUE_700 };
     add_progress_bar(ui, bar, fill).on_hover_text(result.text.as_str());
 
-    let label = edit_label(footer.noun, footer.resumed);
+    let label = edit_label(footer.mode, footer.resumed);
     let (edit, pressed) = Sides::new().shrink_left().show(
         ui,
         |ui| {
@@ -481,7 +465,7 @@ fn ended_rows(
             } else {
                 format!(
                     "Return to this {}'s settings. Results will be kept in the Results tab.",
-                    footer.noun
+                    footer.mode.noun()
                 )
             };
             add_button(ui, true, Button::new(format!("{MDI_PENCIL_OUTLINE} {label}")), &label)
@@ -506,15 +490,18 @@ fn ended_rows(
     }
 }
 
-/// Asks before starting a new `noun`. Starting drops the unsaved results held in memory.
+/// Asks before starting a new sweep or search in `mode`. Starting drops the unsaved results held in memory.
 ///
 /// Cancel, Escape and a click beside the modal close it and start nothing.
-pub fn replace_modal(ctx: &egui::Context, noun: &str, open: &mut bool, request: &mut Option<SweepRequest>) {
+pub fn replace_modal(ctx: &egui::Context, mode: ExploreMode, open: &mut bool, request: &mut Option<SweepRequest>) {
     let mut closed = false;
     let response = Modal::new(Id::new("henad_replace_results_modal")).show(ctx, |ui| {
         ui.set_max_width(420.0);
         ui.heading("Replace results?");
-        ui.label(format!("Starting a {noun} will clear the unsaved results in memory."));
+        ui.label(format!(
+            "Starting a {} will clear the unsaved results in memory.",
+            mode.noun()
+        ));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if ui.button("Cancel").clicked() {
@@ -541,8 +528,7 @@ pub fn replace_modal(ctx: &egui::Context, noun: &str, open: &mut bool, request: 
 
 /// Inputs of the Abort modal.
 pub struct AbortModal<'a> {
-    /// "sweep" or "search".
-    pub noun: &'static str,
+    pub mode: ExploreMode,
     pub progress: &'a SweepProgress,
     pub paused: bool,
     /// Whether the results go to a folder. An aborted sweep can resume from a folder.
@@ -555,12 +541,12 @@ pub struct AbortModal<'a> {
 /// modal close it and leave the sweep as it is.
 pub fn abort_modal(ctx: &egui::Context, modal: &AbortModal<'_>, open: &mut bool, request: &mut Option<SweepRequest>) {
     let mut closed = false;
-    let noun = modal.noun;
+    let noun = modal.mode.noun();
     let response = Modal::new(Id::new("henad_abort_sweep_modal")).show(ctx, |ui| {
         ui.set_max_width(420.0);
         ui.heading(format!("Abort {noun}?"));
         ui.label(abort_text(modal.progress));
-        ui.label(resume_text(noun, modal.in_folder));
+        ui.label(abort_resume_text(modal.mode, modal.in_folder));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             let keep = if modal.paused { "Keep paused" } else { "Keep running" };
@@ -582,7 +568,7 @@ pub fn abort_modal(ctx: &egui::Context, modal: &AbortModal<'_>, open: &mut bool,
 mod tests {
     use super::{BuilderFooter, LineTone, footer_height, problems_chip, ready_sentence, start_refusal};
     use crate::icons::material_design_icons::MDI_ALERT;
-    use crate::ui::sweep::draft::{DraftMode, DraftSite, IssueKind, MAX_DRAFT_RUNS};
+    use crate::ui::sweep::draft::{DraftSite, ExploreMode, IssueKind, MAX_DRAFT_RUNS, PlanCounts};
     use crate::ui::sweep::layout::SweepSection;
     use crate::ui::sweep::{CheckSummary, IssueLine};
 
@@ -595,9 +581,17 @@ mod tests {
         }
     }
 
+    fn counts(configs: u64, replicates: u64, runs: u64) -> PlanCounts {
+        PlanCounts {
+            configs,
+            replicates,
+            runs,
+        }
+    }
+
     fn footer(summary: &CheckSummary) -> BuilderFooter<'_> {
         BuilderFooter {
-            mode: DraftMode::Sweep,
+            mode: ExploreMode::Sweep,
             summary,
             start_failure: None,
             steps_per_run: 1100,
@@ -611,15 +605,15 @@ mod tests {
     #[test]
     fn a_ready_footer_totals_the_runs() {
         assert_eq!(
-            ready_sentence(DraftMode::Sweep, (15, 3, 45), 1100),
+            ready_sentence(ExploreMode::Sweep, counts(15, 3, 45), 1100),
             "45 runs: 15 configurations × 3 replicates, 1100 steps each"
         );
         assert_eq!(
-            ready_sentence(DraftMode::Search, (200, 3, 600), 1000),
+            ready_sentence(ExploreMode::Search, counts(200, 3, 600), 1000),
             "600 runs: 200 evaluations × 3 replicates, 1000 steps each"
         );
         assert_eq!(
-            ready_sentence(DraftMode::Sweep, (1, 1, 1), 1),
+            ready_sentence(ExploreMode::Sweep, counts(1, 1, 1), 1),
             "1 run: 1 configuration × 1 replicate, 1 step each"
         );
     }
@@ -627,14 +621,14 @@ mod tests {
     #[test]
     fn a_footer_leads_with_a_start_failure_then_the_first_problem() {
         let mut summary = CheckSummary {
-            counts: Some((15, 3, 45)),
+            counts: Some(counts(15, 3, 45)),
             ..CheckSummary::default()
         };
         let ready = footer(&summary).status_line();
         assert_eq!(ready.text, "45 runs: 15 configurations × 3 replicates, 1100 steps each");
         assert_eq!(ready.tone, LineTone::Normal);
 
-        summary.counts = Some((MAX_DRAFT_RUNS / 2, 1, MAX_DRAFT_RUNS / 2));
+        summary.counts = Some(counts(MAX_DRAFT_RUNS / 2, 1, MAX_DRAFT_RUNS / 2));
         let near = footer(&summary).status_line();
         assert_eq!(near.tone, LineTone::Warn, "half the run limit warns");
         assert_eq!(near.tooltip.as_deref(), Some("Near the app's limit of 1048576 runs"));

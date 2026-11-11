@@ -2,6 +2,7 @@
 //! views that plot them.
 
 pub mod heatmap;
+pub mod labels;
 pub mod plot;
 pub mod response;
 pub mod search;
@@ -14,6 +15,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Id, Modal};
+#[cfg(not(target_arch = "wasm32"))]
+use henad_compute::cpu::sim_thread::WakeFn;
 use henad_compute::entry::{ModelEntry, ModelLookupError};
 use henad_core::explore::plan::Plan;
 use henad_explore::handle::{DEFAULT_SERIES_BUDGET, SweepEvent};
@@ -34,8 +37,9 @@ use crate::ui::results::search::SearchView;
 use crate::ui::results::series::SeriesView;
 use crate::ui::results::store::{ResultsSource, ResultsStore, RunsFilter};
 use crate::ui::results::table::TableView;
-use crate::ui::sweep::draft::describe_error;
+use crate::ui::sweep::draft::ExploreMode;
 use crate::ui::sweep::session::SweepSession;
+use crate::ui::text::{describe_error, folder_name};
 
 /// Number of configs that a new store selects for the Series view.
 const DEFAULT_SELECTED_CONFIGS: usize = 5;
@@ -274,11 +278,7 @@ impl ResultsPanel {
     /// Selects the first run of search candidate `candidate_id`, which opens the run strip. A candidate with no
     /// run in the panel changes nothing.
     pub fn select_candidate(&mut self, candidate_id: u64) {
-        let first_run = self
-            .store
-            .as_ref()
-            .and_then(|store| store.config_runs(candidate_id).next())
-            .map(|outcome| outcome.run.run_id);
+        let first_run = self.store.as_ref().and_then(|store| store.first_run_id(candidate_id));
         if first_run.is_some() {
             self.selected_run = first_run;
         }
@@ -373,29 +373,45 @@ impl ReadResults {
     }
 }
 
+/// Runs `work` on a new thread named `name`, and returns the receiver its result arrives on.
+///
+/// `wake` runs once the result is sent. A result sent after the receiver is gone, as when the app is closing, is
+/// dropped.
+///
+/// # Errors
+///
+/// Returns the error of a thread that cannot start.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn spawn_reporting<T: Send + 'static>(
+    name: &str,
+    wake: WakeFn,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> std::io::Result<flume::Receiver<T>> {
+    let (sender, receiver) = flume::bounded(1);
+    std::thread::Builder::new().name(name.to_owned()).spawn(move || {
+        // The receiver is gone once the app is closing, and nothing is left to report to.
+        drop(sender.send(work()));
+        wake();
+    })?;
+    Ok(receiver)
+}
+
 /// Reads the results in `folder` and builds their store on a separate thread, and shows them once built.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_folder(app: &mut AppState, folder: PathBuf) {
-    let (sender, receiver) = flume::bounded(1);
-    let wake = app.repaint_waker();
     let path = folder.clone();
     let models = app.models.clone();
     let gpu_ctx = app.gpu_ctx.clone();
-    let spawned = std::thread::Builder::new()
-        .name("henad-results".to_owned())
-        .spawn(move || {
-            let read = ResultSet::open_dir(&path, DEFAULT_SERIES_BUDGET)
-                .map_err(|error| describe_error(&error))
-                .map(|set| {
-                    let model = models.lookup(&set.manifest().model.id, gpu_ctx.as_ref());
-                    ReadResults::new(set, ResultsSource::Folder(path), model)
-                });
-            // The receiver is gone once the app is closing, and nothing is left to report to.
-            drop(sender.send(read));
-            wake();
-        });
+    let spawned = spawn_reporting("henad-results", app.repaint_waker(), move || {
+        ResultSet::open_dir(&path, DEFAULT_SERIES_BUDGET)
+            .map_err(|error| describe_error(&error))
+            .map(|set| {
+                let model = models.lookup(&set.manifest().model.id, gpu_ctx.as_ref());
+                ReadResults::new(set, ResultsSource::Folder(path), model)
+            })
+    });
     match spawned {
-        Ok(_) => {
+        Ok(receiver) => {
             app.results.status = Some(format!("Opening {}", folder.display()));
             app.results.folder_load = Some((folder, receiver));
         }
@@ -598,12 +614,16 @@ pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
 /// Draws the source of the results, Open results, Resume sweep and Open in Editor, and the status line.
 fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRequest>) {
     let sweep_running = app.sweep.is_running();
-    let running_noun = app.sweep.session.as_ref().map_or("sweep", SweepSession::noun);
-    let running_hover = format!("A {running_noun} is running");
+    let running_mode = app
+        .sweep
+        .session
+        .as_ref()
+        .map_or(ExploreMode::Sweep, SweepSession::mode);
+    let running_hover = format!("A {} is running", running_mode.noun());
     let panel = &app.results;
     ui.horizontal_wrapped(|ui| {
         if let Some(store) = &panel.store {
-            source_label(ui, &store.source, store.is_search());
+            source_label(ui, &store.source, store.mode());
         }
         let open_tooltip = if cfg!(target_arch = "wasm32") {
             "Select manifest.json and CSV files from a results folder"
@@ -621,20 +641,16 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
             *request = Some(ResultsRequest::OpenResults);
         }
         if resumable(app) {
-            let noun = if panel.store.as_ref().is_some_and(ResultsStore::is_search) {
-                "search"
-            } else {
-                "sweep"
-            };
+            let mode = panel.store.as_ref().map_or(ExploreMode::Sweep, ResultsStore::mode);
             let refusal = if sweep_running {
                 Some(running_hover.clone())
             } else {
-                code_refusal(panel.store.as_ref(), noun)
+                code_refusal(panel.store.as_ref(), mode)
             };
             let resume = ui
                 .add_enabled(
                     refusal.is_none(),
-                    egui::Button::new(format!("{MDI_PLAY} Resume {noun}")),
+                    egui::Button::new(format!("{MDI_PLAY} Resume {}", mode.noun())),
                 )
                 .on_hover_text("Run missing runs")
                 .on_disabled_hover_text(refusal.unwrap_or_default());
@@ -643,10 +659,9 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
             }
         }
         if let Some(store) = panel.store.as_ref().filter(|store| store.records_editable_code()) {
-            let noun = if store.is_search() { "search" } else { "sweep" };
             let open = ui
                 .button(format!("{MDI_PENCIL_OUTLINE} {OPEN_IN_EDITOR}"))
-                .on_hover_text(format!("Open model this {noun} ran in Editor"));
+                .on_hover_text(format!("Open model this {} ran in Editor", store.mode().noun()));
             if open.clicked() {
                 *request = Some(ResultsRequest::OpenInEditor);
             }
@@ -656,10 +671,7 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
         .store
         .as_ref()
         .filter(|store| !sweep_running && resumable(app) && store.code_matches)
-        .and_then(|store| {
-            let noun = if store.is_search() { "search" } else { "sweep" };
-            store.recorded_execution?.resume_text(noun)
-        });
+        .and_then(|store| store.recorded_execution?.resume_text(store.mode()));
     if let Some(text) = resume_text {
         ui.weak(text);
     }
@@ -674,11 +686,11 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
 /// Returns the reason Resume cannot resume the folder of `store`, a folder of runtime code that differs from the app's
 /// entry, or `None` when the code matches.
 ///
-/// `noun` names the results, "sweep" or "search".
-fn code_refusal(store: Option<&ResultsStore>, noun: &str) -> Option<String> {
+/// `mode` names the results, a sweep or a search.
+fn code_refusal(store: Option<&ResultsStore>, mode: ExploreMode) -> Option<String> {
     store
         .filter(|store| !store.code_matches)
-        .map(|_| format!("Model code changed since this {noun} ran"))
+        .map(|_| format!("Model code changed since this {} ran", mode.noun()))
 }
 
 /// Returns whether the results come from an incomplete folder whose sweep this app can resume.
@@ -694,20 +706,14 @@ fn resumable(app: &AppState) -> bool {
 }
 
 /// Draws the source of the results, the search or sweep in memory or the files read.
-fn source_label(ui: &mut egui::Ui, source: &ResultsSource, is_search: bool) {
+fn source_label(ui: &mut egui::Ui, source: &ResultsSource, mode: ExploreMode) {
     match source {
-        ResultsSource::Sweep if is_search => {
-            ui.strong("Current search");
-        }
         ResultsSource::Sweep => {
-            ui.strong("Current sweep");
+            ui.strong(format!("Current {}", mode.noun()));
         }
         ResultsSource::Folder(folder) => {
-            let name = folder.file_name().map_or_else(
-                || folder.display().to_string(),
-                |name| name.to_string_lossy().into_owned(),
-            );
-            ui.strong(name).on_hover_text(folder.display().to_string());
+            ui.strong(folder_name(folder))
+                .on_hover_text(folder.display().to_string());
         }
         ResultsSource::Files(names) => {
             ui.strong(names.join(", "));
@@ -840,12 +846,12 @@ fn resume_sweep(app: &mut AppState) {
 
 #[cfg(target_arch = "wasm32")]
 fn resume_sweep(app: &mut AppState) {
-    let noun = if app.results.store.as_ref().is_some_and(ResultsStore::is_search) {
-        "search"
-    } else {
-        "sweep"
-    };
-    app.results.status = Some(format!("Use the desktop app to resume a {noun}"));
+    let mode = app
+        .results
+        .store
+        .as_ref()
+        .map_or(ExploreMode::Sweep, ResultsStore::mode);
+    app.results.status = Some(format!("Use the desktop app to resume a {}", mode.noun()));
 }
 
 /// Reads the missing series of the drawn configs' runs from the folder, on a separate thread.
@@ -874,18 +880,12 @@ fn load_series(app: &mut AppState) {
     let stat_columns = store.stat_columns().to_vec();
     let series_budget = store.series_room(&kept_runs);
     let requested_runs = missing.clone();
-    let (sender, receiver) = flume::bounded(1);
-    let spawned = std::thread::Builder::new()
-        .name("henad-series".to_owned())
-        .spawn(move || {
-            let read =
-                henad_explore::result_set::read_directory_series(&folder, &stat_columns, &missing, series_budget)
-                    .map_err(|error| describe_error(&error));
-            drop(sender.send(read));
-            wake();
-        });
+    let spawned = spawn_reporting("henad-series", wake, move || {
+        henad_explore::result_set::read_directory_series(&folder, &stat_columns, &missing, series_budget)
+            .map_err(|error| describe_error(&error))
+    });
     match spawned {
-        Ok(_) => {
+        Ok(receiver) => {
             panel.status = Some("Loading series".to_owned());
             panel.series_load = Some(SeriesLoad {
                 kept_runs,
@@ -911,7 +911,7 @@ mod tests {
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::measure::SeriesBuffer;
-    use henad_core::explore::outcome::{RunOutcome, RunStatus, StopReason};
+    use henad_core::explore::outcome::RunOutcome;
     use henad_core::explore::plan::Plan;
     use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
     use henad_core::explore::search::genetic::GeneticSettings;
@@ -925,6 +925,7 @@ mod tests {
     use henad_models::example_models;
 
     use super::{READING_RESULTS, ReadResults, ResultsPanel, ResultsView, SeriesLoad, poll_series_load};
+    use crate::tests::support::{ScratchFolder, finished_run, sir};
     use crate::ui::files::DialogFile;
     use crate::ui::results::store::{ResultsSource, ResultsStore};
 
@@ -933,10 +934,6 @@ mod tests {
         let mut series = SeriesBuffer::new(3);
         series.push(0, &[value; 3]);
         series
-    }
-
-    fn sir() -> ModelEntry {
-        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     /// Returns the plan of SIR over two infection rates with `replicates` runs each.
@@ -959,17 +956,8 @@ mod tests {
     fn outcome(plan: &Plan, run_id: u64, series: SeriesBuffer) -> RunOutcome {
         let run = plan.run(run_id).expect("a planned run");
         RunOutcome {
-            run,
-            run_key: plan.run_key(&run),
-            status: RunStatus::Ok,
-            stop_reason: StopReason::Steps,
-            ticks: 0,
-            population: 1,
-            build_ms: 1.0,
-            wall_ms: 1.0,
-            reducers: Vec::new(),
             series,
-            note: None,
+            ..finished_run(run, plan.run_key(&run))
         }
     }
 
@@ -1000,15 +988,6 @@ mod tests {
         let store = panel.store.as_ref().expect("the sweep's store");
         assert_eq!(store.series(0), Some(&series(1.0)), "run 0 keeps the sweep's series");
         assert_eq!(panel.status, None);
-    }
-
-    /// Removes the folder it holds once dropped, so a failed test leaves nothing behind.
-    struct ScratchFolder(std::path::PathBuf);
-
-    impl Drop for ScratchFolder {
-        fn drop(&mut self) {
-            drop(std::fs::remove_dir_all(&self.0));
-        }
     }
 
     /// Returns a search of SIR by `algorithm` over the infection rate, 6 evaluations of 2 replicates.
@@ -1073,9 +1052,7 @@ mod tests {
     fn a_search_held_live_matches_its_folder_and_replays_from_either() {
         let models = example_models();
         for (name, algorithm) in compared_searches() {
-            let folder =
-                ScratchFolder(std::env::temp_dir().join(format!("henad-app-search-{name}-{}", std::process::id())));
-            drop(std::fs::remove_dir_all(&folder.0));
+            let folder = ScratchFolder::new(&format!("search-{name}"));
             let output = SweepOutput::Directory(folder.0.clone());
             let options = SweepRunOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
             let mut run =

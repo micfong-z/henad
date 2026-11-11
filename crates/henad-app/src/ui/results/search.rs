@@ -6,17 +6,18 @@ use std::collections::BTreeMap;
 use egui::Color32;
 use egui_plot::{Legend, Line, Plot, PlotPoint};
 use henad_core::explore::search::pse::{ArchiveEntry, PatternAxis, PatternCell, PatternSpaceSettings};
-use henad_core::explore::search::{Aggregate, GenerationSummary, Goal, SearchAlgorithm};
+use henad_core::explore::search::{GenerationSummary, SearchAlgorithm};
 use henad_explore::output::GENERATIONS_FILE;
 use henad_explore::output::search_tables::SearchHistory;
 use henad_explore::result_set::ResultSet;
 
 use crate::icons::material_design_icons::MDI_ALERT;
 use crate::ui::results::ResultsRequest;
+use crate::ui::results::labels::output_label;
 use crate::ui::results::plot::{
     CONFIG_COLORS, HeatmapTiles, NO_DATA_COLOR, color_bar, format_precise, format_significant, heat_color,
 };
-use crate::ui::results::store::{ResultsStore, SearchLog, output_label};
+use crate::ui::results::store::{ResultsStore, SearchLog};
 use crate::ui::sweep::draft::DraftAlgorithm;
 use crate::ui::sweep::search::algorithm_label;
 use crate::ui::{plural, show_plot};
@@ -133,11 +134,6 @@ pub fn generation_lines(generations: &[GenerationSummary]) -> [Vec<[f64; 2]>; 3]
     ]
 }
 
-/// Returns the id of the first run of candidate `candidate_id` that the store holds.
-fn first_run(store: &ResultsStore, candidate_id: u64) -> Option<u64> {
-    store.config_runs(candidate_id).next().map(|outcome| outcome.run.run_id)
-}
-
 /// Draws the Search view of `store`, whose search is still `running` or has ended.
 pub fn search_ui(
     ui: &mut egui::Ui,
@@ -176,31 +172,22 @@ pub fn search_ui(
 
 /// Returns the line naming the method and its objective or its two axes.
 fn heading_text(search: &SearchLog) -> String {
-    let aggregate = |aggregate: Aggregate| match aggregate {
-        Aggregate::Median => "median",
-        Aggregate::Mean => "mean",
-    };
     let method = algorithm_label(DraftAlgorithm::from(&search.spec.algorithm));
     if let SearchAlgorithm::PatternSpaceExploration(settings) = &search.spec.algorithm {
         return format!(
             "{method} · {} against {} · {} of replicates",
             output_label(&settings.y_axis.column),
             output_label(&settings.x_axis.column),
-            aggregate(settings.aggregate)
+            settings.aggregate.as_str()
         );
     }
     match &search.spec.objective {
-        Some(objective) => {
-            let goal = match objective.goal {
-                Goal::Maximize => "maximize",
-                Goal::Minimize => "minimize",
-            };
-            format!(
-                "{method} · {goal} {} · {} of replicates",
-                output_label(&objective.column),
-                aggregate(objective.aggregate)
-            )
-        }
+        Some(objective) => format!(
+            "{method} · {} {} · {} of replicates",
+            objective.goal.as_str(),
+            output_label(&objective.column),
+            objective.aggregate.as_str()
+        ),
         None => method.to_owned(),
     }
 }
@@ -222,7 +209,7 @@ fn best_line(ui: &mut egui::Ui, store: &ResultsStore, search: &SearchLog, reques
             "· best {}, candidate {candidate_id}",
             format_precise(objective)
         ));
-        if let Some(run_id) = first_run(store, candidate_id)
+        if let Some(run_id) = store.first_run_id(candidate_id)
             && ui
                 .button("Select run")
                 .on_hover_text("Select first run of best candidate. Its details will appear below.")
@@ -375,7 +362,7 @@ fn grid_ui(
             let noun = if hits == 1 { "hit" } else { "hits" };
             hover.push_str(&format!("\n{hits} {noun}, first candidate {candidate_id}"));
             if response.response.clicked()
-                && let Some(run_id) = first_run(store, candidate_id)
+                && let Some(run_id) = store.first_run_id(candidate_id)
             {
                 *request = Some(ResultsRequest::SelectRun(run_id));
             }

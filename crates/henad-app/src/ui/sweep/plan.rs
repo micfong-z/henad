@@ -8,7 +8,7 @@ use std::path::Path;
 use egui::{Label, RichText, Sense};
 use henad_core::explore::factor::LevelSpec;
 use henad_core::explore::plan::{ModelSchema, Plan};
-use henad_core::explore::search::{Aggregate, Goal};
+use henad_core::explore::search::Goal;
 use henad_core::helpers::fmt_bytes;
 use henad_core::params::ParamValue;
 use henad_explore::exec::Concurrency;
@@ -17,17 +17,18 @@ use crate::icons::material_design_icons::MDI_ALERT;
 use crate::ui::kv_grid;
 use crate::ui::params::display_value;
 use crate::ui::plural;
+use crate::ui::results::labels::output_label;
 use crate::ui::results::plot::format_significant;
-use crate::ui::results::store::output_label;
 use crate::ui::sweep::builder::design_label;
 use crate::ui::sweep::draft::{
-    DraftAlgorithm, DraftDesign, DraftMode, LevelCount, LevelPreview, LevelPreviews, MAX_DRAFT_RUNS,
-    MAX_MEMORY_SERIES_BYTES, StopDraft, SweepDraft, TickSource, comparator_words, parse_levels,
+    DraftAlgorithm, DraftDesign, ExploreMode, LevelCount, LevelPreview, LevelPreviews, StopDraft, SweepDraft,
+    TickSource, comparator_words, near_run_limit, near_series_limit, parse_levels,
 };
 use crate::ui::sweep::layout::{Reveal, SweepSection, issue_color, issue_icon};
 use crate::ui::sweep::search::algorithm_label;
 use crate::ui::sweep::session::SweepSession;
 use crate::ui::sweep::{CheckSummary, DraftCheck, IssueLine, SweepRequest};
+use crate::ui::text::folder_name;
 
 /// Value of a row that needs a plan, while the draft has no plan.
 pub const NOT_COUNTED: &str = "Unknown";
@@ -101,7 +102,7 @@ impl PlanSummary {
             ),
             Some(SweepSection::Seeds),
         ));
-        let runs = planned.map(|planned| planned.counts().2);
+        let runs = planned.map(|planned| planned.counts().runs);
         rows.push(runs_row(runs));
         rows.extend(run_rows(draft, schema, &check.level_previews.1));
         let in_memory = draft.holds_results_in_memory();
@@ -173,7 +174,7 @@ impl PlanSummary {
         ];
         rows.extend(budgets.into_iter().filter_map(|(label, bytes)| {
             let mut row = PlanRow::new(label, fmt_bytes(bytes?), None);
-            row.tooltip = Some(format!("Recorded by the {}", session.noun()));
+            row.tooltip = Some(format!("Recorded by the {}", session.mode().noun()));
             Some(row)
         }));
         Self {
@@ -195,7 +196,7 @@ impl PlanSummary {
 /// Returns the rows of a search's method, budget and objective, or of a sweep's design and configurations.
 fn design_rows(check: &DraftCheck) -> Vec<PlanRow> {
     let draft = &check.draft;
-    if draft.mode == DraftMode::Search {
+    if draft.mode == ExploreMode::Search {
         return vec![
             PlanRow::new(
                 "Method",
@@ -297,11 +298,11 @@ fn objective_row(draft: &SweepDraft) -> PlanRow {
             Goal::Maximize => "maximized",
             Goal::Minimize => "minimized",
         };
-        let aggregate = match search.aggregate {
-            Aggregate::Median => "median",
-            Aggregate::Mean => "mean",
-        };
-        format!("{}, {goal}, {aggregate}", output_label(&search.objective_column))
+        format!(
+            "{}, {goal}, {}",
+            output_label(&search.objective_column),
+            search.aggregate.as_str()
+        )
     };
     PlanRow::new("Objective", objective, Some(SweepSection::Search))
 }
@@ -313,9 +314,9 @@ fn runs_row(runs: Option<u64>) -> PlanRow {
         runs.map_or_else(|| NOT_COUNTED.to_owned(), |runs| runs.to_string()),
         Some(SweepSection::Seeds),
     );
-    if runs.is_some_and(|runs| runs >= MAX_DRAFT_RUNS / 2) {
+    if let Some(tooltip) = runs.and_then(near_run_limit) {
         row.warn = true;
-        row.tooltip = Some(format!("Near the app's limit of {MAX_DRAFT_RUNS} runs"));
+        row.tooltip = Some(tooltip);
     }
     row
 }
@@ -330,12 +331,9 @@ fn series_row(series_every: u64, bytes: Option<u64>, in_memory: bool) -> PlanRow
     }
     if let Some(bytes) = bytes {
         row.value = format!("About {}", fmt_bytes(bytes));
-        if in_memory && bytes >= MAX_MEMORY_SERIES_BYTES / 2 {
+        if let Some(tooltip) = near_series_limit(bytes, in_memory) {
             row.warn = true;
-            row.tooltip = Some(format!(
-                "Series near the memory limit of {}",
-                fmt_bytes(MAX_MEMORY_SERIES_BYTES)
-            ));
+            row.tooltip = Some(tooltip);
         }
     }
     row
@@ -365,14 +363,6 @@ fn results_row(folder: Option<&Path>) -> PlanRow {
         row.tooltip = Some(folder.display().to_string());
     }
     row
-}
-
-/// Returns the last part of `folder`'s path, or the whole path when it has no file name.
-pub fn folder_name(folder: &Path) -> String {
-    folder.file_name().map_or_else(
-        || folder.display().to_string(),
-        |name| name.to_string_lossy().into_owned(),
-    )
 }
 
 /// Returns the text of a run of `steps` measured ticks after `warmup` ticks of warm-up.
@@ -448,7 +438,7 @@ fn actions_text(draft: &SweepDraft, schema: &ModelSchema<'_>, tick_previews: &[O
                 TickSource::Fixed => format!("{label} at {}", action.tick),
                 TickSource::Table => format!("{label}, tick from design table"),
                 TickSource::Varied => match tick_previews.get(position).and_then(Option::as_ref) {
-                    Some(preview) => format!("{label} at {}", ticks_text(preview)),
+                    Some(preview) => format!("{label} at {}", preview_ticks_text(preview)),
                     None => format!("{label} at {}", action.ticks_text.trim()),
                 },
             }
@@ -459,7 +449,7 @@ fn actions_text(draft: &SweepDraft, schema: &ModelSchema<'_>, tick_previews: &[O
 
 /// Returns the ticks of `preview` as the Actions row shows them: "0, 100 or 200", "one of 11 ticks from 0 to 100", or
 /// "any tick from 0 to 400" for ticks drawn from a range.
-fn ticks_text(preview: &LevelPreview) -> String {
+fn preview_ticks_text(preview: &LevelPreview) -> String {
     match preview {
         LevelPreview::Listed { count, values, .. } if *count <= MAX_LISTED_TICKS => either_text(values),
         LevelPreview::Listed { count, values, last } => format!(
@@ -515,9 +505,8 @@ fn varied_lines(
     param_counts: &[Option<LevelCount>],
     tick_counts: &[Option<LevelCount>],
 ) -> Vec<(String, String)> {
-    let search = draft.mode == DraftMode::Search;
-    if !search && draft.design == DraftDesign::Table {
-        let columns = draft.table.as_ref().map(|table| table.columns()).unwrap_or_default();
+    let search = draft.mode == ExploreMode::Search;
+    if let Some(columns) = draft.table_columns() {
         return schema
             .params
             .iter()
@@ -583,11 +572,7 @@ fn levels_summary(text: &str, count: Option<LevelCount>, search: bool) -> String
 
 /// Returns each parameter the draft holds at its Parameters tab value in `panel_values`, as in "Grid Width 1024".
 fn held_values(draft: &SweepDraft, schema: &ModelSchema<'_>, panel_values: &[ParamValue]) -> Vec<String> {
-    let table_columns = match (&draft.mode, &draft.design, &draft.table) {
-        (DraftMode::Sweep, DraftDesign::Table, Some(table)) => Some(table.columns()),
-        (DraftMode::Sweep, DraftDesign::Table, None) => Some(Vec::new()),
-        _ => None,
-    };
+    let table_columns = draft.table_columns();
     schema
         .params
         .iter()
@@ -694,24 +679,14 @@ mod tests {
 
     use henad_compute::cpu::sim_thread::WakeFn;
     use henad_compute::entry::ModelEntry;
-    use henad_core::params::ParamValue;
+
     use henad_models::example_models;
 
     use super::{NOT_COUNTED, PlanSummary, budget_rows, either_text, samples_text, steps_text};
-    use crate::ui::sweep::draft::{DesignTableDraft, DraftAlgorithm, DraftDesign, DraftMode, GridAxis, SweepDraft};
+    use crate::state::default_values;
+    use crate::tests::support::sir;
+    use crate::ui::sweep::draft::{DesignTableDraft, DraftAlgorithm, DraftDesign, ExploreMode, GridAxis, SweepDraft};
     use crate::ui::sweep::{CheckSummary, SweepPanel};
-
-    fn sir() -> ModelEntry {
-        example_models().get("sir").cloned().expect("SIR is registered")
-    }
-
-    fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
-        entry
-            .param_descriptors()
-            .iter()
-            .map(|descriptor| descriptor.kind().default_value())
-            .collect()
-    }
 
     /// Returns the plan of a new SIR draft after `edit` changes it.
     fn plan_of(edit: impl FnOnce(&mut crate::ui::sweep::draft::SweepDraft, &[&str])) -> PlanSummary {
@@ -832,7 +807,7 @@ mod tests {
     #[test]
     fn a_search_plan_names_its_method_budget_and_objective() {
         let plan = plan_of(|draft, ids| {
-            draft.mode = DraftMode::Search;
+            draft.mode = ExploreMode::Search;
             let infection = index(ids, "infection_rate");
             draft.factors[infection].vary = true;
             draft.factors[infection].levels_text = "0:1".to_owned();
@@ -848,7 +823,7 @@ mod tests {
 
         let pattern_plan = |bounded_y: bool| {
             plan_of(|draft, _| {
-                draft.mode = DraftMode::Search;
+                draft.mode = ExploreMode::Search;
                 draft.search.algorithm = DraftAlgorithm::PatternSpace;
                 if bounded_y {
                     draft.search.set_automatic_range(GridAxis::Y, false);
@@ -909,7 +884,7 @@ mod tests {
         assert_eq!(
             actions_row(|draft| {
                 vary("0:400")(draft);
-                draft.mode = DraftMode::Search;
+                draft.mode = ExploreMode::Search;
             }),
             "Seed outbreak at any tick from 0 to 400"
         );
@@ -922,7 +897,7 @@ mod tests {
             draft.add_action(&entry.schema(), 0, 50);
             draft.actions[0].vary_tick = true;
             draft.actions[0].ticks_text = "0:2000000".to_owned();
-            draft.mode = DraftMode::Search;
+            draft.mode = ExploreMode::Search;
         });
         assert_eq!(value(&plan, "Actions"), "Seed outbreak at any tick from 0 to 2000000");
         assert_eq!(

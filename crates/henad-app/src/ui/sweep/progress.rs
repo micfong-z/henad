@@ -19,12 +19,13 @@ use henad_explore::sweep::{SweepEnd, SweepReport};
 
 use crate::icons::material_design_icons::MDI_ALERT;
 use crate::ui::results::ResultsPanel;
+use crate::ui::results::labels::output_label;
 use crate::ui::results::plot::format_precise;
-use crate::ui::results::store::output_label;
-use crate::ui::sweep::draft::{batch_estimate, capitalize, generation_estimate};
+use crate::ui::sweep::SweepRequest;
+use crate::ui::sweep::draft::{ExploreMode, batch_estimate, generation_estimate};
 use crate::ui::sweep::layout::{IssueCount, SectionHeading, section, truncated_label};
 use crate::ui::sweep::session::{SessionState, SweepSession};
-use crate::ui::sweep::{SweepRequest, format_duration};
+use crate::ui::text::format_duration;
 use crate::ui::{add_progress_bar, banner, kv_grid, mcs, plural};
 
 /// Maximum number of runs in progress that the tab lists one by one.
@@ -94,10 +95,15 @@ pub struct SessionResult {
 }
 
 impl SessionResult {
-    /// Returns the end of a session from its `report` or its `failure`, with the time of `progress`. That time leaves
-    /// pauses out. `noun` is "sweep" or "search".
-    pub fn new(noun: &str, report: Option<&SweepReport>, failure: Option<&str>, progress: &SweepProgress) -> Self {
-        let noun = capitalize(noun);
+    /// Returns the end of a session in `mode` from its `report` or its `failure`, with the time of `progress`. That
+    /// time leaves pauses out.
+    pub fn new(
+        mode: ExploreMode,
+        report: Option<&SweepReport>,
+        failure: Option<&str>,
+        progress: &SweepProgress,
+    ) -> Self {
+        let noun = mode.title();
         if let Some(failure) = failure {
             return Self {
                 text: format!("{noun} failed: {failure}"),
@@ -164,9 +170,10 @@ pub fn abort_text(progress: &SweepProgress) -> String {
     text
 }
 
-/// Returns the Abort modal's sentence on whether the rest of the `noun` can run later. Only a sweep or search that
-/// writes to a folder can.
-pub fn resume_text(noun: &str, in_folder: bool) -> String {
+/// Returns the Abort modal's sentence on whether the rest of the sweep or search in `mode` can run later. Only a sweep
+/// or search that writes to a folder can.
+pub fn abort_resume_text(mode: ExploreMode, in_folder: bool) -> String {
+    let noun = mode.noun();
     if in_folder {
         format!("Press Resume {noun} in the Results tab to run the rest later.")
     } else {
@@ -273,11 +280,12 @@ pub fn left_text(progress: &SweepProgress, state: SessionState) -> String {
     }
 }
 
-/// Returns the Results row of a running `noun`, whose results go to `output_dir` or stay in memory for `None`.
-pub fn running_results_text(noun: &str, output_dir: Option<&Path>) -> String {
+/// Returns the Results row of a running sweep or search in `mode`, whose results go to `output_dir` or stay in memory
+/// for `None`.
+pub fn running_results_text(mode: ExploreMode, output_dir: Option<&Path>) -> String {
     match output_dir {
         Some(dir) => dir.display().to_string(),
-        None => format!("In memory. Save them once the {noun} ends."),
+        None => format!("In memory. Save them once the {} ends.", mode.noun()),
     }
 }
 
@@ -392,11 +400,12 @@ pub fn result_rows(ending: &Ending, elapsed: Duration, results: &str) -> Vec<Pro
     ]
 }
 
-/// Returns the note under the Result grid of the `noun` that ended as `ending`, `None` for a session that finished or
-/// failed.
+/// Returns the note under the Result grid of the sweep or search in `mode` that ended as `ending`, `None` for a session
+/// that finished or failed.
 ///
 /// The note says whether and where the runs that were not written can run. Only results in a folder can resume.
-pub fn result_note(noun: &str, ending: &Ending, in_folder: bool) -> Option<String> {
+pub fn result_note(mode: ExploreMode, ending: &Ending, in_folder: bool) -> Option<String> {
+    let noun = mode.noun();
     let left = ending.planned.saturating_sub(ending.written);
     match ending.state {
         // An abort or a lost device can happen after the last run is written.
@@ -550,15 +559,15 @@ pub struct ProgressView<'a> {
 pub fn progress_ui(ui: &mut Ui, view: &ProgressView<'_>, request: &mut Option<SweepRequest>) {
     let session = view.session;
     let (progress, state) = (view.progress, view.state);
-    let noun = session.noun();
+    let mode = session.mode();
     if let Some(failure) = &session.failure {
-        let title = format!("{} failed", capitalize(noun));
+        let title = format!("{} failed", mode.title());
         banner(ui, MDI_ALERT, ui.visuals().error_fg_color, &title, failure);
     }
     let output_dir = session.output_dir.as_deref();
     if state.is_running() {
         ui.strong("Status");
-        let results = running_results_text(noun, output_dir);
+        let results = running_results_text(mode, output_dir);
         let input = StatusInput {
             progress,
             state,
@@ -578,7 +587,7 @@ pub fn progress_ui(ui: &mut Ui, view: &ProgressView<'_>, request: &mut Option<Sw
         let results = ended_results_text(output_dir, saved);
         let rows = result_rows(&ending, progress.elapsed, &results);
         progress_grid(ui, "henad_sweep_result_grid", &rows, request);
-        if let Some(note) = result_note(noun, &ending, output_dir.is_some()) {
+        if let Some(note) = result_note(mode, &ending, output_dir.is_some()) {
             ui.weak(note);
         }
     }
@@ -705,10 +714,11 @@ mod tests {
     use henad_explore::search_run::SearchUpdate;
 
     use super::{
-        Ending, PlannedExecution, ProgressRow, RowButton, SearchStanding, SessionResult, StatusInput, abort_text,
-        active_run_label, bar_text, ended_results_text, finished_fraction, result_note, result_rows, resume_text,
-        run_bar_text, running_results_text, runs_at_once_text, search_rows, status_rows,
+        Ending, PlannedExecution, ProgressRow, RowButton, SearchStanding, SessionResult, StatusInput,
+        abort_resume_text, abort_text, active_run_label, bar_text, ended_results_text, finished_fraction, result_note,
+        result_rows, run_bar_text, running_results_text, runs_at_once_text, search_rows, status_rows,
     };
+    use crate::ui::sweep::draft::ExploreMode;
     use crate::ui::sweep::session::SessionState;
 
     fn progress() -> SweepProgress {
@@ -799,7 +809,7 @@ mod tests {
 
     #[test]
     fn a_failed_session_keeps_its_fraction_and_names_its_error() {
-        let result = SessionResult::new("search", None, Some("Device lost"), &progress());
+        let result = SessionResult::new(ExploreMode::Search, None, Some("Device lost"), &progress());
         assert_eq!(result.text, "Search failed: Device lost");
         assert_eq!(result.fraction, 0.2);
         assert!(result.failed);
@@ -808,11 +818,11 @@ mod tests {
     #[test]
     fn only_a_sweep_in_a_folder_can_resume_after_an_abort() {
         assert_eq!(
-            resume_text("sweep", true),
+            abort_resume_text(ExploreMode::Sweep, true),
             "Press Resume sweep in the Results tab to run the rest later."
         );
         assert_eq!(
-            resume_text("search", false),
+            abort_resume_text(ExploreMode::Search, false),
             "An aborted search in memory cannot resume."
         );
     }
@@ -823,7 +833,7 @@ mod tests {
             active_runs: vec![active(12), active(13), active(14), active(15)],
             ..progress()
         };
-        let results = running_results_text("sweep", None);
+        let results = running_results_text(ExploreMode::Sweep, None);
         let execution = PlannedExecution {
             layout: ExecutionLayout {
                 cpu_lanes: 4,
@@ -924,7 +934,7 @@ mod tests {
             rows.iter().find(|row| row.label == "Failed").and_then(|row| row.button),
             Some(RowButton::ShowFailedRuns)
         );
-        assert_eq!(result_note("sweep", &finished, true), None);
+        assert_eq!(result_note(ExploreMode::Sweep, &finished, true), None);
 
         let aborted = Ending {
             state: SessionState::Aborted,
@@ -935,11 +945,11 @@ mod tests {
         let rows = result_rows(&aborted, Duration::from_secs(12), "Saved");
         assert_eq!(value(&rows, "Runs"), "39 of 300 finished");
         assert_eq!(
-            result_note("sweep", &aborted, true).as_deref(),
+            result_note(ExploreMode::Sweep, &aborted, true).as_deref(),
             Some("Press Resume sweep in the Results tab to run the remaining 261.")
         );
         assert_eq!(
-            result_note("search", &aborted, false).as_deref(),
+            result_note(ExploreMode::Search, &aborted, false).as_deref(),
             Some("An aborted search in memory cannot resume.")
         );
         let stopped = Ending {
@@ -947,7 +957,7 @@ mod tests {
             ..aborted
         };
         assert_eq!(
-            result_note("sweep", &stopped, true).as_deref(),
+            result_note(ExploreMode::Sweep, &stopped, true).as_deref(),
             Some("Press Resume sweep in the Results tab to run the rest on a working device.")
         );
         let aborted_after_the_last_run = Ending {
@@ -956,7 +966,7 @@ mod tests {
         };
         for in_folder in [true, false] {
             assert_eq!(
-                result_note("search", &aborted_after_the_last_run, in_folder).as_deref(),
+                result_note(ExploreMode::Search, &aborted_after_the_last_run, in_folder).as_deref(),
                 Some("Every run finished before the search ended.")
             );
         }
@@ -965,7 +975,7 @@ mod tests {
             ..aborted_after_the_last_run
         };
         assert_eq!(
-            result_note("sweep", &stopped_after_the_last_run, true).as_deref(),
+            result_note(ExploreMode::Sweep, &stopped_after_the_last_run, true).as_deref(),
             Some("Every run finished before the sweep ended.")
         );
 

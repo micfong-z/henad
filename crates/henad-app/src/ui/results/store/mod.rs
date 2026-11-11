@@ -9,49 +9,46 @@
 //! `runs.csv`, and a resumed sweep can write that file out of run-id order. The last digits of a statistic can then
 //! differ between the two.
 
-use std::cmp::Ordering;
+mod axes;
+mod recorded;
+mod replay;
+mod series_cache;
+pub mod statistics;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use henad_compute::entry::{ModelEntry, ModelLookupError};
-use henad_compute::gpu::runtime_grid::GridRule;
-use henad_core::explore::factor::FactorTarget;
 use henad_core::explore::fingerprint::schema_hash;
 use henad_core::explore::measure::SeriesBuffer;
 use henad_core::explore::outcome::RunOutcome;
-use henad_core::explore::plan::{Config, Plan};
-use henad_core::explore::reducer::ReducerKind;
-use henad_core::explore::replay::Replay;
+use henad_core::explore::plan::Plan;
 use henad_core::explore::search::SearchSpec;
-use henad_core::explore::spec::{ACTION_COLUMN_PREFIX, ActionSpec, SweepSpec};
-use henad_core::explore::summary::{ReplicateSummary, RunningMoments};
-use henad_core::explore::value::{format_value, parse_value};
-use henad_core::metadata::{TimeScale, TimeUnit};
+use henad_core::metadata::TimeScale;
 use henad_core::params::ParamDescriptor;
-use henad_core::provenance::{CodeOrigin, ModelCode};
-use henad_explore::output::manifest::{BuildRole, Manifest, ManifestModelCode, RecordedBuild};
+use henad_explore::output::manifest::BuildRole;
 use henad_explore::output::search_tables::SearchHistory;
 use henad_explore::result_set::ResultSet;
-use henad_explore::search_run::{SearchPlan, SearchUpdate};
-use henad_graph::sheet::SHEET_CODE_FORMAT;
+use henad_explore::search_run::SearchPlan;
 
 use crate::state::lookup_message;
-use crate::ui::editor::{EditableModel, editable_model};
-use crate::ui::sweep::draft::describe_error;
+use crate::ui::results::labels::output_label;
+use crate::ui::sweep::draft::ExploreMode;
 use crate::ui::sweep::session::SessionExecution;
-use crate::ui::time_axis::RunTime;
-
-/// Level id of a config on an axis whose column the config lacks.
-const NO_LEVEL_ID: usize = usize::MAX;
+use crate::ui::text::describe_error;
+pub use axes::ResultsAxis;
+use axes::{BlockAxes, ConfigEntry, ConfigTexts, plan_texts, plan_value_columns};
+use recorded::{RecordedModel, RecordedSpec, action_labels};
+use replay::{ReplayPlan, planned_texts, replay_plan};
+pub use series_cache::SeriesCache;
+pub use statistics::{
+    BandKind, HeatColor, HeatGrid, HeatQuery, ResponseLine, ResponseQuery, RunsColumn, RunsFilter, RunsSort, SeriesBand,
+};
 
 /// Maximum number of configs a folder's manifest can record for the app to plan its sweep. The configs of a larger
 /// sweep are listed from `runs.csv` alone.
 const MAX_PLANNED_CONFIGS: u64 = 1 << 20;
-
-/// Reason no command line replays the runs of a model file.
-pub const MODEL_FILE_COMMAND: &str =
-    "Runs of a model file replay on the command line with --model-file PATH. Save the model file to replay them there.";
 
 /// Source the results come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,258 +62,6 @@ pub enum ResultsSource {
     Files(Vec<String>),
 }
 
-/// A value column that takes more than one value across the configs.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ResultsAxis {
-    /// Position of the axis among the value columns.
-    pub column: usize,
-    /// Name of the axis as the views show it.
-    pub label: String,
-    /// Values of the axis as `runs.csv` writes them. Numbers ascend, and other values keep the order of the first
-    /// config that takes them.
-    pub levels: Vec<String>,
-    /// Place of each level on a plot axis, its value on a numeric axis and its index otherwise.
-    pub positions: Vec<f64>,
-    /// Whether every level is a number.
-    pub numeric: bool,
-    /// Id of each level. A level keeps its id when levels are added below it.
-    level_ids: Vec<usize>,
-    /// Level of each id, the inverse of `level_ids`.
-    id_levels: Vec<usize>,
-}
-
-impl ResultsAxis {
-    /// Returns the axis of value column `column`, labelled `label`, with `levels` at `positions`.
-    fn new(column: usize, label: String, levels: Vec<String>, positions: Vec<f64>, numeric: bool) -> Self {
-        let level_ids: Vec<usize> = (0..levels.len()).collect();
-        Self {
-            column,
-            label,
-            levels,
-            positions,
-            numeric,
-            id_levels: level_ids.clone(),
-            level_ids,
-        }
-    }
-
-    /// Returns the level whose id is `level_id`, or `None` for [`NO_LEVEL_ID`].
-    fn level_of_id(&self, level_id: usize) -> Option<usize> {
-        self.id_levels.get(level_id).copied()
-    }
-
-    /// Returns the id of the level whose value is `text`, or [`NO_LEVEL_ID`] when the axis lacks it.
-    fn level_id(&self, text: &str) -> usize {
-        self.level(text).map_or(NO_LEVEL_ID, |level| self.level_ids[level])
-    }
-
-    /// Returns the level whose value is `text`, or `None` when the axis lacks it.
-    fn level(&self, text: &str) -> Option<usize> {
-        if !self.numeric {
-            return self.levels.iter().position(|level| level == text);
-        }
-        let value = finite_number(text)?;
-        let start = self
-            .positions
-            .partition_point(|position| position.total_cmp(&value).is_lt());
-        (start..self.levels.len())
-            .take_while(|&level| self.positions[level].total_cmp(&value).is_eq())
-            .find(|&level| self.levels[level] == text)
-    }
-
-    /// Adds each value of `texts` that is missing from the axis as a level with its own id.
-    ///
-    /// A numeric axis places a new level among the numbers, after any old level of the same value, and leaves out a
-    /// text that is not a finite number. Any other axis adds new levels at the end. Note that every level above the
-    /// lowest new level moves up, in time that grows with the number of levels it moves. A search over an `f32` range
-    /// draws a value below the highest level on nearly every batch.
-    fn extend<'a>(&mut self, texts: impl Iterator<Item = &'a str>) {
-        let mut seen = BTreeSet::new();
-        let new_texts = texts.filter(|&text| self.level(text).is_none() && seen.insert(text));
-        let mut new_levels: Vec<(f64, &str)> = if self.numeric {
-            let mut numbers: Vec<(f64, &str)> = new_texts
-                .filter_map(|text| Some((finite_number(text)?, text)))
-                .collect();
-            numbers.sort_by(|a, b| a.0.total_cmp(&b.0));
-            numbers
-        } else {
-            let positions = (self.levels.len()..).map(|level| level as f64);
-            positions.zip(new_texts).collect()
-        };
-        let old_count = self.levels.len();
-        let count = old_count + new_levels.len();
-        self.levels.resize_with(count, String::new);
-        self.positions.resize(count, 0.0);
-        self.level_ids.resize(count, NO_LEVEL_ID);
-        // Places the new levels from the highest down. Each old level above the one being placed moves up to make
-        // room, and the levels below the lowest new one stay where they are.
-        let (mut unmoved, mut slot) = (old_count, count);
-        while let Some((position, text)) = new_levels.pop() {
-            while unmoved > 0 && self.positions[unmoved - 1].total_cmp(&position).is_gt() {
-                unmoved -= 1;
-                slot -= 1;
-                self.levels.swap(unmoved, slot);
-                self.positions[slot] = self.positions[unmoved];
-                let level_id = self.level_ids[unmoved];
-                self.level_ids[slot] = level_id;
-                self.id_levels[level_id] = slot;
-            }
-            slot -= 1;
-            self.levels[slot] = text.to_owned();
-            self.positions[slot] = position;
-            self.level_ids[slot] = self.id_levels.len();
-            self.id_levels.push(slot);
-        }
-    }
-}
-
-/// Block and values of one config.
-#[derive(Debug, Clone, PartialEq)]
-struct ConfigTexts {
-    /// Index of the block the config comes from.
-    block: usize,
-    /// Value of each value column, as `runs.csv` writes it.
-    texts: Vec<String>,
-}
-
-/// One config of the results.
-#[derive(Debug, Clone, PartialEq)]
-struct ConfigEntry {
-    /// Index of the block the config comes from.
-    block: usize,
-    /// Value of each value column, as `runs.csv` writes it.
-    texts: Vec<String>,
-    /// Id of the config's level on each axis, [`NO_LEVEL_ID`] where the config lacks the axis's column.
-    level_ids: Vec<usize>,
-    /// Positions in the store's runs of the config's runs, in order of run id.
-    runs: Vec<usize>,
-}
-
-/// Levels the configs of one block take on each axis.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BlockAxes {
-    /// Level id on each axis from the first config of the block with a level on that axis, [`NO_LEVEL_ID`] while
-    /// no config of the block has a level on it.
-    first_level_ids: Vec<usize>,
-    /// Whether each axis takes more than one level within the block.
-    varies: Vec<bool>,
-}
-
-impl BlockAxes {
-    fn new(axis_count: usize) -> Self {
-        Self {
-            first_level_ids: vec![NO_LEVEL_ID; axis_count],
-            varies: vec![false; axis_count],
-        }
-    }
-
-    /// Adds `level_ids`, the level ids of one more config of the block, one per axis.
-    fn add(&mut self, level_ids: &[usize]) {
-        let axes = self.first_level_ids.iter_mut().zip(&mut self.varies);
-        for ((first, varies), &level_id) in axes.zip(level_ids) {
-            if level_id == NO_LEVEL_ID {
-                continue;
-            }
-            if *first == NO_LEVEL_ID {
-                *first = level_id;
-            } else if *first != level_id {
-                *varies = true;
-            }
-        }
-    }
-}
-
-/// Series of runs, held while they fit a byte budget.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SeriesCache {
-    /// Maximum number of bytes the cache holds.
-    budget: usize,
-    /// Size in bytes of the held series.
-    used: usize,
-    runs: BTreeMap<u64, SeriesBuffer>,
-}
-
-impl SeriesCache {
-    pub fn new(budget: usize) -> Self {
-        Self {
-            budget,
-            used: 0,
-            runs: BTreeMap::new(),
-        }
-    }
-
-    /// Holds `series` as the series of run `run_id`, and returns whether it fits the budget.
-    ///
-    /// A series that does not fit is dropped.
-    pub fn insert(&mut self, run_id: u64, series: SeriesBuffer) -> bool {
-        self.remove(run_id);
-        let bytes = series_bytes(&series);
-        if self.used + bytes > self.budget {
-            return false;
-        }
-        self.used += bytes;
-        self.runs.insert(run_id, series);
-        true
-    }
-
-    pub fn get(&self, run_id: u64) -> Option<&SeriesBuffer> {
-        self.runs.get(&run_id)
-    }
-
-    fn remove(&mut self, run_id: u64) {
-        if let Some(series) = self.runs.remove(&run_id) {
-            self.used -= series_bytes(&series);
-        }
-    }
-
-    /// Drops held series of runs outside `kept_runs`, highest run id first, until `bytes` more fit the budget.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn make_room(&mut self, bytes: usize, kept_runs: &BTreeSet<u64>) {
-        let evictable: Vec<u64> = self
-            .runs
-            .keys()
-            .rev()
-            .copied()
-            .filter(|id| !kept_runs.contains(id))
-            .collect();
-        for run_id in evictable {
-            if self.used + bytes <= self.budget {
-                return;
-            }
-            self.remove(run_id);
-        }
-    }
-
-    /// Number of runs whose series is held.
-    pub fn len(&self) -> usize {
-        self.runs.len()
-    }
-
-    /// Size in bytes of the held series.
-    #[cfg(test)]
-    pub fn used_bytes(&self) -> usize {
-        self.used
-    }
-}
-
-/// Plan used to replay the runs of a store.
-#[derive(Debug, Clone)]
-enum ReplayPlan {
-    Sweep(Arc<Plan>),
-    /// A search, whose runs replay from the configs of their candidates.
-    Search(Arc<SearchPlan>),
-}
-
-impl ReplayPlan {
-    /// Plan of the settings every run shares, and of a sweep's configs.
-    fn base(&self) -> &Plan {
-        match self {
-            Self::Sweep(plan) => plan,
-            Self::Search(search_plan) => search_plan.base(),
-        }
-    }
-}
-
 /// Settings and history of the search that produced the results.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchLog {
@@ -324,294 +69,6 @@ pub struct SearchLog {
     pub history: SearchHistory,
     /// Reason the search tables of an opened folder cannot be read. `history` is then empty.
     pub table_error: Option<String>,
-}
-
-/// Returns the size of `series` in bytes, counted the same way as a sweep's events.
-fn series_bytes(series: &SeriesBuffer) -> usize {
-    series.len() * (series.width() + 1) * size_of::<f64>()
-}
-
-/// Spread a series band shows around its centre line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BandKind {
-    /// Mean, with one sample standard deviation either side.
-    #[default]
-    StandardDeviation,
-    /// Mean, with the 95% confidence interval of the mean.
-    ConfidenceInterval,
-    /// Median, from the 10th to the 90th percentile.
-    Percentiles,
-}
-
-/// Centre line and spread of one stat over the replicates of a config, tick by tick.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct SeriesBand {
-    pub ticks: Vec<f64>,
-    pub center: Vec<f64>,
-    pub low: Vec<f64>,
-    pub high: Vec<f64>,
-    /// Number of runs whose series the band reads.
-    pub runs: usize,
-}
-
-/// Output plotted against one axis, pooled over every config the pins let through.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResponseQuery {
-    pub x_axis: usize,
-    /// Index of the reducer column.
-    pub output: usize,
-    /// Axis whose levels each get their own line.
-    pub group_axis: Option<usize>,
-    /// Level each axis is held at, `None` for any level. The x and group axes are free whatever their pin.
-    pub pins: Vec<Option<usize>>,
-}
-
-/// Statistics of an output at one level of the x axis.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ResponsePoint {
-    pub x: f64,
-    /// Level of the x axis.
-    pub level: usize,
-    pub summary: ReplicateSummary,
-}
-
-/// Points of one line of a response plot.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ResponseLine {
-    /// Level of the group axis, `None` without a group axis.
-    pub group_level: Option<usize>,
-    /// Points in order of x level.
-    pub points: Vec<ResponsePoint>,
-}
-
-/// Statistic a heatmap cell is coloured by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HeatColor {
-    #[default]
-    Mean,
-    StandardDeviation,
-    /// Standard deviation over the magnitude of the mean.
-    CoefficientOfVariation,
-}
-
-/// Output over the levels of two axes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HeatQuery {
-    pub x_axis: usize,
-    pub y_axis: usize,
-    /// Index of the reducer column.
-    pub output: usize,
-    pub color_by: HeatColor,
-    /// Level each axis is held at, `None` for any level. The x and y axes are free whatever their pin.
-    pub pins: Vec<Option<usize>>,
-}
-
-/// Cells of a heatmap, row by row from the lowest y level.
-#[derive(Debug, Clone, PartialEq)]
-pub struct HeatGrid {
-    /// Number of x levels.
-    pub columns: usize,
-    /// Number of y levels.
-    pub rows: usize,
-    /// Value of each cell, not finite for a cell with no value.
-    pub values: Vec<f64>,
-    /// Number of values each cell pools.
-    pub counts: Vec<u64>,
-    /// Ids of the configs each cell pools.
-    pub configs: Vec<Vec<u64>>,
-}
-
-impl HeatGrid {
-    /// Returns the index of the cell at x level `column` and y level `row`.
-    pub fn cell(&self, column: usize, row: usize) -> usize {
-        row * self.columns + column
-    }
-
-    /// Returns the lowest and highest finite value, or `None` when no cell holds a finite value.
-    pub fn range(&self) -> Option<(f64, f64)> {
-        let finite = self.values.iter().copied().filter(|value| value.is_finite());
-        finite.fold(None, |range, value| match range {
-            None => Some((value, value)),
-            Some((low, high)) => Some((f64::min(low, value), f64::max(high, value))),
-        })
-    }
-}
-
-/// Set of runs that the runs table lists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RunsFilter {
-    #[default]
-    All,
-    /// Runs that ended on a fault or a timeout.
-    Failed,
-    /// Runs of the selected configs.
-    SelectedConfigs,
-}
-
-/// Column of the runs table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunsColumn {
-    Run,
-    Config,
-    Replicate,
-    Seed,
-    Status,
-    Ticks,
-    /// Wall time spent stepping and sampling.
-    Time,
-    /// Level of the axis at this index.
-    Axis(usize),
-    /// Value of the reducer column at this index.
-    Output(usize),
-}
-
-/// Order of the runs table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RunsSort {
-    pub column: RunsColumn,
-    pub descending: bool,
-}
-
-impl Default for RunsSort {
-    fn default() -> Self {
-        Self {
-            column: RunsColumn::Run,
-            descending: false,
-        }
-    }
-}
-
-/// Value a run sorts by in one column of the runs table.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum SortValue {
-    Whole(u64),
-    Real(f64),
-}
-
-impl SortValue {
-    /// Returns the order of `self` and `other`, equal for two values of different kinds.
-    fn compare(self, other: Self) -> Ordering {
-        match (self, other) {
-            (Self::Whole(a), Self::Whole(b)) => a.cmp(&b),
-            (Self::Real(a), Self::Real(b)) => a.total_cmp(&b),
-            (Self::Whole(_), Self::Real(_)) | (Self::Real(_), Self::Whole(_)) => Ordering::Equal,
-        }
-    }
-}
-
-/// Declarations and builds that a sweep recorded of its model. The store compares them with the app's entry.
-#[derive(Debug, Clone)]
-struct RecordedModel {
-    /// Henad's builds that the sessions recorded.
-    engine_builds: Vec<RecordedBuild>,
-    /// Builds of the model's code that the sessions recorded.
-    model_builds: Vec<RecordedBuild>,
-    /// Hash of the model's declarations, `None` for a manifest whose hash does not read as one.
-    schema_hash: Option<u64>,
-    /// Whether the sweep recorded that the model replays exactly.
-    replays_exactly: bool,
-    /// Manifest of a folder's sweep, `None` for a sweep run in this app. A resume of the folder compares the code of
-    /// its sessions with the app's entry ([`Manifest::code_matches`]).
-    manifest: Option<Manifest>,
-    /// Code of a model composed at run time, `None` for compiled code.
-    code: Option<ModelCode>,
-    /// Author text of a model built from a sheet, `None` for a model built from its code alone.
-    author: Option<ModelCode>,
-}
-
-impl RecordedModel {
-    /// Returns the model that the manifest of `set` records.
-    fn of_result_set(set: &ResultSet) -> Self {
-        let model = &set.manifest().model;
-        Self {
-            engine_builds: set.recorded_builds(BuildRole::Engine),
-            model_builds: set.recorded_builds(BuildRole::Model),
-            schema_hash: u64::from_str_radix(&model.schema_hash, 16).ok(),
-            replays_exactly: model.replays_exactly,
-            manifest: Some(set.manifest().clone()),
-            code: model.code.as_ref().map(ManifestModelCode::to_code),
-            author: set.author(),
-        }
-    }
-
-    /// Returns the model of a sweep of `entry` on this build of Henad.
-    fn of_entry(entry: &ModelEntry) -> Self {
-        Self {
-            engine_builds: vec![RecordedBuild::engine()],
-            model_builds: vec![RecordedBuild::from(entry.source())],
-            schema_hash: Some(schema_hash(&entry.schema())),
-            replays_exactly: entry.metadata().replays_exactly,
-            manifest: None,
-            code: entry.source().code().cloned(),
-            author: entry.source().author().cloned(),
-        }
-    }
-
-    /// Returns whether `entry` runs the code a resume of the folder needs, `false` without an entry.
-    ///
-    /// For a sweep run in this app, always `true` with an entry. The Results tab never resumes such a sweep.
-    fn code_matches(&self, entry: Option<&ModelEntry>) -> bool {
-        entry.is_some_and(|entry| {
-            self.manifest
-                .as_ref()
-                .is_none_or(|manifest| manifest.code_matches(entry.source()))
-        })
-    }
-}
-
-/// Returns the roles whose current build, Henad's build or the build of the code of `entry`, differs from a build in
-/// `recorded` for that role, and then the roles whose builds cannot be compared.
-///
-/// A build that records neither a commit nor a source hash is never the same as another build, itself included. A role
-/// goes in the second list when each of its differences is between two builds of one package and version, and one
-/// of the two is such a build.
-fn compare_builds(recorded: &RecordedModel, entry: &ModelEntry) -> (Vec<BuildRole>, Vec<BuildRole>) {
-    let mut changed = Vec::new();
-    let mut unidentified = Vec::new();
-    for (role, recorded, current) in [
-        (BuildRole::Engine, &recorded.engine_builds, RecordedBuild::engine()),
-        (
-            BuildRole::Model,
-            &recorded.model_builds,
-            RecordedBuild::from(entry.source()),
-        ),
-    ] {
-        let mut differing = recorded
-            .iter()
-            .filter(|recorded| !recorded.same_build(&current))
-            .peekable();
-        if differing.peek().is_none() {
-            continue;
-        }
-        if differing.any(|recorded| known_change(recorded, &current)) {
-            changed.push(role);
-        } else {
-            unidentified.push(role);
-        }
-    }
-    (changed, unidentified)
-}
-
-/// Returns whether `recorded` and `current`, two builds that are not the same, are known to differ: in package or
-/// version, or with both identified by a commit or a source hash.
-fn known_change(recorded: &RecordedBuild, current: &RecordedBuild) -> bool {
-    recorded.package != current.package
-        || recorded.version != current.version
-        || (recorded.is_identified() && current.is_identified())
-}
-
-/// Spec of a sweep read from files, which the store plans again against an entry that replaces the sweep's model.
-#[derive(Debug, Clone)]
-struct RecordedSpec {
-    spec: SweepSpec,
-    /// Whether the files hold a search.
-    is_search: bool,
-    /// Number of configs the manifest records, 0 when it records none.
-    configs: u64,
-    /// Largest number of configs the store plans, and lists from a plan.
-    max_planned: u64,
-    /// Hash of the declarations of the entry the plan was made against, `None` for a plan made without an entry.
-    planned_with: Option<u64>,
 }
 
 /// Runs, configs and series of one sweep.
@@ -776,10 +233,6 @@ impl ResultsStore {
         let model = model.map_err(|error| lookup_message(&error));
         let entry = model.as_ref().ok().copied();
         let schema_matches = entry.is_some_and(|entry| set.schema_matches(entry.schema()));
-        let recorded_model = RecordedModel::of_result_set(&set);
-        let (changed_builds, unidentified_builds) =
-            entry.map_or_else(Default::default, |entry| compare_builds(&recorded_model, entry));
-        let replays_exactly = recorded.replays_exactly && entry.is_none_or(|entry| entry.metadata().replays_exactly);
         let search = set
             .spec()
             .search
@@ -811,22 +264,22 @@ impl ResultsStore {
             model_id,
             model_name,
             schema_matches,
-            changed_builds,
-            unidentified_builds,
-            replays_exactly,
-            code_matches: recorded_model.code_matches(entry),
-            recorded: recorded_model,
+            // The four fields compared with the entry are set by `compare_entry` below.
+            changed_builds: Vec::new(),
+            unidentified_builds: Vec::new(),
+            replays_exactly: false,
+            code_matches: false,
+            recorded: RecordedModel::of_result_set(&set),
             complete: set.is_complete(),
             recorded_execution: Some(SessionExecution::recorded(&set.manifest().execution)),
             folder: set.dir().map(Path::to_path_buf),
             plan,
             recorded_spec: Some(recorded_spec),
             search,
-            descriptors: entry
-                .map(|entry| entry.param_descriptors().to_vec())
-                .unwrap_or_default(),
+            // The parameters and action labels of the entry are set by `take_declarations` below.
+            descriptors: Vec::new(),
             time: entry.and_then(|entry| entry.metadata().time.clone()),
-            action_labels: entry.map_or_else(BTreeMap::new, |entry| action_labels(&set.spec().actions, entry)),
+            action_labels: BTreeMap::new(),
             value_columns: set.value_columns().to_vec(),
             stat_columns: set.stat_columns().to_vec(),
             reducer_columns: set.reducer_columns().to_vec(),
@@ -842,6 +295,8 @@ impl ResultsStore {
             empty_series_runs: BTreeSet::new(),
             revision: 0,
         };
+        store.compare_entry(entry);
+        store.take_declarations(entry, &set.spec().actions);
         let rows = set.into_runs();
         for row in &rows {
             let config = ConfigTexts {
@@ -855,128 +310,6 @@ impl ResultsStore {
             store.insert_run(row.outcome, !row.series_held);
         }
         store
-    }
-
-    /// Returns the model the sweep ran as the Editor opens it: the sheet the sweep recorded, or the graph or grid rule
-    /// of its code when it recorded no sheet. `None` for compiled code.
-    ///
-    /// A sweep run in this app records the entry it started with, and a folder records what its manifest holds.
-    pub fn editable_model(&self) -> Option<EditableModel> {
-        editable_model(self.recorded.author.as_ref(), self.recorded.code.as_ref())
-    }
-
-    /// Returns whether the sweep recorded a model the Editor can open, a sheet or code in a format it reads, without
-    /// reading the text.
-    pub fn records_editable_code(&self) -> bool {
-        let sheet = self
-            .recorded
-            .author
-            .as_ref()
-            .is_some_and(|author| author.format() == SHEET_CODE_FORMAT);
-        let code = self
-            .recorded
-            .code
-            .as_ref()
-            .is_some_and(|code| [henad_graph::CODE_FORMAT, GridRule::CODE_FORMAT].contains(&code.format()));
-        sheet || code
-    }
-
-    /// Replaces the configs with `texts`, the block and values of each config by id, and finds the axes they vary.
-    fn set_configs(&mut self, texts: BTreeMap<u64, ConfigTexts>) {
-        let axes: Vec<ResultsAxis> = (0..self.value_columns.len())
-            .filter_map(|column| self.axis(column, &texts))
-            .collect();
-        let lookups: Vec<BTreeMap<&str, usize>> = axes
-            .iter()
-            .map(|axis| {
-                let levels = axis.levels.iter().enumerate();
-                levels.map(|(level, text)| (text.as_str(), level)).collect()
-            })
-            .collect();
-        let configs: BTreeMap<u64, ConfigEntry> = texts
-            .into_iter()
-            .map(|(config_id, ConfigTexts { block, texts })| {
-                // A new axis gives each level the id of its place.
-                let level_ids = axes
-                    .iter()
-                    .zip(&lookups)
-                    .map(|(axis, lookup)| {
-                        let text = texts.get(axis.column).map(String::as_str);
-                        text.and_then(|text| lookup.get(text)).copied().unwrap_or(NO_LEVEL_ID)
-                    })
-                    .collect();
-                let entry = ConfigEntry {
-                    block,
-                    texts,
-                    level_ids,
-                    runs: Vec::new(),
-                };
-                (config_id, entry)
-            })
-            .collect();
-        self.block_axes = block_axes(&configs, axes.len());
-        self.configs = configs;
-        self.axes = axes;
-        self.revision += 1;
-    }
-
-    /// Returns whether axis `axis` takes more than one level within block `block`.
-    fn block_varies(&self, block: usize, axis: usize) -> bool {
-        self.block_axes
-            .get(&block)
-            .and_then(|block_axes| block_axes.varies.get(axis))
-            .copied()
-            .unwrap_or(false)
-    }
-
-    /// Returns the axis of value column `column` across the configs `texts`, or `None` when the column holds one
-    /// value.
-    fn axis(&self, column: usize, texts: &BTreeMap<u64, ConfigTexts>) -> Option<ResultsAxis> {
-        let mut seen = BTreeSet::new();
-        let mut distinct: Vec<&str> = Vec::new();
-        for config in texts.values() {
-            if let Some(text) = config.texts.get(column)
-                && seen.insert(text.as_str())
-            {
-                distinct.push(text);
-            }
-        }
-        if distinct.len() < 2 {
-            return None;
-        }
-        let numbers: Option<Vec<f64>> = distinct.iter().map(|text| finite_number(text)).collect();
-        let (levels, positions, numeric) = if let Some(numbers) = numbers {
-            let mut pairs: Vec<(f64, &str)> = numbers.into_iter().zip(distinct).collect();
-            pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let levels = pairs.iter().map(|&(_, text)| text.to_owned()).collect();
-            (levels, pairs.iter().map(|&(value, _)| value).collect(), true)
-        } else {
-            let positions = (0..distinct.len()).map(|level| level as f64).collect();
-            (distinct.into_iter().map(str::to_owned).collect(), positions, false)
-        };
-        Some(ResultsAxis::new(
-            column,
-            self.column_label(column),
-            levels,
-            positions,
-            numeric,
-        ))
-    }
-
-    /// Returns the name that the views use for value column `column`:
-    /// a parameter's label, or an action's label and "tick".
-    ///
-    /// An action or a parameter that this device's model does not declare keeps the name from its column.
-    fn column_label(&self, column: usize) -> String {
-        let name = &self.value_columns[column];
-        if let Some(action) = name.strip_prefix(ACTION_COLUMN_PREFIX) {
-            let label = self.action_labels.get(action).map_or(action, String::as_str);
-            return format!("{label} tick");
-        }
-        self.descriptors
-            .iter()
-            .find(|descriptor| descriptor.id() == name)
-            .map_or_else(|| name.clone(), |descriptor| descriptor.label().to_owned())
     }
 
     /// Sets the stat and reducer columns of a sweep that has planned its runs, unless the store knows them already.
@@ -1031,139 +364,6 @@ impl ResultsStore {
         insert_by_run_id(positions, &self.runs, position);
     }
 
-    /// Adds the configs of the candidates that `updates` report, and each batch in order to the search history.
-    ///
-    /// A batch that the history already holds, as when a resumed search reports it again, adds no second entry. The
-    /// configs of every batch join the configs held in one pass over the axes.
-    pub fn push_search_updates<'a>(&mut self, updates: impl IntoIterator<Item = &'a SearchUpdate>) {
-        let Some(search) = &mut self.search else {
-            return;
-        };
-        let mut added: BTreeMap<u64, ConfigTexts> = BTreeMap::new();
-        for update in updates {
-            let known = search
-                .history
-                .batches
-                .last()
-                .is_some_and(|last| last.batch >= update.batch);
-            if !known {
-                search.history.push(update);
-            }
-            for evaluated in &update.evaluated {
-                if !self.configs.contains_key(&evaluated.candidate_id) {
-                    added
-                        .entry(evaluated.candidate_id)
-                        .or_insert_with(|| config_texts(&evaluated.config, &self.descriptors));
-                }
-            }
-        }
-        if !added.is_empty() && !self.descriptors.is_empty() {
-            self.add_configs(added);
-        }
-        self.revision += 1;
-    }
-
-    /// Adds the configs `added` beside the configs held, and assigns each config its runs.
-    ///
-    /// The axes grow in place when [`Self::fits_axes`] finds that the added configs fit them. Otherwise every config
-    /// is built again and the axes are found again.
-    fn add_configs(&mut self, added: BTreeMap<u64, ConfigTexts>) {
-        if self.fits_axes(&added) {
-            self.extend_configs(added);
-        } else {
-            self.rebuild_configs(added);
-        }
-    }
-
-    /// Returns whether the configs `added` fit the axes held: every added id comes after every held id, no column
-    /// that is not an axis takes a second value, and every value on a numeric axis is a finite number.
-    ///
-    /// A store that holds no config yet fits nothing.
-    fn fits_axes(&self, added: &BTreeMap<u64, ConfigTexts>) -> bool {
-        let (Some((&first_added, _)), Some((&last_held, _))) = (added.first_key_value(), self.configs.last_key_value())
-        else {
-            return false;
-        };
-        if first_added <= last_held {
-            return false;
-        }
-        let added_texts = |column: usize| added.values().filter_map(move |config| config.texts.get(column));
-        let numbers_fit = self
-            .axes
-            .iter()
-            .filter(|axis| axis.numeric)
-            .all(|axis| added_texts(axis.column).all(|text| finite_number(text).is_some()));
-        let axis_columns: BTreeSet<usize> = self.axes.iter().map(|axis| axis.column).collect();
-        numbers_fit
-            && (0..self.value_columns.len())
-                .filter(|column| !axis_columns.contains(column))
-                .all(|column| {
-                    let held = self.configs.values().find_map(|config| config.texts.get(column));
-                    let mut texts = held.into_iter().chain(added_texts(column));
-                    let first = texts.next();
-                    texts.all(|text| Some(text) == first)
-                })
-    }
-
-    /// Adds the configs `added`, which fit the axes held, and assigns each added config its runs.
-    ///
-    /// Every config and block held keeps its entry. A level keeps its id when levels are added below it.
-    fn extend_configs(&mut self, added: BTreeMap<u64, ConfigTexts>) {
-        for axis in &mut self.axes {
-            let column = axis.column;
-            let texts = added.values().filter_map(|config| config.texts.get(column));
-            axis.extend(texts.map(String::as_str));
-        }
-        let axis_count = self.axes.len();
-        for (config_id, ConfigTexts { block, texts }) in added {
-            let level_ids: Vec<usize> = self
-                .axes
-                .iter()
-                .map(|axis| texts.get(axis.column).map_or(NO_LEVEL_ID, |text| axis.level_id(text)))
-                .collect();
-            self.block_axes
-                .entry(block)
-                .or_insert_with(|| BlockAxes::new(axis_count))
-                .add(&level_ids);
-            let config = ConfigEntry {
-                block,
-                texts,
-                level_ids,
-                runs: self.unassigned_runs.remove(&config_id).unwrap_or_default(),
-            };
-            self.configs.insert(config_id, config);
-        }
-    }
-
-    /// Builds every config again from the configs held and `added`, finds the axes again and assigns each config
-    /// its runs.
-    fn rebuild_configs(&mut self, added: BTreeMap<u64, ConfigTexts>) {
-        let mut texts: BTreeMap<u64, ConfigTexts> = std::mem::take(&mut self.configs)
-            .into_iter()
-            .map(|(config_id, config)| {
-                let texts = ConfigTexts {
-                    block: config.block,
-                    texts: config.texts,
-                };
-                (config_id, texts)
-            })
-            .collect();
-        for (config_id, config) in added {
-            texts.entry(config_id).or_insert(config);
-        }
-        self.set_configs(texts);
-        self.unassigned_runs.clear();
-        let mut positions: Vec<usize> = (0..self.runs.len()).collect();
-        positions.sort_by_key(|&position| self.runs[position].run.run_id);
-        for position in positions {
-            let config_id = self.runs[position].run.config_id;
-            match self.configs.get_mut(&config_id) {
-                Some(config) => config.runs.push(position),
-                None => self.unassigned_runs.entry(config_id).or_default().push(position),
-            }
-        }
-    }
-
     /// Search the results come from, `None` for a sweep.
     pub fn search_log(&self) -> Option<&SearchLog> {
         self.search.as_ref()
@@ -1172,6 +372,15 @@ impl ResultsStore {
     /// Returns whether the results come from a search, whose configs are its candidates.
     pub fn is_search(&self) -> bool {
         self.search.is_some()
+    }
+
+    /// Returns whether the results come from a sweep or a search.
+    pub fn mode(&self) -> ExploreMode {
+        if self.is_search() {
+            ExploreMode::Search
+        } else {
+            ExploreMode::Sweep
+        }
     }
 
     /// Marks whether every run of the sweep is held.
@@ -1204,23 +413,6 @@ impl ResultsStore {
         self.replaced_runs
     }
 
-    pub fn series(&self, run_id: u64) -> Option<&SeriesBuffer> {
-        self.series.get(run_id)
-    }
-
-    pub fn series_cache(&self) -> &SeriesCache {
-        &self.series
-    }
-
-    /// Number of runs that recorded no series rows.
-    pub fn empty_series_count(&self) -> usize {
-        self.empty_series_runs.len()
-    }
-
-    pub fn axes(&self) -> &[ResultsAxis] {
-        &self.axes
-    }
-
     pub fn stat_columns(&self) -> &[String] {
         &self.stat_columns
     }
@@ -1234,781 +426,10 @@ impl ResultsStore {
         output_label(self.reducer_columns.get(output).map_or("", String::as_str))
     }
 
-    /// Ids of every config, planned or seen in a run.
-    pub fn config_ids(&self) -> impl Iterator<Item = u64> + '_ {
-        self.configs.keys().copied()
-    }
-
-    /// Number of configs, planned or seen in a run.
-    pub fn config_count(&self) -> usize {
-        self.configs.len()
-    }
-
-    /// Returns the level of config `config_id` on axis `axis`.
-    pub fn config_level(&self, config_id: u64, axis: usize) -> Option<usize> {
-        self.entry_level(self.configs.get(&config_id)?, axis)
-    }
-
-    /// Returns the level of `config` on axis `axis`, `None` where the config lacks the axis's column.
-    fn entry_level(&self, config: &ConfigEntry, axis: usize) -> Option<usize> {
-        self.axes.get(axis)?.level_of_id(*config.level_ids.get(axis)?)
-    }
-
-    /// Returns the word that the views use for a config, "Candidate" for the results of a search.
-    pub fn config_noun(&self) -> &'static str {
-        if self.is_search() { "Candidate" } else { "Config" }
-    }
-
-    /// Returns the plural that the views use for the configs, "candidates" for the results of a search.
-    pub fn configs_noun(&self) -> &'static str {
-        if self.is_search() {
-            "candidates"
-        } else {
-            "configurations"
-        }
-    }
-
-    /// Returns a name for config `config_id` that shows its level on every axis.
-    pub fn config_label(&self, config_id: u64) -> String {
-        let noun = self.config_noun();
-        let Some(config) = self.configs.get(&config_id) else {
-            return format!("{noun} {config_id}");
-        };
-        let levels: Vec<String> = self
-            .axes
-            .iter()
-            .filter_map(|axis| Some(format!("{} {}", axis.label, config.texts.get(axis.column)?)))
-            .collect();
-        if levels.is_empty() {
-            format!("{noun} {config_id}")
-        } else {
-            format!("{noun} {config_id}: {}", levels.join(", "))
-        }
-    }
-
-    /// Returns the label and value of each column that config `config_id` varies, the value as `runs.csv` writes it.
-    ///
-    /// A search's config lists every parameter and tick the search picks, and a sweep's config its level on every
-    /// axis. Returns `None` for a config the store does not hold, as a search candidate before its batch ends.
-    pub fn config_values(&self, config_id: u64) -> Option<Vec<(String, String)>> {
-        let config = self.configs.get(&config_id)?;
-        let columns: Vec<usize> = match &self.search {
-            Some(search) => search
-                .spec
-                .space
-                .iter()
-                .filter_map(|factor| self.target_column(&factor.target))
-                .collect(),
-            None => self.axes.iter().map(|axis| axis.column).collect(),
-        };
-        let values = columns
-            .into_iter()
-            .filter_map(|column| Some((self.column_label(column), config.texts.get(column)?.clone())))
-            .collect();
-        Some(values)
-    }
-
-    /// Returns the values of config `config_id` on one line, as in "Infection Rate 0.2, Recovery Rate 0.05", or
-    /// `None` for a config the store does not hold.
-    pub fn config_values_text(&self, config_id: u64) -> Option<String> {
-        let values = self.config_values(config_id)?;
-        let parts: Vec<String> = values.iter().map(|(label, value)| format!("{label} {value}")).collect();
-        Some(parts.join(", "))
-    }
-
-    /// Unit of the model's time scale, `None` for a model with no time scale or when this device lacks it.
-    ///
-    /// Note that the unit is `None` too when the value columns hold no tick length, as in a folder written before the
-    /// model declared a time scale. The runs of such a folder draw at their ticks.
-    pub fn time_unit(&self) -> Option<TimeUnit> {
-        self.time
-            .as_ref()
-            .filter(|time| self.value_columns.iter().any(|column| *column == time.tick_length))
-            .map(|time| time.unit)
-    }
-
-    /// Returns the unit and tick length that the runs of config `config_id` ran with, `None` for a model with no time
-    /// scale, a config the store does not hold, or a tick length missing from the config's values.
-    ///
-    /// The time at a tick of such a run is the value that its series' `time` column holds.
-    pub fn config_time(&self, config_id: u64) -> Option<RunTime> {
-        let time = self.time.as_ref()?;
-        let column = self.value_columns.iter().position(|name| *name == time.tick_length)?;
-        let text = self.configs.get(&config_id)?.texts.get(column)?;
-        Some(RunTime {
-            unit: time.unit,
-            tick_length: text.parse().ok()?,
-        })
-    }
-
-    /// Returns the value column that `target` sets, `None` for a parameter or action missing from the columns.
-    fn target_column(&self, target: &FactorTarget) -> Option<usize> {
-        let name = match target {
-            FactorTarget::Param(id) => id.clone(),
-            FactorTarget::Action(name) => format!("{ACTION_COLUMN_PREFIX}{name}"),
-        };
-        self.value_columns.iter().position(|column| *column == name)
-    }
-
-    /// Returns the lowest and highest finite value of the output column `column`, as in `Infected:max`, over the
-    /// runs that did not fail. Returns `None` for a column the runs do not record, or record no value of.
-    pub fn output_range(&self, column: &str) -> Option<(f64, f64)> {
-        let output = self.reducer_columns.iter().position(|name| name == column)?;
-        self.runs
-            .iter()
-            .filter(|outcome| !outcome.status.is_failure())
-            .filter_map(|outcome| outcome.reducers.get(output).copied().flatten())
-            .filter(|value| value.is_finite())
-            .fold(None, |range, value| match range {
-                None => Some((value, value)),
-                Some((low, high)) => Some((f64::min(low, value), f64::max(high, value))),
-            })
-    }
-
-    /// Returns the runs of config `config_id` in order of run id.
-    pub fn config_runs(&self, config_id: u64) -> impl Iterator<Item = &RunOutcome> + '_ {
-        let positions = self.configs.get(&config_id).map_or(&[][..], |config| &config.runs[..]);
-        positions.iter().map(|&position| &self.runs[position])
-    }
-
-    /// Returns the values of reducer column `output` over the runs of `config` that did not fail, in order of run id.
-    fn output_values<'a>(&'a self, config: &'a ConfigEntry, output: usize) -> impl Iterator<Item = f64> + 'a {
-        config.runs.iter().filter_map(move |&position| {
-            let outcome = &self.runs[position];
-            if outcome.status.is_failure() {
-                return None;
-            }
-            outcome.reducers.get(output).copied().flatten()
-        })
-    }
-
-    /// Returns whether `config` sits at every pinned level of `pins`, the axes in `free` left out.
-    fn matches_pins(&self, config: &ConfigEntry, pins: &[Option<usize>], free: &[Option<usize>]) -> bool {
-        pins.iter().enumerate().all(|(axis, pin)| {
-            free.contains(&Some(axis)) || pin.is_none_or(|level| self.entry_level(config, axis) == Some(level))
-        })
-    }
-
-    /// Returns the band of stat column `stat` over the runs of config `config_id` whose series is held and that did
-    /// not fail, or `None` when there is no such run.
-    ///
-    /// A run that ended early adds nothing to the ticks past its end.
-    pub fn band(&self, config_id: u64, stat: usize, kind: BandKind) -> Option<SeriesBand> {
-        let config = self.configs.get(&config_id)?;
-        let mut samples: BTreeMap<u64, Vec<f64>> = BTreeMap::new();
-        let mut runs = 0;
-        for &position in &config.runs {
-            let outcome = &self.runs[position];
-            let Some(series) = self.series.get(outcome.run.run_id) else {
-                continue;
-            };
-            if outcome.status.is_failure() || stat >= series.width() {
-                continue;
-            }
-            runs += 1;
-            for (tick, row) in series.rows() {
-                if row[stat].is_finite() {
-                    samples.entry(tick).or_default().push(row[stat]);
-                }
-            }
-        }
-        if runs == 0 {
-            return None;
-        }
-        let mut band = SeriesBand {
-            runs,
-            ..SeriesBand::default()
-        };
-        for (tick, mut values) in samples {
-            let (center, low, high) = spread(&mut values, kind);
-            band.ticks.push(tick as f64);
-            band.center.push(center);
-            band.low.push(low);
-            band.high.push(high);
-        }
-        Some(band)
-    }
-
-    /// Returns the response that `query` requests, one line per level of its group axis.
-    ///
-    /// A point pools the runs of every config at its x level that the pins let through, failed runs left out. Only a
-    /// block that varies the x axis counts. A block that holds it at one level, as each block of a One at a time
-    /// design does for every parameter but its own, would pool its variation into that one point.
-    pub fn response(&self, query: &ResponseQuery) -> Vec<ResponseLine> {
-        let free = [Some(query.x_axis), query.group_axis];
-        let mut cells: BTreeMap<(Option<usize>, usize), RunningMoments> = BTreeMap::new();
-        for config in self.configs.values() {
-            if !self.block_varies(config.block, query.x_axis) || !self.matches_pins(config, &query.pins, &free) {
-                continue;
-            }
-            let Some(x_level) = self.entry_level(config, query.x_axis) else {
-                continue;
-            };
-            let group_level = match query.group_axis {
-                None => None,
-                Some(axis) => match self.entry_level(config, axis) {
-                    Some(level) => Some(level),
-                    None => continue,
-                },
-            };
-            let moments = cells.entry((group_level, x_level)).or_default();
-            for value in self.output_values(config, query.output) {
-                moments.push(value);
-            }
-        }
-        let Some(axis) = self.axes.get(query.x_axis) else {
-            return Vec::new();
-        };
-        let mut lines: Vec<ResponseLine> = Vec::new();
-        for ((group_level, level), moments) in cells {
-            if moments.count() == 0 {
-                continue;
-            }
-            let point = ResponsePoint {
-                x: axis.positions[level],
-                level,
-                summary: moments.summary(),
-            };
-            match lines.last_mut() {
-                Some(last) if last.group_level == group_level => last.points.push(point),
-                _ => lines.push(ResponseLine {
-                    group_level,
-                    points: vec![point],
-                }),
-            }
-        }
-        lines
-    }
-
-    /// Returns the heatmap that `query` requests, or `None` when its axes are the same or out of range.
-    ///
-    /// A cell pools the runs of every config at its levels that the pins let through, failed runs left out. Only a
-    /// block that varies the x or the y axis counts, and a config that repeats the values of an earlier config of
-    /// the cell counts once. A cell with no value, or too few values for its statistic, holds a value that is not
-    /// finite.
-    pub fn heat_grid(&self, query: &HeatQuery) -> Option<HeatGrid> {
-        if query.x_axis == query.y_axis {
-            return None;
-        }
-        let (columns, rows) = (
-            self.axes.get(query.x_axis)?.levels.len(),
-            self.axes.get(query.y_axis)?.levels.len(),
-        );
-        let free = [Some(query.x_axis), Some(query.y_axis)];
-        let mut moments = vec![RunningMoments::default(); columns * rows];
-        let mut configs = vec![Vec::new(); columns * rows];
-        let mut pooled_texts: Vec<BTreeSet<&[String]>> = vec![BTreeSet::new(); columns * rows];
-        for (&config_id, config) in &self.configs {
-            let varies = self.block_varies(config.block, query.x_axis) || self.block_varies(config.block, query.y_axis);
-            if !varies || !self.matches_pins(config, &query.pins, &free) {
-                continue;
-            }
-            let (Some(column), Some(row)) = (
-                self.entry_level(config, query.x_axis),
-                self.entry_level(config, query.y_axis),
-            ) else {
-                continue;
-            };
-            let cell = row * columns + column;
-            if !pooled_texts[cell].insert(config.texts.as_slice()) {
-                continue;
-            }
-            configs[cell].push(config_id);
-            for value in self.output_values(config, query.output) {
-                moments[cell].push(value);
-            }
-        }
-        let values = moments
-            .iter()
-            .map(|moments| {
-                let (mean, deviation) = (moments.mean(), moments.standard_deviation());
-                let value = match query.color_by {
-                    HeatColor::Mean => mean,
-                    HeatColor::StandardDeviation => deviation,
-                    HeatColor::CoefficientOfVariation => mean
-                        .zip(deviation)
-                        .filter(|&(mean, _)| mean != 0.0)
-                        .map(|(mean, deviation)| deviation / mean.abs()),
-                };
-                value.unwrap_or(f64::NAN)
-            })
-            .collect();
-        Some(HeatGrid {
-            columns,
-            rows,
-            values,
-            counts: moments.iter().map(RunningMoments::count).collect(),
-            configs,
-        })
-    }
-
-    /// Returns the positions of the runs `filter` lets through, in the order that `sort` requests, ties by run id.
-    ///
-    /// A missing value sorts last in either direction.
-    pub fn row_order(&self, filter: RunsFilter, selected: &BTreeSet<u64>, sort: RunsSort) -> Vec<usize> {
-        let mut order: Vec<usize> = (0..self.runs.len())
-            .filter(|&position| {
-                let outcome = &self.runs[position];
-                match filter {
-                    RunsFilter::All => true,
-                    RunsFilter::Failed => outcome.status.is_failure(),
-                    RunsFilter::SelectedConfigs => selected.contains(&outcome.run.config_id),
-                }
-            })
-            .collect();
-        order.sort_by(|&a, &b| {
-            let (first, second) = (&self.runs[a], &self.runs[b]);
-            let ordering = match (self.sort_key(first, sort.column), self.sort_key(second, sort.column)) {
-                (Some(x), Some(y)) if sort.descending => y.compare(x),
-                (Some(x), Some(y)) => x.compare(y),
-                (Some(_), None) => Ordering::Less,
-                (None, Some(_)) => Ordering::Greater,
-                (None, None) => Ordering::Equal,
-            };
-            ordering.then(first.run.run_id.cmp(&second.run.run_id))
-        });
-        order
-    }
-
-    /// Returns the value `outcome` sorts by in `column`, `None` when `outcome` has no value in `column`.
-    fn sort_key(&self, outcome: &RunOutcome, column: RunsColumn) -> Option<SortValue> {
-        let run = &outcome.run;
-        match column {
-            RunsColumn::Run => Some(SortValue::Whole(run.run_id)),
-            RunsColumn::Config => Some(SortValue::Whole(run.config_id)),
-            RunsColumn::Replicate => Some(SortValue::Whole(run.rep)),
-            RunsColumn::Seed => Some(SortValue::Whole(run.seed)),
-            RunsColumn::Status => Some(SortValue::Whole(outcome.status as u64)),
-            RunsColumn::Ticks => Some(SortValue::Whole(outcome.ticks)),
-            RunsColumn::Time => Some(outcome.wall_ms)
-                .filter(|time| time.is_finite())
-                .map(SortValue::Real),
-            RunsColumn::Axis(axis) => self
-                .config_level(run.config_id, axis)
-                .map(|level| SortValue::Whole(level as u64)),
-            RunsColumn::Output(output) => outcome.reducers.get(output).copied().flatten().map(SortValue::Real),
-        }
-    }
-
-    /// Compares the declarations and builds the sweep recorded with `model`, the app's lookup of the sweep's model id
-    /// after the set's entry was replaced, or the reason the app cannot run the model.
-    ///
-    /// A replay of a run of other code then carries the warning that the replay might differ, and a folder of runtime
-    /// code that differs from the entry cannot be resumed. Results read from files plan their spec again
-    /// against an entry whose declarations differ from those of the plan they hold, and take the entry's parameters
-    /// and action labels. A sweep run in this app keeps the plan of its session.
-    pub fn model_changed(&mut self, model: Result<&ModelEntry, &ModelLookupError>) {
-        let entry = model.ok();
-        self.schema_matches = entry.is_some_and(|entry| {
-            entry.id() == self.model_id && self.recorded.schema_hash == Some(schema_hash(&entry.schema()))
-        });
-        (self.changed_builds, self.unidentified_builds) =
-            entry.map_or_else(Default::default, |entry| compare_builds(&self.recorded, entry));
-        self.replays_exactly =
-            self.recorded.replays_exactly && entry.is_none_or(|entry| entry.metadata().replays_exactly);
-        self.code_matches = self.recorded.code_matches(entry);
-        self.time = entry
-            .filter(|entry| entry.id() == self.model_id)
-            .and_then(|entry| entry.metadata().time.clone());
-        if let Some(mut recorded) = self.recorded_spec.take() {
-            self.descriptors = entry
-                .map(|entry| entry.param_descriptors().to_vec())
-                .unwrap_or_default();
-            self.action_labels = entry.map_or_else(BTreeMap::new, |entry| action_labels(&recorded.spec.actions, entry));
-            let declarations = entry.map(|entry| schema_hash(&entry.schema()));
-            if declarations.is_none() || declarations != recorded.planned_with {
-                recorded.planned_with = declarations;
-                self.plan = replay_plan(&recorded, model.map_err(lookup_message));
-                let planned = planned_texts(&self.plan, entry, self.schema_matches, recorded.max_planned);
-                self.rebuild_configs(planned);
-            } else {
-                let labels: Vec<String> = self.axes.iter().map(|axis| self.column_label(axis.column)).collect();
-                for (axis, label) in self.axes.iter_mut().zip(labels) {
-                    axis.label = label;
-                }
-            }
-            self.recorded_spec = Some(recorded);
-        }
-        self.revision += 1;
-    }
-
-    /// Reason the runs cannot replay, `None` when they can.
-    pub fn replay_refusal(&self) -> Option<&str> {
-        self.plan.as_ref().err().map(String::as_str)
-    }
-
-    /// Returns the reason run `run_id` of a running search cannot replay yet, `None` for any other run.
-    ///
-    /// A search reports a run before the batch that tells its candidate, and the candidate's values arrive with the
-    /// batch.
-    pub fn untold_candidate(&self, run_id: u64) -> Option<String> {
-        if !self.is_search() {
-            return None;
-        }
-        let config_id = self.run(run_id)?.run.config_id;
-        (!self.configs.contains_key(&config_id) && self.unassigned_runs.contains_key(&config_id))
-            .then(|| format!("Candidate {config_id} will be known once its batch ends"))
-    }
-
-    /// Returns the replay of run `run_id`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Self::replay_refusal`], or a message when the store holds no run `run_id` or the plan assigns the run
-    /// a different config, replicate or seed than its record. A search's run fails when the value columns do not list
-    /// the model's parameters in order. A run of either kind fails when its values do not produce the key that its
-    /// record holds, unless the model has changed since the run.
-    pub fn replay(&self, run_id: u64) -> Result<Replay, String> {
-        let plan = self.plan.as_ref().map_err(Clone::clone)?;
-        let outcome = self
-            .run(run_id)
-            .ok_or_else(|| format!("No run {run_id} in these results"))?;
-        let plan = match plan {
-            ReplayPlan::Sweep(plan) => plan,
-            ReplayPlan::Search(search_plan) => return self.search_replay(search_plan, outcome),
-        };
-        let mismatch = || format!("Run {run_id} does not match the plan of its sweep");
-        match plan.run(run_id) {
-            Some(planned) if planned == outcome.run && self.key_matches(plan.run_key(&planned), outcome) => {
-                plan.replay(run_id).ok_or_else(mismatch)
-            }
-            _ => Err(mismatch()),
-        }
-    }
-
-    /// Returns whether `key`, the key that a plan assigns to `outcome`, matches the key its record holds.
-    /// Any key matches once the model has changed since the run.
-    ///
-    /// The key hashes the model's declarations. After a change to the model no run's key matches, and the runs table
-    /// warns that a replay might differ.
-    fn key_matches(&self, key: u64, outcome: &RunOutcome) -> bool {
-        !self.schema_matches || key == outcome.run_key
-    }
-
-    /// Returns the replay of `outcome`, a run of the search of `search_plan`, from the values of its candidate.
-    fn search_replay(&self, search_plan: &SearchPlan, outcome: &RunOutcome) -> Result<Replay, String> {
-        let run_id = outcome.run.run_id;
-        if let Some(reason) = self.untold_candidate(run_id) {
-            return Err(reason);
-        }
-        let mismatch = || format!("Run {run_id} does not match the search it comes from");
-        let config = self.configs.get(&outcome.run.config_id).ok_or_else(mismatch)?;
-        let param_count = self.descriptors.len();
-        let columns = &self.value_columns;
-        let names_params = columns
-            .iter()
-            .zip(&self.descriptors)
-            .all(|(column, descriptor)| column == descriptor.id());
-        let column_count = param_count + search_plan.base().actions().len();
-        if !names_params || columns.len() != column_count || config.texts.len() != column_count {
-            return Err(mismatch());
-        }
-        let (param_texts, tick_texts) = config.texts.split_at(param_count);
-        let params = self
-            .descriptors
-            .iter()
-            .zip(param_texts)
-            .map(|(descriptor, text)| parse_value(descriptor.kind(), text).ok())
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(mismatch)?;
-        let action_ticks = tick_texts
-            .iter()
-            .map(|text| text.parse().ok())
-            .collect::<Option<Vec<u64>>>()
-            .ok_or_else(mismatch)?;
-        let config = Config {
-            block: config.block,
-            params,
-            action_ticks,
-        };
-        if !self.key_matches(search_plan.run_key(&outcome.run, &config), outcome) {
-            return Err(mismatch());
-        }
-        Ok(search_plan.replay(&outcome.run, &config))
-    }
-
-    /// Returns the reason no command line replays the runs, `None` when [`Self::cli_command`] can write one.
-    ///
-    /// A run of a model file needs the file on the command line, and the results hold no path to it.
-    pub fn command_refusal(&self) -> Option<&'static str> {
-        let runtime = |build: &RecordedBuild| build.origin.as_deref() == Some(CodeOrigin::Runtime.as_str());
-        self.recorded
-            .model_builds
-            .iter()
-            .any(runtime)
-            .then_some(MODEL_FILE_COMMAND)
-    }
-
-    /// Returns a command line of `program`, a host's equivalent of `henad-cli`, that steps run `run_id` to the tick it
-    /// ended on and writes its stats.
-    ///
-    /// The command sets each parameter that differs from the model's default and fires each action due by the end.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Self::command_refusal`] for the runs of a model file, and the message of [`Self::replay`] for a run
-    /// that does not replay.
-    pub fn cli_command(&self, program: &str, run_id: u64) -> Result<String, String> {
-        if let Some(reason) = self.command_refusal() {
-            return Err(reason.to_owned());
-        }
-        let replay = self.replay(run_id)?;
-        let (Ok(plan), Some(outcome)) = (&self.plan, self.run(run_id)) else {
-            return Err(format!("No run {run_id} in these results"));
-        };
-        let plan = plan.base();
-        let mut words = vec![
-            shell_word(program),
-            shell_word(&replay.model),
-            "--seed".to_owned(),
-            replay.seed.to_string(),
-        ];
-        for (descriptor, value) in self.descriptors.iter().zip(&replay.params) {
-            if *value != descriptor.kind().default_value() {
-                let assignment = format!("{}={}", descriptor.id(), format_value(descriptor.kind(), value));
-                words.extend(["--set".to_owned(), shell_word(&assignment)]);
-            }
-        }
-        for scheduled in replay.schedule.entries() {
-            if scheduled.tick <= outcome.ticks {
-                words.extend([
-                    "--act".to_owned(),
-                    shell_word(&format!("{}@{}", scheduled.id, scheduled.tick)),
-                ]);
-            }
-        }
-        let warmup = plan.run_settings().warmup.min(outcome.ticks);
-        words.extend([
-            "--warmup".to_owned(),
-            warmup.to_string(),
-            "--steps".to_owned(),
-            (outcome.ticks - warmup).to_string(),
-        ]);
-        let stats_every = plan.measure_settings().stats_every;
-        if stats_every != 1 {
-            words.extend(["--stats-every".to_owned(), stats_every.to_string()]);
-        }
-        words.extend(["--export-stats".to_owned(), format!("run-{run_id}.csv")]);
-        Ok(words.join(" "))
-    }
-
     /// Folder that holds the sweep's files, `None` for a sweep held in memory or picked files.
     pub fn folder(&self) -> Option<&Path> {
         self.folder.as_deref()
     }
-
-    /// Returns the ids of the runs of the configs `config_ids` whose series is not held, leaving out runs that
-    /// recorded no series.
-    pub fn runs_without_series(&self, config_ids: &BTreeSet<u64>) -> BTreeSet<u64> {
-        config_ids
-            .iter()
-            .flat_map(|&config_id| self.config_runs(config_id))
-            .map(|outcome| outcome.run.run_id)
-            .filter(|&run_id| self.series.get(run_id).is_none() && !self.empty_series_runs.contains(&run_id))
-            .collect()
-    }
-
-    /// Records that the runs `run_ids` have no series rows, so [`Self::runs_without_series`] leaves them out.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn record_empty_series(&mut self, run_ids: &BTreeSet<u64>) {
-        let known = run_ids.iter().filter(|run_id| self.positions.contains_key(run_id));
-        self.empty_series_runs.extend(known);
-        self.revision += 1;
-    }
-
-    /// Returns the number of bytes of series that a load can add while the series of `kept_runs` stay held.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn series_room(&self, kept_runs: &BTreeSet<u64>) -> usize {
-        let kept_bytes: usize = kept_runs
-            .iter()
-            .filter_map(|&run_id| self.series.get(run_id))
-            .map(series_bytes)
-            .sum();
-        self.series.budget.saturating_sub(kept_bytes)
-    }
-
-    /// Holds `series`, series of runs by id, dropping held series of runs outside `kept_runs` to make room, and
-    /// returns the number of series that fit.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn insert_series(&mut self, series: BTreeMap<u64, SeriesBuffer>, kept_runs: &BTreeSet<u64>) -> usize {
-        let needed = series.values().map(series_bytes).sum();
-        self.series.make_room(needed, kept_runs);
-        let mut held = 0;
-        for (run_id, buffer) in series {
-            if self.positions.contains_key(&run_id) && self.series.insert(run_id, buffer) {
-                held += 1;
-            }
-        }
-        self.revision += 1;
-        held
-    }
-}
-
-/// Returns the plan that replays the runs of `recorded`, the spec of a sweep read from files, through `model`, the
-/// app's entry for the sweep's model or the reason the app has none, or the reason the runs cannot replay.
-///
-/// A sweep whose manifest records more than `recorded.max_planned` configs is never planned.
-fn replay_plan(recorded: &RecordedSpec, model: Result<&ModelEntry, String>) -> Result<ReplayPlan, String> {
-    let entry = model?;
-    if recorded.is_search {
-        return SearchPlan::new(&recorded.spec, &entry.schema())
-            .map(|search_plan| ReplayPlan::Search(Arc::new(search_plan)))
-            .map_err(|error| {
-                format!(
-                    "{} refuses this search's spec: {}",
-                    entry.name(),
-                    describe_error(&error)
-                )
-            });
-    }
-    if recorded.configs > recorded.max_planned {
-        return Err(format!(
-            "Sweep has {} configurations, too many to replay in the app",
-            recorded.configs
-        ));
-    }
-    recorded
-        .spec
-        .plan(&entry.schema())
-        .map(|plan| ReplayPlan::Sweep(Arc::new(plan)))
-        .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name(), describe_error(&error)))
-}
-
-/// Returns the configs of `plan`, a sweep's plan through `entry`, to list beside the configs of `runs.csv`, or none
-/// unless the entry declares what the sweep ran with (`schema_matches`) and the plan holds at most `max_planned`.
-fn planned_texts(
-    plan: &Result<ReplayPlan, String>,
-    entry: Option<&ModelEntry>,
-    schema_matches: bool,
-    max_planned: u64,
-) -> BTreeMap<u64, ConfigTexts> {
-    match (plan, entry) {
-        (Ok(ReplayPlan::Sweep(plan)), Some(entry)) if schema_matches && plan.configs().len() as u64 <= max_planned => {
-            plan_texts(plan, entry.param_descriptors())
-        }
-        _ => BTreeMap::new(),
-    }
-}
-
-/// Returns the name that the Outputs section uses for an output kind, as in `Tick of maximum`.
-pub fn reducer_label(kind: ReducerKind) -> &'static str {
-    match kind {
-        ReducerKind::Final => "Final value",
-        ReducerKind::Min => "Minimum",
-        ReducerKind::Max => "Maximum",
-        ReducerKind::Mean => "Mean",
-        ReducerKind::ArgMax => "Tick of maximum",
-        ReducerKind::ArgMin => "Tick of minimum",
-        ReducerKind::FirstCrossing(_) => "First tick crossing",
-        ReducerKind::WindowMean { .. } => "Mean over window",
-    }
-}
-
-/// Returns the name that the views use for the output column `name`, as in `Infected, tick of maximum` for
-/// `Infected:argmax`.
-///
-/// A threshold or a window stays in the name, as in `Infected, first tick <= 10`. A kind that does not parse shows as
-/// written.
-pub fn output_label(name: &str) -> String {
-    let Some((column, written)) = name.rsplit_once(':') else {
-        return name.to_owned();
-    };
-    match written.parse::<ReducerKind>() {
-        Ok(kind) => column_output_label(column, kind),
-        Err(_) => format!("{column}, {written}"),
-    }
-}
-
-/// Returns the name that the views use for output `kind` of the stat column `column`, as [`output_label`] does for its
-/// written name.
-pub fn column_output_label(column: &str, kind: ReducerKind) -> String {
-    match kind {
-        ReducerKind::FirstCrossing(comparison) => format!(
-            "{column}, first tick {} {}",
-            comparison.comparator.as_str(),
-            comparison.threshold
-        ),
-        ReducerKind::WindowMean { start, end } => format!("{column}, mean over ticks {start} to {end}"),
-        kind => format!("{column}, {}", reducer_label(kind).to_lowercase()),
-    }
-}
-
-/// Returns the label `entry` declares for each action of `actions`, by the name that the spec assigns to the action.
-fn action_labels(actions: &[ActionSpec], entry: &ModelEntry) -> BTreeMap<String, String> {
-    actions
-        .iter()
-        .filter_map(|action| {
-            let declared = entry
-                .action_descriptors()
-                .iter()
-                .find(|declared| declared.id() == action.id)?;
-            let label = action_label(declared.label(), &action.id, &action.name);
-            Some((action.name.clone(), label))
-        })
-        .collect()
-}
-
-/// Returns the label of the action `id`, declared as `declared_label`, fired under the name `name`.
-///
-/// An action fired under another name carries that name after the label, so two firings of one action stay apart.
-/// A name that the Sweep tab numbered, such as `seed_outbreak_2`, adds only its number, as in "Seed outbreak 2".
-pub fn action_label(declared_label: &str, id: &str, name: &str) -> String {
-    let number = name
-        .strip_prefix(id)
-        .and_then(|rest| rest.strip_prefix('_'))
-        .filter(|rest| rest.parse::<u64>().is_ok());
-    if name == id {
-        declared_label.to_owned()
-    } else if let Some(number) = number {
-        format!("{declared_label} {number}")
-    } else {
-        format!("{declared_label} ({name})")
-    }
-}
-
-/// Returns the names of the value columns of `plan`: each parameter of `params`, then each action's tick.
-fn plan_value_columns(plan: &Plan, params: &[ParamDescriptor]) -> Vec<String> {
-    let actions = plan.actions().iter().map(|action| action.column_name());
-    params
-        .iter()
-        .map(|param| param.id().to_owned())
-        .chain(actions)
-        .collect()
-}
-
-/// Returns the block and values of every config of `plan` by id, as `runs.csv` writes them for the parameters
-/// `params`.
-fn plan_texts(plan: &Plan, params: &[ParamDescriptor]) -> BTreeMap<u64, ConfigTexts> {
-    plan.configs()
-        .iter()
-        .enumerate()
-        .map(|(config_id, config)| (config_id as u64, config_texts(config, params)))
-        .collect()
-}
-
-/// Returns the block and values of `config`, as `runs.csv` writes them for the parameters `params`.
-fn config_texts(config: &Config, params: &[ParamDescriptor]) -> ConfigTexts {
-    let values = params
-        .iter()
-        .zip(&config.params)
-        .map(|(param, value)| format_value(param.kind(), value));
-    let ticks = config.action_ticks.iter().map(u64::to_string);
-    ConfigTexts {
-        block: config.block,
-        texts: values.chain(ticks).collect(),
-    }
-}
-
-/// Returns the levels the configs of each block of `configs` take on `axis_count` axes, by block index.
-fn block_axes(configs: &BTreeMap<u64, ConfigEntry>, axis_count: usize) -> BTreeMap<usize, BlockAxes> {
-    let mut blocks: BTreeMap<usize, BlockAxes> = BTreeMap::new();
-    for config in configs.values() {
-        blocks
-            .entry(config.block)
-            .or_insert_with(|| BlockAxes::new(axis_count))
-            .add(&config.level_ids);
-    }
-    blocks
 }
 
 /// Inserts `position` into `positions`, positions in `runs` in order of run id, keeping that order.
@@ -2016,63 +437,6 @@ fn insert_by_run_id(positions: &mut Vec<usize>, runs: &[RunOutcome], position: u
     let run_id = runs[position].run.run_id;
     let slot = positions.partition_point(|&held| runs[held].run.run_id < run_id);
     positions.insert(slot, position);
-}
-
-/// Returns `text` as a number, or `None` when it is not a finite number.
-fn finite_number(text: &str) -> Option<f64> {
-    text.parse::<f64>().ok().filter(|value| value.is_finite())
-}
-
-/// Returns the centre and the low and high ends of the spread `kind` over `values`.
-///
-/// # Panics
-///
-/// Panics when `values` is empty and `kind` is [`BandKind::Percentiles`].
-fn spread(values: &mut [f64], kind: BandKind) -> (f64, f64, f64) {
-    let mut moments = RunningMoments::default();
-    for &value in values.iter() {
-        moments.push(value);
-    }
-    let mean = moments.mean().unwrap_or(f64::NAN);
-    match kind {
-        BandKind::StandardDeviation => {
-            let deviation = moments.standard_deviation().unwrap_or(0.0);
-            (mean, mean - deviation, mean + deviation)
-        }
-        BandKind::ConfidenceInterval => {
-            let (low, high) = moments.summary().ci95.unwrap_or((mean, mean));
-            (mean, low, high)
-        }
-        BandKind::Percentiles => {
-            values.sort_by(f64::total_cmp);
-            (
-                percentile(values, 0.5),
-                percentile(values, 0.1),
-                percentile(values, 0.9),
-            )
-        }
-    }
-}
-
-/// Returns the `fraction` percentile of the sorted `values`, interpolated linearly between the two nearest ranks.
-fn percentile(values: &[f64], fraction: f64) -> f64 {
-    let rank = (values.len() - 1) as f64 * fraction;
-    let below = rank.floor() as usize;
-    let above = (below + 1).min(values.len() - 1);
-    values[below] + (rank - below as f64) * (values[above] - values[below])
-}
-
-/// Returns `text` as one word of a shell command, quoted when it holds anything but plain characters.
-fn shell_word(text: &str) -> String {
-    let plain = !text.is_empty()
-        && text
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "_-.,:=@/+%".contains(character));
-    if plain {
-        text.to_owned()
-    } else {
-        format!("'{}'", text.replace('\'', r"'\''"))
-    }
 }
 
 #[cfg(test)]
@@ -2092,16 +456,17 @@ mod tests {
     use henad_explore::search_run::{EvaluatedCandidate, EvaluationReading, SearchPlan, SearchUpdate};
     use henad_models::example_models;
 
+    use super::axes::config_texts;
+    use super::replay::shell_word;
+    use super::series_cache::series_bytes;
     use super::{
         BandKind, HeatColor, HeatQuery, ResponseQuery, ResultsAxis, ResultsStore, RunsColumn, RunsFilter, RunsSort,
-        config_texts, output_label, series_bytes, shell_word,
     };
+    use crate::state::default_values;
+    use crate::tests::support::{ScratchFolder, finished_run, sir};
+    use crate::ui::sweep::draft::ExploreMode;
 
     const STATS: [&str; 3] = ["Susceptible", "Infected", "Recovered"];
-
-    fn sir() -> ModelEntry {
-        example_models().get("sir").cloned().expect("SIR is registered")
-    }
 
     fn values(raw: &[&str]) -> LevelSpec {
         LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
@@ -2145,17 +510,13 @@ mod tests {
             series.push(sample as u64 * 10, &[0.0, value, 0.0]);
         }
         RunOutcome {
-            run,
-            run_key: plan.run_key(&run),
             status,
-            stop_reason: StopReason::Steps,
             ticks: (infected.len() as u64).saturating_sub(1) * 10,
             population: 256,
-            build_ms: 1.0,
             wall_ms: 2.0,
             reducers: vec![Some(reducer)],
             series,
-            note: None,
+            ..finished_run(run, plan.run_key(&run))
         }
     }
 
@@ -2356,11 +717,7 @@ mod tests {
         let mut store = ResultsStore::for_search(Arc::new(search_plan), &sir, None, usize::MAX);
         assert_eq!(store.config_values(0), None, "no batch has ended");
 
-        let mut params: Vec<ParamValue> = sir
-            .param_descriptors()
-            .iter()
-            .map(|descriptor| descriptor.kind().default_value())
-            .collect();
+        let mut params = default_values(&sir);
         params[2] = ParamValue::F32(0.25);
         let config = Config {
             block: 0,
@@ -2427,23 +784,18 @@ mod tests {
 
     /// Returns replicate `rep` of candidate `candidate_id`, a run of `replicates` per candidate, ended with `status`.
     fn search_outcome(candidate_id: u64, rep: u64, replicates: u64, status: RunStatus) -> RunOutcome {
+        let run = PlannedRun {
+            run_id: candidate_id * replicates + rep,
+            config_id: candidate_id,
+            rep,
+            seed: rep,
+        };
         RunOutcome {
-            run: PlannedRun {
-                run_id: candidate_id * replicates + rep,
-                config_id: candidate_id,
-                rep,
-                seed: rep,
-            },
-            run_key: 0,
             status,
-            stop_reason: StopReason::Steps,
             ticks: 10,
-            population: 1,
-            build_ms: 1.0,
-            wall_ms: 1.0,
             reducers: vec![Some(candidate_id as f64)],
             series: SeriesBuffer::new(1),
-            note: None,
+            ..finished_run(run, 0)
         }
     }
 
@@ -3170,23 +1522,6 @@ mod tests {
     }
 
     #[test]
-    fn an_output_label_names_its_kind_in_words() {
-        assert_eq!(output_label("Infected:argmax"), "Infected, tick of maximum");
-        assert_eq!(output_label("Infected:final"), "Infected, final value");
-        assert_eq!(output_label("Infected:first<=10"), "Infected, first tick <= 10");
-        assert_eq!(
-            output_label("Recovered:mean@200..600"),
-            "Recovered, mean over ticks 200 to 600"
-        );
-        assert_eq!(
-            output_label("Infected:median"),
-            "Infected, median",
-            "an unknown kind shows as written"
-        );
-        assert_eq!(output_label("Infected"), "Infected");
-    }
-
-    #[test]
     fn an_action_axis_takes_the_label_the_model_declares() {
         let sir = sir();
         let names = ["seed_outbreak", "seed_outbreak_2", "late"];
@@ -3283,17 +1618,6 @@ mod tests {
         assert_eq!(shell_word("it's"), r"'it'\''s'");
     }
 
-    /// Folder under the system's temporary folder, removed when dropped.
-    #[cfg(not(target_arch = "wasm32"))]
-    struct ScratchFolder(std::path::PathBuf);
-
-    #[cfg(not(target_arch = "wasm32"))]
-    impl Drop for ScratchFolder {
-        fn drop(&mut self) {
-            drop(std::fs::remove_dir_all(&self.0));
-        }
-    }
-
     /// Takes snapshots from `thread` until one reports `tick`, or gives up after ten seconds.
     #[cfg(not(target_arch = "wasm32"))]
     fn snapshot_at(
@@ -3330,8 +1654,7 @@ mod tests {
             .map(|(id, value)| (id.to_owned(), value.to_owned()))
             .to_vec();
         spec.run.steps = 3;
-        let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-builds-{}", std::process::id())));
-        drop(std::fs::remove_dir_all(&folder.0));
+        let folder = ScratchFolder::new("builds");
         let mut options = SweepOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
         for replicates in [1, 2] {
             spec.run.replicates = replicates;
@@ -3431,7 +1754,7 @@ mod tests {
             "a resume refuses runtime code the sweep did not run"
         );
         assert_eq!(
-            super::super::code_refusal(Some(&store), "sweep").as_deref(),
+            super::super::code_refusal(Some(&store), ExploreMode::Sweep).as_deref(),
             Some("Model code changed since this sweep ran")
         );
 
@@ -3451,7 +1774,7 @@ mod tests {
         assert_eq!(store.changed_builds, [], "the sweep's own code again");
         assert!(store.replays_exactly);
         assert!(store.code_matches);
-        assert_eq!(super::super::code_refusal(Some(&store), "sweep"), None);
+        assert_eq!(super::super::code_refusal(Some(&store), ExploreMode::Sweep), None);
         assert_eq!(store.replay_refusal(), None);
         assert!(store.replay(0).is_ok(), "the run replays under its own code");
 
@@ -3475,7 +1798,7 @@ mod tests {
         use henad_core::provenance::ModelCode;
         use henad_explore::model_file::ModelFile;
 
-        use super::MODEL_FILE_COMMAND;
+        use super::replay::MODEL_FILE_COMMAND;
 
         let starter = crate::ui::editor::life_starter();
         assert!(starter.contains("id = \"life_rule\""));
@@ -3536,8 +1859,7 @@ mod tests {
             ..BlockSpec::default()
         }];
         spec.run.steps = 3;
-        let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-planned-{}", std::process::id())));
-        drop(std::fs::remove_dir_all(&folder.0));
+        let folder = ScratchFolder::new("planned");
         let options = SweepOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
         run_spec(
             sir,
@@ -3658,8 +1980,7 @@ mod tests {
             ],
             design_seed: None,
         }];
-        let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-results-{}", std::process::id())));
-        drop(std::fs::remove_dir_all(&folder.0));
+        let folder = ScratchFolder::new("results");
         let options = SweepOptions::new(henad_explore::sweep::Provenance::new(
             henad_core::build_info!(),
             Vec::new(),

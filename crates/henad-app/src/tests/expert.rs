@@ -1,8 +1,6 @@
 //! Tests of the expert mode: the Diagram of a card, the conversion of a sheet to a node graph copy, the copy's banner
 //! and the original's link line, display names, port names by origin and frame titles that fit.
 
-use std::path::PathBuf;
-
 use egui::accesskit::Role;
 use henad_graph::edit::{EditCommand, Scope};
 use henad_graph::ids::NodeId;
@@ -14,7 +12,7 @@ use henad_graph::sheet::sentence::{
 use henad_graph::sheet::starters;
 use henad_graph::value::Literal;
 
-use crate::tests::support::{Harness, forbidden_words};
+use crate::tests::support::{Harness, ScratchFolder, forbidden_words};
 use crate::ui::editor::expert::{CopyState, convert_refusal, copy_banner, find_original, open_original_of, today};
 use crate::ui::editor::graph::arrange::NODE_SIZE;
 use crate::ui::editor::sheet::diagram::diagram_boxes;
@@ -466,24 +464,6 @@ fn open_original_returns_to_the_sheet_and_its_line_opens_the_copy() {
     harness.click(&converted_link("Game of Life (expert)"));
     let banner = copy_banner(&mut harness.app.editor).expect("a banner");
     assert_eq!(banner.state, CopyState::OriginalChanged);
-}
-
-/// A folder under the system's temporary folder, removed when dropped.
-struct ScratchFolder(PathBuf);
-
-impl ScratchFolder {
-    fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("henad-app-{name}-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&path));
-        std::fs::create_dir_all(&path).expect("a scratch folder");
-        Self(path)
-    }
-}
-
-impl Drop for ScratchFolder {
-    fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.0));
-    }
 }
 
 #[test]

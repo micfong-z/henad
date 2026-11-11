@@ -228,5 +228,5 @@ fn a_hidden_tick_length_stays_a_sweep_factor() {
     let planned = draft
         .check(&schema, &default_values(&entry))
         .unwrap_or_else(|issues| panic!("the draft does not plan: {issues:?}"));
-    assert_eq!(planned.counts().0, 2, "two tick lengths");
+    assert_eq!(planned.counts().configs, 2, "two tick lengths");
 }

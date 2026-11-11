@@ -1297,7 +1297,7 @@ pub fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
 
 /// Returns `error` capitalised, as in "This build does not include model 'x'".
 pub fn lookup_message(error: &ModelLookupError) -> String {
-    crate::ui::sweep::draft::capitalize(&error.to_string())
+    crate::ui::text::capitalize(&error.to_string())
 }
 
 /// Returns `shortfalls`, the reasons the device cannot build a model, as Build's disabled reason.
@@ -1307,7 +1307,7 @@ pub fn too_large_message(shortfalls: &[String]) -> String {
 
 /// Returns `error` as Build's disabled reason, as in `Parameter 'infection_rate': 2 is outside 0..=1`.
 pub fn setup_message(error: &SetupError) -> String {
-    use crate::ui::sweep::draft::describe_error;
+    use crate::ui::text::describe_error;
     match error {
         SetupError::Param(reason) => describe_error(reason),
         other => describe_error(other),

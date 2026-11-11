@@ -1,7 +1,8 @@
-//! Models and helpers the app's tests share: replaced model code, a model with a time scale, held builds and steps,
-//! the widgets of a frame, a harness that draws the sheet editor and reads its accessible nodes, and the alignment of
-//! a sheet rebuilt in the editor with the starter it rebuilds.
+//! Models and helpers the app's tests share: SIR, replaced model code, a model with a time scale, a finished run and a
+//! scratch folder, held builds and steps, the widgets of a frame, a harness that draws the sheet editor and reads its
+//! accessible nodes, and the alignment of a sheet rebuilt in the editor with the starter it rebuilds.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -10,6 +11,8 @@ use henad_compute::fault::Fault;
 use henad_compute::gpu::GpuContext;
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::grid_model::GridModel;
+use henad_core::explore::measure::SeriesBuffer;
+use henad_core::explore::outcome::{PlannedRun, RunOutcome, RunStatus, StopReason};
 use henad_core::grid::Grid2D;
 use henad_core::helpers::f32_param;
 use henad_core::model::SimState;
@@ -27,6 +30,53 @@ use crate::ui::about::about_modal;
 use crate::ui::editor::sheet::new_model::new_model_modal;
 use crate::ui::editor::{editor_ui, open_text, unsaved_modal};
 use crate::ui::menu_bar::file_menu;
+
+/// Returns the entry of SIR from the example models.
+pub fn sir() -> ModelEntry {
+    henad_models::example_models()
+        .get("sir")
+        .cloned()
+        .expect("SIR is registered")
+}
+
+/// Returns the outcome of `run` with `run_key`, a run that stepped to its end: no ticks, no reducers and no series,
+/// with a population of 1 and a millisecond to build and to run.
+///
+/// A test sets the fields it reads with struct update syntax.
+pub fn finished_run(run: PlannedRun, run_key: u64) -> RunOutcome {
+    RunOutcome {
+        run,
+        run_key,
+        status: RunStatus::Ok,
+        stop_reason: StopReason::Steps,
+        ticks: 0,
+        population: 1,
+        build_ms: 1.0,
+        wall_ms: 1.0,
+        reducers: Vec::new(),
+        series: SeriesBuffer::new(0),
+        note: None,
+    }
+}
+
+/// Empty folder in the system's temporary folder, removed with everything in it when dropped.
+pub struct ScratchFolder(pub PathBuf);
+
+impl ScratchFolder {
+    /// Returns an empty folder named `henad-app-{name}-{pid}`, removing what an earlier run left there.
+    pub fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("henad-app-{name}-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&path));
+        std::fs::create_dir_all(&path).expect("a scratch folder");
+        Self(path)
+    }
+}
+
+impl Drop for ScratchFolder {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.0));
+    }
+}
 
 /// SIR as an edit leaves its declarations: an infection rate capped at 0.5 with another default, no recovery rate, a
 /// new vaccination rate, one stat fewer, and a new action ahead of the outbreak.

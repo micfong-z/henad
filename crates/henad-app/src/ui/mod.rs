@@ -20,6 +20,7 @@ pub mod results;
 pub mod stats;
 pub mod sweep;
 pub mod system;
+pub mod text;
 pub mod time_axis;
 pub mod viewport;
 

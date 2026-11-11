@@ -53,7 +53,7 @@ pub async fn start_web(options: impl FnOnce() -> AppOptions) -> Result<(), WebSt
     let loading_text = document.get_element_by_id(LOADING_TEXT_ID);
     let refuse = |error: WebStartError| {
         if let Some(element) = &loading_text {
-            element.set_text_content(Some(&crate::ui::sweep::draft::capitalize(&error.to_string())));
+            element.set_text_content(Some(&crate::ui::text::capitalize(&error.to_string())));
         }
         Err(error)
     };

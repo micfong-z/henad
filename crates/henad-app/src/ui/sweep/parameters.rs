@@ -14,8 +14,8 @@ use crate::ui::params::display_value;
 use crate::ui::plural;
 use crate::ui::sweep::builder::FormInput;
 use crate::ui::sweep::draft::{
-    DraftDesign, DraftIssue, DraftMode, DraftSite, FactorDraft, IssueKind, LevelPreview, levels_example, number_text,
-    parse_levels, round_step, whole_range_text,
+    DraftDesign, DraftIssue, DraftSite, ExploreMode, FactorDraft, IssueKind, LevelPreview, both_ends_fill, kind_bounds,
+    levels_example, number_text, parse_levels, quarter_step, whole_range_text,
 };
 use crate::ui::sweep::layout::{FormRows, Note, column, icon_button, note_label, note_line, segmented, slot};
 
@@ -153,19 +153,19 @@ pub fn row_note(
 }
 
 /// Returns the legend over the parameter rows, for a draft in `mode` with `design`.
-pub fn legend(mode: DraftMode, design: DraftDesign) -> &'static str {
+pub fn legend(mode: ExploreMode, design: DraftDesign) -> &'static str {
     match (mode, design) {
-        (DraftMode::Search, _) => {
+        (ExploreMode::Search, _) => {
             "Enter a range as 0.1:0.5 to search all of it, or values as 0.1, 0.2 to select from. Checkbox and \
              dropdown parameters use all options by default."
         }
-        (DraftMode::Sweep, DraftDesign::Table) => {
+        (ExploreMode::Sweep, DraftDesign::Table) => {
             "The design table sets the parameters it names. Other parameters use values from the Parameters tab."
         }
-        (DraftMode::Sweep, DraftDesign::LatinHypercube | DraftDesign::UniformRandom) => {
+        (ExploreMode::Sweep, DraftDesign::LatinHypercube | DraftDesign::UniformRandom) => {
             "Enter a range as 0.1:0.5 for the design to draw from, or values as 0.1, 0.2."
         }
-        (DraftMode::Sweep, DraftDesign::EveryCombination | DraftDesign::Zip | DraftDesign::VaryEachAlone) => {
+        (ExploreMode::Sweep, DraftDesign::EveryCombination | DraftDesign::Zip | DraftDesign::VaryEachAlone) => {
             "Enter values as 0.1, 0.2, or a range as 0.1:0.5:0.1 with both ends included. Leave out the step of an \
              integer range to step by 1."
         }
@@ -194,11 +194,9 @@ pub fn parameters_section(
             slot(ui, layout.values_width(), |ui| ui.label(weak("Values")));
         });
     }
-    let table_columns = draft
-        .runs_table()
-        .then(|| draft.table.as_ref().map(|table| table.columns()).unwrap_or_default());
+    let table_columns = draft.table_columns();
     let context = RowContext {
-        search: draft.mode == DraftMode::Search,
+        search: draft.mode == ExploreMode::Search,
         draws_ranges: draft.draws_ranges(),
         cli_command: input.cli_command,
     };
@@ -488,15 +486,7 @@ impl RangeFields {
     /// step, rounded to 1, 2 or 5 times a power of ten.
     pub fn of(text: &str, kind: &ParamKind) -> Self {
         let (low, high) = kind_bounds(kind);
-        let default_step = |min: f64, max: f64| {
-            let step = round_step((max - min) / 4.0);
-            let step = if matches!(kind, ParamKind::U32 { .. }) {
-                step.round().max(1.0)
-            } else {
-                step
-            };
-            if step.is_finite() && step > 0.0 { step } else { 1.0 }
-        };
+        let default_step = |min: f64, max: f64| quarter_step(kind, min, max).unwrap_or(1.0);
         match parse_levels(text) {
             Ok(LevelSpec::Range { min, max, step }) => Self {
                 min,
@@ -540,15 +530,6 @@ impl RangeFields {
     }
 }
 
-/// Returns the lowest and highest value of a parameter of `kind`, 0 and 1 for a parameter that is not a number.
-fn kind_bounds(kind: &ParamKind) -> (f64, f64) {
-    match *kind {
-        ParamKind::F32 { min, max, .. } => (f64::from(min), f64::from(max)),
-        ParamKind::U32 { min, max, .. } => (f64::from(min), f64::from(max)),
-        ParamKind::Bool { .. } | ParamKind::Choice { .. } => (0.0, 1.0),
-    }
-}
-
 /// Returns the bounds of a parameter of `kind` as the editor shows them, as in "1 to 16384, integers".
 pub fn bounds_text(kind: &ParamKind) -> String {
     let (low, high) = kind_bounds(kind);
@@ -584,12 +565,6 @@ pub fn whole_range_fill(kind: &ParamKind, draws_ranges: bool) -> String {
     } else {
         levels_example(kind)
     }
-}
-
-/// Returns the quick fill of a parameter's minimum and maximum only.
-pub fn both_ends_fill(kind: &ParamKind) -> String {
-    let (low, high) = kind_bounds(kind);
-    format!("{},{}", number_text(kind, low), number_text(kind, high))
 }
 
 /// Returns the quick fill of half, one and one and a half times `value`, each held within a parameter's bounds, with
@@ -849,7 +824,8 @@ mod tests {
         options_button_text, options_text, picked_options, preview_note, preview_tooltip, row_note, segment_text,
         values_editor_id, values_field_id, whole_range_fill,
     };
-    use crate::ui::sweep::draft::{DraftIssue, DraftSite, IssueKind, LevelPreview, levels_text};
+    use crate::ui::sweep::draft::levels::levels_text;
+    use crate::ui::sweep::draft::{DraftIssue, DraftSite, IssueKind, LevelPreview};
     use crate::ui::sweep::layout::Note;
 
     const RATE: ParamKind = ParamKind::F32 {

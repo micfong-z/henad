@@ -10,7 +10,7 @@ use egui_plot::{
 use henad_core::explore::summary::ReplicateSummary;
 use web_time::Instant;
 
-use crate::ui::results::plot::{config_color, labeled_combo, level_formatter, refresh_due};
+use crate::ui::results::plot::{cache_stale, config_color, labeled_combo, level_formatter};
 use crate::ui::results::store::{ResponseLine, ResponseQuery, ResultsAxis, ResultsStore};
 use crate::ui::show_plot;
 
@@ -295,7 +295,7 @@ fn controls(ui: &mut egui::Ui, store: &ResultsStore, view: &mut ResponseView) {
                 ui.selectable_value(&mut view.x_axis, index, axis.label.as_str());
             }
         });
-        output_combo(ui, "henad_results_response_output", store, &mut view.output);
+        reducer_combo(ui, "henad_results_response_output", store, &mut view.output);
         let group_text = view.group_axis.map_or("None", |axis| axes[axis].label.as_str());
         labeled_combo(ui, "Group by", "henad_results_response_group", group_text, |ui| {
             ui.selectable_value(&mut view.group_axis, None, "None");
@@ -321,13 +321,21 @@ fn controls(ui: &mut egui::Ui, store: &ResultsStore, view: &mut ResponseView) {
 }
 
 /// Draws the Output combo, picking a reducer column of `store` into `output`.
-pub fn output_combo(ui: &mut egui::Ui, id: &str, store: &ResultsStore, output: &mut usize) {
+pub fn reducer_combo(ui: &mut egui::Ui, id: &str, store: &ResultsStore, output: &mut usize) {
     let selected_text = store.output_label(*output);
     labeled_combo(ui, "Output", id, &selected_text, |ui| {
         for index in 0..store.reducer_columns().len() {
             ui.selectable_value(output, index, store.output_label(index));
         }
     });
+}
+
+/// Resizes `pins` to one per axis of `axes`, and drops each pin past the levels of its axis.
+pub fn fit_pins(pins: &mut Vec<Option<usize>>, axes: &[ResultsAxis]) {
+    pins.resize(axes.len(), None);
+    for (pin, axis) in pins.iter_mut().zip(axes) {
+        *pin = pin.filter(|&level| level < axis.levels.len());
+    }
 }
 
 /// Draws a combo for each axis outside `free` that holds it at one level or at any level, into `pins`.
@@ -358,10 +366,7 @@ impl ResponseView {
         self.x_axis = self.x_axis.min(axes.len() - 1);
         self.output = self.output.min(store.reducer_columns().len() - 1);
         self.group_axis = self.group_axis.filter(|&axis| axis < axes.len() && axis != self.x_axis);
-        self.pins.resize(axes.len(), None);
-        for (pin, axis) in self.pins.iter_mut().zip(axes) {
-            *pin = pin.filter(|&level| level < axis.levels.len());
-        }
+        fit_pins(&mut self.pins, axes);
     }
 
     /// Returns the lines of `query` with the whiskers that `error_bars` selects, computed again when `query` or
@@ -379,10 +384,12 @@ impl ResponseView {
     ) -> &[PlottedLine] {
         let stale = self.cache.as_ref().is_some_and(|cache| {
             let settings_changed = cache.query != *query || cache.error_bars != error_bars;
-            if settings_changed || cache.revision == store.revision() {
-                return settings_changed;
-            }
-            refresh_due(ctx, cache.computed_at)
+            cache_stale(
+                ctx,
+                settings_changed,
+                cache.revision != store.revision(),
+                cache.computed_at,
+            )
         });
         if stale {
             self.cache = None;
@@ -405,7 +412,7 @@ mod tests {
     use henad_core::explore::summary::ReplicateSummary;
 
     use super::{ErrorBars, Whiskers, plotted_line};
-    use crate::ui::results::store::{ResponseLine, ResponsePoint};
+    use crate::ui::results::store::statistics::{ResponseLine, ResponsePoint};
 
     /// Returns the point at `x` of level `level`, with a mean of `mean` and a confidence interval of `ci95`.
     fn point(x: f64, level: usize, mean: Option<f64>, ci95: Option<(f64, f64)>) -> ResponsePoint {

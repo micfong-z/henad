@@ -17,8 +17,9 @@ use henad_explore::sweep::{Provenance, SweepEnd, SweepOutline, SweepReport};
 use crate::state::{AppState, lookup_message};
 use crate::ui::results::ResultsPanel;
 use crate::ui::sweep::builder::budget_text;
-use crate::ui::sweep::draft::{SweepDraft, capitalize, describe_error};
+use crate::ui::sweep::draft::{ExploreMode, SweepDraft};
 use crate::ui::sweep::plan::PlanSummary;
+use crate::ui::text::{capitalize, describe_error};
 
 /// Draft that started a session, kept for Save spec and the Plan panel while the session lasts.
 pub struct KeptDraft {
@@ -109,12 +110,13 @@ impl SessionExecution {
         }
     }
 
-    /// Returns the line that lists the recorded memory budgets a resume of the `noun` will use, `None` without a
-    /// budget.
-    pub fn resume_text(&self, noun: &str) -> Option<String> {
+    /// Returns the line that lists the recorded memory budgets a resume of the sweep or search in `mode` will use,
+    /// `None` without a budget.
+    pub fn resume_text(&self, mode: ExploreMode) -> Option<String> {
         let budgets = budget_text(self.memory_budget, self.gpu_memory_budget)?;
         Some(format!(
-            "Missing runs will run with Memory budget {budgets}, as the {noun} recorded."
+            "Missing runs will run with Memory budget {budgets}, as the {} recorded.",
+            mode.noun()
         ))
     }
 }
@@ -148,31 +150,10 @@ impl SweepSession {
         if let Some(refusal) = sheet_capacity_refusal(app, &entry, &spec) {
             return Err(refusal);
         }
-        let mut options = SweepRunOptions::new(provenance(app.product.host));
-        options.concurrency = execution.concurrency;
-        options.memory_budget = execution.memory_budget;
-        options.gpu_memory_budget = execution.gpu_memory_budget;
-        options.wake = Some(app.repaint_waker());
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            options.build_pool = app.model_pool().current().1;
-        }
+        let options = run_options(app, execution);
         let run = SweepRun::start(entry, None, spec, output, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();
-        Ok(Self {
-            run,
-            model_name,
-            output_dir,
-            warnings: Vec::new(),
-            report: None,
-            failure: None,
-            latest_search_update: None,
-            latest_generation: 0,
-            finished_generations: 0,
-            outline: None,
-            kept: None,
-            execution,
-        })
+        Ok(Self::new(run, model_name, output_dir, execution))
     }
 
     /// Resumes the sweep whose results `folder` holds, a sweep of the model `model_id`, with the concurrency and
@@ -190,18 +171,19 @@ impl SweepSession {
     ) -> Result<Self, String> {
         let entry = app.lookup(model_id).map_err(|error| lookup_message(&error))?.clone();
         let model_name = entry.name().to_owned();
-        let mut options = SweepRunOptions::new(provenance(app.product.host));
-        options.concurrency = execution.concurrency;
-        options.memory_budget = execution.memory_budget;
-        options.gpu_memory_budget = execution.gpu_memory_budget;
-        options.wake = Some(app.repaint_waker());
-        options.build_pool = app.model_pool().current().1;
+        let options = run_options(app, execution);
         let run = SweepRun::resume_directory(entry, None, &folder, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();
-        Ok(Self {
+        Ok(Self::new(run, model_name, Some(folder), execution))
+    }
+
+    /// Returns a session of `run`, a sweep of the model named `model_name` that runs with `execution`, before its
+    /// first event.
+    fn new(run: SweepRun, model_name: String, output_dir: Option<PathBuf>, execution: SessionExecution) -> Self {
+        Self {
             run,
             model_name,
-            output_dir: Some(folder),
+            output_dir,
             warnings: Vec::new(),
             report: None,
             failure: None,
@@ -211,7 +193,7 @@ impl SweepSession {
             outline: None,
             kept: None,
             execution,
-        })
+        }
     }
 
     /// Plan of the sweep's configs and runs, or of a search's fixed values and actions alone.
@@ -232,12 +214,12 @@ impl SweepSession {
         self.run.search_plan()
     }
 
-    /// Returns "search" for a search and "sweep" for a sweep, as the progress view names it.
-    pub fn noun(&self) -> &'static str {
+    /// Returns whether the session runs a sweep or a search.
+    pub fn mode(&self) -> ExploreMode {
         if self.search_plan().is_some() {
-            "search"
+            ExploreMode::Search
         } else {
-            "sweep"
+            ExploreMode::Sweep
         }
     }
 
@@ -354,6 +336,23 @@ fn sheet_capacity_refusal(app: &AppState, entry: &ModelEntry, spec: &SweepSpec) 
     (error.count > 0).then(|| describe_error(&ExploreError::Capacity(error)))
 }
 
+/// Returns the options of a sweep that `app` starts with the concurrency and budgets of `execution`.
+///
+/// The sweep wakes the UI on each event, and builds its probes and the runs of a GPU model in the app's
+/// [`ModelPool`](crate::state::ModelPool) on native.
+fn run_options(app: &AppState, execution: SessionExecution) -> SweepRunOptions {
+    let mut options = SweepRunOptions::new(provenance(app.product.host));
+    options.concurrency = execution.concurrency;
+    options.memory_budget = execution.memory_budget;
+    options.gpu_memory_budget = execution.gpu_memory_budget;
+    options.wake = Some(app.repaint_waker());
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        options.build_pool = app.model_pool().current().1;
+    }
+    options
+}
+
 /// Returns the provenance a sweep's manifest records: `host`, the build of this app, with its command line.
 pub(crate) fn provenance(host: BuildInfo) -> Provenance {
     let arguments = std::env::args_os()
@@ -377,7 +376,9 @@ mod tests {
 
     use super::{SessionExecution, SessionState, SweepSession};
     use crate::state::AppState;
+    use crate::tests::support::ScratchFolder;
     use crate::ui::results::ResultsPanel;
+    use crate::ui::sweep::draft::ExploreMode;
 
     /// Returns the app over a headless device, or `None` to skip a GPU test on a machine without a GPU.
     fn headless_app() -> Option<AppState> {
@@ -404,16 +405,7 @@ mod tests {
 
         let mut session =
             SweepSession::start(&mut app, spec, SessionExecution::default(), None).expect("the sweep starts");
-        let mut results = ResultsPanel::default();
-        let started = Instant::now();
-        while session.is_running() {
-            assert!(
-                started.elapsed() < Duration::from_secs(60),
-                "the sweep did not end in time"
-            );
-            session.update(0.0, &mut results);
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        finish(&mut session);
 
         let state = session.state(&session.progress());
         assert_eq!(state, SessionState::Finished, "the sweep failed: {:?}", session.failure);
@@ -463,7 +455,7 @@ mod tests {
             "the recorded concurrency is left out"
         );
         assert_eq!(
-            execution.resume_text("sweep").as_deref(),
+            execution.resume_text(ExploreMode::Sweep).as_deref(),
             Some("Missing runs will run with Memory budget 4.0 GB, GPU 2.0 GB, as the sweep recorded.")
         );
         let automatic = ManifestExecution {
@@ -473,7 +465,7 @@ mod tests {
             ..recorded
         };
         assert_eq!(SessionExecution::recorded(&automatic), SessionExecution::default());
-        assert_eq!(SessionExecution::default().resume_text("search"), None);
+        assert_eq!(SessionExecution::default().resume_text(ExploreMode::Search), None);
     }
 
     /// A resume from the Results tab runs with the budgets the sweep recorded.
@@ -485,8 +477,8 @@ mod tests {
         let Some(mut app) = headless_app() else {
             return;
         };
-        let folder = std::env::temp_dir().join(format!("henad-app-resume-execution-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&folder));
+        let scratch = ScratchFolder::new("resume-execution");
+        let folder = &scratch.0;
         let mut spec = SweepSpec::new("sir");
         spec.fixed = vec![
             ("grid_width".to_owned(), "8".to_owned()),
@@ -506,7 +498,7 @@ mod tests {
             let set = ResultSet::open_dir(folder, usize::MAX).expect("the folder reads");
             set.manifest().execution.clone()
         };
-        let recorded = manifest_execution(&folder);
+        let recorded = manifest_execution(folder);
         assert_eq!(recorded.concurrency, "1");
         let budgets = SessionExecution {
             concurrency: Concurrency::Auto,
@@ -518,13 +510,12 @@ mod tests {
             SweepSession::resume_folder(&mut app, folder.clone(), "sir", budgets).expect("the sweep resumes");
         finish(&mut session);
         assert_eq!(session.state(&session.progress()), SessionState::Finished);
-        let resumed = manifest_execution(&folder);
+        let resumed = manifest_execution(folder);
         assert_eq!(resumed.concurrency, "auto", "the resume ran with automatic concurrency");
         assert_eq!(
             SessionExecution::recorded(&resumed),
             budgets,
             "the resume kept the budgets"
         );
-        drop(std::fs::remove_dir_all(&folder));
     }
 }
