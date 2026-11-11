@@ -131,13 +131,13 @@ impl Default for GpuStats {
 
 /// GPU-runner-specific commands, on top of the shared [`crate::cpu::sim_thread::SimCommand`].
 #[derive(Debug)]
-pub enum GpuCommand {
+enum GpuCommand {
     /// Set the fixed batch size, at least 1.
-    SetBatchSize(u32),
+    BatchSize(u32),
     /// Switch adaptive batch sizing on or off.
-    SetAdaptive(bool),
+    Adaptive(bool),
     /// Set the wall-clock budget of one adaptive batch in milliseconds, at least 0.1.
-    SetTargetMs(f64),
+    TargetMs(f64),
 }
 
 /// Initial adaptive-batching settings, so a freshly spawned thread starts in whatever mode the UI
@@ -188,6 +188,7 @@ use crate::runner::{
     SnapshotSlot,
 };
 use crate::snapshot::{Snapshot, SnapshotView, StatSample};
+use henad_core::action::RefusedActions;
 use henad_core::send_sync::WasmNotSend;
 
 /// Time to leave an outstanding batch alone before looking again.
@@ -354,20 +355,20 @@ impl SimLoop for Loop {
                 self.reset_tps_window(Instant::now());
             }
             Command::Sim(SimCommand::Shutdown) => return true,
-            Command::Gpu(GpuCommand::SetBatchSize(n)) => {
+            Command::Gpu(GpuCommand::BatchSize(n)) => {
                 self.fixed_batch_size = n.max(1);
                 if !self.adaptive {
                     self.batch_size = self.fixed_batch_size;
                 }
             }
-            Command::Gpu(GpuCommand::SetAdaptive(enabled)) => {
+            Command::Gpu(GpuCommand::Adaptive(enabled)) => {
                 self.adaptive = enabled;
                 if !enabled {
                     self.batch_size = self.fixed_batch_size;
                 }
                 self.publish_gpu_stats();
             }
-            Command::Gpu(GpuCommand::SetTargetMs(target_ms)) => {
+            Command::Gpu(GpuCommand::TargetMs(target_ms)) => {
                 self.target_ms = target_ms.max(0.1);
             }
         }
@@ -522,12 +523,7 @@ impl Loop {
         }
         // Drains a readback still in flight, so the readback below starts.
         self.state.poll_stats_readback(&self.ctx.device, true);
-        let mut encoder = self.encoder("henad_gpu_run_to_sample");
-        self.state.encode_snapshot_passes(&mut encoder);
-        self.ctx.queue.submit(Some(encoder.finish()));
-        self.state.begin_stats_readback();
-        self.state.poll_stats_readback(&self.ctx.device, true);
-        self.in_flight = None;
+        self.read_snapshot_blocking("henad_gpu_run_to_sample");
         if sample_due && !self.state.stats_readback_pending() {
             self.run_to_samples.push(StatSample {
                 tick,
@@ -539,6 +535,13 @@ impl Loop {
             self.publish_snapshot();
             self.publish_gpu_stats();
         }
+    }
+
+    /// Submits the snapshot passes in an encoder labelled `label` and blocks on their stats readback. The batch in
+    /// flight is dropped rather than timed.
+    fn read_snapshot_blocking(&mut self, label: &str) {
+        snapshot_blocking(&mut *self.state, &self.ctx.device, &self.ctx.queue, label);
+        self.in_flight = None;
     }
 
     fn encoder(&self, label: &str) -> wgpu::CommandEncoder {
@@ -653,38 +656,20 @@ impl Loop {
     /// The outstanding batch is dropped rather than timed. Its sample would cover the one-shot work
     /// too, and on native the readback has drained the queue underneath it anyway.
     fn snapshot_now(&mut self) {
-        let mut encoder = self.encoder("henad_gpu_snapshot_now");
-        self.state.encode_snapshot_passes(&mut encoder);
-        self.ctx.queue.submit(Some(encoder.finish()));
-        self.state.begin_stats_readback();
-        self.state.poll_stats_readback(&self.ctx.device, true);
+        self.read_snapshot_blocking("henad_gpu_snapshot_now");
         self.late_stats = self.state.stats_readback_pending();
-        self.in_flight = None;
 
         self.last_snapshot_publish = Instant::now();
         self.publish_snapshot();
         self.publish_gpu_stats();
     }
 
-    /// Records and submits one batch of steps, plus the display, stats and timestamp-resolve work
-    /// at their own cadences, then updates published state.
-    ///
-    /// Only the first submission of a batch carries the timestamps, so the reported per-step time
-    /// divides by that chunk rather than by the batch.
-    ///
-    /// The timestamp resolve deliberately does not share a command buffer with the writes. See
-    /// `TimestampQuery::resolve_after`.
+    /// Returns the steps of the next batch and whether it ends in a snapshot.
     ///
     /// A batch stops at a pending run-to target and at its next sample tick, and a capped batch holds the steps of one
-    /// snapshot interval. A submission ends at each tick an action is due at. The actions follow in their own
-    /// submissions, and the snapshot passes after them.
-    ///
-    /// Returns the number of steps submitted.
-    fn step_batch(&mut self) -> u32 {
-        let now = Instant::now();
-        let want_timing =
-            self.timestamp_query.is_some() && now.duration_since(self.last_stats_publish) >= STATS_INTERVAL;
-        let (batch_size_submitted, snapshot_interval) = match self.run_to_target {
+    /// snapshot interval.
+    fn plan_batch(&self, now: Instant) -> (u32, bool) {
+        let (steps, snapshot_interval) = match self.run_to_target {
             Some(target) => {
                 let tick = self.state.tick();
                 let mut steps = u64::from(self.batch_size).min(target.saturating_sub(tick));
@@ -702,23 +687,30 @@ impl Loop {
         // at the target. Where a readback can block, [`Self::sample_run_to`] publishes a run to a tick.
         let reaches_target = self
             .run_to_target
-            .is_some_and(|target| self.state.tick() + u64::from(batch_size_submitted) >= target);
+            .is_some_and(|target| self.state.tick() + u64::from(steps) >= target);
         let sampled = self.run_to_target.is_some() && CAN_BLOCK_ON_READBACK;
         let want_snapshot =
             !reaches_target && !sampled && now.duration_since(self.last_snapshot_publish) >= snapshot_interval;
+        (steps, want_snapshot)
+    }
 
-        let query_set = if want_timing {
-            self.timestamp_query.as_ref().map(TimestampQuery::query_set)
-        } else {
-            None
-        };
-
+    /// Submits `steps` steps in chunks, the snapshot passes after the last when `want_snapshot` holds, and the
+    /// timestamps of `query_set` on the first chunk.
+    ///
+    /// A submission ends at each tick an action is due at. The actions follow in their own submissions, and the
+    /// snapshot passes after them. Returns the last submission and the steps of the stamped chunk.
+    fn submit_chunks(
+        &mut self,
+        steps: u32,
+        want_snapshot: bool,
+        query_set: Option<&wgpu::QuerySet>,
+    ) -> (Option<wgpu::SubmissionIndex>, Option<u32>) {
         let mut submitted = 0;
         let mut stamped_steps = None;
         let mut write_submission = None;
-        while submitted < batch_size_submitted {
+        while submitted < steps {
             let steps_to_action = self.steps_to_next_action();
-            let chunk = MAX_STEPS_PER_SUBMISSION.min(batch_size_submitted - submitted);
+            let chunk = MAX_STEPS_PER_SUBMISSION.min(steps - submitted);
             let chunk = steps_to_action.map_or(chunk, |steps| steps.min(u64::from(chunk)) as u32);
             let action_due = steps_to_action == Some(u64::from(chunk));
             let mut encoder = self.encoder("henad_gpu_sim_encoder");
@@ -730,7 +722,7 @@ impl Loop {
             self.state.encode_steps(&mut encoder, chunk, stamp);
 
             submitted += chunk;
-            let snapshot_here = want_snapshot && submitted >= batch_size_submitted;
+            let snapshot_here = want_snapshot && submitted >= steps;
             if snapshot_here && !action_due {
                 self.state.encode_snapshot_passes(&mut encoder);
             }
@@ -744,10 +736,35 @@ impl Loop {
                 }
             }
         }
+        (write_submission, stamped_steps)
+    }
+
+    /// Records and submits one batch of steps, plus the display, stats and timestamp-resolve work
+    /// at their own cadences, then updates published state.
+    ///
+    /// Only the first submission of a batch carries the timestamps, so the reported per-step time
+    /// divides by that chunk rather than by the batch.
+    ///
+    /// The timestamp resolve deliberately does not share a command buffer with the writes. See
+    /// `TimestampQuery::resolve_after`.
+    ///
+    /// Returns the number of steps submitted.
+    fn step_batch(&mut self) -> u32 {
+        let now = Instant::now();
+        let want_timing =
+            self.timestamp_query.is_some() && now.duration_since(self.last_stats_publish) >= STATS_INTERVAL;
+        let (steps, want_snapshot) = self.plan_batch(now);
+        let query_set = self
+            .timestamp_query
+            .as_ref()
+            .filter(|_| want_timing)
+            .map(TimestampQuery::query_set)
+            .cloned();
+        let (write_submission, stamped_steps) = self.submit_chunks(steps, want_snapshot, query_set.as_ref());
         // Every tick the batch passed has had its turn. A due action ended its chunk and fired above.
         self.fired_through = Some(self.state.tick());
 
-        self.step_count += u64::from(batch_size_submitted);
+        self.step_count += u64::from(steps);
 
         if want_snapshot {
             self.state.begin_stats_readback();
@@ -756,13 +773,12 @@ impl Loop {
         // caught up with it by now.
         self.state.poll_stats_readback(&self.ctx.device, false);
 
-        if want_timing && let (Some(tq), Some(submission)) = (self.timestamp_query.as_ref(), write_submission.clone()) {
-            tq.resolve_after(&self.ctx.device, &self.ctx.queue, submission);
-        }
-
         if want_timing {
-            if let (Some(tq), Some(steps)) = (self.timestamp_query.as_ref(), stamped_steps) {
-                self.gpu_us_per_step = tq.read_gpu_us_per_step(&self.ctx.device, steps);
+            if let (Some(query), Some(submission)) = (self.timestamp_query.as_ref(), write_submission.clone()) {
+                query.resolve_after(&self.ctx.device, &self.ctx.queue, submission);
+            }
+            if let (Some(query), Some(steps)) = (self.timestamp_query.as_ref(), stamped_steps) {
+                self.gpu_us_per_step = query.read_gpu_us_per_step(&self.ctx.device, steps);
             }
             self.refresh_tps(now);
             self.last_stats_publish = now;
@@ -778,8 +794,8 @@ impl Loop {
             self.publish_gpu_stats();
         }
 
-        self.track(write_submission, batch_size_submitted, now);
-        batch_size_submitted
+        self.track(write_submission, steps, now);
+        steps
     }
 
     /// Resets both clocks together. `want_timing` is gated on `last_stats_publish` but divides by
@@ -842,18 +858,67 @@ impl Loop {
 /// [`GpuSimState::encode_action`] requires, and returns the last of those submissions.
 fn fire_due(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &Schedule) -> Option<wgpu::SubmissionIndex> {
     let tick = state.tick();
+    let (last, refused) = submit_due(state, ctx, schedule, "henad_gpu_scheduled_action");
+    for action in refused {
+        log::warn!("Model refused action '{}' at tick {tick}", action.id);
+    }
+    last
+}
+
+/// Records the actions of `schedule` due at the tick of `state`, each in its own submission labelled `label`.
+///
+/// An action goes in a submission of its own, between two batches of steps, since a uniform written mid-encoder would
+/// not be visible until the whole encoder submitted. Returns the last of those submissions and the entries the state
+/// rejected.
+pub(crate) fn submit_due<'s>(
+    state: &mut dyn GpuSimState,
+    ctx: &GpuContext,
+    schedule: &'s Schedule,
+    label: &str,
+) -> (Option<wgpu::SubmissionIndex>, RefusedActions<'s>) {
     let mut last = None;
-    for action in schedule.due(tick) {
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("henad_gpu_scheduled_action"),
-        });
+    let mut refused = Vec::new();
+    for action in schedule.due(state.tick()) {
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
         if state.encode_action(&mut encoder, action.index) {
             last = Some(ctx.queue.submit(Some(encoder.finish())));
         } else {
-            log::warn!("Model refused action '{}' at tick {tick}", action.id);
+            refused.push(action);
         }
     }
-    last
+    (last, refused)
+}
+
+/// Submits `count` steps of `state`, at most [`MAX_STEPS_PER_SUBMISSION`] per command buffer, each labelled `label`.
+/// Nothing waits on the GPU.
+pub(crate) fn submit_in_chunks(
+    state: &mut dyn GpuSimState,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    count: u64,
+    label: &str,
+) {
+    // Submissions to one queue run in order, so batch N+1 still reads batch N's output. They all
+    // queue up and the caller's one wait drains them, letting the CPU encode ahead of the GPU.
+    let mut remaining = count;
+    while remaining > 0 {
+        let chunk = remaining.min(u64::from(MAX_STEPS_PER_SUBMISSION)) as u32;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+        state.encode_steps(&mut encoder, chunk, None);
+        queue.submit(Some(encoder.finish()));
+        remaining -= u64::from(chunk);
+    }
+}
+
+/// Submits the snapshot passes of `state` in an encoder labelled `label`, and blocks on their stats readback.
+pub(crate) fn snapshot_blocking(state: &mut dyn GpuSimState, device: &wgpu::Device, queue: &wgpu::Queue, label: &str) {
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+    state.encode_snapshot_passes(&mut encoder);
+    queue.submit(Some(encoder.finish()));
+    state.begin_stats_readback();
+    state.poll_stats_readback(device, true);
 }
 
 /// Handle on a running GPU simulation, driven by the same commands as a
@@ -999,23 +1064,23 @@ impl GpuSimThread {
     /// Sets the manual batch size used in fixed mode. It has no visible effect while adaptive mode is
     /// on, and is kept for when it is turned back off.
     pub fn set_batch_size(&mut self, batch_size: u32) {
-        self.driver.send(Command::Gpu(GpuCommand::SetBatchSize(batch_size)));
+        self.driver.send(Command::Gpu(GpuCommand::BatchSize(batch_size)));
     }
 
     /// Turns adaptive batching on or off. Fixed mode's manual batch size and adaptive mode's target
     /// are each preserved independently across toggles.
     pub fn set_adaptive(&mut self, enabled: bool) {
-        self.driver.send(Command::Gpu(GpuCommand::SetAdaptive(enabled)));
+        self.driver.send(Command::Gpu(GpuCommand::Adaptive(enabled)));
     }
 
     /// Sets the per-batch wall-clock budget (ms) used by the adaptive controller.
     pub fn set_target_ms(&mut self, target_ms: f64) {
-        self.driver.send(Command::Gpu(GpuCommand::SetTargetMs(target_ms)));
+        self.driver.send(Command::Gpu(GpuCommand::TargetMs(target_ms)));
     }
 
     /// Latest GPU-runner numbers.
     pub fn gpu_stats(&self) -> GpuStats {
-        self.gpu_stats.lock().map(|s| *s).unwrap_or_default()
+        self.gpu_stats.lock().map(|stats| *stats).unwrap_or_default()
     }
 
     /// Advances the sim when the driver runs inside the frame loop, and does nothing when the driver has its own
@@ -1054,6 +1119,15 @@ mod tests {
     use henad_core::model::SimState;
     use henad_core::params::ParamValue;
     use henad_core::view::{StatEntry, StatValue};
+
+    /// Returns the settings of a runner that steps in batches of `batch_size`, never adapting them.
+    fn fixed_batches(batch_size: u32) -> GpuBatchSettings {
+        GpuBatchSettings {
+            adaptive: false,
+            batch_size,
+            ..GpuBatchSettings::default()
+        }
+    }
 
     /// Population arrives on the second poll rather than on the blocking one, as in a browser, where
     /// `poll_blocking` is an ordinary poll and the map resolves a frame later.
@@ -1102,10 +1176,7 @@ mod tests {
         }
 
         fn view(&self) -> GpuSnapshot {
-            GpuSnapshot {
-                display: None,
-                agents: None,
-            }
+            GpuSnapshot::default()
         }
     }
 
@@ -1114,7 +1185,6 @@ mod tests {
     #[test]
     fn a_readback_landing_after_the_initial_snapshot_is_published() {
         let Some(ctx) = headless_context("henad_late_stats_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_readback_landing_after_the_initial_snapshot_is_published: no adapter");
             return;
         };
         let state = LateStats {
@@ -1187,10 +1257,7 @@ mod tests {
             self.polls_left > 0
         }
         fn view(&self) -> GpuSnapshot {
-            GpuSnapshot {
-                display: None,
-                agents: None,
-            }
+            GpuSnapshot::default()
         }
     }
 
@@ -1199,14 +1266,9 @@ mod tests {
     #[test]
     fn a_run_to_after_the_build_republishes_tick_zero_first() {
         let Some(ctx) = headless_context("henad_late_tick_zero_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_run_to_after_the_build_republishes_tick_zero_first: no adapter");
             return;
         };
-        let settings = GpuBatchSettings {
-            adaptive: false,
-            batch_size: 100,
-            ..GpuBatchSettings::default()
-        };
+        let settings = fixed_batches(100);
         let slot = SnapshotSlot::empty();
         let gpu_stats = Arc::new(Mutex::new(GpuStats {
             gpu_us_per_step: None,
@@ -1303,10 +1365,7 @@ mod tests {
             false
         }
         fn view(&self) -> GpuSnapshot {
-            GpuSnapshot {
-                display: None,
-                agents: None,
-            }
+            GpuSnapshot::default()
         }
     }
 
@@ -1318,11 +1377,7 @@ mod tests {
             ticks: Arc::clone(&ticks),
             fired: Arc::clone(&fired),
         };
-        let settings = GpuBatchSettings {
-            adaptive: false,
-            batch_size: 100,
-            ..GpuBatchSettings::default()
-        };
+        let settings = fixed_batches(100);
         let faults = ctx.faults.clone();
         (
             GpuSimThread::new(ctx, Box::new(state), settings, None, faults),
@@ -1355,7 +1410,6 @@ mod tests {
     #[test]
     fn run_to_stops_at_the_target() {
         let Some(ctx) = headless_context("henad_run_to_test", wgpu::Features::empty()) else {
-            log::warn!("skipping run_to_stops_at_the_target: no adapter");
             return;
         };
         let (mut thread, ticks, _) = action_recorder(ctx);
@@ -1382,7 +1436,6 @@ mod tests {
     #[test]
     fn a_capped_gpu_run_keeps_to_its_rate() {
         let Some(ctx) = headless_context("henad_capped_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_capped_gpu_run_keeps_to_its_rate: no adapter");
             return;
         };
         let (mut thread, ticks, _) = action_recorder(ctx);
@@ -1440,10 +1493,7 @@ mod tests {
             false
         }
         fn view(&self) -> GpuSnapshot {
-            GpuSnapshot {
-                display: None,
-                agents: None,
-            }
+            GpuSnapshot::default()
         }
     }
 
@@ -1452,14 +1502,9 @@ mod tests {
     #[test]
     fn a_gpu_run_to_a_tick_samples_its_stats_on_the_way() {
         let Some(ctx) = headless_context("henad_run_to_samples_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_gpu_run_to_a_tick_samples_its_stats_on_the_way: no adapter");
             return;
         };
-        let settings = GpuBatchSettings {
-            adaptive: false,
-            batch_size: 100,
-            ..GpuBatchSettings::default()
-        };
+        let settings = fixed_batches(100);
         let faults = ctx.faults.clone();
         let state = TickStat { tick: 0, read: 0 };
         let mut thread = GpuSimThread::new(ctx, Box::new(state), settings, None, faults);
@@ -1487,7 +1532,6 @@ mod tests {
     #[test]
     fn a_gpu_schedule_fires_once_per_tick_after_the_step_reaching_it() {
         let Some(ctx) = headless_context("henad_gpu_schedule_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_gpu_schedule_fires_once_per_tick_after_the_step_reaching_it: no adapter");
             return;
         };
         let (mut thread, ticks, fired) = action_recorder(ctx);
@@ -1516,7 +1560,6 @@ mod tests {
     #[test]
     fn a_replaced_gpu_schedule_never_fires_a_tick_again() {
         let Some(ctx) = headless_context("henad_gpu_replaced_schedule_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_replaced_gpu_schedule_never_fires_a_tick_again: no adapter");
             return;
         };
         let (mut thread, _, fired) = action_recorder(ctx);
@@ -1602,10 +1645,7 @@ mod tests {
             false
         }
         fn view(&self) -> GpuSnapshot {
-            GpuSnapshot {
-                display: None,
-                agents: None,
-            }
+            GpuSnapshot::default()
         }
     }
 
@@ -1613,7 +1653,6 @@ mod tests {
     #[test]
     fn a_gpu_runner_in_a_pool_pumps_on_its_workers() {
         let Some(ctx) = headless_context("henad_gpu_pool_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_gpu_runner_in_a_pool_pumps_on_its_workers: no adapter");
             return;
         };
         let width = rayon::current_num_threads() + 1;

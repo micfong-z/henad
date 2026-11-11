@@ -648,7 +648,6 @@ fn a_grid_rule_binds_at_most_five_storage_buffers() {
 #[test]
 fn a_result_past_the_last_state_is_clamped() {
     let Some(ctx) = headless_context("henad_runtime_grid_clamp", wgpu::Features::empty()) else {
-        log::warn!("skipping a_result_past_the_last_state_is_clamped: no adapter");
         return;
     };
     let mut rule = GridRule::life();
@@ -701,7 +700,6 @@ fn seed_word(compiled: &CompiledGridRule, width: u32, height: u32, params: &[Par
 #[test]
 fn a_random_rule_draws_a_fresh_stream_each_tick() {
     let Some(ctx) = headless_context("henad_runtime_grid_random", wgpu::Features::empty()) else {
-        log::warn!("skipping a_random_rule_draws_a_fresh_stream_each_tick: no adapter");
         return;
     };
     let mut rule = GridRule::life();
@@ -751,7 +749,6 @@ fn a_random_rule_draws_a_fresh_stream_each_tick() {
 #[test]
 fn a_rule_draws_the_words_of_the_rust_twin() {
     let Some(ctx) = headless_context("henad_runtime_grid_twin", wgpu::Features::empty()) else {
-        log::warn!("skipping a_rule_draws_the_words_of_the_rust_twin: no adapter");
         return;
     };
     let mut rule = GridRule::life();

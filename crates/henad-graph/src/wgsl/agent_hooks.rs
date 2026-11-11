@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use henad_compute::gpu::{AgentHooks, AgentPassId, AgentRun, AgentUploads};
+use henad_compute::gpu::{AgentHooks, AgentPassId, AgentRun, RerunUploads};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{Geometry, PassCtx, PassId};
 use henad_core::helpers::{extract_f32, extract_u32};
@@ -311,7 +311,7 @@ impl AgentHooks for AgentGraphHooks {
         run: AgentRun,
         params: &[ParamValue],
         stream: &mut u64,
-    ) -> Result<AgentUploads, String> {
+    ) -> Result<RerunUploads, String> {
         let Some(plan) = self.actions.get(action) else {
             return Ok(Vec::new());
         };

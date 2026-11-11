@@ -7,32 +7,15 @@ use henad_core::helpers::fmt_bytes;
 
 use crate::display_scale::display_dims;
 use crate::gpu::MAX_STEPS_PER_SUBMISSION;
-use crate::gpu::primitives::pipeline::{storage_entry, uniform_entry};
 use crate::gpu::shader_spec::ShaderBinding;
-use henad_core::authoring::model::binding::BindingKind;
 
 /// Returns the number of bindings that count against `max_storage_buffers_per_shader_stage`. A uniform and a storage
 /// texture each count against a separate limit.
 pub(crate) fn storage_bindings(bindings: &[ShaderBinding]) -> u32 {
-    bindings.iter().filter(|d| d.kind.is_storage_buffer()).count() as u32
-}
-
-/// Returns the layout entry that a declaration requires.
-pub(crate) fn layout_entry(i: u32, binding: &ShaderBinding) -> wgpu::BindGroupLayoutEntry {
-    match binding.kind {
-        BindingKind::Storage { read_only } => storage_entry(i, read_only),
-        BindingKind::Uniform => uniform_entry(i),
-        BindingKind::StorageTexture => wgpu::BindGroupLayoutEntry {
-            binding: i,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::StorageTexture {
-                access: wgpu::StorageTextureAccess::WriteOnly,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                view_dimension: wgpu::TextureViewDimension::D2,
-            },
-            count: None,
-        },
-    }
+    bindings
+        .iter()
+        .filter(|binding| binding.kind.is_storage_buffer())
+        .count() as u32
 }
 
 /// One buffer a model would allocate, labelled as wgpu would label it so a message points at something greppable.
@@ -312,7 +295,10 @@ impl Demand {
             } else {
                 continue;
             };
-            match groups.iter_mut().find(|g| g.bytes == alloc.bytes && g.limit == limit) {
+            match groups
+                .iter_mut()
+                .find(|group| group.bytes == alloc.bytes && group.limit == limit)
+            {
                 Some(group) => group.count += 1,
                 None => groups.push(Group {
                     bytes: alloc.bytes,

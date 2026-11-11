@@ -4,7 +4,7 @@
 //! results are added back down the chain. Levels are built once at construction.
 
 use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
-use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
+use crate::gpu::primitives::pipeline::{compute_pipeline, dispatch_pass, storage_buffer, uniform_buffer};
 use crate::shader_bindings::primitives::scan::ScanParams;
 
 /// One level of the scan. Its bind groups keep the buffers it touches alive.
@@ -88,12 +88,20 @@ impl PrefixScan {
         let upper_outputs: Vec<wgpu::Buffer> = sizes[1..]
             .iter()
             .enumerate()
-            .map(|(k, &m)| storage_buffer(device, &format!("{label}_scan_out{}", k + 1), m as usize))
+            .map(|(level, &level_len)| {
+                storage_buffer(device, &format!("{label}_scan_out{}", level + 1), level_len as usize)
+            })
             .collect();
         let sums: Vec<wgpu::Buffer> = sizes
             .iter()
             .enumerate()
-            .map(|(i, &m)| storage_buffer(device, &format!("{label}_scan_sums{i}"), m.div_ceil(WORKGROUP) as usize))
+            .map(|(level, &level_len)| {
+                storage_buffer(
+                    device,
+                    &format!("{label}_scan_sums{level}"),
+                    level_len.div_ceil(WORKGROUP) as usize,
+                )
+            })
             .collect();
 
         let output_at = |i: usize| if i == 0 { output } else { &upper_outputs[i - 1] };
@@ -179,13 +187,14 @@ impl PrefixScan {
     /// passes.
     pub fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
         for level in &self.levels {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("henad_scan_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.scan_pipeline);
-            pass.set_bind_group(0, &level.scan_bind, &[]);
-            pass.dispatch_workgroups(level.groups.0, level.groups.1, 1);
+            dispatch_pass(
+                encoder,
+                "henad_scan_pass",
+                &self.scan_pipeline,
+                &level.scan_bind,
+                level.groups,
+                None,
+            );
         }
 
         // Top down, since a level can only be lifted once the level above it is correct.
@@ -193,13 +202,14 @@ impl PrefixScan {
             let Some(add_bind) = &level.add_bind else {
                 continue;
             };
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("henad_scan_add_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.add_pipeline);
-            pass.set_bind_group(0, add_bind, &[]);
-            pass.dispatch_workgroups(level.groups.0, level.groups.1, 1);
+            dispatch_pass(
+                encoder,
+                "henad_scan_add_pass",
+                &self.add_pipeline,
+                add_bind,
+                level.groups,
+                None,
+            );
         }
     }
 }

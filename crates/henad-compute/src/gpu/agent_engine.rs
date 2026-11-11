@@ -9,118 +9,43 @@ use henad_core::params::ParamValue;
 use henad_core::view::{StatEntry, stat_entries};
 
 use crate::fault::{Fault, FaultSink, STEPPING};
+use crate::gpu::GpuContext;
 use crate::gpu::agent_spec::{AgentPassId, AgentRun, GpuAgentSpec};
-use crate::gpu::capacity::{Demand, layout_entry};
+use crate::gpu::built_pass::{BuiltPass, PassDescriptor, Sides, buffer_binding, stamps};
+use crate::gpu::capacity::Demand;
+use crate::gpu::press::{PRESSING, next_press_seed, upload_rerun};
 use crate::gpu::primitives::dispatch::linear_dispatch;
-use crate::gpu::primitives::pipeline::{compute_pipeline, lane_buffer, storage_buffer, uniform_buffer};
+use crate::gpu::primitives::pipeline::{lane_buffer, storage_buffer};
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll, read_words};
 use crate::gpu::primitives::reduce::GpuLaneReduce;
 use crate::gpu::primitives::spatial_hash::GpuSpatialHash;
 use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
-use crate::gpu::sides::{BufferSide, SideTable};
-use crate::gpu::sim_thread::GpuSimState;
+use crate::gpu::sides::SideTable;
+use crate::gpu::sim_thread::{GpuSimState, snapshot_blocking, submit_in_chunks};
 use crate::gpu::view::agents::GpuAgents;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
-use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION};
 use crate::snapshot::{FireCounts, GpuSnapshot};
 
-/// A resource that exists once, or once per ping-ponged side.
-struct Sides<T> {
-    a: T,
-    b: Option<T>,
-}
-
-impl<T> Sides<T> {
-    fn pick(&self, a_is_current: bool) -> &T {
-        if a_is_current {
-            &self.a
-        } else {
-            self.b.as_ref().unwrap_or(&self.a)
-        }
-    }
-}
-
-struct BufferSides {
-    a: wgpu::Buffer,
-    b: Option<wgpu::Buffer>,
-}
-
-impl BufferSides {
-    /// Returns `(current, next)`, the same buffer twice when this one is written in place.
-    fn sides(&self, a_is_current: bool) -> (&wgpu::Buffer, &wgpu::Buffer) {
-        match &self.b {
-            None => (&self.a, &self.a),
-            Some(b) if a_is_current => (&self.a, b),
-            Some(b) => (b, &self.a),
-        }
-    }
-
-    /// Returns the buffer on `side`, the same buffer on either side when this one is written in place.
-    fn side(&self, a_is_current: bool, side: BufferSide) -> &wgpu::Buffer {
-        let (current, next) = self.sides(a_is_current);
-        match side {
-            BufferSide::Current => current,
-            BufferSide::Next => next,
-        }
-    }
-}
-
-struct EncodedPass {
-    label: String,
-    /// Pass of the spec this pass was built from. Its uniform block is written for this pass.
-    id: AgentPassId,
-    pipeline: wgpu::ComputePipeline,
-    binds: Sides<wgpu::BindGroup>,
-    groups: (u32, u32),
-    /// Invocations the pass runs. Its uniform block reads them.
+/// Pass of an agent spec, with the invocations its uniform block reads.
+#[derive(Clone, Copy)]
+struct AgentPassKey {
+    pass: AgentPassId,
     invocations: u32,
-    /// Uniform of the pass, kept so an action can reseed it before a press and a live edit can write any other again.
-    uniform: wgpu::Buffer,
-    /// Counting block of a step pass, `None` where [`Self::counting`] is.
-    counting_uniform: Option<wgpu::Buffer>,
-    /// Bind groups of the counting block of a step pass, `None` for a spec with no fire counters and for every pass
-    /// that is no step.
-    counting: Option<Sides<wgpu::BindGroup>>,
 }
 
-impl EncodedPass {
-    /// Records the pass into `encoder`, through its counting block when `counting` holds and the pass has one.
-    fn encode(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        a_is_current: bool,
-        timestamps: Option<wgpu::ComputePassTimestampWrites<'_>>,
-        counting: bool,
-    ) {
-        let binds = match &self.counting {
-            Some(binds) if counting => binds,
-            _ => &self.binds,
-        };
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some(&self.label),
-            timestamp_writes: timestamps,
-        });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, binds.pick(a_is_current), &[]);
-        pass.dispatch_workgroups(self.groups.0, self.groups.1, 1);
+/// A pass of the agent engine.
+type AgentPass = BuiltPass<AgentPassKey>;
+
+impl AgentPass {
+    /// Returns the facts the pass's uniform block is written from, with the action seed `seed`.
+    fn ctx<'g>(&self, geom: &'g Geometry, seed: u32) -> PassCtx<'g> {
+        PassCtx {
+            geom,
+            invocations: self.id.invocations,
+            groups_x: self.groups.0,
+            seed,
+        }
     }
-}
-
-/// Returns the timestamp writes of a pass, `None` for a pass that neither opens nor closes a batch.
-///
-/// A `ComputePassTimestampWrites` needs at least one index set.
-fn stamps(
-    query_set: Option<&wgpu::QuerySet>,
-    opening: bool,
-    closing: bool,
-) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
-    query_set
-        .filter(|_| opening || closing)
-        .map(|query_set| wgpu::ComputePassTimestampWrites {
-            query_set,
-            beginning_of_pass_write_index: opening.then_some(0),
-            end_of_pass_write_index: closing.then_some(1),
-        })
 }
 
 /// GPU-resident state built from a [`GpuAgentSpec`], with every buffer, pass and bind group the spec declares.
@@ -137,7 +62,7 @@ pub(crate) struct GpuAgentEngine {
     device: wgpu::Device,
     queue: wgpu::Queue,
 
-    buffers: Vec<BufferSides>,
+    buffers: Vec<Sides<wgpu::Buffer>>,
     /// `true` when the `a` side of every double buffered buffer holds the current state.
     current_is_a: bool,
     /// Set when some buffer requests double buffering. Nothing flips otherwise.
@@ -147,16 +72,14 @@ pub(crate) struct GpuAgentEngine {
     index: Option<GpuSpatialHash>,
     index_binds: Option<Sides<wgpu::BindGroup>>,
 
-    steps: Vec<EncodedPass>,
-    display: Option<(EncodedPass, Arc<GpuDisplay>)>,
+    steps: Vec<AgentPass>,
+    display: Option<(AgentPass, Arc<GpuDisplay>)>,
 
     reduce: GpuLaneReduce,
-    reduce_pass: EncodedPass,
+    reduce_pass: AgentPass,
     counters: Option<CounterReadback>,
 
-    actions: Vec<EncodedPass>,
-    /// Invocations of each action, in the order of [`Self::actions`].
-    action_invocations: Vec<u32>,
+    actions: Vec<AgentPass>,
     /// Seed of the next action press, advanced per press so that pressing twice draws twice.
     action_seed: u32,
     /// Parameter values, kept to rewrite the action uniforms on each press, and edited by a live
@@ -165,7 +88,7 @@ pub(crate) struct GpuAgentEngine {
     /// Whether each parameter is live, in the order of [`Self::params`]. A parameter past its end is reload-only.
     live: Vec<bool>,
     /// Pass that writes the colour buffer before each snapshot, when the spec declares one.
-    color: Option<EncodedPass>,
+    color: Option<AgentPass>,
     /// Seed of the run, `None` for the model's default seed.
     seed: Option<u64>,
     /// Presses of any action so far.
@@ -256,7 +179,7 @@ impl GpuAgentEngine {
             "{id}: seed_buffers must return one vector per BUFFERS entry"
         );
 
-        let buffers: Vec<BufferSides> = spec
+        let buffers: Vec<Sides<wgpu::Buffer>> = spec
             .buffers
             .iter()
             .zip(&lens)
@@ -269,7 +192,7 @@ impl GpuAgentEngine {
                         storage_buffer(device, &label, len)
                     }
                 };
-                BufferSides {
+                Sides {
                     a: make_buffer("a"),
                     // Only the current side is seeded, so the other side is written by the first step.
                     b: buffer.double_buffered.then(|| make_buffer("b")),
@@ -280,16 +203,16 @@ impl GpuAgentEngine {
         let mut clear = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some(&format!("{id}_seed")),
         });
-        for (k, (buffer, bytes)) in buffers.iter().zip(&seeds).enumerate() {
+        for (buffer_index, (buffer, bytes)) in buffers.iter().zip(&seeds).enumerate() {
             if bytes.is_empty() {
                 clear.clear_buffer(&buffer.a, 0, None);
                 continue;
             }
             assert_eq!(
                 bytes.len(),
-                lens[k] * std::mem::size_of::<u32>(),
-                "{id}: seed for buffer '{}' must be buffer_lens[{k}] words of bytes",
-                spec.buffers[k].label
+                lens[buffer_index] * std::mem::size_of::<u32>(),
+                "{id}: seed for buffer '{}' must be buffer_lens[{buffer_index}] words of bytes",
+                spec.buffers[buffer_index].label
             );
             queue.write_buffer(&buffer.a, 0, bytes);
         }
@@ -338,7 +261,7 @@ impl GpuAgentEngine {
             run: AgentRun::new(seed, 0, 0),
         };
 
-        let steps: Vec<EncodedPass> = spec
+        let steps: Vec<AgentPass> = spec
             .steps
             .iter()
             .enumerate()
@@ -397,17 +320,12 @@ impl GpuAgentEngine {
 
         // Truncated from the same stream the CPU engines use, since the WGSL generator is 32 bit.
         let action_seed = henad_core::action::action_seed(seed) as u32;
-        let action_invocations: Vec<u32> = spec
+        let actions: Vec<AgentPass> = spec
             .actions
             .iter()
-            .map(|action| action.domain.invocations(&geom))
-            .collect();
-        let actions: Vec<EncodedPass> = spec
-            .actions
-            .iter()
-            .zip(&action_invocations)
             .enumerate()
-            .map(|(i, (action, &invocations))| {
+            .map(|(i, action)| {
+                let invocations = action.domain.invocations(&geom);
                 build.pass(
                     AgentPassId::Action(i),
                     &format!("action_{}", action.id),
@@ -421,11 +339,9 @@ impl GpuAgentEngine {
             .collect();
 
         let make_agents = |a_is_current: bool| {
-            let (pos, _) = buffers[spec.pos_buffer].sides(a_is_current);
-            let (color, _) = buffers[spec.color_buffer].sides(a_is_current);
             Arc::new(GpuAgents {
-                pos: pos.clone(),
-                color: color.clone(),
+                pos: buffers[spec.pos_buffer].pick(a_is_current).clone(),
+                color: buffers[spec.color_buffer].pick(a_is_current).clone(),
                 count: num_agents,
                 world_w: extent.w,
                 world_h: extent.h,
@@ -453,7 +369,6 @@ impl GpuAgentEngine {
             reduce_pass,
             counters,
             actions,
-            action_invocations,
             action_seed,
             params: params.to_vec(),
             live: Vec::new(),
@@ -496,104 +411,43 @@ impl GpuAgentEngine {
             .chain([&self.reduce_pass]);
         let mut blocks = Vec::new();
         for pass in passes {
-            let ctx = PassCtx {
-                geom: &self.geom,
-                invocations: pass.invocations,
-                groups_x: pass.groups.0,
-                seed: 0,
-            };
-            blocks.push((
-                &pass.uniform,
-                self.spec.hooks.run_params_bytes(pass.id, ctx, run, params)?,
-            ));
+            let ctx = pass.ctx(&self.geom, 0);
+            if let Some(uniform) = &pass.uniform {
+                blocks.push((
+                    uniform,
+                    self.spec.hooks.run_params_bytes(pass.id.pass, ctx, run, params)?,
+                ));
+            }
             if let Some(uniform) = &pass.counting_uniform {
                 let block = self
                     .spec
                     .hooks
-                    .run_params_bytes(pass.id, ctx, run.with_counting(true), params)?;
+                    .run_params_bytes(pass.id.pass, ctx, run.with_counting(true), params)?;
                 blocks.push((uniform, block));
             }
         }
         Ok(blocks)
     }
 
-    /// Submits `steps` steps, at most [`MAX_STEPS_PER_SUBMISSION`] per command buffer, as the runner does. Nothing
-    /// waits on the GPU.
-    pub(crate) fn run_batched(&mut self, steps: u32) {
-        let mut remaining = steps;
-        while remaining > 0 {
-            let batch = remaining.min(MAX_STEPS_PER_SUBMISSION);
-            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("henad_gpu_agent_batch"),
-            });
-            self.encode_steps(&mut encoder, batch, None);
-            self.queue.submit(Some(encoder.finish()));
-            remaining -= batch;
-        }
-    }
-
-    /// Runs the snapshot passes and waits for the readback, so `stats()` reports the current tick.
-    pub(crate) fn refresh_stats(&mut self) {
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("henad_gpu_agent_snapshot"),
-        });
-        self.encode_snapshot_passes(&mut encoder);
-        let device = self.device.clone();
-        self.queue.submit(Some(encoder.finish()));
-        self.begin_stats_readback();
-        self.poll_stats_readback(&device, true);
-    }
-
-    /// Returns the current side of buffer `index` as raw words, blocking on the GPU.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the readback fails.
-    pub(crate) fn read_buffer(&self, index: usize) -> Vec<u32> {
-        let (buffer, _) = self.buffers[index].sides(self.current_is_a);
-        read_words(&self.device, &self.queue, buffer)
-    }
-
     /// Runs the rerun of action `index` on the host and uploads the buffers it writes to their current sides.
     ///
     /// Returns whether the rerun succeeded. A fault goes to the context's fault sink.
     fn rerun(&mut self, index: usize, run: AgentRun) -> bool {
-        let id = &self.spec.id;
-        let uploads = match self
+        let outcome = self
             .spec
             .hooks
-            .rerun(index, &self.geom, run, &self.params, &mut self.action_stream)
-        {
-            Ok(uploads) => uploads,
-            Err(message) => {
-                self.faults.set_once(Fault::refused(PRESSING, message));
-                return false;
-            }
-        };
-        for (k, words) in uploads {
-            let Some(&len) = self.buffer_lens.get(k) else {
-                self.faults.set_once(Fault::refused(
-                    PRESSING,
-                    format!("{id}: a rerun wrote buffer {k}, which does not exist"),
-                ));
-                return false;
-            };
-            if words.len() != len {
-                self.faults.set_once(Fault::refused(
-                    PRESSING,
-                    format!("{id}: a rerun wrote {} words to buffer {k} of {len}", words.len()),
-                ));
-                return false;
-            }
-            let (current, _) = self.buffers[k].sides(self.current_is_a);
-            self.queue.write_buffer(current, 0, bytemuck::cast_slice(&words));
-        }
-        true
+            .rerun(index, &self.geom, run, &self.params, &mut self.action_stream);
+        upload_rerun(
+            outcome,
+            &self.spec.id,
+            &self.faults,
+            &self.queue,
+            &self.buffers,
+            &self.buffer_lens,
+            self.current_is_a,
+        )
     }
 }
-
-/// Phase of a fault a press raises.
-const PRESSING: &str = "pressing an action";
 
 /// Carries what every pass needs to resolve its bindings into wgpu objects.
 struct PassBuilder<'a> {
@@ -602,7 +456,7 @@ struct PassBuilder<'a> {
     spec: &'a GpuAgentSpec,
     geom: &'a Geometry,
     params: &'a [ParamValue],
-    buffers: &'a [BufferSides],
+    buffers: &'a [Sides<wgpu::Buffer>],
     ping_pong: bool,
     index: Option<&'a GpuSpatialHash>,
     counters: Option<&'a CounterReadback>,
@@ -611,7 +465,7 @@ struct PassBuilder<'a> {
     run: AgentRun,
 }
 
-impl PassBuilder<'_> {
+impl<'a> PassBuilder<'a> {
     /// Builds a pass over `groups` workgroups, binding each buffer through `sides`.
     ///
     /// `groups.0` is the fold width that `henad::dispatch::linear_index` expects, and goes in the uniform as
@@ -629,9 +483,8 @@ impl PassBuilder<'_> {
         groups: (u32, u32),
         invocations: u32,
         seed: u32,
-    ) -> EncodedPass {
+    ) -> AgentPass {
         let label = format!("{}_{label}", self.spec.id);
-
         let block = |run: AgentRun| {
             self.spec
                 .hooks
@@ -648,94 +501,35 @@ impl PassBuilder<'_> {
                 )
                 .unwrap_or_else(|message| panic!("{}: {message}", self.spec.id))
         };
-        let uniform = uniform_buffer(self.device, self.queue, &format!("{label}_params"), &block(self.run));
         // A step's counting block differs from its block in the counting flag alone.
-        let counting_uniform = (!self.spec.fire_counters.is_empty() && matches!(id, AgentPassId::Step(_))).then(|| {
-            uniform_buffer(
-                self.device,
-                self.queue,
-                &format!("{label}_counting_params"),
-                &block(self.run.with_counting(true)),
-            )
-        });
-
-        let entries: Vec<wgpu::BindGroupLayoutEntry> = shader
-            .bindings
-            .iter()
-            .enumerate()
-            .map(|(i, binding)| layout_entry(i as u32, binding))
-            .collect();
-        let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("{label}_layout")),
-            entries: &entries,
-        });
-
-        let make_bind = |a_is_current: bool, side: &str, uniform: &wgpu::Buffer| {
-            let entries: Vec<wgpu::BindGroupEntry<'_>> = shader
-                .bindings
-                .iter()
-                .enumerate()
-                .map(|(i, binding)| wgpu::BindGroupEntry {
-                    binding: i as u32,
-                    resource: self.resource(binding, a_is_current, sides, uniform),
-                })
-                .collect();
-            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("{label}_bind_{side}")),
-                layout: &layout,
-                entries: &entries,
-            })
-        };
-
-        let binds = Sides {
-            a: make_bind(true, "a", &uniform),
-            b: self.ping_pong.then(|| make_bind(false, "b", &uniform)),
-        };
-        let counting = counting_uniform.as_ref().map(|counting_uniform| Sides {
-            a: make_bind(true, "counting_a", counting_uniform),
-            b: self.ping_pong.then(|| make_bind(false, "counting_b", counting_uniform)),
-        });
-
-        let pipeline = compute_pipeline(self.device, &label, &shader.source, &layout);
-        EncodedPass {
+        let counts = !self.spec.fire_counters.is_empty() && matches!(id, AgentPassId::Step(_));
+        let descriptor = PassDescriptor {
+            pass_label: label.clone(),
             label,
-            id,
-            pipeline,
-            binds,
+            id: AgentPassKey { pass: id, invocations },
+            shader,
             groups,
-            invocations,
-            uniform,
-            counting_uniform,
-            counting,
-        }
+            uniform: Some(block(self.run)),
+            counting_uniform: counts.then(|| block(self.run.with_counting(true))),
+            both_sides: self.ping_pong,
+        };
+        BuiltPass::new(self.device, self.queue, descriptor, |binding, a_is_current| {
+            self.resource(binding, a_is_current, sides)
+        })
     }
 
-    /// Returns the resource that a shader binding's name refers to. The name alone links the binding to its resource,
-    /// and `sides` picks the side of a buffer.
+    /// Returns the resource that a shader binding's name refers to, for every name but `params`. The name alone links
+    /// the binding to its resource, and `sides` picks the side of a buffer.
     ///
     /// Panics rather than returning an error, since a name that resolves to nothing is a shader
     /// and model that disagree, and no run can be correct after that.
-    fn resource<'r>(
-        &'r self,
-        binding: &ShaderBinding,
-        a_is_current: bool,
-        sides: &SideTable,
-        uniform: &'r wgpu::Buffer,
-    ) -> wgpu::BindingResource<'r> {
+    fn resource(&self, binding: &ShaderBinding, a_is_current: bool, sides: &SideTable) -> wgpu::BindingResource<'a> {
         let id = &self.spec.id;
-        if let Some((label, writes)) = binding.buffer_target() {
-            let k = self
-                .spec
-                .buffers
-                .iter()
-                .position(|buffer| buffer.label == label)
-                .unwrap_or_else(|| panic!("{id}: no buffer labelled `{label}`, wanted by `{}`", binding.name));
-            let row = sides.rows()[k];
-            let side = if writes { row.write } else { row.read };
-            return self.buffers[k].side(a_is_current, side).as_entire_binding();
+        let labels = self.spec.buffers.iter().map(|buffer| &*buffer.label);
+        if let Some(resource) = buffer_binding(binding, id, labels, self.buffers, sides, a_is_current) {
+            return resource;
         }
         match binding.name.as_ref() {
-            "params" => uniform.as_entire_binding(),
             "cell_start" => self.index.expect("INDEX is declared").cell_start_binding(),
             "sorted" => self.index.expect("INDEX is declared").sorted_binding(),
             "counters" => self.counters.expect("COUNTERS is non-zero").binding(),
@@ -891,28 +685,25 @@ impl GpuSimState for GpuAgentEngine {
         }
         // A fresh seed per press, so pressing twice draws twice. The write is queued before the
         // encoder is submitted, so the pass reads the new value.
-        self.action_seed = self.action_seed.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+        self.action_seed = next_press_seed(self.action_seed);
         self.presses = self.presses.wrapping_add(1);
         let run = AgentRun::new(self.seed, self.presses, self.tick);
         if !self.rerun(index, run) {
             return true;
         }
-        let Some(action) = self.actions.get(index) else {
-            return false;
-        };
+        let action = &self.actions[index];
         let block = self.spec.hooks.run_params_bytes(
             AgentPassId::Action(index),
-            PassCtx {
-                geom: &self.geom,
-                invocations: self.action_invocations[index],
-                groups_x: action.groups.0,
-                seed: self.action_seed,
-            },
+            action.ctx(&self.geom, self.action_seed),
             run,
             &self.params,
         );
         match block {
-            Ok(block) => self.queue.write_buffer(&action.uniform, 0, &block),
+            Ok(block) => {
+                if let Some(uniform) = &action.uniform {
+                    self.queue.write_buffer(uniform, 0, &block);
+                }
+            }
             Err(message) => {
                 self.faults
                     .set_once(Fault::refused(PRESSING, format!("{}: {message}", self.spec.id)));
@@ -957,16 +748,11 @@ impl GpuSimState for GpuAgentEngine {
 
     fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
         let sums_poll = self.reduce.poll_readback(device, block);
-        let counters_poll = match &mut self.counters {
-            Some(readback) if block => readback.poll_blocking(device),
-            Some(readback) => readback.poll(device),
-            None => StatsPoll::Landed,
-        };
-        let poll = match (sums_poll, counters_poll) {
-            (StatsPoll::Pending, _) | (_, StatsPoll::Pending) => StatsPoll::Pending,
-            (StatsPoll::Failed, _) | (_, StatsPoll::Failed) => StatsPoll::Failed,
-            (StatsPoll::Landed, StatsPoll::Landed) => StatsPoll::Landed,
-        };
+        let counters_poll = self
+            .counters
+            .as_mut()
+            .map_or(StatsPoll::Landed, |readback| readback.poll_or_block(device, block));
+        let poll = sums_poll.and(counters_poll);
         if poll == StatsPoll::Landed && !self.faulted {
             let counters = self.counters.as_ref().map_or(&[][..], CounterReadback::values);
             if let Some(message) = self.spec.hooks.fault(counters) {
@@ -1010,18 +796,14 @@ impl GpuSimState for GpuAgentEngine {
     }
 
     fn fire_counts(&self) -> FireCounts {
-        let fires = self.spec.fire_counters.clone();
-        match &self.counters {
-            Some(counters) if !fires.is_empty() => FireCounts::new(
-                counters.values_tag(),
-                counters.values().get(fires).unwrap_or_default().to_vec(),
-            ),
-            _ => FireCounts::default(),
-        }
+        self.counters.as_ref().map_or_else(FireCounts::default, |counters| {
+            counters.fire_counts(self.spec.fire_counters.clone())
+        })
     }
 
     fn read_buffer(&self, index: usize) -> Option<Vec<u32>> {
-        (index < self.buffers.len()).then(|| Self::read_buffer(self, index))
+        let buffer = self.buffers.get(index)?;
+        Some(read_words(&self.device, &self.queue, buffer.pick(self.current_is_a)))
     }
 }
 
@@ -1085,24 +867,32 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         }
     }
 
-    /// Submits `steps` steps, at most [`MAX_STEPS_PER_SUBMISSION`] per command buffer, as the runner does. Nothing
-    /// waits on the GPU.
+    /// Submits `steps` steps, at most [`MAX_STEPS_PER_SUBMISSION`](crate::gpu::MAX_STEPS_PER_SUBMISSION) per command
+    /// buffer, as the runner does. Nothing waits on the GPU.
     pub fn run_batched(&mut self, steps: u32) {
-        self.engine.run_batched(steps);
+        let (device, queue) = (self.engine.device.clone(), self.engine.queue.clone());
+        submit_in_chunks(
+            &mut self.engine,
+            &device,
+            &queue,
+            u64::from(steps),
+            "henad_gpu_agent_batch",
+        );
     }
 
     /// Runs the snapshot passes and waits for the readback, so `stats()` reports the current tick.
     pub fn refresh_stats(&mut self) {
-        self.engine.refresh_stats();
+        let (device, queue) = (self.engine.device.clone(), self.engine.queue.clone());
+        snapshot_blocking(&mut self.engine, &device, &queue, "henad_gpu_agent_snapshot");
     }
 
     /// Returns the current side of buffer `index` as raw words, blocking on the GPU.
     ///
     /// # Panics
     ///
-    /// Panics if the readback fails.
+    /// Panics if `index` lies past the buffers or the readback fails.
     pub fn read_buffer(&self, index: usize) -> Vec<u32> {
-        self.engine.read_buffer(index)
+        GpuSimState::read_buffer(&self.engine, index).unwrap_or_else(|| panic!("the model has no buffer {index}"))
     }
 
     /// Geometry the state was built at.
@@ -1197,6 +987,6 @@ impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
     }
 
     fn read_buffer(&self, index: usize) -> Option<Vec<u32>> {
-        GpuSimState::read_buffer(&self.engine, index)
+        self.engine.read_buffer(index)
     }
 }

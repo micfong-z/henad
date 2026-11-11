@@ -18,7 +18,8 @@ use crate::gpu::agent_spec::{
 };
 use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
 use crate::gpu::sides::{BufferSide, SideRow, SideTable};
-use crate::gpu::sim_thread::GpuSimState as _;
+use crate::gpu::sim_thread::{GpuSimState as _, snapshot_blocking, submit_in_chunks};
+use crate::gpu::tests::support::storage;
 use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION, headless_context, stepping};
 
 /// Number of agents of the test model. One workgroup covers them.
@@ -172,10 +173,6 @@ impl AgentHooks for CountingHooks {
     }
 }
 
-fn storage(name: &'static str, read_only: bool) -> ShaderBinding {
-    ShaderBinding::new(name, BindingKind::Storage { read_only })
-}
-
 /// Returns a shader of the test model, with the uniform block's struct in front of `body`.
 fn shader(body: &str, bindings: Vec<ShaderBinding>) -> ShaderSpec {
     ShaderSpec::new(format!("{HEADER}{body}"), bindings)
@@ -247,7 +244,7 @@ fn context() -> Option<GpuContext> {
 
 /// Returns the words of buffer `index` of `engine`.
 fn words(engine: &GpuAgentEngine, index: usize) -> Vec<u32> {
-    GpuAgentEngine::read_buffer(engine, index)
+    engine.read_buffer(index).expect("the index names a buffer")
 }
 
 /// Returns `1 + offset, 2 + offset, ...` for every agent, each times `factor`.
@@ -260,7 +257,6 @@ fn expected(offset: u32, factor: u32) -> Vec<u32> {
 #[test]
 fn a_side_table_picks_the_side_a_later_pass_reads() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_side_table_picks_the_side_a_later_pass_reads: no adapter");
         return;
     };
     let calls = Arc::new(HookCalls::default());
@@ -298,7 +294,6 @@ fn a_side_table_picks_the_side_a_later_pass_reads() {
 #[test]
 fn an_in_place_action_writes_the_current_side() {
     let Some(ctx) = context() else {
-        log::warn!("skipping an_in_place_action_writes_the_current_side: no adapter");
         return;
     };
     let calls = Arc::new(HookCalls::default());
@@ -314,7 +309,7 @@ fn an_in_place_action_writes_the_current_side() {
         let stepped: Vec<u32> = after.iter().map(|word| word + 1).collect();
         assert_eq!(words(&engine, COUNT), stepped, "the step after a press at tick {tick}");
 
-        engine.refresh_stats();
+        snapshot_blocking(&mut engine, &ctx.device, &ctx.queue, "agent_spec_snapshot");
         let total: u32 = stepped.iter().sum();
         let entries = engine.stats();
         assert_eq!(entries[0].label(), "Total");
@@ -332,7 +327,6 @@ fn an_in_place_action_writes_the_current_side() {
 #[test]
 fn a_step_calls_no_hook() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_step_calls_no_hook: no adapter");
         return;
     };
     let calls = Arc::new(HookCalls::default());
@@ -346,7 +340,13 @@ fn a_step_calls_no_hook() {
 
     let built = calls.counts();
     engine.step();
-    engine.run_batched(MAX_STEPS_PER_SUBMISSION * 2 + 1);
+    submit_in_chunks(
+        &mut engine,
+        &ctx.device,
+        &ctx.queue,
+        u64::from(MAX_STEPS_PER_SUBMISSION * 2 + 1),
+        "agent_spec_batch",
+    );
     let mut encoder = ctx
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -377,16 +377,12 @@ fn a_step_calls_no_hook() {
 #[test]
 fn the_runner_interface_reads_a_buffer() {
     let Some(ctx) = context() else {
-        log::warn!("skipping the_runner_interface_reads_a_buffer: no adapter");
         return;
     };
     let calls = Arc::new(HookCalls::default());
     let engine = GpuAgentEngine::new(&ctx, spec(BufferSide::Next, &calls), &[], None);
-    assert_eq!(
-        crate::gpu::GpuSimState::read_buffer(&engine, COUNT),
-        Some(expected(0, 1))
-    );
-    assert_eq!(crate::gpu::GpuSimState::read_buffer(&engine, TIMES_TEN + 1), None);
+    assert_eq!(engine.read_buffer(COUNT), Some(expected(0, 1)));
+    assert_eq!(engine.read_buffer(TIMES_TEN + 1), None);
     assert_eq!(engine.population(), u64::from(AGENTS));
 }
 
@@ -508,7 +504,6 @@ fn faulting_spec(block_fault: BlockFault) -> Arc<GpuAgentSpec> {
 #[test]
 fn a_recorded_fault_ends_a_run_that_reads_no_stats() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_recorded_fault_ends_a_run_that_reads_no_stats: no adapter");
         return;
     };
     let mut engine = GpuAgentEngine::new(&ctx, faulting_spec(BlockFault::None), &[], None);
@@ -525,7 +520,6 @@ fn a_recorded_fault_ends_a_run_that_reads_no_stats() {
 #[should_panic(expected = "fault_probe: node n9 in pass 'probe' faulted: the block has no value")]
 fn a_step_block_the_hooks_cannot_compute_fails_the_build() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_step_block_the_hooks_cannot_compute_fails_the_build: no adapter");
         panic!("fault_probe: node n9 in pass 'probe' faulted: the block has no value (no adapter)");
     };
     drop(GpuAgentEngine::new(&ctx, faulting_spec(BlockFault::Step), &[], None));
@@ -536,7 +530,6 @@ fn a_step_block_the_hooks_cannot_compute_fails_the_build() {
 #[test]
 fn an_action_block_the_hooks_cannot_compute_refuses_the_press() {
     let Some(ctx) = context() else {
-        log::warn!("skipping an_action_block_the_hooks_cannot_compute_refuses_the_press: no adapter");
         return;
     };
     let mut engine = GpuAgentEngine::new(&ctx, faulting_spec(BlockFault::Pressed), &[], None);

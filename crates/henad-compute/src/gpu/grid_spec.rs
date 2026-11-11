@@ -170,8 +170,17 @@ pub struct GridPassCtx {
     pub counting: bool,
 }
 
-/// Buffers that a rerun on the host wrote, each as its buffer's position in [`GpuGridSpec::buffers`] and its new
-/// words.
+impl GridPassCtx {
+    /// Returns the values with [`Self::counting`] set to `counting`.
+    pub(crate) fn with_counting(self, counting: bool) -> Self {
+        Self { counting, ..self }
+    }
+}
+
+/// Buffers that a rerun on the host wrote, each as its buffer's position in the spec's buffers and its new words.
+///
+/// A grid's reruns index [`GpuGridSpec::buffers`], and an agent model's
+/// [`GpuAgentSpec::buffers`](super::agent_spec::GpuAgentSpec::buffers).
 pub type RerunUploads = Vec<(usize, Vec<u32>)>;
 
 /// Functions of a GPU grid model that the engine calls, each the counterpart of the [`GpuGridModel`] function of the
@@ -335,6 +344,11 @@ impl fmt::Debug for GpuGridSpec {
 }
 
 impl GpuGridSpec {
+    /// Returns the length of the reduce shader's `counters` binding, [`Self::counters`] floored at 1.
+    pub(crate) fn counter_len(&self) -> usize {
+        self.counters.max(1)
+    }
+
     /// Creates the spec of model `id` with no actions.
     ///
     /// [`Self::actions`], [`Self::counters`], [`Self::fire_counters`], [`Self::sums`] and [`Self::init_cost`] are
@@ -572,11 +586,11 @@ impl GpuGridSpec {
     pub(crate) fn assert_contracts(&self) {
         assert_buffer_labels(&self.id, self.buffers.iter().map(|buffer| buffer.label.as_ref()));
         assert!(
-            self.fire_counters.end <= self.counters.max(1),
+            self.fire_counters.end <= self.counter_len(),
             "{}: the fire counters {:?} end past the {} counters",
             self.id,
             self.fire_counters,
-            self.counters.max(1)
+            self.counter_len()
         );
         // Every pass dispatches square workgroups of `workgroup_size`.
         let square = [self.workgroup_size, self.workgroup_size, 1];

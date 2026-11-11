@@ -29,6 +29,9 @@ pub(crate) const TEMPLATE_NAMES: &[&str] = &[
     "main",
 ];
 
+/// Functions of [`TEMPLATE_NAMES`] that the rule's text may call.
+pub(crate) const HELPERS: &[&str] = &["neighbor", "moore_count", "von_neumann_count"];
+
 /// Prefix of the names the template keeps to itself, compared without regard to case.
 pub(crate) const PRIVATE_PREFIX: &str = "henad_";
 

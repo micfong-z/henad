@@ -356,7 +356,7 @@ fn compose_checked(
             ..Default::default()
         }));
     for descriptor in descriptors {
-        if let Err(error) = composer.add_composable_module(descriptor).map(|_| ()) {
+        if let Err(error) = composer.add_composable_module(descriptor) {
             return Err(vec![diagnose(&composer, &error, files)]);
         }
     }
@@ -521,7 +521,8 @@ fn check_directives(text: &str, is_module: bool, known: &[String], file: &FileIn
             None => diagnostic.with_note(BEFORE_TEXT_NOTE),
         });
     };
-    for (line, (_, raw)) in code_lines(text).iter().zip(split_lines(text)) {
+    for line in &code_lines(text) {
+        let raw = &text[line.start..line.start + line.code.len()];
         if let Some((column, character)) = find_wgsl_only_line_break(raw) {
             problem(
                 line,
@@ -531,11 +532,14 @@ fn check_directives(text: &str, is_module: bool, known: &[String], file: &FileIn
             );
             continue;
         }
-        if let Some(column) = raw.find(DECORATION).or_else(|| raw.find(OVERRIDE_DECORATION)) {
+        if let Some((column, marker)) = [DECORATION, OVERRIDE_DECORATION]
+            .iter()
+            .find_map(|marker| raw.find(marker).map(|column| (column, marker)))
+        {
             problem(
                 line,
                 column,
-                DECORATION.len(),
+                marker.len(),
                 "the text contains the name decoration the composer adds to imported items".to_owned(),
             );
             continue;
@@ -582,7 +586,9 @@ fn check_directives(text: &str, is_module: bool, known: &[String], file: &FileIn
                 "@binding(auto)".len(),
                 "a binding needs a number".to_owned(),
             );
-        } else if let Some((column, word)) = words(&line.code).find(|(_, word)| matches!(*word, "virtual" | "override"))
+        } else if let Some((column, word)) = words(&line.code)
+            .into_iter()
+            .find(|(_, word)| matches!(*word, "virtual" | "override"))
         {
             problem(line, column, word.len(), format!("`{word}` is not supported"));
         }
@@ -599,7 +605,7 @@ fn leading_word(text: &str) -> Option<&str> {
 }
 
 /// Returns every word of `code` made of letters, digits and underscores, with its byte offset.
-pub(crate) fn words(code: &str) -> impl Iterator<Item = (usize, &str)> {
+pub(crate) fn words(code: &str) -> Vec<(usize, &str)> {
     let mut start = None;
     let mut found = Vec::new();
     for (index, c) in code.char_indices().chain(std::iter::once((code.len(), ' '))) {
@@ -613,7 +619,7 @@ pub(crate) fn words(code: &str) -> impl Iterator<Item = (usize, &str)> {
             _ => {}
         }
     }
-    found.into_iter()
+    found
 }
 
 /// Checks one line whose code starts with `#`, and returns the problem's message.
@@ -715,7 +721,7 @@ impl SourceLines {
         };
         let line = &self.lines[index];
         let within = offset.saturating_sub(line.start).min(line.text.len());
-        let within = floor_char_boundary(&line.text, within);
+        let within = line.text.floor_char_boundary(within);
         let column = line.text[..within].chars().count() + 1;
         (to_u32(index + 1), to_u32(column))
     }
@@ -724,15 +730,6 @@ impl SourceLines {
 /// Returns `value` as a `u32`, saturating.
 fn to_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
-}
-
-/// Returns the largest character boundary of `text` at or below `index`.
-fn floor_char_boundary(text: &str, index: usize) -> usize {
-    let mut index = index.min(text.len());
-    while !text.is_char_boundary(index) {
-        index -= 1;
-    }
-    index
 }
 
 /// Returns `range`, a byte range in `preprocessed`, as the byte range of `original` it came from. `preprocessed` is
@@ -773,7 +770,7 @@ fn map_offset(preprocessed: &SourceLines, original: &SourceLines, offset: usize)
 /// changed name the column is clamped to the original name.
 fn map_column(preprocessed: &str, source: &str, column: usize) -> usize {
     if preprocessed == source {
-        return floor_char_boundary(source, column);
+        return source.floor_char_boundary(column);
     }
     let theirs: Vec<Token<'_>> = Tokenizer::new(preprocessed, true).collect();
     let ours: Vec<Token<'_>> = Tokenizer::new(source, true).collect();
@@ -781,7 +778,7 @@ fn map_column(preprocessed: &str, source: &str, column: usize) -> usize {
         let their_end = their.pos() + token_len(their);
         if column < their_end {
             let within = (column - their.pos()).min(token_len(our));
-            return floor_char_boundary(source, our.pos() + within);
+            return source.floor_char_boundary(our.pos() + within);
         }
     }
     source.len()
@@ -799,13 +796,13 @@ fn token_len(token: &Token<'_>) -> usize {
 pub(crate) fn undecorate(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(index) = [DECORATION, OVERRIDE_DECORATION]
+    while let Some((index, marker)) = [DECORATION, OVERRIDE_DECORATION]
         .iter()
-        .filter_map(|marker| rest.find(marker))
-        .min()
+        .filter_map(|marker| rest.find(marker).map(|index| (index, marker)))
+        .min_by_key(|&(index, _)| index)
     {
         out.push_str(&rest[..index]);
-        let after = &rest[index + DECORATION.len()..];
+        let after = &rest[index + marker.len()..];
         let encoded = after
             .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit()))
             .unwrap_or(after.len());

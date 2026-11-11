@@ -38,9 +38,9 @@ block of every step pass (its counting block too), the display and the reduce pa
 so the bytes equal a fresh build's at the new value. The agent engine computes every block but the
 actions' first through `run_params_bytes` at `AgentRun::new(seed, 0, 0)` (`uniform_blocks`), and
 rejects the edit, keeping the old value and the run, when one fails. Each built pass keeps its pass
-id, its uniform and its counting uniform for this (`BuiltPass`, `EncodedPass`, which keeps its
-invocations too). An action's block is written at each press from the current `params`, and the
-reruns and the stats read them. The writes go through `queue.write_buffer` between submissions, so
+id, its uniform and its counting uniform for this (`BuiltPass` in `gpu/built_pass.rs`, which both
+engines build through, the agent engine's id holding the invocations too). An action's block is
+written at each press from the current `params`, and the reruns and the stats read them. The writes go through `queue.write_buffer` between submissions, so
 the next step reads them, and the tick and the buffers stay. A live parameter therefore feeds
 nothing but those blocks, the reruns and the stat values. henad-graph marks the rest reload-only.
 `gpu/tests/live_params.rs` holds `a_live_edit_keeps_the_run_and_later_steps_read_the_new_value`
@@ -102,10 +102,10 @@ types an unsuffixed literal falls back to.
   `GridPassSpec`s too. A `GridActionSpec` holds a list of passes and a `rerun_cost`. A press
   advances the `GridPress` (seed by the PCG step, count by one, both shared by every action),
   calls `GridHooks::rerun`, uploads the `RerunUploads` it returns to the current sides with
-  `write_buffer`, then runs the passes in order, each rewriting its uniform first. A rerun's
-  `Err` goes to `ctx.faults` as a refused fault, and no pass runs. `pass_params_bytes(GridPassId,
-  GridPassCtx, params)` writes every uniform block, and a pass gets a uniform only when its shader
-  binds `params`. `GridPassCtx.tick` is the steps done: 0 at construction and at a live edit, the
+  `write_buffer` (`gpu/press.rs` holds the seed step and the upload both engines run), then runs
+  the passes in order, each rewriting its uniform first. A rerun's `Err` goes to `ctx.faults` as a
+  refused fault, and no pass runs. `pass_params_bytes(GridPassId, GridPassCtx, params)` writes
+  every uniform block, and a pass gets a uniform only when its shader binds `params`. `GridPassCtx.tick` is the steps done: 0 at construction and at a live edit, the
   engine's tick at a press, and the tick the reduce pass was recorded at (`stats_tick`) for
   `GridHooks::stats(counts, ctx, params)`, which a graph's stats read through the host. `counters` is the length of the
   reduce shader's `counters` array and of the readback, `stats.len().max(1)` from `new`, and a
@@ -122,9 +122,10 @@ types an unsuffixed literal falls back to.
   clears the range (`encode_clear_range`) and binds the counting blocks, and the engine records the
   tick that step reached. The stats clear then clears every word but the range, the reduce tallies
   and the counts read back in one readback, and the copy carries that tick as its tag
-  (`CounterReadback::encode_copy_tagged`, `values_tag` once the map lands).
+  (`CounterReadback::encode_copy_tagged`, kept once the map lands).
   `GpuSimState::fire_counts` (default empty) returns the range's words of the latest landed readback
-  with that tick as a `FireCounts` (`snapshot.rs`), and `GpuSimThread` puts it in
+  with that tick as a `FireCounts` (`snapshot.rs`, cut by `CounterReadback::fire_counts` in both
+  engines), and `GpuSimThread` puts it in
   `Snapshot.fire_counts`, which the CPU runner leaves empty. The counting flag sits in the uniform
   block, never in a storage binding. `gpu/tests/fire_counts.rs` holds
   `a_counted_step_reads_the_last_steps_count_in_calls_of_1_3_and_64` (both engines) and
@@ -181,7 +182,7 @@ types an unsuffixed literal falls back to.
   `pass_params_bytes` and `stats` by default (16 zero bytes for the colour pass, which
   `AgentPassId::Color` names). An `Err` block panics the build with the model id (the build's
   scope reports it), and at a press is a refused fault with no pass run. A press calls `rerun`
-  before its pass: the `AgentUploads` go to the current sides, and an `Err` is a refused fault
+  before its pass: the `RerunUploads` go to the current sides, and an `Err` is a refused fault
   with no pass run. After each stats readback lands, the engine reads `fault(counters)`. A `Some`
   sets the context's fault sink once, prefixed with the model id, and the poll and every later one
   return `Failed`, which ends a run in the runner and in `stepping::sample_stats`. When

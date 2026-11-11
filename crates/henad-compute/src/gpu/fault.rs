@@ -76,7 +76,6 @@ mod tests {
     #[test]
     fn a_device_error_comes_back_as_a_fault() {
         let Some(ctx) = headless_context("henad_fault_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_device_error_comes_back_as_a_fault: no adapter");
             return;
         };
         let fault = catching_on(&ctx, "testing", || oversized_buffer(&ctx.device))
@@ -91,7 +90,6 @@ mod tests {
     #[test]
     fn the_device_still_works_after_a_captured_error() {
         let Some(ctx) = headless_context("henad_fault_reuse_test", wgpu::Features::empty()) else {
-            log::warn!("skipping the_device_still_works_after_a_captured_error: no adapter");
             return;
         };
         drop(catching_on(&ctx, "testing", || oversized_buffer(&ctx.device)));
@@ -117,7 +115,6 @@ mod tests {
     #[test]
     fn a_panic_inside_a_scope_leaves_the_scopes_balanced() {
         let Some(ctx) = headless_context("henad_fault_unwind_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_panic_inside_a_scope_leaves_the_scopes_balanced: no adapter");
             return;
         };
         let fault = catching_on(&ctx, "testing", || panic!("from inside a scope"))

@@ -74,8 +74,11 @@ pub const LIFE_STEP: &str = include_str!("life_step.wgsl");
 /// Domain separator of a rule's random stream, so the step and the cell seeding do not start correlated.
 const STEP_SEED: u64 = GRID_INIT_SEED ^ 0x0F5E_ED0F_5EED_0F5E;
 
+/// Grid parameter ids the engine puts in front of a rule's own parameter ids.
+const GRID_PARAM_IDS: [&str; 2] = ["grid_width", "grid_height"];
+
 /// Number of grid parameters the engine puts in front of a rule's own parameters.
-const GRID_PARAMS: usize = 2;
+const GRID_PARAMS: usize = GRID_PARAM_IDS.len();
 
 /// A GPU grid model held as data, with a step written in WGSL.
 ///
@@ -210,9 +213,10 @@ impl GridRule {
     /// Returns every parameter of the model the rule builds: `grid_width` and `grid_height`, then the rule's own
     /// parameters, each applying on reload.
     fn param_descriptors(&self) -> Vec<ParamDescriptor> {
+        let [width_id, height_id] = GRID_PARAM_IDS;
         let mut params = vec![
-            u32_param("grid_width", "Grid Width", self.width, 1, MAX_GRID_SIDE).on_reload(),
-            u32_param("grid_height", "Grid Height", self.height, 1, MAX_GRID_SIDE).on_reload(),
+            u32_param(width_id, "Grid Width", self.width, 1, MAX_GRID_SIDE).on_reload(),
+            u32_param(height_id, "Grid Height", self.height, 1, MAX_GRID_SIDE).on_reload(),
         ];
         params.extend(self.params.iter().cloned().map(ParamDescriptor::on_reload));
         params

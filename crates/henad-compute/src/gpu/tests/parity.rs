@@ -11,6 +11,7 @@ use henad_core::authoring::primitives::space::{self, Boundary, MOORE_COLUMN_MAJO
 
 use crate::gpu::headless_context;
 use crate::gpu::primitives::pipeline::compute_pipeline;
+use crate::gpu::primitives::readback::read_words;
 use crate::shader_bindings::henad::space as codes;
 use crate::shader_bindings::tests::parity::{
     Case, OP_AXIS_DELTA, OP_BELOW, OP_CELL_INDEX, OP_CHOICE3, OP_DIST_SQ, OP_HEADING_OCTANT, OP_NEIGHBOR_COUNT,
@@ -357,12 +358,6 @@ fn run_on_gpu(cases: &[Case]) -> Option<Vec<Out>> {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("parity_staging"),
-        size: out_size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
 
     let layout = device.create_bind_group_layout(&WgpuBindGroup0::LAYOUT_DESCRIPTOR);
     let pipeline = compute_pipeline(device, "henad_space_parity", SHADER_STRING, &layout);
@@ -393,26 +388,9 @@ fn run_on_gpu(cases: &[Case]) -> Option<Vec<Out>> {
         pass.set_bind_group(0, &bind, &[]);
         pass.dispatch_workgroups((cases.len() as u32).div_ceil(64), 1, 1);
     }
-    encoder.copy_buffer_to_buffer(&result_buffer, 0, &staging, 0, out_size);
     queue.submit(Some(encoder.finish()));
 
-    let (tx, rx) = flume::bounded(1);
-    staging
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |r| drop(tx.send(r)));
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("the device should drain");
-    rx.recv()
-        .expect("the map callback should fire")
-        .expect("the staging buffer should map");
-
-    let view = staging.slice(..).get_mapped_range().expect("mapped range");
-    let results: Vec<Out> = bytemuck::cast_slice(&view).to_vec();
-    drop(view);
-    staging.unmap();
-
-    Some(results)
+    Some(bytemuck::pod_collect_to_vec(&read_words(device, queue, &result_buffer)))
 }
 
 /// A WGSL primitive and its Rust twin must be the same function.

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use henad_compute::cpu::agent_engine::AgentModelState;
 use henad_compute::entry::{EntryDeclarations, ModelEntry};
 use henad_compute::gpu::sim_thread::GpuSimState;
-use henad_compute::gpu::{AgentHooks, AgentPassId, AgentRun, AgentUploads, GpuContext, wgpu};
+use henad_compute::gpu::{AgentHooks, AgentPassId, AgentRun, GpuContext, RerunUploads, wgpu};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{Geometry, PassCtx, PassId};
 use henad_core::authoring::primitives::rng::pcg_hash;
@@ -574,7 +574,7 @@ impl AgentHooks for PlantedHooks {
         run: AgentRun,
         params: &[ParamValue],
         stream: &mut u64,
-    ) -> Result<AgentUploads, String> {
+    ) -> Result<RerunUploads, String> {
         self.inner.rerun(action, geom, run, params, stream)
     }
 

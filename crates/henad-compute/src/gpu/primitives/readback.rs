@@ -5,6 +5,9 @@
 //! A reported value is therefore a few milliseconds stale, as the display texture already is.
 
 use std::mem::size_of;
+use std::ops::Range;
+
+use crate::snapshot::FireCounts;
 
 /// State of a stats readback after a poll.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +18,17 @@ pub enum StatsPoll {
     Landed,
     /// No readback is in flight, and the latest one to finish failed and left the earlier values in place.
     Failed,
+}
+
+impl StatsPoll {
+    /// Returns the state of two readbacks taken together: pending while either is, then failed if either failed.
+    pub(crate) fn and(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Pending, _) | (_, Self::Pending) => Self::Pending,
+            (Self::Failed, _) | (_, Self::Failed) => Self::Failed,
+            (Self::Landed, Self::Landed) => Self::Landed,
+        }
+    }
 }
 
 /// A GPU-side `u32` accumulator of `count` counters, plus the staging buffer used to read it back
@@ -140,27 +154,7 @@ impl CounterReadback {
     ///
     /// The staging buffer of [`Self::begin_map`] and the values it holds are left alone.
     pub(crate) fn read_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Vec<u32>> {
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("henad_gpu_counter_check"),
-            size: self.size(),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("henad_gpu_counter_check"),
-        });
-        encoder.copy_buffer_to_buffer(&self.storage, 0, &staging, 0, self.size());
-        queue.submit(Some(encoder.finish()));
-        let (tx, rx) = flume::bounded(1);
-        staging
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| drop(tx.send(result)));
-        // The wait runs the map's callback on native. A browser cannot wait, and the readback fails there.
-        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
-        rx.try_recv().ok()?.ok()?;
-        let words = bytemuck::cast_slice::<u8, u32>(&staging.slice(..).get_mapped_range().ok()?).to_vec();
-        staging.unmap();
-        Some(words)
+        try_read_words(device, queue, &self.storage)
     }
 
     /// Returns whether a map started by [`Self::begin_map`] has not been consumed yet.
@@ -222,6 +216,24 @@ impl CounterReadback {
         self.poll(device)
     }
 
+    /// Polls as [`Self::poll_blocking`] does when `block` holds, and as [`Self::poll`] does otherwise.
+    pub(crate) fn poll_or_block(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
+        if block {
+            self.poll_blocking(device)
+        } else {
+            self.poll(device)
+        }
+    }
+
+    /// Returns the counts of the fire range `fires` of the latest values, with the tag of their copy, or no counts
+    /// when the range is empty.
+    pub(crate) fn fire_counts(&self, fires: Range<usize>) -> FireCounts {
+        if fires.is_empty() {
+            return FireCounts::default();
+        }
+        FireCounts::new(self.values_tag, self.values.get(fires).unwrap_or_default().to_vec())
+    }
+
     fn status(&self) -> StatsPoll {
         if self.pending.is_some() {
             StatsPoll::Pending
@@ -273,16 +285,51 @@ impl CounterReadback {
         &self.values
     }
 
-    /// Tag of the copy that [`Self::values`] holds, 0 until a tagged copy lands.
-    pub(crate) fn values_tag(&self) -> u64 {
-        self.values_tag
-    }
-
     /// Most recently read-back values, each word's bits reinterpreted as an `f32`, for
     /// [`crate::gpu::primitives::reduce`].
     pub fn values_f32(&self) -> impl Iterator<Item = f32> + '_ {
         self.values.iter().copied().map(f32::from_bits)
     }
+}
+
+/// Returns the contents of `buffer` as raw words, blocking on the GPU until the copy lands.
+///
+/// `buffer` needs `COPY_SRC` usage. A parity test or an export calls this between steps, and the runner never does.
+///
+/// # Panics
+///
+/// Panics if the readback fails.
+pub(crate) fn read_words(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Vec<u32> {
+    try_read_words(device, queue, buffer).expect("the GPU reads the buffer back")
+}
+
+/// Returns the contents of `buffer` as raw words, read through a staging buffer of their own and blocking on the GPU,
+/// or `None` when the readback fails.
+///
+/// `buffer` needs `COPY_SRC` usage.
+pub(crate) fn try_read_words(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Option<Vec<u32>> {
+    let size = buffer.size();
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("henad_gpu_buffer_readback"),
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("henad_gpu_buffer_readback"),
+    });
+    encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
+    queue.submit(Some(encoder.finish()));
+    let (tx, rx) = flume::bounded(1);
+    staging
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| drop(tx.send(result)));
+    // The wait runs the map's callback on native. A browser cannot wait, and the readback fails there.
+    device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+    rx.try_recv().ok()?.ok()?;
+    let words = bytemuck::cast_slice::<u8, u32>(&staging.slice(..).get_mapped_range().ok()?).to_vec();
+    staging.unmap();
+    Some(words)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -305,7 +352,6 @@ mod tests {
     #[test]
     fn a_completed_map_polls_as_landed() {
         let Some(ctx) = headless_context("henad_readback_landed_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_completed_map_polls_as_landed: no adapter");
             return;
         };
         let mut readback = CounterReadback::new(&ctx.device, "henad_readback_landed_test", 3);
@@ -335,7 +381,6 @@ mod tests {
     #[test]
     fn a_failed_map_polls_as_failed_and_keeps_the_values() {
         let Some(ctx) = headless_context("henad_readback_failed_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_failed_map_polls_as_failed_and_keeps_the_values: no adapter");
             return;
         };
         let mut readback = CounterReadback::new(&ctx.device, "henad_readback_failed_test", 3);
@@ -362,7 +407,6 @@ mod tests {
     #[test]
     fn an_abandoned_map_leaves_the_next_readback_working() {
         let Some(ctx) = headless_context("henad_readback_abandoned_test", wgpu::Features::empty()) else {
-            log::warn!("skipping an_abandoned_map_leaves_the_next_readback_working: no adapter");
             return;
         };
         let mut readback = CounterReadback::new(&ctx.device, "henad_readback_abandoned_test", 3);
@@ -387,38 +431,4 @@ mod tests {
         assert_eq!(readback.values(), [7, 8, 9]);
         assert!(ctx.faults.take().is_none(), "a copy went into a mapped staging buffer");
     }
-}
-
-/// Returns the contents of `buffer` as raw words, blocking on the GPU until the copy lands.
-///
-/// `buffer` needs `COPY_SRC` usage. A parity test or an export calls this between steps, and the runner never does.
-///
-/// # Panics
-///
-/// Panics if the readback fails.
-pub(crate) fn read_words(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Vec<u32> {
-    let size = buffer.size();
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("henad_gpu_buffer_readback"),
-        size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("henad_gpu_buffer_readback"),
-    });
-    encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
-    queue.submit(Some(encoder.finish()));
-
-    let (tx, rx) = flume::bounded(1);
-    staging
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |r| drop(tx.send(r)));
-    device.poll(wgpu::PollType::wait_indefinitely()).expect("readback poll");
-    rx.recv().expect("readback channel").expect("readback map");
-    let data = staging.slice(..).get_mapped_range().expect("readback range");
-    let out = bytemuck::cast_slice::<u8, u32>(&data).to_vec();
-    drop(data);
-    staging.unmap();
-    out
 }

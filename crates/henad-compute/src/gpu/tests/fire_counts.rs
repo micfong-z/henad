@@ -1,24 +1,20 @@
 //! The fire-count channel of both GPU engines: the last step of each batch counts into the spec's fire range through
 //! its counting block, and the counts read back with the stats, with the tick of the step they counted.
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
-use henad_core::authoring::model::binding::BindingKind;
 use henad_core::authoring::model::field::Extent;
-use henad_core::authoring::model::gpu_agent_model::{Domain, Geometry, PassCtx, PassId};
+use henad_core::authoring::model::gpu_agent_model::{Geometry, PassCtx, PassId};
 use henad_core::params::ParamValue;
-use henad_core::view::{StatDescriptor, StatValue};
+use henad_core::view::StatValue;
 
 use crate::gpu::agent_engine::GpuAgentEngine;
-use crate::gpu::agent_spec::{
-    AgentBufferSpec, AgentHooks, AgentPassId, AgentPassSpec, AgentReduceSpec, AgentRun, GpuAgentSpec,
-};
+use crate::gpu::agent_spec::{AgentHooks, AgentPassId, AgentRun, GpuAgentSpec};
 use crate::gpu::grid_engine::GpuGridEngine;
-use crate::gpu::grid_spec::{GpuGridSpec, GridBufferSpec, GridHooks, GridPassCtx, GridPassId, GridPassSpec};
-use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
-use crate::gpu::sides::SideTable;
+use crate::gpu::grid_spec::{GpuGridSpec, GridHooks, GridPassCtx, GridPassId};
+use crate::gpu::shader_spec::ShaderSpec;
 use crate::gpu::sim_thread::GpuSimState;
+use crate::gpu::tests::support::{count_agent_spec, count_grid_spec, scalar_stat, steps_then_stats, storage, uniform};
 use crate::gpu::{GpuContext, headless_context};
 use crate::snapshot::FireCounts;
 
@@ -55,37 +51,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 ";
 
-/// Writes nothing to its texture, which no test reads.
-const GRID_DISPLAY: &str = r"
-struct Dims { grid: vec2<u32>, tex: vec2<u32> }
-
-@group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(1) var<uniform> dims: Dims;
-
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x < dims.tex.x && id.y < dims.tex.y) {
-        textureStore(output, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
-    }
-}
-";
-
-/// Sums `count` into the reduce tally, word 0.
-const GRID_REDUCE: &str = r"
-struct Dims { grid: vec2<u32>, tex: vec2<u32> }
-
-@group(0) @binding(0) var<storage, read> count: array<u32>;
-@group(0) @binding(1) var<storage, read_write> counters: array<atomic<u32>>;
-@group(0) @binding(2) var<uniform> dims: Dims;
-
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x < dims.grid.x && id.y < dims.grid.y) {
-        atomicAdd(&counters[0], count[id.y * dims.grid.x + id.x]);
-    }
-}
-";
-
 /// Hooks of the test grid model, which seed `count` with `1, 2, ...` and write the counting flag into every block.
 struct GridTestHooks;
 
@@ -118,63 +83,10 @@ impl GridHooks for GridTestHooks {
     }
 }
 
-fn storage(name: &'static str, read_only: bool) -> ShaderBinding {
-    ShaderBinding::new(name, BindingKind::Storage { read_only })
-}
-
-fn uniform(name: &'static str) -> ShaderBinding {
-    ShaderBinding::new(name, BindingKind::Uniform)
-}
-
 /// Returns the test grid model: one step that counts the cells' values into word 1, and a reduce pass that sums them
 /// into word 0.
 fn grid_spec() -> Arc<GpuGridSpec> {
-    let swapping = || SideTable::swapping(1);
-    let step = GridPassSpec::new(
-        "count_step",
-        ShaderSpec::new(
-            GRID_STEP,
-            vec![
-                storage("count_in", true),
-                storage("count_out", false),
-                storage("counters", false),
-                uniform("params"),
-            ],
-        ),
-        swapping(),
-    );
-    let display = GridPassSpec::new(
-        "display",
-        ShaderSpec::new(
-            GRID_DISPLAY,
-            vec![
-                ShaderBinding::new("output", BindingKind::StorageTexture),
-                uniform("dims"),
-            ],
-        ),
-        swapping(),
-    );
-    let reduce = GridPassSpec::new(
-        "reduce",
-        ShaderSpec::new(
-            GRID_REDUCE,
-            vec![storage("count", true), storage("counters", false), uniform("dims")],
-        ),
-        swapping(),
-    );
-    let mut spec = GpuGridSpec::new(
-        "fire_count_grid",
-        8,
-        vec![GridBufferSpec::new("count", true)],
-        vec![step],
-        display,
-        reduce,
-        Cow::Owned(vec![StatDescriptor::owned("Total".to_owned(), [1, 2, 3, 255])]),
-        Box::new(GridTestHooks),
-    );
-    spec.counters = 2;
-    spec.fire_counters = FIRE_WORD..FIRE_WORD + 1;
-    Arc::new(spec)
+    count_grid_spec("fire_count_grid", "count_step", GRID_STEP, Box::new(GridTestHooks))
 }
 
 /// Writes `count + 1` to the next side of `count`, and adds `count` to the fire word when the block counts.
@@ -193,26 +105,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
         if (params.counting != 0u) {
             atomicAdd(&counters[1], count_in[lid.x]);
         }
-    }
-}
-";
-
-/// Sums `count` into the one partial of the single workgroup.
-const AGENT_REDUCE: &str = r"
-struct Params { n: u32, counting: u32, _pad0: u32, _pad1: u32 }
-
-@group(0) @binding(0) var<storage, read> count: array<u32>;
-@group(0) @binding(1) var<storage, read_write> partials: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
-
-@compute @workgroup_size(256)
-fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
-    if (lid.x == 0u) {
-        var total = 0.0;
-        for (var i = 0u; i < params.n; i++) {
-            total += f32(count[i]);
-        }
-        partials[0] = total;
     }
 }
 ";
@@ -264,43 +156,16 @@ impl AgentHooks for AgentTestHooks {
 
 /// Returns the test agents model: one step that counts the agents' values into word 1 of two counters.
 fn agent_spec() -> Arc<GpuAgentSpec> {
-    let buffers = vec![
-        AgentBufferSpec::new("pos", false, true),
-        AgentBufferSpec::new("color", false, true),
-        AgentBufferSpec::new("count", true, false),
-    ];
-    let reduce = AgentReduceSpec::new(
-        ShaderSpec::new(
-            AGENT_REDUCE,
-            vec![storage("count", true), storage("partials", false), uniform("params")],
-        ),
-        1,
-        Domain::Agents,
-        SideTable::swapping(buffers.len()),
+    let step = ShaderSpec::new(
+        AGENT_STEP,
+        vec![
+            storage("count_in", true),
+            storage("count_out", false),
+            storage("counters", false),
+            uniform("params"),
+        ],
     );
-    let mut spec = GpuAgentSpec::new(
-        "fire_count_agents",
-        buffers,
-        0,
-        1,
-        reduce,
-        Cow::Owned(vec![StatDescriptor::owned("Total".to_owned(), [1, 2, 3, 255])]),
-        Box::new(AgentTestHooks),
-    );
-    spec.steps = vec![AgentPassSpec::new(
-        "count_step",
-        ShaderSpec::new(
-            AGENT_STEP,
-            vec![
-                storage("count_in", true),
-                storage("count_out", false),
-                storage("counters", false),
-                uniform("params"),
-            ],
-        ),
-        Domain::Agents,
-        SideTable::swapping(spec.buffers.len()),
-    )];
+    let mut spec = count_agent_spec("fire_count_agents", "count_step", step, Box::new(AgentTestHooks));
     spec.counters = 2;
     spec.fire_counters = FIRE_WORD..FIRE_WORD + 1;
     Arc::new(spec)
@@ -310,30 +175,9 @@ fn context() -> Option<GpuContext> {
     headless_context("fire_count_tests", wgpu::Features::empty())
 }
 
-/// Records `steps` steps and then the stats passes into one submission, as the runner does for a snapshot, and waits
-/// for the readback.
-fn steps_then_stats(ctx: &GpuContext, state: &mut dyn GpuSimState, steps: u32) {
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    state.encode_steps(&mut encoder, steps, None);
-    state.encode_stats_passes(&mut encoder);
-    ctx.queue.submit(Some(encoder.finish()));
-    state.begin_stats_readback();
-    state.poll_stats_readback(&ctx.device, true);
-}
-
 /// Returns the fire count of the step that reached `tick`: the values every element held as the step began.
 fn count_of_step(tick: u64) -> u32 {
     SEED_TOTAL + (tick as u32 - 1) * ELEMENTS
-}
-
-/// Returns the scalar of the one stat.
-fn total(state: &dyn GpuSimState) -> f64 {
-    match state.stats()[0].value() {
-        StatValue::Scalar(value) => *value,
-        other => panic!("not a scalar: {other:?}"),
-    }
 }
 
 /// Steps `state` in calls of 1, 3 and 64 steps and checks after each that the counts hold the call's last step alone,
@@ -354,7 +198,7 @@ fn assert_last_step_counted(ctx: &GpuContext, state: &mut dyn GpuSimState, what:
             "{what}: the counts after a call of {calls} steps"
         );
         assert_eq!(
-            total(state),
+            scalar_stat(state, 0),
             f64::from(SEED_TOTAL + tick as u32 * ELEMENTS),
             "{what}: the stats after a call of {calls} steps"
         );
@@ -366,7 +210,6 @@ fn assert_last_step_counted(ctx: &GpuContext, state: &mut dyn GpuSimState, what:
 #[test]
 fn a_counted_step_reads_the_last_steps_count_in_calls_of_1_3_and_64() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_counted_step_reads_the_last_steps_count_in_calls_of_1_3_and_64: no adapter");
         return;
     };
     let mut grid = GpuGridEngine::new(&ctx, grid_spec(), &[], None);
@@ -381,19 +224,18 @@ fn a_counted_step_reads_the_last_steps_count_in_calls_of_1_3_and_64() {
 #[test]
 fn a_grid_reads_its_tallies_and_its_fire_range_in_one_readback() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_grid_reads_its_tallies_and_its_fire_range_in_one_readback: no adapter");
         return;
     };
     let mut grid = GpuGridEngine::new(&ctx, grid_spec(), &[], None);
     steps_then_stats(&ctx, &mut grid, 5);
     let counted = FireCounts::new(5, vec![count_of_step(5)]);
     assert_eq!(grid.fire_counts(), counted);
-    assert_eq!(total(&grid), f64::from(SEED_TOTAL + 5 * ELEMENTS));
+    assert_eq!(scalar_stat(&grid, 0), f64::from(SEED_TOTAL + 5 * ELEMENTS));
     for read in 1..=2 {
         steps_then_stats(&ctx, &mut grid, 0);
         assert_eq!(grid.fire_counts(), counted, "stats read {read} with no step");
         assert_eq!(
-            total(&grid),
+            scalar_stat(&grid, 0),
             f64::from(SEED_TOTAL + 5 * ELEMENTS),
             "stats read {read}: the tally is taken afresh"
         );
@@ -405,7 +247,6 @@ fn a_grid_reads_its_tallies_and_its_fire_range_in_one_readback() {
 #[test]
 fn a_spec_with_no_fire_range_has_empty_counts() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_spec_with_no_fire_range_has_empty_counts: no adapter");
         return;
     };
     let mut spec = Arc::try_unwrap(grid_spec()).unwrap_or_else(|_| unreachable!("the spec is not shared"));
@@ -413,5 +254,5 @@ fn a_spec_with_no_fire_range_has_empty_counts() {
     let mut grid = GpuGridEngine::new(&ctx, Arc::new(spec), &[], None);
     steps_then_stats(&ctx, &mut grid, 3);
     assert!(grid.fire_counts().is_empty());
-    assert_eq!(total(&grid), f64::from(SEED_TOTAL + 3 * ELEMENTS));
+    assert_eq!(scalar_stat(&grid, 0), f64::from(SEED_TOTAL + 3 * ELEMENTS));
 }

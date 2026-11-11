@@ -8,7 +8,7 @@ use henad_core::authoring::model::field::Extent;
 pub use henad_core::spatial_hash::HashGrid;
 
 use crate::gpu::primitives::dispatch::linear_dispatch;
-use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
+use crate::gpu::primitives::pipeline::{compute_pipeline, dispatch_pass, storage_buffer, uniform_buffer};
 use crate::gpu::primitives::prefix_scan::PrefixScan;
 use crate::shader_bindings::primitives::hash_count::HashParams;
 
@@ -200,34 +200,33 @@ impl GpuSpatialHash {
     ) {
         encoder.clear_buffer(&self.counts, 0, None);
 
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("henad_hash_count_pass"),
-                timestamp_writes: begin_stamp.map(|(query_set, index)| wgpu::ComputePassTimestampWrites {
-                    query_set,
-                    beginning_of_pass_write_index: Some(index),
-                    end_of_pass_write_index: None,
-                }),
-            });
-            pass.set_pipeline(&self.count_pipeline);
-            pass.set_bind_group(0, count_bind, &[]);
-            pass.dispatch_workgroups(self.agent_groups.0, self.agent_groups.1, 1);
-        }
+        let stamp = begin_stamp.map(|(query_set, index)| wgpu::ComputePassTimestampWrites {
+            query_set,
+            beginning_of_pass_write_index: Some(index),
+            end_of_pass_write_index: None,
+        });
+        dispatch_pass(
+            encoder,
+            "henad_hash_count_pass",
+            &self.count_pipeline,
+            count_bind,
+            self.agent_groups,
+            stamp,
+        );
 
         self.scan.encode(encoder);
 
         // The scatter bumps the cursor, so it works on a copy and `cell_start` survives.
         encoder.copy_buffer_to_buffer(&self.cell_start, 0, &self.cursor, 0, self.table_bytes());
 
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("henad_hash_scatter_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.scatter_pipeline);
-            pass.set_bind_group(0, &self.scatter_bind, &[]);
-            pass.dispatch_workgroups(self.agent_groups.0, self.agent_groups.1, 1);
-        }
+        dispatch_pass(
+            encoder,
+            "henad_hash_scatter_pass",
+            &self.scatter_pipeline,
+            &self.scatter_bind,
+            self.agent_groups,
+            None,
+        );
     }
 
     fn table_bytes(&self) -> u64 {
@@ -262,6 +261,7 @@ mod tests {
     use crate::gpu::headless_context;
     use crate::gpu::primitives::dispatch::WORKGROUP;
     use crate::gpu::primitives::pipeline::storage_buffer;
+    use crate::gpu::primitives::readback::read_words;
     use henad_core::authoring::model::field::Extent;
     use henad_core::authoring::primitives::rng::xorshift64;
     use henad_core::spatial_hash::SpatialHash;
@@ -306,37 +306,6 @@ mod tests {
         (0..n).map(|_| (unit() * w, unit() * h)).unzip()
     }
 
-    /// Reads a `u32` storage buffer back through a staging copy.
-    fn read_u32(ctx: &crate::gpu::GpuContext, buffer: &wgpu::Buffer, len: usize) -> Vec<u32> {
-        let size = (len * std::mem::size_of::<u32>()) as u64;
-        let staging = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hash_test_staging"),
-            size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
-        ctx.queue.submit(Some(encoder.finish()));
-
-        let (tx, rx) = flume::bounded(1);
-        staging
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |r| drop(tx.send(r)));
-        ctx.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("device poll");
-        rx.recv().expect("map channel").expect("map");
-
-        let data = staging.slice(..).get_mapped_range().expect("map range");
-        let out = bytemuck::cast_slice::<u8, u32>(&data)[..len].to_vec();
-        drop(data);
-        staging.unmap();
-        out
-    }
-
     /// Builds the hash for one set of positions and reads back `(cell_start, sorted)`.
     fn build(
         ctx: &crate::gpu::GpuContext,
@@ -363,8 +332,8 @@ mod tests {
 
         let cells = hash.grid().num_cells() as usize + 1;
         (
-            read_u32(ctx, hash.cell_start_buffer(), cells),
-            read_u32(ctx, hash.sorted_buffer(), n as usize),
+            read_words(&ctx.device, &ctx.queue, hash.cell_start_buffer())[..cells].to_vec(),
+            read_words(&ctx.device, &ctx.queue, hash.sorted_buffer())[..n as usize].to_vec(),
         )
     }
 
@@ -373,7 +342,6 @@ mod tests {
     #[test]
     fn buckets_match_the_cpu_hash() {
         let Some(ctx) = headless_context("gpu_spatial_hash_test", wgpu::Features::empty()) else {
-            log::warn!("skipping buckets_match_the_cpu_hash: no adapter");
             return;
         };
 
@@ -409,7 +377,6 @@ mod tests {
     #[test]
     fn a_large_population_still_sorts_every_agent() {
         let Some(ctx) = headless_context("gpu_spatial_hash_large_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_large_population_still_sorts_every_agent: no adapter");
             return;
         };
 

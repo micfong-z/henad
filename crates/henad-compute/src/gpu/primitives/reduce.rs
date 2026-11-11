@@ -4,7 +4,7 @@
 //! pairs in a fixed order, so the sum is reproducible.
 
 use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
-use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
+use crate::gpu::primitives::pipeline::{compute_pipeline, dispatch_pass, storage_buffer, uniform_buffer};
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::shader_bindings::primitives::reduce::ReduceParams;
 
@@ -92,7 +92,13 @@ impl GpuLaneReduce {
         let intermediates: Vec<wgpu::Buffer> = sizes[1..]
             .iter()
             .enumerate()
-            .map(|(k, &n)| storage_buffer(device, &format!("{label}_reduce_level{}", k + 1), n as usize * lanes))
+            .map(|(level, &level_len)| {
+                storage_buffer(
+                    device,
+                    &format!("{label}_reduce_level{}", level + 1),
+                    level_len as usize * lanes,
+                )
+            })
             .collect();
         let readback = CounterReadback::new(device, &format!("{label}_reduce"), lanes);
 
@@ -176,13 +182,14 @@ impl GpuLaneReduce {
     /// Records the tree and the staging copy. Record the leaf pass before calling.
     pub fn encode(&mut self, encoder: &mut wgpu::CommandEncoder) {
         for level in &self.levels {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("henad_reduce_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &level.bind, &[]);
-            pass.dispatch_workgroups(level.groups.0, level.groups.1, 1);
+            dispatch_pass(
+                encoder,
+                "henad_reduce_pass",
+                &self.pipeline,
+                &level.bind,
+                level.groups,
+                None,
+            );
         }
         // The last level writes every entry unconditionally, and no clear is needed.
         self.readback.encode_copy(encoder);
@@ -200,11 +207,7 @@ impl GpuLaneReduce {
 
     /// Completes an in-flight readback, waiting when `block` is set, and returns its state after the poll.
     pub fn poll_readback(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
-        if block {
-            self.readback.poll_blocking(device)
-        } else {
-            self.readback.poll(device)
-        }
+        self.readback.poll_or_block(device, block)
     }
 
     /// Sum of each lane, all zero until the first readback completes.
@@ -397,7 +400,6 @@ fn main(
     #[test]
     fn a_built_reduce_holds_a_partial_for_every_dispatched_block() {
         let Some(ctx) = headless_context("gpu_reduce_partials_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_built_reduce_holds_a_partial_for_every_dispatched_block: no adapter");
             return;
         };
         let lanes = 2;
@@ -412,7 +414,6 @@ fn main(
     #[test]
     fn sums_match_a_cpu_reference() {
         let Some(ctx) = headless_context("gpu_reduce_test", wgpu::Features::empty()) else {
-            log::warn!("skipping sums_match_a_cpu_reference: no adapter");
             return;
         };
 
@@ -433,7 +434,6 @@ fn main(
     #[test]
     fn lanes_stay_separate() {
         let Some(ctx) = headless_context("gpu_reduce_lane_test", wgpu::Features::empty()) else {
-            log::warn!("skipping lanes_stay_separate: no adapter");
             return;
         };
 
@@ -450,7 +450,6 @@ fn main(
     #[test]
     fn a_tree_over_blocks_sums_as_the_tree_over_the_population() {
         let Some(ctx) = headless_context("gpu_reduce_blocks_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_tree_over_blocks_sums_as_the_tree_over_the_population: no adapter");
             return;
         };
         for n in [1usize, 257, 70_000] {

@@ -6,6 +6,7 @@
 
 pub mod agent_engine;
 pub(crate) mod agent_spec;
+mod built_pass;
 pub mod capacity;
 #[cfg(feature = "runtime-wgsl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
@@ -15,6 +16,7 @@ pub mod fault;
 pub mod grid_engine;
 pub(crate) mod grid_spec;
 pub mod limits;
+mod press;
 pub mod primitives;
 #[cfg(feature = "runtime-wgsl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
@@ -35,7 +37,7 @@ pub use agent_engine::GpuAgentState;
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
 pub use agent_spec::{
     AgentActionSpec, AgentBufferSpec, AgentDisplaySpec, AgentHooks, AgentPassId, AgentPassSpec, AgentReduceSpec,
-    AgentRun, AgentUploads, GpuAgentSpec,
+    AgentRun, GpuAgentSpec,
 };
 pub use capacity::{Demand, HOST_WORK_BUDGET, HostWork, PassBindings, PassKind, SUBMISSION_WORK_BUDGET};
 pub use grid_engine::GpuGridState;

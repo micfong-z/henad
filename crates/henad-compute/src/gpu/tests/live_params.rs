@@ -1,25 +1,21 @@
 //! Live parameters of both GPU engines: a live edit writes the uniform blocks again between steps, so the tick and the
 //! buffers stay and later steps read the new value, and a reload-only parameter is rejected.
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
-use henad_core::authoring::model::binding::BindingKind;
 use henad_core::authoring::model::field::Extent;
-use henad_core::authoring::model::gpu_agent_model::{Domain, Geometry, PassCtx, PassId};
+use henad_core::authoring::model::gpu_agent_model::{Geometry, PassCtx, PassId};
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
-use henad_core::view::{StatDescriptor, StatValue};
+use henad_core::view::StatValue;
 
 use crate::gpu::agent_engine::GpuAgentEngine;
-use crate::gpu::agent_spec::{
-    AgentBufferSpec, AgentHooks, AgentPassId, AgentPassSpec, AgentReduceSpec, AgentRun, GpuAgentSpec,
-};
+use crate::gpu::agent_spec::{AgentHooks, AgentPassId, AgentRun, GpuAgentSpec};
 use crate::gpu::grid_engine::GpuGridEngine;
-use crate::gpu::grid_spec::{GpuGridSpec, GridBufferSpec, GridHooks, GridPassCtx, GridPassId, GridPassSpec};
-use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
-use crate::gpu::sides::SideTable;
+use crate::gpu::grid_spec::{GpuGridSpec, GridHooks, GridPassCtx, GridPassId};
+use crate::gpu::shader_spec::ShaderSpec;
 use crate::gpu::sim_thread::GpuSimState;
+use crate::gpu::tests::support::{count_agent_spec, count_grid_spec, scalar_stat, steps_then_stats, storage, uniform};
 use crate::gpu::{GpuContext, headless_context};
 
 // Grid of the test grid model. One workgroup of 8 by 8 covers it.
@@ -52,37 +48,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         if (params.counting != 0u) {
             atomicAdd(&counters[1], params.amount);
         }
-    }
-}
-";
-
-/// Writes nothing to its texture, which no test reads.
-const GRID_DISPLAY: &str = r"
-struct Dims { grid: vec2<u32>, tex: vec2<u32> }
-
-@group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(1) var<uniform> dims: Dims;
-
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x < dims.tex.x && id.y < dims.tex.y) {
-        textureStore(output, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
-    }
-}
-";
-
-/// Sums `count` into word 0.
-const GRID_REDUCE: &str = r"
-struct Dims { grid: vec2<u32>, tex: vec2<u32> }
-
-@group(0) @binding(0) var<storage, read> count: array<u32>;
-@group(0) @binding(1) var<storage, read_write> counters: array<atomic<u32>>;
-@group(0) @binding(2) var<uniform> dims: Dims;
-
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x < dims.grid.x && id.y < dims.grid.y) {
-        atomicAdd(&counters[0], count[id.y * dims.grid.x + id.x]);
     }
 }
 ";
@@ -127,63 +92,10 @@ impl GridHooks for GridTestHooks {
     }
 }
 
-fn storage(name: &'static str, read_only: bool) -> ShaderBinding {
-    ShaderBinding::new(name, BindingKind::Storage { read_only })
-}
-
-fn uniform(name: &'static str) -> ShaderBinding {
-    ShaderBinding::new(name, BindingKind::Uniform)
-}
-
 /// Returns the test grid model: one step that adds the amount to every cell and to the fire word, and a reduce pass
 /// that sums the cells into word 0.
 fn grid_spec() -> Arc<GpuGridSpec> {
-    let swapping = || SideTable::swapping(1);
-    let step = GridPassSpec::new(
-        "add_step",
-        ShaderSpec::new(
-            GRID_STEP,
-            vec![
-                storage("count_in", true),
-                storage("count_out", false),
-                storage("counters", false),
-                uniform("params"),
-            ],
-        ),
-        swapping(),
-    );
-    let display = GridPassSpec::new(
-        "display",
-        ShaderSpec::new(
-            GRID_DISPLAY,
-            vec![
-                ShaderBinding::new("output", BindingKind::StorageTexture),
-                uniform("dims"),
-            ],
-        ),
-        swapping(),
-    );
-    let reduce = GridPassSpec::new(
-        "reduce",
-        ShaderSpec::new(
-            GRID_REDUCE,
-            vec![storage("count", true), storage("counters", false), uniform("dims")],
-        ),
-        swapping(),
-    );
-    let mut spec = GpuGridSpec::new(
-        "live_param_grid",
-        8,
-        vec![GridBufferSpec::new("count", true)],
-        vec![step],
-        display,
-        reduce,
-        Cow::Owned(vec![StatDescriptor::owned("Total".to_owned(), [1, 2, 3, 255])]),
-        Box::new(GridTestHooks),
-    );
-    spec.counters = 2;
-    spec.fire_counters = 1..2;
-    Arc::new(spec)
+    count_grid_spec("live_param_grid", "add_step", GRID_STEP, Box::new(GridTestHooks))
 }
 
 /// Adds the amount to `count`, writing the next side.
@@ -198,26 +110,6 @@ struct Params { n: u32, amount: u32, _pad0: u32, _pad1: u32 }
 fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
     if (lid.x < params.n) {
         count_out[lid.x] = count_in[lid.x] + params.amount;
-    }
-}
-";
-
-/// Sums `count` into the one partial of the single workgroup.
-const AGENT_REDUCE: &str = r"
-struct Params { n: u32, amount: u32, _pad0: u32, _pad1: u32 }
-
-@group(0) @binding(0) var<storage, read> count: array<u32>;
-@group(0) @binding(1) var<storage, read_write> partials: array<f32>;
-@group(0) @binding(2) var<uniform> params: Params;
-
-@compute @workgroup_size(256)
-fn main(@builtin(local_invocation_id) lid: vec3<u32>) {
-    if (lid.x == 0u) {
-        var total = 0.0;
-        for (var i = 0u; i < params.n; i++) {
-            total += f32(count[i]);
-        }
-        partials[0] = total;
     }
 }
 ";
@@ -277,68 +169,24 @@ impl AgentHooks for AgentTestHooks {
 
 /// Returns the test agents model: one step that adds the amount to every agent, and a reduce that sums them.
 fn agent_spec() -> Arc<GpuAgentSpec> {
-    let buffers = vec![
-        AgentBufferSpec::new("pos", false, true),
-        AgentBufferSpec::new("color", false, true),
-        AgentBufferSpec::new("count", true, false),
-    ];
-    let reduce = AgentReduceSpec::new(
-        ShaderSpec::new(
-            AGENT_REDUCE,
-            vec![storage("count", true), storage("partials", false), uniform("params")],
-        ),
-        1,
-        Domain::Agents,
-        SideTable::swapping(buffers.len()),
+    let step = ShaderSpec::new(
+        AGENT_STEP,
+        vec![
+            storage("count_in", true),
+            storage("count_out", false),
+            uniform("params"),
+        ],
     );
-    let mut spec = GpuAgentSpec::new(
+    Arc::new(count_agent_spec(
         "live_param_agents",
-        buffers,
-        0,
-        1,
-        reduce,
-        Cow::Owned(vec![StatDescriptor::owned("Total".to_owned(), [1, 2, 3, 255])]),
-        Box::new(AgentTestHooks),
-    );
-    spec.steps = vec![AgentPassSpec::new(
         "add_step",
-        ShaderSpec::new(
-            AGENT_STEP,
-            vec![
-                storage("count_in", true),
-                storage("count_out", false),
-                uniform("params"),
-            ],
-        ),
-        Domain::Agents,
-        SideTable::swapping(spec.buffers.len()),
-    )];
-    Arc::new(spec)
+        step,
+        Box::new(AgentTestHooks),
+    ))
 }
 
 fn context() -> Option<GpuContext> {
     headless_context("live_param_tests", wgpu::Features::empty())
-}
-
-/// Records `steps` steps and then the stats passes into one submission, as the runner does for a snapshot, and waits
-/// for the readback.
-fn steps_then_stats(ctx: &GpuContext, state: &mut dyn GpuSimState, steps: u32) {
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    state.encode_steps(&mut encoder, steps, None);
-    state.encode_stats_passes(&mut encoder);
-    ctx.queue.submit(Some(encoder.finish()));
-    state.begin_stats_readback();
-    state.poll_stats_readback(&ctx.device, true);
-}
-
-/// Returns the scalar of the one stat.
-fn total(state: &dyn GpuSimState) -> f64 {
-    match state.stats()[0].value() {
-        StatValue::Scalar(value) => *value,
-        other => panic!("not a scalar: {other:?}"),
-    }
 }
 
 /// Values of both test models' parameters: an amount of `amount` and a start of 5.
@@ -352,7 +200,11 @@ fn params(amount: u32) -> Vec<ParamValue> {
 fn assert_live_edit(ctx: &GpuContext, state: &mut dyn GpuSimState, what: &str) {
     let elements = f64::from(ELEMENTS);
     steps_then_stats(ctx, state, 3);
-    assert_eq!(total(state), elements * f64::from(5 + 3 * 2), "{what}: 3 steps at 2");
+    assert_eq!(
+        scalar_stat(state, 0),
+        elements * f64::from(5 + 3 * 2),
+        "{what}: 3 steps at 2"
+    );
 
     assert!(
         state.set_param(AMOUNT, &ParamValue::U32(7)),
@@ -371,7 +223,7 @@ fn assert_live_edit(ctx: &GpuContext, state: &mut dyn GpuSimState, what: &str) {
     steps_then_stats(ctx, state, 4);
     assert_eq!(state.tick(), 7, "{what}: the steps go on from the tick");
     assert_eq!(
-        total(state),
+        scalar_stat(state, 0),
         elements * f64::from(5 + 3 * 2 + 4 * 7),
         "{what}: the steps after the edit add the new amount to the kept values"
     );
@@ -382,7 +234,6 @@ fn assert_live_edit(ctx: &GpuContext, state: &mut dyn GpuSimState, what: &str) {
 #[test]
 fn a_live_edit_keeps_the_run_and_later_steps_read_the_new_value() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_live_edit_keeps_the_run_and_later_steps_read_the_new_value: no adapter");
         return;
     };
     let live = vec![true, false];
@@ -400,14 +251,13 @@ fn a_live_edit_keeps_the_run_and_later_steps_read_the_new_value() {
 #[test]
 fn an_engine_without_live_parameters_rejects_every_edit() {
     let Some(ctx) = context() else {
-        log::warn!("skipping an_engine_without_live_parameters_rejects_every_edit: no adapter");
         return;
     };
     let mut grid = GpuGridEngine::new(&ctx, grid_spec(), &params(2), None);
     assert!(!grid.set_param(AMOUNT, &ParamValue::U32(7)));
     steps_then_stats(&ctx, &mut grid, 2);
     assert_eq!(
-        total(&grid),
+        scalar_stat(&grid, 0),
         f64::from(ELEMENTS * (5 + 2 * 2)),
         "the run kept its amount"
     );
@@ -420,14 +270,13 @@ fn an_engine_without_live_parameters_rejects_every_edit() {
 #[test]
 fn a_value_whose_blocks_fail_is_rejected_and_the_run_keeps_its_value() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_value_whose_blocks_fail_is_rejected_and_the_run_keeps_its_value: no adapter");
         return;
     };
     let mut agents = GpuAgentEngine::new(&ctx, agent_spec(), &params(2), None).with_live_params(vec![true, false]);
     assert!(!agents.set_param(AMOUNT, &ParamValue::U32(REFUSED_AMOUNT)));
     steps_then_stats(&ctx, &mut agents, 2);
     assert_eq!(
-        total(&agents),
+        scalar_stat(&agents, 0),
         f64::from(ELEMENTS * (5 + 2 * 2)),
         "the run kept its amount"
     );

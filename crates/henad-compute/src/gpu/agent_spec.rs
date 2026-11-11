@@ -25,6 +25,7 @@ use henad_core::view::{StatDescriptor, StatValue};
 use crate::display_scale::display_dims;
 use crate::gpu::capacity::{Demand, PassKind, storage_bindings};
 use crate::gpu::contracts::{assert_buffer_labels, assert_workgroup_size};
+use crate::gpu::grid_spec::RerunUploads;
 use crate::gpu::primitives::dispatch::WORKGROUP;
 use crate::gpu::primitives::spatial_hash::HashGrid;
 use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
@@ -286,10 +287,6 @@ impl AgentRun {
     }
 }
 
-/// Buffers that a rerun on the host wrote, each as its buffer's position in [`GpuAgentSpec::buffers`] and its new
-/// words.
-pub type AgentUploads = Vec<(usize, Vec<u32>)>;
-
 /// Functions of a GPU agent model that the engine calls, each the counterpart of the [`GpuAgentModel`] function of the
 /// same name.
 ///
@@ -374,7 +371,7 @@ pub trait AgentHooks: Send + Sync {
         _run: AgentRun,
         _params: &[ParamValue],
         _stream: &mut u64,
-    ) -> Result<AgentUploads, String> {
+    ) -> Result<RerunUploads, String> {
         Ok(Vec::new())
     }
 

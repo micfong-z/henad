@@ -16,6 +16,7 @@ use crate::gpu::grid_spec::{
 use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
 use crate::gpu::sides::{BufferSide, SideRow, SideTable};
 use crate::gpu::sim_thread::GpuSimState as _;
+use crate::gpu::tests::support::{storage, uniform};
 use crate::gpu::{GpuContext, headless_context};
 
 // Grid of the test model. One workgroup of 8 by 8 covers it.
@@ -189,14 +190,6 @@ impl GridHooks for TestHooks {
     }
 }
 
-fn storage(name: &'static str, read_only: bool) -> ShaderBinding {
-    ShaderBinding::new(name, BindingKind::Storage { read_only })
-}
-
-fn uniform(name: &'static str) -> ShaderBinding {
-    ShaderBinding::new(name, BindingKind::Uniform)
-}
-
 /// Returns a shader of the test model, with the uniform blocks' structs in front of `body`.
 fn shader(body: &str, bindings: Vec<ShaderBinding>) -> ShaderSpec {
     ShaderSpec::new(format!("{HEADER}{body}"), bindings)
@@ -322,7 +315,6 @@ fn step(engine: &mut GpuGridEngine) {
 #[test]
 fn a_later_step_pass_reads_the_side_its_table_picks() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_later_step_pass_reads_the_side_its_table_picks: no adapter");
         return;
     };
     for (after_reads, lag) in [(BufferSide::Current, 1), (BufferSide::Next, 0)] {
@@ -346,7 +338,6 @@ fn a_later_step_pass_reads_the_side_its_table_picks() {
 #[test]
 fn a_plain_buffer_takes_one_side() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_plain_buffer_takes_one_side: no adapter");
         return;
     };
     let (spec, _) = spec(BufferSide::Next);
@@ -395,7 +386,6 @@ fn assert_bump(ctx: &GpuContext, engine: &mut GpuGridEngine, press: u32) {
 #[test]
 fn an_action_reruns_on_the_host_then_runs_its_passes_in_place() {
     let Some(ctx) = context() else {
-        log::warn!("skipping an_action_reruns_on_the_host_then_runs_its_passes_in_place: no adapter");
         return;
     };
     let (spec, presses) = spec(BufferSide::Next);
@@ -421,7 +411,6 @@ fn an_action_reruns_on_the_host_then_runs_its_passes_in_place() {
 #[test]
 fn a_rerun_that_faults_reaches_the_sink_and_runs_no_pass() {
     let Some(ctx) = context() else {
-        log::warn!("skipping a_rerun_that_faults_reaches_the_sink_and_runs_no_pass: no adapter");
         return;
     };
     let (spec, _) = spec(BufferSide::Next);
@@ -439,7 +428,6 @@ fn a_rerun_that_faults_reaches_the_sink_and_runs_no_pass() {
 #[test]
 fn the_stats_read_the_current_side() {
     let Some(ctx) = context() else {
-        log::warn!("skipping the_stats_read_the_current_side: no adapter");
         return;
     };
     let (spec, _) = spec(BufferSide::Next);

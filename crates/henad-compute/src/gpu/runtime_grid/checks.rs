@@ -13,8 +13,8 @@ use henad_core::helpers::check_choice_options;
 use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind};
 use naga::{AddressSpace, Block, Expression, Function, Handle, Module, Span, Statement, TypeInner};
 
-use super::template::{FieldType, PRIVATE_PREFIX, TEMPLATE_NAMES, constant_name};
-use super::{GridRule, MAX_GRID_SIDE, MAX_PARAMS, MAX_STATES, MAX_STEP_BYTES, RuleDeclaration};
+use super::template::{FieldType, HELPERS, PARAMS_HEAD, PRIVATE_PREFIX, TEMPLATE_NAMES, constant_name};
+use super::{GRID_PARAM_IDS, GridRule, MAX_GRID_SIDE, MAX_PARAMS, MAX_STATES, MAX_STEP_BYTES, RuleDeclaration};
 use crate::gpu::compose::{
     Composition, Located, code_lines, find_wgsl_only_line_break, undecorate, wgsl_only_line_break_message, words,
 };
@@ -29,13 +29,6 @@ pub(crate) const MAX_PRIVATE_BYTES: u64 = 8192;
 /// Most expressions and statements one call of `step_cell` runs, counting the body of each function it calls once per
 /// call.
 pub(crate) const MAX_STEP_COST: u64 = 1 << 16;
-
-/// Grid parameter ids the engine puts in front of a rule's own parameter ids.
-const GRID_PARAM_IDS: &[&str] = &["grid_width", "grid_height"];
-
-/// Parameter ids the template keeps for itself besides WGSL's reserved words: the fields it fills in `Params`, and
-/// `tick`.
-const RESERVED_PARAM_IDS: &[&str] = &["width", "height", "seed", "tick"];
 
 /// Signature the template calls the rule's step with, as a message names it.
 pub(crate) const STEP_SIGNATURE: &str = "fn step_cell(cell: u32, rng: ptr<function, u32>) -> u32";
@@ -236,9 +229,14 @@ fn check_params(params: &[ParamDescriptor], problems: &mut Vec<DeclarationProble
         let mut problem = |message: String| {
             problems.push((Some(RuleDeclaration::Param(index)), CodeDiagnostic::error(message)));
         };
+        // The template fills the head of `Params` and keeps `tick` for itself.
         if let Err(reason) = crate::entry::check_id_grammar(id) {
             problem(format!("parameter id '{id}' {reason}"));
-        } else if RESERVED_PARAM_IDS.contains(&id) || GRID_PARAM_IDS.contains(&id) || id.starts_with(PRIVATE_PREFIX) {
+        } else if PARAMS_HEAD.contains(&id)
+            || id == "tick"
+            || GRID_PARAM_IDS.contains(&id)
+            || id.starts_with(PRIVATE_PREFIX)
+        {
             problem(format!(
                 "parameter id '{id}' is reserved. The engine will fill `params.width`, `params.height` and \
                  `params.seed`, and will declare `grid_width` and `grid_height`"
@@ -358,7 +356,7 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
     // Depth of braces at the start of the current word, with the bytes before it counted up to `scanned`.
     let mut depth = 0usize;
     let mut scanned = 0;
-    let found: Vec<(usize, &str)> = words(&code).collect();
+    let found = words(&code);
     for (position, &(offset, word)) in found.iter().enumerate() {
         for &byte in &bytes[scanned..offset] {
             match byte {
@@ -823,7 +821,11 @@ impl Walker<'_> {
         loop {
             let function = &module.functions[current];
             let mut calls = Vec::new();
-            collect_calls(&function.body, &mut calls);
+            for_each_statement(&function.body, &mut |statement, span| {
+                if let Statement::Call { function, .. } = statement {
+                    calls.push((*function, span));
+                }
+            });
             if let Some(&(callee, _)) = calls
                 .iter()
                 .find(|(callee, _)| cost(*callee) > MAX_STEP_COST && own.contains(callee))
@@ -969,10 +971,7 @@ impl Walker<'_> {
     fn check_call(&mut self, callee: Handle<Function>, at: Span) {
         let function = &self.module.functions[callee];
         if self.locate(self.module.functions.get_span(callee)).is_some()
-            || function
-                .name
-                .as_deref()
-                .is_some_and(|name| matches!(name, "neighbor" | "moore_count" | "von_neumann_count"))
+            || function.name.as_deref().is_some_and(|name| HELPERS.contains(&name))
         {
             return;
         }
@@ -1001,58 +1000,37 @@ pub(crate) fn function_costs(module: &Module) -> Vec<u64> {
     let mut costs: Vec<u64> = Vec::with_capacity(module.functions.len());
     for (_, function) in module.functions.iter() {
         let mut cost = u64::try_from(function.expressions.len()).unwrap_or(u64::MAX);
-        block_cost(&function.body, &costs, &mut cost);
+        for_each_statement(&function.body, &mut |statement, _| {
+            cost = cost.saturating_add(1);
+            if let Statement::Call { function, .. } = statement {
+                cost = cost.saturating_add(costs.get(function.index()).copied().unwrap_or(u64::MAX));
+            }
+        });
         costs.push(cost);
     }
     costs
 }
 
-/// Adds the cost of every statement of `block` to `cost`, a call adding its callee's cost from `costs`.
-fn block_cost(block: &Block, costs: &[u64], cost: &mut u64) {
-    for statement in block {
-        *cost = cost.saturating_add(1);
-        match statement {
-            Statement::Block(inner) => block_cost(inner, costs, cost),
-            Statement::If { accept, reject, .. } => {
-                block_cost(accept, costs, cost);
-                block_cost(reject, costs, cost);
-            }
-            Statement::Switch { cases, .. } => {
-                for case in cases {
-                    block_cost(&case.body, costs, cost);
-                }
-            }
-            Statement::Loop { body, continuing, .. } => {
-                block_cost(body, costs, cost);
-                block_cost(continuing, costs, cost);
-            }
-            Statement::Call { function, .. } => {
-                *cost = cost.saturating_add(costs.get(function.index()).copied().unwrap_or(u64::MAX));
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Collects every call in `block`, with its span, in the order the statements appear.
-fn collect_calls(block: &Block, calls: &mut Vec<(Handle<Function>, Span)>) {
+/// Calls `visit` on every statement of `block` and of the blocks nested in it, with its span, in the order the
+/// statements appear.
+fn for_each_statement(block: &Block, visit: &mut impl FnMut(&Statement, Span)) {
     for (statement, &span) in block.span_iter() {
+        visit(statement, span);
         match statement {
-            Statement::Block(inner) => collect_calls(inner, calls),
+            Statement::Block(inner) => for_each_statement(inner, visit),
             Statement::If { accept, reject, .. } => {
-                collect_calls(accept, calls);
-                collect_calls(reject, calls);
+                for_each_statement(accept, visit);
+                for_each_statement(reject, visit);
             }
             Statement::Switch { cases, .. } => {
                 for case in cases {
-                    collect_calls(&case.body, calls);
+                    for_each_statement(&case.body, visit);
                 }
             }
             Statement::Loop { body, continuing, .. } => {
-                collect_calls(body, calls);
-                collect_calls(continuing, calls);
+                for_each_statement(body, visit);
+                for_each_statement(continuing, visit);
             }
-            Statement::Call { function, .. } => calls.push((*function, span)),
             _ => {}
         }
     }
