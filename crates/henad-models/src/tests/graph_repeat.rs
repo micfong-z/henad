@@ -6,19 +6,11 @@
 
 use henad_compute::gpu::wgpu;
 use henad_core::params::ParamValue;
-use henad_explore::model_file::ModelFile;
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 use henad_graph::GraphFile;
 use henad_graph::host::{HostEvaluator, HostLanes, HostWorld, RunContext};
 
-use super::graph_grid_parity::{build_gpu, snapshot, stat, step};
 use super::lanes::GraphLanes;
-
-/// Returns the text of `tests/fixtures/graphs/repeat_trials.toml`.
-fn trials_text() -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/graphs/repeat_trials.toml");
-    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
-}
+use super::support::{baseline_device, build_gpu, fixture_text, model_entry, snapshot, stat, step};
 
 /// Returns the parameters of the file at `side` by `side` cells.
 fn trials_params(side: u32, trials: u32, p: f32) -> [ParamValue; 4] {
@@ -38,14 +30,12 @@ const SIGMAS: f64 = 5.0;
 /// be clamped, which the parameter's own bound prevents.
 #[test]
 fn repeated_trials_hit_at_the_closed_form_rate() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping repeated_trials_hit_at_the_closed_form_rate: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
-    let entry = ModelFile::parse(&trials_text())
-        .and_then(|file| file.entry())
-        .unwrap_or_else(|error| panic!("repeat_trials.toml: {error}"));
-    let lanes = GraphLanes::of_text(&trials_text());
+    let text = fixture_text("graphs/repeat_trials.toml");
+    let entry = model_entry(&text);
+    let lanes = GraphLanes::of_text(&text);
     let side = 512u32;
     let cells = f64::from(side * side);
     let cases = [
@@ -94,16 +84,13 @@ fn repeated_trials_hit_at_the_closed_form_rate() {
 /// two seeds.
 #[test]
 fn repeated_trials_on_the_device_equal_the_host() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping repeated_trials_on_the_device_equal_the_host: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
-    let text = trials_text();
+    let text = fixture_text("graphs/repeat_trials.toml");
     let file = GraphFile::parse(&text).unwrap_or_else(|error| panic!("{error}"));
     let evaluator = HostEvaluator::new(&file).unwrap_or_else(|error| panic!("{error}"));
-    let entry = ModelFile::parse(&text)
-        .and_then(|model_file| model_file.entry())
-        .unwrap_or_else(|error| panic!("repeat_trials.toml: {error}"));
+    let entry = model_entry(&text);
     let device_lanes = GraphLanes::of(&file);
     let (width, height) = (61u32, 37u32);
     let own = [ParamValue::U32(3), ParamValue::F32(0.2)];
@@ -141,7 +128,7 @@ fn repeated_trials_on_the_device_equal_the_host() {
 /// by 4096 with a line naming its step pass, and a build at that size fails before the engine allocates or seeds.
 #[test]
 fn a_repeat_within_the_pass_limit_is_refused_by_the_submission_budget_at_a_large_grid() {
-    let text = trials_text()
+    let text = fixture_text("graphs/repeat_trials.toml")
         .replace("config.max = 4\n", "config.max = 140\n")
         .replace("max = 4\ndefault = 4\n", "max = 140\ndefault = 140\n");
     let file = GraphFile::parse(&text).unwrap_or_else(|error| panic!("{error}"));
@@ -149,9 +136,7 @@ fn a_repeat_within_the_pass_limit_is_refused_by_the_submission_budget_at_a_large
     assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
     let step_cost = report.passes[0].cost;
     assert!(step_cost > 980 && step_cost < 1000, "the step costs {step_cost}");
-    let entry = ModelFile::parse(&text)
-        .and_then(|model_file| model_file.entry())
-        .unwrap_or_else(|error| panic!("{error}"));
+    let entry = model_entry(&text);
     let limits = wgpu::Limits::default();
     assert!(
         entry.shortfalls(&trials_params(2048, 140, 0.1), &limits).is_empty(),
@@ -163,8 +148,7 @@ fn a_repeat_within_the_pass_limit_is_refused_by_the_submission_budget_at_a_large
         refused[0].contains("past the budget") && refused[0].contains("pass 'node_repeat_trials_step' is the heaviest"),
         "{refused:?}"
     );
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the build of a_repeat_within_the_pass_limit_is_refused: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     match entry.build(&trials_params(4096, 140, 0.1), None, Some(&ctx)) {

@@ -399,7 +399,7 @@ fn main(
     /// drop the blocks past the buffer from the sum.
     #[test]
     fn a_built_reduce_holds_a_partial_for_every_dispatched_block() {
-        let Some(ctx) = headless_context("gpu_reduce_partials_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("gpu_reduce_partials_test") else {
             return;
         };
         let lanes = 2;
@@ -413,7 +413,7 @@ fn main(
     /// Sizes straddle the workgroup width, including a ragged tail and a multi-level chain.
     #[test]
     fn sums_match_a_cpu_reference() {
-        let Some(ctx) = headless_context("gpu_reduce_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("gpu_reduce_test") else {
             return;
         };
 
@@ -433,7 +433,7 @@ fn main(
     /// Each lane sums on its own. A stride mistake in the group-major layout would otherwise give plausible numbers.
     #[test]
     fn lanes_stay_separate() {
-        let Some(ctx) = headless_context("gpu_reduce_lane_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("gpu_reduce_lane_test") else {
             return;
         };
 
@@ -449,7 +449,7 @@ fn main(
     /// same blocks, bit for bit.
     #[test]
     fn a_tree_over_blocks_sums_as_the_tree_over_the_population() {
-        let Some(ctx) = headless_context("gpu_reduce_blocks_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("gpu_reduce_blocks_test") else {
             return;
         };
         for n in [1usize, 257, 70_000] {

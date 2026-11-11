@@ -4,34 +4,12 @@
 //! Each line kind holds exactly the fields its table lists. A driver reads the lines by name, and renaming or dropping
 //! a field breaks the driver.
 
+mod support;
+
 use std::collections::BTreeSet;
-use std::path::PathBuf;
-use std::process::Command;
 
 use serde_json::{Value, json};
-
-/// Directory under the system's temporary directory, removed with its contents on drop.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("henad-cli-{name}-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&path));
-        std::fs::create_dir_all(&path).expect("the scratch directory can be made");
-        Self(path)
-    }
-
-    /// Returns the path of `name` inside the directory, as an argument.
-    fn arg(&self, name: &str) -> String {
-        self.0.join(name).to_str().expect("a UTF-8 path").to_owned()
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.0));
-    }
-}
+use support::{Scratch, run, stderr, stdout};
 
 /// Runs `henad-cli` with `arguments`, and returns its exit status and the JSON lines it writes to standard output.
 ///
@@ -39,21 +17,16 @@ impl Drop for Scratch {
 ///
 /// Panics when the command does not run, or writes a line to standard output that is not JSON.
 fn json_lines<S: AsRef<str>>(arguments: &[S]) -> (i32, Vec<Value>) {
-    let arguments: Vec<&str> = arguments.iter().map(AsRef::as_ref).collect();
-    let output = Command::new(env!("CARGO_BIN_EXE_henad-cli"))
-        .args(&arguments)
-        .output()
-        .expect("henad-cli runs");
+    let output = run(arguments);
     let status = output.status.code().expect("henad-cli exits");
-    let stdout = String::from_utf8(output.stdout).expect("henad-cli writes UTF-8");
-    let lines = stdout
+    let lines = stdout(&output)
         .lines()
         .map(|line| {
             serde_json::from_str(line).unwrap_or_else(|error| {
                 panic!(
                     "henad-cli {}: '{line}' is not JSON ({error}). stderr: {}",
-                    arguments.join(" "),
-                    String::from_utf8_lossy(&output.stderr)
+                    arguments.iter().map(AsRef::as_ref).collect::<Vec<_>>().join(" "),
+                    stderr(&output)
                 )
             })
         })
@@ -431,10 +404,8 @@ initial_samples = 2
     let scored_fields = ["best_candidate_id", "best_objective", "best_replicates"];
 
     for (name, table) in [("genetic", genetic), ("pse", pse)] {
-        let spec = scratch.0.join(format!("{name}.toml"));
-        std::fs::write(&spec, format!("{SEARCH_SETUP}{table}")).expect("the spec can be written");
-        let spec = spec.to_str().expect("a UTF-8 path");
-        let (status, lines) = json_lines(&["--json", "--spec", spec, "--out", &scratch.arg(name)]);
+        let spec = scratch.write(&format!("{name}.toml"), &format!("{SEARCH_SETUP}{table}"));
+        let (status, lines) = json_lines(&["--json", "--spec", &spec, "--out", &scratch.arg(name)]);
         assert_eq!(status, 0, "{name}");
 
         let plan = &lines[0];

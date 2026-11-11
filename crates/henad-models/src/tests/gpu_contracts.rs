@@ -12,8 +12,8 @@ use henad_core::authoring::model::gpu_agent_model::{
 use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
+use super::support::baseline_device;
 use crate::gpu_ants::GpuAnts;
 use crate::gpu_boids::GpuBoids;
 use crate::gpu_game_of_life::GpuGameOfLife;
@@ -282,7 +282,7 @@ fn agent_refusal<M: GpuAgentModel>(ctx: &GpuContext) -> String {
 /// different from the one it is dispatched over.
 #[test]
 fn a_workgroup_size_the_shaders_do_not_declare_is_refused() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let message = grid_refusal::<SmallWorkgroups>(&ctx);
@@ -297,7 +297,7 @@ fn a_workgroup_size_the_shaders_do_not_declare_is_refused() {
 /// refers to a different label.
 #[test]
 fn a_reserved_or_suffixed_label_is_refused() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let reserved = grid_refusal::<ReservedLabel>(&ctx);
@@ -311,7 +311,7 @@ fn a_reserved_or_suffixed_label_is_refused() {
 
 #[test]
 fn the_agent_engine_refuses_a_reserved_label() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let message = agent_refusal::<ReservedAgentLabel>(&ctx);
@@ -321,7 +321,7 @@ fn the_agent_engine_refuses_a_reserved_label() {
 /// Without the check, the state alternates between the seed and zeros on every step.
 #[test]
 fn the_agent_engine_refuses_a_second_side_no_step_pass_writes() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let message = agent_refusal::<UnwrittenSecondSide>(&ctx);
@@ -334,7 +334,7 @@ fn the_agent_engine_refuses_a_second_side_no_step_pass_writes() {
 /// Without the check, the first draw faults the device after a build that succeeded.
 #[test]
 fn the_agent_engine_refuses_positions_it_cannot_draw() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let message = agent_refusal::<HiddenPositions>(&ctx);
@@ -346,7 +346,7 @@ fn the_agent_engine_refuses_positions_it_cannot_draw() {
 
 #[test]
 fn the_agent_engine_refuses_a_step_shader_of_another_workgroup_size() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let message = agent_refusal::<WideStepWorkgroups>(&ctx);
@@ -361,7 +361,7 @@ fn the_agent_engine_refuses_a_step_shader_of_another_workgroup_size() {
 
 #[test]
 fn the_agent_engine_refuses_a_display_shader_of_another_workgroup_size() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let message = agent_refusal::<SmallDisplayWorkgroups>(&ctx);

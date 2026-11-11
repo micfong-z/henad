@@ -8,6 +8,7 @@ use henad_core::helpers::{bool_param, choice_param, u32_param};
 use henad_core::provenance::CodeOrigin;
 
 use crate::model_file::{ModelFile, ModelFileError};
+use crate::tests::support::{line_at, line_of};
 
 /// Returns the Life starter with a parameter of every kind, a third state, a bounded grid and a step that holds
 /// non-ASCII text.
@@ -58,7 +59,7 @@ fn a_model_file_round_trips_through_to_toml() {
     let error = ModelFile::parse(&basic)
         .err()
         .unwrap_or_else(|| panic!("a step holding `'''` was read:\n{basic}"));
-    let line = basic[..basic.find("// '''").unwrap_or_default()].matches('\n').count() as u32 + 1;
+    let line = line_of(&basic, "// '''");
     assert!(
         matches!(&error, ModelFileError::Format(diagnostic) if diagnostic.line == Some(line)),
         "{error:?}"
@@ -112,7 +113,7 @@ fn a_step_holds_what_a_literal_string_holds() {
     );
     // A file that holds U+0001 in its step is refused at its line.
     let ascii = text.replace('\u{85}', "\u{1}");
-    let line = ascii[..ascii.find('\u{1}').unwrap_or_default()].matches('\n').count() as u32 + 1;
+    let line = line_of(&ascii, "\u{1}");
     let error = ModelFile::parse(&ascii)
         .err()
         .unwrap_or_else(|| panic!("a file holding U+0001 was read"));
@@ -140,7 +141,7 @@ fn a_grid_rule_refuses_the_time_scale_keys() {
         );
         assert_eq!(
             error.diagnostics()[0].line,
-            Some(text[..at].matches('\n').count() as u32),
+            Some(line_of(&text, "[[param]]\n")),
             "the problem sits at the `[[param]]` table"
         );
     }
@@ -161,7 +162,7 @@ fn unknown_keys_are_refused() {
         let at = text.find(after).unwrap_or_default();
         let line_start = if after.ends_with('\n') { at + after.len() } else { at };
         let edited = format!("{}{key}{}", &text[..line_start], &text[line_start..]);
-        let expected_line = edited[..line_start].matches('\n').count() as u32 + 1;
+        let expected_line = line_at(&edited, line_start);
         let error = ModelFile::parse(&edited)
             .err()
             .unwrap_or_else(|| panic!("`{key}` was accepted"));
@@ -216,8 +217,6 @@ fn a_declaration_error_points_at_its_table() {
         .entry()
         .err()
         .unwrap_or_else(|| panic!("the declarations passed"));
-    let line_at = |offset: usize| text[..offset].matches('\n').count() as u32 + 1;
-    let line_of = |needle: &str| line_at(text.find(needle).unwrap_or_default());
     let third_state = text.match_indices("[[state]]").nth(2).map_or(0, |(at, _)| at);
     let second_param = text.match_indices("[[param]]").nth(1).map_or(0, |(at, _)| at);
     let mut placed: Vec<(u32, &str)> = error
@@ -227,10 +226,10 @@ fn a_declaration_error_points_at_its_table() {
         .collect();
     placed.sort_unstable();
     let expected = [
-        (line_of("id = \"Life\""), "rule id 'Life'"),
-        (line_of("[grid]"), "the grid width is 0"),
-        (line_at(third_state), "both produce the constant `DEAD`"),
-        (line_at(second_param), "parameter id 'seed' is reserved"),
+        (line_of(&text, "id = \"Life\""), "rule id 'Life'"),
+        (line_of(&text, "[grid]"), "the grid width is 0"),
+        (line_at(&text, third_state), "both produce the constant `DEAD`"),
+        (line_at(&text, second_param), "parameter id 'seed' is reserved"),
     ];
     assert_eq!(placed.len(), expected.len(), "{}", lines_of(&error).join("\n"));
     for ((line, message), (expected_line, text_part)) in placed.iter().zip(expected) {
@@ -257,7 +256,6 @@ fn control_characters_in_the_declarations_are_refused() {
         .entry()
         .err()
         .unwrap_or_else(|| panic!("the declarations passed"));
-    let line_at = |offset: usize| edited[..offset].matches('\n').count() as u32 + 1;
     let third_state = edited.match_indices("[[state]]").nth(2).map_or(0, |(at, _)| at);
     let choice = edited.match_indices("[[param]]").nth(3).map_or(0, |(at, _)| at);
     let mut placed: Vec<(Option<u32>, &str)> = error
@@ -271,11 +269,11 @@ fn control_characters_in_the_declarations_are_refused() {
         [
             (None, "the rule's name contains the control character U+001B"),
             (
-                Some(line_at(third_state)),
+                Some(line_at(&edited, third_state)),
                 "the label of state 2 contains the control character U+001B"
             ),
             (
-                Some(line_at(choice)),
+                Some(line_at(&edited, choice)),
                 "an option of parameter 'mode' contains the control character U+001B"
             ),
         ],
@@ -341,7 +339,7 @@ fn a_wgsl_error_points_at_its_file_line() {
         .err()
         .unwrap_or_else(|| panic!("the step compiled"));
     let semicolon = file.find("cell +;").unwrap_or_default() + "cell +".len();
-    let line = file[..semicolon].matches('\n').count() as u32 + 1;
+    let line = line_at(&file, semicolon);
     let ModelFileError::Rule(problems) = &error else {
         panic!("{error:?}");
     };

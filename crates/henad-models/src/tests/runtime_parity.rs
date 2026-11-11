@@ -1,18 +1,16 @@
 //! The example models' shaders composed at run time, and grid rules held to the models they write again.
 
 use henad_compute::cpu::grid_engine::GridModelState;
-use henad_compute::entry::{ModelSet, ModelState};
+use henad_compute::entry::ModelState;
 use henad_compute::gpu::compose::{WgslFile, compose_wgsl};
 use henad_compute::gpu::runtime_grid::GridRule;
-use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_compute::gpu::{GpuContext, GpuDisplay};
 use henad_core::authoring::primitives::rng::xorshift64;
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
 use henad_core::provenance::ModelCode;
-use henad_core::view::{StatEntry, StatValue};
-use henad_explore::testing::{CheckSettings, TestDeviceRequest, assert_set_conforms, headless_test_device};
 
+use super::support::{assert_entries_conform, baseline_device, snapshot, stat, step};
 use crate::game_of_life::GameOfLifeModel;
 
 /// The import path of `gpu_ants/state.wgsl`, the one module of the example shaders.
@@ -287,25 +285,6 @@ fn life_entry() -> henad_compute::entry::ModelEntry {
         .entry(ModelCode::new(GridRule::CODE_FORMAT, GridRule::life().step))
 }
 
-/// Returns the value of the stat labelled `label`.
-fn stat(stats: &[StatEntry], label: &str) -> f64 {
-    match stats.iter().find(|entry| entry.label() == label).map(StatEntry::value) {
-        Some(StatValue::Scalar(value)) => *value,
-        other => panic!("no scalar stat `{label}`: {other:?}"),
-    }
-}
-
-/// Runs the display and reduce passes of `state` and waits for its stats, as a blocking snapshot does.
-fn snapshot(ctx: &GpuContext, state: &mut dyn GpuSimState) {
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    state.encode_snapshot_passes(&mut encoder);
-    ctx.queue.submit(Some(encoder.finish()));
-    state.begin_stats_readback();
-    state.poll_stats_readback(&ctx.device, true);
-}
-
 /// Returns the state of each cell as `display` draws it, row after row, one texel per cell. Each state takes its colour
 /// in [`GridRule::life`].
 fn drawn_cells(display: &GpuDisplay, ctx: &GpuContext) -> Vec<u8> {
@@ -409,8 +388,7 @@ fn drawn_cells(display: &GpuDisplay, ctx: &GpuContext) -> Vec<u8> {
 /// every 8 ticks.
 #[test]
 fn the_life_starter_matches_game_of_life() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_life_starter_matches_game_of_life: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let (side, ticks, seed) = (128u32, 64u64, Some(11));
@@ -441,11 +419,7 @@ fn the_life_starter_matches_game_of_life() {
             let cells = cpu.grid_view().map(|view| view.cells.to_vec()).unwrap_or_default();
             assert!(drawn_cells(&display, &ctx) == cells, "the cells differ at tick {tick}");
         }
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        gpu.encode_steps(&mut encoder, 1, None);
-        ctx.queue.submit(Some(encoder.finish()));
+        step(&ctx, &mut *gpu, 1);
         cpu.step();
     }
 }
@@ -468,17 +442,5 @@ fn coin_entry() -> henad_compute::entry::ModelEntry {
 /// kit, their GPU checks on a baseline device included.
 #[test]
 fn a_grid_rule_conforms() {
-    let mut models = ModelSet::new(henad_core::build_info!());
-    for entry in [life_entry(), coin_entry()] {
-        models
-            .insert(entry)
-            .unwrap_or_else(|error| panic!("the set refused the rule: {error}"));
-    }
-    let mut settings = CheckSettings::default();
-    if let Some(device) = headless_test_device(&TestDeviceRequest::baseline()) {
-        settings = settings.gpu(device);
-    } else {
-        log::warn!("checking the Life starter without its GPU checks: no adapter");
-    }
-    assert_set_conforms(&models, &settings);
+    assert_entries_conform([life_entry(), coin_entry()].map(|entry| (entry.id().to_owned(), entry)));
 }

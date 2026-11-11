@@ -6,47 +6,14 @@
 //! A grid rule and a graph run on the GPU. The tests that build one skip on a machine without a device, and fail there
 //! when `HENAD_REQUIRE_GPU` is set.
 
+mod support;
+
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 
 use henad_explore::model_file::ModelFile;
 use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 use serde_json::Value;
-
-/// Directory under the system's temporary directory, removed with its contents on drop.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("henad-cli-model-file-{name}-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&path));
-        std::fs::create_dir_all(&path).expect("the scratch directory can be made");
-        Self(path)
-    }
-
-    /// Returns the path of `name` inside the directory.
-    fn path(&self, name: &str) -> PathBuf {
-        self.0.join(name)
-    }
-
-    /// Writes `text` to the file `name` inside the directory, and returns its path as an argument.
-    fn write(&self, name: &str, text: &str) -> String {
-        let path = self.path(name);
-        std::fs::write(&path, text).expect("the scratch file can be written");
-        argument(&path)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.0));
-    }
-}
-
-/// Returns `path` as a command-line argument.
-fn argument(path: &Path) -> String {
-    path.to_str().expect("a UTF-8 path").to_owned()
-}
+use support::{Scratch, argument, manifest, run, run_ok, stderr, stdout};
 
 /// Returns the text of the example model file, the Life rule.
 fn life_rule() -> String {
@@ -71,35 +38,6 @@ fn has_device() -> bool {
     headless_test_device(&TestDeviceRequest::baseline()).is_some()
 }
 
-/// Runs `henad-cli` with `arguments` and returns its output.
-fn run<S: AsRef<str>>(arguments: &[S]) -> Output {
-    let arguments: Vec<&str> = arguments.iter().map(AsRef::as_ref).collect();
-    Command::new(env!("CARGO_BIN_EXE_henad-cli"))
-        .args(&arguments)
-        .output()
-        .expect("henad-cli runs")
-}
-
-/// Runs `henad-cli` with `arguments`, checks that it succeeds, and returns its output.
-fn run_ok<S: AsRef<str>>(arguments: &[S]) -> Output {
-    let output = run(arguments);
-    assert!(
-        output.status.success(),
-        "henad-cli {} failed: {}",
-        arguments.iter().map(AsRef::as_ref).collect::<Vec<_>>().join(" "),
-        stderr(&output)
-    );
-    output
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-fn stderr(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
 /// Returns the arguments of a sweep of the Life rule in `model_file`, two densities on a 16 by 16 grid for four steps
 /// with `replicates` replicates, into `dir`.
 fn sweep_arguments(model_file: &str, replicates: &str, dir: &Path) -> Vec<String> {
@@ -122,12 +60,6 @@ fn sweep_arguments(model_file: &str, replicates: &str, dir: &Path) -> Vec<String
     ]
     .map(str::to_owned)
     .to_vec()
-}
-
-/// Returns the manifest in `dir`.
-fn manifest(dir: &Path) -> Value {
-    let text = std::fs::read_to_string(dir.join("manifest.json")).expect("the manifest is written");
-    serde_json::from_str(&text).expect("the manifest is JSON")
 }
 
 /// Returns the number of records in `runs.csv` in `dir`, its header left out.

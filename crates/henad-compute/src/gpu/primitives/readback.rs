@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn a_completed_map_polls_as_landed() {
-        let Some(ctx) = headless_context("henad_readback_landed_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_readback_landed_test") else {
             return;
         };
         let mut readback = CounterReadback::new(&ctx.device, "henad_readback_landed_test", 3);
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn a_failed_map_polls_as_failed_and_keeps_the_values() {
-        let Some(ctx) = headless_context("henad_readback_failed_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_readback_failed_test") else {
             return;
         };
         let mut readback = CounterReadback::new(&ctx.device, "henad_readback_failed_test", 3);
@@ -406,7 +406,7 @@ mod tests {
     /// would be a validation error.
     #[test]
     fn an_abandoned_map_leaves_the_next_readback_working() {
-        let Some(ctx) = headless_context("henad_readback_abandoned_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_readback_abandoned_test") else {
             return;
         };
         let mut readback = CounterReadback::new(&ctx.device, "henad_readback_abandoned_test", 3);

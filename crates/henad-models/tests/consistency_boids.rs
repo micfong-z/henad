@@ -2,77 +2,18 @@
 //!
 //! See `tests/fixtures/docs/boids_fixture.md` for how a fixture is produced.
 
-use std::collections::HashMap;
-use std::path::Path;
-
 use henad_compute::cpu::agent_engine::AgentModelState;
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
 use henad_models::boids::BoidsModel;
 
-/// Boids as `(x, y, vx, vy)` tuples.
-type Agents = &'static [(f32, f32, f32, f32)];
+mod support;
 
-/// 8 boids with exact binary representations.
-const BOIDS_8: Agents = &[
-    (10.0, 10.0, 1.0, 0.0),
-    (13.0, 10.0, 1.0, 0.0),
-    (30.0, 30.0, 0.0, 2.0),
-    (42.0, 30.0, 2.0, 0.0),
-    (75.0, 75.0, 0.5, 0.5),
-    (2.0, 50.0, -3.0, 0.0),
-    (98.0, 50.0, 3.0, 0.0),
-    (60.0, 10.0, 6.0, 6.0),
-];
+#[path = "gates/boids.rs"]
+mod gate;
 
-/// 42 boids sampled along two sine periods, quantised to exact binary representations (1/8).
-#[rustfmt::skip]
-const SINE_42: Agents = &[
-    (0.0, 61.125, 2.0, 0.0),
-    (2.25, 73.5, 2.375, 2.875),
-    (4.625, 83.75, -1.25, 5.375),
-    (6.875, 91.0, -6.5, 3.125),
-    (9.125, 94.625, -8.125, -3.875),
-    (11.375, 94.25, -2.375, -10.5),
-    (13.75, 90.0, 1.25, -1.625),
-    (16.0, 82.25, 3.75, 0.0),
-    (18.25, 71.5, 3.375, 4.25),
-    (20.625, 58.875, -1.625, 7.125),
-    (22.875, 45.5, -8.125, 3.875),
-    (25.125, 32.5, -9.625, -4.625),
-    (27.375, 21.0, -0.5, -2.0),
-    (29.75, 12.125, 2.375, -2.875),
-    (32.0, 6.625, 5.5, 0.0),
-    (34.25, 5.0, 4.5, 5.625),
-    (36.625, 7.375, -2.0, 8.75),
-    (38.875, 13.5, -9.625, 4.625),
-    (41.125, 22.875, -1.75, -0.875),
-    (43.375, 34.625, -0.875, -3.625),
-    (45.75, 47.75, 3.375, -4.25),
-    (48.0, 61.125, 7.25, 0.0),
-    (50.25, 73.5, 5.625, 7.0),
-    (52.625, 83.75, -2.375, 10.5),
-    (54.875, 91.0, -1.75, 0.875),
-    (57.125, 94.625, -3.375, -1.625),
-    (59.375, 94.25, -1.25, -5.375),
-    (61.75, 90.0, 4.5, -5.625),
-    (64.0, 82.25, 9.0, 0.0),
-    (66.25, 71.5, 6.75, 8.375),
-    (68.625, 58.875, -0.5, 2.0),
-    (70.875, 45.5, -3.375, 1.625),
-    (73.125, 32.5, -5.0, -2.375),
-    (75.375, 21.0, -1.625, -7.125),
-    (77.75, 12.125, 5.625, -7.0),
-    (80.0, 6.625, 10.75, 0.0),
-    (82.25, 5.0, 1.25, 1.625),
-    (84.625, 7.375, -0.875, 3.625),
-    (86.875, 13.5, -5.0, 2.375),
-    (89.125, 22.875, -6.5, -3.125),
-    (91.375, 34.625, -2.0, -8.75),
-    (93.75, 47.75, 6.75, -8.375),
-];
-
-const SCENARIOS: &[(&str, Agents)] = &[("boids-8", BOIDS_8), ("sine-42", SINE_42)];
+use gate::{Agents, Boid, MAX_SPEED, MIN_SPEED, SCENARIOS, TOLERANCE, WORLD, parse_fixture};
+use support::{fixture_dir, reference_fixtures};
 
 /// Resolves a fixture's `scenario` header to the agents it started from.
 fn scenario(name: &str) -> Agents {
@@ -84,43 +25,31 @@ fn scenario(name: &str) -> Agents {
         .unwrap_or_else(|| panic!("fixture declares unknown scenario `{key}`"))
 }
 
-/// Returns the directory of the reference fixtures for `model`.
-///
-/// `HENAD_FIXTURE_DIR` points the gate at a directory holding one engine's candidates, so a
-/// failure identifies that engine and no tracked fixture is written or removed to find out.
-fn fixture_dir(model: &str) -> std::path::PathBuf {
-    match std::env::var_os("HENAD_FIXTURE_DIR") {
-        Some(root) => std::path::PathBuf::from(root).join(model),
-        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(model),
-    }
-}
-
 /// One tick, as `boids_fixture.md` declares for both scenarios.
 ///
 /// Henad holds `f32` where the other engines hold `f64`, and the model is chaotic enough that a second
 /// tick would put the two flocks past any useful tolerance.
 const DECLARED_STEPS: u32 = 1;
 
-const WORLD: f32 = 100.0;
-const MAX_SPEED: f32 = 8.0;
-const MIN_SPEED: f32 = 2.0;
-
+/// Returns the parameters of the stock boids in the gate, in the order of its schema.
 fn params(agents: usize) -> Vec<ParamValue> {
-    vec![
-        ParamValue::U32(agents as u32),
-        ParamValue::F32(WORLD),     // world_width
-        ParamValue::F32(WORLD),     // world_height
-        ParamValue::F32(20.0),      // visual_range
-        ParamValue::F32(5.0),       // protected_range
-        ParamValue::F32(0.5),       // separation
-        ParamValue::F32(0.25),      // alignment
-        ParamValue::F32(0.125),     // cohesion
-        ParamValue::F32(MAX_SPEED), // max_speed
-        ParamValue::F32(MIN_SPEED), // min_speed
-    ]
+    let values = gate::gate_values(agents);
+    let models = henad_models::example_models();
+    let entry = models.get("boids").expect("the stock boids");
+    entry
+        .param_descriptors()
+        .iter()
+        .map(|descriptor| {
+            values
+                .iter()
+                .find(|(id, _)| *id == descriptor.id())
+                .map(|(_, value)| value.clone())
+                .unwrap_or_else(|| panic!("the gate sets no {}", descriptor.id()))
+        })
+        .collect()
 }
 
-fn run(agents: &[(f32, f32, f32, f32)], steps: u32) -> Vec<(f32, f32, f32, f32)> {
+fn run(agents: &[Boid], steps: u32) -> Vec<Boid> {
     let p = params(agents.len());
     let mut state = AgentModelState::<BoidsModel>::from_agents(&p, |lanes, _extent| {
         for (i, &(x, y, vx, vy)) in agents.iter().enumerate() {
@@ -139,56 +68,13 @@ fn run(agents: &[(f32, f32, f32, f32)], steps: u32) -> Vec<(f32, f32, f32, f32)>
         .collect()
 }
 
-/// Tolerance of the comparison, since Henad holds `f32` where the references hold `f64`.
-const TOLERANCE: f32 = 1e-5;
-
-struct Fixture {
-    header: HashMap<String, String>,
-    agents: Vec<(f32, f32, f32, f32)>,
-}
-
-/// Parses a fixture: `# key: value` header lines, then one `x y vx vy` row per agent.
-fn parse_fixture(text: &str) -> Fixture {
-    let mut header = HashMap::new();
-    let mut agents = Vec::new();
-
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix('#') {
-            if let Some((k, v)) = rest.split_once(':') {
-                header.insert(k.trim().to_lowercase(), v.trim().to_owned());
-            }
-            continue;
-        }
-        let vals: Vec<f32> = line
-            .split_whitespace()
-            .map(|t| t.parse().unwrap_or_else(|_| panic!("`{t}` is not a number")))
-            .collect();
-        assert_eq!(vals.len(), 4, "expected `x y vx vy`, got {} values", vals.len());
-        agents.push((vals[0], vals[1], vals[2], vals[3]));
-    }
-
-    Fixture { header, agents }
-}
-
 /// Checks Henad's agents against every reference, within tolerance.
 #[test]
 fn matches_every_reference_fixture() {
     let dir = fixture_dir("boids");
     let mut seen: Vec<String> = Vec::new();
 
-    let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
-    for entry in entries {
-        let path = entry.expect("readable directory entry").path();
-        if path.extension().is_none_or(|e| e != "txt") {
-            continue;
-        }
-
-        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {name}: {e}"));
+    for (name, text) in reference_fixtures(&dir) {
         let fixture = parse_fixture(&text);
         let engine = fixture.header.get("engine").map_or("?", String::as_str);
         let steps: u32 = fixture

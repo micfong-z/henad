@@ -591,17 +591,14 @@ mod tests {
     use crate::progress::NoProgress;
     use crate::sweep::SweepOptions;
     use crate::tests::support::{
-        Recorder, ScratchDir, entry, manifest, other_engine, provenance, rewrite_manifest, sweep, sweep_options,
+        Recorder, ScratchDir, entry, fixed, manifest, other_engine, provenance, rewrite_manifest, sweep, sweep_options,
         sweep_with,
     };
 
     /// Returns Game of Life on an 8 by 8 grid for 2 steps, with 4 replicates.
     fn life_spec() -> SweepSpec {
         let mut spec = SweepSpec::new("game_of_life");
-        spec.fixed = vec![
-            ("grid_width".to_owned(), "8".to_owned()),
-            ("grid_height".to_owned(), "8".to_owned()),
-        ];
+        spec.fixed = fixed(&[("grid_width", "8"), ("grid_height", "8")]);
         spec.run.steps = 2;
         spec.run.replicates = 4;
         spec
@@ -680,10 +677,7 @@ mod tests {
         let scratch = ScratchDir::new("merge-duplicate");
         let shard_dir = scratch.path().join("shard");
         let mut spec = SweepSpec::new("game_of_life");
-        spec.fixed = vec![
-            ("grid_width".to_owned(), "8".to_owned()),
-            ("grid_height".to_owned(), "8".to_owned()),
-        ];
+        spec.fixed = fixed(&[("grid_width", "8"), ("grid_height", "8")]);
         spec.run.steps = 2;
         spec.run.replicates = 2;
         sweep(&entry("game_of_life", None), None, &spec, &shard_dir, Concurrency::Auto);

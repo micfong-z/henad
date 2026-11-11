@@ -20,7 +20,7 @@ use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
 use crate::gpu::sides::{BufferSide, SideRow, SideTable};
 use crate::gpu::sim_thread::{GpuSimState as _, snapshot_blocking, submit_in_chunks};
 use crate::gpu::tests::support::storage;
-use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION, headless_context, stepping};
+use crate::gpu::{MAX_STEPS_PER_SUBMISSION, headless_context, stepping};
 
 /// Number of agents of the test model. One workgroup covers them.
 const AGENTS: u32 = 16;
@@ -238,10 +238,6 @@ fn spec(after_reads: BufferSide, calls: &Arc<HookCalls>) -> Arc<GpuAgentSpec> {
     Arc::new(spec)
 }
 
-fn context() -> Option<GpuContext> {
-    headless_context("agent_spec_tests", wgpu::Features::empty())
-}
-
 /// Returns the words of buffer `index` of `engine`.
 fn words(engine: &GpuAgentEngine, index: usize) -> Vec<u32> {
     engine.read_buffer(index).expect("the index names a buffer")
@@ -256,7 +252,7 @@ fn expected(offset: u32, factor: u32) -> Vec<u32> {
 /// that points it at the next side. The sides swap once per step either way.
 #[test]
 fn a_side_table_picks_the_side_a_later_pass_reads() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("agent_spec_tests") else {
         return;
     };
     let calls = Arc::new(HookCalls::default());
@@ -293,7 +289,7 @@ fn a_side_table_picks_the_side_a_later_pass_reads() {
 /// step. The stats read that side too.
 #[test]
 fn an_in_place_action_writes_the_current_side() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("agent_spec_tests") else {
         return;
     };
     let calls = Arc::new(HookCalls::default());
@@ -326,7 +322,7 @@ fn an_in_place_action_writes_the_current_side() {
 /// A build calls the size and seed hooks, and from then on only a press and a stats read call a hook.
 #[test]
 fn a_step_calls_no_hook() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("agent_spec_tests") else {
         return;
     };
     let calls = Arc::new(HookCalls::default());
@@ -376,7 +372,7 @@ fn a_step_calls_no_hook() {
 /// The runner interface reads a declared buffer, and returns nothing past the last one.
 #[test]
 fn the_runner_interface_reads_a_buffer() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("agent_spec_tests") else {
         return;
     };
     let calls = Arc::new(HookCalls::default());
@@ -503,7 +499,7 @@ fn faulting_spec(block_fault: BlockFault) -> Arc<GpuAgentSpec> {
 /// A fault a shader records ends a run that steps and reads no stats, as a benchmark runs, with the hooks' message.
 #[test]
 fn a_recorded_fault_ends_a_run_that_reads_no_stats() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("agent_spec_tests") else {
         return;
     };
     let mut engine = GpuAgentEngine::new(&ctx, faulting_spec(BlockFault::None), &[], None);
@@ -519,7 +515,7 @@ fn a_recorded_fault_ends_a_run_that_reads_no_stats() {
 #[test]
 #[should_panic(expected = "fault_probe: node n9 in pass 'probe' faulted: the block has no value")]
 fn a_step_block_the_hooks_cannot_compute_fails_the_build() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("agent_spec_tests") else {
         panic!("fault_probe: node n9 in pass 'probe' faulted: the block has no value (no adapter)");
     };
     drop(GpuAgentEngine::new(&ctx, faulting_spec(BlockFault::Step), &[], None));
@@ -529,7 +525,7 @@ fn a_step_block_the_hooks_cannot_compute_fails_the_build() {
 /// not run.
 #[test]
 fn an_action_block_the_hooks_cannot_compute_refuses_the_press() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("agent_spec_tests") else {
         return;
     };
     let mut engine = GpuAgentEngine::new(&ctx, faulting_spec(BlockFault::Pressed), &[], None);

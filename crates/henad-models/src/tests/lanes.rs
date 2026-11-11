@@ -4,9 +4,12 @@
 //! id leaves a test unchanged by where the compiler put it.
 
 use henad_compute::gpu::sim_thread::GpuSimState;
+use henad_explore::model_file::ModelFile;
 use henad_graph::GraphFile;
 use henad_graph::document::World;
 use henad_graph::wgsl::{AgentProgram, GridProgram, LaneBuffer};
+
+use super::support::starter_text;
 
 /// Buffer and segment of each lane of one graph, by lane id.
 pub(super) struct GraphLanes {
@@ -33,13 +36,14 @@ impl GraphLanes {
         Self { places }
     }
 
-    /// Returns the places of the lanes of the graph file `text`.
+    /// Returns the places of the lanes of the model file `text`, a graph or a sheet, in the graph it builds as.
     ///
     /// # Panics
     ///
-    /// Panics if the text does not read or does not compile.
+    /// Panics if the text does not read, holds a grid rule or does not compile.
     pub(super) fn of_text(text: &str) -> Self {
-        Self::of(&GraphFile::parse(text).unwrap_or_else(|error| panic!("{error}")))
+        let file = ModelFile::parse(text).unwrap_or_else(|error| panic!("{error}"));
+        Self::of(file.lowered_graph().expect("a graph or a sheet"))
     }
 
     /// Returns the places of the lanes of the starter `file_name`.
@@ -48,8 +52,7 @@ impl GraphLanes {
     ///
     /// Panics if there is no such starter.
     pub(super) fn of_starter(file_name: &str) -> Self {
-        let starter = henad_graph::starters::starter(file_name).unwrap_or_else(|| panic!("no starter {file_name}"));
-        Self::of_text(starter.text)
+        Self::of_text(starter_text(file_name))
     }
 
     /// Returns the buffer and segment of the lane `id`.
@@ -63,6 +66,18 @@ impl GraphLanes {
             .find(|(known, _)| known == id)
             .map(|(_, place)| *place)
             .unwrap_or_else(|| panic!("the graph has no lane {id} on the device"))
+    }
+
+    /// Returns the words of every lane of `state` that sits on the device, each with its lane id, in document order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a buffer does not read back.
+    pub(super) fn read_all(&self, state: &dyn GpuSimState) -> Vec<(String, Vec<u32>)> {
+        self.places
+            .iter()
+            .map(|(id, _)| (id.clone(), self.read(state, id)))
+            .collect()
     }
 
     /// Returns the words of the lane `id` of `state`.

@@ -119,3 +119,5 @@ holds the crate doc, and of `docs/reference/cli.md`, and its floor is the 13 doc
 that are not sweeps. `tests/json_lines.rs` runs the binary and holds each `--json` line kind to
 the fields `benchmarks/protocol.md` and `docs/reference/cli.md` list, `explore_progress` aside,
 which a quick sweep never sends and a unit test checks. Keep them.
+The four test crates share `tests/support/mod.rs` through `mod support;`: `Scratch`, `run`,
+`run_ok`, `stdout`, `stderr` and `manifest`.

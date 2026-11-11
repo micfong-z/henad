@@ -11,8 +11,7 @@ use henad_compute::gpu::GpuContext;
 use henad_core::params::ParamValue;
 use henad_core::view::StatValue;
 
-use super::graph_grid_parity::{build_gpu, snapshot, stat, step};
-use super::sheet_grid::{device, device_params, entry_of, fixture_text};
+use super::support::{baseline_device, build_gpu, device_params, fixture_text, model_entry, snapshot, stat, step};
 
 /// Returns the text of the sheet starter `file_name`.
 fn starter_text(file_name: &str) -> &'static str {
@@ -81,12 +80,13 @@ fn halves(gaps: &[f64]) -> bool {
 /// most 0.8 of the one before. The chance SIR at its one-day chances per tick, read with the same ticks per day, fails
 /// the rule, so the test tells the two apart.
 #[test]
+#[expect(clippy::print_stderr, reason = "the gaps are information for the record")]
 fn the_rates_sir_converges_as_the_tick_halves_and_the_chance_sir_does_not() {
-    let Some(ctx) = device("the_rates_sir_converges_as_the_tick_halves_and_the_chance_sir_does_not") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
-    let rates = entry_of(starter_text("sir.toml"));
-    let chances = entry_of(&fixture_text("sheets/sir_chance.toml"));
+    let rates = model_entry(starter_text("sir.toml"));
+    let chances = model_entry(&fixture_text("sheets/sir_chance.toml"));
     let one_day = [
         ("infection_chance", 1.0 - (-0.3f32).exp()),
         ("recovery_chance", 1.0 - (-0.1f32).exp()),
@@ -108,7 +108,7 @@ fn the_rates_sir_converges_as_the_tick_halves_and_the_chance_sir_does_not() {
     }
     let rate_gaps = largest_gaps(&rate_runs);
     let chance_gaps = largest_gaps(&chance_runs);
-    log::info!("rate gaps {rate_gaps:?}, chance gaps {chance_gaps:?}");
+    eprintln!("rate gaps {rate_gaps:?}, chance gaps {chance_gaps:?}");
     assert!(halves(&rate_gaps), "the rate gaps {rate_gaps:?} do not halve");
     assert!(!halves(&chance_gaps), "the chance gaps {chance_gaps:?} halve");
     assert!(rate_gaps[0] > 0.05, "a tick of 1 day is coarse: {rate_gaps:?}");
@@ -133,13 +133,14 @@ fn dead_share(ctx: &GpuContext, entry: &ModelEntry, params: &[ParamValue], seed:
 /// Dead lies within 0.01 of the competing-risks split, 0.5, and the hand-lowered model in which the higher line wins
 /// lies within 0.01 of its own prediction, 0.4134.
 #[test]
+#[expect(clippy::print_stderr, reason = "the shares are information for the record")]
 fn the_sird_sheet_splits_its_removed_cells_by_its_rates() {
-    let Some(ctx) = device("the_sird_sheet_splits_its_removed_cells_by_its_rates") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let side = 512;
-    let sheet = entry_of(&fixture_text("sheets/sird.toml"));
-    let higher_wins = entry_of(&fixture_text("lowered/rates/sird_higher_wins.toml"));
+    let sheet = model_entry(&fixture_text("sheets/sird.toml"));
+    let higher_wins = model_entry(&fixture_text("lowered/rates/sird_higher_wins.toml"));
     for seed in 1..=3 {
         let competing = dead_share(
             &ctx,
@@ -153,7 +154,7 @@ fn the_sird_sheet_splits_its_removed_cells_by_its_rates() {
             &device_params(&higher_wins, side, &[("tick_length", 7.0)]),
             seed,
         );
-        log::info!("seed {seed}: competing {competing}, higher wins {contrast}");
+        eprintln!("seed {seed}: competing {competing}, higher wins {contrast}");
         assert!(
             (competing - 0.5).abs() <= 0.01,
             "seed {seed}: {competing} of the removed are Dead"
@@ -170,11 +171,11 @@ fn the_sird_sheet_splits_its_removed_cells_by_its_rates() {
 /// the binomial count, where a chance resolved to 2^-24 recovers none.
 #[test]
 fn a_rate_below_the_resolution_of_a_float_draw_recovers_its_share() {
-    let Some(ctx) = device("a_rate_below_the_resolution_of_a_float_draw_recovers_its_share") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let (side, ticks, rate) = (2048u32, 600u32, 2e-8f64);
-    let entry = entry_of(starter_text("sir.toml"));
+    let entry = model_entry(starter_text("sir.toml"));
     let params = device_params(
         &entry,
         side,
@@ -201,10 +202,10 @@ fn a_rate_below_the_resolution_of_a_float_draw_recovers_its_share() {
 /// Two runs of the rates SIR at one seed and a tick of half a day write identical statistics every tick.
 #[test]
 fn two_runs_at_one_seed_write_identical_statistics() {
-    let Some(ctx) = device("two_runs_at_one_seed_write_identical_statistics") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
-    let entry = entry_of(starter_text("sir.toml"));
+    let entry = model_entry(starter_text("sir.toml"));
     let params = device_params(&entry, 64, &[("tick_length", 0.5)]);
     let run = || {
         let mut state = build_gpu(&entry, &params, Some(5), &ctx);

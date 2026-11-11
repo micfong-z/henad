@@ -185,10 +185,6 @@ fn agent_spec() -> Arc<GpuAgentSpec> {
     ))
 }
 
-fn context() -> Option<GpuContext> {
-    headless_context("live_param_tests", wgpu::Features::empty())
-}
-
 /// Values of both test models' parameters: an amount of `amount` and a start of 5.
 fn params(amount: u32) -> Vec<ParamValue> {
     vec![ParamValue::U32(amount), ParamValue::U32(5)]
@@ -233,7 +229,7 @@ fn assert_live_edit(ctx: &GpuContext, state: &mut dyn GpuSimState, what: &str) {
 /// counting step of a batch included.
 #[test]
 fn a_live_edit_keeps_the_run_and_later_steps_read_the_new_value() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("live_param_tests") else {
         return;
     };
     let live = vec![true, false];
@@ -250,7 +246,7 @@ fn a_live_edit_keeps_the_run_and_later_steps_read_the_new_value() {
 /// An engine built with no live parameters rejects every edit, as a model type's engine does.
 #[test]
 fn an_engine_without_live_parameters_rejects_every_edit() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("live_param_tests") else {
         return;
     };
     let mut grid = GpuGridEngine::new(&ctx, grid_spec(), &params(2), None);
@@ -269,7 +265,7 @@ fn an_engine_without_live_parameters_rejects_every_edit() {
 /// A value at which the agents model's hooks cannot write a block is rejected, and the run keeps the value it had.
 #[test]
 fn a_value_whose_blocks_fail_is_rejected_and_the_run_keeps_its_value() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("live_param_tests") else {
         return;
     };
     let mut agents = GpuAgentEngine::new(&ctx, agent_spec(), &params(2), None).with_live_params(vec![true, false]);

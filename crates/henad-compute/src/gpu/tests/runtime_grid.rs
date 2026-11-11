@@ -647,7 +647,7 @@ fn a_grid_rule_binds_at_most_five_storage_buffers() {
 /// A step that returns a state past the last one leaves every cell in the last state.
 #[test]
 fn a_result_past_the_last_state_is_clamped() {
-    let Some(ctx) = headless_context("henad_runtime_grid_clamp", wgpu::Features::empty()) else {
+    let Some(ctx) = headless_context("henad_runtime_grid_clamp") else {
         return;
     };
     let mut rule = GridRule::life();
@@ -699,7 +699,7 @@ fn seed_word(compiled: &CompiledGridRule, width: u32, height: u32, params: &[Par
 /// on the CPU from the seed word of the uniform block.
 #[test]
 fn a_random_rule_draws_a_fresh_stream_each_tick() {
-    let Some(ctx) = headless_context("henad_runtime_grid_random", wgpu::Features::empty()) else {
+    let Some(ctx) = headless_context("henad_runtime_grid_random") else {
         return;
     };
     let mut rule = GridRule::life();
@@ -748,7 +748,7 @@ fn a_random_rule_draws_a_fresh_stream_each_tick() {
 /// and a cell's state holds the top four bits of a `next_bits` draw and the whole part of a `next_float` draw below 16.
 #[test]
 fn a_rule_draws_the_words_of_the_rust_twin() {
-    let Some(ctx) = headless_context("henad_runtime_grid_twin", wgpu::Features::empty()) else {
+    let Some(ctx) = headless_context("henad_runtime_grid_twin") else {
         return;
     };
     let mut rule = GridRule::life();

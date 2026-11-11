@@ -8,6 +8,7 @@ use henad_graph::sheet::sentence::SHEET_EMPTY;
 use henad_graph::sheet::{SheetFile, starters};
 
 use crate::model_file::{ModelFile, ModelFileError};
+use crate::tests::support::{edited, line_of};
 
 /// Text of the Game of Life sheet starter.
 fn life() -> &'static str {
@@ -16,20 +17,6 @@ fn life() -> &'static str {
         .find(|starter| starter.file_name == "game_of_life.toml")
         .expect("the Game of Life sheet is a starter")
         .text
-}
-
-/// Returns `text` with `old` replaced by `new` once, where `text` must hold `old`.
-fn edited(text: &str, old: &str, new: &str) -> String {
-    assert!(text.contains(old), "the text holds no {old:?}");
-    text.replacen(old, new, 1)
-}
-
-/// Returns the line of `text` that holds the first `needle`, counted from 1.
-fn line_of(text: &str, needle: &str) -> u32 {
-    let at = text
-        .find(needle)
-        .unwrap_or_else(|| panic!("the text holds no {needle:?}"));
-    u32::try_from(text[..at].matches('\n').count() + 1).expect("a short text")
 }
 
 /// Returns whether `diagnostic` names no pass and no node, and mentions neither in its message or notes.

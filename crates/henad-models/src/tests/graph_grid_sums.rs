@@ -5,10 +5,8 @@
 
 use henad_core::params::ParamValue;
 use henad_core::view::{StatEntry, StatValue};
-use henad_explore::model_file::ModelFile;
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
-use super::graph_grid_parity::{build_gpu, snapshot, stat, step};
+use super::support::{baseline_device, build_gpu, model_entry, snapshot, stat, step};
 
 /// A grid whose init pass sets `x` to `(index % 7) / 4`, whose tick pass keeps it, and whose stats pass reports its
 /// sum, its mean and the sum of `(x, -x)`.
@@ -155,13 +153,10 @@ fn vector_stat(stats: &[StatEntry], label: &str) -> (f64, f64) {
 /// workgroups, before and after a step, and replay.
 #[test]
 fn float_sums_of_a_grid_graph_reduce_on_the_device() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping float_sums_of_a_grid_graph_reduce_on_the_device: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
-    let entry = ModelFile::parse(SUMS)
-        .and_then(|file| file.entry())
-        .unwrap_or_else(|error| panic!("{error}"));
+    let entry = model_entry(SUMS);
     for (width, height) in [(1, 1), (16, 16), (100, 37), (300, 211)] {
         let params = [ParamValue::U32(width), ParamValue::U32(height)];
         let cells = width * height;

@@ -1167,7 +1167,7 @@ mod tests {
     /// loop has to look again, or population and the stats panel read zero until the first Play.
     #[test]
     fn a_readback_landing_after_the_initial_snapshot_is_published() {
-        let Some(ctx) = headless_context("henad_late_stats_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_late_stats_test") else {
             return;
         };
         let state = LateStats {
@@ -1248,7 +1248,7 @@ mod tests {
     /// readback completes. Otherwise the host keeps the build's zeros as the row of tick 0.
     #[test]
     fn a_run_to_after_the_build_republishes_tick_zero_first() {
-        let Some(ctx) = headless_context("henad_late_tick_zero_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_late_tick_zero_test") else {
             return;
         };
         let settings = fixed_batches(100);
@@ -1392,7 +1392,7 @@ mod tests {
 
     #[test]
     fn run_to_stops_at_the_target() {
-        let Some(ctx) = headless_context("henad_run_to_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_run_to_test") else {
             return;
         };
         let (mut thread, ticks, _) = action_recorder(ctx);
@@ -1418,7 +1418,7 @@ mod tests {
     /// A capped run steps at its rate, far below what the device can do.
     #[test]
     fn a_capped_gpu_run_keeps_to_its_rate() {
-        let Some(ctx) = headless_context("henad_capped_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_capped_test") else {
             return;
         };
         let (mut thread, ticks, _) = action_recorder(ctx);
@@ -1484,7 +1484,7 @@ mod tests {
     /// stats of its own tick.
     #[test]
     fn a_gpu_run_to_a_tick_samples_its_stats_on_the_way() {
-        let Some(ctx) = headless_context("henad_run_to_samples_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_run_to_samples_test") else {
             return;
         };
         let settings = fixed_batches(100);
@@ -1514,7 +1514,7 @@ mod tests {
 
     #[test]
     fn a_gpu_schedule_fires_once_per_tick_after_the_step_reaching_it() {
-        let Some(ctx) = headless_context("henad_gpu_schedule_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_gpu_schedule_test") else {
             return;
         };
         let (mut thread, ticks, fired) = action_recorder(ctx);
@@ -1542,7 +1542,7 @@ mod tests {
     /// A second schedule must not record the actions of the tick the loop sits at a second time.
     #[test]
     fn a_replaced_gpu_schedule_never_fires_a_tick_again() {
-        let Some(ctx) = headless_context("henad_gpu_replaced_schedule_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_gpu_replaced_schedule_test") else {
             return;
         };
         let (mut thread, _, fired) = action_recorder(ctx);
@@ -1635,7 +1635,7 @@ mod tests {
     /// Every pump of a GPU runner started in a pool runs on that pool, and the global pool runs none of it.
     #[test]
     fn a_gpu_runner_in_a_pool_pumps_on_its_workers() {
-        let Some(ctx) = headless_context("henad_gpu_pool_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_gpu_pool_test") else {
             return;
         };
         let width = rayon::current_num_threads() + 1;

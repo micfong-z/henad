@@ -171,10 +171,6 @@ fn agent_spec() -> Arc<GpuAgentSpec> {
     Arc::new(spec)
 }
 
-fn context() -> Option<GpuContext> {
-    headless_context("fire_count_tests", wgpu::Features::empty())
-}
-
 /// Returns the fire count of the step that reached `tick`: the values every element held as the step began.
 fn count_of_step(tick: u64) -> u32 {
     SEED_TOTAL + (tick as u32 - 1) * ELEMENTS
@@ -209,7 +205,7 @@ fn assert_last_step_counted(ctx: &GpuContext, state: &mut dyn GpuSimState, what:
 /// call.
 #[test]
 fn a_counted_step_reads_the_last_steps_count_in_calls_of_1_3_and_64() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("fire_count_tests") else {
         return;
     };
     let mut grid = GpuGridEngine::new(&ctx, grid_spec(), &[], None);
@@ -223,7 +219,7 @@ fn a_counted_step_reads_the_last_steps_count_in_calls_of_1_3_and_64() {
 /// leaves the fire range as the last counted step left it.
 #[test]
 fn a_grid_reads_its_tallies_and_its_fire_range_in_one_readback() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("fire_count_tests") else {
         return;
     };
     let mut grid = GpuGridEngine::new(&ctx, grid_spec(), &[], None);
@@ -246,7 +242,7 @@ fn a_grid_reads_its_tallies_and_its_fire_range_in_one_readback() {
 /// A spec with no fire range counts nothing, and its counts are empty.
 #[test]
 fn a_spec_with_no_fire_range_has_empty_counts() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("fire_count_tests") else {
         return;
     };
     let mut spec = Arc::try_unwrap(grid_spec()).unwrap_or_else(|_| unreachable!("the spec is not shared"));

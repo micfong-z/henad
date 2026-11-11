@@ -3,81 +3,30 @@
 //! population each admits in its declared world, a step of a Repeat on the device against the host evaluator, and the
 //! fault of a radius fold past its visit cap.
 
-use henad_compute::entry::{ModelEntry, ModelSet};
+use henad_compute::entry::ModelEntry;
 use henad_compute::fault::FaultKind;
 use henad_compute::gpu::stepping::sample_stats;
 use henad_compute::gpu::{HOST_WORK_BUDGET, PassKind, SUBMISSION_WORK_BUDGET};
 use henad_core::params::{ParamKind, ParamValue};
 use henad_explore::model_file::ModelFile;
-use henad_explore::testing::{CheckSettings, TestDeviceRequest, assert_set_conforms, headless_test_device};
 use henad_graph::GraphFile;
-use henad_graph::document::{PassStage, World};
+use henad_graph::document::PassStage;
 use henad_graph::host::{HostEvaluator, HostWorld, RunContext};
 
-use super::graph_grid_parity::{build_gpu, step};
 use super::lanes::GraphLanes;
-use super::sheet_agents::agent_sheets;
-
-/// Returns every agents file of the corpus with its name: the agent starters, then the agents fixtures.
-fn agent_corpus() -> Vec<(String, GraphFile)> {
-    let starters = henad_graph::starters::agent_starters()
-        .iter()
-        .map(|starter| (starter.file_name.to_owned(), starter.text.to_owned()));
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/graphs");
-    let mut fixtures: Vec<(String, String)> = std::fs::read_dir(&directory)
-        .unwrap_or_else(|error| panic!("{}: {error}", directory.display()))
-        .map(|entry| entry.expect("a directory entry").path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "toml"))
-        .map(|path| {
-            let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-            let name = path.file_name().expect("a file name").to_string_lossy().into_owned();
-            (name, text)
-        })
-        .collect();
-    fixtures.sort();
-    starters
-        .chain(fixtures)
-        .filter_map(|(name, text)| {
-            let file = GraphFile::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
-            matches!(file.document().world, World::Agents(_)).then_some((name, file))
-        })
-        .collect()
-}
-
-/// Returns the entry `file` builds.
-fn entry_of(name: &str, file: &GraphFile) -> ModelEntry {
-    ModelFile::parse(&file.to_toml())
-        .and_then(|model_file| model_file.entry())
-        .unwrap_or_else(|error| panic!("{name}: {error}"))
-}
+use super::support::{
+    agent_corpus, agent_sheets, assert_device_runs, assert_entries_conform, baseline_device, build_gpu, graph_buffer,
+    model_entry, roomy_limits, step,
+};
 
 /// Every agents entry of the corpus meets the testing kit's checks, its GPU checks included where a device exists.
 #[test]
 fn every_agent_corpus_entry_conforms() {
-    let mut models = ModelSet::new(henad_core::build_info!());
-    for (name, file) in agent_corpus() {
-        models
-            .insert(entry_of(&name, &file))
-            .unwrap_or_else(|error| panic!("{name}: the set refused the entry: {error}"));
-    }
-    let mut settings = CheckSettings::default();
-    if let Some(device) = headless_test_device(&TestDeviceRequest::baseline()) {
-        settings = settings.gpu(device);
-    } else {
-        log::warn!("checking the agents corpus without its GPU checks: no adapter");
-    }
-    assert_set_conforms(&models, &settings);
-}
-
-/// Limits of a device that holds every buffer and binding of the agents files, so that the work budgets are the only
-/// bounds a population meets.
-fn roomy_limits() -> wgpu::Limits {
-    wgpu::Limits {
-        max_storage_buffer_binding_size: u64::MAX,
-        max_buffer_size: u64::MAX,
-        max_storage_buffers_per_shader_stage: 16,
-        ..wgpu::Limits::default()
-    }
+    assert_entries_conform(
+        agent_corpus()
+            .into_iter()
+            .map(|(name, file)| (name, model_entry(&file.to_toml()))),
+    );
 }
 
 /// Returns every agents file of the corpus, then every agent sheet starter, each with its directory and file name and
@@ -88,7 +37,7 @@ fn budget_corpus() -> Vec<(String, ModelEntry)> {
         .map(|starter| starter.file_name)
         .collect();
     let graphs = agent_corpus().into_iter().map(|(name, file)| {
-        let entry = entry_of(&name, &file);
+        let entry = model_entry(&file.to_toml());
         let directory = if starters.contains(&name.as_str()) {
             "starters"
         } else {
@@ -96,12 +45,9 @@ fn budget_corpus() -> Vec<(String, ModelEntry)> {
         };
         (format!("{directory}/{name}"), entry)
     });
-    let sheets = agent_sheets().into_iter().map(|(name, text)| {
-        let entry = ModelFile::parse(text)
-            .and_then(|file| file.entry())
-            .unwrap_or_else(|error| panic!("sheets/{name}: {error}"));
-        (format!("sheets/{name}"), entry)
-    });
+    let sheets = agent_sheets()
+        .into_iter()
+        .map(|(name, text)| (format!("sheets/{name}"), model_entry(text)));
     graphs.chain(sheets).collect()
 }
 
@@ -165,7 +111,10 @@ const GROUND_INIT_PAST_THE_HOST_BUDGET: [&str; 3] = ["starters/ants.toml", "grap
 /// init alone, the same at its declared population as at its largest.
 #[test]
 fn every_agent_file_at_its_largest_population_in_its_largest_world_fits_the_work_budgets() {
-    let limits = roomy_limits();
+    let limits = wgpu::Limits {
+        max_storage_buffers_per_shader_stage: 16,
+        ..roomy_limits()
+    };
     let mut ground_refused = Vec::new();
     for (name, entry) in budget_corpus() {
         let (declared, largest) = population_range(&name, &entry);
@@ -222,7 +171,10 @@ fn every_agent_file_in_its_declared_world_admits_its_pinned_largest_population()
         ("sheets/bounded_confidence.toml", 552_857),
         ("sheets/ants.toml", 5_000_000),
     ];
-    let limits = roomy_limits();
+    let limits = wgpu::Limits {
+        max_storage_buffers_per_shader_stage: 16,
+        ..roomy_limits()
+    };
     let corpus = budget_corpus();
     let found: Vec<(&str, u32)> = corpus
         .iter()
@@ -308,13 +260,12 @@ const TOLERANCE: f32 = 1e-4;
 /// than the host.
 #[test]
 fn a_repeat_over_agents_steps_on_the_device_as_on_the_host() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_repeat_over_agents_steps_on_the_device_as_on_the_host: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let starter = henad_graph::starters::starter("random_walk.toml").expect("the random walk");
     let file = GraphFile::parse(starter.text).expect("the random walk reads");
-    let entry = entry_of("random_walk.toml", &file);
+    let entry = model_entry(starter.text);
     let device_lanes = GraphLanes::of(&file);
     let evaluator = HostEvaluator::new(&file).expect("the random walk compiles on the host");
     let tick = file
@@ -372,13 +323,20 @@ fn a_repeat_over_agents_steps_on_the_device_as_on_the_host() {
     }
 }
 
+/// Returns the line, counted from 1, of the table of the pass node `node_id` in the graph file `text`.
+fn node_line(text: &str, node_id: &str) -> usize {
+    let header = text
+        .find(&format!("[[pass.node]]\nid = \"{node_id}\""))
+        .unwrap_or_else(|| panic!("no table of node {node_id}"));
+    1 + text[..header].matches('\n').count()
+}
+
 /// A radius fold whose walk meets more than 65536 candidates sets its fault, which ends the run at the next stats read
 /// with a message naming its pass, its node and the line of the node's table, and the device runs another model
 /// afterwards.
 #[test]
 fn a_radius_fold_past_its_visit_cap_faults_and_the_device_survives() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_radius_fold_past_its_visit_cap_faults_and_the_device_survives: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     // Every agent sits at the origin, in one cell of the index, and agent 0 alone walks. The world is wide, so the
@@ -395,9 +353,7 @@ fn a_radius_fold_past_its_visit_cap_faults_and_the_device_survives() {
                 in.when = \"n3\"\n\n[[pass.node]]\nid = \"n5\"\nop = \"region.put\"\nregion = \"n4\"\n\
                 config.acc = \"seen\"\n\n[[pass.node]]\nid = \"n6\"\nop = \"lane.set\"\nconfig.lane = \"seen\"\n\
                 in.value = \"n4.seen\"\n";
-    let entry = ModelFile::parse(text)
-        .and_then(|file| file.entry())
-        .unwrap_or_else(|error| panic!("{error}"));
+    let entry = model_entry(text);
     let params = [
         ParamValue::U32(70_000),
         ParamValue::F32(1000.0),
@@ -414,23 +370,14 @@ fn a_radius_fold_past_its_visit_cap_faults_and_the_device_survives() {
     let FaultKind::Refused(message) = &fault.kind else {
         panic!("{fault}");
     };
-    let header = text.find("[[pass.node]]\nid = \"n4\"").expect("the fold's table");
-    let line = 1 + text[..header].matches('\n').count();
+    let line = node_line(text, "n4");
     assert!(
         message.contains(&format!("the pass 'crowd', node n4 on line {line}:")) && message.contains("65536"),
         "{message}"
     );
     drop(state);
     let models = crate::example_models();
-    let boids = models.get("gpu_boids").expect("the stock model");
-    let boids_params = boids
-        .param_descriptors()
-        .iter()
-        .map(|descriptor| descriptor.kind().default_value())
-        .collect::<Vec<_>>();
-    let mut other = build_gpu(boids, &boids_params, None, &ctx);
-    step(&ctx, &mut *other, 2);
-    sample_stats(&mut *other, &ctx).expect("the device runs another model after the fault");
+    assert_device_runs(&ctx, models.get("gpu_boids").expect("the stock model"));
 }
 
 /// A graph of one agent in a world of 4 by 2 cells, whose field `trail` of two layers starts at 1 and whose `finish`
@@ -469,17 +416,14 @@ macro_rules! walled_trail {
 /// the update writes that field in place.
 #[test]
 fn a_field_update_reads_each_layer_at_its_own_cell() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_field_update_reads_each_layer_at_its_own_cell: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
-    let entry = ModelFile::parse(walled_trail!("walls"))
-        .and_then(|file| file.entry())
-        .unwrap_or_else(|error| panic!("{error}"));
+    let entry = model_entry(walled_trail!("walls"));
     let params = [ParamValue::U32(1), ParamValue::F32(4.0), ParamValue::F32(2.0)];
     let mut state = build_gpu(&entry, &params, None, &ctx);
     step(&ctx, &mut *state, 1);
-    let trail: Vec<f32> = super::graph_ants_parity::graph_buffer(&entry, &*state, "field_trail_cells")
+    let trail: Vec<f32> = graph_buffer(&entry, &*state, "field_trail_cells")
         .into_iter()
         .map(f32::from_bits)
         .collect();
@@ -517,14 +461,8 @@ const WORLD_WALK: &str = "format = \"henad-model\"\nformat_version = 1\nkind = \
 /// the first step faults with its pass, node and line. The device runs another model afterwards.
 #[test]
 fn a_radius_fold_over_the_whole_world_is_refused_or_faults_with_its_place() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_radius_fold_over_the_whole_world_is_refused_or_faults_with_its_place: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
-    };
-    let entry_of_text = |text: &str| {
-        ModelFile::parse(text)
-            .and_then(|file| file.entry())
-            .unwrap_or_else(|error| panic!("{error}"))
     };
     let world = |agents: u32| {
         [
@@ -534,7 +472,7 @@ fn a_radius_fold_over_the_whole_world_is_refused_or_faults_with_its_place() {
         ]
     };
     let limits = ctx.device.limits();
-    let coarse = entry_of_text(&WORLD_WALK.replace("cell_size = { f32 = 1.0 }", "cell_size = { f32 = 64.0 }"));
+    let coarse = model_entry(&WORLD_WALK.replace("cell_size = { f32 = 1.0 }", "cell_size = { f32 = 64.0 }"));
     let found = coarse.shortfalls(&world(60_000), &limits);
     assert!(
         found.iter().any(|line| line.contains("node_sparse_crowd")),
@@ -542,12 +480,11 @@ fn a_radius_fold_over_the_whole_world_is_refused_or_faults_with_its_place() {
     );
     assert!(coarse.shortfalls(&world(100), &limits).is_empty());
 
-    let entry = entry_of_text(WORLD_WALK);
+    let entry = model_entry(WORLD_WALK);
     assert!(entry.shortfalls(&world(60_000), &limits).is_empty());
     let mut state = build_gpu(&entry, &world(60_000), None, &ctx);
     let fault = henad_compute::gpu::stepping::run_steps(&mut *state, &ctx, 1).expect_err("the walk faults");
-    let header = WORLD_WALK.find("[[pass.node]]\nid = \"n4\"").expect("the fold's table");
-    let line = 1 + WORLD_WALK[..header].matches('\n').count();
+    let line = node_line(WORLD_WALK, "n4");
     let message = fault.to_string();
     assert!(
         message.contains(&format!("the pass 'crowd', node n4 on line {line}:"))
@@ -556,13 +493,5 @@ fn a_radius_fold_over_the_whole_world_is_refused_or_faults_with_its_place() {
     );
     drop(state);
     let models = crate::example_models();
-    let boids = models.get("gpu_boids").expect("the stock model");
-    let boids_params = boids
-        .param_descriptors()
-        .iter()
-        .map(|descriptor| descriptor.kind().default_value())
-        .collect::<Vec<_>>();
-    let mut other = build_gpu(boids, &boids_params, None, &ctx);
-    step(&ctx, &mut *other, 2);
-    sample_stats(&mut *other, &ctx).expect("the device runs another model after the fault");
+    assert_device_runs(&ctx, models.get("gpu_boids").expect("the stock model"));
 }

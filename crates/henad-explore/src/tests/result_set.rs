@@ -15,15 +15,12 @@ use crate::output::read::ReadError;
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::progress::{Progress, ProgressEvent};
 use crate::result_set::{ResultReplayError, ResultSet, ResultSetError, read_directory_series};
-use crate::tests::support::{ScratchDir, entry, sweep_options, sweep_with, values};
+use crate::tests::support::{ScratchDir, entry, file_bytes, fixed, sweep_options, sweep_with, untimed, values};
 
 /// Returns 3 configs of SIR on a 16 by 16 grid with 2 replicates of 30 steps, and an action whose tick varies.
 fn sir_spec() -> SweepSpec {
     let mut spec = SweepSpec::new("sir");
-    spec.fixed = vec![
-        ("grid_width".to_owned(), "16".to_owned()),
-        ("grid_height".to_owned(), "16".to_owned()),
-    ];
+    spec.fixed = fixed(&[("grid_width", "16"), ("grid_height", "16")]);
     spec.run.steps = 30;
     spec.run.replicates = 2;
     spec.measure.stats_every = 3;
@@ -76,23 +73,11 @@ fn run_sweep(dir: &Path, spec: &SweepSpec) -> Vec<RunOutcome> {
     outcomes.0
 }
 
-/// Returns `outcome` with its timings zeroed, since `runs.csv` rounds them.
-fn untimed(outcome: &RunOutcome) -> RunOutcome {
-    RunOutcome {
-        build_ms: 0.0,
-        wall_ms: 0.0,
-        ..outcome.clone()
-    }
-}
-
 /// Returns every file of the directory `dir`, each as its name and bytes.
 fn directory_entries(dir: &Path) -> Vec<(String, Vec<u8>)> {
-    [MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE]
-        .iter()
-        .map(|&file| {
-            let bytes = fs::read(dir.join(file)).expect("the file is written");
-            (format!("picked/{file}"), bytes)
-        })
+    file_bytes(dir, &[MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE])
+        .into_iter()
+        .map(|(file, bytes)| (format!("picked/{file}"), bytes))
         .collect()
 }
 

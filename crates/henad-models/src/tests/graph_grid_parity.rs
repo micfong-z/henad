@@ -2,88 +2,16 @@
 //! `gpu_game_of_life` in cells, stats and every press of Randomise and Clear, and Vote to the template's Vote.
 
 use henad_compute::cpu::grid_engine::GridModelState;
-use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
-use henad_core::view::{StatEntry, StatValue};
-use henad_explore::model_file::ModelFile;
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
 use super::graph_corpus::vote::Vote;
 use super::lanes::GraphLanes;
-use crate::gpu_game_of_life::words_per_row;
-
-/// Returns the entry the model file of the starter `file_name` builds.
-pub(super) fn starter_entry(file_name: &str) -> ModelEntry {
-    let starter = henad_graph::starters::starter(file_name).unwrap_or_else(|| panic!("no starter {file_name}"));
-    ModelFile::parse(starter.text)
-        .and_then(|file| file.entry())
-        .unwrap_or_else(|error| panic!("{file_name}: {error}"))
-}
-
-/// Builds `entry` on `ctx` as a GPU state.
-pub(super) fn build_gpu(
-    entry: &ModelEntry,
-    params: &[ParamValue],
-    seed: Option<u64>,
-    ctx: &GpuContext,
-) -> Box<dyn GpuSimState> {
-    match entry.build(params, seed, Some(ctx)) {
-        Ok(ModelState::Gpu(state)) => state,
-        Ok(ModelState::Cpu(_)) => panic!("{} built on the CPU", entry.id()),
-        Err(fault) => panic!("{} did not build: {fault}", entry.id()),
-    }
-}
-
-/// Returns the scalar stat labelled `label`.
-pub(super) fn stat(stats: &[StatEntry], label: &str) -> f64 {
-    match stats.iter().find(|entry| entry.label() == label).map(StatEntry::value) {
-        Some(StatValue::Scalar(value)) => *value,
-        other => panic!("no scalar stat `{label}`: {other:?}"),
-    }
-}
-
-/// Runs the display and reduce passes of `state` and waits for its stats.
-pub(super) fn snapshot(ctx: &GpuContext, state: &mut dyn GpuSimState) {
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    state.encode_snapshot_passes(&mut encoder);
-    ctx.queue.submit(Some(encoder.finish()));
-    state.begin_stats_readback();
-    state.poll_stats_readback(&ctx.device, true);
-}
-
-/// Steps `state` `count` times in one submission.
-pub(super) fn step(ctx: &GpuContext, state: &mut dyn GpuSimState, count: u32) {
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    state.encode_steps(&mut encoder, count, None);
-    ctx.queue.submit(Some(encoder.finish()));
-}
-
-/// Presses action `index` of `state` in a submission of its own.
-pub(super) fn press(ctx: &GpuContext, state: &mut dyn GpuSimState, index: usize) {
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    assert!(state.encode_action(&mut encoder, index), "action {index}");
-    ctx.queue.submit(Some(encoder.finish()));
-}
-
-/// Returns the cells of the stock `gpu_game_of_life`, one word per cell in row-major order, unpacked from its 32 cells
-/// to a word.
-fn stock_life_cells(state: &dyn GpuSimState, width: u32, height: u32) -> Vec<u32> {
-    let words = state.read_buffer(0).expect("the state buffer");
-    let stride = words_per_row(width);
-    (0..height as usize)
-        .flat_map(|y| (0..width as usize).map(move |x| (y, x)))
-        .map(|(y, x)| (words[y * stride + x / 32] >> (x % 32)) & 1)
-        .collect()
-}
+use super::support::{
+    baseline_device, buffer_words, build_gpu, press, snapshot, starter_entry, stat, step, unpacked_life_cells,
+};
 
 /// Holds the graph and the stock Game of Life equal in cells and in the Alive count.
 fn assert_life_equal(
@@ -95,7 +23,7 @@ fn assert_life_equal(
     at: &str,
 ) {
     let (width, height) = size;
-    let cells = stock_life_cells(stock, width, height);
+    let cells = unpacked_life_cells(&buffer_words(stock, 0), width, height);
     assert!(lanes.read(graph, "state") == cells, "the cells differ {at}");
     snapshot(ctx, graph);
     snapshot(ctx, stock);
@@ -113,8 +41,7 @@ fn assert_life_equal(
 /// steps in one submission.
 #[test]
 fn the_game_of_life_graph_equals_gpu_game_of_life_every_tick() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_game_of_life_graph_equals_gpu_game_of_life_every_tick: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let graph_entry = starter_entry("game_of_life.toml");
@@ -159,8 +86,7 @@ fn the_game_of_life_graph_equals_gpu_game_of_life_every_tick() {
 /// at seed 0 and with no seed, between steps, leaves equal cells and counts, and two presses of Randomise draw apart.
 #[test]
 fn the_game_of_life_graph_actions_equal_gpu_game_of_life_press_by_press() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_game_of_life_graph_actions_equal_gpu_game_of_life_press_by_press: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let graph_entry = starter_entry("game_of_life.toml");
@@ -204,8 +130,7 @@ fn the_game_of_life_graph_actions_equal_gpu_game_of_life_press_by_press() {
 /// once the majorities settle.
 #[test]
 fn the_vote_graph_equals_vote_every_tick() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_vote_graph_equals_vote_every_tick: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let graph_entry = starter_entry("vote.toml");

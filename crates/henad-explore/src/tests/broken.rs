@@ -282,12 +282,24 @@ impl AgentModel for SharedAccumulator {
 }
 
 /// Writes a grid model with one cell value drawn per cell at build, a step that changes nothing, actions that change
-/// nothing, and one stat per entry of `stats`, each the count of live cells. `init` runs after the draw.
+/// nothing, and one stat per entry of `stats`, each the count of live cells. `init` runs after the draw. The model
+/// declares the parameters `params`, none when the invocation leaves them out.
 macro_rules! grid_model {
     (
         $(#[$meta:meta])*
         $name:ident, id: $id:expr, palette: $palette:expr, stats: $stats:expr, actions: $actions:expr,
         init: |$grid:ident, $rng:ident| $init:block
+    ) => {
+        grid_model! {
+            $(#[$meta])*
+            $name, id: $id, palette: $palette, stats: $stats, actions: $actions, params: Vec::new(),
+            init: |$grid, $rng| $init
+        }
+    };
+    (
+        $(#[$meta:meta])*
+        $name:ident, id: $id:expr, palette: $palette:expr, stats: $stats:expr, actions: $actions:expr,
+        params: $params:expr, init: |$grid:ident, $rng:ident| $init:block
     ) => {
         $(#[$meta])*
         pub struct $name;
@@ -303,7 +315,7 @@ macro_rules! grid_model {
             type Params = ();
 
             fn param_descriptors() -> Vec<ParamDescriptor> {
-                Vec::new()
+                $params
             }
 
             fn from_params(_params: &[ParamValue]) {}
@@ -418,85 +430,35 @@ grid_model! {
     }
 }
 
-/// Declares parameter and action ids that the command line cannot accept, and an action id holding `@`. The command
-/// line accepts `@` in an action id.
-pub struct UnnameableIds;
-
-impl GridModel for UnnameableIds {
-    const NAME: &'static str = "Unnameable Ids";
-    const ID: &'static str = "unnameable_ids";
-    const DESCRIPTION: &'static str = "A deliberately broken model, registered only by tests";
-    const PALETTE: &'static [[u8; 4]] = TWO_COLORS;
-    const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
-    const STATS: &'static [StatDescriptor] = LIVE;
-    const ACTIONS: &'static [ActionDescriptor] = &[
+grid_model! {
+    /// Declares parameter and action ids that the command line cannot accept, and an action id holding `@`. The
+    /// command line accepts `@` in an action id.
+    UnnameableIds,
+    id: "unnameable_ids",
+    palette: TWO_COLORS,
+    stats: LIVE,
+    actions: &[
         ActionDescriptor::new("spawn@centre", "Spawn at centre"),
         ActionDescriptor::new("clear=all", "Clear all"),
-    ];
-    type Params = ();
-
-    fn param_descriptors() -> Vec<ParamDescriptor> {
-        vec![
-            u32_param("rate=high", "Rate", 1, 0, 4),
-            u32_param("spread rate", "Spread rate", 1, 0, 4),
-            u32_param("action.delay", "Delay", 1, 0, 4),
-            u32_param("count", "Count", 1, 0, 4),
-        ]
-    }
-
-    fn from_params(_params: &[ParamValue]) {}
-
-    fn init(grid: &mut Grid2D<u8>, _params: &[ParamValue], rng: &mut u64) {
-        for cell in grid.current_mut() {
-            *rng = xorshift64(*rng);
-            *cell = u8::from(*rng & 1 == 1);
-        }
-    }
-
-    fn step_cell(cell: u8, _neighbors: &[u8], (): &(), _rng: &mut u64) -> u8 {
-        cell
-    }
-
-    fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
-        vec![StatValue::Scalar(
-            grid.current().iter().filter(|&&cell| cell == 1).count() as f64,
-        )]
-    }
+    ],
+    params: vec![
+        u32_param("rate=high", "Rate", 1, 0, 4),
+        u32_param("spread rate", "Spread rate", 1, 0, 4),
+        u32_param("action.delay", "Delay", 1, 0, 4),
+        u32_param("count", "Count", 1, 0, 4),
+    ],
+    init: |_grid, _rng| {}
 }
 
-/// Declares a parameter default outside its own bounds. Nothing checks it before the kit.
-pub struct DefaultOutOfBounds;
-
-impl GridModel for DefaultOutOfBounds {
-    const NAME: &'static str = "Default Out Of Bounds";
-    const ID: &'static str = "default_out_of_bounds";
-    const DESCRIPTION: &'static str = "A deliberately broken model, registered only by tests";
-    const PALETTE: &'static [[u8; 4]] = TWO_COLORS;
-    const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::Moore;
-    const STATS: &'static [StatDescriptor] = LIVE;
-    type Params = ();
-
-    fn param_descriptors() -> Vec<ParamDescriptor> {
-        vec![u32_param("initial_infected", "Initial infected", 500, 1, 100)]
-    }
-
-    fn from_params(_params: &[ParamValue]) {}
-
-    fn init(grid: &mut Grid2D<u8>, _params: &[ParamValue], rng: &mut u64) {
-        for cell in grid.current_mut() {
-            *rng = xorshift64(*rng);
-            *cell = u8::from(*rng & 1 == 1);
-        }
-    }
-
-    fn step_cell(cell: u8, _neighbors: &[u8], (): &(), _rng: &mut u64) -> u8 {
-        cell
-    }
-
-    fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
-        let live = grid.current().iter().filter(|&&cell| cell == 1).count();
-        vec![StatValue::Scalar(live as f64)]
-    }
+grid_model! {
+    /// Declares a parameter default outside its own bounds. Nothing checks it before the kit.
+    DefaultOutOfBounds,
+    id: "default_out_of_bounds",
+    palette: TWO_COLORS,
+    stats: LIVE,
+    actions: &[],
+    params: vec![u32_param("initial_infected", "Initial infected", 500, 1, 100)],
+    init: |_grid, _rng| {}
 }
 
 /// Declares its own `num_agents` parameter beside the engine's `num_agents`, and its own `grid_width` parameter twice.
@@ -733,70 +695,109 @@ impl GpuSimState for BuggyGpuState {
 /// baseline's 128 MiB storage binding.
 const OVERSIZED_SIDE: u32 = 8192;
 
-/// [`GpuSir`] with a default grid past the WebGPU baseline.
-pub struct OversizedGpuSir;
+/// Writes a GPU grid model that forwards every item of [`GpuSir`] but its name `label`, its id, its description and
+/// its parameters `params`.
+macro_rules! gpu_sir_with {
+    (
+        $(#[$meta:meta])*
+        $name:ident, label: $label:expr, id: $id:expr, description: $description:expr, params: $params:expr
+    ) => {
+        $(#[$meta])*
+        pub struct $name;
 
-impl GpuGridModel for OversizedGpuSir {
-    const NAME: &'static str = "Oversized GPU SIR";
-    const ID: &'static str = "oversized_gpu_sir";
-    const DESCRIPTION: &'static str = "A deliberately broken model, registered only by tests";
-    const PALETTE: &'static [[u8; 4]] = GpuSir::PALETTE;
-    const WORKGROUP_SIZE: u32 = GpuSir::WORKGROUP_SIZE;
-    const STATS: &'static [StatDescriptor] = GpuSir::STATS;
-    const ACTIONS: &'static [GpuGridAction] = GpuSir::ACTIONS;
-    const BUFFERS: &'static [&'static str] = GpuSir::BUFFERS;
-    const STEP_BINDINGS: &'static [BindingDecl] = GpuSir::STEP_BINDINGS;
-    const DISPLAY_BINDINGS: &'static [BindingDecl] = GpuSir::DISPLAY_BINDINGS;
-    const REDUCE_BINDINGS: &'static [BindingDecl] = GpuSir::REDUCE_BINDINGS;
-    const STEP_SHADER: &'static str = GpuSir::STEP_SHADER;
-    const DISPLAY_SHADER: &'static str = GpuSir::DISPLAY_SHADER;
-    const REDUCE_SHADER: &'static str = GpuSir::REDUCE_SHADER;
-    const REPLAYS_EXACTLY: bool = GpuSir::REPLAYS_EXACTLY;
+        impl GpuGridModel for $name {
+            const NAME: &'static str = $label;
+            const ID: &'static str = $id;
+            const DESCRIPTION: &'static str = $description;
+            const PALETTE: &'static [[u8; 4]] = GpuSir::PALETTE;
+            const WORKGROUP_SIZE: u32 = GpuSir::WORKGROUP_SIZE;
+            const STATS: &'static [StatDescriptor] = GpuSir::STATS;
+            const ACTIONS: &'static [GpuGridAction] = GpuSir::ACTIONS;
+            const BUFFERS: &'static [&'static str] = GpuSir::BUFFERS;
+            const STEP_BINDINGS: &'static [BindingDecl] = GpuSir::STEP_BINDINGS;
+            const DISPLAY_BINDINGS: &'static [BindingDecl] = GpuSir::DISPLAY_BINDINGS;
+            const REDUCE_BINDINGS: &'static [BindingDecl] = GpuSir::REDUCE_BINDINGS;
+            const STEP_SHADER: &'static str = GpuSir::STEP_SHADER;
+            const DISPLAY_SHADER: &'static str = GpuSir::DISPLAY_SHADER;
+            const REDUCE_SHADER: &'static str = GpuSir::REDUCE_SHADER;
+            const REPLAYS_EXACTLY: bool = GpuSir::REPLAYS_EXACTLY;
 
-    fn param_descriptors() -> Vec<ParamDescriptor> {
-        let mut descriptors = GpuSir::param_descriptors();
-        for descriptor in &mut descriptors {
-            if let ParamKind::U32 { min, max, .. } = *descriptor.kind()
-                && matches!(descriptor.id(), "grid_width" | "grid_height")
-            {
-                let kind = ParamKind::U32 {
-                    min,
-                    max,
-                    default: OVERSIZED_SIDE,
-                };
-                *descriptor = ParamDescriptor::new(descriptor.id().to_owned(), descriptor.label().to_owned(), kind);
+            fn param_descriptors() -> Vec<ParamDescriptor> {
+                $params
+            }
+
+            fn dims(params: &[ParamValue]) -> (u32, u32) {
+                GpuSir::dims(params)
+            }
+
+            fn buffer_lens(width: u32, height: u32) -> Vec<usize> {
+                GpuSir::buffer_lens(width, height)
+            }
+
+            fn step_dims(width: u32, height: u32) -> (u32, u32) {
+                GpuSir::step_dims(width, height)
+            }
+
+            fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
+                GpuSir::seed_buffers(width, height, params, seed)
+            }
+
+            fn step_params_bytes(width: u32, height: u32, params: &[ParamValue]) -> Vec<u8> {
+                GpuSir::step_params_bytes(width, height, params)
+            }
+
+            fn action_params_bytes(
+                action: usize,
+                width: u32,
+                height: u32,
+                params: &[ParamValue],
+                seed: u32,
+            ) -> Vec<u8> {
+                GpuSir::action_params_bytes(action, width, height, params, seed)
+            }
+
+            fn stats(counts: &[u32]) -> Vec<StatValue> {
+                GpuSir::stats(counts)
             }
         }
-        descriptors
-    }
+    };
+}
 
-    fn dims(params: &[ParamValue]) -> (u32, u32) {
-        GpuSir::dims(params)
+/// Returns the parameters of [`GpuSir`] with the grid's default sides at [`OVERSIZED_SIDE`].
+fn oversized_sir_params() -> Vec<ParamDescriptor> {
+    let mut descriptors = GpuSir::param_descriptors();
+    for descriptor in &mut descriptors {
+        if let ParamKind::U32 { min, max, .. } = *descriptor.kind()
+            && matches!(descriptor.id(), "grid_width" | "grid_height")
+        {
+            let kind = ParamKind::U32 {
+                min,
+                max,
+                default: OVERSIZED_SIDE,
+            };
+            *descriptor = ParamDescriptor::new(descriptor.id().to_owned(), descriptor.label().to_owned(), kind);
+        }
     }
+    descriptors
+}
 
-    fn buffer_lens(width: u32, height: u32) -> Vec<usize> {
-        GpuSir::buffer_lens(width, height)
-    }
+gpu_sir_with! {
+    /// [`GpuSir`] with a default grid past the WebGPU baseline.
+    OversizedGpuSir,
+    label: "Oversized GPU SIR",
+    id: "oversized_gpu_sir",
+    description: "A deliberately broken model, registered only by tests",
+    params: oversized_sir_params()
+}
 
-    fn step_dims(width: u32, height: u32) -> (u32, u32) {
-        GpuSir::step_dims(width, height)
-    }
-
-    fn seed_buffers(width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
-        GpuSir::seed_buffers(width, height, params, seed)
-    }
-
-    fn step_params_bytes(width: u32, height: u32, params: &[ParamValue]) -> Vec<u8> {
-        GpuSir::step_params_bytes(width, height, params)
-    }
-
-    fn action_params_bytes(action: usize, width: u32, height: u32, params: &[ParamValue], seed: u32) -> Vec<u8> {
-        GpuSir::action_params_bytes(action, width, height, params, seed)
-    }
-
-    fn stats(counts: &[u32]) -> Vec<StatValue> {
-        GpuSir::stats(counts)
-    }
+gpu_sir_with! {
+    /// [`GpuSir`] under an id that the example set does not hold, registered as a downstream crate registers its
+    /// models.
+    OutsideGpuSir,
+    label: "SIR Epidemic (GPU, outside the example set)",
+    id: "outside_gpu_sir",
+    description: GpuSir::DESCRIPTION,
+    params: GpuSir::param_descriptors()
 }
 
 /// [`GpuBoids`] declaring no stats, like a model that only draws. The model is sound.

@@ -19,8 +19,8 @@ use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::provenance::ModelSource;
 use henad_core::topology::TopologyHint;
 use henad_core::view::{StatDescriptor, StatValue};
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
+use super::support::baseline_device;
 use crate::gpu_ants::GpuAnts;
 use crate::gpu_boids::GpuBoids;
 
@@ -298,8 +298,7 @@ fn assert_reads_like_registered<M: GpuAgentModel>(ctx: &GpuContext) {
 /// Each example GPU agent model built through the public constructors reads like its registered entry.
 #[test]
 fn an_owned_spec_entry_reads_like_the_registered_one() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping an_owned_spec_entry_reads_like_the_registered_one: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     assert_reads_like_registered::<GpuAnts>(&ctx);
@@ -309,8 +308,7 @@ fn an_owned_spec_entry_reads_like_the_registered_one() {
 /// A press through the entry of a model built from values matches a press through the registered entry.
 #[test]
 fn a_press_through_an_owned_spec_matches_the_registered_entry() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_press_through_an_owned_spec_matches_the_registered_entry: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let mut owned = build::<GpuAnts>(&entry_from_values::<GpuAnts>(), &ctx);

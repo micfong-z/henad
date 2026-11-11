@@ -231,8 +231,9 @@ the lane's words from the whole buffer read back. The crate-private `lane_groups
 `SheetFile::shortfalls` compiles the lowered graph again when a shortfall names a buffer of the
 model (`<id>_buffer<k>_a` of a grid, `<id>_<label>_a` of agents), and names the buffer by its
 properties (`a_shortfall_names_the_properties_a_buffer_holds`). henad-models' tests read a graph's
-lanes through `tests/lanes.rs` (`GraphLanes::of`, `of_text`, `of_starter`, `read`), and
-`planted_entry` plants a lane by id into its segment, never by buffer index. henad-graph's
+or a sheet's lanes through `tests/lanes.rs` (`GraphLanes::of`, `of_text`, `of_starter`, `read`,
+`read_all`), and both `planted_entry`s, of a grid and of agents, plant a lane by id into its
+segment, never by buffer index. henad-graph's
 `gpu_cases.rs` and `gpu_repeat.rs` build and read a case's lane buffers through
 `support::lane_buffers` and `support::lane_words`, both over `compiled.layout`, and
 `sheet_agents.rs` reads a lane through `AgentProgram::lane_buffer`. Tests: `tests/packing.rs` (the

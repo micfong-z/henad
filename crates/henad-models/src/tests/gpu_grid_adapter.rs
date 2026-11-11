@@ -7,8 +7,8 @@ use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::gpu_grid_model::GpuGridModel;
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
+use super::support::baseline_device;
 use crate::gpu_game_of_life::GpuGameOfLife;
 use crate::gpu_sir::GpuSir;
 
@@ -130,8 +130,7 @@ fn assert_state_follows<M: GpuGridModel>(ctx: &GpuContext) {
 /// A state of each example GPU grid model reports what its model declares.
 #[test]
 fn a_built_gpu_grid_state_follows_its_model_declarations() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_built_gpu_grid_state_follows_its_model_declarations: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     assert_state_follows::<GpuGameOfLife>(&ctx);

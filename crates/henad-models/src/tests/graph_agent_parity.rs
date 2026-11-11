@@ -13,23 +13,27 @@
 
 use henad_compute::cpu::agent_engine::AgentModelState;
 use henad_compute::entry::ModelEntry;
-use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_compute::gpu::{GpuAgentState, GpuContext, SUBMISSION_WORK_BUDGET};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::GpuAgentModel as _;
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
 use henad_core::spatial_hash::HashGrid;
-use henad_core::view::StatValue;
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 use henad_graph::GraphFile;
 
-use super::graph_ants_parity::{params_for, planted_entry};
-use super::graph_grid_parity::{build_gpu, snapshot, starter_entry, step};
-use super::graph_sir_parity::{fixture_entry, fixture_text};
+use super::graph_ants_parity::planted_entry;
 use super::lanes::GraphLanes;
+use super::support::{
+    baseline_device, build_gpu, fixture_text, model_entry, params_for, roomy_limits, starter_entry, starter_text,
+    stat_values, step,
+};
 use crate::boids::BoidsModel;
 use crate::gpu_boids::GpuBoids;
+
+#[path = "../../tests/gates/boids.rs"]
+mod gate;
+
+use gate::{Agents, Boid, MAX_SPEED, MIN_SPEED, SCENARIOS, TOLERANCE, WORLD, gate_values, parse_fixture};
 
 /// Largest distance between a statistic of a graph and the stock port's over [`STEPS`] steps, relative to the larger of
 /// the stock value and 1.
@@ -50,29 +54,13 @@ fn boids_params(num_agents: u32, world: f32) -> Vec<ParamValue> {
         .collect()
 }
 
-/// Returns the text of the fixture graph `file_name`.
-fn graph_text(file_name: &str) -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/graphs")
-        .join(file_name);
-    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
-}
-
-/// Returns the text of the starter `file_name`.
-fn starter_text(file_name: &str) -> String {
-    henad_graph::starters::starter(file_name)
-        .unwrap_or_else(|| panic!("no starter {file_name}"))
-        .text
-        .to_owned()
-}
-
 /// Returns the entries of the two boids graphs, each with its name and the places of its lanes.
 fn boids_graphs() -> [(&'static str, ModelEntry, GraphLanes); 2] {
     [
         (
             "gpu_boids.toml",
-            fixture_entry("gpu_boids.toml"),
-            GraphLanes::of_text(&fixture_text("gpu_boids.toml")),
+            model_entry(&fixture_text("graphs/gpu_boids.toml")),
+            GraphLanes::of_text(&fixture_text("graphs/gpu_boids.toml")),
         ),
         (
             "boids.toml",
@@ -80,20 +68,6 @@ fn boids_graphs() -> [(&'static str, ModelEntry, GraphLanes); 2] {
             GraphLanes::of_starter("boids.toml"),
         ),
     ]
-}
-
-/// Returns the stat values of `state` as plain numbers, a vector as its two components.
-fn stat_values(ctx: &GpuContext, state: &mut dyn GpuSimState) -> Vec<f64> {
-    snapshot(ctx, state);
-    state
-        .stats()
-        .iter()
-        .flat_map(|stat| match stat.value() {
-            StatValue::Scalar(value) => vec![*value],
-            StatValue::Vector2D { x, y } => vec![*x, *y],
-            StatValue::Histogram { .. } => panic!("a boids model reports no histogram"),
-        })
-        .collect()
 }
 
 /// Splits an interleaved `vec2<f32>` buffer into its two components.
@@ -108,8 +82,7 @@ fn split(words: &[u32]) -> (Vec<f32>, Vec<f32>) {
 /// Each boids graph builds, seeds its position and velocity buffers as the stock port does, and steps.
 #[test]
 fn the_boids_graphs_seed_like_gpu_boids_and_step() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_boids_graphs_seed_like_gpu_boids_and_step: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let models = crate::example_models();
@@ -137,8 +110,7 @@ fn the_boids_graphs_seed_like_gpu_boids_and_step() {
 /// stock port's over [`STEPS`] steps, at two seeds.
 #[test]
 fn the_boids_graphs_track_gpu_boids_in_their_statistics() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_boids_graphs_track_gpu_boids_in_their_statistics: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let models = crate::example_models();
@@ -172,8 +144,7 @@ fn the_boids_graphs_track_gpu_boids_in_their_statistics() {
 /// hold it.
 #[test]
 fn the_boids_graphs_keep_the_stock_ports_invariants() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_boids_graphs_keep_the_stock_ports_invariants: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     for (name, entry, lanes) in boids_graphs() {
@@ -310,8 +281,7 @@ fn boids_sweep(entry: &ModelEntry, ctx: &GpuContext, tracks: usize) -> henad_exp
 /// run order, ids, seeds, parameters, statuses, ticks and sampled ticks.
 #[test]
 fn the_boids_graph_equals_gpu_boids_in_the_engine_owned_fields_of_a_sweep() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_boids_graph_equals_gpu_boids_in_the_engine_owned_fields_of_a_sweep: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let models = crate::example_models();
@@ -322,7 +292,7 @@ fn the_boids_graph_equals_gpu_boids_in_the_engine_owned_fields_of_a_sweep() {
         1 + 4 * 11,
         "ticks 0 to 30 of every run, every third tick, and the header"
     );
-    let graph_entry = fixture_entry("gpu_boids.toml");
+    let graph_entry = model_entry(&fixture_text("graphs/gpu_boids.toml"));
     for tracks in [1, 4] {
         assert_eq!(
             engine_owned(&boids_sweep(&graph_entry, &ctx, tracks)),
@@ -406,10 +376,8 @@ const VISIT_CAP: u32 = 65_536;
 )]
 fn the_boids_graphs_walk_past_the_cap_only_where_the_budget_refuses_them() {
     let limits = wgpu::Limits {
-        max_storage_buffer_binding_size: u64::MAX,
-        max_buffer_size: u64::MAX,
         max_storage_buffers_per_shader_stage: 16,
-        ..wgpu::Limits::default()
+        ..roomy_limits()
     };
     let graphs = boids_graphs();
     // Each row reads: agents, visual range, world side, whether the longest walk passes the cap, and whether the
@@ -473,100 +441,6 @@ fn the_boids_graphs_walk_past_the_cap_only_where_the_budget_refuses_them() {
     }
 }
 
-// The cross-engine gate of `tests/consistency_boids.rs`, copied since an integration test exports nothing. Its fixture
-// document is `tests/fixtures/docs/boids_fixture.md`.
-
-/// One boid as `(x, y, vx, vy)`.
-type Boid = (f32, f32, f32, f32);
-
-/// Boids of a scenario.
-type Agents = &'static [Boid];
-
-/// 8 boids with exact binary representations.
-const BOIDS_8: Agents = &[
-    (10.0, 10.0, 1.0, 0.0),
-    (13.0, 10.0, 1.0, 0.0),
-    (30.0, 30.0, 0.0, 2.0),
-    (42.0, 30.0, 2.0, 0.0),
-    (75.0, 75.0, 0.5, 0.5),
-    (2.0, 50.0, -3.0, 0.0),
-    (98.0, 50.0, 3.0, 0.0),
-    (60.0, 10.0, 6.0, 6.0),
-];
-
-/// 42 boids sampled along two sine periods, quantised to exact binary representations (1/8).
-#[rustfmt::skip]
-const SINE_42: Agents = &[
-    (0.0, 61.125, 2.0, 0.0),
-    (2.25, 73.5, 2.375, 2.875),
-    (4.625, 83.75, -1.25, 5.375),
-    (6.875, 91.0, -6.5, 3.125),
-    (9.125, 94.625, -8.125, -3.875),
-    (11.375, 94.25, -2.375, -10.5),
-    (13.75, 90.0, 1.25, -1.625),
-    (16.0, 82.25, 3.75, 0.0),
-    (18.25, 71.5, 3.375, 4.25),
-    (20.625, 58.875, -1.625, 7.125),
-    (22.875, 45.5, -8.125, 3.875),
-    (25.125, 32.5, -9.625, -4.625),
-    (27.375, 21.0, -0.5, -2.0),
-    (29.75, 12.125, 2.375, -2.875),
-    (32.0, 6.625, 5.5, 0.0),
-    (34.25, 5.0, 4.5, 5.625),
-    (36.625, 7.375, -2.0, 8.75),
-    (38.875, 13.5, -9.625, 4.625),
-    (41.125, 22.875, -1.75, -0.875),
-    (43.375, 34.625, -0.875, -3.625),
-    (45.75, 47.75, 3.375, -4.25),
-    (48.0, 61.125, 7.25, 0.0),
-    (50.25, 73.5, 5.625, 7.0),
-    (52.625, 83.75, -2.375, 10.5),
-    (54.875, 91.0, -1.75, 0.875),
-    (57.125, 94.625, -3.375, -1.625),
-    (59.375, 94.25, -1.25, -5.375),
-    (61.75, 90.0, 4.5, -5.625),
-    (64.0, 82.25, 9.0, 0.0),
-    (66.25, 71.5, 6.75, 8.375),
-    (68.625, 58.875, -0.5, 2.0),
-    (70.875, 45.5, -3.375, 1.625),
-    (73.125, 32.5, -5.0, -2.375),
-    (75.375, 21.0, -1.625, -7.125),
-    (77.75, 12.125, 5.625, -7.0),
-    (80.0, 6.625, 10.75, 0.0),
-    (82.25, 5.0, 1.25, 1.625),
-    (84.625, 7.375, -0.875, 3.625),
-    (86.875, 13.5, -5.0, 2.375),
-    (89.125, 22.875, -6.5, -3.125),
-    (91.375, 34.625, -2.0, -8.75),
-    (93.75, 47.75, 6.75, -8.375),
-];
-
-/// Scenarios of the gate, by the name a fixture's `scenario` header starts with.
-const SCENARIOS: &[(&str, Agents)] = &[("boids-8", BOIDS_8), ("sine-42", SINE_42)];
-
-/// Side of the gate's world.
-const GATE_WORLD: f32 = 100.0;
-/// Speed bounds of the gate.
-const GATE_SPEEDS: (f32, f32) = (2.0, 8.0);
-/// Tolerance of the gate, as `consistency_boids.rs` sets it for an `f64` reference.
-const GATE_TOLERANCE: f32 = 1e-5;
-
-/// Returns the gate's parameters for `agents` boids, by id.
-fn gate_values(agents: usize) -> Vec<(&'static str, ParamValue)> {
-    vec![
-        ("num_agents", ParamValue::U32(agents as u32)),
-        ("world_width", ParamValue::F32(GATE_WORLD)),
-        ("world_height", ParamValue::F32(GATE_WORLD)),
-        ("visual_range", ParamValue::F32(20.0)),
-        ("protected_range", ParamValue::F32(5.0)),
-        ("separation", ParamValue::F32(0.5)),
-        ("alignment", ParamValue::F32(0.25)),
-        ("cohesion", ParamValue::F32(0.125)),
-        ("max_speed", ParamValue::F32(GATE_SPEEDS.1)),
-        ("min_speed", ParamValue::F32(GATE_SPEEDS.0)),
-    ]
-}
-
 /// Runs the stock CPU boids one tick from `agents`, as `consistency_boids.rs` does.
 fn cpu_boids(agents: Agents) -> Vec<Boid> {
     let models = crate::example_models();
@@ -623,31 +497,19 @@ fn boids_fixtures() -> Vec<(String, String, Vec<Boid>)> {
         }
         let name = path.file_name().expect("a file name").to_string_lossy().into_owned();
         let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{name}: {error}"));
-        let mut scenario = None;
-        let mut agents = Vec::new();
-        for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
-            if let Some(rest) = line.strip_prefix('#') {
-                if let Some(("scenario", value)) = rest.split_once(':').map(|(key, value)| (key.trim(), value)) {
-                    scenario = value.split_whitespace().next().map(str::to_owned);
-                }
-                continue;
-            }
-            let values: Vec<f32> = line
-                .split_whitespace()
-                .map(|token| token.parse().unwrap_or_else(|_| panic!("{name}: `{token}`")))
-                .collect();
-            agents.push((values[0], values[1], values[2], values[3]));
-        }
-        fixtures.push((
-            name.clone(),
-            scenario.unwrap_or_else(|| panic!("{name} names no scenario")),
-            agents,
-        ));
+        let fixture = parse_fixture(&text);
+        let scenario = fixture
+            .header
+            .get("scenario")
+            .and_then(|value| value.split_whitespace().next())
+            .unwrap_or_else(|| panic!("{name} names no scenario"))
+            .to_owned();
+        fixtures.push((name, scenario, fixture.agents));
     }
     fixtures
 }
 
-/// Returns whether two boids are within [`GATE_TOLERANCE`] in every component.
+/// Returns whether two boids are within [`TOLERANCE`] in every component.
 fn boids_close(found: &Boid, expected: &Boid) -> bool {
     [
         (found.0, expected.0),
@@ -656,15 +518,14 @@ fn boids_close(found: &Boid, expected: &Boid) -> bool {
         (found.3, expected.3),
     ]
     .iter()
-    .all(|(a, b)| (a - b).abs() <= GATE_TOLERANCE)
+    .all(|(a, b)| (a - b).abs() <= TOLERANCE)
 }
 
 /// Each boids graph on the device meets the cross-engine gate of `consistency_boids.rs`: one tick from each planted
 /// scenario lands within the gate's tolerance of the stock CPU boids and of every engine's reference fixture.
 #[test]
 fn the_boids_graphs_meet_the_cross_engine_gate() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_boids_graphs_meet_the_cross_engine_gate: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let fixtures = boids_fixtures();
@@ -675,8 +536,8 @@ fn the_boids_graphs_meet_the_cross_engine_gate() {
         );
         let cpu = cpu_boids(scenario);
         for (graph, text) in [
-            ("gpu_boids.toml", graph_text("gpu_boids.toml")),
-            ("boids.toml", starter_text("boids.toml")),
+            ("gpu_boids.toml", fixture_text("graphs/gpu_boids.toml")),
+            ("boids.toml", starter_text("boids.toml").to_owned()),
         ] {
             let file = GraphFile::parse(&text).expect("the graph reads");
             let found = graph_boids(&ctx, &file, scenario);
@@ -703,8 +564,7 @@ fn the_boids_graphs_meet_the_cross_engine_gate() {
 /// the self-consistency check of `consistency_boids.rs`.
 #[test]
 fn the_boids_graphs_keep_speed_and_position_in_bounds() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_boids_graphs_keep_speed_and_position_in_bounds: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     for (name, entry, lanes) in boids_graphs() {
@@ -717,11 +577,11 @@ fn the_boids_graphs_keep_speed_and_position_in_bounds() {
             for i in 0..500 {
                 let speed = vel_x[i].hypot(vel_y[i]);
                 assert!(
-                    (GATE_SPEEDS.0 - GATE_TOLERANCE..=GATE_SPEEDS.1 + GATE_TOLERANCE).contains(&speed),
+                    (MIN_SPEED - TOLERANCE..=MAX_SPEED + TOLERANCE).contains(&speed),
                     "{name}: boid {i} has speed {speed} at tick {tick}"
                 );
                 assert!(
-                    (0.0..GATE_WORLD).contains(&pos_x[i]) && (0.0..GATE_WORLD).contains(&pos_y[i]),
+                    (0.0..WORLD).contains(&pos_x[i]) && (0.0..WORLD).contains(&pos_y[i]),
                     "{name}: boid {i} left the world at ({}, {}) at tick {tick}",
                     pos_x[i],
                     pos_y[i]

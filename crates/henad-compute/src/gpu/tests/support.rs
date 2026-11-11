@@ -42,24 +42,17 @@ pub fn headless_adapter() -> Option<wgpu::Adapter> {
     adapter.ok()
 }
 
-/// Returns a headless device, or `None` when this machine cannot provide one.
+/// Returns a headless device labelled `label`, or `None` when this machine cannot provide one.
 ///
 /// # Panics
 ///
-/// Panics if [`REQUIRE_GPU`] is set and no adapter or device could be acquired. Missing
-/// `required_features` still returns `None`, since a software rasteriser owes us nothing
-/// optional.
-pub fn headless_context(label: &str, required_features: wgpu::Features) -> Option<GpuContext> {
+/// Panics if [`REQUIRE_GPU`] is set and no adapter or device could be acquired.
+pub fn headless_context(label: &str) -> Option<GpuContext> {
     let adapter = headless_adapter()?;
-
-    if !adapter.features().contains(required_features) {
-        log::warn!("skipping {label}: the adapter lacks {required_features:?}");
-        return None;
-    }
 
     let device = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some(label),
-        required_features,
+        required_features: wgpu::Features::empty(),
         // No binding count. henad-compute cannot see the models, and its own tests bind few.
         required_limits: crate::gpu::limits::raise(&adapter, &wgpu::Limits::default(), crate::gpu::GpuNeeds::default()),
         ..Default::default()

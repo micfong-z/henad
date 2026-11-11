@@ -19,13 +19,12 @@ use henad_core::helpers::{extract_f32, f32_param, u32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{StatDescriptor, StatValue};
-use henad_explore::model_file::ModelFile;
-use henad_explore::testing::{CheckSettings, TestDeviceRequest, assert_set_conforms, headless_test_device};
 use henad_graph::GraphFile;
 use henad_graph::document::{PassStage, World};
 use henad_graph::host::{HostEvaluator, HostWorld};
 
-use crate::gpu_game_of_life::{GpuGameOfLife, words_per_row};
+use super::support::{assert_entries_conform, graph_corpus, model_entry, roomy_limits, unpacked_life_cells};
+use crate::gpu_game_of_life::GpuGameOfLife;
 use crate::gpu_sir::GpuSir;
 
 /// The template's Vote model, copied from `templates/model-project/src/vote.rs`.
@@ -162,12 +161,7 @@ impl Oracle {
         match self {
             Self::GameOfLife => {
                 let words = GpuGameOfLife::seed_buffers(width, height, &params, seed).remove(0);
-                let stride = words_per_row(width);
-                let cells = (0..height as usize)
-                    .flat_map(|y| (0..width as usize).map(move |x| (y, x)))
-                    .map(|(y, x)| (words[y * stride + x / 32] >> (x % 32)) & 1)
-                    .collect();
-                vec![("state", cells)]
+                vec![("state", unpacked_life_cells(&words, width, height))]
             }
             Self::Vote => {
                 let mut grid = Grid2D::new(width, height);
@@ -218,34 +212,9 @@ impl Oracle {
     }
 }
 
-/// Returns every grid file of the corpus, starters first, each read through a [`ModelFile`] as a graph.
+/// Returns every grid file of the corpus, starters first.
 fn grid_corpus() -> Vec<(String, GraphFile)> {
-    let starters = henad_graph::starters::starters()
-        .iter()
-        .map(|starter| (starter.file_name.to_owned(), starter.text.to_owned()));
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/graphs");
-    let mut fixtures: Vec<(String, String)> = std::fs::read_dir(&directory)
-        .unwrap_or_else(|error| panic!("{}: {error}", directory.display()))
-        .map(|entry| entry.expect("a directory entry").path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "toml"))
-        .map(|path| {
-            let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-            let name = path.file_name().expect("a file name").to_string_lossy().into_owned();
-            (name, text)
-        })
-        .collect();
-    fixtures.sort();
-    starters
-        .chain(fixtures)
-        .filter_map(|(name, text)| {
-            let file = ModelFile::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
-            let graph = file
-                .graph()
-                .unwrap_or_else(|| panic!("{name} reads as a graph"))
-                .clone();
-            matches!(graph.document().world, World::Grid(_)).then_some((name, graph))
-        })
-        .collect()
+    graph_corpus(|world| matches!(world, World::Grid(_)))
 }
 
 /// Parameter each corpus file's init reads, with a value away from its default.
@@ -369,9 +338,7 @@ fn every_grid_corpus_schema_hashes_like_the_stock_model_under_its_id() {
             "{name}: the hash reads the model id"
         );
         // The entry the model file builds declares the schema this test builds.
-        let entry = ModelFile::parse(&file.to_toml())
-            .and_then(|model_file| model_file.entry())
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let entry = model_entry(&file.to_toml());
         let schema = entry.schema();
         let declared = (schema.params.to_vec(), schema.stats.to_vec(), schema.actions.to_vec());
         assert_eq!(schema.id, file.document().target.id, "{name}");
@@ -448,14 +415,8 @@ fn every_grid_corpus_file_at_its_largest_size_fits_the_work_budgets() {
         let found = demand.shortfalls(&wgpu::Limits::default());
         assert!(found.is_empty(), "{name}: {found:?}");
         // The entry the compiler builds reports the same work, on a device that holds its buffers.
-        let entry = ModelFile::parse(&file.to_toml())
-            .and_then(|model_file| model_file.entry())
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let limits = wgpu::Limits {
-            max_storage_buffer_binding_size: u64::MAX,
-            max_buffer_size: u64::MAX,
-            ..wgpu::Limits::default()
-        };
+        let entry = model_entry(&file.to_toml());
+        let limits = roomy_limits();
         let side = [ParamValue::U32(GPU_GRID_SIDE), ParamValue::U32(GPU_GRID_SIDE)];
         let found = entry.shortfalls(&side, &limits);
         assert!(found.is_empty(), "{name}: {found:?}");
@@ -466,20 +427,9 @@ fn every_grid_corpus_file_at_its_largest_size_fits_the_work_budgets() {
 /// included.
 #[test]
 fn every_grid_corpus_entry_conforms() {
-    let mut models = henad_compute::entry::ModelSet::new(henad_core::build_info!());
-    for (name, file) in grid_corpus() {
-        let entry = ModelFile::parse(&file.to_toml())
-            .and_then(|model_file| model_file.entry())
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        models
-            .insert(entry)
-            .unwrap_or_else(|error| panic!("{name}: the set refused the entry: {error}"));
-    }
-    let mut settings = CheckSettings::default();
-    if let Some(device) = headless_test_device(&TestDeviceRequest::baseline()) {
-        settings = settings.gpu(device);
-    } else {
-        log::warn!("checking the grid corpus without its GPU checks: no adapter");
-    }
-    assert_set_conforms(&models, &settings);
+    assert_entries_conform(
+        grid_corpus()
+            .into_iter()
+            .map(|(name, file)| (name, model_entry(&file.to_toml()))),
+    );
 }

@@ -2,16 +2,17 @@
 //! buffers and meets the testing kit, a capped fold's fault names its author lines, and each holds a band against the
 //! graph lowered by hand in `tests/fixtures/lowered/round1/` on seeds 1 to 3, with a planted rule error outside it.
 
-use henad_compute::entry::{ModelEntry, ModelSet};
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::stepping::{run_steps, sample_stats};
 use henad_core::params::ParamValue;
 use henad_explore::model_file::ModelFile;
-use henad_explore::testing::{CheckSettings, TestDeviceRequest, assert_set_conforms, headless_test_device};
-use henad_graph::sheet::{SheetFile, starters};
+use henad_graph::sheet::SheetFile;
 
-use super::graph_ants_parity::graph_buffer;
-use super::graph_grid_parity::{build_gpu, snapshot, stat, step};
+use super::lanes::GraphLanes;
+use super::support::{
+    agent_sheets, assert_device_runs, assert_entries_conform, baseline_device, build_gpu, model_entry, pairs,
+    params_for, roomy_limits, snapshot, stat, step,
+};
 
 /// Hand-lowered random walk of `tests/fixtures/lowered/round1/`.
 const HAND_WALK: &str = include_str!("../../tests/fixtures/lowered/round1/random_walk.toml");
@@ -24,15 +25,6 @@ const HAND_ANTS: &str = include_str!("../../tests/fixtures/lowered/round1/ants.t
 
 /// Seeds every band runs at.
 const SEEDS: [u64; 3] = [1, 2, 3];
-
-/// Returns the agent sheet starters with their file names.
-pub(super) fn agent_sheets() -> Vec<(&'static str, &'static str)> {
-    starters()
-        .iter()
-        .filter(|starter| starter.text.contains("made_of = \"agents\""))
-        .map(|starter| (starter.file_name, starter.text))
-        .collect()
-}
 
 /// Returns the text of the agent starter `file_name`.
 fn sheet(file_name: &str) -> &'static str {
@@ -49,46 +41,9 @@ fn edited(text: &str, old: &str, new: &str) -> String {
     text.replacen(old, new, 1)
 }
 
-/// Returns the entry the model file `text`, a sheet or a graph, builds.
-fn entry_of(text: &str) -> ModelEntry {
-    ModelFile::parse(text)
-        .and_then(|file| file.entry())
-        .unwrap_or_else(|error| panic!("{error}"))
-}
-
-/// Returns the parameters of `entry` at their defaults, with each of `set` in place of its default.
-fn params_of(entry: &ModelEntry, set: &[(&str, ParamValue)]) -> Vec<ParamValue> {
-    entry
-        .param_descriptors()
-        .iter()
-        .map(|descriptor| {
-            set.iter()
-                .find(|(id, _)| *id == descriptor.id())
-                .map_or_else(|| descriptor.kind().default_value(), |(_, value)| value.clone())
-        })
-        .collect()
-}
-
-/// Returns the components of the interleaved `vec2<f32>` lane `words`.
-fn pairs(words: &[u32]) -> Vec<(f32, f32)> {
-    words
-        .chunks_exact(2)
-        .map(|pair| (f32::from_bits(pair[0]), f32::from_bits(pair[1])))
-        .collect()
-}
-
-/// Returns the baseline device, or `None` with a warning naming `test` when this machine has none.
-fn device(test: &str) -> Option<GpuContext> {
-    let ctx = headless_test_device(&TestDeviceRequest::baseline());
-    if ctx.is_none() {
-        log::warn!("skipping {test}: no adapter");
-    }
-    ctx
-}
-
 #[test]
 fn every_agent_sheet_lowers_checks_and_compiles() {
-    let Some(ctx) = device("every_agent_sheet_lowers_checks_and_compiles") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let names: Vec<&str> = agent_sheets().iter().map(|(name, _)| *name).collect();
@@ -102,7 +57,7 @@ fn every_agent_sheet_lowers_checks_and_compiles() {
         let lowered = file.lowered_graph().expect("a sheet lowers to a graph");
         assert!(lowered.check().diagnostics.is_empty(), "{name}");
         let entry = file.entry().unwrap_or_else(|error| panic!("{name}: {error}"));
-        let params = params_of(&entry, &[]);
+        let params = params_for(&entry, &[]);
         let mut state = build_gpu(&entry, &params, Some(1), &ctx);
         run_steps(&mut *state, &ctx, 100).unwrap_or_else(|fault| panic!("{name}: {fault}"));
         sample_stats(&mut *state, &ctx).unwrap_or_else(|fault| panic!("{name}: {fault}"));
@@ -114,9 +69,9 @@ fn the_lowered_agent_sheets_bind_at_most_8_storage_buffers() {
     let limits = wgpu::Limits::default();
     assert_eq!(limits.max_storage_buffers_per_shader_stage, 8);
     for (name, text) in agent_sheets() {
-        let entry = entry_of(text);
+        let entry = model_entry(text);
         let demand = entry
-            .demand(&params_of(&entry, &[]), &limits)
+            .demand(&params_for(&entry, &[]), &limits)
             .expect("a GPU entry has a demand");
         for pass in &demand.passes {
             assert!(
@@ -140,30 +95,18 @@ fn the_lowered_agent_sheets_bind_at_most_8_storage_buffers() {
 
 #[test]
 fn every_agent_sheet_entry_conforms() {
-    let mut models = ModelSet::new(henad_core::build_info!());
-    for (name, text) in agent_sheets() {
-        models
-            .insert(entry_of(text))
-            .unwrap_or_else(|error| panic!("{name}: the set refused the entry: {error}"));
-    }
-    let mut settings = CheckSettings::default();
-    if let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) {
-        settings = settings.gpu(ctx);
-    } else {
-        log::warn!("checking the agent sheets without their GPU checks: no adapter");
-    }
-    assert_set_conforms(&models, &settings);
+    assert_entries_conform(
+        agent_sheets()
+            .into_iter()
+            .map(|(name, text)| (name.to_owned(), model_entry(text))),
+    );
     // At its largest population, each sheet fits a device that holds its buffers, or is refused in its own words.
-    let limits = wgpu::Limits {
-        max_storage_buffer_binding_size: u64::MAX,
-        max_buffer_size: u64::MAX,
-        ..wgpu::Limits::default()
-    };
+    let limits = roomy_limits();
     for (name, text) in agent_sheets() {
         let file = SheetFile::parse(text).unwrap_or_else(|error| panic!("{name}: {error}"));
-        let entry = entry_of(text);
+        let entry = model_entry(text);
         let largest = file.document().agents[0].max_count;
-        let params = params_of(&entry, &[("num_agents", ParamValue::U32(largest))]);
+        let params = params_for(&entry, &[("num_agents", ParamValue::U32(largest))]);
         for line in file.shortfalls(&entry, &params, &limits) {
             assert!(
                 line.contains("looks at too many") || line.contains("too much work"),
@@ -182,7 +125,7 @@ fn every_agent_sheet_entry_conforms() {
 /// device runs another model afterwards.
 #[test]
 fn a_capped_fold_fault_names_the_author_line() {
-    let Some(ctx) = device("a_capped_fold_fault_names_the_author_line") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let gathered = edited(
@@ -190,8 +133,8 @@ fn a_capped_fold_fault_names_the_author_line() {
         "mode = \"by\"\nvalue = { my_new = \"velocity\" }",
         "mode = \"by\"\n\n[card.line.l7.value]\nkind = \"calculate\"\nformula = \"-(my.position)\"",
     );
-    let entry = entry_of(&gathered);
-    let params = params_of(&entry, &[("num_agents", ParamValue::U32(70_000))]);
+    let entry = model_entry(&gathered);
+    let params = params_for(&entry, &[("num_agents", ParamValue::U32(70_000))]);
     let mut state = build_gpu(&entry, &params, Some(1), &ctx);
     let fault = run_steps(&mut *state, &ctx, 3).expect_err("the fold faults");
     let message = fault.to_string();
@@ -204,10 +147,7 @@ fn a_capped_fold_fault_names_the_author_line() {
     );
     assert!(!message.contains("node") && !message.contains("pass"), "{message}");
     drop(state);
-    let walk = entry_of(sheet("random_walk.toml"));
-    let mut other = build_gpu(&walk, &params_of(&walk, &[]), None, &ctx);
-    step(&ctx, &mut *other, 2);
-    sample_stats(&mut *other, &ctx).expect("the device runs another model after the fault");
+    assert_device_runs(&ctx, &model_entry(sheet("random_walk.toml")));
 }
 
 /// Mean over the agents of the squared distance moved in one tick, the shorter way round a torus `side` wide.
@@ -227,13 +167,14 @@ fn mean_squared_step(before: &[(f32, f32)], after: &[(f32, f32)], side: f32) -> 
 /// Returns the mean squared step of one tick of the random walk `text` at `seed`, after 3 ticks, with 4 steps a tick of
 /// length 2.
 fn walk_step(ctx: &GpuContext, text: &str, seed: u64) -> f64 {
-    let entry = entry_of(text);
-    let params = params_of(&entry, &[]);
+    let entry = model_entry(text);
+    let lanes = GraphLanes::of_text(text);
+    let params = params_for(&entry, &[]);
     let mut state = build_gpu(&entry, &params, Some(seed), ctx);
     step(ctx, &mut *state, 3);
-    let before = pairs(&graph_buffer(&entry, &*state, "lane_position_agents"));
+    let before = pairs(&lanes.read(&*state, "position"));
     step(ctx, &mut *state, 1);
-    let after = pairs(&graph_buffer(&entry, &*state, "lane_position_agents"));
+    let after = pairs(&lanes.read(&*state, "position"));
     mean_squared_step(&before, &after, 1000.0)
 }
 
@@ -244,7 +185,7 @@ fn walk_step(ctx: &GpuContext, text: &str, seed: u64) -> f64 {
 /// planted error moves once a tick, outside the Repeat, and lands near 4.
 #[test]
 fn the_random_walk_sheet_steps_its_closed_form() {
-    let Some(ctx) = device("the_random_walk_sheet_steps_its_closed_form") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let expected = 4.0 * 2.0f64.powi(2);
@@ -297,8 +238,9 @@ struct BoidsRun {
 
 /// Runs the boids `text` with 20000 birds for 300 ticks at `seed`. With `speeds`, reads every speed after each tick.
 fn boids_run(ctx: &GpuContext, text: &str, seed: u64, speeds: bool) -> BoidsRun {
-    let entry = entry_of(text);
-    let params = params_of(&entry, &[("num_agents", ParamValue::U32(20_000))]);
+    let entry = model_entry(text);
+    let lanes = GraphLanes::of_text(text);
+    let params = params_for(&entry, &[("num_agents", ParamValue::U32(20_000))]);
     let mut state = build_gpu(&entry, &params, Some(seed), ctx);
     let mut outside = None;
     if speeds {
@@ -307,7 +249,7 @@ fn boids_run(ctx: &GpuContext, text: &str, seed: u64, speeds: bool) -> BoidsRun 
             if outside.is_some() {
                 continue;
             }
-            let velocities = pairs(&graph_buffer(&entry, &*state, "lane_velocity_agents"));
+            let velocities = pairs(&lanes.read(&*state, "velocity"));
             outside = velocities
                 .iter()
                 .map(|&(vx, vy)| vx.hypot(vy))
@@ -321,7 +263,7 @@ fn boids_run(ctx: &GpuContext, text: &str, seed: u64, speeds: bool) -> BoidsRun 
         }
     }
     BoidsRun {
-        polarisation: polarisation(&pairs(&graph_buffer(&entry, &*state, "lane_velocity_agents"))),
+        polarisation: polarisation(&pairs(&lanes.read(&*state, "velocity"))),
         outside,
     }
 }
@@ -336,7 +278,7 @@ fn boids_run(ctx: &GpuContext, text: &str, seed: u64, speeds: bool) -> BoidsRun 
 /// speed leaves the limits.
 #[test]
 fn the_boids_sheet_keeps_its_speeds_and_flocks_in_band() {
-    let Some(ctx) = device("the_boids_sheet_keeps_its_speeds_and_flocks_in_band") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let band = |polarisation: f64| polarisation > 0.0 && polarisation <= 0.95;
@@ -406,11 +348,12 @@ fn opinion_groups(opinions: &[u32]) -> usize {
 
 /// Returns the opinion groups of bounded confidence `text` after 100 ticks at `seed`.
 fn opinion_groups_of(ctx: &GpuContext, text: &str, seed: u64) -> usize {
-    let entry = entry_of(text);
-    let mut state = build_gpu(&entry, &params_of(&entry, &[]), Some(seed), ctx);
+    let entry = model_entry(text);
+    let lanes = GraphLanes::of_text(text);
+    let mut state = build_gpu(&entry, &params_for(&entry, &[]), Some(seed), ctx);
     step(ctx, &mut *state, 50);
     step(ctx, &mut *state, 50);
-    opinion_groups(&graph_buffer(&entry, &*state, "lane_opinion_agents"))
+    opinion_groups(&lanes.read(&*state, "opinion"))
 }
 
 /// Band: one opinion group after 100 ticks on each seed, for the sheet and the hand-lowered file, since with a
@@ -420,7 +363,7 @@ fn opinion_groups_of(ctx: &GpuContext, text: &str, seed: u64) -> usize {
 /// is left.
 #[test]
 fn the_bounded_confidence_sheet_forms_its_opinion_groups_in_band() {
-    let Some(ctx) = device("the_bounded_confidence_sheet_forms_its_opinion_groups_in_band") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let planted = edited(sheet("bounded_confidence.toml"), "mode = \"towards\"", "mode = \"by\"");
@@ -446,8 +389,8 @@ fn the_bounded_confidence_sheet_forms_its_opinion_groups_in_band() {
 /// Returns the deliveries of the ants `text` at `seed` after 2000 and after 3000 ticks, read from its statistic
 /// `label`.
 fn deliveries(ctx: &GpuContext, text: &str, label: &str, seed: u64) -> (f64, f64) {
-    let entry = entry_of(text);
-    let mut state = build_gpu(&entry, &params_of(&entry, &[]), Some(seed), ctx);
+    let entry = model_entry(text);
+    let mut state = build_gpu(&entry, &params_for(&entry, &[]), Some(seed), ctx);
     let mut found = [0.0; 2];
     for (slot, submissions) in found.iter_mut().zip([40, 20]) {
         for _ in 0..submissions {
@@ -469,7 +412,7 @@ fn deliveries(ctx: &GpuContext, text: &str, label: &str, seed: u64) -> (f64, f64
 /// deliveries by tick 3000 stay far below 500.
 #[test]
 fn the_ants_sheet_delivers_food_in_band() {
-    let Some(ctx) = device("the_ants_sheet_delivers_food_in_band") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let in_band = |(by_2000, by_3000): (f64, f64)| by_2000 <= 1000.0 && by_3000 >= 500.0;

@@ -10,25 +10,30 @@
 use std::sync::Arc;
 
 use henad_compute::cpu::agent_engine::AgentModelState;
-use henad_compute::entry::{EntryDeclarations, ModelEntry};
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_compute::gpu::{AgentHooks, AgentPassId, AgentRun, GpuContext, RerunUploads, wgpu};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{Geometry, PassCtx, PassId};
 use henad_core::authoring::primitives::rng::pcg_hash;
-use henad_core::metadata::Structure;
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
 use henad_core::view::{StatEntry, StatValue};
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 use henad_graph::GraphFile;
 use henad_graph::wgsl::{AgentProgram, LaneBuffer};
 
-use super::graph_grid_parity::{build_gpu, press, snapshot, starter_entry, stat, step};
-use super::graph_sir_parity::{fixture_entry, fixture_text};
 use super::lanes::GraphLanes;
+use super::support::{
+    baseline_device, buffer_index, buffer_words, build_gpu, declarations_like, fixture_text, graph_buffer, model_entry,
+    params_for, press, snapshot, starter_entry, stat, stat_values, step,
+};
 use crate::ants::AntsModel;
 use crate::ants::field::{LOW_PHEROMONE, OBSTACLE, TO_FOOD, TO_HOME};
+
+#[path = "../../tests/gates/ants.rs"]
+mod gate;
+
+use gate::{GATE_AGENTS, GATE_H, GATE_TICKS, GATE_W, GateAnt, GateResult, gate_field, gate_params};
 
 // Buffers of the stock `gpu_ants`, in its `buffers!` order.
 const STOCK_POS: usize = 0;
@@ -174,8 +179,7 @@ fn run_probe(ctx: &GpuContext, inputs: &[[f32; 4]]) -> Vec<[u32; 2]> {
 #[test]
 #[expect(clippy::print_stderr, reason = "the probe's counts are information for the record")]
 fn the_device_rounds_the_deposit_alike_in_both_forms() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_device_rounds_the_deposit_alike_in_both_forms: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let inputs: Vec<[f32; 4]> = (0..PROBE_INPUTS).map(probe_input).collect();
@@ -205,20 +209,6 @@ fn the_device_rounds_the_deposit_alike_in_both_forms() {
     );
 }
 
-/// Returns the parameters of `entry` at their defaults, with each id in `values` set.
-pub(super) fn params_for(entry: &ModelEntry, values: &[(&str, ParamValue)]) -> Vec<ParamValue> {
-    entry
-        .param_descriptors()
-        .iter()
-        .map(|descriptor| {
-            values
-                .iter()
-                .find(|(id, _)| *id == descriptor.id())
-                .map_or_else(|| descriptor.kind().default_value(), |(_, value)| value.clone())
-        })
-        .collect()
-}
-
 /// Returns the parameters of an ants model of `agents` ants in a square world of side `world`.
 fn ants_params(entry: &ModelEntry, agents: u32, world: f32) -> Vec<ParamValue> {
     params_for(
@@ -229,42 +219,6 @@ fn ants_params(entry: &ModelEntry, agents: u32, world: f32) -> Vec<ParamValue> {
             ("world_height", ParamValue::F32(world)),
         ],
     )
-}
-
-/// Returns the position of the buffer labelled `label` among the buffers of `entry`.
-fn buffer_index(entry: &ModelEntry, label: &str) -> usize {
-    let Structure::GpuAgents { buffers, .. } = &entry.metadata().structure else {
-        panic!("{} is no GPU agent model", entry.id());
-    };
-    buffers
-        .iter()
-        .position(|buffer| buffer.label == label)
-        .unwrap_or_else(|| panic!("{} has no buffer {label}", entry.id()))
-}
-
-/// Returns the words of the buffer labelled `label` of `state`, built from `entry`.
-pub(super) fn graph_buffer(entry: &ModelEntry, state: &dyn GpuSimState, label: &str) -> Vec<u32> {
-    state
-        .read_buffer(buffer_index(entry, label))
-        .unwrap_or_else(|| panic!("{label} reads back"))
-}
-
-/// Returns the words of buffer `index` of the stock state `state`.
-fn stock_buffer(state: &dyn GpuSimState, index: usize) -> Vec<u32> {
-    state.read_buffer(index).expect("a stock buffer reads back")
-}
-
-/// Returns each statistic of `state` as a number, in declaration order, after a snapshot.
-fn stat_values(ctx: &GpuContext, state: &mut dyn GpuSimState) -> Vec<f64> {
-    snapshot(ctx, state);
-    state
-        .stats()
-        .iter()
-        .map(|entry| match entry.value() {
-            StatValue::Scalar(value) => *value,
-            other => panic!("an ants model reports scalars, got {other:?}"),
-        })
-        .collect()
 }
 
 /// Asserts that the ants graph `graph`, built from `entry` with its lanes placed as `lanes`, holds the lanes and field
@@ -279,9 +233,9 @@ fn assert_lanes_equal(
     with_rng: bool,
     what: &str,
 ) {
-    let packed = stock_buffer(stock, STOCK_STATE);
+    let packed = buffer_words(stock, STOCK_STATE);
     let expected: [(&str, Vec<u32>); 6] = [
-        ("pos", stock_buffer(stock, STOCK_POS)),
+        ("pos", buffer_words(stock, STOCK_POS)),
         ("last_step", packed.iter().map(|word| word & LAST_STEP_MASK).collect()),
         (
             "cargo",
@@ -300,8 +254,8 @@ fn assert_lanes_equal(
                 })
                 .collect(),
         ),
-        ("field_pheromone_cells", stock_buffer(stock, STOCK_FIELD)),
-        ("field_sites_cells", stock_buffer(stock, STOCK_SITES)),
+        ("field_pheromone_cells", buffer_words(stock, STOCK_FIELD)),
+        ("field_sites_cells", buffer_words(stock, STOCK_SITES)),
     ];
     for (label, words) in expected {
         // A field has a buffer of its own, and a lane may share one.
@@ -322,7 +276,7 @@ fn assert_lanes_equal(
     }
     if with_rng {
         assert!(
-            lanes.read(graph, "rng") == stock_buffer(stock, STOCK_RNG),
+            lanes.read(graph, "rng") == buffer_words(stock, STOCK_RNG),
             "{what}: the rng lane differs from gpu_ants"
         );
     }
@@ -334,14 +288,13 @@ fn assert_lanes_equal(
 /// deliveries.
 #[test]
 fn the_exact_ants_graph_equals_gpu_ants_every_tick() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_exact_ants_graph_equals_gpu_ants_every_tick: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let models = crate::example_models();
     let stock_entry = models.get("gpu_ants").expect("the stock model");
-    let entry = fixture_entry("gpu_ants.toml");
-    let lanes = GraphLanes::of_text(&fixture_text("gpu_ants.toml"));
+    let entry = model_entry(&fixture_text("graphs/gpu_ants.toml"));
+    let lanes = GraphLanes::of_text(&fixture_text("graphs/gpu_ants.toml"));
     let colors = buffer_index(&entry, "agent_colors");
     for (agents, world, seed, ticks, press_at) in [
         (2_000, 200.0, None, 1_540, Some(1_500)),
@@ -387,8 +340,7 @@ fn the_exact_ants_graph_equals_gpu_ants_every_tick() {
 /// the sites, at two worlds and two seeds.
 #[test]
 fn the_ants_starter_starts_as_gpu_ants_on_the_device() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_ants_starter_starts_as_gpu_ants_on_the_device: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let models = crate::example_models();
@@ -407,57 +359,6 @@ fn the_ants_starter_starts_as_gpu_ants_on_the_device() {
             assert_lanes_equal(&entry, &lanes, &*graph, &*stock, reward, false, &what);
         }
     }
-}
-
-// The cross-engine gate of `tests/consistency_ants.rs`, copied since an integration test exports nothing. Its
-// fixture document is `tests/fixtures/docs/ants_fixture.md`.
-
-/// Side of the gate's square world.
-const GATE_SIDE: u32 = 32;
-/// Number of ticks the gate runs, the last tick without a tie.
-const GATE_TICKS: u32 = 4;
-/// Ants of the gate.
-const GATE_AGENTS: [GateAnt; 12] = [
-    (0.0, 0.0, 255, 0, 1.0),
-    (31.0, 0.0, 255, 1, 1.0),
-    (0.0, 31.0, 255, 0, 0.5),
-    (31.0, 31.0, 255, 1, 0.5),
-    (16.0, 0.0, 255, 0, 1.0),
-    (4.0, 4.0, 255, 0, 1.0),
-    (28.0, 28.0, 255, 1, 1.0),
-    (8.0, 12.0, 255, 0, 1.0),
-    (22.0, 20.0, 255, 1, 1.0),
-    (15.0, 15.0, 7, 0, 1.0),
-    (15.0, 15.0, 255, 0, 0.25),
-    (15.0, 16.0, 2, 1, 1.0),
-];
-
-/// Returns the gate's seeded pheromone layer `layer`, whose 3 by 3 neighbourhoods hold no two equal values.
-fn gate_field(layer: usize) -> Vec<f32> {
-    let (a, b, m) = if layer == TO_FOOD { (7, 13, 97) } else { (11, 5, 89) };
-    (0..GATE_SIDE)
-        .flat_map(|y| (0..GATE_SIDE).map(move |x| ((a * x + b * y) % m + 1) as f32 / (m + 1) as f32))
-        .collect()
-}
-
-/// One ant of the gate: `(x, y, last_step, has_food, reward)`.
-type GateAnt = (f32, f32, u8, u8, f32);
-
-/// Ant rows and both pheromone layers after the gate's ticks.
-type GateResult = (Vec<GateAnt>, Vec<f32>, Vec<f32>);
-
-/// Returns the gate's parameters, in the order of the stock schema: momentum and random action off.
-fn gate_params() -> Vec<ParamValue> {
-    vec![
-        ParamValue::U32(GATE_AGENTS.len() as u32),
-        ParamValue::F32(GATE_SIDE as f32),
-        ParamValue::F32(GATE_SIDE as f32),
-        ParamValue::F32(0.9),
-        ParamValue::F32(1.0),
-        ParamValue::F32(0.0),
-        ParamValue::F32(0.0),
-        ParamValue::F32(0.999),
-    ]
 }
 
 /// Runs the gate on the stock CPU ants, as `consistency_ants.rs` does.
@@ -616,17 +517,7 @@ pub(super) fn planted_entry(file: &GraphFile, planted: Vec<(&str, Vec<u32>)>) ->
         inner: program.spec().hooks,
         planted,
     });
-    let mut declarations = EntryDeclarations::new(
-        plain.id().to_owned(),
-        plain.name().to_owned(),
-        plain.description().to_owned(),
-        plain.param_descriptors().to_vec(),
-        spec.topology_hint(),
-        spec.structure(),
-    );
-    declarations.stats = plain.stat_descriptors().to_vec();
-    declarations.actions = plain.action_descriptors().to_vec();
-    declarations.replays_exactly = program.replays_exactly();
+    let declarations = declarations_like(&plain, spec.topology_hint(), spec.structure());
     ModelEntry::from_gpu_agent_spec(declarations, plain.source().clone(), Arc::new(spec))
 }
 
@@ -660,8 +551,8 @@ fn graph_gate(ctx: &GpuContext, entry: &ModelEntry, seed: Option<u64>) -> GateRe
         entry,
         &[
             ("num_agents", ParamValue::U32(GATE_AGENTS.len() as u32)),
-            ("world_width", ParamValue::F32(GATE_SIDE as f32)),
-            ("world_height", ParamValue::F32(GATE_SIDE as f32)),
+            ("world_width", ParamValue::F32(GATE_W as f32)),
+            ("world_height", ParamValue::F32(GATE_H as f32)),
             ("momentum", ParamValue::F32(0.0)),
             ("random_action", ParamValue::F32(0.0)),
         ],
@@ -691,7 +582,7 @@ fn graph_gate(ctx: &GpuContext, entry: &ModelEntry, seed: Option<u64>) -> GateRe
         .into_iter()
         .map(f32::from_bits)
         .collect();
-    let cells = (GATE_SIDE * GATE_SIDE) as usize;
+    let cells = (GATE_W * GATE_H) as usize;
     (agents, field[..cells].to_vec(), field[cells..].to_vec())
 }
 
@@ -700,8 +591,7 @@ fn graph_gate(ctx: &GpuContext, entry: &ModelEntry, seed: Option<u64>) -> GateRe
 /// cell of both layers, bit for bit after the gate's four ticks, at four seeds.
 #[test]
 fn the_ants_starter_equals_the_stock_ants_under_the_gate() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_ants_starter_equals_the_stock_ants_under_the_gate: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let entry = planted_gate_entry();
@@ -760,8 +650,7 @@ fn check_state(ctx: &GpuContext, entry: &ModelEntry) -> Box<dyn GpuSimState> {
 /// [`LOW_PHEROMONE`], as `consistency_ants.rs` holds the stock ants.
 #[test]
 fn cells_without_an_ant_decay_by_exactly_the_evaporation_rate_on_the_device() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping cells_without_an_ant_decay_by_exactly_the_evaporation_rate_on_the_device: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let entry = starter_entry("ants.toml");
@@ -802,8 +691,7 @@ fn cells_without_an_ant_decay_by_exactly_the_evaporation_rate_on_the_device() {
 /// inside the world and off every obstacle, its load is 0 or 1, and Deliveries never decreases.
 #[test]
 fn the_ants_starter_meets_the_consistency_checks_on_the_device() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_ants_starter_meets_the_consistency_checks_on_the_device: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let entry = starter_entry("ants.toml");

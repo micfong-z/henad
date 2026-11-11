@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 use henad_compute::entry::{ModelEntry, ModelSet, register_grid_model};
 use henad_core::authoring::model::grid_model::GridModel as _;
-use henad_core::explore::plan::Shard;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::provenance::{BuildInfo, CodeOrigin, ModelCode, ModelSource};
 use henad_models::game_of_life::GameOfLifeModel;
@@ -21,17 +20,14 @@ use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::result_set::ResultSet;
 use crate::sweep::{ExploreError, Provenance, SweepOptions, SweepWarning};
 use crate::tests::support::{
-    OutputTables, Recorder, ScratchDir, entry, manifest, other_engine, provenance, sweep_options, sweep_with,
-    unbuildable,
+    OutputTables, Recorder, ScratchDir, entry, file_bytes, fixed, manifest, other_engine, provenance, shard_options,
+    sweep_options, sweep_with, unbuildable,
 };
 
 /// Returns Game of Life on an 8 by 8 grid for 2 steps, with `replicates` replicates.
 fn life_spec(replicates: u64) -> SweepSpec {
     let mut spec = SweepSpec::new(GameOfLifeModel::ID);
-    spec.fixed = vec![
-        ("grid_width".to_owned(), "8".to_owned()),
-        ("grid_height".to_owned(), "8".to_owned()),
-    ];
+    spec.fixed = fixed(&[("grid_width", "8"), ("grid_height", "8")]);
     spec.run.steps = 2;
     spec.run.replicates = replicates;
     spec
@@ -338,8 +334,7 @@ fn a_cli_sweep_opened_in_a_dirty_app_raises_no_build_warning() {
 fn shard_under(dir: &std::path::Path, index: u64, engine: RecordedBuild) {
     let options = SweepOptions {
         provenance: under_engine(engine),
-        shard: Shard::new(index, 2).expect("a valid shard"),
-        ..sweep_options(false)
+        ..shard_options(index, 2)
     };
     let life = entry(GameOfLifeModel::ID, None);
     sweep_with(&life, None, &life_spec(2), dir, &options, &mut Recorder::default()).expect("the shard runs");
@@ -586,7 +581,7 @@ fn resume_with(first: &ModelEntry, second: &ModelEntry) -> (Result<Vec<SweepWarn
         &mut Recorder::default(),
     )
     .expect("the sweep runs");
-    let before = folder_bytes(scratch.path());
+    let before = file_bytes(scratch.path(), &[MANIFEST_FILE, RUNS_FILE]);
     let mut progress = Recorder::default();
     let result = sweep_with(
         second,
@@ -597,15 +592,8 @@ fn resume_with(first: &ModelEntry, second: &ModelEntry) -> (Result<Vec<SweepWarn
         &mut progress,
     )
     .map(|_| progress.warnings);
-    let unchanged = folder_bytes(scratch.path()) == before;
+    let unchanged = file_bytes(scratch.path(), &[MANIFEST_FILE, RUNS_FILE]) == before;
     (result, unchanged)
-}
-
-/// Returns the bytes of the manifest and `runs.csv` in `dir`.
-fn folder_bytes(dir: &std::path::Path) -> Vec<Vec<u8>> {
-    [MANIFEST_FILE, RUNS_FILE]
-        .map(|file| std::fs::read(dir.join(file)).expect("the file reads"))
-        .to_vec()
 }
 
 /// Asserts that `result` is the refusal of changed code, and returns its message.
@@ -702,10 +690,7 @@ fn a_merge_refuses_shards_of_two_codes() {
         .collect();
     let (life, edited) = (rule("life"), rule("life, edited"));
     let shard = |dir: &std::path::Path, index: u64, count: u64, entry: &ModelEntry, spec: &SweepSpec| {
-        let options = SweepOptions {
-            shard: Shard::new(index, count).expect("a valid shard"),
-            ..sweep_options(false)
-        };
+        let options = shard_options(index, count);
         sweep_with(entry, None, spec, dir, &options, &mut Recorder::default()).expect("the shard runs");
     };
     shard(&dirs[0], 0, 2, &runtime_life(&life), &life_spec(2));
@@ -848,11 +833,9 @@ mod sheet_text {
 
     use henad_compute::entry::ModelEntry;
     use henad_compute::gpu::GpuContext;
-    use henad_core::explore::design::DesignKind;
-    use henad_core::explore::factor::{FactorSpec, LevelSpec};
+    use henad_core::explore::factor::FactorSpec;
     use henad_core::explore::fingerprint::schema_hash;
-    use henad_core::explore::plan::Shard;
-    use henad_core::explore::spec::{BlockSpec, SweepSpec};
+    use henad_core::explore::spec::SweepSpec;
     use henad_graph::sheet::{SHEET_CODE_FORMAT, starters};
 
     use crate::merge::merge;
@@ -861,9 +844,10 @@ mod sheet_text {
     use crate::output::manifest::ManifestModelCode;
     use crate::output::resume::ResumeError;
     use crate::result_set::ResultSet;
-    use crate::sweep::{ExploreError, SweepOptions, SweepWarning};
+    use crate::sweep::{ExploreError, SweepWarning};
     use crate::tests::support::{
-        OutputTables, Recorder, ScratchDir, headless_device, manifest, sweep_options, sweep_with,
+        OutputTables, Recorder, ScratchDir, edited, factorial, headless_device, manifest, shard_options, sweep_options,
+        sweep_with, values,
     };
 
     /// Returns the Game of Life sheet starter on a 16 by 16 grid.
@@ -876,12 +860,6 @@ mod sheet_text {
         let small = text.replacen("width = 1024\nheight = 1024\n", "width = 16\nheight = 16\n", 1);
         assert_ne!(small, text, "the grid size was found");
         small
-    }
-
-    /// Returns `text` with `old` replaced by `new` once, where `text` must hold `old`.
-    fn edited(text: &str, old: &str, new: &str) -> String {
-        assert!(text.contains(old), "the text holds no {old:?}");
-        text.replacen(old, new, 1)
     }
 
     /// Returns the Game of Life sheet with a note on line 2. The note leaves the lowered graph alone.
@@ -908,29 +886,13 @@ mod sheet_text {
     /// Returns a sweep of the sheet over Initial density for 2 steps, with `replicates` replicates.
     fn sheet_spec(replicates: u64) -> SweepSpec {
         let mut spec = SweepSpec::new("sheet_game_of_life");
-        spec.blocks = vec![BlockSpec {
-            design: DesignKind::Factorial,
-            factors: vec![FactorSpec::param(
-                "initial_density",
-                LevelSpec::Values(vec!["0.2".to_owned(), "0.4".to_owned()]),
-            )],
-            design_seed: None,
-        }];
+        spec.blocks = vec![factorial(vec![FactorSpec::param(
+            "initial_density",
+            values(&["0.2", "0.4"]),
+        )])];
         spec.run.steps = 2;
         spec.run.replicates = replicates;
         spec
-    }
-
-    /// Sweeps `entry` on `gpu` into `dir` with `options`, reporting to `progress`.
-    fn sweep_into(
-        entry: &ModelEntry,
-        gpu: &GpuContext,
-        spec: &SweepSpec,
-        dir: &Path,
-        options: &SweepOptions,
-        progress: &mut Recorder,
-    ) -> Result<(), ExploreError> {
-        sweep_with(entry, Some(gpu), spec, dir, options, progress).map(|_| ())
     }
 
     /// Sweeps `first` with one replicate into a fresh directory, then resumes it with `second` and two replicates.
@@ -943,9 +905,9 @@ mod sheet_text {
         second: &ModelEntry,
     ) -> (Result<Vec<SweepWarning>, ExploreError>, ScratchDir, bool) {
         let scratch = ScratchDir::new("sheet-text");
-        sweep_into(
+        sweep_with(
             first,
-            gpu,
+            Some(gpu),
             &sheet_spec(1),
             scratch.path(),
             &sweep_options(false),
@@ -955,15 +917,15 @@ mod sheet_text {
         let read = || std::fs::read(scratch.path().join(MANIFEST_FILE)).expect("the manifest reads");
         let before = read();
         let mut progress = Recorder::default();
-        let result = sweep_into(
+        let result = sweep_with(
             second,
-            gpu,
+            Some(gpu),
             &sheet_spec(2),
             scratch.path(),
             &sweep_options(true),
             &mut progress,
         )
-        .map(|()| progress.warnings);
+        .map(|_| progress.warnings);
         let unchanged = read() == before;
         (result, scratch, unchanged)
     }
@@ -981,9 +943,9 @@ mod sheet_text {
         let text = life_sheet();
         let entry = entry_of(&text);
         let scratch = ScratchDir::new("sheet-manifest");
-        sweep_into(
+        sweep_with(
             &entry,
-            &gpu,
+            Some(&gpu),
             &sheet_spec(1),
             scratch.path(),
             &sweep_options(false),
@@ -1050,13 +1012,10 @@ mod sheet_text {
         let scratch = ScratchDir::new("sheet-merge");
         let dirs = [scratch.path().join("shard-0"), scratch.path().join("shard-1")];
         for (index, (dir, text)) in dirs.iter().zip([life_sheet(), noted_sheet()]).enumerate() {
-            let options = SweepOptions {
-                shard: Shard::new(index as u64, 2).expect("a valid shard"),
-                ..sweep_options(false)
-            };
-            sweep_into(
+            let options = shard_options(index as u64, 2);
+            sweep_with(
                 &entry_of(&text),
-                &gpu,
+                Some(&gpu),
                 &sheet_spec(2),
                 dir,
                 &options,
@@ -1087,9 +1046,9 @@ mod sheet_text {
         let (sheet_dir, graph_dir) = (scratch.path().join("sheet"), scratch.path().join("graph"));
         let spec = sheet_spec(2);
         let sheet = entry_of(&life_sheet());
-        sweep_into(
+        sweep_with(
             &sheet,
-            &gpu,
+            Some(&gpu),
             &spec,
             &sheet_dir,
             &sweep_options(false),
@@ -1115,9 +1074,9 @@ mod sheet_text {
             set.replay(replayed.schema(), row.outcome.run.run_id)
                 .expect("the run replays");
         }
-        sweep_into(
+        sweep_with(
             &replayed,
-            &gpu,
+            Some(&gpu),
             &spec,
             &graph_dir,
             &sweep_options(false),

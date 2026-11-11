@@ -15,21 +15,25 @@ use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::view::StatEntry;
 
+use super::support::baseline_device;
 use crate::example_models;
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
 fn entry(id: &str) -> ModelEntry {
     example_models().get(id).cloned().expect("the model is registered")
 }
 
-/// Returns a 64 by 64 SIR setup with seed 3.
-fn small_sir() -> RunSetup {
-    entry("sir")
+/// Returns the setup of the grid model `entry` on a 64 by 64 grid.
+fn small(entry: &ModelEntry) -> RunSetup {
+    entry
         .setup()
         .set("grid_width", 64u32)
         .and_then(|setup| setup.set("grid_height", 64u32))
         .expect("the grid fits")
-        .with_seed(3)
+}
+
+/// Returns a 64 by 64 SIR setup with seed 3.
+fn small_sir() -> RunSetup {
+    small(&entry("sir")).with_seed(3)
 }
 
 /// Checks that a tick-0 action has fired by the time the build returns, and fires once.
@@ -400,19 +404,11 @@ fn faulty_life() -> ModelEntry {
 /// the edit would return without the error, and the healthy simulation's next wait would report it from the sink.
 #[test]
 fn a_gpu_simulation_reports_its_own_device_error() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
-    let small = |entry: ModelEntry| {
-        entry
-            .setup()
-            .set("grid_width", 64u32)
-            .and_then(|setup| setup.set("grid_height", 64u32))
-            .expect("the grid fits")
-            .with_seed(1)
-    };
-    let mut healthy = small(entry("gpu_game_of_life")).build(Some(&ctx)).expect("builds");
-    let mut faulty = small(faulty_life()).build(Some(&ctx)).expect("builds");
+    let mut healthy = small_gpu_life().build(Some(&ctx)).expect("builds");
+    let mut faulty = small(&faulty_life()).with_seed(1).build(Some(&ctx)).expect("builds");
     healthy.run_for(5).expect("the healthy simulation steps");
     faulty.run_for(5).expect("the faulty simulation steps");
 
@@ -430,12 +426,7 @@ fn a_gpu_simulation_reports_its_own_device_error() {
 
 /// Returns a 64 by 64 `gpu_game_of_life` setup with seed 1.
 fn small_gpu_life() -> RunSetup {
-    entry("gpu_game_of_life")
-        .setup()
-        .set("grid_width", 64u32)
-        .and_then(|setup| setup.set("grid_height", 64u32))
-        .expect("the grid fits")
-        .with_seed(1)
+    small(&entry("gpu_game_of_life")).with_seed(1)
 }
 
 /// Checks that a lost device fails the stepping and the sampling of every simulation on it.
@@ -444,7 +435,7 @@ fn small_gpu_life() -> RunSetup {
 /// advance the tick and repeat the last stats read.
 #[test]
 fn a_lost_device_fails_the_next_step_and_sample() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let mut stepped = small_gpu_life().build(Some(&ctx)).expect("builds");
@@ -515,13 +506,7 @@ fn a_simulation_refuses_every_call_after_a_fault() {
             },
         )
     });
-    let mut simulation = broken
-        .setup()
-        .set("grid_width", 64u32)
-        .and_then(|setup| setup.set("grid_height", 64u32))
-        .expect("the grid fits")
-        .build(None)
-        .expect("SIR builds");
+    let mut simulation = small(&broken).build(None).expect("SIR builds");
     let fault = simulation.run_for(10).expect_err("the step panics");
     assert!(matches!(fault.kind, FaultKind::Panic { .. }), "{fault:?}");
     assert_eq!(simulation.tick(), 2);
@@ -609,7 +594,7 @@ fn relax_layout_moves_a_network_and_leaves_other_models_alone() {
 /// Checks that an action on a GPU simulation reaches its state.
 #[test]
 fn an_action_on_a_gpu_simulation_reaches_its_state() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let mut simulation = small_gpu_life().build(Some(&ctx)).expect("builds");
@@ -634,18 +619,11 @@ fn an_action_on_a_gpu_simulation_reaches_its_state() {
 /// simulation's next wait reports it.
 #[test]
 fn a_gpu_action_reports_an_error_from_the_sink_before_it_returns() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let mut healthy = small_gpu_life().build(Some(&ctx)).expect("builds");
-    let mut faulty = faulty_life()
-        .setup()
-        .set("grid_width", 64u32)
-        .and_then(|setup| setup.set("grid_height", 64u32))
-        .expect("the grid fits")
-        .with_seed(1)
-        .build(Some(&ctx))
-        .expect("builds");
+    let mut faulty = small(&faulty_life()).with_seed(1).build(Some(&ctx)).expect("builds");
     healthy.run_for(5).expect("the healthy simulation steps");
     faulty.run_for(5).expect("the faulty simulation steps");
 

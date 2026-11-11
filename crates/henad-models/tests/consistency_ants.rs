@@ -5,13 +5,20 @@
 //! `tests/fixtures/docs/ants_fixture.md`.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use henad_compute::cpu::agent_engine::AgentModelState;
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
 use henad_models::ants::AntsModel;
 use henad_models::ants::field::{LOW_PHEROMONE, OBSTACLE, TO_FOOD, TO_HOME};
+
+mod support;
+
+#[path = "gates/ants.rs"]
+mod gate;
+
+use gate::{GATE_AGENTS, GATE_H, GATE_TICKS, GATE_W, GateResult, gate_field, gate_params};
+use support::{fixture_dir, reference_fixtures};
 
 type State = AgentModelState<AntsModel>;
 
@@ -147,78 +154,12 @@ fn deliveries_never_decrease() {
     }
 }
 
-// The cross-engine gate.
-//
-// See `tests/fixtures/docs/ants_fixture.md`. Randomness in this model lives entirely inside
-// `advect_agent`: a tie between two neighbours draws, and the momentum and random-action branches
-// draw. The scenario below sets both probabilities to zero and seeds a field whose 3x3
-// neighbourhoods hold no two equal values, so no draw can change the outcome and the run is the
-// same under any generator. Another engine's answer is comparable only because of this.
-
-// Small enough to write out in full, large enough for both obstacle blobs and both sites.
-const GATE_W: u32 = 32;
-const GATE_H: u32 = 32;
-/// Number of ticks the gate runs. Five is already too many.
-///
-/// Deposits put decayed copies of the same value into different cells, and by the fifth tick two
-/// of them are exactly equal in a neighbourhood an ant is standing in. That tie draws, at one
-/// chance in four, so a correct implementation reaches a different answer a quarter of the time.
-/// Four ticks is tie free in both `f32` and `f64`.
-const GATE_TICKS: u32 = 4;
+// The cross-engine gate, whose ants, field and parameters `gates/ants.rs` holds.
 
 /// Number of seeds, enough that a tie cannot hide behind luck.
 ///
 /// A one-in-four tie survives six seeds with probability 0.75^6, about 18%, and 64 seeds with about 1e-8.
 const GATE_SEEDS: u64 = 64;
-
-/// Twelve ants: the four corners, a top edge, both sites, two cells beside an obstacle, one ant
-/// carrying momentum history, and two sharing a cell so the deposit combine has something to merge.
-///
-/// `(x, y, last_step, has_food, reward)`, with `last_step` encoded `(dx + 1) * 3 + (dy + 1)` and
-/// 255 meaning no step yet.
-const GATE_AGENTS: [(f32, f32, u8, u8, f32); 12] = [
-    (0.0, 0.0, 255, 0, 1.0),
-    (31.0, 0.0, 255, 1, 1.0),
-    (0.0, 31.0, 255, 0, 0.5),
-    (31.0, 31.0, 255, 1, 0.5),
-    (16.0, 0.0, 255, 0, 1.0),
-    (4.0, 4.0, 255, 0, 1.0),    // on the food source
-    (28.0, 28.0, 255, 1, 1.0),  // on the nest
-    (8.0, 12.0, 255, 0, 1.0),   // (9, 13) is an obstacle
-    (22.0, 20.0, 255, 1, 1.0),  // (21, 19) is an obstacle
-    (15.0, 15.0, 7, 0, 1.0),    // last step (1, 0)
-    (15.0, 15.0, 255, 0, 0.25), // shares the cell above, lower reward
-    (15.0, 16.0, 2, 1, 1.0),    // last step (-1, 1)
-];
-
-/// The seeded field, stated as a formula so every engine builds the same field without a data file.
-///
-/// Two neighbours collide only when `7dx + 13dy` (or `11dx + 5dy`) is a multiple of the modulus.
-/// Across a 3x3 window those sums stay well inside one period, so the only collision is with the
-/// cell itself. Values sit in `(0, 1]`, keeping the best neighbour off zero and the momentum
-/// branch out of reach.
-fn gate_field(layer: usize) -> Vec<f32> {
-    let (a, b, m) = if layer == TO_FOOD { (7, 13, 97) } else { (11, 5, 89) };
-    (0..GATE_H)
-        .flat_map(|y| (0..GATE_W).map(move |x| ((a * x + b * y) % m + 1) as f32 / (m + 1) as f32))
-        .collect()
-}
-
-fn gate_params() -> Vec<ParamValue> {
-    vec![
-        ParamValue::U32(GATE_AGENTS.len() as u32),
-        ParamValue::F32(GATE_W as f32),
-        ParamValue::F32(GATE_H as f32),
-        ParamValue::F32(CUTDOWN),
-        ParamValue::F32(REWARD),
-        ParamValue::F32(0.0), // momentum, off so the branch cannot fire
-        ParamValue::F32(0.0), // random action, off for the same reason
-        ParamValue::F32(0.999),
-    ]
-}
-
-/// Agent rows and both pheromone layers after the gate's ticks, as a fixture holds them.
-type GateResult = (Vec<(f32, f32, u8, u8, f32)>, Vec<f32>, Vec<f32>);
 
 fn gate_run(seed: Option<u64>, ticks: u32) -> GateResult {
     let p = gate_params();
@@ -388,17 +329,6 @@ fn close(got: f32, want: f32) -> bool {
     (got - want).abs() <= GATE_TOLERANCE * scale
 }
 
-/// Returns the directory of the reference fixtures for `model`.
-///
-/// `HENAD_FIXTURE_DIR` points the gate at a directory holding one engine's candidates, so a
-/// failure identifies that engine and no tracked fixture is written or removed to find out.
-fn fixture_dir(model: &str) -> std::path::PathBuf {
-    match std::env::var_os("HENAD_FIXTURE_DIR") {
-        Some(root) => std::path::PathBuf::from(root).join(model),
-        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(model),
-    }
-}
-
 /// Checks Henad against every engine that has committed a fixture.
 #[test]
 fn matches_every_reference_fixture() {
@@ -410,14 +340,7 @@ fn matches_every_reference_fixture() {
     );
 
     let mut checked = Vec::new();
-    let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
-    for entry in entries {
-        let path = entry.expect("readable directory entry").path();
-        if path.extension().is_none_or(|e| e != "txt") {
-            continue;
-        }
-        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {name}: {e}"));
+    for (name, text) in reference_fixtures(&dir) {
         let (header, (agents, to_food, to_home)) = parse_gate_fixture(&text);
         let engine = header.get("engine").map_or("?", String::as_str);
         let steps: u32 = header

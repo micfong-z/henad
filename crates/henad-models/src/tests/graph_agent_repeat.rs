@@ -4,19 +4,18 @@
 //! The graphs place agent `i` at the centre of cell `(i % 40, (i / 40) % 30)` of a 40 by 30 world, so each expected
 //! value has a closed form. The random walk starter is the corpus file of agents that takes a Repeat.
 
-use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_core::authoring::primitives::rng::pcg_hash;
 use henad_core::params::ParamValue;
-use henad_explore::model_file::ModelFile;
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 use henad_graph::GraphFile;
 use henad_graph::document::PassStage;
 use henad_graph::host::{HostEvaluator, HostWorld, RunContext};
 
-use super::graph_grid_parity::{build_gpu, starter_entry, step};
 use super::lanes::GraphLanes;
+use super::support::{
+    baseline_device, build_gpu, lane, model_entry, pairs, params_for, roomy_limits, starter_entry, step,
+};
 
 /// Number of agents of every test graph.
 const AGENTS: u32 = 300;
@@ -604,13 +603,6 @@ fn checked(text: &str) -> GraphFile {
     file
 }
 
-/// Returns the entry the model file `text` builds.
-fn entry_of(text: &str) -> ModelEntry {
-    ModelFile::parse(text)
-        .and_then(|file| file.entry())
-        .unwrap_or_else(|error| panic!("{error}"))
-}
-
 /// Returns the engine's parameters of the test world.
 fn world_params() -> [ParamValue; 3] {
     [
@@ -624,7 +616,7 @@ fn world_params() -> [ParamValue; 3] {
 /// left out.
 fn on_device(ctx: &GpuContext, text: &str, seed: Option<u64>, ticks: u32) -> Vec<(String, Vec<u32>)> {
     let file = checked(text);
-    let mut state = build_gpu(&entry_of(text), &world_params(), seed, ctx);
+    let mut state = build_gpu(&model_entry(text), &world_params(), seed, ctx);
     step(ctx, &mut *state, ticks);
     lanes_of(&file, &*state)
 }
@@ -674,22 +666,12 @@ fn on_host(text: &str, seed: Option<u64>) -> Vec<(String, Vec<u32>)> {
         .collect()
 }
 
-/// Returns the words of lane `id` among `lanes`.
-fn lane<'a>(lanes: &'a [(String, Vec<u32>)], id: &str) -> &'a [u32] {
-    &lanes
-        .iter()
-        .find(|(lane, _)| lane == id)
-        .unwrap_or_else(|| panic!("no lane {id}"))
-        .1
-}
-
 /// The known-answer cases of a Repeat hold over agents on the device and on the host: zero iterations and `when` false
 /// return the initial value, a count of 100 runs `max` 8 times, a count per agent runs that many times, and an inner
 /// count that reads the outer `k` runs `k + 1` times.
 #[test]
 fn a_repeat_over_agents_meets_its_known_answers() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_repeat_over_agents_meets_its_known_answers: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let text = repeats_text(CHAIN_LOOP);
@@ -720,8 +702,7 @@ fn a_repeat_over_agents_meets_its_known_answers() {
 /// on the device, both equal the host's run, and every agent's chain is `pcg_hash` applied five times to its index.
 #[test]
 fn a_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let looped = repeats_text(CHAIN_LOOP);
@@ -833,8 +814,7 @@ fn float_text(copied: bool) -> String {
 /// do two runs of its hand-chained copies. The host runs the loop and the copies alike.
 #[test]
 fn a_float_repeat_over_agents_replays_on_the_device() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_float_repeat_over_agents_replays_on_the_device: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     for copied in [false, true] {
@@ -860,8 +840,7 @@ fn a_float_repeat_over_agents_replays_on_the_device() {
 #[test]
 #[ignore = "probes a device that may fuse a multiply with an add or reorder float operations"]
 fn a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let looped = on_device(&ctx, &float_text(false), Some(3), 1);
@@ -877,8 +856,7 @@ fn a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit() {
 /// otherwise, and each draw on the device equals the host's.
 #[test]
 fn draws_in_a_repeat_over_agents_differ_by_iteration_and_replay() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping draws_in_a_repeat_over_agents_differ_by_iteration_and_replay: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let text = repeats_text(CHAIN_LOOP);
@@ -915,8 +893,7 @@ fn stencil(x: i64, y: i64) -> f32 {
 /// of addition sums exactly.
 #[test]
 fn folds_and_repeats_nest_over_agents() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping folds_and_repeats_nest_over_agents: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let text = folds_text();
@@ -938,39 +915,18 @@ fn folds_and_repeats_nest_over_agents() {
     }
 }
 
-/// Returns the parameters of the random walk starter with `sub_steps` steps a tick, the others at their defaults.
-fn walk_params(entry: &ModelEntry, sub_steps: u32) -> Vec<ParamValue> {
-    entry
-        .param_descriptors()
-        .iter()
-        .map(|descriptor| match descriptor.id() {
-            "sub_steps" => ParamValue::U32(sub_steps),
-            _ => descriptor.kind().default_value(),
-        })
-        .collect()
-}
-
-/// Returns the components of the interleaved `vec2<f32>` lane `words`.
-fn pairs(words: &[u32]) -> Vec<(f32, f32)> {
-    words
-        .chunks_exact(2)
-        .map(|pair| (f32::from_bits(pair[0]), f32::from_bits(pair[1])))
-        .collect()
-}
-
 /// The random walk starter replays at one seed, every agent's last step has the step size, and over a tick an agent
 /// moves a mean squared distance of `sub_steps * step_size^2`, the closed form of a walk of uniform headings, within
 /// five standard errors. With no steps a tick, the Repeat runs zero times and the walk stands still.
 #[test]
 fn the_random_walk_replays_and_steps_its_closed_form() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_random_walk_replays_and_steps_its_closed_form: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let entry = starter_entry("random_walk.toml");
     let lanes = GraphLanes::of_starter("random_walk.toml");
     let (step_size, side) = (2.0f32, 1_000.0f32);
-    let params = walk_params(&entry, 4);
+    let params = params_for(&entry, &[("sub_steps", ParamValue::U32(4))]);
     let mut first = build_gpu(&entry, &params, Some(5), &ctx);
     let mut second = build_gpu(&entry, &params, Some(5), &ctx);
     step(&ctx, &mut *first, 3);
@@ -1009,7 +965,7 @@ fn the_random_walk_replays_and_steps_its_closed_form() {
         (mean - expected).abs() <= 5.0 * standard_error,
         "the mean squared step over a tick is {mean}, and a walk of uniform headings takes {expected}"
     );
-    let params = walk_params(&entry, 0);
+    let params = params_for(&entry, &[("sub_steps", ParamValue::U32(0))]);
     let mut still = build_gpu(&entry, &params, Some(5), &ctx);
     let start = lanes.read(&*still, "pos");
     step(&ctx, &mut *still, 2);
@@ -1035,13 +991,9 @@ fn a_repeat_over_agents_is_refused_by_the_submission_budget_at_a_large_populatio
         cost > 32_768 && cost < 65_536,
         "the heaviest pass costs {cost} an agent"
     );
-    let entry = entry_of(&text);
+    let entry = model_entry(&text);
     let at = |agents: u32| [ParamValue::U32(agents), ParamValue::F32(40.0), ParamValue::F32(30.0)];
-    let limits = wgpu::Limits {
-        max_storage_buffer_binding_size: u64::MAX,
-        max_buffer_size: u64::MAX,
-        ..wgpu::Limits::default()
-    };
+    let limits = roomy_limits();
     assert!(
         entry.shortfalls(&at(100_000), &limits).is_empty(),
         "a hundred thousand agents fit"
@@ -1052,8 +1004,7 @@ fn a_repeat_over_agents_is_refused_by_the_submission_budget_at_a_large_populatio
         refused[0].contains("past the budget") && refused[0].contains("'node_agent_repeat_answers'"),
         "{refused:?}"
     );
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the build of a_repeat_over_agents_is_refused_by_the_submission_budget: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     match entry.build(&at(1_000_000), None, Some(&ctx)) {

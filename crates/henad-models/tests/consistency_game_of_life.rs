@@ -3,12 +3,15 @@
 //! See `tests/fixtures/docs/game_of_life_fixture.md` for how a fixture is produced.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use henad_compute::cpu::grid_engine::GridModelState;
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
 use henad_models::game_of_life::GameOfLifeModel;
+
+mod support;
+
+use support::{fixture_dir, reference_fixtures};
 
 /// Standard glider, as `(x, y)` offsets in buffer order with row 0 first.
 ///
@@ -46,17 +49,6 @@ fn declared(scenario: &str) -> (u32, u32, u32) {
         "glider" => (64, 64, 101),
         "r-pentomino" => (64, 64, 500),
         other => panic!("fixture declares unknown scenario `{other}`"),
-    }
-}
-
-/// Returns the directory of the reference fixtures for `model`.
-///
-/// `HENAD_FIXTURE_DIR` points the gate at a directory holding one engine's candidates, so a
-/// failure identifies that engine and no tracked fixture is written or removed to find out.
-fn fixture_dir(model: &str) -> std::path::PathBuf {
-    match std::env::var_os("HENAD_FIXTURE_DIR") {
-        Some(root) => std::path::PathBuf::from(root).join(model),
-        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(model),
     }
 }
 
@@ -170,15 +162,7 @@ fn matches_every_reference_fixture() {
     let dir = fixture_dir("game_of_life");
     let mut checked = Vec::new();
 
-    let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
-    for entry in entries {
-        let path = entry.expect("readable directory entry").path();
-        if path.extension().is_none_or(|e| e != "txt") {
-            continue;
-        }
-
-        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {name}: {e}"));
+    for (name, text) in reference_fixtures(&dir) {
         let fixture = parse_fixture(&text);
 
         let engine = fixture.header.get("engine").map_or("?", String::as_str);

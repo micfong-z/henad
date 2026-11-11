@@ -16,32 +16,26 @@
 //! of a count, and is held to the host evaluator every tick.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::Arc;
 
-use henad_compute::entry::{EntryDeclarations, ModelEntry, ModelSet};
-use henad_compute::gpu::sim_thread::GpuSimState;
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::{GpuContext, GridHooks, GridPassCtx, GridPassId, RerunUploads};
 use henad_compute::snapshot::FireCounts;
 use henad_core::action::action_seed;
 use henad_core::params::ParamValue;
 use henad_core::topology::TopologyHint;
 use henad_core::view::StatValue;
-use henad_explore::model_file::ModelFile;
-use henad_explore::testing::{CheckSettings, TestDeviceRequest, assert_set_conforms, headless_test_device};
 use henad_graph::GraphFile;
 use henad_graph::document::{PassEnabled, PassStage, World};
 use henad_graph::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
 use henad_graph::sheet::SheetFile;
-use henad_graph::wgsl::{GridProgram, Probes};
+use henad_graph::wgsl::{GridProgram, LaneBuffer, Probes};
 
-use super::graph_grid_parity::{build_gpu, press, snapshot, stat, step};
-
-/// Returns the text of `tests/fixtures/<path>`.
-pub(super) fn fixture_text(path: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(path);
-    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
-}
+use super::lanes::GraphLanes;
+use super::support::{
+    assert_entries_conform, baseline_device, build_gpu, declarations_like, device_params, fixture_text, lane,
+    model_entry, press, snapshot, stat, step,
+};
 
 /// Returns the name and text of every grid sheet: the sheet starters of a grid world, then the chance SIR and the SIRD
 /// of two competing rates.
@@ -74,43 +68,6 @@ fn sheet_file(text: &str) -> SheetFile {
 /// Returns the hand-lowered reference `tests/fixtures/lowered/round1/<name>`.
 fn hand_lowered(name: &str) -> GraphFile {
     GraphFile::parse(&fixture_text(&format!("lowered/round1/{name}"))).unwrap_or_else(|error| panic!("{name}: {error}"))
-}
-
-/// Returns the entry the model file of `text` builds.
-pub(super) fn entry_of(text: &str) -> ModelEntry {
-    ModelFile::parse(text)
-        .and_then(|file| file.entry())
-        .unwrap_or_else(|error| panic!("{error}"))
-}
-
-/// Returns the build parameters of `entry` at `side` by `side` cells: the grid size, then each parameter at its
-/// default unless `overrides` names it.
-///
-/// Panics if an id of `overrides` names no parameter of `entry`.
-pub(super) fn device_params(entry: &ModelEntry, side: u32, overrides: &[(&str, f32)]) -> Vec<ParamValue> {
-    for (id, _) in overrides {
-        assert!(
-            entry
-                .param_descriptors()
-                .iter()
-                .any(|descriptor| descriptor.id() == *id),
-            "{}: no parameter {id}",
-            entry.id()
-        );
-    }
-    let mut params: Vec<ParamValue> = entry
-        .param_descriptors()
-        .iter()
-        .map(|descriptor| {
-            overrides.iter().find(|(id, _)| *id == descriptor.id()).map_or_else(
-                || descriptor.kind().default_value(),
-                |(_, value)| ParamValue::F32(*value),
-            )
-        })
-        .collect();
-    params[0] = ParamValue::U32(side);
-    params[1] = ParamValue::U32(side);
-    params
 }
 
 /// Returns the wrapping world of `side` by `side` cells that the host evaluator runs.
@@ -155,48 +112,13 @@ fn host_words(lanes: &HostLanes, file: &GraphFile) -> Vec<(String, Vec<u32>)> {
         .collect()
 }
 
-/// Returns the positions of the lane buffers of `file` on the device, each with the lane id, in document order.
-fn lane_buffers(file: &GraphFile) -> Vec<(String, usize)> {
-    let program = GridProgram::compile(file).unwrap_or_else(|problems| panic!("{problems:#?}"));
-    let buffers = program.spec().buffers;
-    file.document()
-        .lanes
-        .iter()
-        .map(|lane| {
-            let label = format!("lane_{}_cells", lane.id);
-            let position = buffers
-                .iter()
-                .position(|buffer| buffer.label == label)
-                .unwrap_or_else(|| panic!("no buffer {label}"));
-            (lane.id.clone(), position)
-        })
-        .collect()
-}
-
-/// Returns the words of every lane of `state`, with the lane id, read from the buffers `buffers` names.
-fn device_words(state: &dyn GpuSimState, buffers: &[(String, usize)]) -> Vec<(String, Vec<u32>)> {
-    buffers
-        .iter()
-        .map(|(id, position)| (id.clone(), state.read_buffer(*position).expect("a lane buffer")))
-        .collect()
-}
-
-/// Returns the words of lane `id` among `words`.
-fn lane<'a>(words: &'a [(String, Vec<u32>)], id: &str) -> &'a [u32] {
-    words
-        .iter()
-        .find(|(lane, _)| lane == id)
-        .map(|(_, words)| words.as_slice())
-        .unwrap_or_else(|| panic!("no lane {id}"))
-}
-
-/// Hooks of a graph whose build uploads planted words instead of some of its seeded buffers. Every other hook
-/// forwards to the graph's own.
+/// Hooks of a graph whose build uploads planted words instead of the seeded words of some of its lanes. Every other
+/// hook forwards to the graph's own.
 struct PlantedHooks {
     /// Hooks of the graph itself.
     inner: Box<dyn GridHooks>,
-    /// Buffers to replace, each as its position and its words.
-    planted: Vec<(usize, Vec<u32>)>,
+    /// Lanes to replace, each as its buffer and segment and its words.
+    planted: Vec<(LaneBuffer, Vec<u32>)>,
 }
 
 impl GridHooks for PlantedHooks {
@@ -214,13 +136,11 @@ impl GridHooks for PlantedHooks {
 
     fn seed_buffers(&self, width: u32, height: u32, params: &[ParamValue], seed: Option<u64>) -> Vec<Vec<u32>> {
         let mut buffers = self.inner.seed_buffers(width, height, params, seed);
-        for (position, words) in &self.planted {
-            assert_eq!(
-                buffers[*position].len(),
-                words.len(),
-                "planted words of buffer {position}"
-            );
-            buffers[*position].clone_from(words);
+        for (place, words) in &self.planted {
+            let buffer = &mut buffers[place.buffer()];
+            let range = place.segment_range(buffer.len());
+            assert_eq!(range.len(), words.len(), "planted words of buffer {}", place.buffer());
+            buffer[range].copy_from_slice(words);
         }
         buffers
     }
@@ -254,16 +174,11 @@ fn planted_entry(file: &GraphFile, probes: &Probes, planted: &[(String, Vec<u32>
     let program = GridProgram::compile_with_probes(file, probes).unwrap_or_else(|problems| panic!("{problems:#?}"));
     let plain = program.entry();
     let mut spec = program.spec();
-    let buffers = lane_buffers(file);
     let planted = planted
         .iter()
         .map(|(id, words)| {
-            let position = buffers
-                .iter()
-                .find(|(lane, _)| lane == id)
-                .map(|(_, position)| *position)
-                .unwrap_or_else(|| panic!("no lane {id}"));
-            (position, words.clone())
+            let place = program.lane_buffer(id).unwrap_or_else(|| panic!("no lane {id}"));
+            (place, words.clone())
         })
         .collect();
     // A second spec of the same program lends its hooks. Those hooks share the program's compiled parts.
@@ -271,18 +186,7 @@ fn planted_entry(file: &GraphFile, probes: &Probes, planted: &[(String, Vec<u32>
         inner: program.spec().hooks,
         planted,
     });
-    let mut declarations = EntryDeclarations::new(
-        plain.id().to_owned(),
-        plain.name().to_owned(),
-        plain.description().to_owned(),
-        plain.param_descriptors().to_vec(),
-        TopologyHint::GRID,
-        spec.structure(),
-    );
-    declarations.stats = plain.stat_descriptors().to_vec();
-    declarations.actions = plain.action_descriptors().to_vec();
-    declarations.palette.clone_from(&plain.metadata().palette);
-    declarations.time.clone_from(&plain.metadata().time);
+    let declarations = declarations_like(&plain, TopologyHint::GRID, spec.structure());
     ModelEntry::from_gpu_grid_spec(declarations, plain.source().clone(), Arc::new(spec))
 }
 
@@ -308,7 +212,7 @@ fn planted_lanes(
 #[test]
 #[should_panic(expected = "no parameter lightning_chanse")]
 fn a_mistyped_override_id_panics() {
-    let entry = entry_of(&sheet_text("forest_fire.toml"));
+    let entry = model_entry(&sheet_text("forest_fire.toml"));
     device_params(&entry, 16, &[("lightning_chanse", 0.001)]);
 }
 
@@ -318,15 +222,6 @@ fn cells_in(words: &[u32], side: u32, category: u32) -> Vec<(u32, u32)> {
         .filter(|&cell| words[cell as usize] == category)
         .map(|cell| (cell % side, cell / side))
         .collect()
-}
-
-/// Returns a baseline device, or `None` with a warning naming the test `name` when there is no adapter.
-pub(super) fn device(name: &str) -> Option<GpuContext> {
-    let ctx = headless_test_device(&TestDeviceRequest::baseline());
-    if ctx.is_none() {
-        log::warn!("skipping {name}: no adapter");
-    }
-    ctx
 }
 
 /// Runs the lowered Game of Life on the device from the alive cells `cells` on a 32 by 32 wrapping world, and returns
@@ -340,11 +235,11 @@ fn life_on_the_device(ctx: &GpuContext, cells: &[(u32, u32)], ticks: u32) -> Vec
         &Probes::default(),
         &planted_lanes(lowered, side, "status", 1, cells),
     );
-    let buffers = lane_buffers(lowered);
+    let device_lanes = GraphLanes::of(lowered);
     let mut state = build_gpu(&entry, &device_params(&entry, side, &[]), Some(1), ctx);
     let mut states = Vec::new();
     for _ in 0..=ticks {
-        states.push(cells_in(lane(&device_words(&*state, &buffers), "status"), side, 1));
+        states.push(cells_in(&device_lanes.read(&*state, "status"), side, 1));
         step(ctx, &mut *state, 1);
     }
     states
@@ -359,7 +254,7 @@ fn moved(cells: &[(u32, u32)], shift: u32) -> Vec<(u32, u32)> {
 
 #[test]
 fn the_life_sheet_blinker_has_period_2_on_the_device() {
-    let Some(ctx) = device("the_life_sheet_blinker_has_period_2_on_the_device") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let states = life_on_the_device(&ctx, &[(15, 14), (15, 15), (15, 16)], 4);
@@ -372,7 +267,7 @@ fn the_life_sheet_blinker_has_period_2_on_the_device() {
 
 #[test]
 fn the_life_sheet_glider_moves_by_one_cell_on_each_axis_every_4_ticks_on_the_device() {
-    let Some(ctx) = device("the_life_sheet_glider_moves_by_one_cell_on_each_axis_every_4_ticks_on_the_device") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let glider = [(1, 0), (2, 1), (0, 2), (1, 2), (2, 2)];
@@ -422,7 +317,7 @@ fn host_counted_tick(
 /// 3 counts 2, read from the counts of the step that reached each tick.
 #[test]
 fn the_life_sheet_blinker_fires_lines_2_and_3_twice_each_tick_on_the_device() {
-    let Some(ctx) = device("the_life_sheet_blinker_fires_lines_2_and_3_twice_each_tick_on_the_device") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let side = 32;
@@ -458,7 +353,7 @@ fn the_life_sheet_blinker_fires_lines_2_and_3_twice_each_tick_on_the_device() {
 /// line by line, every tick for 50 ticks at 64 by 64 cells, and each of its four change lines applies in some tick.
 #[test]
 fn the_forest_fire_counts_equal_the_host_every_tick_for_50_ticks() {
-    let Some(ctx) = device("the_forest_fire_counts_equal_the_host_every_tick_for_50_ticks") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let side = 64;
@@ -466,7 +361,7 @@ fn the_forest_fire_counts_equal_the_host_every_tick_for_50_ticks() {
     let text = sheet_text(name);
     let file = sheet_file(&text);
     let fires = file.fire_lines();
-    let entry = entry_of(&text);
+    let entry = model_entry(&text);
     let params = device_params(&entry, side, active_params(name));
     let evaluator = HostEvaluator::new(file.lowered()).unwrap_or_else(|error| panic!("{error}"));
     let seed = 3;
@@ -500,23 +395,23 @@ fn the_forest_fire_counts_equal_the_host_every_tick_for_50_ticks() {
 /// layout the host's rerun of the same press draws, and a second build replays the presses.
 #[test]
 fn a_start_again_button_draws_a_new_layout_each_press() {
-    let Some(ctx) = device("a_start_again_button_draws_a_new_layout_each_press") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let side = 64;
     let text = sheet_text("game_of_life.toml");
     let file = sheet_file(&text);
-    let entry = entry_of(&text);
+    let entry = model_entry(&text);
     let randomise = entry.action_index("randomise").expect("the Randomise button");
     let params = device_params(&entry, side, &[]);
-    let buffers = lane_buffers(file.lowered());
+    let device_lanes = GraphLanes::of(file.lowered());
     let evaluator = HostEvaluator::new(file.lowered()).unwrap_or_else(|error| panic!("{error}"));
     let presses = || {
         let mut state = build_gpu(&entry, &params, Some(7), &ctx);
-        let mut layouts = vec![device_words(&*state, &buffers)];
+        let mut layouts = vec![device_lanes.read_all(&*state)];
         for _ in 0..2 {
             press(&ctx, &mut *state, randomise);
-            layouts.push(device_words(&*state, &buffers));
+            layouts.push(device_lanes.read_all(&*state));
         }
         layouts
     };
@@ -546,18 +441,18 @@ fn a_start_again_button_draws_a_new_layout_each_press() {
 /// start, and a build at another seed draws another start.
 #[test]
 fn a_rebuild_replays_the_same_start() {
-    let Some(ctx) = device("a_rebuild_replays_the_same_start") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let side = 64;
     let text = sheet_text("game_of_life.toml");
     let file = sheet_file(&text);
-    let entry = entry_of(&text);
+    let entry = model_entry(&text);
     let params = device_params(&entry, side, &[]);
-    let buffers = lane_buffers(file.lowered());
+    let device_lanes = GraphLanes::of(file.lowered());
     let start = |seed: u64| {
         let state = build_gpu(&entry, &params, Some(seed), &ctx);
-        device_words(&*state, &buffers)
+        device_lanes.read_all(&*state)
     };
     let first = start(7);
     assert_eq!(start(7), first, "a rebuild at seed 7");
@@ -634,9 +529,9 @@ fn assert_steps_alike(
 ) -> Vec<Vec<(String, Vec<u32>)>> {
     let file = sheet_file(text);
     let lowered = file.lowered();
-    let entry = entry_of(text);
+    let entry = model_entry(text);
     let params = device_params(&entry, ALIKE_SIDE, overrides);
-    let buffers = lane_buffers(lowered);
+    let device_lanes = GraphLanes::of(lowered);
     let evaluator = HostEvaluator::new(lowered).unwrap_or_else(|error| panic!("{name}: {error}"));
     let mut last = Vec::new();
     for seed in ALIKE_SEEDS {
@@ -662,7 +557,7 @@ fn assert_steps_alike(
             host = host_words(&lanes, lowered);
             changed |= host != start;
             assert!(
-                device_words(&*state, &buffers) == host,
+                device_lanes.read_all(&*state) == host,
                 "{name} at seed {seed}: the lanes differ at tick {tick}"
             );
             step(ctx, &mut *state, 1);
@@ -679,7 +574,7 @@ fn assert_steps_alike(
 /// it.
 #[test]
 fn every_grid_sheet_steps_alike_on_the_host_and_the_device() {
-    let Some(ctx) = device("every_grid_sheet_steps_alike_on_the_host_and_the_device") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let sheets = grid_sheets();
@@ -725,7 +620,7 @@ fn tick_shader_calls_exp(text: &str) -> bool {
 /// decide a cell differently.
 #[test]
 fn a_competing_group_with_a_rate_for_each_steps_alike_on_the_host_and_the_device() {
-    let Some(ctx) = device("a_competing_group_with_a_rate_for_each_steps_alike_on_the_host_and_the_device") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let text = sird_dying_for_each_infected_neighbour();
@@ -763,29 +658,29 @@ fn state_counts(words: &[u32], states: usize) -> Vec<usize> {
 /// ticks at 64 by 64 cells, in its lanes and its measures, across a press of New outbreak after the first tick.
 #[test]
 fn the_chance_sir_sheet_conserves_its_cells_every_tick_on_the_device() {
-    let Some(ctx) = device("the_chance_sir_sheet_conserves_its_cells_every_tick_on_the_device") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let side = 64u32;
     let cells = (side * side) as usize;
     let text = sheet_text("sir_chance.toml");
     let file = sheet_file(&text);
-    let entry = entry_of(&text);
+    let entry = model_entry(&text);
     let new_outbreak = entry.action_index("new_outbreak").expect("the New outbreak button");
-    let buffers = lane_buffers(file.lowered());
+    let device_lanes = GraphLanes::of(file.lowered());
     let mut state = build_gpu(&entry, &device_params(&entry, side, &[]), Some(5), &ctx);
     let mut peak = 0;
     for tick in 0..=200u32 {
         if tick == 1 {
-            let before = state_counts(lane(&device_words(&*state, &buffers), "health"), 3);
+            let before = state_counts(&device_lanes.read(&*state, "health"), 3);
             press(&ctx, &mut *state, new_outbreak);
-            let after = state_counts(lane(&device_words(&*state, &buffers), "health"), 3);
+            let after = state_counts(&device_lanes.read(&*state, "health"), 3);
             assert!(
                 after[1] > before[1],
                 "New outbreak infects more cells: {before:?}, then {after:?}"
             );
         }
-        let counts = state_counts(lane(&device_words(&*state, &buffers), "health"), 3);
+        let counts = state_counts(&device_lanes.read(&*state, "health"), 3);
         assert_eq!(
             counts.iter().sum::<usize>(),
             cells,
@@ -802,7 +697,7 @@ fn the_chance_sir_sheet_conserves_its_cells_every_tick_on_the_device() {
         peak = peak.max(counts[1]);
         step(&ctx, &mut *state, 1);
     }
-    let end = state_counts(lane(&device_words(&*state, &buffers), "health"), 3);
+    let end = state_counts(&device_lanes.read(&*state, "health"), 3);
     assert!(
         peak > 0 && end[2] > 0,
         "the epidemic spreads and recovers: {peak}, {end:?}"
@@ -885,14 +780,14 @@ fn the_drawless_sheets_equal_their_hand_lowered_files_every_tick_on_the_host() {
 /// ticks on the device, from the tick-0 lanes each sheet draws at seeds 1 to 4, planted in both.
 #[test]
 fn the_drawless_sheets_equal_their_hand_lowered_files_every_tick_on_the_device() {
-    let Some(ctx) = device("the_drawless_sheets_equal_their_hand_lowered_files_every_tick_on_the_device") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     for (sheet, reference) in DRAWLESS {
         let file = sheet_file(&sheet_text(sheet));
         let reference = hand_lowered(reference);
-        let sheet_buffers = lane_buffers(file.lowered());
-        let reference_buffers = lane_buffers(&reference);
+        let sheet_lanes = GraphLanes::of(file.lowered());
+        let reference_lanes = GraphLanes::of(&reference);
         for seed in SEEDS {
             let start = shared_start(&file, seed);
             let sheet_entry = planted_entry(file.lowered(), &Probes::default(), &start);
@@ -909,16 +804,12 @@ fn the_drawless_sheets_equal_their_hand_lowered_files_every_tick_on_the_device()
                 Some(seed),
                 &ctx,
             );
-            assert_eq!(
-                device_words(&*sheet_state, &sheet_buffers),
-                start,
-                "{sheet}: the planted start"
-            );
+            assert_eq!(sheet_lanes.read_all(&*sheet_state), start, "{sheet}: the planted start");
             for tick in 0..EQUAL_TICKS {
                 step(&ctx, &mut *sheet_state, 1);
                 step(&ctx, &mut *reference_state, 1);
                 assert!(
-                    device_words(&*sheet_state, &sheet_buffers) == device_words(&*reference_state, &reference_buffers),
+                    sheet_lanes.read_all(&*sheet_state) == reference_lanes.read_all(&*reference_state),
                     "{sheet} at seed {seed}: the lanes differ after tick {tick}"
                 );
             }
@@ -985,19 +876,18 @@ const BAND_CASES: [BandCase; 2] = [
 /// Measures of one run that the bands hold: the peak share of the active state, the share of each state at the last
 /// tick, and the share of cells that were ever in the active state.
 fn band_measures(ctx: &GpuContext, case: &BandCase, entry: &ModelEntry, file: &GraphFile, seed: u64) -> Vec<f64> {
-    let buffers = lane_buffers(file);
+    let device_lanes = GraphLanes::of(file);
     let cells = f64::from(case.side * case.side);
     let mut state = build_gpu(entry, &device_params(entry, case.side, case.overrides), Some(seed), ctx);
     let mut reached = vec![false; (case.side * case.side) as usize];
     let mut peak = 0usize;
     let mut last = Vec::new();
     for tick in 0..=case.ticks {
-        let words = device_words(&*state, &buffers);
-        let words = lane(&words, case.lane);
-        let counts = state_counts(words, case.states);
+        let words = device_lanes.read(&*state, case.lane);
+        let counts = state_counts(&words, case.states);
         assert_eq!(counts.iter().sum::<usize>() as f64, cells, "the lanes at tick {tick}");
         peak = peak.max(counts[case.active as usize]);
-        for (reached, &word) in reached.iter_mut().zip(words) {
+        for (reached, &word) in reached.iter_mut().zip(&words) {
             *reached |= word == case.active;
         }
         last = counts;
@@ -1079,7 +969,7 @@ fn outside(reference: &[Vec<f64>], sheet: &[Vec<f64>], cells: f64) -> Vec<(usize
 ///    at least one of its means outside its band, against the same four runs of the hand-lowered file.
 #[test]
 fn the_forest_fire_and_the_chance_sir_sheets_sit_within_their_hand_lowered_bands() {
-    let Some(ctx) = device("the_forest_fire_and_the_chance_sir_sheets_sit_within_their_hand_lowered_bands") else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     for case in &BAND_CASES {
@@ -1098,7 +988,7 @@ fn the_forest_fire_and_the_chance_sir_sheets_sit_within_their_hand_lowered_bands
 
         let text = sheet_text(case.sheet);
         let file = sheet_file(&text);
-        let sheet_runs = runs(&entry_of(&text), file.lowered());
+        let sheet_runs = runs(&model_entry(&text), file.lowered());
         let outliers = outside(&reference_runs, &sheet_runs, cells);
         assert!(
             outliers.is_empty(),
@@ -1115,7 +1005,7 @@ fn the_forest_fire_and_the_chance_sir_sheets_sit_within_their_hand_lowered_bands
         );
         let planted_text = text.replace(line, wrong);
         let planted = sheet_file(&planted_text);
-        let planted_runs = runs(&entry_of(&planted_text), planted.lowered());
+        let planted_runs = runs(&model_entry(&planted_text), planted.lowered());
         assert!(
             !outside(&reference_runs, &planted_runs, cells).is_empty(),
             "{}: the planted rule error stays within the bands, the hand-lowered runs {reference_runs:?}, the \
@@ -1128,19 +1018,7 @@ fn the_forest_fire_and_the_chance_sir_sheets_sit_within_their_hand_lowered_bands
 /// The entry of every grid sheet passes every check of the testing kit, its GPU checks on a baseline device included.
 #[test]
 fn every_grid_sheet_entry_conforms() {
-    let mut models = ModelSet::new(henad_core::build_info!());
-    for (name, text) in grid_sheets() {
-        models
-            .insert(entry_of(&text))
-            .unwrap_or_else(|error| panic!("{name}: the set refused the entry: {error}"));
-    }
-    let mut settings = CheckSettings::default();
-    if let Some(device) = headless_test_device(&TestDeviceRequest::baseline()) {
-        settings = settings.gpu(device);
-    } else {
-        log::warn!("checking the grid sheets without their GPU checks: no adapter");
-    }
-    assert_set_conforms(&models, &settings);
+    assert_entries_conform(grid_sheets().into_iter().map(|(name, text)| (name, model_entry(&text))));
 }
 
 /// Returns the position of parameter `id` among the parameters of `entry`.
@@ -1156,18 +1034,17 @@ fn param_index(entry: &ModelEntry, id: &str) -> usize {
 /// on the device as the host steps at the new rate. The start's share and the tick length stay reload-only.
 #[test]
 fn a_live_rate_edit_keeps_the_tick_and_the_cells_and_later_ticks_follow_it_on_the_device() {
-    let Some(ctx) = device("a_live_rate_edit_keeps_the_tick_and_the_cells_and_later_ticks_follow_it_on_the_device")
-    else {
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let (side, seed, before, after) = (64, 5, 10u32, 30u32);
     let text = sheet_text("sir.toml");
     let file = sheet_file(&text);
     let lowered = file.lowered();
-    let entry = entry_of(&text);
+    let entry = model_entry(&text);
     let rate = param_index(&entry, "infection_rate");
     let mut params = device_params(&entry, side, &[("infection_rate", 0.3)]);
-    let buffers = lane_buffers(lowered);
+    let device_lanes = GraphLanes::of(lowered);
     let evaluator = HostEvaluator::new(lowered).unwrap_or_else(|error| panic!("{error}"));
 
     let mut state = build_gpu(&entry, &params, Some(seed), &ctx);
@@ -1180,7 +1057,7 @@ fn a_live_rate_edit_keeps_the_tick_and_the_cells_and_later_ticks_follow_it_on_th
         step(&ctx, &mut *kept, 1);
         host_tick(&evaluator, &mut lanes, &params[2..], seed, tick);
     }
-    let cells = device_words(&*state, &buffers);
+    let cells = device_lanes.read_all(&*state);
 
     params[rate] = ParamValue::F32(2.0);
     assert!(state.set_param(rate, &params[rate]), "the infection rate is live");
@@ -1189,20 +1066,20 @@ fn a_live_rate_edit_keeps_the_tick_and_the_cells_and_later_ticks_follow_it_on_th
         assert!(!state.set_param(index, &params[index]), "{id} is reload-only");
     }
     assert_eq!(state.tick(), u64::from(before), "the edit keeps the tick");
-    assert!(device_words(&*state, &buffers) == cells, "the edit keeps the cells");
+    assert!(device_lanes.read_all(&*state) == cells, "the edit keeps the cells");
 
     let mut parted = false;
     for tick in before..before + after {
         step(&ctx, &mut *state, 1);
         step(&ctx, &mut *kept, 1);
         host_tick(&evaluator, &mut lanes, &params[2..], seed, tick);
-        let words = device_words(&*state, &buffers);
+        let words = device_lanes.read_all(&*state);
         assert!(
             words == host_words(&lanes, lowered),
             "the lanes differ from the host at the new rate at tick {}",
             tick + 1
         );
-        parted |= words != device_words(&*kept, &buffers);
+        parted |= words != device_lanes.read_all(&*kept);
     }
     assert!(
         parted,

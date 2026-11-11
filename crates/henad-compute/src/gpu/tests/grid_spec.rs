@@ -295,11 +295,6 @@ fn spec(after_reads: BufferSide) -> (Arc<GpuGridSpec>, PressLog) {
     (Arc::new(spec), presses)
 }
 
-/// Returns a device for these tests, `None` without an adapter.
-fn context() -> Option<GpuContext> {
-    headless_context("grid_spec_tests", wgpu::Features::empty())
-}
-
 /// Returns buffer `index` of `engine`, read back from its current side.
 fn read(engine: &GpuGridEngine, index: usize) -> Vec<u32> {
     engine.read_buffer(index).expect("the engine holds the buffer")
@@ -314,7 +309,7 @@ fn step(engine: &mut GpuGridEngine) {
 /// the writer's output under [`BufferSide::Next`]. The plain buffer `keep` keeps its seed, since nothing swaps it.
 #[test]
 fn a_later_step_pass_reads_the_side_its_table_picks() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("grid_spec_tests") else {
         return;
     };
     for (after_reads, lag) in [(BufferSide::Current, 1), (BufferSide::Next, 0)] {
@@ -337,7 +332,7 @@ fn a_later_step_pass_reads_the_side_its_table_picks() {
 /// The buffers of the dual set take two sides and the plain ones one.
 #[test]
 fn a_plain_buffer_takes_one_side() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("grid_spec_tests") else {
         return;
     };
     let (spec, _) = spec(BufferSide::Next);
@@ -385,7 +380,7 @@ fn assert_bump(ctx: &GpuContext, engine: &mut GpuGridEngine, press: u32) {
 /// of the swap. Each press advances the seed and the count it hands the hooks and the uniform blocks.
 #[test]
 fn an_action_reruns_on_the_host_then_runs_its_passes_in_place() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("grid_spec_tests") else {
         return;
     };
     let (spec, presses) = spec(BufferSide::Next);
@@ -410,7 +405,7 @@ fn an_action_reruns_on_the_host_then_runs_its_passes_in_place() {
 /// A rerun that faults reports a refused fault, runs none of its action's passes, and leaves the state as it was.
 #[test]
 fn a_rerun_that_faults_reaches_the_sink_and_runs_no_pass() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("grid_spec_tests") else {
         return;
     };
     let (spec, _) = spec(BufferSide::Next);
@@ -427,7 +422,7 @@ fn a_rerun_that_faults_reaches_the_sink_and_runs_no_pass() {
 /// The reduce pass reads the current side, after the swap.
 #[test]
 fn the_stats_read_the_current_side() {
-    let Some(ctx) = context() else {
+    let Some(ctx) = headless_context("grid_spec_tests") else {
         return;
     };
     let (spec, _) = spec(BufferSide::Next);

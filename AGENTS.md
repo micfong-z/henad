@@ -291,9 +291,9 @@ sentence case, widget names, tense, tooltips, the square corners and the Micfong
   `henad-compute/src/gpu/tests/`, `henad-compute/src/cpu/tests/`, `henad-graph/src/tests/`,
   `henad-models/src/tests/` and `henad-app/src/tests/` hold any test module too big to inline, and
   henad-compute's `gpu/tests/` and henad-graph's each hold a `support.rs` (the headless device) as
-  well, as henad-app's holds the model and helpers its tests of replaced code share, so each
-  `mod.rs` lists exactly one `#[cfg(test)] mod tests;` rather than interleaving test modules with
-  real ones.
+  well, as henad-app's holds the model and helpers its tests of replaced code share and
+  henad-models' the entries, runs and readers its tests share, so each `mod.rs` lists exactly one
+  `#[cfg(test)] mod tests;` rather than interleaving test modules with real ones.
   An inline `#[cfg(test)] mod tests` at the bottom of the file it tests is still the default and is
   unaffected. Every other crate's tests take their device from
   `henad_explore::testing::headless_test_device`. henad-compute and henad-graph keep their own

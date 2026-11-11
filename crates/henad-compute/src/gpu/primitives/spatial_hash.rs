@@ -341,7 +341,7 @@ mod tests {
     /// order within a cell.
     #[test]
     fn buckets_match_the_cpu_hash() {
-        let Some(ctx) = headless_context("gpu_spatial_hash_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("gpu_spatial_hash_test") else {
             return;
         };
 
@@ -376,7 +376,7 @@ mod tests {
     /// Exercises the 2D dispatch fold and a multi-level scan.
     #[test]
     fn a_large_population_still_sorts_every_agent() {
-        let Some(ctx) = headless_context("gpu_spatial_hash_large_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("gpu_spatial_hash_large_test") else {
             return;
         };
 

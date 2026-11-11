@@ -338,7 +338,7 @@ fn all_checks() -> Vec<Check> {
 
 /// Runs every case through the parity shader in one dispatch.
 fn run_on_gpu(cases: &[Case]) -> Option<Vec<Out>> {
-    let ctx = headless_context("henad_space_parity", wgpu::Features::empty())?;
+    let ctx = headless_context("henad_space_parity")?;
     let (device, queue) = (&ctx.device, &ctx.queue);
 
     let case_bytes: &[u8] = bytemuck::cast_slice(cases);

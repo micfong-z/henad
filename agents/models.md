@@ -47,13 +47,26 @@ corpus entry on a baseline device. `src/tests/graph_grid_parity.rs` builds the s
 model files and holds them to the stock models every tick, reading lanes with `read_buffer`: Game of
 Life to `gpu_game_of_life` (cells unpacked, Alive, a 64-step batch, and every press of Randomise and
 Clear at three seeds) and Vote to the CPU `Vote` (cells and Ones). `graph_corpus::vote` is
-`pub(super)` for it, and so are the file's helpers (`build_gpu`, `step`, `press`, `snapshot`,
-`stat`, `graph_cells`, `starter_entry`) for the two files below. `src/tests/graph_sir_parity.rs`
-holds `gpu_sir_exact.toml` to `gpu_sir` every tick in cells, `rng` words and counts, over a 64-step
-batch and presses of Seed outbreak, at three sizes and seeds. It holds the starter `sir.toml` to
-`gpu_sir` at tick 0, and every tick and press under the rate gates (infection rate 0 or 1, recovery
-rate 0 or 1), which leave no decision to a draw. Past those the starter meets the bands of
-`tests/consistency_sir.rs` at its size, rates and seed and one more seed, over the step from tick 0.
+`pub(super)` for it. `src/tests/support.rs` holds the helpers the test files share:
+`baseline_device`, `model_entry` (the entry a model file's text builds), `starter_entry`,
+`fixture_text` and `fixture_files` (files under `tests/fixtures/`), `graph_corpus` and
+`agent_corpus`, `params_for` (the defaults with overrides, each id checked) and `device_params`
+(the grid size too), `build_gpu`, `step`, `press`, `snapshot`, `stat`, `stat_values`, the buffer
+and lane readers, `unpacked_life_cells`, `declarations_like` (the declarations both
+`planted_entry`s copy), `assert_entries_conform` (the testing kit over a list of entries),
+`assert_device_runs`, `agent_sheets` and `roomy_limits` (a device that holds a buffer of any size).
+`src/tests/graph_sir_parity.rs` holds `gpu_sir_exact.toml` to `gpu_sir` every tick in cells, `rng`
+words and counts, over a 64-step batch and presses of Seed outbreak, at three sizes and seeds. It
+holds the starter `sir.toml` to `gpu_sir` at tick 0, and every tick and press under the rate gates
+(infection rate 0 or 1, recovery rate 0 or 1), which leave no decision to a draw. Past those the
+starter meets the bands of `tests/consistency_sir.rs` at its size, rates and seed and one more seed,
+over the step from tick 0.
+`tests/gates/` holds the data and pure functions of the SIR bands, the boids gate and the ants gate
+(`sir.rs`, `boids.rs`, `ants.rs`). Each consistency test and the device test of the same model
+include the file with `#[path]`, so the two hold one copy of the scenarios, parameters and bands.
+The ants gate reads `TO_FOOD` from its includer. `tests/support/mod.rs` holds what the consistency
+tests share: `fixture_dir` (the `HENAD_FIXTURE_DIR` switch `scripts/validate_ports.py` sets),
+`reference_fixtures`, a network model's `network_params` and `param_index`, and `band`.
 `src/tests/graph_repeat.rs` holds `repeat_trials.toml`'s share of hits to `1 - (1 - p)^trials`
 within five standard deviations, each device tick to the host evaluator's `run_pass` of its tick
 pass cell for cell, and a copy with `max = 140` refused by `Demand::shortfalls` at 4096 by 4096 and
@@ -171,8 +184,7 @@ the hand-lowered file's mean, the variance of one run the larger of the variance
 eight runs and the binomial `p (1 - p) / cells`. Behind each band a planted rule error (the
 "from" state dropped from the forest fire's lightning line, which then strikes empty cells too,
 and from the SIR's recovery line) moves at least one mean outside. Keep these files.
-`src/tests/sheet_rates.rs` holds the rate gates on the same device, its helpers
-(`device`, `device_params`, `entry_of`, `fixture_text`) taken from `sheet_grid.rs`. The SIR starter
+`src/tests/sheet_rates.rs` holds the rate gates on the same device. The SIR starter
 `sir.toml` (rates per day) at beta 0.3 and gamma 0.1 on 256 by 256 cells for 80 days, seeds 1 to 3,
 at ticks of 1, 0.5, 0.25 and 0.125 days against 0.0625: the largest gap in infected share, sampled
 at the start of each day, falls with each halving to at most 0.8 of the one before, and the chance

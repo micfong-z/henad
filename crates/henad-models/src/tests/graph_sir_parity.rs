@@ -5,33 +5,22 @@
 //! equals `gpu_sir` at tick 0, and every tick under the rate gates, the rates of 0 and 1 that leave no decision to a
 //! draw. Past those it is held to the bands of `tests/consistency_sir.rs`.
 
-use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_core::params::ParamValue;
-use henad_explore::model_file::ModelFile;
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
-use super::graph_grid_parity::{build_gpu, press, snapshot, starter_entry, stat, step};
 use super::lanes::GraphLanes;
+use super::support::{
+    baseline_device, buffer_words, build_gpu, fixture_text, model_entry, press, snapshot, starter_entry, stat, step,
+};
+
+#[path = "../../tests/gates/sir.rs"]
+mod gate;
+
+use gate::{BETA, GAMMA, I, INITIAL_INFECTED, R, S, SEED, SIDE, check_infections, check_recoveries};
 
 /// Labels of the SIR stats, in the order both models declare them.
 const LABELS: [&str; 3] = ["Susceptible", "Infected", "Recovered"];
-
-/// Returns the text of the fixture `tests/fixtures/graphs/<file_name>`.
-pub(super) fn fixture_text(file_name: &str) -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/graphs")
-        .join(file_name);
-    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
-}
-
-/// Returns the entry the fixture `tests/fixtures/graphs/<file_name>` builds.
-pub(super) fn fixture_entry(file_name: &str) -> ModelEntry {
-    ModelFile::parse(&fixture_text(file_name))
-        .and_then(|file| file.entry())
-        .unwrap_or_else(|error| panic!("{file_name}: {error}"))
-}
 
 /// Returns the parameters of a SIR model at `width` by `height` cells.
 fn sir_params(width: u32, height: u32, infection_rate: f32, recovery_rate: f32, initial: f32) -> [ParamValue; 5] {
@@ -44,11 +33,6 @@ fn sir_params(width: u32, height: u32, infection_rate: f32, recovery_rate: f32, 
     ]
 }
 
-/// Returns the words of buffer `index` of `state`.
-fn words(state: &dyn GpuSimState, index: usize) -> Vec<u32> {
-    state.read_buffer(index).expect("a buffer of the state")
-}
-
 /// Holds `graph` and `stock` equal in cells and in each SIR count, and in their `rng` buffers when `rng` holds.
 fn assert_sir_equal(
     ctx: &GpuContext,
@@ -58,10 +42,13 @@ fn assert_sir_equal(
     rng: bool,
     at: &str,
 ) {
-    let cells = words(stock, 0);
+    let cells = buffer_words(stock, 0);
     assert!(lanes.read(graph, "health") == cells, "the cells differ {at}");
     if rng {
-        assert!(lanes.read(graph, "rng") == words(stock, 1), "the rng words differ {at}");
+        assert!(
+            lanes.read(graph, "rng") == buffer_words(stock, 1),
+            "the rng words differ {at}"
+        );
     }
     snapshot(ctx, graph);
     snapshot(ctx, stock);
@@ -79,12 +66,11 @@ fn assert_sir_equal(
 /// one submission, and presses of Seed outbreak between steps.
 #[test]
 fn the_exact_sir_graph_equals_gpu_sir_every_tick() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_exact_sir_graph_equals_gpu_sir_every_tick: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
-    let graph_entry = fixture_entry("gpu_sir_exact.toml");
-    let lanes = GraphLanes::of_text(&fixture_text("gpu_sir_exact.toml"));
+    let graph_entry = model_entry(&fixture_text("graphs/gpu_sir_exact.toml"));
+    let lanes = GraphLanes::of_text(&fixture_text("graphs/gpu_sir_exact.toml"));
     let models = crate::example_models();
     let stock_entry = models.get("gpu_sir").expect("the stock model");
     let runs = [
@@ -125,8 +111,7 @@ fn the_exact_sir_graph_equals_gpu_sir_every_tick() {
 /// infects none, each with a recovery rate of 0 or 1.
 #[test]
 fn the_sir_graph_equals_gpu_sir_at_tick_0_and_under_the_rate_gates() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_sir_graph_equals_gpu_sir_at_tick_0_and_under_the_rate_gates: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let graph_entry = starter_entry("sir.toml");
@@ -175,56 +160,20 @@ fn the_sir_graph_equals_gpu_sir_at_tick_0_and_under_the_rate_gates() {
     }
 }
 
-// The bands of `tests/consistency_sir.rs`, at its size, rates and seed.
-const SIDE: usize = 1024;
-const BETA: f64 = 0.3;
-const GAMMA: f64 = 0.05;
-const INITIAL_INFECTED: f64 = 0.5;
-const BAND_SEED: u64 = 0x5152_0BEE_5EED_0001;
-/// Buckets thinner than this are skipped, as in the consistency test.
-const MIN_TRIALS: u64 = 1_000;
-/// Half-width of the acceptance band, in standard deviations of a binomial proportion.
-const SIGMAS: f64 = 5.0;
-
-// Cell states, as the stock model and the starter's category order them.
-const S: u32 = 0;
-const I: u32 = 1;
-const R: u32 = 2;
-
-/// Returns the number of infected neighbours of `(x, y)` in a Moore neighbourhood, wrapping toroidally.
-fn infected_neighbours(grid: &[u32], x: usize, y: usize) -> usize {
-    let mut count = 0;
-    for dy in [SIDE - 1, 0, 1] {
-        for dx in [SIDE - 1, 0, 1] {
-            if dx == 0 && dy == 0 {
-                continue;
-            }
-            count += usize::from(grid[((y + dy) % SIDE) * SIDE + (x + dx) % SIDE] == I);
-        }
-    }
-    count
-}
-
-/// Returns the half-width of the acceptance band for a binomial proportion `expected` over `trials` trials.
-fn band(expected: f64, trials: u64) -> f64 {
-    SIGMAS * (expected * (1.0 - expected) / trials as f64).sqrt()
-}
-
 /// The starter `sir.toml` on the device meets the bands of `tests/consistency_sir.rs` over the step from tick 0, at
 /// the consistency test's seed and one more: `P(S -> I | k infected neighbours) = 1 - (1 - beta)^k` for every bucket
 /// of at least 1000 cells, no infection without an infected neighbour, and `P(I -> R) = gamma`. Over five ticks the
 /// cells move only from S to I to R, and the population is conserved.
 #[test]
 fn the_sir_graph_meets_the_sir_bands() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping the_sir_graph_meets_the_sir_bands: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let entry = starter_entry("sir.toml");
     let lanes = GraphLanes::of_starter("sir.toml");
     let side = SIDE as u32;
     let params = sir_params(side, side, BETA as f32, GAMMA as f32, INITIAL_INFECTED as f32);
-    for seed in [BAND_SEED, BAND_SEED ^ 1] {
+    for seed in [SEED, SEED ^ 1] {
         let mut state = build_gpu(&entry, &params, Some(seed), &ctx);
         let mut before = lanes.read(&*state, "health");
         for tick in 0..5 {
@@ -240,65 +189,11 @@ fn the_sir_graph_meets_the_sir_bands() {
             let total: f64 = LABELS.iter().map(|label| stat(&state.stats(), label)).sum();
             assert_eq!(total, (SIDE * SIDE) as f64, "the population after tick {tick}");
             if tick == 0 {
-                check_rates(&before, &after, seed);
+                let what = format!("seed {seed:#x}");
+                check_infections(&before, &after, &what);
+                check_recoveries(&before, &after, &what);
             }
             before = after;
         }
     }
-}
-
-/// Holds the step from `before` to `after` to the infection and recovery bands.
-fn check_rates(before: &[u32], after: &[u32], seed: u64) {
-    let mut trials = [0u64; 9];
-    let mut infections = [0u64; 9];
-    let (mut infected, mut recoveries) = (0u64, 0u64);
-    for y in 0..SIDE {
-        for x in 0..SIDE {
-            let index = y * SIDE + x;
-            match before[index] {
-                S => {
-                    let k = infected_neighbours(before, x, y);
-                    trials[k] += 1;
-                    infections[k] += u64::from(after[index] == I);
-                }
-                I => {
-                    infected += 1;
-                    recoveries += u64::from(after[index] == R);
-                }
-                _ => {}
-            }
-        }
-    }
-    let mut checked = 0;
-    for (k, (&count, &hits)) in trials.iter().zip(&infections).enumerate() {
-        if count < MIN_TRIALS {
-            continue;
-        }
-        let expected = 1.0 - (1.0 - BETA).powi(k as i32);
-        let observed = hits as f64 / count as f64;
-        let allowed = band(expected, count);
-        assert!(
-            (observed - expected).abs() <= allowed,
-            "seed {seed:#x}, k={k}: observed {observed:.6}, expected {expected:.6}, allowed {allowed:.6} over {count} cells"
-        );
-        checked += 1;
-    }
-    assert_eq!(
-        infections[0], 0,
-        "seed {seed:#x}: a cell with no infected neighbour got infected"
-    );
-    assert!(
-        checked >= 8,
-        "seed {seed:#x}: only {checked} buckets had enough samples to check"
-    );
-    assert!(
-        infected >= MIN_TRIALS,
-        "seed {seed:#x}: only {infected} infected cells to sample"
-    );
-    let observed = recoveries as f64 / infected as f64;
-    let allowed = band(GAMMA, infected);
-    assert!(
-        (observed - GAMMA).abs() <= allowed,
-        "seed {seed:#x}: recovery rate {observed:.6}, expected {GAMMA:.6}, allowed {allowed:.6} over {infected} cells"
-    );
 }

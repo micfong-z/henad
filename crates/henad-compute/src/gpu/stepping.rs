@@ -299,7 +299,7 @@ mod tests {
     /// sample's values.
     #[test]
     fn a_sample_behind_an_unfinished_readback_reports_the_current_tick() {
-        let Some(ctx) = headless_context("henad_sample_stats_test", wgpu::Features::empty()) else {
+        let Some(ctx) = headless_context("henad_sample_stats_test") else {
             return;
         };
         let mut state = TickReadback {

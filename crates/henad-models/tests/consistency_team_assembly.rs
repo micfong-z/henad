@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 
-use henad_compute::cpu::network_engine::{NetworkModelState, network_model_param_descriptors};
+use henad_compute::cpu::network_engine::NetworkModelState;
 use henad_core::model::SimState as _;
 use henad_core::network::Network;
 use henad_core::params::ParamValue;
@@ -14,45 +14,18 @@ use henad_models::team_assembly::{
     IDLE, INCUMBENT, INCUMBENT_INCUMBENT, NEWCOMER, NEWCOMER_INCUMBENT, NEWCOMER_NEWCOMER, REPEAT, TeamAssembly,
 };
 
+mod support;
+
+use support::{band, network_params, param_index};
+
 type State = NetworkModelState<TeamAssembly>;
 
 const SEED: u64 = 0x7EA3_A55E_5EED_0001;
 
-/// Half-width of the acceptance band, in standard deviations of a binomial proportion.
-const SIGMAS: f64 = 5.0;
-
 use ParamValue::{F32, U32};
 
-/// Returns the default params with some overridden by id.
-///
-/// # Panics
-///
-/// Panics if an id is not declared by the model.
-fn params(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
-    let descs = network_model_param_descriptors::<TeamAssembly>();
-    for (id, _) in overrides {
-        assert!(descs.iter().any(|d| d.id() == *id), "no parameter '{id}'");
-    }
-    descs
-        .iter()
-        .map(|d| {
-            overrides
-                .iter()
-                .find(|(id, _)| *id == d.id())
-                .map_or_else(|| d.kind().default_value(), |(_, v)| v.clone())
-        })
-        .collect()
-}
-
-fn index(id: &str) -> usize {
-    network_model_param_descriptors::<TeamAssembly>()
-        .iter()
-        .position(|d| d.id() == id)
-        .unwrap_or_else(|| panic!("no parameter '{id}'"))
-}
-
 fn build(overrides: &[(&str, ParamValue)]) -> State {
-    State::from_params_seeded(&params(overrides), Some(SEED))
+    State::from_params_seeded(&network_params::<TeamAssembly>(overrides), Some(SEED))
 }
 
 /// Returns the tick of the step just taken, as the lanes store it.
@@ -212,7 +185,7 @@ fn the_ring_retires_what_the_scan_would() {
     let schedule = [30, 12, 7, 40, 9, 9, 25, 8];
     for tick in 0..1_600u32 {
         let max_downtime = schedule[(tick / 200) as usize];
-        state.set_param(index("max_downtime"), &U32(max_downtime));
+        state.set_param(param_index::<TeamAssembly>("max_downtime"), &U32(max_downtime));
         let live_before = occupied(state.graph());
         state.step();
 
@@ -275,7 +248,7 @@ fn newcomer_rate_matches_p() {
     }
     let expected = 1.0 - f64::from(P);
     let observed = newcomers as f64 / members as f64;
-    let allowed = SIGMAS * (expected * (1.0 - expected) / members as f64).sqrt();
+    let allowed = band(expected, members);
     assert!(
         (observed - expected).abs() <= allowed,
         "newcomer share {observed:.5}, expected {expected:.5} within {allowed:.5} over {members} members"
@@ -385,7 +358,7 @@ fn a_team_larger_than_the_population_is_filled_with_newcomers() {
         ("max_downtime", U32(10)),
         ("p", F32(1.0)),
     ]);
-    state.set_param(index("team_size"), &U32(8));
+    state.set_param(param_index::<TeamAssembly>("team_size"), &U32(8));
     state.step();
     let members = team(&state);
     assert_eq!(members.len(), 8);

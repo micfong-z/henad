@@ -315,13 +315,20 @@ than `MIN_TICKS`. `CheckSettings::set_text` overrides a value in every check tha
 a `TestDeviceRequest`, the baseline or `raised(needs)`, with optional features, and a missing
 feature returns `None` even under `HENAD_REQUIRE_GPU`. An adapter below the baseline gives no
 device for either request, as `acquire_headless` refuses it.
-`src/tests/` holds `support.rs` (the headless device, scratch directories, a sweep helper,
-`OutputTables`, `CommitLimit`, and `ticks_seen` with `HOLD_WINDOW` for pause checks), `broken.rs`
+`src/tests/` holds `support.rs` (the headless device, scratch directories, the sweep helpers and
+the spec pieces `fixed`, `values`, `range`, `factorial`, `lane_count`, `spec_over` and
+`shard_options`, `OutputTables`, `CommitLimit` with `interrupted_after`, `drain`,
+`pump_until_idle`, `UntimedFiles` with `directory_files`, `file_bytes`, `run_batch`, `untimed`,
+`cadence_rows`, `assert_covers`, the `model-files` text helpers `edited`, `line_of` and
+`line_at`, and `ticks_seen` with `HOLD_WINDOW` for pause checks), `broken.rs`
 (`GridModel`s that panic or report a value that is not finite, registered through the public
-`register_grid_model`, the `grid_model!` models with one broken declaration or build each,
+`register_grid_model`, the `grid_model!` models with one broken declaration, parameter list or
+build each,
 `SharedAccumulator`, whose kernel shares a counter across chunks, `DeclaresNumAgents`,
 `CountsViews`, a network model whose `prepare_view` writes a lane, `DefaultOutOfBounds`, whose
-default lies outside its bounds, `OversizedGpuSir`, whose defaults pass the WebGPU baseline,
+default lies outside its bounds, the `gpu_sir_with!` copies of `GpuSir`: `OversizedGpuSir`, whose
+defaults pass the WebGPU baseline, and the sound `OutsideGpuSir` under an id outside the example
+set,
 `BuggyState`, which adds one `Bug` to a CPU state, `BuggyGpuState`, which adds one `GpuBug` to a
 GPU state, such as reading zeros on every state of its entry after a full submission, and the
 sound `PlacesCellBySeed` and `StatlessGpuBoids`, which the kit passes), `kit.rs` (each broken

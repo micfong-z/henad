@@ -4,16 +4,12 @@
 //! and each tick every agent deposits a random amount below 3 into its cell. The field adds up at the resolution
 //! 2^-16, and its `finish` halves each cell.
 
-use henad_compute::entry::ModelEntry;
 use henad_core::params::ParamValue;
-use henad_explore::model_file::ModelFile;
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 use henad_graph::GraphFile;
 use henad_graph::document::PassStage;
 use henad_graph::host::{HostEvaluator, HostValue, HostWorld, RunContext};
 
-use super::graph_ants_parity::graph_buffer;
-use super::graph_grid_parity::{build_gpu, step};
+use super::support::{baseline_device, build_gpu, graph_buffer, model_entry, step};
 
 /// Number of agents, ten to a cell.
 const AGENTS: u32 = 12_000;
@@ -179,13 +175,6 @@ in.at = "n12.cell"
 in.value = "n13"
 "#;
 
-/// Returns the entry of [`MODEL`].
-fn entry() -> ModelEntry {
-    ModelFile::parse(MODEL)
-        .and_then(|file| file.entry())
-        .unwrap_or_else(|error| panic!("{error}"))
-}
-
 /// Returns the engine's parameters of the world.
 fn world_params() -> [ParamValue; 3] {
     [
@@ -198,11 +187,10 @@ fn world_params() -> [ParamValue; 3] {
 /// Two runs of 20 ticks at one seed leave the same field bit for bit, and another seed leaves another field.
 #[test]
 fn a_sum_field_replays_exactly() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_sum_field_replays_exactly: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
-    let entry = entry();
+    let entry = model_entry(MODEL);
     let run = |seed: u64| {
         let mut state = build_gpu(&entry, &world_params(), Some(seed), &ctx);
         step(&ctx, &mut *state, 20);
@@ -222,11 +210,10 @@ fn a_sum_field_replays_exactly() {
 /// by the `finish`, bit for bit.
 #[test]
 fn a_sum_field_merges_the_hosts_word() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_sum_field_merges_the_hosts_word: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
-    let entry = entry();
+    let entry = model_entry(MODEL);
     let mut state = build_gpu(&entry, &world_params(), Some(3), &ctx);
     step(&ctx, &mut *state, 1);
     let device = graph_buffer(&entry, &*state, FIELD_BUFFER);

@@ -11,11 +11,10 @@ use henad_compute::gpu::sim_thread::{GpuBatchSettings, GpuSimThread};
 use henad_compute::simulation::RunSetup;
 use henad_compute::snapshot::Snapshot;
 use henad_core::action::Schedule;
-use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::measure::Sampler;
 use henad_core::explore::outcome::RunStatus;
-use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
+use henad_core::explore::spec::{ActionSpec, SweepSpec};
 use henad_core::explore::value::resolve_params;
 use henad_core::export::stats_csv::StatColumns;
 use henad_core::view::StatEntry;
@@ -23,7 +22,7 @@ use henad_core::view::StatEntry;
 use crate::exec::Concurrency;
 use crate::result_set::ResultSet;
 use crate::tests::support::{
-    Collected, ScratchDir, entry, fixed, headless_device, lanes, planned, run_plan, sweep, values,
+    Collected, ScratchDir, entry, factorial, fixed, headless_device, lanes, planned, run_plan, sweep, values,
 };
 
 /// Time that [`snapshot_at`] waits for a loop to publish its target tick.
@@ -93,14 +92,10 @@ fn a_replay_of_a_planned_run_matches_its_sweep_row() {
         name: "wave".to_owned(),
         ..ActionSpec::new("seed_outbreak", 20)
     }];
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Factorial,
-        factors: vec![
-            FactorSpec::param("infection_rate", values(&["0.03", "0.06"])),
-            FactorSpec::action("wave", values(&["0", "20"])),
-        ],
-        design_seed: None,
-    }];
+    spec.blocks = vec![factorial(vec![
+        FactorSpec::param("infection_rate", values(&["0.03", "0.06"])),
+        FactorSpec::action("wave", values(&["0", "20"])),
+    ])];
     let (plan, measure) = planned(&sir, None, &spec);
     let mut outcomes = Collected::default();
     run_plan(&sir, None, &plan, &measure, lanes(2, 1), &mut outcomes);
@@ -225,14 +220,10 @@ fn a_replayed_run_from_a_result_set_matches_its_row() {
     spec.measure.series_every = 5;
     spec.seeds.root = 17;
     spec.actions = vec![ActionSpec::new("seed_outbreak", 9)];
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Factorial,
-        factors: vec![
-            FactorSpec::param("infection_rate", values(&["0.04", "0.08"])),
-            FactorSpec::action("seed_outbreak", values(&["0", "9"])),
-        ],
-        design_seed: None,
-    }];
+    spec.blocks = vec![factorial(vec![
+        FactorSpec::param("infection_rate", values(&["0.04", "0.08"])),
+        FactorSpec::action("seed_outbreak", values(&["0", "9"])),
+    ])];
     let scratch = ScratchDir::new("replay-result-set");
     sweep(&sir, None, &spec, scratch.path(), Concurrency::Auto);
     let set = ResultSet::open_dir(scratch.path(), usize::MAX).expect("the directory reads");
@@ -355,11 +346,7 @@ fn a_simulation_follows_the_run_cursor() {
             ..ActionSpec::new("seed_outbreak", 31)
         },
     ];
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Factorial,
-        factors: vec![FactorSpec::action("wave", values(&["0", "12"]))],
-        design_seed: None,
-    }];
+    spec.blocks = vec![factorial(vec![FactorSpec::action("wave", values(&["0", "12"]))])];
     let (plan, measure) = planned(&sir, None, &spec);
     let mut outcomes = Collected::default();
     run_plan(&sir, None, &plan, &measure, lanes(1, 1), &mut outcomes);

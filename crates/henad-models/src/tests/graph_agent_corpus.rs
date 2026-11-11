@@ -12,11 +12,9 @@ use henad_core::authoring::primitives::rng::next_float;
 use henad_core::explore::fingerprint::schema_hash;
 use henad_core::explore::plan::ModelSchema;
 use henad_core::params::ParamValue;
-use henad_explore::model_file::ModelFile;
-use henad_graph::GraphFile;
-use henad_graph::document::World;
 use henad_graph::host::{HostEvaluator, HostLanes, HostValue, HostWorld};
 
+use super::support::{agent_corpus, model_entry};
 use crate::gpu_ants::GpuAnts;
 use crate::gpu_boids::GpuBoids;
 
@@ -129,36 +127,6 @@ fn words(bytes: &[u8]) -> Vec<u32> {
     bytes
         .chunks_exact(4)
         .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
-        .collect()
-}
-
-/// Returns every agents file of the corpus, starters first, each read through a [`ModelFile`] as a graph.
-fn agent_corpus() -> Vec<(String, GraphFile)> {
-    let starters = henad_graph::starters::agent_starters()
-        .iter()
-        .map(|starter| (starter.file_name.to_owned(), starter.text.to_owned()));
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/graphs");
-    let mut fixtures: Vec<(String, String)> = std::fs::read_dir(&directory)
-        .unwrap_or_else(|error| panic!("{}: {error}", directory.display()))
-        .map(|entry| entry.expect("a directory entry").path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "toml"))
-        .map(|path| {
-            let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-            let name = path.file_name().expect("a file name").to_string_lossy().into_owned();
-            (name, text)
-        })
-        .collect();
-    fixtures.sort();
-    starters
-        .chain(fixtures)
-        .filter_map(|(name, text)| {
-            let file = ModelFile::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
-            let graph = file
-                .graph()
-                .unwrap_or_else(|| panic!("{name} reads as a graph"))
-                .clone();
-            matches!(graph.document().world, World::Agents(_)).then_some((name, graph))
-        })
         .collect()
 }
 
@@ -282,9 +250,7 @@ fn every_agent_corpus_schema_hashes_like_the_stock_models_under_their_ids() {
             Oracle::Ants | Oracle::AntsWithRng => &["gpu_ants", "ants"],
             Oracle::RandomWalk => continue,
         };
-        let entry = ModelFile::parse(&file.to_toml())
-            .and_then(|model_file| model_file.entry())
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let entry = model_entry(&file.to_toml());
         assert_eq!(entry.id(), file.document().target.id, "{name}");
         for &stock_id in stock_ids {
             let stock = models.get(stock_id).expect("a stock model");

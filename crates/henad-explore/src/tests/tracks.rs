@@ -10,12 +10,11 @@ use henad_compute::fault::{BUILDING, Fault, install_panic_hook};
 use henad_compute::gpu::{GpuContext, GpuSimState, StatsPoll, stepping};
 use henad_compute::snapshot::GpuSnapshot;
 use henad_core::action::Fire;
-use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::measure::MeasurePlan;
 use henad_core::explore::outcome::{PlannedRun, RunOutcome, RunStatus, StopReason};
 use henad_core::explore::plan::Plan;
-use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
+use henad_core::explore::spec::{ActionSpec, SweepSpec};
 use henad_core::explore::stop::StopSpec;
 use henad_core::metadata::Backend;
 use henad_core::model::SimState;
@@ -23,13 +22,13 @@ use henad_core::params::ParamValue;
 use henad_core::view::StatEntry;
 use henad_models::example_models;
 
-use crate::exec::{ActiveRuns, BatchEnd, Concurrency, ExecutionLayout, Executor, RunRequest, SweepControl};
+use crate::exec::{ActiveRuns, BatchEnd, ExecutionLayout, Executor, RunRequest, SweepControl};
 use crate::output::manifest::ManifestStatus;
 use crate::progress::NoProgress;
 use crate::sweep::{SweepEnd, SweepOptions};
 use crate::tests::support::{
-    Collected, ONE_TRACK, OutputTables, ScratchDir, entry, fixed, headless_device, manifest, planned, sweep,
-    sweep_options, sweep_with, ticks_seen, tracks, values,
+    Collected, ONE_TRACK, OutputTables, ScratchDir, assert_covers, entry, factorial, fixed, headless_device,
+    lane_count, manifest, planned, run_batch, sweep, sweep_options, sweep_with, ticks_seen, tracks, untimed, values,
 };
 
 /// Fault a [`HarnessState`] injects at a tick.
@@ -231,19 +230,9 @@ fn instrument(
 
 /// Runs every run of `plan` on `executor`, and returns the outcomes with their timing zeroed.
 fn outcomes(executor: &Executor<'_>, plan: &Plan) -> Vec<RunOutcome> {
-    let requests: Vec<RunRequest<'_>> = plan.runs().map(|run| RunRequest::planned(plan, run)).collect();
     let mut collected = Collected::default();
-    let end = executor.run_batch(&requests, &mut collected).expect("the batch runs");
-    assert_eq!(end, BatchEnd::Complete);
-    collected
-        .0
-        .into_iter()
-        .map(|outcome| RunOutcome {
-            build_ms: 0.0,
-            wall_ms: 0.0,
-            ..outcome
-        })
-        .collect()
+    run_batch(executor, plan, &mut collected);
+    collected.0.iter().map(untimed).collect()
 }
 
 /// Returns the executor of `model` over `measure` on `layout`.
@@ -254,15 +243,6 @@ fn executor<'e>(
     layout: ExecutionLayout,
 ) -> Executor<'e> {
     Executor::new(model, Some(ctx), Arc::clone(measure), layout, SweepControl::new()).expect("a device")
-}
-
-/// Returns a block of every combination of `factors`.
-fn factorial(factors: Vec<FactorSpec>) -> BlockSpec {
-    BlockSpec {
-        design: DesignKind::Factorial,
-        factors,
-        design_seed: None,
-    }
 }
 
 /// Returns a spec of 4 configs of 2 replicates over `model`, varying `param` and the tick of `action`, stopped by
@@ -335,7 +315,7 @@ fn interleaved_gpu_runs_match_sequential_ones() {
         let model = entry(&spec.model, Some(&ctx));
         let [one, four] = [1, 4].map(|count| {
             let output_dir = scratch.path().join(format!("{}-{count}", spec.model));
-            let concurrency = Concurrency::Fixed(count.try_into().expect("a track count above 0"));
+            let concurrency = lane_count(count);
             let report = sweep(&model, Some(&ctx), &spec, &output_dir, concurrency);
             assert_eq!(report.outline.layout.gpu_tracks, count);
             assert_eq!((report.counts.rows, report.counts.ok), (8, 8), "{}", spec.model);
@@ -391,7 +371,7 @@ fn interleaved_gpu_boids_runs_commit_in_plan_order() {
     let scratch = ScratchDir::new("gpu-boids-interleaved");
     let [one, four] = [1, 4].map(|count| {
         let output_dir = scratch.path().join(format!("tracks-{count}"));
-        let concurrency = Concurrency::Fixed(count.try_into().expect("a track count above 0"));
+        let concurrency = lane_count(count);
         let report = sweep(&model, Some(&ctx), &spec, &output_dir, concurrency);
         assert_eq!(report.outline.layout.gpu_tracks, count);
         assert_eq!((report.counts.rows, report.counts.ok), (4, 4));
@@ -493,18 +473,12 @@ fn a_pipelined_gpu_sample_matches_a_blocking_one() {
 /// exactly.
 #[test]
 fn every_gpu_model_that_replays_has_a_track_case() {
-    let mut registered: Vec<String> = example_models()
-        .iter()
-        .filter(|model| model.metadata().backend == Backend::Gpu && model.metadata().replays_exactly)
-        .map(|model| model.id().to_owned())
-        .collect();
-    registered.sort_unstable();
-    let mut interleaved: Vec<String> = interleaved_cases().into_iter().map(|spec| spec.model).collect();
-    interleaved.sort_unstable();
-    let mut pipelined: Vec<String> = PIPELINED_CASES.iter().map(|&(id, _, _)| id.to_owned()).collect();
-    pipelined.sort_unstable();
-    assert_eq!(interleaved, registered, "interleaved_gpu_runs_match_sequential_ones");
-    assert_eq!(pipelined, registered, "a_pipelined_gpu_sample_matches_a_blocking_one");
+    let replays = |model: &ModelEntry| model.metadata().backend == Backend::Gpu && model.metadata().replays_exactly;
+    let interleaved: Vec<String> = interleaved_cases().into_iter().map(|spec| spec.model).collect();
+    let interleaved: Vec<&str> = interleaved.iter().map(String::as_str).collect();
+    assert_covers(&interleaved, replays, "interleaved_gpu_runs_match_sequential_ones");
+    let pipelined: Vec<&str> = PIPELINED_CASES.iter().map(|&(id, _, _)| id).collect();
+    assert_covers(&pipelined, replays, "a_pipelined_gpu_sample_matches_a_blocking_one");
 }
 
 #[test]
@@ -852,7 +826,7 @@ fn a_lost_device_leaves_a_directory_a_resume_completes() {
     let lost_dir = scratch.path().join("lost");
     let active_runs = ActiveRuns::new();
     let options = SweepOptions {
-        concurrency: Concurrency::Fixed(2.try_into().expect("2 is above 0")),
+        concurrency: lane_count(2),
         active_runs: Some(active_runs.clone()),
         ..sweep_options(false)
     };

@@ -4,9 +4,7 @@
 
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::sim_thread::GpuSimState;
-use henad_core::params::ParamValue;
 use henad_explore::model_file::sheet_probes;
-use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 use henad_graph::GraphFile;
 use henad_graph::document::{PassStage, World};
 use henad_graph::sheet::SheetFile;
@@ -14,8 +12,8 @@ use henad_graph::types::ValueType;
 use henad_graph::value::PortRef;
 use henad_graph::wgsl::{AgentProgram, FaultNames, GeneratedShader, GridProgram, Probes, ShaderRole};
 
-use super::graph_grid_parity::{build_gpu, snapshot, starter_entry, step};
 use super::lanes::GraphLanes;
+use super::support::{baseline_device, build_gpu, fixture_text, params_for, snapshot, starter_entry, step};
 
 /// Kinds that normalisation expands into copies, whose outputs no compiled pass computes under their own names.
 const EXPANDED: [&str; 2] = ["math.expr", "fn.call"];
@@ -100,8 +98,7 @@ fn probes_add_at_most_one_storage_binding_and_no_starter_passes_eight() {
 /// stats every tick, so the counting step changes no state.
 #[test]
 fn a_probed_starter_steps_as_the_unprobed_one() {
-    let Some(ctx) = headless_test_device(&TestDeviceRequest::baseline()) else {
-        log::warn!("skipping a_probed_starter_steps_as_the_unprobed_one: no adapter");
+    let Some(ctx) = baseline_device() else {
         return;
     };
     let starter = henad_graph::starters::starter("sir.toml").expect("the SIR starter");
@@ -113,11 +110,7 @@ fn a_probed_starter_steps_as_the_unprobed_one() {
         .entry();
     let plain = starter_entry("sir.toml");
     let lanes = GraphLanes::of_starter("sir.toml");
-    let defaults: Vec<ParamValue> = plain
-        .param_descriptors()
-        .iter()
-        .map(|param| param.kind().default_value())
-        .collect();
+    let defaults = params_for(&plain, &[]);
     let mut probed_state = build_gpu(&probed, &defaults, Some(5), &ctx);
     let mut plain_state = build_gpu(&plain, &defaults, Some(5), &ctx);
     for tick in 0..40 {
@@ -234,8 +227,7 @@ fn every_probed_shader_keeps_its_barriers_in_uniform_control_flow() {
             &probed_shaders(&file, &every_bool_output(&file), None),
         );
     }
-    let fixtures =
-        ["sir_chance.toml", "sird.toml"].map(|name| (name, super::sheet_grid::fixture_text(&format!("sheets/{name}"))));
+    let fixtures = ["sir_chance.toml", "sird.toml"].map(|name| (name, fixture_text(&format!("sheets/{name}"))));
     let sheets = henad_graph::sheet::starters()
         .iter()
         .map(|starter| (starter.file_name, starter.text.to_owned()))
