@@ -3,86 +3,18 @@
 //! grid card, the second fold of a look that reads an earlier look, the add-up merge, the `or` of a Become inside a
 //! Repeat, a button over the ants and the ground, the open test of moves, and the refusals that remain.
 
-use henad_compute::fault::FaultSink;
-use henad_compute::gpu::{GpuContext, wgpu};
-use henad_core::authoring::primitives::space::Boundary;
 use henad_core::params::ParamValue;
 
-use super::support::test_device;
+use super::sheet_support::{
+    VALUES, accumulators, ants_with, boids_with, edited, entry_of, host_of, lowered, only_refusal, pass_nodes,
+    placed_at, refusals, sheet_text,
+};
+use super::support::{built, context, device_for, params_of, torus};
 use crate::document::FieldCombine;
-use crate::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
+use crate::host::{HostLanes, HostValue, HostWorld, RunContext};
 use crate::node::Node;
-use crate::sheet::{SheetFile, SheetFileError, sentence, starters};
+use crate::sheet::{SheetFile, sentence};
 use crate::value::{ConfigValue, InputValue};
-use crate::wgsl::AgentProgram;
-
-/// Returns the text of the starter `file_name`.
-fn starter(file_name: &str) -> &'static str {
-    starters()
-        .iter()
-        .find(|starter| starter.file_name == file_name)
-        .map(|starter| starter.text)
-        .unwrap_or_else(|| panic!("no starter {file_name}"))
-}
-
-/// Returns `text` with `old` replaced by `new` once, where `text` must hold `old`.
-fn edited(text: &str, old: &str, new: &str) -> String {
-    assert!(text.contains(old), "the text holds no {old:?}");
-    text.replacen(old, new, 1)
-}
-
-/// Lowers `text`, which must lower.
-fn lowered(text: &str) -> SheetFile {
-    SheetFile::parse(text).unwrap_or_else(|error| panic!("the sheet does not lower: {error}"))
-}
-
-/// Returns the errors of lowering `text`, which must hold some.
-fn refusals(text: &str) -> Vec<henad_core::diagnostic::CodeDiagnostic> {
-    match SheetFile::parse(text) {
-        Ok(_) => panic!("the sheet lowers:\n{text}"),
-        Err(SheetFileError::Invalid(errors)) => errors.as_slice().to_vec(),
-        Err(other) => panic!("the sheet does not read: {other}"),
-    }
-}
-
-/// Returns the bytes of `text` that `diagnostic` points at.
-fn placed_at<'a>(diagnostic: &henad_core::diagnostic::CodeDiagnostic, text: &'a str) -> &'a str {
-    let span = diagnostic
-        .span
-        .clone()
-        .unwrap_or_else(|| panic!("{diagnostic} has no place"));
-    &text[span]
-}
-
-/// Returns the nodes of the pass `pass` of `file`.
-fn pass_nodes<'a>(file: &'a SheetFile, pass: &str) -> &'a [Node] {
-    &file
-        .lowered()
-        .document()
-        .passes
-        .iter()
-        .find(|known| known.id == pass)
-        .unwrap_or_else(|| panic!("no pass {pass}"))
-        .body
-        .nodes
-}
-
-/// Returns the accumulators of the fold `node`.
-fn accumulators(node: &Node) -> Vec<String> {
-    match node.config.get("acc") {
-        Some(ConfigValue::Array(entries)) => entries
-            .iter()
-            .filter_map(|entry| match entry {
-                ConfigValue::Table(table) => match table.get("name") {
-                    Some(ConfigValue::String(name)) => Some(name.clone()),
-                    _ => None,
-                },
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
 
 /// Default values of the ants' parameters, in the sheet's order.
 const ANTS_PARAMS: [ParamValue; 5] = [
@@ -106,11 +38,11 @@ fn vector(value: Option<HostValue>) -> [f32; 2] {
 /// an open cell inside the world.
 #[test]
 fn the_ants_sheet_lowers_checks_and_runs_on_the_host() {
-    let file = lowered(starter("ants.toml"));
+    let file = lowered(sheet_text("ants.toml"));
     assert!(file.warnings().is_empty(), "{:?}", file.warnings());
     let report = file.lowered().check();
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let evaluator = host_of(&file);
     let world = HostWorld::Agents {
         count: 50,
         width: 200.0,
@@ -168,7 +100,7 @@ fn the_ants_sheet_lowers_checks_and_runs_on_the_host() {
 /// to the Deliveries counter.
 #[test]
 fn the_ants_card_lowers_to_one_fused_fold_per_neighbourhood() {
-    let file = lowered(starter("ants.toml"));
+    let file = lowered(sheet_text("ants.toml"));
     let tick = pass_nodes(&file, "tick_ant_tick");
     let folds: Vec<&Node> = tick.iter().filter(|node| node.op == "grid.fold").collect();
     assert_eq!(folds.len(), 1);
@@ -215,7 +147,7 @@ const ANTS_TICK_NODES: usize = 110;
 /// Game of Life with Look around lines `l5` and `l6` added to the card that runs each tick, each with `first` and
 /// `second` summaries of whether any neighbour is alive.
 fn life_with_looks(first: usize, second: usize) -> String {
-    let text = edited(starter("game_of_life.toml"), "next_line = 5", "next_line = 7");
+    let text = edited(sheet_text("game_of_life.toml"), "next_line = 5", "next_line = 7");
     let text = edited(
         &text,
         "lines = [\"l1\", \"l2\", \"l3\"]",
@@ -296,7 +228,7 @@ fn a_block_and_the_8_cells_around_share_a_fold_with_a_guard() {
         })
         .count();
     assert_eq!(guards, 1, "one guard for the look at the 8 cells around");
-    let values = lowered(include_str!("sheets/values.toml"));
+    let values = lowered(VALUES);
     let orders: Vec<Option<&ConfigValue>> = values
         .lowered()
         .document()
@@ -312,13 +244,9 @@ fn a_block_and_the_8_cells_around_share_a_fold_with_a_guard() {
 /// A ground property that adds up its marks lowers to a field that merges with `sum` at a resolution of 2^-16, and the
 /// ants run with it on the device.
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "the skip is information for a reader of the test output"
-)]
 fn a_ground_property_that_adds_up_lowers_to_a_sum_and_runs() {
     let text = edited(
-        &edited(starter("ants.toml"), "marks = \"largest\"", "marks = \"add_up\""),
+        &edited(sheet_text("ants.toml"), "marks = \"largest\"", "marks = \"add_up\""),
         "marks = \"largest\"",
         "marks = \"add_up\"",
     );
@@ -330,27 +258,12 @@ fn a_ground_property_that_adds_up_lowers_to_a_sum_and_runs() {
             .to_toml()
             .contains("combine = \"sum\"\nresolution = 1.52587890625e-5")
     );
-    let Some(device) = test_device() else {
-        eprintln!("skipping the device half of a_ground_property_that_adds_up_lowers_to_a_sum_and_runs: no adapter");
+    let Some(device) = device_for("the device half of a_ground_property_that_adds_up_lowers_to_a_sum_and_runs") else {
         return;
     };
-    let ctx = GpuContext::new(
-        device.device,
-        device.queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        FaultSink::new(),
-    );
-    let entry = AgentProgram::compile_with_fault_names(file.lowered(), file.fault_names())
-        .unwrap_or_else(|problems| panic!("{problems:#?}"))
-        .entry();
-    let params: Vec<ParamValue> = entry
-        .param_descriptors()
-        .iter()
-        .map(|descriptor| descriptor.kind().default_value())
-        .collect();
-    let Ok(henad_compute::entry::ModelState::Gpu(mut state)) = entry.build(&params, Some(1), Some(&ctx)) else {
-        panic!("the ants build on the device");
-    };
+    let ctx = context(device);
+    let entry = entry_of(&file);
+    let mut state = built(&entry, &params_of(&entry, &[]), Some(1), &ctx);
     henad_compute::gpu::stepping::run_steps(&mut *state, &ctx, 100).expect("100 ticks run");
 }
 
@@ -358,13 +271,11 @@ fn a_ground_property_that_adds_up_lowers_to_a_sum_and_runs() {
 /// change reads its total. A Set inside the Repeat whose value reads a line inside it is refused.
 #[test]
 fn a_become_inside_a_repeat_applies_when_any_time_holds() {
-    let text = edited(starter("ants.toml"), "next_line = 17", "next_line = 20");
-    let text = edited(&text, "\"l12\", \"l16\"]", "\"l12\", \"l16\", \"l17\"]");
     let repeat = "[card.line.l17]\nkind = \"repeat\"\ntimes = 2\nlines = [\"l18\", \"l19\"]\n\n[card.line.l18]\n\
                   kind = \"chance\"\nname = \"Lost\"\nkey = 41\nchance = 0.01\n\n[card.line.l19]\nkind = \
                   \"become\"\nproperty = \"cargo\"\nnew_state = \"searching\"\nstart_state = \"carrying_food\"\n\
                   condition = { result = \"l18\" }\n";
-    let text = format!("{text}\n{repeat}");
+    let text = ants_with(20, &["l17"], repeat);
     let file = lowered(&text);
     let tick = pass_nodes(&file, "tick_ant_tick");
     let region = tick
@@ -399,61 +310,11 @@ fn a_become_inside_a_repeat_applies_when_any_time_holds() {
     );
 }
 
-/// Returns a sheet of walkers whose card repeats 4 times a Random number Roll (`l2`), then line `first`, which becomes
-/// A when Roll is less than 0.5, and line `second`, which becomes B when Roll is at least 0.5.
-fn repeat_roll(first: &str, second: &str) -> String {
-    format!(
-        "format = \"henad-model\"\nformat_version = 1\nkind = \"sheet\"\n\n[sheet]\nversion = 1\nid = \"repeat_roll\"\n\
-         name = \"Repeat roll\"\nnext_line = 5\n\n[world]\nmade_of = \"agents\"\nwidth = 100\nheight = 100\n\
-         edges = \"wrap\"\n\n[[agents]]\nid = \"walker\"\nname = \"Walker\"\ncount = 100\nmax_count = 100\n\n\
-         [[agents.property]]\nid = \"position\"\nname = \"Position\"\ntype = \"position\"\n\n\
-         [agents.property.starts_as]\nrule = \"anywhere\"\nkey = 11\n\n[[agents.property]]\nid = \"status\"\n\
-         name = \"Status\"\ntype = \"states\"\nstates = [\n  {{ id = \"s\", name = \"S\", color = \"#E8E8F0\" }},\n  \
-         {{ id = \"a\", name = \"A\", color = \"#3DD58C\" }},\n  {{ id = \"b\", name = \"B\", color = \"#E43748\" }},\n]\n\n\
-         [agents.property.starts_as]\nrule = \"value\"\nvalue = {{ state = \"s\" }}\n\n[[card]]\nid = \"walker_tick\"\n\
-         every = \"walker\"\nruns = \"each_tick\"\nlines = [\"l1\"]\n\n[card.line.l1]\nkind = \"repeat\"\ntimes = 4\n\
-         lines = [\"l2\", \"{first}\", \"{second}\"]\n\n[card.line.l2]\nkind = \"random_number\"\nname = \"Roll\"\n\
-         key = 201\nlow = 0\nhigh = 1\n\n[card.line.{first}]\nkind = \"become\"\nproperty = \"status\"\n\
-         new_state = \"a\"\nstart_state = \"s\"\n\n[card.line.{first}.condition]\nkind = \"compare\"\n\
-         test = \"less_than\"\nleft = {{ result = \"l2\" }}\nright = 0.5\n\n[card.line.{second}]\nkind = \"become\"\n\
-         property = \"status\"\nnew_state = \"b\"\nstart_state = \"s\"\n\n[card.line.{second}.condition]\n\
-         kind = \"compare\"\ntest = \"at_least\"\nleft = {{ result = \"l2\" }}\nright = 0.5\n"
-    )
-}
-
-/// Two Becomes inside a Repeat that test a Random number drawn inside it can each hold at a different time round, so
-/// they can both apply. The lower reads "otherwise", and the rows of the transition keep display order whatever the
-/// line ids.
-#[test]
-fn becomes_that_test_a_number_drawn_inside_a_repeat_keep_display_order() {
-    for (first, second) in [("l3", "l4"), ("l4", "l3")] {
-        let text = repeat_roll(first, second);
-        let file = lowered(&text);
-        let transition = pass_nodes(&file, "tick_walker_tick")
-            .iter()
-            .find(|node| node.op == "cat.transition")
-            .expect("the transition of Status");
-        let targets: Vec<&str> = transition.config["rules"]
-            .as_array()
-            .expect("rules")
-            .iter()
-            .filter_map(|rule| rule.as_table()?.get("to")?.as_str())
-            .collect();
-        assert_eq!(targets, ["a", "b"], "{first} above {second}");
-        let document = crate::sheet::ParsedSheet::parse(&text)
-            .expect("the sheet reads")
-            .into_document();
-        let relations = crate::sheet::relations::CardRelations::new(&document, &document.cards[0]);
-        assert!(relations.can_both_apply(first, second));
-        assert_eq!(relations.otherwise_numbers(second), [3], "{first} above {second}");
-    }
-}
-
 /// [`StartsAs::paints_single_cells`](crate::sheet::document::StartsAs::paints_single_cells) holds for each state of the
 /// ants' ground that agents can start on, and a start on each such state lowers while a start on any other is refused.
 #[test]
 fn agents_start_on_exactly_the_states_painted_on_single_cells() {
-    let text = starter("ants.toml");
+    let text = sheet_text("ants.toml");
     let sheet = crate::sheet::ParsedSheet::parse(text).expect("the starter reads");
     let ground = sheet
         .document()
@@ -473,51 +334,38 @@ fn agents_start_on_exactly_the_states_painted_on_single_cells() {
     }
 }
 
-/// The refusals the ground leaves: walls around agents that move by an arrow, the cell ahead of agents that move by an
-/// arrow, and a start on a state the ground paints larger than one cell. Each gives one located error.
+/// The refusals the ground leaves: the cell ahead of agents that move by an arrow, and a start on a state the ground
+/// paints larger than one cell. Each gives one located error.
 #[test]
 fn each_ground_refusal_gives_one_located_error() {
     let one = |text: &str, message: &str, at: &str| {
-        let errors = refusals(text);
-        assert_eq!(errors.len(), 1, "{errors:#?}");
-        assert!(errors[0].message.ends_with(message), "{}", errors[0].message);
+        let error = only_refusal(text);
+        assert!(error.message.ends_with(message), "{}", error.message);
         assert!(
-            placed_at(&errors[0], text).starts_with(at),
+            placed_at(&error, text).starts_with(at),
             "{} is placed at {:?}",
-            errors[0].message,
-            placed_at(&errors[0], text)
+            error.message,
+            placed_at(&error, text)
         );
     };
-    let walls = edited(starter("random_walk.toml"), "edges = \"wrap\"", "edges = \"walls\"");
-    one(&walls, sentence::NOT_YET_AGENT_WALLS, "[world]");
     let rock_start = edited(
-        starter("ants.toml"),
+        sheet_text("ants.toml"),
         "rule = \"on_ground\"\nproperty = \"ground\"\nstate = \"nest\"",
         "rule = \"on_ground\"\nproperty = \"ground\"\nstate = \"obstacle\"",
     );
     one(&rock_start, sentence::ON_GROUND_CELLS, "[[agents.property]]");
-    let ahead_by_arrow = edited(
-        &edited(starter("boids.toml"), "next_line = 9", "next_line = 10"),
-        "lines = [\"l1\", \"l2\", \"l3\", \"l4\", \"l5\", \"l6\", \"l7\"]",
-        "lines = [\"l1\", \"l2\", \"l3\", \"l4\", \"l5\", \"l6\", \"l7\", \"l9\"]",
-    );
-    let ahead_by_arrow = edited(
-        &ahead_by_arrow,
-        "# Lines of Randomise headings",
-        "[card.line.l9]\nkind = \"look_at_cell\"\nname = \"Ahead\"\nwhich = \"ahead\"\n\n# Lines of Randomise headings",
-    );
+    let ahead_by_arrow = boids_with("[card.line.l9]\nkind = \"look_at_cell\"\nname = \"Ahead\"\nwhich = \"ahead\"");
     one(&ahead_by_arrow, sentence::AHEAD_NEEDS_CELLS, "[card.line.l9]");
 }
 
 /// A Count of the food around an ant joins the fold of the ants' picks, and reads the ground at each cell it visits.
 #[test]
 fn a_count_of_the_ground_around_joins_the_fold_of_the_picks() {
-    let text = edited(starter("ants.toml"), "next_line = 17", "next_line = 18");
-    let text = edited(&text, "\"l12\", \"l16\"]", "\"l12\", \"l16\", \"l17\"]");
-    let text = format!(
-        "{text}\n[card.line.l17]\nkind = \"count\"\nname = \"Food around\"\naround = \"cells_8\"\n\n\
-         [card.line.l17.whose]\nkind = \"compare\"\ntest = \"is\"\nleft = {{ their = \"ground\" }}\nright = {{ state = \
-         \"food\" }}\n"
+    let text = ants_with(
+        18,
+        &["l17"],
+        "[card.line.l17]\nkind = \"count\"\nname = \"Food around\"\naround = \"cells_8\"\n\n[card.line.l17.whose]\n\
+         kind = \"compare\"\ntest = \"is\"\nleft = { their = \"ground\" }\nright = { state = \"food\" }\n",
     );
     let file = lowered(&text);
     let tick = pass_nodes(&file, "tick_ant_tick");
@@ -607,12 +455,8 @@ fn a_look_that_reads_an_earlier_look_opens_its_own_fold() {
         .map(accumulators)
         .collect();
     assert_eq!(folds, [vec!["l1_count", "l1_summary_mean"], vec!["l2_count"]]);
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
-    let world = HostWorld::Grid {
-        width: 8,
-        height: 8,
-        boundary: Boundary::Torus,
-    };
+    let evaluator = host_of(&file);
+    let world = torus(8, 8);
     let mut lanes: HostLanes = evaluator.init(world, &[], Some(1)).expect("the init runs");
     evaluator
         .run_pass("tick_cell_tick", &mut lanes, &[], &RunContext::tick(Some(1), 0), &mut 0)
@@ -628,7 +472,7 @@ fn a_look_that_reads_an_earlier_look_opens_its_own_fold() {
 #[test]
 fn a_pick_that_reads_an_earlier_pick_opens_its_own_fold() {
     let text = edited(
-        starter("ants.toml"),
+        sheet_text("ants.toml"),
         "open_only = true\npick = \"most\"\nranked_by = \"to_home\"\n",
         "open_only = true\npick = \"most\"\nranked_by = \"to_home\"\n\n[card.line.l2.only]\nkind = \"compare\"\ntest = \
          \"at_least\"\nleft = { their = \"to_home\" }\nright = { result = \"l1\", part = \"amount\" }\n",
@@ -653,7 +497,7 @@ fn a_pick_that_reads_an_earlier_pick_opens_its_own_fold() {
 #[test]
 fn a_button_that_starts_ants_and_ground_again_reruns_two_passes() {
     let text = edited(
-        starter("ants.toml"),
+        sheet_text("ants.toml"),
         "[[button.does]]\nrule = \"start_again\"\nthing = \"ant\"\n\n[[button.does]]\nrule = \"set_everywhere\"\n\
          property = \"to_food\"\nvalue = 0\n\n[[button.does]]\nrule = \"set_everywhere\"\nproperty = \"to_home\"\n\
          value = 0\n",
@@ -666,7 +510,7 @@ fn a_button_that_starts_ants_and_ground_again_reruns_two_passes() {
     assert_eq!(actions.len(), 1);
     assert_eq!(actions[0].runs, ["restart_reset_colony", "restart_reset_colony_ground"]);
     let layer = format!("{}.to_food", file.lowered().document().fields[1].id);
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let evaluator = host_of(&file);
     let world = HostWorld::Agents {
         count: 50,
         width: 200.0,
@@ -706,7 +550,7 @@ const MOVE_TO_FIRST: &str = include_str!("sheets/move_to_first.toml");
 /// [`MOVE_TO_FIRST`] or an edit of it.
 fn positions_after_one_tick(text: &str) -> Vec<[f32; 2]> {
     let file = lowered(text);
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let evaluator = host_of(&file);
     let world = HostWorld::Agents {
         count: 100,
         width: 20.0,
@@ -756,7 +600,7 @@ fn the_first_move_to_whose_condition_holds_decides() {
 #[test]
 fn a_move_to_a_blocked_cell_leaves_the_agent_where_it_is() {
     let text = edited(
-        starter("ants.toml"),
+        sheet_text("ants.toml"),
         "shape = \"cell\"\nstate = \"nest\"\ncenter = [0.875, 0.875]",
         "shape = \"cell\"\nstate = \"nest\"\ncenter = [0.55, 0.775]",
     );
@@ -766,7 +610,7 @@ fn a_move_to_a_blocked_cell_leaves_the_agent_where_it_is() {
         "",
     );
     let file = lowered(&text);
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let evaluator = host_of(&file);
     let world = HostWorld::Agents {
         count: 50,
         width: 200.0,
@@ -804,19 +648,18 @@ fn a_move_to_a_blocked_cell_leaves_the_agent_where_it_is() {
     }
     assert!(moved > 0, "some ant leaves the nest");
     let move_by = edited(
-        starter("random_walk.toml"),
+        sheet_text("random_walk.toml"),
         "[[parameter]]",
         "[ground]\nblocked = [\n  { property = \"terrain\", state = \"rock\" },\n]\n\n[[ground.property]]\nid = \
          \"terrain\"\nname = \"Terrain\"\ntype = \"states\"\nstates = [\n  { id = \"open\", name = \"Open\", color = \
          \"#0E0E12\" },\n  { id = \"rock\", name = \"Rock\", color = \"#5A5A62\" },\n]\n\n\
          [ground.property.starts_as]\nrule = \"painted\"\nbase = \"open\"\n\n[[parameter]]",
     );
-    let errors = refusals(&move_by);
-    assert_eq!(errors.len(), 1, "{errors:#?}");
+    let error = only_refusal(&move_by);
     assert!(
-        errors[0].message.ends_with(sentence::NOT_YET_BLOCKED_MOVE_BY),
+        error.message.ends_with(sentence::NOT_YET_BLOCKED_MOVE_BY),
         "{}",
-        errors[0].message
+        error.message
     );
-    assert!(placed_at(&errors[0], &move_by).starts_with("[card.line.l2]"));
+    assert!(placed_at(&error, &move_by).starts_with("[card.line.l2]"));
 }

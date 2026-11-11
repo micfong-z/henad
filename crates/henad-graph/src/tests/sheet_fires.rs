@@ -2,73 +2,23 @@
 
 use std::collections::BTreeMap;
 
-use henad_core::authoring::primitives::space::Boundary;
 use henad_core::params::ParamValue;
 
-use super::sheet_document::{sheet_text, sheets};
-use crate::document::{PassStage, World};
-use crate::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
-use crate::sheet::SheetFile;
+use super::sheet_support::{LIFE_PARAMS, ROLL, edited_sheet, host_of, lowered, sheet_text, sheets, with_sets};
+use super::support::{host_step, torus};
+use crate::document::World;
+use crate::host::{HostLanes, HostValue, HostWorld};
 use crate::sheet::document::{CardRuns, LineKind};
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{fire_count, fire_count_description};
-use crate::wgsl::{AgentProgram, GridProgram, Probes};
-
-/// Returns the sheet of `text`, read, checked and lowered.
-fn sheet(text: &str) -> SheetFile {
-    SheetFile::parse(text).unwrap_or_else(|error| panic!("{error}"))
-}
-
-/// Returns the wrapping grid `side` cells wide that the host runs.
-fn grid(side: u32) -> HostWorld {
-    HostWorld::Grid {
-        width: side,
-        height: side,
-        boundary: Boundary::Torus,
-    }
-}
-
-/// Runs every tick pass of `evaluator` once over `lanes` as tick `tick`, and returns the count of each probe of
-/// `probes`.
-fn counted_tick(
-    evaluator: &HostEvaluator,
-    lanes: &mut HostLanes,
-    params: &[ParamValue],
-    seed: Option<u64>,
-    tick: u32,
-    probes: &Probes,
-) -> Vec<u32> {
-    let mut counts = vec![0; probes.len()];
-    let mut stream = 0;
-    let ticks: Vec<String> = evaluator
-        .document()
-        .passes
-        .iter()
-        .filter(|pass| pass.stage == PassStage::Tick)
-        .map(|pass| pass.id.clone())
-        .collect();
-    for pass in ticks {
-        evaluator
-            .run_pass_counting(
-                &pass,
-                lanes,
-                params,
-                &RunContext::tick(seed, tick),
-                &mut stream,
-                probes,
-                &mut counts,
-            )
-            .unwrap_or_else(|error| panic!("{pass}: {error}"));
-    }
-    counts
-}
+use crate::wgsl::{AgentProgram, GridProgram};
 
 /// Every sheet compiles with the probes of its change lines, and each probe counts for a change line of the card that
 /// runs each tick.
 #[test]
 fn every_sheet_compiles_with_the_probes_of_its_change_lines() {
     for (name, text) in sheets() {
-        let file = sheet(text);
+        let file = lowered(text);
         let fires = file.fire_lines();
         let compiled = match file.lowered().document().world {
             World::Agents(_) => {
@@ -107,14 +57,14 @@ fn every_sheet_compiles_with_the_probes_of_its_change_lines() {
 /// out the button's lines, the lines that always apply with no row and a Set that reads "otherwise".
 #[test]
 fn the_starters_count_their_change_lines() {
-    let lines = |name: &str| sheet(sheet_text(name)).fire_lines().lines().to_vec();
+    let lines = |name: &str| lowered(sheet_text(name)).fire_lines().lines().to_vec();
     assert_eq!(lines("game_of_life.toml"), ["l2", "l3"]);
     assert_eq!(lines("sir.toml"), ["l2", "l3"]);
     assert_eq!(lines("vote.toml"), ["l2", "l2", "l3", "l3"]);
     assert_eq!(lines("forest_fire.toml"), ["l2", "l3", "l4", "l5"]);
     assert_eq!(lines("sird.toml"), ["l2", "l3", "l4"]);
     assert!(lines("boids.toml").is_empty(), "every boids change always applies");
-    let ants = sheet(sheet_text("ants.toml"));
+    let ants = lowered(sheet_text("ants.toml"));
     let ants_lines = ants.fire_lines().lines();
     for (id, kind) in [
         ("l10", LineKind::Become),
@@ -146,22 +96,19 @@ fn the_starters_count_their_change_lines() {
 /// with a blank condition inside a Repeat inside a When takes the When's condition.
 #[test]
 fn a_move_by_inside_a_repeat_has_no_count() {
-    let text = sheet_text("random_walk.toml");
-    let wrapped = [
-        ("next_line = 3\n", "next_line = 4\n"),
-        ("lines = [\"l1\"]\n", "lines = [\"l3\"]\n"),
-        (
-            "# Repeat Steps per tick times:\n",
-            "[card.line.l3]\nkind = \"when\"\nlines = [\"l1\"]\n\n[card.line.l3.condition]\nkind = \"compare\"\n\
-             test = \"at_least\"\nleft = { param = \"step_size\" }\nright = 1\n\n",
-        ),
-    ]
-    .iter()
-    .fold(text.to_owned(), |text, (old, new)| {
-        assert!(text.contains(old), "the walk holds {old:?}");
-        text.replacen(old, new, 1)
-    });
-    let file = sheet(&wrapped);
+    let wrapped = edited_sheet(
+        "random_walk.toml",
+        &[
+            ("next_line = 3\n", "next_line = 4\n"),
+            ("lines = [\"l1\"]\n", "lines = [\"l3\"]\n"),
+            (
+                "# Repeat Steps per tick times:\n",
+                "[card.line.l3]\nkind = \"when\"\nlines = [\"l1\"]\n\n[card.line.l3.condition]\nkind = \"compare\"\n\
+                 test = \"at_least\"\nleft = { param = \"step_size\" }\nright = 1\n\n",
+            ),
+        ],
+    );
+    let file = lowered(&wrapped);
     assert_eq!(
         file.document().line("l2").map(|(_, line)| line.kind),
         Some(LineKind::Move)
@@ -176,18 +123,17 @@ fn a_move_by_inside_a_repeat_has_no_count() {
 /// A blinker planted in the tick-0 lanes gives 2 births and 2 deaths each tick: line 2 counts 2 and line 3 counts 2.
 #[test]
 fn the_life_sheet_blinker_fires_lines_2_and_3_twice_each_tick() {
-    let file = sheet(sheet_text("game_of_life.toml"));
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let file = lowered(sheet_text("game_of_life.toml"));
+    let evaluator = host_of(&file);
     let side = 32;
-    let mut lanes = HostLanes::new(evaluator.document(), grid(side)).expect("lanes");
+    let mut lanes = HostLanes::new(evaluator.document(), torus(side, side)).expect("lanes");
     let status = lanes.column_mut("status").expect("a status lane");
     for (x, y) in [(15, 14), (15, 15), (15, 16)] {
         assert!(status.set((y * side + x) as usize, HostValue::Category(1)));
     }
     let fires = file.fire_lines();
-    let params = [ParamValue::F32(0.3)];
     for tick in 0..6 {
-        let counts = counted_tick(&evaluator, &mut lanes, &params, Some(1), tick, fires.probes());
+        let counts = host_step(&evaluator, &mut lanes, &LIFE_PARAMS, Some(1), tick, fires.probes());
         assert_eq!(
             fires.counts_by_line(&counts),
             BTreeMap::from([("l2".to_owned(), 2), ("l3".to_owned(), 2)]),
@@ -201,8 +147,8 @@ fn the_life_sheet_blinker_fires_lines_2_and_3_twice_each_tick() {
 /// own state in the tick, every tick for 30 ticks.
 #[test]
 fn the_sird_competing_lines_count_separately() {
-    let file = sheet(sheet_text("sird.toml"));
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let file = lowered(sheet_text("sird.toml"));
+    let evaluator = host_of(&file);
     let params = [
         ParamValue::F32(1.0),
         ParamValue::F32(0.3),
@@ -211,20 +157,13 @@ fn the_sird_competing_lines_count_separately() {
         ParamValue::F32(0.2),
     ];
     let seed = Some(4);
-    let mut lanes = evaluator.init(grid(64), &params, seed).expect("the start runs");
+    let mut lanes = evaluator.init(torus(64, 64), &params, seed).expect("the start runs");
     let fires = file.fire_lines();
     let health = |lanes: &HostLanes| lanes.column("health").expect("a health lane").words().to_vec();
     let (mut recovered, mut died) = (0, 0);
     for tick in 0..30 {
         let before = health(&lanes);
-        let counts = fires.counts_by_line(&counted_tick(
-            &evaluator,
-            &mut lanes,
-            &params,
-            seed,
-            tick,
-            fires.probes(),
-        ));
+        let counts = fires.counts_by_line(&host_step(&evaluator, &mut lanes, &params, seed, tick, fires.probes()));
         let after = health(&lanes);
         let went = |from: u32, to: u32| {
             before
@@ -251,13 +190,13 @@ fn the_sird_competing_lines_count_separately() {
 fn probes_leave_the_sheet_code_and_the_lowered_text_alone() {
     for name in ["game_of_life.toml", "forest_fire.toml", "sird.toml"] {
         let text = sheet_text(name);
-        let file = sheet(text);
+        let file = lowered(text);
         let plain = GridProgram::compile(file.lowered()).unwrap_or_else(|problems| panic!("{problems:?}"));
         let probed = GridProgram::compile_with_probes(file.lowered(), file.fire_lines().probes())
             .unwrap_or_else(|problems| panic!("{problems:?}"));
         assert_eq!(probed.entry().source(), plain.entry().source(), "{name}");
         assert_eq!(probed.entry().source().code(), Some(&file.code()), "{name}");
-        let again = sheet(text);
+        let again = lowered(text);
         assert_eq!(again.lowered().to_toml(), file.lowered().to_toml(), "{name}");
         assert_eq!(again.to_toml(), file.to_toml(), "{name}");
         let sources = |program: &GridProgram| -> Vec<String> {
@@ -274,7 +213,7 @@ fn probes_leave_the_sheet_code_and_the_lowered_text_alone() {
 /// The counts of a line's rows add up, and counts of another length than the probes give no count.
 #[test]
 fn counts_by_line_adds_the_rows_of_a_line_and_drops_counts_of_another_length() {
-    let file = sheet(sheet_text("vote.toml"));
+    let file = lowered(sheet_text("vote.toml"));
     let fires = file.fire_lines();
     assert_eq!(
         fires.counts_by_line(&[1, 2, 3, 4]),
@@ -308,11 +247,10 @@ fn a_fire_count_reads_as_its_number_and_its_description() {
 /// Repeat has no count.
 #[test]
 fn a_become_inside_a_repeat_counts_the_agents_it_changed() {
-    let text = include_str!("sheets/repeat_roll.toml");
-    let file = sheet(text);
+    let file = lowered(ROLL);
     let fires = file.fire_lines();
     assert_eq!(fires.lines(), ["l3", "l4"]);
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let evaluator = host_of(&file);
     let agents = 1000;
     let world = HostWorld::Agents {
         count: agents,
@@ -320,7 +258,7 @@ fn a_become_inside_a_repeat_counts_the_agents_it_changed() {
         height: 1000.0,
     };
     let mut lanes = evaluator.init(world, &[], Some(3)).expect("the init runs");
-    let counts = counted_tick(&evaluator, &mut lanes, &[], Some(3), 0, fires.probes());
+    let counts = host_step(&evaluator, &mut lanes, &[], Some(3), 0, fires.probes());
     let status = lanes.column("status").expect("the status lane");
     let in_state = |state: u32| {
         (0..agents as usize)
@@ -333,21 +271,5 @@ fn a_become_inside_a_repeat_counts_the_agents_it_changed() {
         fires.counts_by_line(&counts),
         BTreeMap::from([("l3".to_owned(), in_a), ("l4".to_owned(), in_b)])
     );
-    let sets = text
-        .replace(
-            "property = \"status\"\nnew_state = \"a\"\nstart_state = \"s\"",
-            "property = \"level\"\nvalue = 1",
-        )
-        .replace(
-            "property = \"status\"\nnew_state = \"b\"\nstart_state = \"s\"",
-            "property = \"level\"\nvalue = 2",
-        )
-        .replace("kind = \"become\"", "kind = \"set\"")
-        .replacen(
-            "[[measure]]",
-            "[[agents.property]]\nid = \"level\"\nname = \"Level\"\ntype = \"number\"\n\n\
-             [agents.property.starts_as]\nrule = \"value\"\nvalue = 0\n\n[[measure]]",
-            1,
-        );
-    assert!(sheet(&sets).fire_lines().is_empty());
+    assert!(lowered(&with_sets(ROLL)).fire_lines().is_empty());
 }

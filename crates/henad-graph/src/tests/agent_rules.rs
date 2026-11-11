@@ -1,7 +1,5 @@
 //! The checker's rules of agent models, fields, functions and expressions, and the normalisation behind them.
 
-use henad_core::diagnostic::DiagnosticSeverity;
-
 use crate::GraphFile;
 use crate::host::{HostEvaluator, HostWorld, RunContext};
 use crate::normal::compose_key;
@@ -65,9 +63,7 @@ default = 2.0
 fn errors(tables: &str) -> Vec<String> {
     let file = GraphFile::parse(&format!("{AGENTS}\n{tables}")).unwrap_or_else(|error| panic!("{error}"));
     file.check()
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .errors()
         .map(|diagnostic| format!("{} {:?} {:?}", diagnostic.message, diagnostic.node, diagnostic.notes))
         .collect()
 }

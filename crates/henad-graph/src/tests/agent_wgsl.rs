@@ -4,14 +4,10 @@
 use henad_compute::gpu::wgpu;
 use henad_core::params::ParamValue;
 
+use super::support::{big_category, node, powi_flood_tables, tally_pass};
 use crate::GraphFile;
 use crate::wgsl::emit::FIRST_COUNTER;
 use crate::wgsl::{AgentProgram, GridProgram, ShaderRole};
-
-/// Returns a node `id` of kind `op` with the further lines `lines`.
-fn node(id: usize, op: &str, lines: &str) -> String {
-    format!("\n[[pass.node]]\nid = \"n{id}\"\nop = \"{op}\"\n{lines}")
-}
 
 /// Returns the file `id` of an agents world of 1000 agents, at most 1000000, with a position lane, then
 /// `declarations` and `passes`.
@@ -36,26 +32,12 @@ fn baseline_shortfalls(file: &GraphFile, agents: u32) -> Vec<String> {
 
 /// Returns a file whose stats pass counts a category of 256 variants with `counts` nodes, 1 KiB of tallies each.
 fn tally_flood(counts: usize) -> GraphFile {
-    let variants: Vec<String> = (0..256)
-        .map(|k| format!("{{ name = \"V{k}\", label = \"V{k}\", color = [{k}, 0, 0, 255] }}"))
-        .collect();
     let declarations = format!(
-        "\n[[category]]\nid = \"big\"\nvariants = [{}]\n\n\
-         [[lane]]\nid = \"c\"\ndomain = \"agents\"\ntype = \"cat:big\"\ninitial = {{ cat = \"big.V0\" }}\n\n\
+        "{}\n[[lane]]\nid = \"c\"\ndomain = \"agents\"\ntype = \"cat:big\"\ninitial = {{ cat = \"big.V0\" }}\n\n\
          [[stat]]\nlabel = \"S0\"\nfrom = \"n2.V0\"\ncolor = [1, 1, 1, 255]\n",
-        variants.join(", ")
+        big_category()
     );
-    let mut passes =
-        String::from("\n[[pass]]\nid = \"counts\"\nstage = \"stats\"\nkind = \"map\"\ndomain = \"agents\"\n");
-    passes.push_str(&node(1, "lane.get", "config.lane = \"c\"\n"));
-    for k in 0..counts {
-        passes.push_str(&node(
-            k + 2,
-            "stat.count_by",
-            "config.category = \"big\"\nin.value = \"n1\"\n",
-        ));
-    }
-    agents_file("node_tally_flood", &declarations, &passes)
+    agents_file("node_tally_flood", &declarations, &tally_pass("agents", counts))
 }
 
 /// The reduce leaf of an agents world counts its tallies in workgroup memory, and a leaf past the baseline's 16 KiB
@@ -77,40 +59,8 @@ fn agent_tallies_past_the_workgroup_memory_are_refused() {
 
 /// Returns a file whose tick pass sums `powers` integer powers of 64 entries' tables each, per agent.
 fn powi_flood(powers: usize) -> GraphFile {
-    let declarations = "\n[[lane]]\nid = \"x\"\ndomain = \"agents\"\ntype = \"f32\"\ninitial = { f32 = 0.0 }\n";
-    let mut passes = String::from("\n[[pass]]\nid = \"step\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"agents\"\n");
-    passes.push_str(&node(1, "ctx.index", ""));
-    let mut sum: Option<usize> = None;
-    let mut next = 2;
-    for k in 0..powers {
-        let power = next;
-        let base = 1.0 + k as f32 / 1000.0;
-        passes.push_str(&node(
-            power,
-            "math.powi",
-            &format!("config.max_exponent = 64\nin.base = {{ f32 = {base:?} }}\nin.exponent = \"n1\"\n"),
-        ));
-        next += 1;
-        sum = Some(match sum {
-            None => power,
-            Some(previous) => {
-                passes.push_str(&node(
-                    next,
-                    "math.add",
-                    &format!("in.a = \"n{previous}\"\nin.b = \"n{power}\"\n"),
-                ));
-                next += 1;
-                next - 1
-            }
-        });
-    }
-    let value = sum.unwrap_or(1);
-    passes.push_str(&node(
-        next,
-        "lane.set",
-        &format!("config.lane = \"x\"\nin.value = \"n{value}\"\n"),
-    ));
-    agents_file("node_powi_flood", declarations, &passes)
+    let (declarations, passes) = powi_flood_tables("agents", powers);
+    agents_file("node_powi_flood", &declarations, &passes)
 }
 
 /// A pass of an agents world whose uniform block passes the baseline's 64 KiB is refused with a line naming it.
@@ -368,16 +318,8 @@ fn expansions_count_toward_the_inlined_limit_and_no_text_limit_refuses_them() {
 
 /// Returns the text of every shader of every agent starter and agents fixture, each named by its file and label.
 fn agents_shader_texts() -> Vec<(String, String)> {
-    let files = crate::starters::agent_starters()
-        .iter()
-        .map(|starter| (starter.file_name.to_owned(), starter.text.to_owned()))
-        .chain(super::corpus::fixtures());
     let mut texts = Vec::new();
-    for (name, text) in files {
-        let file = GraphFile::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
-        if !matches!(file.document().world, crate::document::World::Agents(_)) {
-            continue;
-        }
+    for (name, file) in super::corpus::agents() {
         let program = AgentProgram::compile(&file).unwrap_or_else(|problems| panic!("{name}: {problems:#?}"));
         for shader in program.shaders() {
             texts.push((format!("{name} {}", shader.label()), shader.text().to_owned()));

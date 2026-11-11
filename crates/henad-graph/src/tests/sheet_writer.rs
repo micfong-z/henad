@@ -6,28 +6,14 @@
 
 use henad_core::metadata::TimeUnit;
 
-use crate::sheet::document::{LineKind, ParameterType, SheetChip, SheetDocument, SheetLine, SheetParameter};
+use crate::sheet::document::{LineKind, ParameterType, SheetChip, SheetLine, SheetParameter};
 use crate::sheet::document::{SheetValue, Slot};
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::Sentences;
 use crate::sheet::{ParsedSheet, SheetWriteError, format_number};
 
-use super::sheet_document::{mutate, sheet_text, sheets};
-
-/// Reads `text`, which must read, and returns its document.
-fn read(text: &str) -> SheetDocument {
-    ParsedSheet::parse(text)
-        .unwrap_or_else(|error| panic!("the sheet does not read: {error}\n{text}"))
-        .document()
-        .clone()
-}
-
-/// Writes `document`, which must hold only finite numbers.
-fn write(document: &SheetDocument) -> String {
-    document
-        .to_text()
-        .unwrap_or_else(|error| panic!("the sheet does not write: {error}"))
-}
+use super::sheet_support::{SHEET_HOSTILE, read, sheet_text, sheets, write};
+use super::support::mutations;
 
 /// Returns `text` without its comment lines.
 fn without_comments(text: &str) -> String {
@@ -411,6 +397,63 @@ fn trimmed(lines: &[String]) -> Vec<String> {
     lines[start..end].to_vec()
 }
 
+/// Hunks of a new waning line in the SIR sheet: the next line number, the Waning rate parameter, the card's lines, and
+/// line 5 with its comment.
+pub(super) const WANING_HUNKS: &[(&[&str], &[&str])] = &[
+    (&["next_line = 5"], &["next_line = 6"]),
+    (
+        &[],
+        &[
+            "[[parameter]]",
+            "id = \"waning_rate\"",
+            "name = \"Waning rate\"",
+            "type = \"number\"",
+            "min = 0",
+            "max = 1",
+            "default = 0.01",
+            "step = 0.001",
+            "unit = \"per day\"",
+            "means = \"Rate at which a recovered cell loses its immunity\"",
+        ],
+    ),
+    (
+        &["lines = [\"l1\", \"l2\", \"l3\"]"],
+        &["lines = [\"l1\", \"l2\", \"l3\", \"l5\"]"],
+    ),
+    (
+        &[],
+        &[
+            "# Become Susceptible from Recovered, at rate Waning rate per day",
+            "[card.line.l5]",
+            "kind = \"become\"",
+            "key = 1585830067",
+            "property = \"health\"",
+            "new_state = \"susceptible\"",
+            "start_state = \"recovered\"",
+            "",
+            "[card.line.l5.condition]",
+            "kind = \"rate\"",
+            "rate = { param = \"waning_rate\" }",
+            "rate_unit = \"day\"",
+        ],
+    ),
+];
+
+/// Hunk of a move of the boids' Steer by the flockmates' centre two places up.
+pub(super) const STEER_REORDER_HUNKS: &[(&[&str], &[&str])] = &[(
+    &["lines = [\"l1\", \"l2\", \"l3\", \"l4\", \"l5\", \"l6\", \"l7\"]"],
+    &["lines = [\"l1\", \"l2\", \"l5\", \"l3\", \"l4\", \"l6\", \"l7\"]"],
+)];
+
+/// Hunks of a rename of the boids' Cohesion to Pull to centre: its name and the comment that shows it.
+pub(super) const RENAME_HUNKS: &[(&[&str], &[&str])] = &[
+    (&["name = \"Cohesion\""], &["name = \"Pull to centre\""]),
+    (
+        &["# Steer Velocity by Flockmates' centre, strength Cohesion"],
+        &["# Steer Velocity by Flockmates' centre, strength Pull to centre"],
+    ),
+];
+
 /// Checks that `old` turns into `new` through exactly `expected`, each hunk's removed and added lines, blank lines at
 /// a hunk's ends aside.
 pub(super) fn assert_hunks(old: &str, new: &str, expected: &[(&[&str], &[&str])]) {
@@ -453,49 +496,7 @@ fn a_new_waning_line_changes_four_hunks() {
     document.cards[0].lines.push("l5".to_owned());
     document.cards[0].line_tables.insert("l5".to_owned(), line);
     let new = write(&document);
-    assert_hunks(
-        old,
-        &new,
-        &[
-            (&["next_line = 5"], &["next_line = 6"]),
-            (
-                &[],
-                &[
-                    "[[parameter]]",
-                    "id = \"waning_rate\"",
-                    "name = \"Waning rate\"",
-                    "type = \"number\"",
-                    "min = 0",
-                    "max = 1",
-                    "default = 0.01",
-                    "step = 0.001",
-                    "unit = \"per day\"",
-                    "means = \"Rate at which a recovered cell loses its immunity\"",
-                ],
-            ),
-            (
-                &["lines = [\"l1\", \"l2\", \"l3\"]"],
-                &["lines = [\"l1\", \"l2\", \"l3\", \"l5\"]"],
-            ),
-            (
-                &[],
-                &[
-                    "# Become Susceptible from Recovered, at rate Waning rate per day",
-                    "[card.line.l5]",
-                    "kind = \"become\"",
-                    "key = 1585830067",
-                    "property = \"health\"",
-                    "new_state = \"susceptible\"",
-                    "start_state = \"recovered\"",
-                    "",
-                    "[card.line.l5.condition]",
-                    "kind = \"rate\"",
-                    "rate = { param = \"waning_rate\" }",
-                    "rate_unit = \"day\"",
-                ],
-            ),
-        ],
-    );
+    assert_hunks(old, &new, WANING_HUNKS);
     assert_eq!(read(&new), document);
 }
 
@@ -507,14 +508,7 @@ fn a_steer_reorder_changes_one_line() {
     let cohesion = lines.remove(4);
     lines.insert(2, cohesion);
     let new = write(&document);
-    assert_hunks(
-        old,
-        &new,
-        &[(
-            &["lines = [\"l1\", \"l2\", \"l3\", \"l4\", \"l5\", \"l6\", \"l7\"]"],
-            &["lines = [\"l1\", \"l2\", \"l5\", \"l3\", \"l4\", \"l6\", \"l7\"]"],
-        )],
-    );
+    assert_hunks(old, &new, STEER_REORDER_HUNKS);
 }
 
 #[test]
@@ -528,17 +522,7 @@ fn a_parameter_rename_changes_its_name_and_the_comment_that_shows_it() {
         .unwrap_or_else(|| panic!("no cohesion"));
     cohesion.name = "Pull to centre".to_owned();
     let new = write(&document);
-    assert_hunks(
-        old,
-        &new,
-        &[
-            (&["name = \"Cohesion\""], &["name = \"Pull to centre\""]),
-            (
-                &["# Steer Velocity by Flockmates' centre, strength Cohesion"],
-                &["# Steer Velocity by Flockmates' centre, strength Pull to centre"],
-            ),
-        ],
-    );
+    assert_hunks(old, &new, RENAME_HUNKS);
 }
 
 #[test]
@@ -546,11 +530,7 @@ fn every_readable_mutation_writes_text_that_reads_back() {
     let mut rng = 0x7772_6974_6500_0001u64;
     let mut written = 0usize;
     for (file_name, text) in sheets() {
-        for edit in 0..300 {
-            let mut edited = mutate(text, &mut rng);
-            if edit % 3 == 0 {
-                edited = mutate(&edited, &mut rng);
-            }
+        for edited in mutations(text, &mut rng, &SHEET_HOSTILE, 300) {
             let Ok(parsed) = ParsedSheet::parse(&edited) else {
                 continue;
             };

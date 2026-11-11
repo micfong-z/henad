@@ -696,7 +696,7 @@ mod tests {
     use super::{Origins, PropertyType, SheetLines, property_read, sheet_origins, sheet_title};
     use crate::sheet::ParsedSheet;
     use crate::sheet::sentence::Sentences;
-    use crate::tests::sheet_document::sheet_text;
+    use crate::tests::sheet_support::sheet_text;
 
     /// Returns `ids` as owned strings.
     fn owned(ids: &[&str]) -> Vec<String> {

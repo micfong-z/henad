@@ -6,10 +6,9 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use henad_core::authoring::primitives::rng::xorshift64;
-
 use super::case_files::case_file;
 use super::corpus;
+use super::support::{HostileText, mutations};
 use crate::GraphFile;
 use crate::catalogue::definitions;
 use crate::host::{HostEvaluator, HostWorld, RunContext};
@@ -54,49 +53,11 @@ const HOSTILE_LINES: [&str; 8] = [
     "[[pass]]\nid = \"step\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"cells\"",
 ];
 
-/// Returns a number below `bound` from `rng`.
-fn below(rng: &mut u64, bound: usize) -> usize {
-    *rng = xorshift64(*rng);
-    (*rng >> 33) as usize % bound.max(1)
-}
-
-/// Returns `text` with one random edit.
-fn mutate(text: &str, rng: &mut u64) -> String {
-    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
-    if lines.is_empty() {
-        return String::new();
-    }
-    let at = below(rng, lines.len());
-    match below(rng, 7) {
-        0 => {
-            lines.remove(at);
-        }
-        1 => {
-            let copy = lines[at].clone();
-            lines.insert(below(rng, lines.len()), copy);
-        }
-        2 => {
-            let other = below(rng, lines.len());
-            lines.swap(at, other);
-        }
-        3 | 4 => {
-            if let Some((key, _)) = lines[at].split_once(" = ") {
-                let value = HOSTILE_VALUES[below(rng, HOSTILE_VALUES.len())];
-                lines[at] = format!("{key} = {value}");
-            }
-        }
-        5 => lines.insert(at, HOSTILE_LINES[below(rng, HOSTILE_LINES.len())].to_owned()),
-        _ => {
-            let joined = lines.join("\n");
-            let mut cut = below(rng, joined.len());
-            while !joined.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            return joined[..cut].to_owned();
-        }
-    }
-    lines.join("\n")
-}
+/// Values and lines the edits of the graph corpus put in.
+const HOSTILE: HostileText = HostileText {
+    values: &HOSTILE_VALUES,
+    lines: &HOSTILE_LINES,
+};
 
 /// Number of edited files the host evaluator has run.
 static HOST_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -155,11 +116,7 @@ fn the_reader_and_checker_never_panic_on_the_mutation_corpus() {
     let mut rng = 0x6D75_7461_7465_0001u64;
     let (mut cases, mut read) = (0usize, 0usize);
     for (seed, edits) in &seeds {
-        for edit in 0..*edits {
-            let mut text = mutate(seed, &mut rng);
-            if edit % 3 == 0 {
-                text = mutate(&text, &mut rng);
-            }
+        for text in mutations(seed, &mut rng, &HOSTILE, *edits) {
             cases += 1;
             read += usize::from(exercise(&text));
         }

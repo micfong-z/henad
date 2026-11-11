@@ -1,38 +1,22 @@
 //! Lane packing: a model past the fixed budget of 8 storage bindings compiles to shaders within it, the same shaders
 //! whatever device it later builds on, and a packed model steps as its unpacked twin does.
 
-use henad_compute::entry::{ModelEntry, ModelState};
-use henad_compute::fault::FaultSink;
+use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_compute::gpu::stepping::run_steps;
 use henad_compute::gpu::{GpuContext, wgpu};
 use henad_core::metadata::Structure;
 use henad_core::params::ParamValue;
 
-use super::support::{TestDevice, baseline_test_device, test_device};
+use super::sheet_support::{ants_with, boids_with, edited, lowered};
+use super::support::{baseline_test_device, built, context, device_for, note_skip, params_of, test_device};
 use crate::document::World;
 use crate::limits::MAX_STORAGE_BINDINGS;
-use crate::sheet::{SheetFile, starters};
 use crate::wgsl::pack::{UNPACKED, storage_bindings};
 use crate::wgsl::{AgentProgram, GeneratedShader, GridProgram, LaneBuffer};
 
 /// Text of the test sheet of three infections, each read at the neighbours of every cell.
 const THREE_STRAINS: &str = include_str!("sheets/three_strains.toml");
-
-/// Returns the text of the sheet starter `file_name`.
-fn sheet(file_name: &str) -> &'static str {
-    starters()
-        .iter()
-        .find(|starter| starter.file_name == file_name)
-        .map(|starter| starter.text)
-        .unwrap_or_else(|| panic!("no sheet starter {file_name}"))
-}
-
-/// Returns `text` with `old` replaced by `new` once, where `text` must hold `old`.
-fn edited(text: &str, old: &str, new: &str) -> String {
-    assert!(text.contains(old), "the text holds no {old:?}");
-    text.replacen(old, new, 1)
-}
 
 /// Returns the property table of a Number property `id` that starts at 0, for the kind of `table`.
 fn number_property(table: &str, id: &str) -> String {
@@ -56,14 +40,12 @@ fn add_one_line(line: &str, id: &str) -> String {
 
 /// Returns the ants starter with one more Number property and a line that adds 1 to it each tick.
 fn ants_with_energy() -> String {
-    let text = edited(sheet("ants.toml"), "next_line = 17", "next_line = 18");
-    let text = edited(&text, "\"l12\", \"l16\"]", "\"l12\", \"l16\", \"l17\"]");
-    let text = edited(
+    let text = ants_with(18, &["l17"], &add_one_line("l17", "energy"));
+    edited(
         &text,
         "[ground]\n",
         &format!("{}[ground]\n", number_property("agents.property", "energy")),
-    );
-    format!("{text}\n{}", add_one_line("l17", "energy"))
+    )
 }
 
 /// Returns the ants starter with three more properties after its own, each set by a line every tick: a Number that
@@ -72,12 +54,13 @@ fn ants_with_energy() -> String {
 /// The three pack after the Cargo and Reward held lanes. The Whole number is an `i32` lane at a non-zero offset, and
 /// the Arrow a `vec2<f32>` lane at a non-zero offset.
 fn ants_with_three_kinds() -> String {
-    let text = edited(sheet("ants.toml"), "next_line = 17", "next_line = 20");
-    let text = edited(
-        &text,
-        "\"l12\", \"l16\"]",
-        "\"l12\", \"l16\", \"l17\", \"l18\", \"l19\"]",
+    let lines = format!(
+        "{}{}{}",
+        add_one_line("l17", "energy"),
+        formula_line("l18", "tally", "my.tally - 2"),
+        formula_line("l19", "drift", "my.drift * 2")
     );
+    let text = ants_with(20, &["l17", "l18", "l19"], &lines);
     let properties = format!(
         "{}[[agents.property]]\nid = \"tally\"\nname = \"Tally\"\ntype = \"whole_number\"\n\n\
          [agents.property.starts_as]\nrule = \"value\"\nvalue = -5\n\n\
@@ -86,28 +69,16 @@ fn ants_with_three_kinds() -> String {
          [agents.property.starts_as.value]\nkind = \"random_direction\"\nlength = 1\n\n",
         number_property("agents.property", "energy")
     );
-    let text = edited(&text, "[ground]\n", &format!("{properties}[ground]\n"));
-    format!(
-        "{text}\n{}{}{}",
-        add_one_line("l17", "energy"),
-        formula_line("l18", "tally", "my.tally - 2"),
-        formula_line("l19", "drift", "my.drift * 2")
-    )
+    edited(&text, "[ground]\n", &format!("{properties}[ground]\n"))
 }
 
 /// Returns the boids starter with one more Number property and a line that adds 1 to it each tick.
 fn boids_with_energy() -> String {
-    let text = edited(sheet("boids.toml"), "next_line = 9", "next_line = 10");
-    let text = edited(&text, "\"l6\", \"l7\"]", "\"l6\", \"l7\", \"l9\"]");
-    let text = edited(
+    let text = boids_with(add_one_line("l9", "energy").trim_end());
+    edited(
         &text,
         "[[parameter]]\n",
         &format!("{}[[parameter]]\n", number_property("agents.property", "energy")),
-    );
-    edited(
-        &text,
-        "# Lines of Randomise headings",
-        &format!("{}# Lines of Randomise headings", add_one_line("l9", "energy")),
     )
 }
 
@@ -132,7 +103,7 @@ enum Program {
 impl Program {
     /// Lowers the sheet `text` and compiles it, with every lane in a buffer of its own when `unpacked` holds.
     fn of(text: &str, unpacked: bool) -> Self {
-        let sheet = SheetFile::parse(text).unwrap_or_else(|error| panic!("the sheet does not lower: {error}"));
+        let sheet = lowered(text);
         UNPACKED.with(|cell| cell.set(unpacked));
         let file = sheet.lowered();
         let program = if matches!(file.document().world, World::Grid(_)) {
@@ -178,37 +149,18 @@ impl Program {
     }
 }
 
-/// Returns a context over `device`.
-fn context(device: TestDevice) -> GpuContext {
-    GpuContext::new(
-        device.device,
-        device.queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        FaultSink::new(),
-    )
-}
-
-/// Returns the parameters of `entry` at their defaults, with `agents` agents in a world of agents.
-fn params_of(entry: &ModelEntry, agents: u32) -> Vec<ParamValue> {
-    entry
-        .param_descriptors()
-        .iter()
-        .map(|descriptor| match descriptor.id() {
-            "num_agents" => ParamValue::U32(agents),
-            "grid_width" | "grid_height" => ParamValue::U32(96),
-            _ => descriptor.kind().default_value(),
-        })
-        .collect()
-}
-
-/// Builds `entry` on `ctx` at seed 7 and runs `ticks` ticks.
-fn built(entry: &ModelEntry, ctx: &GpuContext, ticks: u64) -> Box<dyn GpuSimState> {
-    let params = params_of(entry, 3_000);
-    let mut state = match entry.build(&params, Some(7), Some(ctx)) {
-        Ok(ModelState::Gpu(state)) => state,
-        Ok(ModelState::Cpu(_)) => panic!("{} built on the CPU", entry.id()),
-        Err(fault) => panic!("{} did not build: {fault}", entry.id()),
-    };
+/// Builds `entry` on `ctx` at seed 7, with 3,000 agents in a world of agents and 96 by 96 cells on a grid, and runs
+/// `ticks` ticks.
+fn stepped(entry: &ModelEntry, ctx: &GpuContext, ticks: u64) -> Box<dyn GpuSimState> {
+    let params = params_of(
+        entry,
+        &[
+            ("num_agents", ParamValue::U32(3_000)),
+            ("grid_width", ParamValue::U32(96)),
+            ("grid_height", ParamValue::U32(96)),
+        ],
+    );
+    let mut state = built(entry, &params, Some(7), ctx);
     run_steps(&mut *state, ctx, ticks).unwrap_or_else(|fault| panic!("{} did not run: {fault}", entry.id()));
     state
 }
@@ -234,10 +186,6 @@ fn buffer_labels(entry: &ModelEntry) -> Vec<String> {
 /// storage buffers in one shader unpacked, and compile to shaders within 8 that build and run on a device of the
 /// WebGPU default limits. The three strains alone sit at the budget and keep every lane in a buffer of its own.
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "the skip is information for a reader of the test output"
-)]
 fn a_model_past_8_bindings_compiles_to_8() {
     let budget = MAX_STORAGE_BINDINGS as usize;
     let at_budget = Program::of(THREE_STRAINS, false);
@@ -253,11 +201,10 @@ fn a_model_past_8_bindings_compiles_to_8() {
         ("boids", boids_with_energy(), "energy"),
         ("three strains", three_strains_with_age(), "health_a"),
     ];
-    let device = baseline_test_device();
-    if device.is_none() {
-        eprintln!("skipping the device half of a_model_past_8_bindings_compiles_to_8: no adapter");
+    let ctx = baseline_test_device().map(context);
+    if ctx.is_none() {
+        note_skip("the device half of a_model_past_8_bindings_compiles_to_8");
     }
-    let ctx = device.map(context);
     for (name, text, packed_lane) in &models {
         assert!(
             Program::of(text, true).widest() > budget,
@@ -274,7 +221,7 @@ fn a_model_past_8_bindings_compiles_to_8() {
             "{name} packs {packed_lane}"
         );
         if let Some(ctx) = &ctx {
-            built(&program.entry(), ctx, 3);
+            stepped(&program.entry(), ctx, 3);
         }
     }
 }
@@ -282,10 +229,6 @@ fn a_model_past_8_bindings_compiles_to_8() {
 /// A packed file compiles to the same shaders each time, since the compiler reads no device, and the same entry builds
 /// on a device of the WebGPU default limits and on one of raised limits.
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "the skip is information for a reader of the test output"
-)]
 fn packing_never_depends_on_the_device() {
     let text = ants_with_energy();
     let first = Program::of(&text, false);
@@ -304,12 +247,12 @@ fn packing_never_depends_on_the_device() {
             .any(|label| label == "lanes_agents_0")
     );
     let (Some(baseline), Some(raised)) = (baseline_test_device(), test_device()) else {
-        eprintln!("skipping the device half of packing_never_depends_on_the_device: no adapter");
+        note_skip("the device half of packing_never_depends_on_the_device");
         return;
     };
     let entry = first.entry();
     for ctx in [context(baseline), context(raised)] {
-        let state = built(&entry, &ctx, 2);
+        let state = stepped(&entry, &ctx, 2);
         let place = first.lane_buffer("energy").expect("the energy lane");
         let words = state.read_buffer(place.buffer()).expect("the packed buffer reads back");
         assert!(
@@ -326,18 +269,13 @@ fn packing_never_depends_on_the_device() {
 /// The packed ants hold a `u32`, two `f32`, an `i32` and a `vec2<f32>` lane in one buffer, the last two at a non-zero
 /// offset, and the three strains hold `u32` lanes on two sides.
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "the skip is information for a reader of the test output"
-)]
 fn a_packed_model_steps_as_its_unpacked_twin() {
-    let Some(device) = test_device() else {
-        eprintln!("skipping a_packed_model_steps_as_its_unpacked_twin: no adapter");
+    let Some(device) = device_for("a_packed_model_steps_as_its_unpacked_twin") else {
         return;
     };
     let ctx = context(device);
     for text in [ants_with_three_kinds(), three_strains_with_age()] {
-        let sheet = SheetFile::parse(&text).unwrap_or_else(|error| panic!("{error}"));
+        let sheet = lowered(&text);
         let packed = Program::of(&text, false);
         let unpacked = Program::of(&text, true);
         if let Program::Agents(program) = &packed {
@@ -348,8 +286,8 @@ fn a_packed_model_steps_as_its_unpacked_twin() {
             }
         }
         let (packed_entry, unpacked_entry) = (packed.entry(), unpacked.entry());
-        let mut packed_state = built(&packed_entry, &ctx, 20);
-        let mut unpacked_state = built(&unpacked_entry, &ctx, 20);
+        let mut packed_state = stepped(&packed_entry, &ctx, 20);
+        let mut unpacked_state = stepped(&unpacked_entry, &ctx, 20);
         // Reset colony starts the ants again, and its rerun uploads the packed buffer whole.
         if !packed_entry.action_descriptors().is_empty() {
             for state in [&mut packed_state, &mut unpacked_state] {
@@ -400,7 +338,7 @@ fn a_packed_model_steps_as_its_unpacked_twin() {
 #[test]
 fn a_shortfall_names_the_properties_a_buffer_holds() {
     let text = three_strains_with_age();
-    let sheet = SheetFile::parse(&text).expect("the sheet lowers");
+    let sheet = lowered(&text);
     let entry = Program::of(&text, false).entry();
     let params: Vec<ParamValue> = entry
         .param_descriptors()

@@ -87,7 +87,9 @@ its condition, and its change holds where `cmp.lt(<line>_first, u32::MAX)` and, 
 competitor, `cmp.ge(<lower>_first, <line>_first)` (path `change`), so the rows' display order picks
 the line that first held at the earliest time round, the higher on a tie. A Become from a state
 below one from any state puts only where my state, `cmp.eq` outside the region, is that state. A
-change outside meets these by display order. Tests in `src/tests/sheet_repeat.rs`. A Set's value
+change outside meets these by display order. Tests in `src/tests/sheet_repeat.rs`, among them
+`becomes_that_test_a_number_drawn_inside_a_repeat_keep_display_order` on `repeat_roll.toml` in both
+line id orders. A Set's value
 is lowered outside the region, once per tick, and a value that reads a line inside the Repeat is
 refused (`SET_IN_REPEAT`, `reads_inside` over chips, phrases and formulas). Lines inside a Repeat
 take its region through `line_site`. A Keep between, When, Repeat, Leave, Record or Move to inside a
@@ -101,8 +103,8 @@ boids' two looks with its accumulators, its name and two `cmp.le` filters, a loo
 the code, `the_radius_index_follows_the_current_largest_distance` (one `cell_size` source, and
 `AgentHooks::index_cell_size` at 50 and 8, then 9 and 30), the power rule on the host (0.488 within
 five standard errors over 4 people and 5000 ticks, 0 for a chance of 0 for each of 1000),
-`for_each_of_zero_with_chance_1_is_0_on_host_and_device` (the device through `GpuContext::new` over
-`support::test_device`), `each_agent_refusal_gives_one_located_error` (walls, Pick a cell, Record,
+`for_each_of_zero_with_chance_1_is_0_on_host_and_device` (the device through `support::device_for`
+and `support::context`), `each_agent_refusal_gives_one_located_error` (walls, Pick a cell, Record,
 Move to below Move by, Set below Steer, a Become in a Repeat, a look in a Repeat, a second kind), a
 look at the cells around, `the_shortfalls_of_a_sheet_name_its_looks_in_the_model_words` (boids at
 1,000,000 birds and a Visual range of 200),
@@ -178,6 +180,5 @@ deposit, one counter, the tick pass's node count, `ANTS_TICK_NODES`, 110),
 `a_pick_that_reads_an_earlier_pick_opens_its_own_fold`,
 `a_button_that_starts_ants_and_ground_again_reruns_two_passes` and
 `a_move_to_a_blocked_cell_leaves_the_agent_where_it_is` (20 host ticks, and
-`NOT_YET_BLOCKED_MOVE_BY`), `the_first_move_to_whose_condition_holds_decides` (the test sheet
-`src/tests/sheets/move_to_first.toml`, the cell ahead not open at the first tick) and
-`becomes_that_test_a_number_drawn_inside_a_repeat_keep_display_order` (both line id orders).
+`NOT_YET_BLOCKED_MOVE_BY`) and `the_first_move_to_whose_condition_holds_decides` (the test sheet
+`src/tests/sheets/move_to_first.toml`, the cell ahead not open at the first tick).

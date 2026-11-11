@@ -6,7 +6,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use henad_core::diagnostic::DiagnosticSeverity;
 use henad_core::explore::fingerprint::fnv1a64;
 
-use super::sheet_document::{edited, mutate, sheets};
+use super::sheet_support::{SHEET_HOSTILE, edited_sheet, sheets};
+use super::support::{mutations, without_each_key};
 use crate::sheet::check::SheetDiagnostic;
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{
@@ -42,7 +43,11 @@ fn assert_reported(text: &str, expected: Expected, message: &str, at: &str) -> S
                     .is_some_and(|span| text[span.start..].starts_with(at))
         })
         .unwrap_or_else(|| {
-            let all: Vec<String> = report.diagnostics.iter().map(|d| d.diagnostic.to_string()).collect();
+            let all: Vec<String> = report
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.diagnostic.to_string())
+                .collect();
             panic!("no diagnostic {message:?} at {at:?} among:\n{}", all.join("\n"))
         });
     let (severity, skips) = match expected {
@@ -72,7 +77,7 @@ fn assert_reported(text: &str, expected: Expected, message: &str, at: &str) -> S
 
 #[test]
 fn a_result_below_its_user_skips_the_line() {
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[("lines = [\"l1\", \"l2\", \"l3\"]", "lines = [\"l2\", \"l1\", \"l3\"]")],
     );
@@ -86,7 +91,7 @@ fn a_result_below_its_user_skips_the_line() {
 
 #[test]
 fn a_result_of_a_change_line_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[(
             "left = { result = \"l1\" }\nright = 3",
@@ -103,7 +108,7 @@ fn a_result_of_a_change_line_is_an_error() {
 
 #[test]
 fn an_unknown_parameter_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "forest_fire.toml",
         &[(
             "chance = { param = \"lightning_chance\" }",
@@ -120,7 +125,7 @@ fn an_unknown_parameter_is_an_error() {
 
 #[test]
 fn a_state_of_another_property_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "ants.toml",
         &[(
             "[card.line.l3.condition]\nkind = \"compare\"\ntest = \"is\"\nleft = { my = \"cargo\" }\nright = { state = \
@@ -139,7 +144,7 @@ fn a_state_of_another_property_is_an_error() {
 
 #[test]
 fn my_new_above_the_last_change_skips_the_line() {
-    let text = edited(
+    let text = edited_sheet(
         "boids.toml",
         &[(
             "lines = [\"l1\", \"l2\", \"l3\", \"l4\", \"l5\", \"l6\", \"l7\"]",
@@ -156,7 +161,7 @@ fn my_new_above_the_last_change_skips_the_line() {
 
 #[test]
 fn a_missing_key_is_a_warning() {
-    let text = edited("forest_fire.toml", &[("key = 3688405984\n", "")]);
+    let text = edited_sheet("forest_fire.toml", &[("key = 3688405984\n", "")]);
     let found = assert_reported(
         &text,
         Expected::Warning,
@@ -168,7 +173,7 @@ fn a_missing_key_is_a_warning() {
 
 #[test]
 fn a_duplicate_key_is_an_error() {
-    let text = edited("forest_fire.toml", &[("key = 1270439170", "key = 3688405984")]);
+    let text = edited_sheet("forest_fire.toml", &[("key = 1270439170", "key = 3688405984")]);
     assert_reported(
         &text,
         Expected::Error,
@@ -179,7 +184,7 @@ fn a_duplicate_key_is_an_error() {
 
 #[test]
 fn an_unlisted_line_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[("lines = [\"l1\", \"l2\", \"l3\"]", "lines = [\"l1\", \"l2\"]")],
     );
@@ -193,7 +198,7 @@ fn an_unlisted_line_is_an_error() {
 
 #[test]
 fn a_line_past_next_line_is_an_error() {
-    let text = edited("game_of_life.toml", &[("next_line = 5", "next_line = 4")]);
+    let text = edited_sheet("game_of_life.toml", &[("next_line = 5", "next_line = 4")]);
     assert_reported(
         &text,
         Expected::Error,
@@ -204,14 +209,14 @@ fn a_line_past_next_line_is_an_error() {
 
 #[test]
 fn a_rate_with_no_time_skips_the_line() {
-    let text = edited("sir.toml", &[("[time]\ntick_length = 1\ntick_unit = \"day\"\n\n", "")]);
+    let text = edited_sheet("sir.toml", &[("[time]\ntick_length = 1\ntick_unit = \"day\"\n\n", "")]);
     assert_reported(&text, Expected::Skip, NOT_RUN_TICK, "[card.line.l2]");
     assert_reported(&text, Expected::Skip, NOT_RUN_TICK, "[card.line.l3]");
 }
 
 #[test]
 fn a_number_in_a_condition_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[(
             "start_state = \"any_state\"\n\n[card.line.l4.condition]\nkind = \"always\"",
@@ -228,7 +233,7 @@ fn a_number_in_a_condition_is_an_error() {
 
 #[test]
 fn a_count_in_a_button_card_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[(
             "id = \"cell_tick\"\nevery = \"cells\"\nruns = \"each_tick\"",
@@ -245,7 +250,7 @@ fn a_count_in_a_button_card_is_an_error() {
 
 #[test]
 fn a_result_from_another_card_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[(
             "[card.line.l4.condition]\nkind = \"always\"",
@@ -257,7 +262,7 @@ fn a_result_from_another_card_is_an_error() {
 
 #[test]
 fn their_outside_a_look_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[(
             "left = { result = \"l1\" }\nright = 3",
@@ -274,7 +279,7 @@ fn their_outside_a_look_is_an_error() {
 
 #[test]
 fn an_unknown_formula_word_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "ants.toml",
         &[(
             "formula = \"trail_falloff * l2.amount + my.reward_held\"",
@@ -291,7 +296,7 @@ fn an_unknown_formula_word_is_an_error() {
 
 #[test]
 fn a_formula_syntax_error_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "ants.toml",
         &[(
             "formula = \"trail_falloff * l2.amount + my.reward_held\"",
@@ -308,7 +313,7 @@ fn a_formula_syntax_error_is_an_error() {
 
 #[test]
 fn a_part_of_the_wrong_line_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "boids.toml",
         &[(
             "value = { result = \"l2\", part = \"push\" }",
@@ -325,7 +330,7 @@ fn a_part_of_the_wrong_line_is_an_error() {
 
 #[test]
 fn leave_on_an_agent_property_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "ants.toml",
         &[("ground_property = \"to_home\"", "ground_property = \"reward_held\"")],
     );
@@ -339,7 +344,7 @@ fn leave_on_an_agent_property_is_an_error() {
 
 #[test]
 fn become_on_a_number_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "ants.toml",
         &[(
             "kind = \"become\"\nproperty = \"cargo\"\nnew_state = \"carrying_food\"",
@@ -356,7 +361,7 @@ fn become_on_a_number_is_an_error() {
 
 #[test]
 fn two_parameters_with_one_id_are_an_error() {
-    let text = edited("sir.toml", &[("id = \"recovery_rate\"", "id = \"infection_rate\"")]);
+    let text = edited_sheet("sir.toml", &[("id = \"recovery_rate\"", "id = \"infection_rate\"")]);
     assert_reported(
         &text,
         Expected::Error,
@@ -367,7 +372,7 @@ fn two_parameters_with_one_id_are_an_error() {
 
 #[test]
 fn a_parameter_id_of_the_line_form_is_an_error() {
-    let text = edited("sir.toml", &[("id = \"recovery_rate\"", "id = \"l7\"")]);
+    let text = edited_sheet("sir.toml", &[("id = \"recovery_rate\"", "id = \"l7\"")]);
     assert_reported(
         &text,
         Expected::Error,
@@ -378,7 +383,7 @@ fn a_parameter_id_of_the_line_form_is_an_error() {
 
 #[test]
 fn a_default_outside_its_range_is_an_error() {
-    let text = edited("game_of_life.toml", &[("default = 0.3", "default = 1.5")]);
+    let text = edited_sheet("game_of_life.toml", &[("default = 0.3", "default = 1.5")]);
     assert_reported(
         &text,
         Expected::Error,
@@ -389,7 +394,7 @@ fn a_default_outside_its_range_is_an_error() {
 
 #[test]
 fn an_unknown_state_in_a_measure_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[(
             "property = \"status\"\nstate = \"alive\"",
@@ -406,7 +411,7 @@ fn an_unknown_state_in_a_measure_is_an_error() {
 
 #[test]
 fn a_button_running_a_tick_card_is_an_error() {
-    let text = edited("game_of_life.toml", &[("card = \"clear\"", "card = \"cell_tick\"")]);
+    let text = edited_sheet("game_of_life.toml", &[("card = \"clear\"", "card = \"cell_tick\"")]);
     assert_reported(
         &text,
         Expected::Error,
@@ -417,7 +422,7 @@ fn a_button_running_a_tick_card_is_an_error() {
 
 #[test]
 fn a_count_inside_a_repeat_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "random_walk.toml",
         &[("[card.line.l2]\nkind = \"move\"", "[card.line.l2]\nkind = \"count\"")],
     );
@@ -431,7 +436,7 @@ fn a_count_inside_a_repeat_is_an_error() {
 
 #[test]
 fn a_rate_in_a_run_once_card_is_an_error() {
-    let text = edited(
+    let text = edited_sheet(
         "sir.toml",
         &[(
             "kind = \"chance\"\nchance = { param = \"initial_infected\" }",
@@ -444,7 +449,7 @@ fn a_rate_in_a_run_once_card_is_an_error() {
 #[test]
 fn a_chance_above_1_and_a_negative_rate_are_errors() {
     for chance in ["1.5", "-0.1", "{ percent = 150 }"] {
-        let text = edited(
+        let text = edited_sheet(
             "forest_fire.toml",
             &[(
                 "chance = { param = \"lightning_chance\" }",
@@ -454,7 +459,7 @@ fn a_chance_above_1_and_a_negative_rate_are_errors() {
         assert_reported(&text, Expected::Error, CHANCE_OUT_OF_RANGE, "[card.line.l3]");
     }
     for chance in ["1", "0", "{ percent = 30 }", "{ percent = 100 }"] {
-        let text = edited(
+        let text = edited_sheet(
             "forest_fire.toml",
             &[(
                 "chance = { param = \"lightning_chance\" }",
@@ -465,14 +470,14 @@ fn a_chance_above_1_and_a_negative_rate_are_errors() {
         assert!(report.diagnostics.is_empty(), "{chance}: {:?}", report.diagnostics);
     }
     for rate in ["-0.1", "{ percent = -5 }"] {
-        let text = edited(
+        let text = edited_sheet(
             "sir.toml",
             &[("rate = { param = \"recovery_rate\" }", &format!("rate = {rate}"))],
         );
         assert_reported(&text, Expected::Error, RATE_BELOW_ZERO, "[card.line.l3]");
     }
     // A chance outside 0 to 1 is refused where a cell starts, too.
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[("chance = { param = \"initial_density\" }", "chance = { percent = 130 }")],
     );
@@ -494,7 +499,7 @@ fn a_summary_id_follows_the_id_rules() {
         ("count", "the summary id 'count' is reserved".to_owned()),
         ("l4", "the summary id 'l4' is reserved".to_owned()),
     ] {
-        let text = edited(
+        let text = edited_sheet(
             "boids.toml",
             &[
                 ("{ id = \"push\",", &format!("{{ id = \"{id}\",")),
@@ -507,9 +512,9 @@ fn a_summary_id_follows_the_id_rules() {
 
 #[test]
 fn a_chance_parameter_ranging_past_1_is_an_error() {
-    let text = edited("forest_fire.toml", &[("max = 0.001", "max = 2")]);
+    let text = edited_sheet("forest_fire.toml", &[("max = 0.001", "max = 2")]);
     assert_reported(&text, Expected::Error, CHANCE_LIMITS_OUTSIDE, "[card.line.l3]");
-    let text = edited(
+    let text = edited_sheet(
         "sir.toml",
         &[(
             "id = \"recovery_rate\"\nname = \"Recovery rate\"\ntype = \"number\"\nmin = 0",
@@ -557,26 +562,10 @@ fn the_sheet_checker_never_panics_on_the_mutation_corpus() {
     for (name, text) in sheets() {
         // Each sheet draws its own edits, so a sheet added to the corpus leaves the others' edits as they were.
         let mut rng = 0x6368_6563_6b00_0005u64 ^ fnv1a64(name.as_bytes());
-        for edit in 0..400 {
-            let mut edited = mutate(text, &mut rng);
-            if edit % 3 == 0 {
-                edited = mutate(&edited, &mut rng);
-            }
+        // Random edits, then every key of every table deleted in turn, which leaves most slots blank once.
+        for edited in mutations(text, &mut rng, &SHEET_HOSTILE, 400).chain(without_each_key(text)) {
             cases += 1;
             read += usize::from(exercise(&edited));
-        }
-        // Every key of every table deleted in turn, which leaves most slots blank once.
-        for (index, line) in text.lines().enumerate() {
-            if line.contains(" = ") {
-                let edited: Vec<&str> = text
-                    .lines()
-                    .enumerate()
-                    .filter(|(other, _)| *other != index)
-                    .map(|(_, line)| line)
-                    .collect();
-                cases += 1;
-                read += usize::from(exercise(&edited.join("\n")));
-            }
         }
     }
     assert!(
@@ -588,7 +577,7 @@ fn the_sheet_checker_never_panics_on_the_mutation_corpus() {
 #[test]
 fn a_comparison_of_an_arrow_with_a_number_is_an_error_at_its_line() {
     let compare = |test: &str, left: &str, right: &str| {
-        edited(
+        edited_sheet(
             "boids.toml",
             &[(
                 "[card.line.l8.condition]\nkind = \"always\"",

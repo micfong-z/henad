@@ -1,8 +1,7 @@
 //! Fields that add up their deposits: the `resolution` key in the reader and the canonical writer, and the checker's
 //! wrap bound.
 
-use henad_core::diagnostic::DiagnosticSeverity;
-
+use super::support::{graph_errors, graph_refusal};
 use crate::GraphFile;
 use crate::document::FieldCombine;
 
@@ -75,25 +74,6 @@ in.value = {value}
     )
 }
 
-/// Returns the message of the reader's refusal of `text`, with the line it is placed at.
-fn refusal(text: &str) -> (String, Option<u32>) {
-    let error = GraphFile::parse(text).expect_err("the reader refuses the text");
-    let diagnostic = error.diagnostic();
-    (diagnostic.message.clone(), diagnostic.line)
-}
-
-/// Returns the messages of the checker's errors of `text`.
-fn errors(text: &str) -> Vec<String> {
-    GraphFile::parse(text)
-        .unwrap_or_else(|error| panic!("{error}"))
-        .check()
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
-        .map(|diagnostic| diagnostic.message.clone())
-        .collect()
-}
-
 /// A sum at 2^-16 written as a decimal reads, writes its resolution in the writer's number form, and reads back to
 /// the same text.
 #[test]
@@ -116,7 +96,7 @@ fn a_sum_field_round_trips() {
     let again = GraphFile::parse(&canonical).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(again.to_toml(), canonical);
     assert_eq!(again.document().fields[0].combine, combine);
-    assert!(errors(&text).is_empty(), "{:?}", errors(&text));
+    assert!(graph_errors(&text).is_empty(), "{:?}", graph_errors(&text));
 
     let whole = model("combine = \"sum\"\nresolution = 1", 1.0, "{ f32 = 0.5 }");
     let file = GraphFile::parse(&whole).unwrap_or_else(|error| panic!("{error}"));
@@ -142,11 +122,12 @@ fn a_resolution_that_is_not_a_power_of_two_is_refused() {
         ("3.0", "1.0 (2^-0)"),
         ("0.3", "0.25 (2^-2)"),
     ] {
-        let (message, line) = refusal(&model(
+        let refusal = graph_refusal(&model(
             &format!("combine = \"sum\"\nresolution = {written}"),
             1.0,
             "{ f32 = 0.5 }",
         ));
+        let (message, line) = (refusal.message, refusal.line);
         assert!(
             message.contains("is not a power of two from 1 down to 2^-24"),
             "{written}: {message}"
@@ -162,14 +143,14 @@ fn a_resolution_that_is_not_a_power_of_two_is_refused() {
 /// A resolution belongs to a sum alone, and a sum needs one.
 #[test]
 fn a_resolution_needs_a_sum_and_a_sum_needs_a_resolution() {
-    let (message, _) = refusal(&model("combine = \"max\"\nresolution = 0.25", 1.0, "{ f32 = 0.5 }"));
+    let message = graph_refusal(&model("combine = \"max\"\nresolution = 0.25", 1.0, "{ f32 = 0.5 }")).message;
     assert!(
         message.contains("the field 'f' has a `resolution`, and only a field with `combine = \"sum\"` takes one"),
         "{message}"
     );
-    let (message, _) = refusal(&model("resolution = 0.25", 1.0, "{ f32 = 0.5 }"));
+    let message = graph_refusal(&model("resolution = 0.25", 1.0, "{ f32 = 0.5 }")).message;
     assert!(message.contains("only a field with `combine = \"sum\"`"), "{message}");
-    let (message, _) = refusal(&model("combine = \"sum\"", 1.0, "{ f32 = 0.5 }"));
+    let message = graph_refusal(&model("combine = \"sum\"", 1.0, "{ f32 = 0.5 }")).message;
     assert!(
         message.contains("the field 'f' adds up its deposits, and needs a `resolution`"),
         "{message}"
@@ -181,7 +162,7 @@ fn a_resolution_needs_a_sum_and_a_sum_needs_a_resolution() {
 #[test]
 fn a_deposit_at_the_wrap_bound_is_refused() {
     let sum = "combine = \"sum\"\nresolution = 1.52587890625e-5";
-    let found = errors(&model(sum, 1.0, "{ f32 = 65536.0 }"));
+    let found = graph_errors(&model(sum, 1.0, "{ f32 = 65536.0 }"));
     assert!(
         found.iter().any(
             |message| message.contains("n3 deposits up to 65536.0 into the field 'f'")
@@ -189,16 +170,16 @@ fn a_deposit_at_the_wrap_bound_is_refused() {
         ),
         "{found:?}"
     );
-    let found = errors(&model(sum, 70000.0, "{ param = \"amount\" }"));
+    let found = graph_errors(&model(sum, 70000.0, "{ param = \"amount\" }"));
     assert!(
         found.iter().any(|message| message.contains("deposits up to 70000.0")),
         "{found:?}"
     );
     for (max, value) in [(1.0, "{ f32 = 65535.0 }"), (65535.0, "{ param = \"amount\" }")] {
-        let found = errors(&model(sum, max, value));
+        let found = graph_errors(&model(sum, max, value));
         assert!(found.is_empty(), "{value}: {found:?}");
     }
-    let found = errors(&model("combine = \"max\"", 1.0, "{ f32 = 1e30 }"));
+    let found = graph_errors(&model("combine = \"max\"", 1.0, "{ f32 = 1e30 }"));
     assert!(found.is_empty(), "a max has no bound: {found:?}");
 }
 

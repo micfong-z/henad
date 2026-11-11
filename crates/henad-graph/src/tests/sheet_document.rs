@@ -10,10 +10,11 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use henad_core::authoring::primitives::rng::xorshift64;
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::metadata::TimeUnit;
 
+use super::sheet_support::{SHEET_HOSTILE, edited, edited_sheet, result, sheet_text, sheets};
+use super::support::{mutations, without_each_key};
 use crate::model_text::{ModelHeader, read_header};
 use crate::sheet::document::{
     Around, ButtonStepRule, CardRuns, ChipRelation, CompareTest, Edges, LineKind, MadeOf, MeasureRule, PropertyType,
@@ -21,39 +22,6 @@ use crate::sheet::document::{
 };
 use crate::sheet::limits::{MAX_LINES_PER_CARD, MAX_NESTING, MAX_SHEET_BYTES};
 use crate::sheet::{ParsedSheet, SheetFileError, TablePlaces, starters};
-
-/// Every sheet the tests read, by file name: the starters of [`starters`], then the test sheets.
-pub(super) fn sheets() -> Vec<(&'static str, &'static str)> {
-    let test_sheets = [
-        ("sir_chance.toml", include_str!("sheets/sir_chance.toml")),
-        ("mobile_sir.toml", include_str!("sheets/mobile_sir.toml")),
-        ("sird.toml", include_str!("sheets/sird.toml")),
-    ];
-    starters()
-        .iter()
-        .map(|starter| (starter.file_name, starter.text))
-        .chain(test_sheets)
-        .collect()
-}
-
-/// Returns the sheet `file_name` of [`sheets`].
-pub(crate) fn sheet_text(file_name: &str) -> &'static str {
-    sheets()
-        .into_iter()
-        .find(|(name, _)| *name == file_name)
-        .map(|(_, text)| text)
-        .unwrap_or_else(|| panic!("no sheet {file_name}"))
-}
-
-/// Returns the sheet `file_name` with each `(old, new)` of `edits` applied, where each `old` occurs exactly once.
-pub(crate) fn edited(file_name: &str, edits: &[(&str, &str)]) -> String {
-    let mut text = sheet_text(file_name).to_owned();
-    for (old, new) in edits {
-        assert_eq!(text.matches(old).count(), 1, "{file_name}: {old:?} is not unique");
-        text = text.replacen(old, new, 1);
-    }
-    text
-}
 
 /// The copies of `sir_chance.toml` and `sird.toml` in henad-models' `tests/fixtures/sheets/` and henad-app's
 /// `src/tests/sheets/` equal the test sheets here byte for byte.
@@ -358,15 +326,6 @@ fn nesting_depth(text: &str) -> usize {
     }
     let table: toml::Table = toml::from_str(text).expect("the sheet is TOML");
     deepest(&toml::Value::Table(table), 1)
-}
-
-/// Returns a result chip of line `line`.
-fn result(line: &str) -> SheetChip {
-    SheetChip::Result {
-        line: line.to_owned(),
-        part: None,
-        property: None,
-    }
 }
 
 /// Returns a parameter chip.
@@ -749,9 +708,13 @@ fn a_percent_reads_as_typed_wherever_a_number_can_stand() {
     assert_header(chance, &sir, "[card.line.l4.condition.chance]");
     assert_eq!(chance.key("percent").map(|span| &sir[span]), Some("30"));
 
-    let life = sheet_text("game_of_life.toml")
-        .replacen("right = 3", "right = { percent = 300 }", 1)
-        .replacen("right = [2, 3]", "right = [2, { percent = 300 }]", 1);
+    let life = edited_sheet(
+        "game_of_life.toml",
+        &[
+            ("right = 3", "right = { percent = 300 }"),
+            ("right = [2, 3]", "right = [2, { percent = 300 }]"),
+        ],
+    );
     let document = read(&life).into_document();
     let born = phrase(&line(&document, "l2").condition);
     assert_eq!(literal(&born.right).number(), Some(3.0));
@@ -777,8 +740,7 @@ const BLANK_CELLS: &str = "format = \"henad-model\"\nformat_version = 1\nkind = 
 
 /// Checks that `text` with `old` replaced by `new` is refused with a message holding `message`, placed on `at`.
 fn assert_refused(text: &str, old: &str, new: &str, at: &str, message: &str) {
-    assert!(text.contains(old), "{old}");
-    let text = text.replacen(old, new, 1);
+    let text = edited(text, old, new);
     let error = refusal(&text);
     let diagnostic = error.diagnostic();
     assert!(diagnostic.message.contains(message), "{diagnostic}");
@@ -948,90 +910,6 @@ fn colours_and_sizes_follow_their_rules() {
     assert!(error.diagnostic().span.is_none());
 }
 
-/// Values a token edit puts in place of a value.
-const HOSTILE_VALUES: [&str; 24] = [
-    "0",
-    "-1",
-    "4294967296",
-    "9223372036854775807",
-    "1e400",
-    "-0.0",
-    "nan",
-    "\"\"",
-    "\"l1\"",
-    "\"any_state\"",
-    "\"fortnight\"",
-    "[]",
-    "[[]]",
-    "{}",
-    "{ kind = \"always\" }",
-    "{ result = \"l99\", part = \"amount\" }",
-    "{ param = \"x\", my = \"y\" }",
-    "true",
-    "1979-05-27",
-    "\"#GGGGGG\"",
-    "{ percent = 30 }",
-    "{ percent = \"30\" }",
-    "{ percent = 1e400 }",
-    "{ percent = 30, my = \"y\" }",
-];
-
-/// Lines an edit inserts.
-const HOSTILE_LINES: [&str; 7] = [
-    "kind = \"when\"",
-    "[card.line.l1.condition]\nkind = \"always\"",
-    "[[card.line.l1.items]]\nresult = \"l1\"",
-    "[[card]]\nid = \"x\"\nevery = \"cells\"\nruns = \"once\"",
-    "[card.line.l99]\nkind = \"repeat\"\nlines = [\"l99\"]",
-    "version = 2",
-    "percent = 30",
-];
-
-/// Returns a number below `bound` from `rng`.
-pub(super) fn below(rng: &mut u64, bound: usize) -> usize {
-    *rng = xorshift64(*rng);
-    (*rng >> 33) as usize % bound.max(1)
-}
-
-/// Returns `text` with one random edit: a line removed, copied or swapped, a value replaced, a line inserted, or
-/// the text cut short.
-pub(super) fn mutate(text: &str, rng: &mut u64) -> String {
-    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
-    if lines.is_empty() {
-        return String::new();
-    }
-    let at = below(rng, lines.len());
-    match below(rng, 7) {
-        0 => {
-            lines.remove(at);
-        }
-        1 => {
-            let copy = lines[at].clone();
-            lines.insert(below(rng, lines.len()), copy);
-        }
-        2 => {
-            let other = below(rng, lines.len());
-            lines.swap(at, other);
-        }
-        3 | 4 => {
-            if let Some((key, _)) = lines[at].split_once(" = ") {
-                let value = HOSTILE_VALUES[below(rng, HOSTILE_VALUES.len())];
-                lines[at] = format!("{key} = {value}");
-            }
-        }
-        5 => lines.insert(at, HOSTILE_LINES[below(rng, HOSTILE_LINES.len())].to_owned()),
-        _ => {
-            let joined = lines.join("\n");
-            let mut cut = below(rng, joined.len());
-            while !joined.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            return joined[..cut].to_owned();
-        }
-    }
-    lines.join("\n")
-}
-
 /// Reads `text` and walks what it read. A panic fails the test with the text.
 fn exercise(text: &str) -> bool {
     let outcome = catch_unwind(AssertUnwindSafe(|| match ParsedSheet::parse(text) {
@@ -1040,7 +918,10 @@ fn exercise(text: &str) -> bool {
                 for line_id in card.line_tables.keys() {
                     let places = sheet.places().line(card_index, line_id);
                     assert!(places.is_some(), "line {line_id} has no place");
-                    let placed = sheet.place(CodeDiagnostic::error("here"), places.map_or(0..0, |p| p.table.clone()));
+                    let placed = sheet.place(
+                        CodeDiagnostic::error("here"),
+                        places.map_or(0..0, |place| place.table.clone()),
+                    );
                     assert!(placed.line.is_some());
                 }
             }
@@ -1060,26 +941,10 @@ fn the_sheet_reader_never_panics_on_the_mutation_corpus() {
     let mut rng = 0x7368_6565_7400_0001u64;
     let (mut cases, mut read) = (0usize, 0usize);
     for (_, text) in sheets() {
-        for edit in 0..400 {
-            let mut edited = mutate(text, &mut rng);
-            if edit % 3 == 0 {
-                edited = mutate(&edited, &mut rng);
-            }
+        // Random edits, then every key of every table deleted in turn.
+        for edited in mutations(text, &mut rng, &SHEET_HOSTILE, 400).chain(without_each_key(text)) {
             cases += 1;
             read += usize::from(exercise(&edited));
-        }
-        // Every key of every table deleted in turn.
-        for (index, line) in text.lines().enumerate() {
-            if line.contains(" = ") {
-                let edited: Vec<&str> = text
-                    .lines()
-                    .enumerate()
-                    .filter(|(other, _)| *other != index)
-                    .map(|(_, line)| line)
-                    .collect();
-                cases += 1;
-                read += usize::from(exercise(&edited.join("\n")));
-            }
         }
     }
     assert!(

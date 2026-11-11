@@ -4,6 +4,7 @@
 use henad_core::authoring::primitives::space::Boundary;
 use henad_core::params::{ParamDescriptor, ParamKind};
 
+use super::support::{assert_checks, link, node_id, starter_builder};
 use crate::GraphFile;
 use crate::document::{
     AgentsWorld, Category, Domain, GridWorld, Lane, Pass, PassEnabled, PassStage, Stat, Variant, World,
@@ -14,40 +15,12 @@ use crate::ids::NodeId;
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, Literal, MemberName, PortRef};
 
-/// Returns a builder of the starter `name`, with keys drawn from a fixed seed.
-fn starter(name: &str) -> GraphBuilder {
-    let text = crate::starters::starter(name).expect("a starter").text;
-    GraphBuilder::from_file(&GraphFile::parse(text).expect("the starter reads")).with_key_seed(1)
-}
-
-/// Returns node `number`'s id.
-fn n(number: u32) -> NodeId {
-    NodeId::new(number).expect("an id")
-}
-
-/// Returns a reference to output `port` of node `number`.
-fn link(number: u32, port: Option<&str>) -> InputValue {
-    InputValue::Link(PortRef {
-        node: n(number),
-        port: port.map(str::to_owned),
-    })
-}
-
 /// Returns a category literal.
 fn variant(category: &str, member: &str) -> InputValue {
     InputValue::Literal(Literal::Category(MemberName {
         owner: category.to_owned(),
         member: member.to_owned(),
     }))
-}
-
-/// Asserts that the builder's graph reads back and checks without an error.
-#[track_caller]
-fn assert_checks(builder: &GraphBuilder) -> GraphFile {
-    let file = builder.to_file().expect("the graph reads back");
-    let errors: Vec<String> = file.check().errors().map(|error| error.message.clone()).collect();
-    assert!(errors.is_empty(), "{errors:#?}\n{}", builder.to_toml());
-    file
 }
 
 #[test]
@@ -108,7 +81,7 @@ fn a_builder_makes_a_graph_that_checks_and_runs() {
             &seed,
             "cmp.lt",
             &[],
-            &[("a", link(bits.number(), None)), ("b", link(threshold.number(), None))],
+            &[("a", link(bits, None)), ("b", link(threshold, None))],
         )
         .expect("adds");
     let chosen = builder
@@ -117,19 +90,14 @@ fn a_builder_makes_a_graph_that_checks_and_runs() {
             "logic.select",
             &[],
             &[
-                ("cond", link(below.number(), None)),
+                ("cond", link(below, None)),
                 ("if_true", variant("life", "Alive")),
                 ("if_false", variant("life", "Dead")),
             ],
         )
         .expect("adds");
     builder
-        .add_node(
-            &seed,
-            "lane.set",
-            &[lane("state")],
-            &[("value", link(chosen.number(), None))],
-        )
+        .add_node(&seed, "lane.set", &[lane("state")], &[("value", link(chosen, None))])
         .expect("adds");
     assert_eq!(
         builder.document().passes[0].draw_order,
@@ -164,19 +132,11 @@ fn a_builder_makes_a_graph_that_checks_and_runs() {
             &step,
             "grid.life_like",
             &config,
-            &[
-                ("cell", link(cell.number(), None)),
-                ("count", link(count.number(), None)),
-            ],
+            &[("cell", link(cell, None)), ("count", link(count, None))],
         )
         .expect("adds");
     builder
-        .add_node(
-            &step,
-            "lane.set",
-            &[lane("state")],
-            &[("value", link(next.number(), None))],
-        )
+        .add_node(&step, "lane.set", &[lane("state")], &[("value", link(next, None))])
         .expect("adds");
 
     let counts = Scope::pass("counts");
@@ -188,15 +148,15 @@ fn a_builder_makes_a_graph_that_checks_and_runs() {
             &counts,
             "stat.count_by",
             &[("category", ConfigValue::String("life".to_owned()))],
-            &[("value", link(read.number(), None))],
+            &[("value", link(read, None))],
         )
         .expect("adds");
-    let from = PortRef {
+    let source = PortRef {
         node: counted,
         port: Some("Alive".to_owned()),
     };
     builder
-        .apply(EditCommand::AddStat(Stat::new("Alive", from, [255, 255, 255, 255])))
+        .apply(EditCommand::AddStat(Stat::new("Alive", source, [255, 255, 255, 255])))
         .expect("adds");
 
     let file = assert_checks(&builder);
@@ -213,7 +173,7 @@ fn a_builder_makes_a_graph_that_checks_and_runs() {
 
 #[test]
 fn a_new_node_takes_the_next_id_and_a_fresh_key() {
-    let mut builder = starter("sir.toml");
+    let mut builder = starter_builder("sir.toml", 1);
     let step = Scope::pass("step");
     let add = |builder: &mut GraphBuilder| {
         builder
@@ -227,7 +187,11 @@ fn a_new_node_takes_the_next_id_and_a_fresh_key() {
     };
     let first = add(&mut builder);
     let second = add(&mut builder);
-    assert_eq!((first, second), (n(52), n(53)), "the editor's next id comes first");
+    assert_eq!(
+        (first, second),
+        (node_id(52), node_id(53)),
+        "the editor's next id comes first"
+    );
     assert_eq!(builder.editor().next_id(), Some(54));
     let key = |builder: &GraphBuilder, id: NodeId| {
         builder.document().passes[1]
@@ -237,12 +201,12 @@ fn a_new_node_takes_the_next_id_and_a_fresh_key() {
             .and_then(ConfigValue::as_integer)
             .expect("a key")
     };
-    let keys = [key(&builder, n(14)), key(&builder, first), key(&builder, second)];
+    let keys = [key(&builder, node_id(14)), key(&builder, first), key(&builder, second)];
     assert!(
         keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2],
         "{keys:?}"
     );
-    let mut again = starter("sir.toml");
+    let mut again = starter_builder("sir.toml", 1);
     let replayed = add(&mut again);
     assert_eq!(key(&again, replayed), keys[1], "one key seed mints one key");
     assert_eq!(
@@ -253,9 +217,11 @@ fn a_new_node_takes_the_next_id_and_a_fresh_key() {
 
 #[test]
 fn a_paste_mints_fresh_ids_and_keys_and_keeps_wires_inside_the_copy() {
-    let mut builder = starter("sir.toml");
+    let mut builder = starter_builder("sir.toml", 1);
     let step = Scope::pass("step");
-    let text = builder.copy(&step, &[n(12), n(13), n(14)]).expect("copies");
+    let text = builder
+        .copy(&step, &[node_id(12), node_id(13), node_id(14)])
+        .expect("copies");
     let made = builder
         .apply(EditCommand::Paste {
             scope: step.clone(),
@@ -263,12 +229,12 @@ fn a_paste_mints_fresh_ids_and_keys_and_keeps_wires_inside_the_copy() {
             offset: [100.0, 0.0],
         })
         .expect("pastes");
-    assert_eq!(made, vec![n(52), n(53), n(54)]);
+    assert_eq!(made, vec![node_id(52), node_id(53), node_id(54)]);
     let body = &builder.document().passes[1].body;
-    let powi = body.node(n(53)).expect("the pasted powi");
+    let powi = body.node(node_id(53)).expect("the pasted powi");
     assert_eq!(
         powi.inputs.get("base"),
-        Some(&link(52, None)),
+        Some(&link(node_id(52), None)),
         "the wire inside the copy follows it"
     );
     assert!(
@@ -276,17 +242,17 @@ fn a_paste_mints_fresh_ids_and_keys_and_keeps_wires_inside_the_copy() {
         "the wire from outside the copy is dropped"
     );
     let key = |id: NodeId| body.node(id).and_then(|node| node.config.get("key")).cloned();
-    assert_ne!(key(n(54)), key(n(14)), "the pasted draw takes a fresh key");
+    assert_ne!(key(node_id(54)), key(node_id(14)), "the pasted draw takes a fresh key");
     assert_eq!(
-        builder.editor().node_layout(n(52)).map(|layout| layout.pos),
+        builder.editor().node_layout(node_id(52)).map(|layout| layout.pos),
         builder
             .editor()
-            .node_layout(n(12))
+            .node_layout(node_id(12))
             .map(|layout| [layout.pos[0] + 100.0, layout.pos[1]])
     );
     builder.to_file().expect("the graph reads back");
 
-    let mut vote = starter("vote.toml");
+    let mut vote = starter_builder("vote.toml", 1);
     let made = vote
         .apply(EditCommand::Paste {
             scope: Scope::pass("step"),
@@ -303,22 +269,22 @@ fn a_paste_mints_fresh_ids_and_keys_and_keeps_wires_inside_the_copy() {
 
 #[test]
 fn removing_a_node_drops_its_wires_and_its_placement() {
-    let mut builder = starter("sir.toml");
+    let mut builder = starter_builder("sir.toml", 1);
     let step = Scope::pass("step");
     builder
         .apply(EditCommand::RemoveNode {
             scope: step.clone(),
-            node: n(11),
+            node: node_id(11),
         })
         .expect("removes");
     let body = &builder.document().passes[1].body;
-    assert!(body.node(n(11)).is_none());
-    assert!(!body.node(n(13)).expect("powi").inputs.contains_key("exponent"));
-    assert!(builder.editor().node_layout(n(11)).is_none());
+    assert!(body.node(node_id(11)).is_none());
+    assert!(!body.node(node_id(13)).expect("powi").inputs.contains_key("exponent"));
+    assert!(builder.editor().node_layout(node_id(11)).is_none());
     assert!(!builder.to_toml().contains("\"n11\""), "no frame names the node");
     let refused = builder.apply(EditCommand::RemoveNode {
         scope: Scope::pass("counts"),
-        node: n(31),
+        node: node_id(31),
     });
     assert!(
         matches!(&refused, Err(EditError::Referenced { references, .. }) if references.len() == 3),
@@ -328,7 +294,7 @@ fn removing_a_node_drops_its_wires_and_its_placement() {
 
 #[test]
 fn renames_rewrite_every_reference() {
-    let mut builder = starter("sir.toml");
+    let mut builder = starter_builder("sir.toml", 1);
     let before = HostEvaluator::new(&builder.to_file().expect("reads"))
         .expect("runs")
         .init(HostWorld::of(builder.document()), &[], Some(4))
@@ -398,7 +364,7 @@ fn renames_rewrite_every_reference() {
 
 #[test]
 fn a_delete_with_references_is_refused_with_their_list() {
-    let mut builder = starter("sir.toml");
+    let mut builder = starter_builder("sir.toml", 1);
     let text = builder.to_toml();
     let refusals = [
         (EditCommand::RemoveLane("health".to_owned()), 7),
@@ -439,38 +405,38 @@ fn a_delete_with_references_is_refused_with_their_list() {
 
 #[test]
 fn a_structural_mistake_is_refused_and_changes_nothing() {
-    let mut builder = starter("sir.toml");
+    let mut builder = starter_builder("sir.toml", 1);
     let text = builder.to_toml();
     let step = Scope::pass("step");
     let mistakes = [
         EditCommand::SetLiteral {
             scope: step.clone(),
-            node: n(14),
+            node: node_id(14),
             port: "max".to_owned(),
             literal: Literal::F32(f32::NAN),
         },
         EditCommand::BindParam {
             scope: step.clone(),
-            node: n(14),
+            node: node_id(14),
             port: "max".to_owned(),
             param: "nothing".to_owned(),
         },
         EditCommand::SetRegion {
             scope: step.clone(),
-            node: n(14),
-            region: Some(n(13)),
+            node: node_id(14),
+            region: Some(node_id(13)),
         },
         EditCommand::Connect {
             scope: step.clone(),
-            node: n(15),
+            node: node_id(15),
             port: "a".to_owned(),
             source: PortRef {
-                node: n(42),
+                node: node_id(42),
                 port: None,
             },
         },
         EditCommand::Move {
-            node: n(999),
+            node: node_id(999),
             pos: [0.0, 0.0],
         },
         EditCommand::AddNode {
@@ -493,7 +459,7 @@ fn a_structural_mistake_is_refused_and_changes_nothing() {
 
 #[test]
 fn a_node_moves_into_a_region_and_out_again() {
-    let mut builder = starter("sir.toml");
+    let mut builder = starter_builder("sir.toml", 1);
     let step = Scope::pass("step");
     let repeat = builder
         .add_node(
@@ -547,7 +513,7 @@ fn a_node_moves_into_a_region_and_out_again() {
 
 #[test]
 fn passes_move_within_their_stage() {
-    let mut builder = starter("sir.toml");
+    let mut builder = starter_builder("sir.toml", 1);
     builder
         .apply(EditCommand::AddPass(Pass::new(
             "later",
@@ -577,7 +543,7 @@ fn passes_move_within_their_stage() {
 
 #[test]
 fn a_pass_switch_a_parameter_and_the_world_change_in_place() {
-    let mut builder = starter("sir.toml");
+    let mut builder = starter_builder("sir.toml", 1);
     builder
         .apply(EditCommand::AddParam(ParamDescriptor::new(
             "outbreaks",
@@ -650,19 +616,19 @@ fn a_pass_switch_a_parameter_and_the_world_change_in_place() {
 
 #[test]
 fn a_frame_and_a_move_change_the_editor_region_alone() {
-    let mut builder = starter("vote.toml");
+    let mut builder = starter_builder("vote.toml", 1);
     let code = builder.to_file().expect("reads").code();
     builder
         .apply(EditCommand::Frame {
             scope: Scope::pass("step"),
             title: "Count".to_owned(),
             color: "blue".to_owned(),
-            members: vec![n(10)],
+            members: vec![node_id(10)],
         })
         .expect("frames");
     builder
         .apply(EditCommand::Move {
-            node: n(10),
+            node: node_id(10),
             pos: [5.0, 6.0],
         })
         .expect("moves");
@@ -675,7 +641,7 @@ fn a_frame_and_a_move_change_the_editor_region_alone() {
         (added.scope.as_str(), added.title.as_str(), added.color.as_str()),
         ("pass.step", "Count", "blue")
     );
-    assert_eq!(added.members, [n(10)]);
+    assert_eq!(added.members, [node_id(10)]);
 }
 
 /// A graph whose category `kind` holds one variant, counted by `n21`, which a stat reads.
@@ -754,7 +720,7 @@ fn a_bare_link_to_a_counter_of_one_variant_is_named_before_a_variant_edit() {
     assert_eq!(
         file.document().stats[0].from,
         PortRef {
-            node: n(21),
+            node: node_id(21),
             port: Some("Only".to_owned()),
         }
     );

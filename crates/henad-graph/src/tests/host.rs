@@ -1,10 +1,10 @@
 //! The host evaluator: inits replay, reruns draw on the action stream, and a Repeat runs as its definition says.
 
 use henad_core::authoring::primitives::rng::random_float;
-use henad_core::authoring::primitives::space::Boundary;
 use henad_core::params::ParamValue;
 
 use super::corpus;
+use super::support::torus;
 use crate::GraphFile;
 use crate::document::PassStage;
 use crate::draw::{PHASE_INIT, action_phase, draw_bits, key_word};
@@ -53,7 +53,7 @@ default = true
 "#;
 
 /// A tick pass that keeps `x`, since a grid has exactly one tick pass.
-const KEEP_X: &str = r#"
+pub(super) const KEEP_X: &str = r#"
 [[pass]]
 id = "step"
 stage = "tick"
@@ -86,11 +86,7 @@ fn init(nodes: &str) -> String {
 }
 
 /// The world of [`GRID`].
-pub(super) const WORLD: HostWorld = HostWorld::Grid {
-    width: 8,
-    height: 8,
-    boundary: Boundary::Torus,
-};
+pub(super) const WORLD: HostWorld = torus(8, 8);
 
 /// Returns every value of lane `id`.
 fn values(lanes: &HostLanes, id: &str) -> Vec<HostValue> {
@@ -102,11 +98,7 @@ fn values(lanes: &HostLanes, id: &str) -> Vec<HostValue> {
 
 #[test]
 fn every_corpus_init_runs_on_the_host_and_replays() {
-    let world = HostWorld::Grid {
-        width: 24,
-        height: 16,
-        boundary: Boundary::Torus,
-    };
+    let world = torus(24, 16);
     for (name, text) in corpus::all() {
         let file = GraphFile::parse(&text).expect("the corpus reads");
         let evaluator = HostEvaluator::new(&file).unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -172,11 +164,7 @@ fn every_corpus_init_runs_on_the_host_and_replays() {
 fn the_sir_init_reads_its_parameters_and_their_defaults() {
     let text = crate::starters::starter("sir.toml").expect("the SIR starter").text;
     let evaluator = HostEvaluator::new(&GraphFile::parse(text).expect("the starter reads")).expect("the starter runs");
-    let world = HostWorld::Grid {
-        width: 16,
-        height: 16,
-        boundary: Boundary::Torus,
-    };
+    let world = torus(16, 16);
     let health = |pct: f32| {
         let params = [ParamValue::F32(0.3), ParamValue::F32(0.05), ParamValue::F32(pct)];
         let lanes = evaluator.init(world, &params, Some(3)).expect("the init runs");
@@ -224,11 +212,7 @@ fn a_tick_pass_reads_the_start_of_the_pass() {
         .expect("the Life starter")
         .text;
     let evaluator = HostEvaluator::new(&GraphFile::parse(text).expect("the starter reads")).expect("the starter runs");
-    let world = HostWorld::Grid {
-        width: 5,
-        height: 5,
-        boundary: Boundary::Torus,
-    };
+    let world = torus(5, 5);
     let mut lanes = HostLanes::new(evaluator.document(), world).expect("the lanes");
     let alive = |cells: &[usize]| -> Vec<HostValue> {
         (0..25)
@@ -692,11 +676,7 @@ fn lanes_of_another_file_fault_and_never_panic() {
 
 #[test]
 fn lanes_past_the_host_budget_are_refused_before_they_are_allocated() {
-    let largest = HostWorld::Grid {
-        width: 16384,
-        height: 16384,
-        boundary: Boundary::Torus,
-    };
+    let largest = torus(16384, 16384);
     // Over 2^28 cells, `x` and `y` take a word each and the two `vec2u` lanes two words each: 6 GiB together.
     let wide = GraphFile::parse(&format!(
         "{GRID}\n[[lane]]\nid = \"v\"\ndomain = \"cells\"\ntype = \"vec2u\"\n\n\

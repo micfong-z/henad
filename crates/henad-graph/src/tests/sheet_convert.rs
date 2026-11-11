@@ -3,16 +3,15 @@
 //! function and Copy. The device run of the copy sits in henad-models.
 
 use henad_core::action::action_seed;
-use henad_core::authoring::primitives::space::Boundary;
 use henad_core::explore::fingerprint::fnv1a64;
-use henad_core::params::ParamValue;
 
+use super::sheet_support::{LIFE_PARAMS, edited, lowered};
+use super::support::{node_id, torus};
 use crate::GraphFile;
 use crate::document::PassStage;
 use crate::edit::{EditCommand, GraphBuilder, Scope};
 use crate::editor::{FrameLayout, ModelOrigin, NoteLayout};
-use crate::host::{HostEvaluator, HostLanes, HostWorld, RunContext};
-use crate::ids::NodeId;
+use crate::host::{HostEvaluator, HostLanes, RunContext};
 use crate::node::Node;
 use crate::sheet::{
     ChangesError, ConvertError, ConvertOptions, ConvertRefusal, KIND_SHEET, ParsedSheet, SheetFile, SheetFileError,
@@ -28,26 +27,10 @@ fn life() -> &'static str {
     starters()[0].text
 }
 
-/// Returns `text` with `old` replaced by `new` once, where `text` must hold `old`.
-fn edited(text: &str, old: &str, new: &str) -> String {
-    assert!(text.contains(old), "the text holds no {old:?}");
-    text.replacen(old, new, 1)
-}
-
-/// Lowers `text`, which must lower.
-fn lowered(text: &str) -> SheetFile {
-    SheetFile::parse(text).unwrap_or_else(|error| panic!("the sheet does not lower: {error}"))
-}
-
 /// Returns the first copy of `sheet`, with no id or name taken.
 fn copy_of(sheet: &SheetFile) -> GraphFile {
     let options = ConvertOptions::new(sheet.document(), DATE, |_, _| false);
     convert(sheet, &options).unwrap_or_else(|error| panic!("the sheet does not convert: {error}"))
-}
-
-/// Returns node `number`'s id.
-fn id(number: u32) -> NodeId {
-    NodeId::new(number).expect("node ids count from 1")
 }
 
 /// Returns the frame among `frames` titled `title`.
@@ -215,7 +198,7 @@ fn the_copy_frames_each_origin_group() {
 fn the_copy_labels_named_results_and_reads_and_places_no_node() {
     let copy = copy_of(&lowered(life()));
     let editor = copy.editor().expect("the copy has an editor region");
-    let label = |number: u32| editor.node_layout(id(number))?.label;
+    let label = |number: u32| editor.node_layout(node_id(number))?.label;
     assert_eq!(label(1001).as_deref(), Some("Alive neighbours"));
     for read in [4, 7, 9] {
         assert_eq!(label(read).as_deref(), Some("my Status"), "node n{read}");
@@ -363,9 +346,6 @@ fn a_sheet_with_an_error_or_a_skipped_line_does_not_convert() {
     assert_eq!(ConvertRefusal::of(&lowered(life()).parsed().check()), None);
 }
 
-/// Parameters of Game of Life on the host: the initial density.
-const LIFE_PARAMS: [ParamValue; 1] = [ParamValue::F32(0.3)];
-
 /// Runs `file`, Game of Life or a copy of it, for 200 ticks at seed 7 on a wrapping world 64 cells wide, pressing
 /// Randomise at tick 60, Clear at tick 150 and Randomise at tick 160, and returns the status lane's words at tick 0 and
 /// after each tick.
@@ -373,11 +353,7 @@ fn life_run(file: &GraphFile) -> Vec<Vec<u32>> {
     let side = 64;
     let seed = Some(7);
     let evaluator = HostEvaluator::new(file).unwrap_or_else(|error| panic!("{error}"));
-    let world = HostWorld::Grid {
-        width: side,
-        height: side,
-        boundary: Boundary::Torus,
-    };
+    let world = torus(side, side);
     let mut lanes = evaluator.init(world, &LIFE_PARAMS, seed).expect("the start runs");
     let words = |lanes: &HostLanes| lanes.column("status").expect("a status lane").words().to_vec();
     let clear = file
@@ -468,11 +444,11 @@ fn highlife(copy: &GraphFile) -> GraphFile {
         .find(|pass| pass.id == "tick_cell_tick")
         .expect("the tick pass");
     let count = PortRef {
-        node: id(1001),
+        node: node_id(1001),
         port: None,
     };
     let equals = |number: u32, value: u32| {
-        let mut node = Node::new(id(number), "cmp.eq");
+        let mut node = Node::new(node_id(number), "cmp.eq");
         node.inputs.insert("a".to_owned(), InputValue::Link(count.clone()));
         node.inputs
             .insert("b".to_owned(), InputValue::Literal(Literal::U32(value)));
@@ -484,14 +460,14 @@ fn highlife(copy: &GraphFile) -> GraphFile {
         .body
         .nodes
         .iter_mut()
-        .find(|node| node.id == id(2001))
+        .find(|node| node.id == node_id(2001))
         .expect("line 2's comparison");
-    *birth = Node::new(id(2001), "logic.or");
+    *birth = Node::new(node_id(2001), "logic.or");
     for (port, source) in [("a", 9001), ("b", 9002)] {
         birth.inputs.insert(
             port.to_owned(),
             InputValue::Link(PortRef {
-                node: id(source),
+                node: node_id(source),
                 port: None,
             }),
         );
@@ -544,7 +520,7 @@ fn a_highlife_edit_is_found_by_changes_since_conversion() {
     builder
         .apply(EditCommand::RemoveNode {
             scope: Scope::pass("tick_cell_tick"),
-            node: id(3002),
+            node: node_id(3002),
         })
         .expect("the node is removed");
     let removed = builder.to_file().expect("the copy reads");
@@ -602,7 +578,7 @@ fn make_function_keeps_frame_members() {
     let made = builder
         .apply(EditCommand::MakeFunction {
             scope: Scope::pass("tick_cell_tick"),
-            nodes: vec![id(3001), id(3002), id(3003)],
+            nodes: vec![node_id(3001), node_id(3002), node_id(3003)],
             id: "survives".to_owned(),
         })
         .expect("line 3's nodes make a function");
@@ -619,11 +595,11 @@ fn make_function_keeps_frame_members() {
         .filter(|frame| frame.title == LINE_3 && frame.scope == "function.survives")
         .collect();
     assert_eq!(in_function.len(), 1);
-    assert_eq!(in_function[0].members, [id(3001), id(3002), id(3003)]);
+    assert_eq!(in_function[0].members, [node_id(3001), node_id(3002), node_id(3003)]);
     assert_eq!(in_function[0].lines, ["l3"]);
     assert_eq!(in_function[0].color, "blue");
     // Frames of other lines stay as they were.
-    assert_eq!(frame(&frames, LINE_2).members, [id(2001)]);
+    assert_eq!(frame(&frames, LINE_2).members, [node_id(2001)]);
     let file = builder.to_file().expect("the edited copy reads");
     assert!(file.check().diagnostics.is_empty(), "{:#?}", file.check().diagnostics);
 }
@@ -633,12 +609,14 @@ fn copy_carries_frame_membership() {
     let copy = copy_of(&lowered(life()));
     let mut builder = GraphBuilder::from_file(&copy).with_key_seed(1);
     let scope = Scope::pass("tick_cell_tick");
-    let text = builder.copy(&scope, &[id(3001), id(3002)]).expect("the nodes copy");
+    let text = builder
+        .copy(&scope, &[node_id(3001), node_id(3002)])
+        .expect("the nodes copy");
     let copied = GraphFile::parse(&text).expect("the copied text reads");
     let copied_frames = copied.editor().expect("an editor region").frames();
     assert_eq!(copied_frames.len(), 1, "{copied_frames:#?}");
     assert_eq!(copied_frames[0].title, LINE_3);
-    assert_eq!(copied_frames[0].members, [id(3001), id(3002)]);
+    assert_eq!(copied_frames[0].members, [node_id(3001), node_id(3002)]);
     assert_eq!(copied_frames[0].lines, ["l3"]);
 
     let pasted = builder
@@ -653,7 +631,7 @@ fn copy_carries_frame_membership() {
     assert_eq!(line_3.len(), 2, "the paste adds a frame of its own: {line_3:#?}");
     assert_eq!(
         line_3[0].members,
-        [id(3001), id(3002), id(3003)],
+        [node_id(3001), node_id(3002), node_id(3003)],
         "the original frame is unchanged"
     );
     assert_eq!(line_3[1].members, pasted);

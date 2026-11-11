@@ -5,11 +5,11 @@
 //! the lanes the case gives, and compares the lanes, statistics and colours it leaves.
 
 use super::case_files::{node_case_file, pass_case_file};
+use super::support::node_id;
 use crate::GraphFile;
-use crate::catalogue::{CaseForm, CaseValue, NodeCase, NodeDef, PassCase, definitions};
+use crate::catalogue::{CaseContext, CaseForm, CaseValue, NodeCase, NodeDef, PassCase, definitions};
 use crate::document::{GraphDocument, PassStage};
 use crate::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
-use crate::ids::NodeId;
 use crate::value::{InputValue, Literal, MemberName, PortRef};
 use henad_core::authoring::primitives::space::Boundary;
 
@@ -83,17 +83,7 @@ fn run_node_case(def: &NodeDef, name: &str, case: &NodeCase) {
     let evaluator = HostEvaluator::from_document(&document).expect("the case compiles");
     let lanes = HostLanes::new(evaluator.document(), HostWorld::of(evaluator.document())).expect("the lanes");
     let context = &case.context;
-    let run_context = RunContext {
-        seed: context.seed,
-        phase: context.phase,
-        tick: context.tick,
-        tick_word: if stage == PassStage::Action {
-            context.press
-        } else {
-            context.tick
-        },
-        press: context.press,
-    };
+    let run_context = node_case_context(context, stage);
     let mut stream = context.stream;
     let values = evaluator
         .probe(
@@ -105,7 +95,7 @@ fn run_node_case(def: &NodeDef, name: &str, case: &NodeCase) {
             &mut stream,
         )
         .unwrap_or_else(|error| panic!("{} '{name}': {error}", def.id));
-    let n1 = NodeId::new(1).expect("an id");
+    let n1 = node_id(1);
     for (port, expected) in case.outputs {
         let found = *values
             .get(&(n1, (*port).to_owned()))
@@ -128,6 +118,43 @@ fn run_node_case(def: &NodeDef, name: &str, case: &NodeCase) {
     }
 }
 
+/// Returns the context of a node case's run, whose pass is of stage `stage`. An action pass reads the press as its
+/// tick word.
+pub(super) fn node_case_context(context: &CaseContext, stage: PassStage) -> RunContext {
+    RunContext {
+        seed: context.seed,
+        phase: context.phase,
+        tick: context.tick,
+        tick_word: if stage == PassStage::Action {
+            context.press
+        } else {
+            context.tick
+        },
+        press: context.press,
+    }
+}
+
+/// Returns the context of the pass `case` of a pass case, of stage `stage`.
+pub(super) fn pass_case_context(stage: PassStage) -> RunContext {
+    match stage {
+        PassStage::Init => RunContext::init(None),
+        PassStage::Action => RunContext::action(None, 0, 1, 0),
+        _ => RunContext::tick(None, 0),
+    }
+}
+
+/// Sets each lane or field layer of `lanes` that `before` names to its values. A value the lane does not take fails
+/// the case `what`.
+pub(super) fn plant(lanes: &mut HostLanes, before: &[(&str, &[CaseValue])], document: &GraphDocument, what: &str) {
+    for (lane, values) in before {
+        let column = lanes.column_mut(lane).expect("a lane or layer of the case");
+        for (index, value) in values.iter().enumerate() {
+            let value = HostValue::from_literal(&input_literal(*value), document).expect("a value");
+            assert!(column.set(index, value), "{what}: {lane} takes {value:?}");
+        }
+    }
+}
+
 /// Runs a pass case and fails on the first lane, statistic or colour that differs.
 fn run_pass_case(def: &NodeDef, name: &str, case: &PassCase) {
     let file = GraphFile::parse(&pass_case_file(case)).expect("the case reads");
@@ -143,27 +170,13 @@ fn run_pass_case(def: &NodeDef, name: &str, case: &PassCase) {
             def.id
         );
     }
-    for (lane, values) in case.before {
-        let column = lanes.column_mut(lane).expect("a lane of the case");
-        for (index, value) in values.iter().enumerate() {
-            let value = HostValue::from_literal(&input_literal(*value), document).expect("a value");
-            assert!(
-                column.set(index, value),
-                "{} '{name}': lane {lane} takes {value:?}",
-                def.id
-            );
-        }
-    }
+    plant(&mut lanes, case.before, document, &format!("{} '{name}'", def.id));
     let pass = document
         .passes
         .iter()
         .find(|pass| pass.id == "case")
         .expect("the case pass");
-    let context = match pass.stage {
-        PassStage::Init => RunContext::init(None),
-        PassStage::Action => RunContext::action(None, 0, 1, 0),
-        _ => RunContext::tick(None, 0),
-    };
+    let context = pass_case_context(pass.stage);
     let mut stream = 1;
     let outcome = evaluator
         .run_pass("case", &mut lanes, &[], &context, &mut stream)

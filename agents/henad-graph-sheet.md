@@ -290,10 +290,11 @@ Game of Life's Clear is a Run once card holding "Become Dead from any state, alw
 sheets name their button `new_outbreak`, "New outbreak". The written sheets' keys were minted at
 random. Their text is the writer's canonical text, comments included. The bounded confidence colour
 rule is `shaded` over `opinion` with no colours, since the schema holds no ramp. The test helper
-`sheets()` lists the starters from `starters()`, then the test sheets, so every starter is among the
-sheets the tests read. `starters_returns_the_grid_sheets_then_the_agent_sheets` holds the list and
-each starter's world, and `the_sheets_written_from_round_1_read_their_values` a value of each
-written sheet. `every_sheet_reads` (places on every line table, the ants' chip in
+`sheets()` in `src/tests/sheet_support.rs` lists the starters from `starters()`, then the test
+sheets, so every starter is among the sheets the tests read.
+`starters_returns_the_grid_sheets_then_the_agent_sheets` holds the list and each starter's world,
+and `the_sheets_written_from_round_1_read_their_values` a value of each written sheet.
+`every_sheet_reads` (places on every line table, the ants' chip in
 `[[card.line.l7.row.condition.items]]`, and a depth at most half the limit),
 `every_table_reads_its_values`, `a_sheet_with_an_unknown_key_is_refused_on_the_key` (also with
 `\r\n` line ends), `a_newer_sheet_version_is_refused_on_its_key`,

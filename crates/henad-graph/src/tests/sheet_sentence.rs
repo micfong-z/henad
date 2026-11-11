@@ -7,27 +7,21 @@ use henad_core::metadata::TimeUnit;
 
 use crate::sheet::ParsedSheet;
 use crate::sheet::document::{
-    Around, CompareTest, LineKind, LookSummary, PropertyType, SheetChip, SheetDocument, SheetLine, SheetProperty,
-    SheetValue, Slot, SummaryKind,
+    Around, CompareTest, LineKind, LookSummary, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral,
+    SheetProperty, SheetValue, Slot, SummaryKind,
 };
+use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{
-    self, AddButton, AddItem, Blank, ConditionItem, ConditionKind, DrawKind, LineSelect, OtherwiseRepeat,
+    self, AddButton, AddItem, Blank, ChipKind, ConditionItem, ConditionKind, DrawKind, FieldPlace, LineSelect,
+    OtherwiseRepeat, PartPlace, PlaceTarget, SentenceChip, SentencePart, sentence_text,
 };
 use crate::sheet::sentence::{COMPARISONS, Sentences, SheetSection, StartsField};
 
-use super::sheet_document::sheets;
+use super::sheet_support::{VALUES, read, sheet_text, sheets};
 
 /// Reads the sheet `file_name` of [`sheets`].
 fn document(file_name: &str) -> SheetDocument {
-    let text = sheets()
-        .into_iter()
-        .find(|(name, _)| *name == file_name)
-        .map(|(_, text)| text)
-        .unwrap_or_else(|| panic!("no sheet {file_name}"));
-    ParsedSheet::parse(text)
-        .unwrap_or_else(|error| panic!("{file_name} does not read: {error}"))
-        .document()
-        .clone()
+    read(sheet_text(file_name))
 }
 
 /// Returns the sentence of every line of card `card` of `document` in display order, the lines inside a When or
@@ -1581,7 +1575,7 @@ fn a_kind_reads_in_the_plural_by_the_rules_of_english() {
 
 #[test]
 fn a_count_names_its_only_test_and_a_set_to_a_chance_reads_yes_otherwise_no() {
-    let values = ParsedSheet::parse(include_str!("sheets/values.toml"))
+    let values = ParsedSheet::parse(VALUES)
         .expect("the values sheet reads")
         .into_document();
     let (_, count) = values.line("l10").expect("line 10");
@@ -1651,8 +1645,6 @@ fn a_total_or_average_line_reads_over_its_cells() {
 
 #[test]
 fn an_empty_total_or_average_value_is_a_number_property_blank() {
-    use crate::sheet::sentence::SentencePart;
-
     let mut game = document("game_of_life.toml");
     let mut summary = LookSummary::new("summary", "Total around");
     summary.summary = Some(SummaryKind::Total);
@@ -1761,7 +1753,7 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
         texts.extend(item.description().map(str::to_owned));
     }
     for text in &texts {
-        for word in text.split(|c: char| !c.is_alphanumeric()) {
+        for word in text.split(|letter: char| !letter.is_alphanumeric()) {
             assert!(
                 !sentence::is_forbidden_word(word),
                 "{text:?} holds the forbidden word {word:?}"
@@ -1772,8 +1764,6 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
 
 #[test]
 fn the_parts_of_a_life_line_name_each_chip_select_and_word() {
-    use crate::sheet::sentence::{ChipKind, SentenceChip, SentencePart};
-
     let game = document("game_of_life.toml");
     let sentences = Sentences::new(&game);
     let chip = |kind: ChipKind, name: &str| {
@@ -1851,8 +1841,6 @@ fn the_parts_of_a_life_line_name_each_chip_select_and_word() {
 
 #[test]
 fn otherwise_blanks_and_the_empty_for_each_are_parts_of_their_own() {
-    use crate::sheet::sentence::{SentencePart, sentence_text};
-
     let fire = document("forest_fire.toml");
     let sentences = Sentences::new(&fire);
     let parts = sentences.line_parts("l3", &[2]);
@@ -1878,8 +1866,6 @@ fn otherwise_blanks_and_the_empty_for_each_are_parts_of_their_own() {
 
 #[test]
 fn no_line_of_a_test_sheet_holds_two_adjacent_word_parts() {
-    use crate::sheet::sentence::SentencePart;
-
     for (file_name, _) in sheets() {
         let sheet = document(file_name);
         let sentences = Sentences::new(&sheet);
@@ -1903,9 +1889,6 @@ fn no_line_of_a_test_sheet_holds_two_adjacent_word_parts() {
 /// that reads as nothing.
 #[test]
 fn lead_words_result_names_and_alternatives_leave_every_sentence_as_written() {
-    use crate::sheet::relations::CardRelations;
-    use crate::sheet::sentence::{SentencePart, sentence_text};
-
     let mut leads = 0;
     let mut alternatives = 0;
     for (file_name, text) in sheets() {
@@ -1978,8 +1961,6 @@ fn lead_words_result_names_and_alternatives_leave_every_sentence_as_written() {
 
 #[test]
 fn a_typed_number_reads_as_its_known_answers() {
-    use crate::sheet::document::SheetLiteral;
-
     let read = sentence::read_typed_number;
     assert_eq!(read("3"), Some(SheetLiteral::Number(3.0)));
     assert_eq!(read(" -0.25 "), Some(SheetLiteral::Number(-0.25)));
@@ -2007,8 +1988,6 @@ fn a_typed_number_reads_as_its_known_answers() {
 
 #[test]
 fn every_control_of_a_life_line_is_placed_at_the_slot_or_field_it_shows() {
-    use crate::sheet::sentence::{FieldPlace, PartPlace, PlaceTarget};
-
     let game = document("game_of_life.toml");
     let sentences = Sentences::new(&game);
     let places = |line_id: &str| -> Vec<(String, Option<PartPlace>)> {
@@ -2086,8 +2065,6 @@ fn every_control_of_a_life_line_is_placed_at_the_slot_or_field_it_shows() {
 
 #[test]
 fn a_new_count_wants_a_property_then_a_state_and_an_empty_calculate_its_two_values() {
-    use crate::sheet::sentence::{FieldPlace, PlaceTarget, SentencePart, sentence_text};
-
     let mut game = document("game_of_life.toml");
     let line = game.cards[0].line_tables.get_mut("l1").expect("line 1");
     let mut whose = SheetLine::new(LineKind::Compare);
@@ -2134,10 +2111,7 @@ fn a_new_count_wants_a_property_then_a_state_and_an_empty_calculate_its_two_valu
 
 #[test]
 fn the_words_for_each_are_a_part_placed_at_its_count() {
-    use crate::sheet::sentence::{PartPlace, PlaceTarget, SentencePart, sentence_text};
-
-    let text = super::sheet_document::sheet_text("sir_chance.toml");
-    let sir = ParsedSheet::parse(text).expect("the sheet reads").into_document();
+    let sir = document("sir_chance.toml");
     let sentences = Sentences::new(&sir);
     let placed = sentences.placed_parts("l2", &[]);
     let tries = Some(PartPlace {
@@ -2159,10 +2133,7 @@ fn the_words_for_each_are_a_part_placed_at_its_count() {
 
 #[test]
 fn a_formula_inside_a_slot_places_no_value_and_no_operation() {
-    use crate::sheet::sentence::{FieldPlace, PlaceTarget, SentencePart, sentence_text};
-
-    let text = super::sheet_document::sheet_text("sir_chance.toml");
-    let mut sir = ParsedSheet::parse(text).expect("the sheet reads").into_document();
+    let mut sir = document("sir_chance.toml");
     let line = sir.cards[0].line_tables.get_mut("l2").expect("line 2");
     let Slot::Filled(SheetValue::Phrase(condition)) = &mut line.condition else {
         panic!("line 2 has a chance");
@@ -2253,8 +2224,6 @@ fn a_comparison_of_a_copy_reads_in_full_sentences() {
 /// run on ants, keeps its order note.
 #[test]
 fn the_notes_of_an_agent_card_name_its_agents() {
-    use crate::sheet::relations::CardRelations;
-
     let ants = document("ants.toml");
     let mut game = document("game_of_life.toml");
     game.agents.push(ants.agents[0].clone());

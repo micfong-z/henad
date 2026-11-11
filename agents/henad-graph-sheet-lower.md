@@ -175,20 +175,14 @@ Depending on, Random number, rates and the world of agents were lifted with thei
 their words removed from `sheet::sentence`. Record on a cells card is an error,
 and so is an agents-only line kind or a look at agents within a distance.
 
-Grid lowering tests sit in `src/tests/sheet_lower.rs`, on the host evaluator:
+Grid lowering tests sit in four files, on the host evaluator. `src/tests/sheet_lower.rs` holds
 `every_grid_sheet_lowers_checks_and_compiles` (the four grid starters and `sir_chance.toml`: no
 warning, no graph diagnostic, `GridProgram`, an entry, canonical text), the vote's block count and
 rows, `lowering_is_deterministic`, `lowered_ids_sit_in_their_line_blocks`,
 `the_line_map_covers_every_written_node`,
 `every_line_map_path_of_a_line_reads_as_an_edit_command_slot_path` (every starter, agents included),
 `two_draws_with_one_key_are_an_error_naming_both` (two starts), the derived key, the percent, the
-measure's label, one test per identity row of the author format, each asserting the code and the
-schema hash through `changes` (a result rename, a reorder of independent lines or of Steers of one
-property, a note, `purpose` or comment, a measure's id, a parameter's unit or `means` and the
-`rate_unit_from_tick` mark keep both; a parameter, state or model rename, a colour, new numbers, a
-step, a tick unit, a reorder of properties and a reorder of changes that can both apply change the
-code alone; a default, minimum or maximum, a measure rename, a parameter id, a tick length and a
-reorder of parameters or measures change both), `the_life_sheet_blinker_has_period_2` and
+measure's label, `the_life_sheet_blinker_has_period_2` and
 `the_life_sheet_glider_moves_one_cell_diagonally_every_4_ticks` (32 by 32, lanes planted),
 `a_rebuild_at_one_seed_replays_the_same_start`,
 `a_start_again_button_draws_a_new_layout_each_press`,
@@ -196,27 +190,37 @@ reorder of parameters or measures change both), `the_life_sheet_blinker_has_peri
 (Repeat), `each_lifted_refusal_now_lowers_checks_and_compiles` (the seven line kinds grid sheets
 first refused), the second tick card, the empty grid,
 `the_largest_grid_sheet_lowers_under_half_the_node_limit` (a card of `MAX_LINES_PER_CARD` count and
-Become lines over four properties), `the_kinds_sheet_runs_its_lines_on_the_host` (the test sheet
-`src/tests/sheets/kinds.toml`, canonical, the counts, yes or no lines and changes against a Rust
-reference over one tick), the parts on Game of Life with a random Number `level` and a States `mood`
-added (`life_with`): Set everywhere and a property set twice, Start again on some properties
+Become lines over four properties), both node limits named,
+`the_sheet_lowering_never_panics_on_the_mutation_corpus` (one in five edits of the sheets that lower
+still lowers) and the placements below. `src/tests/sheet_identity.rs` holds one test per identity
+row of the author format, each asserting the code and the schema hash through `changes` (a result
+rename, a reorder of independent lines or of Steers of one property, a note, `purpose` or comment, a
+measure's id, a parameter's unit or `means` and the `rate_unit_from_tick` mark keep both; a
+parameter, state or model rename, a colour, new numbers, a step, a tick unit, a reorder of
+properties and a reorder of changes that can both apply change the code alone; a default, minimum or
+maximum, a measure rename, a parameter id, a tick length and a reorder of parameters or measures
+change both), and new numbers on a chance and a renamed chance result against the code.
+`src/tests/sheet_parts.rs` holds the parts on Game of Life with a random Number `level` and a States
+`mood` added (`life_with`): Set everywhere and a property set twice, Start again on some properties
 (`restart_randomise`, `level` left alone, presses replay), the random start's range and its refusal
 on a Whole number, average, total and spread against a Rust reference, `view.color` and `view.ramp`,
-the log scale refused, both node limits named,
-`the_sheet_lowering_never_panics_on_the_mutation_corpus` (one in five edits of the sheets that lower
-still lowers), `the_chance_sir_sheet_conserves_its_cells_every_tick` (64 by 64, a New outbreak press
-through its action pass, 200 ticks), `once_for_each_follows_the_power_rule` (a 300 by 300 sheet
-whose Set draws once for each flagged neighbour, every cell flagged against `1 - 0.8^k` for k = 8, 4
-and 9 with `max_exponent` checked, none flagged for 0, every third row for 0.488, with `p` typed for
+and the log scale refused. `src/tests/sheet_values.rs` holds
+`the_kinds_sheet_runs_its_lines_on_the_host` (the test sheet `src/tests/sheets/kinds.toml`,
+canonical, the counts, yes or no lines and changes against a Rust reference over one tick),
+`the_chance_sir_sheet_conserves_its_cells_every_tick` (64 by 64, a New outbreak press through its
+action pass, 200 ticks), `once_for_each_follows_the_power_rule` (a 300 by 300 sheet whose Set draws
+once for each flagged neighbour, every cell flagged against `1 - 0.8^k` for k = 8, 4 and 9 with
+`max_exponent` checked, none flagged for 0, every third row for 0.488, with `p` typed for
 `math.powi` and a Calculate for `math.pow`), the forest fire's spread row before its lightning row,
-new numbers on a chance and a renamed chance result against the code, a chance inside a When keyed
-by its own line, `the_values_sheet_runs_its_lines_on_the_host` (the test sheet
-`src/tests/sheets/values.toml`, canonical: three Look arounds covering every summary, two with
-`only` and one of them able to leave out every neighbour, a Count with `only`, a Calculate over
+a chance inside a When keyed by its own line, `the_values_sheet_runs_its_lines_on_the_host` (the
+test sheet `src/tests/sheets/values.toml`, canonical: three Look arounds covering every summary, two
+with `only` and one of them able to leave out every neighbour, a Count with `only`, a Calculate over
 their parts, a Choose, a Depending on, Sets and a Become, against a Rust reference over one tick),
 `the_values_sheet_honors_each_only_and_gives_0_for_a_summary_of_no_cell` (the Count's `only` and the
 average, largest and smallest of no cell, each met at least once), a formula of arrows or past the
-depth limit refused at its line, and a Random number line's range.
+depth limit refused at its line, and a Random number line's range. The grid sheets and readers the
+four files share (`life`, `life_with_line`, `life_with`, `KINDS`, `VALUES`, `code`) sit in
+`src/tests/sheet_support.rs`.
 `a_graph_diagnostic_is_placed_at_its_author_line` plants an unknown op on a node of line `l2` and
 places the checker's error at `[card.line.l2]` with no pass or node, then a node the sheet owns at
 `[[cells.property]]` and a pass alone at its card and button.

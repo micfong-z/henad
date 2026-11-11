@@ -4,13 +4,13 @@
 
 use std::collections::BTreeMap;
 
-use henad_core::authoring::primitives::space::Boundary;
 use henad_core::metadata::TimeUnit;
 use henad_core::params::ParamValue;
 
-use super::sheet_document::sheet_text;
+use super::sheet_support::{edited_once, epidemic, health_counts, host_of, lowered, read, sheet_text, sized};
+use super::support::torus;
 use crate::document::PassStage;
-use crate::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
+use crate::host::RunContext;
 use crate::sheet::document::{SheetLine, SheetLiteral, SheetTime, SheetValue, Slot};
 use crate::sheet::edit::{SheetBuilder, SheetEdit};
 use crate::sheet::rates::{
@@ -18,36 +18,10 @@ use crate::sheet::rates::{
     parameter_defaults, rate_from_chance, rate_note, tick_in,
 };
 use crate::sheet::relations::CardRelations;
-use crate::sheet::{ParsedSheet, SheetFile, sentence};
+use crate::sheet::{SheetFile, sentence};
 use crate::value::{ConfigValue, InputValue, Literal};
 use crate::wgsl::GridProgram;
 use crate::wgsl::uniform::{MemberShape, MemberSource};
-
-/// Returns `text` with `old` replaced by `new` once, where `text` must hold `old` exactly once.
-fn edited(text: &str, old: &str, new: &str) -> String {
-    assert_eq!(text.matches(old).count(), 1, "the text holds {old:?} other than once");
-    text.replacen(old, new, 1)
-}
-
-/// Lowers `text`, which must lower.
-fn lowered(text: &str) -> SheetFile {
-    SheetFile::parse(text).unwrap_or_else(|error| panic!("the sheet does not lower: {error}\n{text}"))
-}
-
-/// Returns `text` with a world of `side` by `side` cells in place of 1024 by 1024.
-fn sized(text: &str, side: u32) -> String {
-    let text = edited(text, "width = 1024", &format!("width = {side}"));
-    edited(&text, "height = 1024", &format!("height = {side}"))
-}
-
-/// Returns the wrapping grid of `side` by `side` cells.
-fn grid(side: u32) -> HostWorld {
-    HostWorld::Grid {
-        width: side,
-        height: side,
-        boundary: Boundary::Torus,
-    }
-}
 
 /// Returns whether `a` and `b` are at most one `f32` step apart.
 fn within_one_ulp(a: f32, b: f32) -> bool {
@@ -85,7 +59,7 @@ fn rates_give_their_known_chances_per_tick() {
 fn the_rate_uniforms_equal_1_minus_exp() {
     let file = lowered(sheet_text("sir.toml"));
     let program = GridProgram::compile(file.lowered()).unwrap_or_else(|problems| panic!("{problems:#?}"));
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered sheet");
+    let evaluator = host_of(&file);
     let tick = program
         .shaders()
         .iter()
@@ -94,7 +68,7 @@ fn the_rate_uniforms_equal_1_minus_exp() {
     assert!(!tick.text().contains("exp("), "{}", tick.text());
     let params = evaluator.param_values(&[]);
     let bytes = tick
-        .uniform_bytes(&evaluator, grid(1024), &params, &RunContext::tick(Some(1), 0))
+        .uniform_bytes(&evaluator, torus(1024, 1024), &params, &RunContext::tick(Some(1), 0))
         .expect("the uniform block");
     let word = |offset: usize| {
         f32::from_le_bytes(
@@ -144,7 +118,7 @@ fn the_rate_uniforms_equal_1_minus_exp() {
 /// Returns the uniform values of the tick shader of `file` at the parameter values `params`, in document order.
 fn tick_uniforms(file: &SheetFile, params: &[ParamValue]) -> Vec<f32> {
     let program = GridProgram::compile(file.lowered()).unwrap_or_else(|problems| panic!("{problems:#?}"));
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered sheet");
+    let evaluator = host_of(file);
     let tick = program
         .shaders()
         .iter()
@@ -153,7 +127,7 @@ fn tick_uniforms(file: &SheetFile, params: &[ParamValue]) -> Vec<f32> {
     let bytes = tick
         .uniform_bytes(
             &evaluator,
-            grid(64),
+            torus(64, 64),
             &evaluator.param_values(params),
             &RunContext::tick(Some(1), 0),
         )
@@ -213,26 +187,26 @@ fn the_competing_thresholds_are_the_known_shares() {
 fn a_competing_group_with_a_worked_out_rate_splits_by_its_hazards_on_the_host() {
     // Every cell starts Infected, and line 3's rate is a result, so each share is worked out per cell.
     let text = sized(sheet_text("sird.toml"), 128);
-    let text = edited(&text, "default = 0.01\nstep = 0.001", "default = 1\nstep = 0.001");
-    let text = edited(&text, "next_line = 6", "next_line = 7");
-    let text = edited(
+    let text = edited_once(&text, "default = 0.01\nstep = 0.001", "default = 1\nstep = 0.001");
+    let text = edited_once(&text, "next_line = 6", "next_line = 7");
+    let text = edited_once(
         &text,
         "lines = [\"l1\", \"l2\", \"l3\", \"l4\"]",
         "lines = [\"l1\", \"l6\", \"l2\", \"l3\", \"l4\"]",
     );
-    let text = edited(
+    let text = edited_once(
         &text,
         "# Become Infected from Susceptible, at rate",
         "[card.line.l6]\nkind = \"calculate\"\nname = \"Recovery pressure\"\nformula = \"recovery_rate * 3\"\n\n\
          # Become Infected from Susceptible, at rate",
     );
-    let text = edited(
+    let text = edited_once(
         &text,
         "rate = { param = \"recovery_rate\" }",
         "rate = { result = \"l6\" }",
     );
     let file = lowered(&text);
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered sheet");
+    let evaluator = host_of(&file);
     // One tick of 7 days: the cells leave with chance 1 - e^(-(0.15 + 0.05) x 7), three in four of them recovered.
     let params = [
         ParamValue::F32(7.0),
@@ -241,7 +215,9 @@ fn a_competing_group_with_a_worked_out_rate_splits_by_its_hazards_on_the_host() 
         ParamValue::F32(0.05),
         ParamValue::F32(1.0),
     ];
-    let mut lanes = evaluator.init(grid(128), &params, Some(9)).expect("the start runs");
+    let mut lanes = evaluator
+        .init(torus(128, 128), &params, Some(9))
+        .expect("the start runs");
     let mut stream = 0;
     evaluator
         .run_pass(
@@ -268,18 +244,18 @@ fn a_competing_group_with_a_worked_out_rate_splits_by_its_hazards_on_the_host() 
 fn a_competing_group_with_no_exposure_never_leaves() {
     // Every cell starts Infected, both exits are for each dead neighbour, and no cell is Dead yet.
     let text = sized(sheet_text("sird.toml"), 64);
-    let text = edited(&text, "default = 0.01\nstep = 0.001", "default = 1\nstep = 0.001");
-    let text = edited(
+    let text = edited_once(&text, "default = 0.01\nstep = 0.001", "default = 1\nstep = 0.001");
+    let text = edited_once(
         &text,
         "right = { state = \"infected\" }",
         "right = { state = \"dead\" }",
     );
-    let text = edited(
+    let text = edited_once(
         &text,
         "rate = { param = \"recovery_rate\" }\nrate_unit = \"day\"\n",
         "rate = { param = \"recovery_rate\" }\nrate_unit = \"day\"\ntries = { result = \"l1\" }\n",
     );
-    let text = edited(
+    let text = edited_once(
         &text,
         "rate = { param = \"death_rate\" }\nrate_unit = \"day\"\n",
         "rate = { param = \"death_rate\" }\nrate_unit = \"day\"\ntries = { result = \"l1\" }\n",
@@ -297,7 +273,7 @@ fn a_competing_group_with_no_exposure_never_leaves() {
         .map(|node| node.op.as_str())
         .collect();
     assert!(ops.contains(&"cmp.le") && ops.contains(&"logic.select"), "{ops:?}");
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered sheet");
+    let evaluator = host_of(&file);
     let params = [
         ParamValue::F32(1.0),
         ParamValue::F32(0.3),
@@ -305,7 +281,7 @@ fn a_competing_group_with_no_exposure_never_leaves() {
         ParamValue::F32(5.0),
         ParamValue::F32(1.0),
     ];
-    let mut lanes = evaluator.init(grid(64), &params, Some(3)).expect("the start runs");
+    let mut lanes = evaluator.init(torus(64, 64), &params, Some(3)).expect("the start runs");
     let mut stream = 0;
     for tick in 0..4 {
         evaluator
@@ -323,18 +299,18 @@ fn a_competing_group_with_no_exposure_never_leaves() {
 
 #[test]
 fn a_rate_change_inside_a_repeat_competes_with_no_other_line() {
-    let text = edited(sheet_text("sird.toml"), "next_line = 6", "next_line = 7");
-    let text = edited(
+    let text = edited_once(sheet_text("sird.toml"), "next_line = 6", "next_line = 7");
+    let text = edited_once(
         &text,
         "lines = [\"l1\", \"l2\", \"l3\", \"l4\"]",
         "lines = [\"l1\", \"l2\", \"l6\"]",
     );
-    let text = edited(
+    let text = edited_once(
         &text,
         "# Become Recovered from Infected",
         "[card.line.l6]\nkind = \"repeat\"\ntimes = 2\nlines = [\"l3\", \"l4\"]\n\n# Become Recovered from Infected",
     );
-    let document = ParsedSheet::parse(&text).expect("the sheet reads").into_document();
+    let document = read(&text);
     let relations = CardRelations::new(&document, &document.cards[0]);
     assert_eq!(relations.order(), ["l1", "l2", "l6", "l3", "l4"]);
     assert!(relations.competing_groups().is_empty());
@@ -345,57 +321,16 @@ fn a_rate_change_inside_a_repeat_competes_with_no_other_line() {
     );
 }
 
-/// Returns the number of cells of the `health` lane of `lanes` in each of its first `states` states.
-fn health_counts(lanes: &HostLanes, states: usize) -> Vec<usize> {
-    let health = lanes.column("health").expect("a health lane");
-    let mut counts = vec![0; states];
-    for cell in 0..health.len() {
-        match health.get(cell) {
-            Some(HostValue::Category(state)) if (state as usize) < states => counts[state as usize] += 1,
-            other => panic!("cell {cell} holds {other:?}"),
-        }
-    }
-    counts
-}
-
 #[test]
 fn the_rates_sir_sheet_conserves_its_cells_every_tick() {
-    let file = lowered(&sized(sheet_text("sir.toml"), 64));
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered sheet");
     // Half a day per tick.
-    let params = [ParamValue::F32(0.5)];
-    let mut lanes = evaluator.init(grid(64), &params, Some(5)).expect("the start runs");
-    let mut stream = 0;
-    evaluator
-        .run_pass(
-            "button_new_outbreak",
-            &mut lanes,
-            &params,
-            &RunContext::action(Some(5), 0, 1, 0),
-            &mut stream,
-        )
-        .expect("the press runs");
-    let start = health_counts(&lanes, 3);
-    assert!(start[1] > 0, "{start:?}");
-    let mut peak = 0;
-    for tick in 0..200 {
-        evaluator
-            .run_pass(
-                "tick_cell_tick",
-                &mut lanes,
-                &params,
-                &RunContext::tick(Some(5), tick),
-                &mut stream,
-            )
-            .expect("a tick runs");
-        let counts = health_counts(&lanes, 3);
-        assert_eq!(counts.iter().sum::<usize>(), 64 * 64, "tick {tick}: {counts:?}");
-        peak = peak.max(counts[1]);
-    }
-    let end = health_counts(&lanes, 3);
+    let run = epidemic(&lowered(&sized(sheet_text("sir.toml"), 64)), &[ParamValue::F32(0.5)]);
+    assert!(run.pressed[1] > 0, "{:?}", run.pressed);
     assert!(
-        peak > start[1] && end[2] > 0,
-        "the epidemic spreads and recovers: {peak}, {end:?}"
+        run.peak > run.pressed[1] && run.end[2] > 0,
+        "the epidemic spreads and recovers: {}, {:?}",
+        run.peak,
+        run.end
     );
 }
 
@@ -435,7 +370,7 @@ fn a_tick_length_override_keeps_the_code_and_the_keys() {
     assert_eq!(entry.source().code(), Some(&file.code()));
 
     // A new length on the sheet is a new default: the code changes and every key stays.
-    let halved = lowered(&edited(
+    let halved = lowered(&edited_once(
         sheet_text("sir.toml"),
         "tick_length = 1\n",
         "tick_length = 0.5\n",
@@ -445,7 +380,7 @@ fn a_tick_length_override_keeps_the_code_and_the_keys() {
     let default = |file: &SheetFile| file.lowered().document().params[0].kind().default_value();
     assert_eq!(default(&halved), ParamValue::F32(0.5));
     // So does another unit, with a factor where a rate's unit is not the tick's.
-    let hours = lowered(&edited(
+    let hours = lowered(&edited_once(
         sheet_text("sir.toml"),
         "tick_unit = \"day\"",
         "tick_unit = \"hour\"",
@@ -468,7 +403,7 @@ fn a_tick_length_override_keeps_the_code_and_the_keys() {
 
 #[test]
 fn a_rate_per_week_in_a_model_of_days_is_divided_by_7() {
-    let text = edited(
+    let text = edited_once(
         sheet_text("sir.toml"),
         "rate_unit = \"day\"\n\n# Lines",
         "rate_unit = \"week\"\n\n# Lines",
@@ -503,19 +438,19 @@ fn a_small_rate_keeps_its_chance_in_the_threshold() {
 #[test]
 fn every_form_of_rate_lowers_checks_and_compiles() {
     let sir = sheet_text("sir.toml");
-    let rate_line = edited(sir, "next_line = 5", "next_line = 6");
-    let rate_line = edited(
+    let rate_line = edited_once(sir, "next_line = 5", "next_line = 6");
+    let rate_line = edited_once(
         &rate_line,
         "lines = [\"l1\", \"l2\", \"l3\"]",
         "lines = [\"l1\", \"l2\", \"l5\", \"l3\"]",
     );
-    let rate_line = edited(
+    let rate_line = edited_once(
         &rate_line,
         "# Become Recovered from Infected",
         "[card.line.l5]\nkind = \"rate\"\nname = \"Recovery happens\"\nkey = 77\nrate = { param = \"recovery_rate\" \
          }\nrate_unit = \"day\"\n\n# Become Recovered from Infected",
     );
-    let rate_line = edited(
+    let rate_line = edited_once(
         &rate_line,
         "\n\n[card.line.l3.condition]\nkind = \"rate\"\nrate = { param = \"recovery_rate\" }\nrate_unit = \"day\"\n",
         "\ncondition = { result = \"l5\" }\n",
@@ -523,7 +458,7 @@ fn every_form_of_rate_lowers_checks_and_compiles() {
     let forms = [
         rate_line,
         // A rate in an all of with a comparison.
-        edited(
+        edited_once(
             sir,
             "[card.line.l3.condition]\nkind = \"rate\"\nrate = { param = \"recovery_rate\" }\nrate_unit = \"day\"\n",
             "[card.line.l3.condition]\nkind = \"all_of\"\n\n[[card.line.l3.condition.items]]\nkind = \"compare\"\ntest \
@@ -531,7 +466,7 @@ fn every_form_of_rate_lowers_checks_and_compiles() {
              \"rate\"\nrate = { param = \"recovery_rate\" }\nrate_unit = \"day\"\n",
         ),
         // A rate worked out for each cell, for each of a count.
-        edited(
+        edited_once(
             sir,
             "rate = { param = \"infection_rate\" }",
             "rate = { result = \"l1\" }",
@@ -545,12 +480,12 @@ fn every_form_of_rate_lowers_checks_and_compiles() {
         assert!(GridProgram::compile(file.lowered()).is_ok(), "{text}");
     }
     // A rate for each of a count of agents is one exp per agent, guarded at a count of 0.
-    let mobile = edited(
+    let mobile = edited_once(
         sheet_text("mobile_sir.toml"),
         "edges = \"wrap\"\n",
         "edges = \"wrap\"\n\n[time]\ntick_length = 1\ntick_unit = \"day\"\n",
     );
-    let mobile = edited(
+    let mobile = edited_once(
         &mobile,
         "kind = \"chance\"\nchance = { param = \"infection_chance\" }",
         "kind = \"rate\"\nrate = { param = \"infection_chance\" }\nrate_unit = \"day\"",
@@ -574,14 +509,14 @@ fn every_form_of_rate_lowers_checks_and_compiles() {
 #[test]
 fn a_rate_in_an_any_of_keeps_otherwise_and_draws_alone() {
     let sird = sheet_text("sird.toml");
-    let text = edited(
+    let text = edited_once(
         sird,
         "[card.line.l4.condition]\nkind = \"rate\"\nrate = { param = \"death_rate\" }\nrate_unit = \"day\"\n",
         "[card.line.l4.condition]\nkind = \"any_of\"\n\n[[card.line.l4.condition.items]]\nkind = \"rate\"\nrate = { \
          param = \"death_rate\" }\nrate_unit = \"day\"\n\n[[card.line.l4.condition.items]]\nkind = \"compare\"\ntest = \
          \"more_than\"\nleft = { result = \"l1\" }\nright = 7\n",
     );
-    let document = ParsedSheet::parse(&text).expect("the sheet reads").into_document();
+    let document = read(&text);
     let relations = CardRelations::new(&document, &document.cards[0]);
     assert!(relations.competing_groups().is_empty());
     assert_eq!(relations.otherwise_of("l4"), ["l3"]);
@@ -597,7 +532,7 @@ fn a_rate_in_an_any_of_keeps_otherwise_and_draws_alone() {
         .count();
     assert_eq!(draws, 3, "lines 2, 3 and 4 draw alone");
     // The committed SIRD groups its two exits.
-    let committed = ParsedSheet::parse(sird).expect("the sheet reads").into_document();
+    let committed = read(sird);
     assert_eq!(
         CardRelations::new(&committed, &committed.cards[0]).competing_groups(),
         [vec!["l3", "l4"]]
@@ -606,7 +541,7 @@ fn a_rate_in_an_any_of_keeps_otherwise_and_draws_alone() {
 
 /// Returns the note under line `line_id` of `text` at the parameters' defaults.
 fn note(text: &str, line_id: &str) -> Option<crate::sheet::rates::RateNote> {
-    let document = ParsedSheet::parse(text).expect("the sheet reads").into_document();
+    let document = read(text);
     rate_note(&document, line_id, &parameter_defaults(&document))
 }
 
@@ -636,27 +571,27 @@ fn rate_notes_match_the_spec_examples() {
     assert_eq!(infection.mean_stay, None);
     // The long tick: 1 - e^(-0.3 x 8) is above one half at a tick of 1 day, and below it at a quarter day.
     assert_eq!(infection.long_tick.as_deref(), Some("up to 0.909 with 8"));
-    let quarter = edited(sir, "tick_length = 1\n", "tick_length = 0.25\n");
+    let quarter = edited_once(sir, "tick_length = 1\n", "tick_length = 0.25\n");
     assert_eq!(note(&quarter, "l2").and_then(|note| note.long_tick), None);
-    let document = ParsedSheet::parse(&quarter).expect("the sheet reads").into_document();
+    let document = read(&quarter);
     let largest = largest_count_chance(&document, "l2", &parameter_defaults(&document)).expect("a largest count");
     assert_eq!(largest.count, 8);
     assert!(largest.chance < LONG_TICK_CHANCE, "{largest:?}");
     assert_eq!(largest.words(), "up to 0.451 with 8");
     // At 4 days, 1 - e^(-0.3 x 8 x 4) is below 1 and rounds to 1. At 20 days it is 1 in a double.
-    let four = edited(sir, "tick_length = 1\n", "tick_length = 4\n");
+    let four = edited_once(sir, "tick_length = 1\n", "tick_length = 4\n");
     assert_eq!(
         note(&four, "l2").and_then(|note| note.long_tick).as_deref(),
         Some("almost 1 with 8")
     );
-    let twenty = edited(sir, "tick_length = 1\n", "tick_length = 20\n");
+    let twenty = edited_once(sir, "tick_length = 1\n", "tick_length = 20\n");
     assert_eq!(
         note(&twenty, "l2").and_then(|note| note.long_tick).as_deref(),
         Some("up to 1 with 8")
     );
 
     // A tick of 6 hours against a rate per day.
-    let six_hours = edited(
+    let six_hours = edited_once(
         sir,
         "tick_length = 1\ntick_unit = \"day\"",
         "tick_length = 6\ntick_unit = \"hour\"",
@@ -699,7 +634,7 @@ fn a_rate_with_more_to_its_condition_has_no_mean_stay() {
     let recovery = note(sir, "l3").expect("line 3 has a note");
     // A rate with more to its condition keeps its note and loses the mean stay, and a group of such lines its note.
     let rate_and_compare = |text: &str, line: &str, param: &str| {
-        edited(
+        edited_once(
             text,
             &format!(
                 "[card.line.{line}.condition]\nkind = \"rate\"\nrate = {{ param = \"{param}\" }}\nrate_unit = \"day\"\n"
@@ -716,22 +651,20 @@ fn a_rate_with_more_to_its_condition_has_no_mean_stay() {
     assert_eq!(joined.text, recovery.text);
     assert_eq!(joined.mean_stay, None);
     let joined_group = rate_and_compare(sird, "l4", "death_rate");
-    let document = ParsedSheet::parse(&joined_group)
-        .expect("the sheet reads")
-        .into_document();
+    let document = read(&joined_group);
     assert_eq!(
         CardRelations::new(&document, &document.cards[0]).competing_groups(),
         [vec!["l3", "l4"]]
     );
     assert_eq!(note(&joined_group, "l3"), None);
     // So does a rate line inside a When.
-    let inside_when = edited(sir, "next_line = 5", "next_line = 6");
-    let inside_when = edited(
+    let inside_when = edited_once(sir, "next_line = 5", "next_line = 6");
+    let inside_when = edited_once(
         &inside_when,
         "lines = [\"l1\", \"l2\", \"l3\"]",
         "lines = [\"l1\", \"l2\", \"l5\"]",
     );
-    let inside_when = edited(
+    let inside_when = edited_once(
         &inside_when,
         "# Become Recovered from Infected",
         "[card.line.l5]\nkind = \"when\"\nlines = [\"l3\"]\n\n[card.line.l5.condition]\nkind = \"compare\"\ntest = \
@@ -747,13 +680,13 @@ fn worked_out_rate_notes_match_the_spec_examples() {
     let sir = sheet_text("sir.toml");
     // A worked-out rate of a fixed number times a count (eco-6's), and any other worked out with its words first.
     let worked = |formula: &str| {
-        let text = edited(sir, "next_line = 5", "next_line = 6");
-        let text = edited(
+        let text = edited_once(sir, "next_line = 5", "next_line = 6");
+        let text = edited_once(
             &text,
             "lines = [\"l1\", \"l2\", \"l3\"]",
             "lines = [\"l1\", \"l5\", \"l2\", \"l3\"]",
         );
-        let text = edited(
+        let text = edited_once(
             &text,
             "# Become Infected from Susceptible, at rate",
             &format!(
@@ -761,12 +694,12 @@ fn worked_out_rate_notes_match_the_spec_examples() {
                  Infected from Susceptible, at rate"
             ),
         );
-        let text = edited(
+        let text = edited_once(
             &text,
             "rate = { param = \"infection_rate\" }",
             "rate = { result = \"l5\" }",
         );
-        edited(
+        edited_once(
             &text,
             "rate_unit = \"day\"\ntries = { result = \"l1\" }\n",
             "rate_unit = \"day\"\n",
@@ -795,8 +728,8 @@ fn worked_out_rate_notes_match_the_spec_examples() {
     );
 
     // A Count with no name takes its automatic name in the note.
-    let unnamed = edited(&worked("0.3 * l1"), "name = \"Infected neighbours\"\n", "");
-    let document = ParsedSheet::parse(&unnamed).expect("the sheet reads").into_document();
+    let unnamed = edited_once(&worked("0.3 * l1"), "name = \"Infected neighbours\"\n", "");
+    let document = read(&unnamed);
     let (_, count) = document.line("l1").expect("line 1");
     assert_eq!(count.name, None);
     assert_eq!(
@@ -816,10 +749,10 @@ fn worked_out_rate_notes_match_the_spec_examples() {
     );
 
     // A sheet with no length of one tick, a chance line, and a values map read in place of the defaults.
-    let untimed = edited(sir, "[time]\ntick_length = 1\ntick_unit = \"day\"\n\n", "");
+    let untimed = edited_once(sir, "[time]\ntick_length = 1\ntick_unit = \"day\"\n\n", "");
     assert_eq!(note(&untimed, "l3"), None);
     assert_eq!(note(sheet_text("sir_chance.toml"), "l3"), None);
-    let document = ParsedSheet::parse(sir).expect("the sheet reads").into_document();
+    let document = read(sir);
     let values = BTreeMap::from([("recovery_rate".to_owned(), 0.2)]);
     let live = rate_note(&document, "l3", &values).expect("a note");
     assert!(
@@ -840,11 +773,7 @@ fn condition_phrase(builder: &SheetBuilder, line_id: &str) -> SheetLine {
 
 #[test]
 fn change_to_a_rate_keeps_the_chance_per_tick() {
-    let mut builder = SheetBuilder::new(
-        ParsedSheet::parse(sheet_text("sir.toml"))
-            .expect("the sheet reads")
-            .into_document(),
-    );
+    let mut builder = SheetBuilder::new(read(sheet_text("sir.toml")));
     let typed: f64 = ((1.0 - (-0.1f64).exp()) as f32).to_string().parse().expect("a number");
     builder
         .apply(SheetEdit::ChangeToChance { line: "l3".to_owned() })
@@ -919,25 +848,19 @@ fn change_to_a_rate_keeps_the_chance_per_tick() {
     assert_eq!(as_rate.tries, tries);
     assert_eq!(builder.document().line("l2").expect("line 2").1.key, key);
     let text = builder.document().to_text().expect("the sheet writes");
-    let reread = ParsedSheet::parse(&text).expect("the sheet reads back").into_document();
+    let reread = read(&text);
     assert_eq!(reread.line("l2").expect("line 2").1.key, key);
     assert!(SheetFile::parse(&text).is_ok(), "the edited sheet lowers");
 }
 
 #[test]
 fn a_chance_with_no_tick_or_no_typed_number_does_not_change_to_a_rate() {
-    let chance_sheet = ParsedSheet::parse(sheet_text("sir_chance.toml"))
-        .expect("the sheet reads")
-        .into_document();
+    let chance_sheet = read(sheet_text("sir_chance.toml"));
     let mut builder = SheetBuilder::new(chance_sheet);
     builder
         .apply(SheetEdit::ChangeToRate { line: "l3".to_owned() })
         .expect_err("the sheet sets no length of one tick");
-    let mut builder = SheetBuilder::new(
-        ParsedSheet::parse(sheet_text("sir.toml"))
-            .expect("reads")
-            .into_document(),
-    );
+    let mut builder = SheetBuilder::new(read(sheet_text("sir.toml")));
     builder
         .apply(SheetEdit::ChangeToRate { line: "l3".to_owned() })
         .expect_err("line 3 holds a rate, not a chance");
@@ -958,7 +881,7 @@ fn a_chance_with_no_tick_or_no_typed_number_does_not_change_to_a_rate() {
 
 #[test]
 fn a_rate_read_in_another_unit_than_its_parameter_warns() {
-    let text = edited(
+    let text = edited_once(
         sheet_text("sir.toml"),
         "rate = { param = \"recovery_rate\" }\nrate_unit = \"day\"",
         "rate = { param = \"recovery_rate\" }\nrate_unit = \"week\"",
@@ -986,9 +909,7 @@ fn a_rate_read_in_another_unit_than_its_parameter_warns() {
 fn a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named() {
     use crate::sheet::rates::{chance_note, count_as_draw};
 
-    let document = ParsedSheet::parse(sheet_text("sir_chance.toml"))
-        .expect("the sheet reads")
-        .into_document();
+    let document = read(sheet_text("sir_chance.toml"));
     let values = parameter_defaults(&document);
     assert_eq!(
         chance_note(&document, "l2", &values).as_deref(),
@@ -1035,41 +956,39 @@ fn the_card_offers_the_conversion_a_typed_draw_allows() {
     use crate::sheet::rates::conversion;
     use crate::sheet::sentence::DrawKind;
 
-    let document = |text: &str| ParsedSheet::parse(text).expect("the sheet reads").into_document();
     let sir = sheet_text("sir.toml");
-    let typed_recovery = edited(sir, "rate = { param = \"recovery_rate\" }", "rate = 0.1");
-    assert_eq!(conversion(&document(sir), "l3"), None, "a parameter is no typed number");
-    assert_eq!(conversion(&document(&typed_recovery), "l3"), Some(DrawKind::Chance));
+    let typed_recovery = edited_once(sir, "rate = { param = \"recovery_rate\" }", "rate = 0.1");
+    assert_eq!(conversion(&read(sir), "l3"), None, "a parameter is no typed number");
+    assert_eq!(conversion(&read(&typed_recovery), "l3"), Some(DrawKind::Chance));
     // A chance on the card of a button has no duration and changes into no rate.
-    let typed_outbreak = edited(
+    let typed_outbreak = edited_once(
         sir,
         "kind = \"chance\"\nchance = { param = \"initial_infected\" }\n",
         "kind = \"chance\"\nchance = 0.01\n",
     );
-    assert_eq!(conversion(&document(&typed_outbreak), "l4"), None);
-    let chance = edited(
+    assert_eq!(conversion(&read(&typed_outbreak), "l4"), None);
+    let chance = edited_once(
         sheet_text("sir_chance.toml"),
         "chance = { param = \"recovery_chance\" }",
         "chance = 0.05",
     );
-    assert_eq!(conversion(&document(&chance), "l3"), None, "one tick has no length");
-    let timed = edited(
+    assert_eq!(conversion(&read(&chance), "l3"), None, "one tick has no length");
+    let timed = edited_once(
         &chance,
         "edges = \"wrap\"\n",
         "edges = \"wrap\"\n\n[time]\ntick_length = 1\ntick_unit = \"day\"\n",
     );
-    assert_eq!(conversion(&document(&timed), "l3"), Some(DrawKind::Rate));
-    assert_eq!(conversion(&document(&timed), "l1"), None, "a count draws nothing");
+    assert_eq!(conversion(&read(&timed), "l3"), Some(DrawKind::Rate));
+    assert_eq!(conversion(&read(&timed), "l1"), None, "a count draws nothing");
 }
 
 #[test]
 fn the_time_notice_names_the_chance_lines_of_cards_that_run_each_tick() {
     use crate::sheet::rates::chance_line_numbers;
 
-    let document = |text: &str| ParsedSheet::parse(text).expect("the sheet reads").into_document();
-    assert_eq!(chance_line_numbers(&document(sheet_text("sir_chance.toml"))), [2, 3]);
+    assert_eq!(chance_line_numbers(&read(sheet_text("sir_chance.toml"))), [2, 3]);
     assert!(
-        chance_line_numbers(&document(sheet_text("sir.toml"))).is_empty(),
+        chance_line_numbers(&read(sheet_text("sir.toml"))).is_empty(),
         "the rates SIR draws at rates, and the chance of New outbreak runs once"
     );
 }
@@ -1078,16 +997,15 @@ fn the_time_notice_names_the_chance_lines_of_cards_that_run_each_tick() {
 fn a_fixed_rate_below_a_count_of_its_new_state_asks_to_grow_with_it() {
     use crate::sheet::rates::grow_count;
 
-    let document = |text: &str| ParsedSheet::parse(text).expect("the sheet reads").into_document();
     let sir = sheet_text("sir.toml");
-    assert_eq!(grow_count(&document(sir), "l2"), None, "line 2 already grows for each");
-    assert_eq!(grow_count(&document(sir), "l3"), None, "no line counts Recovered");
-    let alone = edited(
+    assert_eq!(grow_count(&read(sir), "l2"), None, "line 2 already grows for each");
+    assert_eq!(grow_count(&read(sir), "l3"), None, "no line counts Recovered");
+    let alone = edited_once(
         sir,
         "rate_unit = \"day\"\ntries = { result = \"l1\" }\n",
         "rate_unit = \"day\"\n",
     );
-    let found = grow_count(&document(&alone), "l2").expect("line 2 asks");
+    let found = grow_count(&read(&alone), "l2").expect("line 2 asks");
     assert_eq!(
         (found.line.as_str(), found.name.as_str()),
         ("l1", "Infected neighbours")
@@ -1097,18 +1015,18 @@ fn a_fixed_rate_below_a_count_of_its_new_state_asks_to_grow_with_it() {
         "Should this rate grow with the number of Infected neighbours?"
     );
     // An empty rate has no note and asks nothing.
-    let empty = edited(&alone, "rate = { param = \"infection_rate\" }\n", "");
+    let empty = edited_once(&alone, "rate = { param = \"infection_rate\" }\n", "");
     assert_eq!(note(&empty, "l2"), None);
-    assert_eq!(grow_count(&document(&empty), "l2"), None);
+    assert_eq!(grow_count(&read(&empty), "l2"), None);
     // A rate worked out from the count asks nothing.
-    let worked_out = edited(
+    let worked_out = edited_once(
         &alone,
         "rate = { param = \"infection_rate\" }",
         "rate = { result = \"l1\" }",
     );
-    assert_eq!(grow_count(&document(&worked_out), "l2"), None);
+    assert_eq!(grow_count(&read(&worked_out), "l2"), None);
     // A count below the line is not open to it.
-    let mut builder = SheetBuilder::new(document(&alone));
+    let mut builder = SheetBuilder::new(read(&alone));
     builder
         .apply(SheetEdit::MoveLine {
             line: "l1".to_owned(),
@@ -1120,9 +1038,7 @@ fn a_fixed_rate_below_a_count_of_its_new_state_asks_to_grow_with_it() {
 
 #[test]
 fn a_lower_line_of_a_competing_group_reads_or() {
-    let document = ParsedSheet::parse(sheet_text("sird.toml"))
-        .expect("the sheet reads")
-        .into_document();
+    let document = read(sheet_text("sird.toml"));
     let sentences = crate::sheet::sentence::Sentences::new(&document);
     let parts = sentence::competing_parts(sentences.placed_parts("l4", &[]), vec![3, 4]);
     let parts: Vec<_> = parts.into_iter().map(|placed| placed.part).collect();
@@ -1158,14 +1074,13 @@ fn change_to_a_rate_is_refused_on_a_card_that_runs_once_as_the_card_offers_it() 
     use crate::sheet::rates::conversion;
     use crate::sheet::sentence::DrawKind;
 
-    let document = |text: &str| ParsedSheet::parse(text).expect("the sheet reads").into_document();
     // Line 4, on the card of New outbreak, becomes Infected with a typed chance. The card runs once.
-    let typed_outbreak = edited(
+    let typed_outbreak = edited_once(
         sheet_text("sir.toml"),
         "kind = \"chance\"\nchance = { param = \"initial_infected\" }\n",
         "kind = \"chance\"\nchance = 0.01\n",
     );
-    let mut builder = SheetBuilder::new(document(&typed_outbreak));
+    let mut builder = SheetBuilder::new(read(&typed_outbreak));
     assert_eq!(conversion(builder.document(), "l4"), None);
     let before = builder.document().to_text().expect("the sheet writes");
     assert_eq!(
@@ -1174,17 +1089,17 @@ fn change_to_a_rate_is_refused_on_a_card_that_runs_once_as_the_card_offers_it() 
     );
     assert_eq!(builder.document().to_text().expect("the sheet writes"), before);
     // Line 3 of a card that runs each tick changes its typed chance to a rate, which the checker takes.
-    let chance = edited(
+    let chance = edited_once(
         sheet_text("sir_chance.toml"),
         "chance = { param = \"recovery_chance\" }",
         "chance = 0.01",
     );
-    let timed = edited(
+    let timed = edited_once(
         &chance,
         "edges = \"wrap\"\n",
         "edges = \"wrap\"\n\n[time]\ntick_length = 1\ntick_unit = \"day\"\n",
     );
-    let mut builder = SheetBuilder::new(document(&timed));
+    let mut builder = SheetBuilder::new(read(&timed));
     assert_eq!(conversion(builder.document(), "l3"), Some(DrawKind::Rate));
     builder
         .apply(SheetEdit::ChangeToRate { line: "l3".to_owned() })
@@ -1203,17 +1118,17 @@ fn change_to_a_rate_is_refused_inside_a_repeat_as_the_card_offers_it() {
     use crate::sheet::sentence::DrawKind;
 
     // Line 3 of the cell card becomes Recovered with a typed chance, and a Repeat of two times follows it.
-    let chance = edited(
+    let chance = edited_once(
         sheet_text("sir_chance.toml"),
         "chance = { param = \"recovery_chance\" }",
         "chance = 0.01",
     );
-    let timed = edited(
+    let timed = edited_once(
         &chance,
         "edges = \"wrap\"\n",
         "edges = \"wrap\"\n\n[time]\ntick_length = 1\ntick_unit = \"day\"\n",
     );
-    let mut builder = SheetBuilder::new(ParsedSheet::parse(&timed).expect("the sheet reads").into_document());
+    let mut builder = SheetBuilder::new(read(&timed));
     let mut repeat = SheetLine::new(LineKind::Repeat);
     repeat.times = Slot::Filled(SheetValue::Literal(SheetLiteral::Number(2.0)));
     let made = builder

@@ -4,26 +4,12 @@
 
 use henad_compute::entry::ModelEntry;
 
-use crate::document::World;
-use crate::sheet::{SheetFile, starters};
-use crate::wgsl::{AgentProgram, GridProgram};
+use super::sheet_support::{entry_of, lowered, sheet_text};
+use crate::sheet::starters;
 
 /// Returns the entry of the sheet starter `file_name`, lowered and compiled.
 fn starter_entry(file_name: &str) -> ModelEntry {
-    let starter = starters()
-        .iter()
-        .find(|starter| starter.file_name == file_name)
-        .unwrap_or_else(|| panic!("no sheet starter {file_name}"));
-    let file = SheetFile::parse(starter.text).unwrap_or_else(|error| panic!("{file_name}: {error}"));
-    let lowered = file.lowered();
-    match lowered.document().world {
-        World::Grid(_) => GridProgram::compile(lowered)
-            .unwrap_or_else(|problems| panic!("{file_name}: {problems:#?}"))
-            .entry(),
-        World::Agents(_) => AgentProgram::compile(lowered)
-            .unwrap_or_else(|problems| panic!("{file_name}: {problems:#?}"))
-            .entry(),
-    }
+    entry_of(&lowered(sheet_text(file_name)))
 }
 
 /// Returns the ids of the reload-only parameters of `entry`, in its order.

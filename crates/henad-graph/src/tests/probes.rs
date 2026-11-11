@@ -1,19 +1,17 @@
 //! Probes of a compiled graph: the counts on the device against the host evaluator's, and the file's text and code
 //! identity untouched by them.
 
-use henad_compute::entry::ModelState;
-use henad_compute::fault::FaultSink;
 use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::sim_thread::GpuSimState;
 use henad_compute::gpu::wgpu;
 use henad_compute::snapshot::FireCounts;
 use henad_core::params::ParamValue;
 
-use super::support::test_device;
-use crate::document::{PassEnabled, PassStage};
+use super::case_files::agents_header_with_position;
+use super::support::{built, context, device_for, host_step, node_id};
+use crate::document::PassEnabled;
 use crate::file::GraphFile;
-use crate::host::{HostEvaluator, HostLanes, HostWorld, RunContext};
-use crate::ids::NodeId;
+use crate::host::{HostEvaluator, HostLanes, HostWorld};
 use crate::value::PortRef;
 use crate::wgsl::{AgentProgram, GridProgram, Probes, ShaderRole};
 
@@ -87,7 +85,7 @@ fn transition_life() -> GraphFile {
 /// Returns the reference to output `port` of node `number`.
 fn output(number: u32, port: &str) -> PortRef {
     PortRef {
-        node: NodeId::new(number).expect("a node number"),
+        node: node_id(number),
         port: Some(port.to_owned()),
     }
 }
@@ -101,17 +99,6 @@ fn life_probes() -> Probes {
     ])
 }
 
-/// Returns a context over the test device.
-fn context() -> Option<GpuContext> {
-    let device = test_device()?;
-    Some(GpuContext::new(
-        device.device,
-        device.queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        FaultSink::default(),
-    ))
-}
-
 /// Records `steps` steps and the stats passes into one submission, as the runner does for a snapshot, and waits for
 /// the readback.
 fn steps_then_stats(ctx: &GpuContext, state: &mut dyn GpuSimState, steps: u32) {
@@ -123,38 +110,6 @@ fn steps_then_stats(ctx: &GpuContext, state: &mut dyn GpuSimState, steps: u32) {
     ctx.queue.submit(Some(encoder.finish()));
     state.begin_stats_readback();
     state.poll_stats_readback(&ctx.device, true);
-}
-
-/// Runs one step of the tick passes of `evaluator` on the host at `tick`, and returns the probes' counts.
-fn host_step(
-    evaluator: &HostEvaluator,
-    lanes: &mut HostLanes,
-    params: &[ParamValue],
-    seed: Option<u64>,
-    tick: u64,
-    probes: &Probes,
-) -> Vec<u32> {
-    let document = evaluator.document();
-    let values = evaluator.param_values(params);
-    let mut counts = vec![0; probes.len()];
-    let mut stream = 0;
-    for (position, pass) in document.passes.iter().enumerate() {
-        if pass.stage != PassStage::Tick || !evaluator.is_enabled(position, &values) {
-            continue;
-        }
-        evaluator
-            .run_pass_counting(
-                &pass.id,
-                lanes,
-                params,
-                &RunContext::tick(seed, tick as u32),
-                &mut stream,
-                probes,
-                &mut counts,
-            )
-            .unwrap_or_else(|error| panic!("{error}"));
-    }
-    counts
 }
 
 /// Steps `state` and the host lanes one tick at a time for `ticks` ticks, then once in a call of 64 steps, and holds
@@ -198,15 +153,11 @@ fn assert_counts_follow_the_host(
 /// On the Game of Life starter written with transition rows, with a probe on each row and one on the test of 3 Alive
 /// neighbours, the device's counts equal the host evaluator's every tick for 50 ticks, and after a call of 64 steps.
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "the skip is information for a reader of the test output"
-)]
 fn a_probe_on_each_transition_row_counts_as_the_host_does() {
-    let Some(ctx) = context() else {
-        eprintln!("skipping a_probe_on_each_transition_row_counts_as_the_host_does: no adapter");
+    let Some(device) = device_for("a_probe_on_each_transition_row_counts_as_the_host_does") else {
         return;
     };
+    let ctx = context(device);
     let file = transition_life();
     let probes = life_probes();
     let program = GridProgram::compile_with_probes(&file, &probes).unwrap_or_else(|problems| panic!("{problems:#?}"));
@@ -219,11 +170,7 @@ fn a_probe_on_each_transition_row_counts_as_the_host_does() {
     let (width, height, seed) = (61, 37, Some(3));
     let own = [ParamValue::F32(0.35)];
     let params = [ParamValue::U32(width), ParamValue::U32(height), own[0].clone()];
-    let mut state = match program.entry().build(&params, seed, Some(&ctx)) {
-        Ok(ModelState::Gpu(state)) => state,
-        Ok(ModelState::Cpu(_)) => panic!("the graph built on the CPU"),
-        Err(fault) => panic!("the graph did not build: {fault}"),
-    };
+    let mut state = built(&program.entry(), &params, seed, &ctx);
     let evaluator = HostEvaluator::new(&file).unwrap_or_else(|error| panic!("{error}"));
     let world = HostWorld::Grid {
         width,
@@ -252,19 +199,14 @@ const PROBED_AGENTS: u32 = 1100;
 /// A probe over agents counts on the device as the host evaluator counts, every tick for 20 ticks and after a call of
 /// 64 steps: the agents whose value, their index plus the tick, is below 600.
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "the skip is information for a reader of the test output"
-)]
 fn a_probe_over_agents_counts_as_the_host_does() {
-    let Some(ctx) = context() else {
-        eprintln!("skipping a_probe_over_agents_counts_as_the_host_does: no adapter");
+    let Some(device) = device_for("a_probe_over_agents_counts_as_the_host_does") else {
         return;
     };
-    let mut text = super::case_files::agents_header(PROBED_AGENTS, 100, 100);
+    let ctx = context(device);
+    let mut text = agents_header_with_position(PROBED_AGENTS, 100, 100);
     text.push_str(
-        "\n[[lane]]\nid = \"case_position\"\ndomain = \"agents\"\ntype = \"vec2f\"\nrole = \"position\"\n\n\
-         [[lane]]\nid = \"value\"\ndomain = \"agents\"\ntype = \"u32\"\n\n\
+        "[[lane]]\nid = \"value\"\ndomain = \"agents\"\ntype = \"u32\"\n\n\
          [[pass]]\nid = \"seed_values\"\nstage = \"init\"\nkind = \"map\"\ndomain = \"agents\"\n\n\
          [[pass.node]]\nid = \"n1\"\nop = \"ctx.index\"\n\n\
          [[pass.node]]\nid = \"n2\"\nop = \"lane.set\"\nconfig.lane = \"value\"\nin.value = \"n1\"\n\n\
@@ -285,11 +227,7 @@ fn a_probe_over_agents_counts_as_the_host_does() {
         ParamValue::F32(100.0),
         ParamValue::F32(100.0),
     ];
-    let mut state = match program.entry().build(&params, None, Some(&ctx)) {
-        Ok(ModelState::Gpu(state)) => state,
-        Ok(ModelState::Cpu(_)) => panic!("the graph built on the CPU"),
-        Err(fault) => panic!("the graph did not build: {fault}"),
-    };
+    let mut state = built(&program.entry(), &params, None, &ctx);
     let (evaluator, _, _) =
         crate::wgsl::agents::compile_parts(&file, &probes).unwrap_or_else(|problems| panic!("{problems:#?}"));
     let world = HostWorld::Agents {
@@ -354,7 +292,7 @@ fn a_probe_on_no_bool_output_of_a_tick_pass_is_refused() {
         (output(99, "out"), "names no output of a node in a tick pass"),
         (
             PortRef {
-                node: NodeId::new(11).expect("a node number"),
+                node: node_id(11),
                 port: None,
             },
             "holds no bool",

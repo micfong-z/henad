@@ -105,7 +105,7 @@ line 3's), `changes_need_the_sheet_the_copy_was_converted_from`,
 `make_function_keeps_frame_members`, `copy_carries_frame_membership` and
 `set_variant_color_round_trips_and_changes_the_code`. The inline test of `convert.rs`
 (`agent_paths_group_and_title_like_cell_paths`) reads the boids test sheet through
-`tests::sheet_document::sheet_text` and checks `writers`, `sheet_origins`, `sheet_title` and
+`tests::sheet_support::sheet_text` and checks `writers`, `sheet_origins`, `sheet_title` and
 `property_read` on agent paths, since the grid lowering writes none. henad-models'
 `src/tests/sheet_convert.rs` runs the copy and the sheet on the device at 128 by 128 with the same
 presses, lanes equal every tick and the Alive stat equal at the end.

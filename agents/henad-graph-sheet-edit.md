@@ -167,12 +167,16 @@ mostly ids another kind holds, to a new id and to its own),
 sheet, ids minted in file order, cards from their kind or button, lines `l1` up in display order
 across cards and `next_line` one past), `a_seeded_key_stream_gives_its_known_first_keys`, the
 automatic names, the condition offers, the for-each and fold offers, deletes that leave skipped
-lines and no error, colours, rate units and marks, Starts as commits, new buttons and cards, and
-`every_edit_leaves_a_document_that_reads_back` (random command sequences on every sheet: the text
-reads back to the same document, the checker never panics, no two lines share a key),
+lines and no error, colours, rate units and marks, Starts as commits, new buttons and cards,
 `the_agents_take_a_count_up_to_their_largest_number`,
+`a_choose_row_takes_its_condition_from_choose_when` and
+`a_ground_property_takes_its_marks_and_fading_and_comes_and_goes_with_the_ground` (an add-up mark
+writes `marks = "add_up"` and lowers to `combine = "sum"`). `src/tests/sheet_edit_random.rs` holds
+`every_edit_leaves_a_document_that_reads_back` (random command sequences on every sheet: the text
+reads back to the same document, the checker never panics, no two lines share a key), and
+`src/tests/sheet_summaries.rs` the summaries of a look:
 `a_summary_follows_its_automatic_name_and_its_new_id_reaches_every_reference`,
 `a_summary_named_by_hand_keeps_its_name_and_a_removed_summary_blanks_its_users`,
-`the_automatic_summary_names_follow_round_1`, `a_choose_row_takes_its_condition_from_choose_when`
-and `a_ground_property_takes_its_marks_and_fading_and_comes_and_goes_with_the_ground` (an add-up
-mark writes `marks = "add_up"` and lowers to `combine = "sum"`).
+`the_automatic_summary_names_follow_round_1` and the tests beside them. The command helpers the
+three files share (`builder_of`, `run`, `add_line`, `set_slot`, `set_field`) sit in
+`src/tests/sheet_support.rs`.

@@ -254,6 +254,14 @@ values, and files past the workgroup, uniform and shader-size limits built in th
 `gpu_cases.rs`, `gpu_repeat.rs` and `agent_wgsl.rs` (agents' budgets, uniform and workgroup limits,
 the replay flag, false among the starters and sheet starters for boids and bounded confidence
 alone, a float sum on a grid writing `partials`, the forms of counters and deposits).
+`sheet_support.rs` holds the sheets the tests read and the helpers that edit, read, write and lower
+their text (`edited` checks that the text holds the old text, `edited_once` that it holds it once,
+`only_refusal` that lowering refuses with exactly one error), the sheet edit commands and the host
+runs. `support.rs` holds the rest: the graph tests' `node_id`, `link`, `starter_builder`,
+`assert_checks`, `graph_errors` and `graph_refusal`, the texts past the device limits that `wgsl.rs`
+and `agent_wgsl.rs` share, and `mutations`, through which every mutation corpus draws its edits over
+its own table of hostile values and lines. A device test takes its device from `device_for`, which
+prints the skip, and builds through `context`, `params_of` and `built` there.
 `HENAD_DUMP_GRAPH_WGSL=<dir>` makes `every_starter_compiles` and `every_agents_graph_compiles` write
 each shader's text there.
 `gpu_cases.rs` runs every `Both` case on the device, an agents pass case through

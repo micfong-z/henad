@@ -3,19 +3,12 @@
 
 use henad_core::diagnostic::DiagnosticSeverity;
 
-use super::sheet_document::{edited, sheet_text, sheets};
+use super::sheet_support::{edited_sheet, read, sheet_text, sheets};
 use crate::sheet::check::{self, SheetReport};
 use crate::sheet::document::{LineKind, SheetDocument, SheetLine, SheetValue, Slot};
 use crate::sheet::relations::{CardRelations, RelationNote, RelationNoteKind};
 use crate::sheet::sentence::{self, Blank, LineSelect, NOT_RUN_TICK, ONE_AGENT_KIND, SHEET_EMPTY, Sentences};
 use crate::sheet::{ParsedSheet, starters};
-
-/// Reads `text`, which must read.
-fn document(text: &str) -> SheetDocument {
-    ParsedSheet::parse(text)
-        .unwrap_or_else(|error| panic!("the sheet does not read: {error}"))
-        .into_document()
-}
 
 /// Returns the report of checking `text`, which must read.
 fn report(text: &str) -> SheetReport {
@@ -49,7 +42,11 @@ fn every_sheet_checks_clean() {
     for (file_name, text) in sheets() {
         let sheet = ParsedSheet::parse(text).unwrap_or_else(|error| panic!("{file_name} does not read: {error}"));
         let placed = sheet.check();
-        let messages: Vec<String> = placed.diagnostics.iter().map(|d| d.diagnostic.to_string()).collect();
+        let messages: Vec<String> = placed
+            .diagnostics
+            .iter()
+            .map(|placed| placed.diagnostic.to_string())
+            .collect();
         assert!(messages.is_empty(), "{file_name}:\n{}", messages.join("\n"));
         assert!(check::check(sheet.document()).diagnostics.is_empty(), "{file_name}");
     }
@@ -58,7 +55,7 @@ fn every_sheet_checks_clean() {
 #[test]
 fn the_report_is_in_file_order_with_each_line_problem_at_its_table() {
     // l3 sits below l1 in the file and above it on the card.
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[
             ("lines = [\"l1\", \"l2\", \"l3\"]", "lines = [\"l3\", \"l2\", \"l1\"]"),
@@ -72,7 +69,11 @@ fn the_report_is_in_file_order_with_each_line_problem_at_its_table() {
         .map(|diagnostic| diagnostic.diagnostic.span.as_ref().map_or(0, |span| span.start))
         .collect();
     assert!(starts.is_sorted(), "{starts:?}");
-    let lines: Vec<Option<&str>> = report.diagnostics.iter().map(|d| d.line.as_deref()).collect();
+    let lines: Vec<Option<&str>> = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.line.as_deref())
+        .collect();
     assert_eq!(lines, [None, Some("l2"), Some("l3")]);
     assert_eq!(report.diagnostics[0].diagnostic.severity, DiagnosticSeverity::Error);
     assert!(report.has_errors());
@@ -89,7 +90,7 @@ fn the_report_is_in_file_order_with_each_line_problem_at_its_table() {
 /// Returns Game of Life with a result line l5 at line 2, both Become lines from Dead, line 3 testing Alive neighbours
 /// with `second` and line 4 with `third`, each a `(test, right)` pair of a compare.
 fn two_tests(second: (&str, &str), third: (&str, &str)) -> SheetDocument {
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[
             ("next_line = 5", "next_line = 6"),
@@ -124,7 +125,7 @@ fn two_tests(second: (&str, &str), third: (&str, &str)) -> SheetDocument {
     );
     let report = report(&text);
     assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
-    document(&text)
+    read(&text)
 }
 
 #[test]
@@ -163,7 +164,7 @@ fn otherwise_names_its_partner_and_skips_exclusive_tests() {
 
 #[test]
 fn the_starters_read_otherwise_as_the_final_words_give_them() {
-    let game = document(sheet_text("game_of_life.toml"));
+    let game = read(sheet_text("game_of_life.toml"));
     for id in ["l1", "l2", "l3"] {
         assert!(partners(&game, 0, id).is_empty(), "{id}");
     }
@@ -171,7 +172,7 @@ fn the_starters_read_otherwise_as_the_final_words_give_them() {
     assert_eq!(relations.order(), ["l1", "l2", "l3"]);
     assert_eq!(relations.number("l3"), Some(3));
     assert!(!relations.can_both_apply("l2", "l3"));
-    let vote = document(sheet_text("vote.toml"));
+    let vote = read(sheet_text("vote.toml"));
     assert_eq!(partners(&vote, 0, "l3"), [2]);
     assert_eq!(
         sentence_of(&vote, 0, "l3"),
@@ -181,7 +182,7 @@ fn the_starters_read_otherwise_as_the_final_words_give_them() {
 
 #[test]
 fn the_forest_fire_lightning_line_reads_otherwise_against_the_spread_line() {
-    let fire = document(sheet_text("forest_fire.toml"));
+    let fire = read(sheet_text("forest_fire.toml"));
     assert_eq!(partners(&fire, 0, "l3"), [2]);
     assert_eq!(
         sentence_of(&fire, 0, "l3"),
@@ -194,7 +195,7 @@ fn the_forest_fire_lightning_line_reads_otherwise_against_the_spread_line() {
 
 #[test]
 fn the_ants_set_lines_follow_the_recorded_set_rule() {
-    let ants = document(sheet_text("ants.toml"));
+    let ants = read(sheet_text("ants.toml"));
     // The When lines around lines 11 and 14 test my Cargo against Searching and Carrying food, each inside an all of.
     assert!(partners(&ants, 0, "l14").is_empty());
     assert_eq!(partners(&ants, 0, "l16"), [11, 14]);
@@ -221,7 +222,7 @@ fn the_ants_set_lines_follow_the_recorded_set_rule() {
 
 /// Returns SIR with a Dead state and line 2 leaving Infected for Dead, with `condition` as its condition table.
 fn two_exits(condition: &str) -> SheetDocument {
-    let text = edited(
+    let text = edited_sheet(
         "sir.toml",
         &[
             (
@@ -238,7 +239,7 @@ fn two_exits(condition: &str) -> SheetDocument {
     );
     let report = report(&text);
     assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
-    document(&text)
+    read(&text)
 }
 
 #[test]
@@ -249,7 +250,7 @@ fn two_rate_exits_form_one_group() {
     assert!(relations.otherwise_of("l3").is_empty());
     assert!(relations.can_both_apply("l2", "l3"));
     // The committed SIR leaves two different states, so it has no group.
-    let committed = document(sheet_text("sir.toml"));
+    let committed = read(sheet_text("sir.toml"));
     assert!(
         CardRelations::new(&committed, &committed.cards[0])
             .competing_groups()
@@ -271,7 +272,7 @@ fn a_chance_line_beside_a_rate_line_keeps_otherwise() {
 
 #[test]
 fn a_line_reading_a_skipped_line_is_skipped() {
-    let text = edited(
+    let text = edited_sheet(
         "game_of_life.toml",
         &[(
             "left = { their = \"status\" }\nright = { state = \"alive\" }\n",
@@ -293,7 +294,7 @@ fn a_line_reading_a_skipped_line_is_skipped() {
 
 #[test]
 fn a_line_inside_a_skipped_when_is_skipped() {
-    let mut ants = document(sheet_text("ants.toml"));
+    let mut ants = read(sheet_text("ants.toml"));
     line_mut(&mut ants, "l12").condition = Slot::Blank;
     let report = check::check(&ants);
     assert!(!report.has_errors(), "{:?}", report.diagnostics);
@@ -317,7 +318,7 @@ fn a_line_inside_a_skipped_when_is_skipped() {
 #[test]
 fn every_line_inside_a_skipped_repeat_is_skipped_at_any_depth() {
     // Repeat l1 with no times holds When l3, which holds the result line l4, then the Move l2.
-    let mut text = edited(
+    let mut text = edited_sheet(
         "random_walk.toml",
         &[
             ("next_line = 3", "next_line = 5"),
@@ -356,7 +357,7 @@ fn every_line_inside_a_skipped_repeat_is_skipped_at_any_depth() {
 #[test]
 fn a_count_part_or_summary_is_tried_at_whole_numbers() {
     // More than 2 and less than 3 hold together only between whole numbers.
-    let text = edited(
+    let text = edited_sheet(
         "boids.toml",
         &[
             (
@@ -376,7 +377,7 @@ fn a_count_part_or_summary_is_tried_at_whole_numbers() {
             ),
         ],
     );
-    let boids = document(&text);
+    let boids = read(&text);
     assert!(
         check::check(&boids).diagnostics.is_empty(),
         "{:?}",
@@ -390,16 +391,16 @@ fn a_count_part_or_summary_is_tried_at_whole_numbers() {
         card.map(|card| CardRelations::new(document, &document.cards[card]).can_both_apply("l3", "l4"))
     };
     assert_eq!(relations(&boids), Some(false));
-    let summary = document(&text.replace("part = \"count\"", "part = \"near\""));
+    let summary = read(&text.replace("part = \"count\"", "part = \"near\""));
     assert_eq!(relations(&summary), Some(false));
     // A total is no count, and 2.5 passes both tests.
-    let total = document(&text.replace("part = \"count\"", "part = \"push\""));
+    let total = read(&text.replace("part = \"count\"", "part = \"push\""));
     assert_eq!(relations(&total), Some(true));
 }
 
 /// Returns Game of Life with lines 1 and 2 inside a When on line 1, so that line 3 uses a result from inside it.
 fn scoped_game() -> String {
-    edited(
+    edited_sheet(
         "game_of_life.toml",
         &[
             ("next_line = 5", "next_line = 6"),
@@ -427,7 +428,7 @@ fn a_result_inside_a_when_is_open_only_to_the_lines_inside_it() {
 #[test]
 #[expect(clippy::too_many_lines, reason = "one case per kind of skip reads best as one table")]
 fn every_skip_note_equals_its_wording_table_entry() {
-    let blank = |old: &str, new: &str| report(&edited("game_of_life.toml", &[(old, new)]));
+    let blank = |old: &str, new: &str| report(&edited_sheet("game_of_life.toml", &[(old, new)]));
     // A blank, in the words of what it wants.
     let cases = [
         (
@@ -488,7 +489,7 @@ fn every_skip_note_equals_its_wording_table_entry() {
             sentence::not_run_choose(Blank::UpperNumber.want()),
         ),
         (
-            report(&edited(
+            report(&edited_sheet(
                 "sir.toml",
                 &[(
                     "rate = { param = \"recovery_rate\" }\nrate_unit = \"day\"",
@@ -529,7 +530,7 @@ fn every_skip_note_equals_its_wording_table_entry() {
             sentence::not_run_result_unfinished("Alive neighbours", 1),
         ),
         (
-            report(&edited(
+            report(&edited_sheet(
                 "sir.toml",
                 &[("[time]\ntick_length = 1\ntick_unit = \"day\"\n\n", "")],
             )),
@@ -543,7 +544,7 @@ fn every_skip_note_equals_its_wording_table_entry() {
         assert_eq!(words, entry, "the wording table changed");
         assert_eq!(report.skip_note(line), Some(words), "{line}");
     }
-    let mut ants = document(sheet_text("ants.toml"));
+    let mut ants = read(sheet_text("ants.toml"));
     line_mut(&mut ants, "l9").condition = Slot::Blank;
     assert_eq!(
         check::check(&ants).skip_note("l10"),
@@ -588,7 +589,7 @@ fn the_outside_test_stands_only_in_a_condition_and_counts_for_otherwise() {
 
 #[test]
 fn a_when_that_is_always_and_the_reserved_ids_are_errors() {
-    let mut ants = document(sheet_text("ants.toml"));
+    let mut ants = read(sheet_text("ants.toml"));
     line_mut(&mut ants, "l9").condition = line_mut(&mut ants.clone(), "l10").condition.clone();
     let errors = |document: &SheetDocument| -> Vec<String> {
         check::check(document)
@@ -636,14 +637,17 @@ fn a_when_that_is_always_and_the_reserved_ids_are_errors() {
         ),
     ] {
         let text = sheet_text("game_of_life.toml").replacen(old, new, 1);
-        let messages: Vec<String> = report(&text).errors().map(|d| d.diagnostic.message.clone()).collect();
+        let messages: Vec<String> = report(&text)
+            .errors()
+            .map(|error| error.diagnostic.message.clone())
+            .collect();
         assert!(messages.iter().any(|found| found == message), "{message}: {messages:?}");
     }
 }
 
 #[test]
 fn a_second_agent_kind_is_refused() {
-    let mut boids = document(sheet_text("boids.toml"));
+    let mut boids = read(sheet_text("boids.toml"));
     let mut second = boids.agents[0].clone();
     second.id = "hawk".to_owned();
     for property in &mut second.properties {
@@ -688,9 +692,9 @@ fn a_grid_sheet_with_no_property_gets_the_empty_state_warning() {
     );
 }
 
-/// Returns the relation notes of card `card` of `text`, every line running, as `(line id, words)`.
+/// Returns the relation notes of card `card` of `text`, every line running.
 fn relation_notes(text: &str, card: usize) -> Vec<RelationNote> {
-    let document = document(text);
+    let document = read(text);
     let relations = CardRelations::new(&document, &document.cards[card]);
     let report = check::check(&document);
     relations.notes(&Sentences::new(&document), |line| !report.is_skipped(line))
@@ -730,7 +734,7 @@ fn the_order_note_shows_on_game_of_life_and_sir_and_not_on_the_vote_or_the_fores
     assert!(order("vote.toml").is_empty());
     assert!(order("forest_fire.toml").is_empty());
     // A line that does not run takes the note away.
-    let skipped = edited(
+    let skipped = edited_sheet(
         "game_of_life.toml",
         &[(
             "[card.line.l2.condition]\nkind = \"compare\"\ntest = \"is\"\nleft = { result = \"l1\" }\nright = 3\n",
@@ -758,7 +762,7 @@ fn the_vote_is_covered_and_a_gap_between_two_thresholds_is_named() {
     );
     assert!(notes_of(&notes, |kind| *kind == RelationNoteKind::Gap).is_empty());
     // "Become A from any state, when B in my block is at most 3" leaves 4 to no line.
-    let gap = edited(
+    let gap = edited_sheet(
         "vote.toml",
         &[(
             "[card.line.l3.condition]\nkind = \"always\"\n",
@@ -781,7 +785,7 @@ fn the_vote_is_covered_and_a_gap_between_two_thresholds_is_named() {
         "lines = [\"l2\", \"l3\", \"l1\"]",
         1,
     );
-    let report = check::check(&document(&skipped));
+    let report = check::check(&read(&skipped));
     assert!(report.is_skipped("l2") && report.is_skipped("l3"));
     let notes = relation_notes(&skipped, 0);
     assert!(
@@ -806,7 +810,7 @@ fn life_with_when(lines: &str, condition: &str, inside: &str, more: &str) -> Str
         "[card.line.l5]\nkind = \"when\"\nlines = {inside}\n\n[card.line.l5.condition]\n{condition}\n\n\
          {more}# Lines of Clear"
     );
-    edited(
+    edited_sheet(
         "game_of_life.toml",
         &[
             ("next_line = 5", "next_line = 7"),
@@ -894,7 +898,7 @@ fn a_when_offers_to_fold_into_its_lines_and_notes_what_holds_inside_it() {
 /// A by-chance start with its chance left empty is an error that names the property, in the sheet's words.
 #[test]
 fn an_empty_start_chance_names_its_property() {
-    let mut sir = document(sheet_text("sir.toml"));
+    let mut sir = read(sheet_text("sir.toml"));
     let cells = sir.cells.as_mut().expect("cells");
     let start = cells[0].starts_as.as_mut().expect("a start");
     start.rows[0].chance = Slot::Blank;

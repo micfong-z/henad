@@ -3,53 +3,20 @@
 
 use std::collections::BTreeSet;
 
-use henad_core::authoring::primitives::space::Boundary;
 use henad_core::explore::fingerprint::fnv1a64;
 
+use super::support::{assert_checks, canonical_builder, node_id, sir_words_after};
 use crate::GraphFile;
 use crate::edit::{EditCommand, EditError, GraphBuilder, PortSide, Scope};
-use crate::host::{HostEvaluator, HostLanes, HostWorld, RunContext};
 use crate::ids::NodeId;
 use crate::node::{OP_FUNCTION_CALL, OP_FUNCTION_INPUT, OP_FUNCTION_OUTPUT};
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, PortRef};
 use crate::wgsl::{AgentProgram, GridProgram};
 
-fn n(number: u32) -> NodeId {
-    NodeId::new(number).expect("an id")
-}
-
 /// Returns the builder of the starter `name` read through its canonical text, with keys drawn from a fixed seed.
 fn starter(name: &str) -> GraphBuilder {
-    let text = crate::starters::starter(name).expect("a starter").text;
-    let canonical = GraphFile::parse(text).expect("the starter reads").to_toml();
-    GraphBuilder::from_file(&GraphFile::parse(&canonical).expect("the canonical text reads")).with_key_seed(5)
-}
-
-/// Asserts that the builder's graph reads back and checks without an error, and returns the file.
-#[track_caller]
-fn assert_checks(builder: &GraphBuilder) -> GraphFile {
-    let file = builder.to_file().expect("the graph reads back");
-    let errors: Vec<String> = file.check().errors().map(|error| error.message.clone()).collect();
-    assert!(errors.is_empty(), "{errors:#?}\n{}", builder.to_toml());
-    file
-}
-
-/// Returns the words of every lane of the SIR graph `file` at 24 by 16 after its init and two steps.
-fn sir_after_two_steps(file: &GraphFile) -> Vec<Vec<u32>> {
-    let world = HostWorld::Grid {
-        width: 24,
-        height: 16,
-        boundary: Boundary::Torus,
-    };
-    let evaluator = HostEvaluator::new(file).expect("the evaluator");
-    let mut lanes: HostLanes = evaluator.init(world, &[], Some(11)).expect("the init runs");
-    for tick in 0..2 {
-        evaluator
-            .run_pass("step", &mut lanes, &[], &RunContext::tick(Some(11), tick), &mut 1)
-            .expect("the step runs");
-    }
-    lanes.columns().iter().map(|column| column.words().to_vec()).collect()
+    canonical_builder(crate::starters::starter(name).expect("a starter").text, 5)
 }
 
 /// Returns the links of every input of the pass `pass` that read node `node`.
@@ -89,8 +56,8 @@ fn function_scope(id: &str) -> Scope {
 #[test]
 fn making_a_function_and_ungrouping_its_call_keep_what_the_pass_computes() {
     let mut builder = starter("sir.toml");
-    let before = sir_after_two_steps(&builder.to_file().expect("reads"));
-    let moved = [n(12), n(13), n(15), n(16), n(17)];
+    let before = sir_words_after(&builder.to_file().expect("reads"), 2);
+    let moved = [node_id(12), node_id(13), node_id(15), node_id(16), node_id(17)];
     let made = builder
         .apply(EditCommand::MakeFunction {
             scope: Scope::pass("step"),
@@ -128,7 +95,7 @@ fn making_a_function_and_ungrouping_its_call_keep_what_the_pass_computes() {
         Some(OP_FUNCTION_CALL)
     );
     assert_eq!(
-        sir_after_two_steps(&file),
+        sir_words_after(&file, 2),
         before,
         "a function of nodes without draws computes the pass as before"
     );
@@ -147,7 +114,7 @@ fn making_a_function_and_ungrouping_its_call_keep_what_the_pass_computes() {
     );
     let file = assert_checks(&builder);
     assert_eq!(
-        sir_after_two_steps(&file),
+        sir_words_after(&file, 2),
         before,
         "the copies compute the pass as before"
     );
@@ -163,11 +130,11 @@ fn an_ungrouped_call_draws_what_the_call_drew() {
     let made = builder
         .apply(EditCommand::MakeFunction {
             scope: Scope::pass("step"),
-            nodes: vec![n(14), n(15), n(18)],
+            nodes: vec![node_id(14), node_id(15), node_id(18)],
             id: "draws".to_owned(),
         })
         .expect("the function is made");
-    let called = sir_after_two_steps(&assert_checks(&builder));
+    let called = sir_words_after(&assert_checks(&builder), 2);
     builder
         .apply(EditCommand::Ungroup {
             scope: Scope::pass("step"),
@@ -175,7 +142,7 @@ fn an_ungrouped_call_draws_what_the_call_drew() {
         })
         .expect("the call is ungrouped");
     assert_eq!(
-        sir_after_two_steps(&assert_checks(&builder)),
+        sir_words_after(&assert_checks(&builder), 2),
         called,
         "the copy of the draw takes the key it had inside the call"
     );
@@ -186,8 +153,8 @@ fn a_function_is_not_made_of_nodes_it_cannot_hold() {
     let mut builder = starter("sir.toml");
     let text = builder.to_toml();
     let cases = [
-        (vec![n(19), n(20)], "a lane write"),
-        (vec![n(16)], "no id"),
+        (vec![node_id(19), node_id(20)], "a lane write"),
+        (vec![node_id(16)], "no id"),
         (Vec::new(), "no node"),
     ];
     for (nodes, reason) in cases {
@@ -202,7 +169,7 @@ fn a_function_is_not_made_of_nodes_it_cannot_hold() {
     let mut boids = starter("boids.toml");
     let refused = boids.apply(EditCommand::MakeFunction {
         scope: Scope::pass("flock"),
-        nodes: vec![n(28)],
+        nodes: vec![node_id(28)],
         id: "push_close".to_owned(),
     });
     assert!(
@@ -218,7 +185,7 @@ fn nodes_inside_a_radius_fold_make_a_function_called_inside_it() {
     let made = builder
         .apply(EditCommand::MakeFunction {
             scope: Scope::pass("flock"),
-            nodes: vec![n(27)],
+            nodes: vec![node_id(27)],
             id: "away".to_owned(),
         })
         .expect("the function is made");
@@ -229,12 +196,12 @@ fn nodes_inside_a_radius_fold_make_a_function_called_inside_it() {
         .iter()
         .find(|pass| pass.id == "flock")
         .expect("flock");
-    assert_eq!(pass.body.node(made[0]).and_then(|call| call.region), Some(n(25)));
+    assert_eq!(pass.body.node(made[0]).and_then(|call| call.region), Some(node_id(25)));
     let call = pass.body.node(made[0]).expect("the call");
     assert_eq!(
         call.inputs.values().next(),
         Some(&InputValue::Link(PortRef {
-            node: n(25),
+            node: node_id(25),
             port: Some("delta".to_owned())
         })),
         "the inner output enters through the call"
@@ -245,7 +212,7 @@ fn nodes_inside_a_radius_fold_make_a_function_called_inside_it() {
 #[test]
 fn a_function_that_gains_a_second_output_names_the_bare_links_to_its_calls_first() {
     let mut builder = starter("boids.toml");
-    let bare = links_to(&builder, "flock", n(49));
+    let bare = links_to(&builder, "flock", node_id(49));
     assert!(
         !bare.is_empty() && bare.iter().all(|link| link.port.is_none()),
         "the canonical text links the only output bare: {bare:?}"
@@ -258,7 +225,7 @@ fn a_function_that_gains_a_second_output_names_the_bare_links_to_its_calls_first
             value_type: ValueType::F32,
         })
         .expect("the output is added");
-    let named = links_to(&builder, "flock", n(49));
+    let named = links_to(&builder, "flock", node_id(49));
     assert_eq!(named.len(), bare.len());
     assert!(
         named.iter().all(|link| link.port.as_deref() == Some("out")),
@@ -482,9 +449,9 @@ fn a_function_body_has_a_report_with_its_types_and_cost() {
         .find(|function| function.id == "clamp_speed")
         .expect("a report of clamp_speed");
     assert!(clamp.cost > 0);
-    let sqrt = clamp.outputs.get(&n(105)).and_then(|ports| ports.get("out"));
+    let sqrt = clamp.outputs.get(&node_id(105)).and_then(|ports| ports.get("out"));
     assert_eq!(sqrt.and_then(|port| port.value_type.clone()), Some(ValueType::F32));
-    let input = clamp.outputs.get(&n(101)).and_then(|ports| ports.get("value"));
+    let input = clamp.outputs.get(&node_id(101)).and_then(|ports| ports.get("value"));
     assert_eq!(input.and_then(|port| port.value_type.clone()), Some(ValueType::Vec2F));
 }
 
@@ -494,13 +461,16 @@ fn nodes_of_a_function_wrap_in_a_repeat() {
     let made = builder
         .apply(EditCommand::WrapInRepeat {
             scope: function_scope("clamp_speed"),
-            nodes: vec![n(104), n(105)],
+            nodes: vec![node_id(104), node_id(105)],
             bounds: None,
         })
         .expect("the nodes are wrapped");
     let file = assert_checks(&builder);
     let function = &file.document().functions[0];
-    assert_eq!(function.body.node(n(105)).and_then(|node| node.region), Some(made[0]));
+    assert_eq!(
+        function.body.node(node_id(105)).and_then(|node| node.region),
+        Some(made[0])
+    );
     AgentProgram::compile(&file).expect("the function with a Repeat compiles");
 }
 

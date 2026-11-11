@@ -6,28 +6,16 @@
 //! stats, a view and an action pass, the other map passes a Repeat can sit in.
 
 use henad_core::authoring::primitives::rng::random_float;
-use henad_core::params::ParamValue;
 
 use super::host::{CARRIED, GRID, NESTED_DRAW, TWO_DRAWS, WORLD, chained};
-use super::support::{ShaderRun, TestDevice, lane_buffers, lane_words, run_shader, test_device};
+use super::support::{
+    ShaderRun, TestDevice, device_for, first_tally, lane_buffers, lane_words, node_id, run_shader, shader_of_pass,
+};
 use super::wgsl::{LANE_SEED_BODY, POWI_BODY, repeat_nodes};
 use crate::GraphFile;
 use crate::draw::{PHASE_TICK, draw_bits, key_word};
 use crate::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
 use crate::wgsl::{Probes, compile_shaders};
-
-/// Returns the test device, or `None` with a note naming the skipped test `test` when this machine has none.
-#[expect(
-    clippy::print_stderr,
-    reason = "the skip is information for a reader of the test output"
-)]
-fn device_for(test: &str) -> Option<TestDevice> {
-    let device = test_device();
-    if device.is_none() {
-        eprintln!("skipping {test}: no adapter");
-    }
-    device
-}
 
 /// Returns the file of [`GRID`] with one tick pass `step` holding `nodes`.
 fn tick_file(nodes: &str) -> GraphFile {
@@ -44,11 +32,7 @@ fn on_device(device: &TestDevice, nodes: &str, seed: Option<u64>, tick: u32) -> 
     let document = evaluator.document();
     let compiled = compile_shaders(document, &report, &evaluator, None, &Probes::default())
         .unwrap_or_else(|problems| panic!("{problems:#?}"));
-    let shader = compiled
-        .shaders
-        .iter()
-        .find(|shader| shader.passes().iter().any(|pass| pass == "step"))
-        .expect("the step shader");
+    let shader = shader_of_pass(&compiled.shaders, "step").expect("the step shader");
     let HostWorld::Grid { width, height, .. } = WORLD else {
         unreachable!("the tests' world is a grid");
     };
@@ -79,16 +63,9 @@ fn on_device(device: &TestDevice, nodes: &str, seed: Option<u64>, tick: u32) -> 
 fn on_host(nodes: &str, seed: Option<u64>, tick: u32) -> Vec<Vec<u32>> {
     let evaluator = HostEvaluator::new(&tick_file(nodes)).unwrap_or_else(|error| panic!("{:?}", error.diagnostics()));
     let mut lanes = HostLanes::new(evaluator.document(), WORLD).expect("the lanes");
-    let no_params: [ParamValue; 0] = [];
     let mut stream = 0;
     evaluator
-        .run_pass(
-            "step",
-            &mut lanes,
-            &no_params,
-            &RunContext::tick(seed, tick),
-            &mut stream,
-        )
+        .run_pass("step", &mut lanes, &[], &RunContext::tick(seed, tick), &mut stream)
         .unwrap_or_else(|error| panic!("{error}"));
     lanes.columns().iter().map(|column| column.words().to_vec()).collect()
 }
@@ -485,13 +462,8 @@ fn a_repeat_runs_in_stats_view_and_action_passes_on_the_device() {
         assert!(column.set(element, HostValue::U32(context_x(element))), "an x");
     }
     let params = evaluator.param_values(&[]);
-    let no_params: [ParamValue; 0] = [];
     let run = |pass: &str, context: &RunContext| {
-        let shader = compiled
-            .shaders
-            .iter()
-            .find(|shader| shader.passes().iter().any(|known| known == pass))
-            .unwrap_or_else(|| panic!("no shader runs `{pass}`"));
+        let shader = shader_of_pass(&compiled.shaders, pass).unwrap_or_else(|| panic!("no shader runs `{pass}`"));
         let (buffers, labels) = lane_buffers(&compiled, &start, context.tick);
         let uniform = shader
             .uniform_bytes(&evaluator, WORLD, &params, context)
@@ -510,7 +482,7 @@ fn a_repeat_runs_in_stats_view_and_action_passes_on_the_device() {
         );
         let mut lanes = start.clone();
         let outcome = evaluator
-            .run_pass(pass, &mut lanes, &no_params, context, &mut 0)
+            .run_pass(pass, &mut lanes, &[], context, &mut 0)
             .unwrap_or_else(|error| panic!("{error}"));
         (shader, result, lanes, outcome)
     };
@@ -518,10 +490,7 @@ fn a_repeat_runs_in_stats_view_and_action_passes_on_the_device() {
     // The stats pass: the device counts the tallies, and the host finishes the statistics from them.
     let tick = RunContext::tick(None, 0);
     let (shader, result, _, outcome) = run("counts", &tick);
-    let mut first = 0;
-    for pass in shader.passes().iter().take_while(|pass| *pass != "counts") {
-        first += evaluator.program(pass).expect("a stats pass").1.tallies;
-    }
+    let first = first_tally(&evaluator, shader, "counts");
     let (_, program) = evaluator.program("counts").expect("the stats pass");
     let tallies: Vec<u64> = result.counters[first..first + program.tallies]
         .iter()
@@ -534,10 +503,10 @@ fn a_repeat_runs_in_stats_view_and_action_passes_on_the_device() {
     let frame = crate::host::run::finish(program, &params, &tick, WORLD, Some(&readback))
         .unwrap_or_else(|error| panic!("{error}"));
     let stat = |node: u32| -> HostValue {
-        let mut ports = outcome.values[&crate::ids::NodeId::new(node).expect("an id")].iter();
+        let mut ports = outcome.values[&node_id(node)].iter();
         let (port, host) = ports.next().expect("a statistic");
         assert!(ports.next().is_none(), "one output of n{node}");
-        let slot = program.outputs[&(crate::ids::NodeId::new(node).expect("an id"), port.clone())];
+        let slot = program.outputs[&(node_id(node), port.clone())];
         assert_eq!(
             frame[slot],
             *host,

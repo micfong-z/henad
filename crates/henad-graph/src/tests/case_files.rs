@@ -53,14 +53,22 @@ fn header(width: u32, height: u32, bounded: bool) -> String {
 }
 
 /// Returns the header of a case file over `agents` agents in a world of `width` by `height` world units.
-pub(super) fn agents_header(agents: u32, width: u32, height: u32) -> String {
+fn agents_header(agents: u32, width: u32, height: u32) -> String {
     format!(
         "format = \"henad-model\"\nformat_version = 1\nkind = \"graph\"\nid = \"case\"\n\n[graph]\ntopology = \"agents\"\nlibrary = 1\n\n[[target]]\nbackend = \"gpu\"\n\n[agents]\ncount = {agents}\nmax_count = {agents}\nwidth = {width}.0\nheight = {height}.0\n{CASE_WORLD}"
     )
 }
 
+/// Returns [`agents_header`] followed by the position lane `case_position`.
+pub(super) fn agents_header_with_position(agents: u32, width: u32, height: u32) -> String {
+    format!(
+        "{}\n[[lane]]\nid = \"case_position\"\ndomain = \"agents\"\ntype = \"vec2f\"\nrole = \"position\"\n\n",
+        agents_header(agents, width, height)
+    )
+}
+
 /// Returns the literal a case value is written as, with a float the format cannot hold written as 0.
-pub(super) fn literal(value: &CaseValue) -> String {
+fn literal(value: &CaseValue) -> String {
     let float = |number: f32| {
         if number.is_finite() {
             format!("{number:?}")

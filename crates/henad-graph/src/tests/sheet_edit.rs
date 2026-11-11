@@ -1,25 +1,26 @@
 //! The sheet edit commands: the author format's three typical edits built by commands, the outline moves, renames and
 //! new ids, line numbers, id minting, automatic names, the commands behind the card's offers, deletes that leave
-//! skipped lines, and random command sequences over every sheet.
+//! skipped lines, colours, rate units, starts, buttons, cards, agents and the ground.
 
 use std::collections::BTreeSet;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use henad_core::authoring::primitives::rng::xorshift64;
 use henad_core::metadata::TimeUnit;
 
-use super::sheet_document::{sheet_text, sheets};
-use super::sheet_writer::assert_hunks;
+use super::sheet_support::{
+    add_line, builder_of, chip, line, lowered, phrase, read, result, run, set_field, set_slot, sheet_text, sheets,
+    write,
+};
+use super::sheet_writer::{RENAME_HUNKS, STEER_REORDER_HUNKS, WANING_HUNKS, assert_hunks};
 use crate::keys::KeyStream;
 use crate::sheet::check;
 use crate::sheet::document::{
-    Around, BlockedState, ButtonStepRule, CardRuns, ChipRelation, CompareTest, Edges, LineKind, LookSummary, Marks,
-    MeasureRule, PaintedShape, ParameterType, PropertyType, ShapeKind, SheetChip, SheetDocument, SheetLine,
-    SheetLiteral, SheetTime, SheetValue, Slot, StartRule, StartsAs, StartsAsRow, SummaryKind,
+    BlockedState, ButtonStepRule, CardRuns, CompareTest, LineKind, Marks, MeasureRule, PaintedShape, ParameterType,
+    PropertyType, ShapeKind, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetTime, SheetValue, Slot, StartRule,
+    StartsAs, StartsAsRow,
 };
 use crate::sheet::edit::{
     IdSpace, LineField, MoveDirection, STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem,
-    automatic_name, automatic_summary_name, mint_id, unit_in_text,
+    automatic_name, mint_id, unit_in_text,
 };
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{ConditionItem, Sentences};
@@ -81,52 +82,6 @@ fn a_new_property_type_clears_every_reference_and_keeps_the_place() {
             })
             .is_err()
     );
-}
-
-/// Reads `text`, which must read.
-fn read(text: &str) -> SheetDocument {
-    ParsedSheet::parse(text)
-        .unwrap_or_else(|error| panic!("the sheet does not read: {error}\n{text}"))
-        .into_document()
-}
-
-/// Writes `document`, which must write.
-fn write(document: &SheetDocument) -> String {
-    document
-        .to_text()
-        .unwrap_or_else(|error| panic!("the sheet does not write: {error}"))
-}
-
-/// Returns a builder of the sheet `file_name`, with its keys seeded.
-fn builder_of(file_name: &str) -> SheetBuilder {
-    SheetBuilder::new(read(sheet_text(file_name))).with_key_seed(12)
-}
-
-/// Runs `edit` on `builder`, which must accept it, and returns the ids it made.
-fn run(builder: &mut SheetBuilder, edit: SheetEdit) -> Vec<String> {
-    let shown = format!("{edit:?}");
-    builder
-        .apply(edit)
-        .unwrap_or_else(|error| panic!("{shown} is refused: {error}"))
-}
-
-/// Returns a chip value.
-fn chip(chip: SheetChip) -> Slot {
-    Slot::Filled(SheetValue::Chip(chip))
-}
-
-/// Returns a phrase value.
-fn phrase(line: SheetLine) -> Slot {
-    Slot::Filled(SheetValue::Phrase(Box::new(line)))
-}
-
-/// Returns the line `line_id` of `builder`'s sheet.
-fn line<'a>(builder: &'a SheetBuilder, line_id: &str) -> &'a SheetLine {
-    builder
-        .document()
-        .line(line_id)
-        .map(|(_, line)| line)
-        .unwrap_or_else(|| panic!("no line {line_id}"))
 }
 
 /// Returns the condition phrase of line `line_id`.
@@ -194,14 +149,7 @@ fn a_new_waning_line_built_by_commands_changes_four_hunks() {
     let mut become_line = SheetLine::new(LineKind::Become);
     become_line.key = Some(1_585_830_067);
     become_line.condition = phrase(SheetLine::new(LineKind::Rate));
-    let made = run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: None,
-            line: Box::new(become_line),
-        },
-    );
+    let made = add_line(&mut builder, "cell_tick", None, become_line);
     assert_eq!(made, ["l5"], "line 4 sits in the New outbreak card");
     let rate = condition(&builder, "l5");
     assert_eq!(
@@ -209,29 +157,17 @@ fn a_new_waning_line_built_by_commands_changes_four_hunks() {
         (Some(TimeUnit::Day), true),
         "a new rate takes the unit of one tick, marked"
     );
-    run(
+    set_field(
         &mut builder,
-        SheetEdit::SetField {
-            line: "l5".to_owned(),
-            phrase: String::new(),
-            field: LineField::NewState(Some(("health".to_owned(), "susceptible".to_owned()))),
-        },
+        "l5",
+        LineField::NewState(Some(("health".to_owned(), "susceptible".to_owned()))),
     );
-    run(
+    set_field(&mut builder, "l5", LineField::StartState(Some("recovered".to_owned())));
+    set_slot(
         &mut builder,
-        SheetEdit::SetField {
-            line: "l5".to_owned(),
-            phrase: String::new(),
-            field: LineField::StartState(Some("recovered".to_owned())),
-        },
-    );
-    run(
-        &mut builder,
-        SheetEdit::SetSlot {
-            line: "l5".to_owned(),
-            path: "condition.rate".to_owned(),
-            value: chip(SheetChip::Param("waning_rate".to_owned())),
-        },
+        "l5",
+        "condition.rate",
+        chip(SheetChip::Param("waning_rate".to_owned())),
     );
     let rate = condition(&builder, "l5");
     assert_eq!(
@@ -240,49 +176,7 @@ fn a_new_waning_line_built_by_commands_changes_four_hunks() {
         "the parameter's unit replaces the mark"
     );
     let new = write(builder.document());
-    assert_hunks(
-        old,
-        &new,
-        &[
-            (&["next_line = 5"], &["next_line = 6"]),
-            (
-                &[],
-                &[
-                    "[[parameter]]",
-                    "id = \"waning_rate\"",
-                    "name = \"Waning rate\"",
-                    "type = \"number\"",
-                    "min = 0",
-                    "max = 1",
-                    "default = 0.01",
-                    "step = 0.001",
-                    "unit = \"per day\"",
-                    "means = \"Rate at which a recovered cell loses its immunity\"",
-                ],
-            ),
-            (
-                &["lines = [\"l1\", \"l2\", \"l3\"]"],
-                &["lines = [\"l1\", \"l2\", \"l3\", \"l5\"]"],
-            ),
-            (
-                &[],
-                &[
-                    "# Become Susceptible from Recovered, at rate Waning rate per day",
-                    "[card.line.l5]",
-                    "kind = \"become\"",
-                    "key = 1585830067",
-                    "property = \"health\"",
-                    "new_state = \"susceptible\"",
-                    "start_state = \"recovered\"",
-                    "",
-                    "[card.line.l5.condition]",
-                    "kind = \"rate\"",
-                    "rate = { param = \"waning_rate\" }",
-                    "rate_unit = \"day\"",
-                ],
-            ),
-        ],
-    );
+    assert_hunks(old, &new, WANING_HUNKS);
     assert_eq!(read(&new), *builder.document());
 }
 
@@ -299,14 +193,7 @@ fn a_steer_reorder_by_two_moves_changes_one_line() {
             },
         );
     }
-    assert_hunks(
-        old,
-        &write(builder.document()),
-        &[(
-            &["lines = [\"l1\", \"l2\", \"l3\", \"l4\", \"l5\", \"l6\", \"l7\"]"],
-            &["lines = [\"l1\", \"l2\", \"l5\", \"l3\", \"l4\", \"l6\", \"l7\"]"],
-        )],
-    );
+    assert_hunks(old, &write(builder.document()), STEER_REORDER_HUNKS);
 }
 
 #[test]
@@ -320,17 +207,7 @@ fn a_parameter_rename_by_command_changes_its_name_and_the_comment_that_shows_it(
             name: "Pull to centre".to_owned(),
         },
     );
-    assert_hunks(
-        old,
-        &write(builder.document()),
-        &[
-            (&["name = \"Cohesion\""], &["name = \"Pull to centre\""]),
-            (
-                &["# Steer Velocity by Flockmates' centre, strength Cohesion"],
-                &["# Steer Velocity by Flockmates' centre, strength Pull to centre"],
-            ),
-        ],
-    );
+    assert_hunks(old, &write(builder.document()), RENAME_HUNKS);
 }
 
 #[test]
@@ -556,24 +433,10 @@ fn change_id_rewrites_every_reference_and_nothing_else() {
 #[test]
 fn a_deleted_line_number_is_never_minted_again() {
     let mut builder = builder_of("game_of_life.toml");
-    let first = run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: None,
-            line: Box::new(SheetLine::new(LineKind::Become)),
-        },
-    );
+    let first = add_line(&mut builder, "cell_tick", None, SheetLine::new(LineKind::Become));
     assert_eq!(first, ["l5"]);
     run(&mut builder, SheetEdit::DeleteLine { line: "l5".to_owned() });
-    let second = run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: None,
-            line: Box::new(SheetLine::new(LineKind::Become)),
-        },
-    );
+    let second = add_line(&mut builder, "cell_tick", None, SheetLine::new(LineKind::Become));
     assert_eq!(second, ["l6"]);
     assert_eq!(builder.document().sheet.next_line, 7);
     let text = write(builder.document());
@@ -741,14 +604,7 @@ fn a_seeded_key_stream_gives_its_known_first_keys() {
 fn every_outline_move_matches_the_prototype() {
     let mut builder = builder_of("game_of_life.toml");
     let add = |builder: &mut SheetBuilder, inside: Option<&str>, kind: LineKind| -> String {
-        let made = run(
-            builder,
-            SheetEdit::AddLine {
-                card: "cell_tick".to_owned(),
-                inside: inside.map(str::to_owned),
-                line: Box::new(SheetLine::new(kind)),
-            },
-        );
+        let made = add_line(builder, "cell_tick", inside, SheetLine::new(kind));
         made.into_iter().next().unwrap_or_default()
     };
     assert_eq!(add(&mut builder, None, LineKind::When), "l5");
@@ -827,22 +683,8 @@ fn a_change_added_inside_a_when_starts_always_and_takes_the_tested_state() {
     test.test = Some(CompareTest::Is);
     test.right = chip(SheetChip::State("alive".to_owned()));
     when.condition = phrase(test);
-    run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: None,
-            line: Box::new(when),
-        },
-    );
-    run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: Some("l5".to_owned()),
-            line: Box::new(SheetLine::new(LineKind::Become)),
-        },
-    );
+    add_line(&mut builder, "cell_tick", None, when);
+    add_line(&mut builder, "cell_tick", Some("l5"), SheetLine::new(LineKind::Become));
     let added = line(&builder, "l6");
     assert_eq!(condition(&builder, "l6").kind, LineKind::Always);
     assert_eq!(added.property.as_deref(), Some("status"));
@@ -861,17 +703,10 @@ fn automatic_names_follow_their_lines_until_renamed() {
     let add_chance = |builder: &mut SheetBuilder, chance: Slot| -> String {
         let mut line = SheetLine::new(LineKind::Chance);
         line.chance = chance;
-        run(
-            builder,
-            SheetEdit::AddLine {
-                card: "cell_tick".to_owned(),
-                inside: None,
-                line: Box::new(line),
-            },
-        )
-        .into_iter()
-        .next()
-        .unwrap_or_default()
+        add_line(builder, "cell_tick", None, line)
+            .into_iter()
+            .next()
+            .unwrap_or_default()
     };
     let name = |builder: &SheetBuilder, line_id: &str| line(builder, line_id).name.clone().unwrap_or_default();
     let empty = add_chance(&mut builder, Slot::Blank);
@@ -891,13 +726,11 @@ fn automatic_names_follow_their_lines_until_renamed() {
     );
     assert_eq!(name(&builder, &typed), "0.3 chance happens");
     // The empty line follows its blank once it is filled.
-    run(
+    set_slot(
         &mut builder,
-        SheetEdit::SetSlot {
-            line: empty.clone(),
-            path: "chance".to_owned(),
-            value: chip(SheetChip::Param("growth_chance".to_owned())),
-        },
+        &empty,
+        "chance",
+        chip(SheetChip::Param("growth_chance".to_owned())),
     );
     assert_eq!(name(&builder, &empty), "Growth happens");
     // A name typed by hand stays through later edits, and frees its automatic name for the next line.
@@ -909,13 +742,11 @@ fn automatic_names_follow_their_lines_until_renamed() {
         },
     );
     assert_eq!(name(&builder, &again), "Lightning happens");
-    run(
+    set_slot(
         &mut builder,
-        SheetEdit::SetSlot {
-            line: lightning.clone(),
-            path: "chance".to_owned(),
-            value: chip(SheetChip::Param("growth_chance".to_owned())),
-        },
+        &lightning,
+        "chance",
+        chip(SheetChip::Param("growth_chance".to_owned())),
     );
     assert_eq!(name(&builder, &lightning), "Strike");
     let taken = builder.apply(SheetEdit::RenameResult {
@@ -973,27 +804,14 @@ fn the_condition_offers_of_the_final_editor_are_one_command_each() {
     let outside = condition(&builder, "l2");
     assert_eq!(outside.test, Some(CompareTest::Outside));
     assert!(outside.left.is_blank() && outside.low.is_blank() && outside.high.is_blank());
-    run(
-        &mut builder,
-        SheetEdit::SetSlot {
-            line: "l2".to_owned(),
-            path: "condition.left".to_owned(),
-            value: chip(SheetChip::Result {
-                line: "l1".to_owned(),
-                part: None,
-                property: None,
-            }),
-        },
-    );
+    set_slot(&mut builder, "l2", "condition.left", chip(result("l1")));
     let refused = builder.apply(SheetEdit::UseOneSide { line: "l2".to_owned() });
     assert!(matches!(refused, Err(SheetEditError::Invalid(_))), "{refused:?}");
-    run(
+    set_slot(
         &mut builder,
-        SheetEdit::SetSlot {
-            line: "l2".to_owned(),
-            path: "condition.high".to_owned(),
-            value: Slot::Filled(SheetValue::Literal(SheetLiteral::Number(4.0))),
-        },
+        "l2",
+        "condition.high",
+        Slot::Filled(SheetValue::Literal(SheetLiteral::Number(4.0))),
     );
     let sentences = |builder: &SheetBuilder| Sentences::new(builder.document()).line("l2", &[]);
     assert_eq!(
@@ -1008,14 +826,7 @@ fn the_condition_offers_of_the_final_editor_are_one_command_each() {
     // A When cannot be always.
     let mut when = SheetLine::new(LineKind::When);
     when.condition = phrase(SheetLine::new(LineKind::Compare));
-    let when_id = run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: None,
-            line: Box::new(when),
-        },
-    );
+    let when_id = add_line(&mut builder, "cell_tick", None, when);
     let refused = builder.apply(SheetEdit::ChooseCondition {
         line: when_id[0].clone(),
         item: ConditionItem::Always,
@@ -1027,37 +838,12 @@ fn the_condition_offers_of_the_final_editor_are_one_command_each() {
 fn a_count_moves_into_for_each_and_a_when_folds_into_its_change() {
     let mut builder = builder_of("sir.toml");
     // Line 2 at rate Infected neighbours: the offer moves the count into "for each" and empties the rate.
-    run(
-        &mut builder,
-        SheetEdit::SetSlot {
-            line: "l2".to_owned(),
-            path: "condition.tries".to_owned(),
-            value: Slot::Blank,
-        },
-    );
-    run(
-        &mut builder,
-        SheetEdit::SetSlot {
-            line: "l2".to_owned(),
-            path: "condition.rate".to_owned(),
-            value: chip(SheetChip::Result {
-                line: "l1".to_owned(),
-                part: None,
-                property: None,
-            }),
-        },
-    );
+    set_slot(&mut builder, "l2", "condition.tries", Slot::Blank);
+    set_slot(&mut builder, "l2", "condition.rate", chip(result("l1")));
     run(&mut builder, SheetEdit::UseCountForEach { line: "l2".to_owned() });
     let rate = condition(&builder, "l2");
     assert!(rate.rate.is_blank());
-    assert_eq!(
-        rate.tries,
-        chip(SheetChip::Result {
-            line: "l1".to_owned(),
-            part: None,
-            property: None
-        })
-    );
+    assert_eq!(rate.tries, chip(result("l1")));
     let refused = builder.apply(SheetEdit::UseCountForEach { line: "l3".to_owned() });
     assert!(matches!(refused, Err(SheetEditError::Invalid(_))), "{refused:?}");
     // "Move it into line N": a When around one change gives the change its condition and goes.
@@ -1067,21 +853,12 @@ fn a_count_moves_into_for_each_and_a_when_folds_into_its_change() {
     test.test = Some(CompareTest::Is);
     test.right = chip(SheetChip::State("recovered".to_owned()));
     when.condition = phrase(test.clone());
-    let when_id = run(
+    let when_id = add_line(&mut builder, "cell_tick", None, when);
+    let inner = add_line(
         &mut builder,
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: None,
-            line: Box::new(when),
-        },
-    );
-    let inner = run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: Some(when_id[0].clone()),
-            line: Box::new(SheetLine::new(LineKind::Become)),
-        },
+        "cell_tick",
+        Some(&when_id[0]),
+        SheetLine::new(LineKind::Become),
     );
     // A change with a condition of its own keeps it: the offer is refused.
     run(
@@ -1297,14 +1074,7 @@ fn a_rate_unit_comes_from_the_tick_until_chosen() {
     let mut builder = builder_of("sir.toml");
     let mut rate = SheetLine::new(LineKind::Rate);
     rate.rate = chip(SheetChip::Param("recovery_rate".to_owned()));
-    let made = run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: None,
-            line: Box::new(rate),
-        },
-    );
+    let made = add_line(&mut builder, "cell_tick", None, rate);
     let added = line(&builder, &made[0]);
     assert_eq!(
         (added.rate_unit, added.rate_unit_from_tick),
@@ -1312,14 +1082,7 @@ fn a_rate_unit_comes_from_the_tick_until_chosen() {
     );
     assert!(added.key.is_some(), "a line that draws takes a key");
     let key = added.key;
-    run(
-        &mut builder,
-        SheetEdit::SetField {
-            line: made[0].clone(),
-            phrase: String::new(),
-            field: LineField::RateUnit(Some(TimeUnit::Week)),
-        },
-    );
+    set_field(&mut builder, &made[0], LineField::RateUnit(Some(TimeUnit::Week)));
     let added = line(&builder, &made[0]);
     assert_eq!(
         (added.rate_unit, added.rate_unit_from_tick),
@@ -1333,14 +1096,7 @@ fn a_rate_unit_comes_from_the_tick_until_chosen() {
     // takes the rate's.
     let mut builder = builder_of("sir.toml");
     run(&mut builder, SheetEdit::SetTime { time: None });
-    let made = run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: None,
-            line: Box::new(SheetLine::new(LineKind::Rate)),
-        },
-    );
+    let made = add_line(&mut builder, "cell_tick", None, SheetLine::new(LineKind::Rate));
     assert_eq!(line(&builder, &made[0]).rate_unit, None);
     run(
         &mut builder,
@@ -1354,13 +1110,11 @@ fn a_rate_unit_comes_from_the_tick_until_chosen() {
             means: None,
         },
     );
-    run(
+    set_slot(
         &mut builder,
-        SheetEdit::SetSlot {
-            line: made[0].clone(),
-            path: "rate".to_owned(),
-            value: chip(SheetChip::Param("recovery_rate".to_owned())),
-        },
+        &made[0],
+        "rate",
+        chip(SheetChip::Param("recovery_rate".to_owned())),
     );
     assert_eq!(line(&builder, &made[0]).rate_unit, Some(TimeUnit::Week));
     assert_eq!(builder.document().time, Some(SheetTime::new(1.0, TimeUnit::Week)));
@@ -1381,21 +1135,12 @@ fn a_parameter_with_no_unit_takes_the_rate_unit() {
             unit: None,
         },
     );
-    let made = run(
+    let made = add_line(&mut builder, "cell_tick", None, SheetLine::new(LineKind::Rate));
+    set_slot(
         &mut builder,
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: None,
-            line: Box::new(SheetLine::new(LineKind::Rate)),
-        },
-    );
-    run(
-        &mut builder,
-        SheetEdit::SetSlot {
-            line: made[0].clone(),
-            path: "rate".to_owned(),
-            value: chip(SheetChip::Param("plain".to_owned())),
-        },
+        &made[0],
+        "rate",
+        chip(SheetChip::Param("plain".to_owned())),
     );
     let plain_unit = |builder: &SheetBuilder| {
         builder
@@ -1544,8 +1289,7 @@ fn a_starts_as_commit_is_one_edit_and_keeps_its_key() {
 
 /// Returns the key of the one draw of the start of the ants' Position in `document`, lowered.
 fn ant_start_draw_key(document: &SheetDocument) -> crate::value::ConfigValue {
-    let file = crate::sheet::SheetFile::parse(&write(document))
-        .unwrap_or_else(|error| panic!("the sheet does not lower: {error}"));
+    let file = lowered(&write(document));
     let start = file
         .lowered()
         .document()
@@ -1616,375 +1360,6 @@ fn a_start_on_two_painted_cells_takes_a_key() {
     );
     assert!(position(builder.document(), "place").is_some());
     assert_eq!(ant_start_draw_key(builder.document()), key);
-}
-
-/// Returns a number below `bound` from `rng`.
-fn below(rng: &mut u64, bound: usize) -> usize {
-    *rng = xorshift64(*rng);
-    usize::try_from(*rng >> 33).unwrap_or(0) % bound.max(1)
-}
-
-/// Returns one of `choices` from `rng`.
-fn pick<'a, T>(rng: &mut u64, choices: &'a [T]) -> Option<&'a T> {
-    if choices.is_empty() {
-        None
-    } else {
-        choices.get(below(rng, choices.len()))
-    }
-}
-
-/// Returns a random value for a slot of `document`.
-fn random_value(rng: &mut u64, document: &SheetDocument, lines: &[String]) -> Slot {
-    let parameters: Vec<String> = document
-        .parameters
-        .iter()
-        .map(|parameter| parameter.id.clone())
-        .collect();
-    let properties: Vec<String> = document
-        .cells
-        .iter()
-        .flatten()
-        .chain(document.agents.iter().flat_map(|kind| &kind.properties))
-        .map(|property| property.id.clone())
-        .collect();
-    let states: Vec<String> = document
-        .cells
-        .iter()
-        .flatten()
-        .chain(document.agents.iter().flat_map(|kind| &kind.properties))
-        .flat_map(|property| property.states.iter().map(|state| state.id.clone()))
-        .collect();
-    match below(rng, 9) {
-        0 => Slot::Blank,
-        1 => Slot::Filled(SheetValue::Literal(SheetLiteral::Number(below(rng, 100) as f64 / 10.0))),
-        2 => Slot::Filled(SheetValue::Literal(SheetLiteral::Percent(below(rng, 100) as f64))),
-        3 => pick(rng, &parameters).map_or(Slot::Blank, |id| chip(SheetChip::Param(id.clone()))),
-        4 => pick(rng, &properties).map_or(Slot::Blank, |id| chip(SheetChip::My(id.clone()))),
-        5 => pick(rng, &states).map_or(Slot::Blank, |id| chip(SheetChip::State(id.clone()))),
-        6 => pick(rng, lines).map_or(Slot::Blank, |id| {
-            chip(SheetChip::Result {
-                line: id.clone(),
-                part: None,
-                property: None,
-            })
-        }),
-        7 => {
-            let kinds = [LineKind::Chance, LineKind::Rate, LineKind::Compare, LineKind::Always];
-            let mut inner = SheetLine::new(kinds[below(rng, kinds.len())]);
-            if inner.kind == LineKind::Compare {
-                inner.test = Some(CompareTest::Is);
-            }
-            phrase(inner)
-        }
-        _ => Slot::Filled(SheetValue::List(vec![SheetValue::Literal(SheetLiteral::Number(2.0))])),
-    }
-}
-
-/// Returns a random edit of `document`, mostly of things it holds and sometimes of things it does not.
-#[expect(clippy::too_many_lines, reason = "one arm per kind of edit reads best as one table")]
-fn random_edit(rng: &mut u64, document: &SheetDocument) -> SheetEdit {
-    let lines: Vec<String> = document
-        .cards
-        .iter()
-        .flat_map(|card| card.line_tables.keys().cloned())
-        .chain(["l999".to_owned()])
-        .collect();
-    let cards: Vec<String> = document.cards.iter().map(|card| card.id.clone()).collect();
-    let properties: Vec<String> = document
-        .cells
-        .iter()
-        .flatten()
-        .chain(document.agents.iter().flat_map(|kind| &kind.properties))
-        .chain(document.ground.iter().flat_map(|ground| &ground.properties))
-        .map(|property| property.id.clone())
-        .collect();
-    let mut items: Vec<SheetItem> = properties.iter().map(|id| SheetItem::Property(id.clone())).collect();
-    items.extend(
-        document
-            .parameters
-            .iter()
-            .map(|known| SheetItem::Parameter(known.id.clone())),
-    );
-    items.extend(
-        document
-            .measures
-            .iter()
-            .map(|known| SheetItem::Measure(known.id.clone())),
-    );
-    items.extend(document.events.iter().map(|known| SheetItem::Event(known.id.clone())));
-    items.extend(document.buttons.iter().map(|known| SheetItem::Button(known.id.clone())));
-    items.extend(cards.iter().map(|id| SheetItem::Card(id.clone())));
-    for property in document.cells.iter().flatten() {
-        items.extend(property.states.iter().map(|state| SheetItem::State {
-            property: property.id.clone(),
-            state: state.id.clone(),
-        }));
-    }
-    let things: Vec<String> = ["cells".to_owned(), "ground".to_owned()]
-        .into_iter()
-        .chain(document.agents.iter().map(|kind| kind.id.clone()))
-        .collect();
-    let names = [
-        "Speed",
-        "Infection rate",
-        "Alive",
-        "Grid width",
-        "  ",
-        "Ünïcode name",
-        "Sick",
-        "A b c",
-    ];
-    let name = (*pick(rng, &names).unwrap_or(&"Name")).to_owned();
-    let line = pick(rng, &lines).cloned().unwrap_or_default();
-    let item = pick(rng, &items)
-        .cloned()
-        .unwrap_or(SheetItem::Parameter("nothing".to_owned()));
-    let paths = [
-        "condition",
-        "condition.rate",
-        "condition.chance",
-        "condition.tries",
-        "condition.left",
-        "condition.right",
-        "condition.low",
-        "condition.high",
-        "whose.right",
-        "value",
-        "rate",
-        "chance",
-        "items.0",
-        "left",
-    ];
-    match below(rng, 29) {
-        0 => SheetEdit::AddProperty {
-            thing: pick(rng, &things).cloned().unwrap_or_default(),
-            name,
-            property_type: [PropertyType::States, PropertyType::Number][below(rng, 2)],
-        },
-        1 => SheetEdit::AddState {
-            property: pick(rng, &properties).cloned().unwrap_or_default(),
-            name,
-            color: None,
-        },
-        2 => SheetEdit::AddParameter {
-            name,
-            parameter_type: ParameterType::Number,
-            min: 0.0,
-            max: 1.0,
-            default: 0.5,
-            unit: [None, Some("per day".to_owned())][below(rng, 2)].clone(),
-        },
-        3 => SheetEdit::AddMeasure {
-            name,
-            rule: MeasureRule::Average,
-            over: Some("cells".to_owned()),
-            property: None,
-            state: None,
-            event: None,
-            value: Slot::Blank,
-            color: None,
-        },
-        4 => SheetEdit::AddButton {
-            name,
-            rule: [ButtonStepRule::StartAgain, ButtonStepRule::RunOnce][below(rng, 2)],
-            thing: pick(rng, &things).cloned().unwrap_or_default(),
-        },
-        5 => SheetEdit::AddCard {
-            every: pick(rng, &things).cloned().unwrap_or_default(),
-        },
-        6 => SheetEdit::Rename { item, name },
-        7 => SheetEdit::ChangeId {
-            item,
-            id: ["fresh_id", "health", "count", "status_2"][below(rng, 4)].to_owned(),
-        },
-        8 => SheetEdit::Recolor {
-            item,
-            color: STATE_COLORS[below(rng, STATE_COLORS.len())],
-        },
-        9 => SheetEdit::Delete { item },
-        10 => SheetEdit::SetPropertyType {
-            property: pick(rng, &properties).cloned().unwrap_or_default(),
-            property_type: [PropertyType::States, PropertyType::Number, PropertyType::WholeNumber][below(rng, 3)],
-        },
-        11 | 12 => {
-            let kinds = [
-                LineKind::Become,
-                LineKind::Set,
-                LineKind::When,
-                LineKind::Count,
-                LineKind::Chance,
-                LineKind::Rate,
-                LineKind::Compare,
-                LineKind::Calculate,
-                LineKind::AllOf,
-            ];
-            let mut new_line = SheetLine::new(kinds[below(rng, kinds.len())]);
-            if new_line.kind == LineKind::Count {
-                new_line.around = Some(Around::Cells8);
-            }
-            let blocks: Vec<String> = document
-                .cards
-                .iter()
-                .flat_map(|card| &card.line_tables)
-                .filter(|(_, known)| known.kind == LineKind::When)
-                .map(|(id, _)| id.clone())
-                .collect();
-            let inside = if below(rng, 2) == 0 {
-                pick(rng, &blocks).cloned()
-            } else {
-                None
-            };
-            let card = inside
-                .as_ref()
-                .and_then(|block| document.line(block).map(|(index, _)| document.cards[index].id.clone()))
-                .or_else(|| pick(rng, &cards).cloned())
-                .unwrap_or_default();
-            SheetEdit::AddLine {
-                card,
-                inside,
-                line: Box::new(new_line),
-            }
-        }
-        13 | 14 => SheetEdit::SetSlot {
-            line,
-            path: (*pick(rng, &paths).unwrap_or(&"condition")).to_owned(),
-            value: random_value(rng, document, &lines),
-        },
-        15 => SheetEdit::SetField {
-            line,
-            phrase: String::new(),
-            field: match below(rng, 5) {
-                0 => LineField::Test(Some(
-                    [CompareTest::Is, CompareTest::OneOf, CompareTest::Outside][below(rng, 3)],
-                )),
-                1 => LineField::RateUnit(Some(TimeUnit::Week)),
-                2 => LineField::Formula(Some("1 + 2".to_owned())),
-                3 => LineField::Property(pick(rng, &properties).cloned()),
-                _ => LineField::StartState(Some("any_state".to_owned())),
-            },
-        },
-        16 => SheetEdit::ChooseCondition {
-            line,
-            item: ConditionItem::ALL[below(rng, ConditionItem::ALL.len())],
-        },
-        17 => SheetEdit::UseOneSide { line },
-        18 => SheetEdit::UseCountForEach { line },
-        19 => SheetEdit::MoveConditionInto { when: line },
-        20 => SheetEdit::RenameResult { line, name },
-        21 => SheetEdit::SetNote {
-            line,
-            note: Some("A note \"quoted\"\nover two lines".to_owned()),
-        },
-        22 | 23 => SheetEdit::MoveLine {
-            line,
-            direction: [MoveDirection::Up, MoveDirection::Down][below(rng, 2)],
-        },
-        24 => SheetEdit::DeleteLine { line },
-        26 => SheetEdit::AddSummary {
-            line,
-            summary: [SummaryKind::Average, SummaryKind::Total, SummaryKind::Count][below(rng, 3)],
-        },
-        27 => SheetEdit::DeleteSummary {
-            line,
-            index: below(rng, 3),
-        },
-        28 => SheetEdit::ChooseRowCondition {
-            line,
-            row: below(rng, 3),
-            item: ConditionItem::ALL[below(rng, ConditionItem::ALL.len())],
-        },
-        _ => match below(rng, 7) {
-            0 => SheetEdit::DrawNewNumbers { line },
-            4 => SheetEdit::SetAgentKind {
-                kind: document.agents.first().map(|kind| kind.id.clone()).unwrap_or_default(),
-                count: [0, 5, 50][below(rng, 3)],
-                max_count: [10, 100][below(rng, 2)],
-            },
-            5 => SheetEdit::SetMarks {
-                property: pick(rng, &properties).cloned().unwrap_or_default(),
-                marks: [None, Some(Marks::Largest), Some(Marks::AddUp)][below(rng, 3)],
-                kept_per_tick: [
-                    Slot::Blank,
-                    Slot::Filled(SheetValue::Literal(SheetLiteral::Number(0.9))),
-                ][below(rng, 2)]
-                .clone(),
-            },
-            6 => {
-                let ground_states: Vec<(String, String)> = document
-                    .ground
-                    .iter()
-                    .flat_map(|ground| &ground.properties)
-                    .flat_map(|property| {
-                        property
-                            .states
-                            .iter()
-                            .map(|state| (property.id.clone(), state.id.clone()))
-                    })
-                    .chain([("nothing".to_owned(), "nothing".to_owned())])
-                    .collect();
-                let (property, state) = pick(rng, &ground_states).cloned().unwrap_or_default();
-                SheetEdit::SetBlocked {
-                    property,
-                    state,
-                    blocked: below(rng, 2) == 0,
-                }
-            }
-            1 => SheetEdit::SetTime {
-                time: [None, Some(SheetTime::new(2.0, TimeUnit::Hour))][below(rng, 2)],
-            },
-            2 => SheetEdit::SetWorld {
-                width: 64,
-                height: 32,
-                edges: Edges::Walls,
-            },
-            _ => SheetEdit::SetPurpose {
-                purpose: Some("A purpose".to_owned()),
-            },
-        },
-    }
-}
-
-#[test]
-fn every_edit_leaves_a_document_that_reads_back() {
-    let mut rng = 0x7368_6565_7465_6469_u64;
-    let mut accepted = 0_usize;
-    for (file_name, text) in sheets() {
-        for _ in 0..12 {
-            let mut builder = SheetBuilder::new(read(text)).with_key_seed(rng);
-            for _ in 0..30 {
-                let edit = random_edit(&mut rng, builder.document());
-                let shown = format!("{edit:?}");
-                if builder.apply(edit).is_err() {
-                    continue;
-                }
-                accepted += 1;
-                let written = write(builder.document());
-                let again = ParsedSheet::parse(&written).unwrap_or_else(|error| {
-                    panic!("{file_name}: after {shown} the text does not read: {error}\n{written}")
-                });
-                assert_eq!(again.document(), builder.document(), "{file_name}: after {shown}");
-                let checked = catch_unwind(AssertUnwindSafe(|| check::check(builder.document())));
-                assert!(
-                    checked.is_ok(),
-                    "{file_name}: the checker panics after {shown}\n{written}"
-                );
-                let keys: Vec<u32> = builder
-                    .document()
-                    .cards
-                    .iter()
-                    .flat_map(|card| card.line_tables.values())
-                    .filter_map(|line| line.key)
-                    .collect();
-                let distinct: BTreeSet<u32> = keys.iter().copied().collect();
-                assert_eq!(
-                    distinct.len(),
-                    keys.len(),
-                    "{file_name}: two lines share a key after {shown}"
-                );
-            }
-        }
-    }
-    assert!(accepted > 1000, "only {accepted} edits were accepted");
 }
 
 #[test]
@@ -2103,9 +1478,9 @@ fn a_ground_property_takes_its_marks_and_fading_and_comes_and_goes_with_the_grou
     );
     let written = write(builder.document());
     assert!(written.contains("id = \"to_food\"\nname = \"To food\"\ntype = \"number\"\nmarks = \"add_up\""));
-    let lowered = crate::sheet::SheetFile::parse(&written).expect("the sheet lowers");
+    let file = lowered(&written);
     assert!(
-        lowered.lowered().to_toml().contains("combine = \"sum\""),
+        file.lowered().to_toml().contains("combine = \"sum\""),
         "add up lowers to a sum"
     );
 
@@ -2189,339 +1564,6 @@ fn a_ground_property_takes_its_marks_and_fading_and_comes_and_goes_with_the_grou
     assert_eq!(write(walk.document()), sheet_text("random_walk.toml"));
 }
 
-/// Returns the ids and names of the summaries of line `line_id` in `builder`.
-fn summaries_of(builder: &SheetBuilder, line_id: &str) -> Vec<(String, String)> {
-    line(builder, line_id)
-        .summaries
-        .iter()
-        .map(|summary| (summary.id.clone(), summary.name.clone()))
-        .collect()
-}
-
-/// Returns a look at the birds within a distance that starts with one average of nothing, as the editor adds it.
-fn new_look() -> SheetLine {
-    let mut look = SheetLine::new(LineKind::LookAround);
-    look.around = Some(Around::AgentsWithin);
-    look.agent_kind = Some("bird".to_owned());
-    look.include_me = Some(false);
-    let mut summary = LookSummary::new("", "");
-    summary.summary = Some(SummaryKind::Average);
-    look.summaries = vec![summary];
-    look
-}
-
-#[test]
-fn a_summary_follows_its_automatic_name_and_its_new_id_reaches_every_reference() {
-    let mut builder = builder_of("boids.toml");
-    let made = run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "bird_tick".to_owned(),
-            inside: None,
-            line: Box::new(new_look()),
-        },
-    );
-    let look = made[0].clone();
-    assert_eq!(
-        summaries_of(&builder, &look),
-        [("average".to_owned(), "average".to_owned())]
-    );
-    run(
-        &mut builder,
-        SheetEdit::SetSlot {
-            line: look.clone(),
-            path: "summaries.0.value".to_owned(),
-            value: chip(SheetChip::Their("velocity".to_owned())),
-        },
-    );
-    assert_eq!(
-        summaries_of(&builder, &look),
-        [("average_velocity".to_owned(), "average velocity".to_owned())]
-    );
-    run(
-        &mut builder,
-        SheetEdit::AddSummary {
-            line: look.clone(),
-            summary: SummaryKind::Average,
-        },
-    );
-    run(
-        &mut builder,
-        SheetEdit::SetSlot {
-            line: look.clone(),
-            path: "summaries.1.value".to_owned(),
-            value: chip(SheetChip::Relation(ChipRelation::OffsetToThem)),
-        },
-    );
-    assert_eq!(
-        summaries_of(&builder, &look)[1],
-        ("centre".to_owned(), "centre".to_owned())
-    );
-
-    // A Steer reads the centre. The total away from them is the push, and the Steer follows the new id.
-    let mut steer = SheetLine::new(LineKind::Steer);
-    steer.property = Some("velocity".to_owned());
-    steer.value = chip(SheetChip::Result {
-        line: look.clone(),
-        part: Some("centre".to_owned()),
-        property: None,
-    });
-    let steer = run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "bird_tick".to_owned(),
-            inside: None,
-            line: Box::new(steer),
-        },
-    )[0]
-    .clone();
-    let mut summaries = line(&builder, &look).summaries.clone();
-    summaries[1].summary = Some(SummaryKind::Total);
-    summaries[1].value = chip(SheetChip::Relation(ChipRelation::OffsetAwayFromThem));
-    run(
-        &mut builder,
-        SheetEdit::SetField {
-            line: look.clone(),
-            phrase: String::new(),
-            field: LineField::Summaries(summaries),
-        },
-    );
-    assert_eq!(summaries_of(&builder, &look)[1], ("push".to_owned(), "push".to_owned()));
-    assert_eq!(
-        line(&builder, &steer).value,
-        chip(SheetChip::Result {
-            line: look.clone(),
-            part: Some("push".to_owned()),
-            property: None,
-        }),
-        "the Steer reads the summary by its new id"
-    );
-}
-
-#[test]
-fn a_summary_named_by_hand_keeps_its_name_and_a_removed_summary_blanks_its_users() {
-    let mut builder = builder_of("boids.toml");
-    let mut look = new_look();
-    look.summaries[0].value = chip(SheetChip::Their("velocity".to_owned()));
-    let mut push = LookSummary::new("", "");
-    push.summary = Some(SummaryKind::Total);
-    push.value = chip(SheetChip::Relation(ChipRelation::OffsetAwayFromThem));
-    look.summaries.push(push);
-    let look = run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "bird_tick".to_owned(),
-            inside: None,
-            line: Box::new(look),
-        },
-    )[0]
-    .clone();
-    let mut steer = SheetLine::new(LineKind::Steer);
-    steer.property = Some("velocity".to_owned());
-    steer.value = chip(SheetChip::Result {
-        line: look.clone(),
-        part: Some("push".to_owned()),
-        property: None,
-    });
-    let steer = run(
-        &mut builder,
-        SheetEdit::AddLine {
-            card: "bird_tick".to_owned(),
-            inside: None,
-            line: Box::new(steer),
-        },
-    )[0]
-    .clone();
-
-    // A name typed by hand stays, and so does its id. A second average of nothing takes "average 2".
-    let mut summaries = line(&builder, &look).summaries.clone();
-    summaries[0].name = "flock speed".to_owned();
-    run(
-        &mut builder,
-        SheetEdit::SetField {
-            line: look.clone(),
-            phrase: String::new(),
-            field: LineField::Summaries(summaries),
-        },
-    );
-    for _ in 0..2 {
-        run(
-            &mut builder,
-            SheetEdit::AddSummary {
-                line: look.clone(),
-                summary: SummaryKind::Average,
-            },
-        );
-    }
-    assert_eq!(
-        summaries_of(&builder, &look),
-        [
-            ("average_velocity".to_owned(), "flock speed".to_owned()),
-            ("push".to_owned(), "push".to_owned()),
-            ("average".to_owned(), "average".to_owned()),
-            ("average_2".to_owned(), "average 2".to_owned()),
-        ]
-    );
-
-    // Removing the push leaves the Steer's value blank, and the last summary stays.
-    run(
-        &mut builder,
-        SheetEdit::DeleteSummary {
-            line: look.clone(),
-            index: 1,
-        },
-    );
-    assert!(line(&builder, &steer).value.is_blank());
-    for _ in 0..2 {
-        run(
-            &mut builder,
-            SheetEdit::DeleteSummary {
-                line: look.clone(),
-                index: 0,
-            },
-        );
-    }
-    assert!(matches!(
-        builder.apply(SheetEdit::DeleteSummary { line: look, index: 0 }),
-        Err(SheetEditError::Invalid(_))
-    ));
-    assert!(matches!(
-        builder.apply(SheetEdit::AddSummary {
-            line: "l3".to_owned(),
-            summary: SummaryKind::Count,
-        }),
-        Err(SheetEditError::Invalid(_))
-    ));
-}
-
-/// Returns the summary id that the value of line `line_id` in `builder` reads.
-fn part_read_by(builder: &SheetBuilder, line_id: &str) -> Option<String> {
-    match &line(builder, line_id).value {
-        Slot::Filled(SheetValue::Chip(SheetChip::Result { part, .. })) => part.clone(),
-        _ => None,
-    }
-}
-
-#[test]
-fn a_summary_that_takes_another_summarys_name_leaves_every_reference_on_its_own_summary() {
-    // Boids' l4 reads summary 0, the average velocity, and l5 reads summary 1, the centre.
-    let mut builder = builder_of("boids.toml");
-    run(
-        &mut builder,
-        SheetEdit::SetSlot {
-            line: "l1".to_owned(),
-            path: "summaries.0.value".to_owned(),
-            value: chip(SheetChip::Relation(ChipRelation::OffsetToThem)),
-        },
-    );
-    let summaries = summaries_of(&builder, "l1");
-    assert_eq!(
-        summaries[..2],
-        [
-            ("centre_2".to_owned(), "centre 2".to_owned()),
-            ("centre".to_owned(), "centre".to_owned()),
-        ],
-        "the centre keeps its name, and the edited summary takes the next number"
-    );
-    assert_eq!(part_read_by(&builder, "l4").as_deref(), Some("centre_2"));
-    assert_eq!(part_read_by(&builder, "l5").as_deref(), Some("centre"));
-
-    // Swapping the two values swaps the two ids, and each reference still follows its own summary.
-    let mut builder = builder_of("boids.toml");
-    let mut summaries = line(&builder, "l1").summaries.clone();
-    let first = summaries[0].value.clone();
-    summaries[0].value = summaries[1].value.clone();
-    summaries[1].value = first;
-    run(
-        &mut builder,
-        SheetEdit::SetField {
-            line: "l1".to_owned(),
-            phrase: String::new(),
-            field: LineField::Summaries(summaries),
-        },
-    );
-    assert_eq!(
-        summaries_of(&builder, "l1")[..2],
-        [
-            ("centre".to_owned(), "centre".to_owned()),
-            ("average_velocity".to_owned(), "average velocity".to_owned()),
-        ]
-    );
-    assert_eq!(part_read_by(&builder, "l4").as_deref(), Some("centre"));
-    assert_eq!(part_read_by(&builder, "l5").as_deref(), Some("average_velocity"));
-}
-
-#[test]
-fn a_count_summary_takes_an_id_that_no_summary_holds() {
-    let mut builder = builder_of("boids.toml");
-    for _ in 0..2 {
-        run(
-            &mut builder,
-            SheetEdit::AddSummary {
-                line: "l1".to_owned(),
-                summary: SummaryKind::Count,
-            },
-        );
-    }
-    let summaries = summaries_of(&builder, "l1");
-    assert_eq!(
-        summaries[summaries.len() - 2..],
-        [
-            ("count_summary".to_owned(), "count".to_owned()),
-            ("count_2".to_owned(), "count 2".to_owned()),
-        ]
-    );
-}
-
-#[test]
-fn the_automatic_summary_names_follow_round_1() {
-    let document = read(sheet_text("boids.toml"));
-    let summary = |kind: SummaryKind, value: Slot| {
-        let mut summary = LookSummary::new("", "");
-        summary.summary = Some(kind);
-        summary.value = value;
-        automatic_summary_name(&document, &summary)
-    };
-    let relation = |relation: ChipRelation| chip(SheetChip::Relation(relation));
-    assert_eq!(summary(SummaryKind::Count, Slot::Blank), "count");
-    assert_eq!(summary(SummaryKind::Total, Slot::Blank), "total");
-    assert_eq!(
-        summary(SummaryKind::Largest, chip(SheetChip::Their("velocity".to_owned()))),
-        "largest velocity"
-    );
-    assert_eq!(
-        summary(SummaryKind::Average, relation(ChipRelation::OffsetToThem)),
-        "centre"
-    );
-    assert_eq!(
-        summary(SummaryKind::Total, relation(ChipRelation::OffsetAwayFromThem)),
-        "push"
-    );
-    assert_eq!(
-        summary(SummaryKind::Average, relation(ChipRelation::DistanceToThem)),
-        "average distance to them"
-    );
-    // Every committed look at agents names its summaries as the editor does, so a rebuild mints the same ids.
-    for (file_name, text) in sheets() {
-        let document = read(text);
-        for card in &document.cards {
-            for line in card.line_tables.values() {
-                if line.around != Some(Around::AgentsWithin) {
-                    continue;
-                }
-                for summary in &line.summaries {
-                    assert_eq!(
-                        summary.name,
-                        automatic_summary_name(&document, summary),
-                        "{file_name}: {}",
-                        summary.id
-                    );
-                }
-            }
-        }
-    }
-}
-
 #[test]
 fn a_choose_row_takes_its_condition_from_choose_when() {
     let mut builder = builder_of("ants.toml");
@@ -2547,13 +1589,11 @@ fn a_choose_row_takes_its_condition_from_choose_when() {
     assert_eq!(condition.kind, LineKind::Always);
     // A filled value one past the last row adds a row with an empty condition.
     let rows = line(&builder, &choose).rows.len();
-    run(
+    set_slot(
         &mut builder,
-        SheetEdit::SetSlot {
-            line: choose.clone(),
-            path: format!("row.{rows}.value"),
-            value: Slot::Filled(SheetValue::Literal(SheetLiteral::Number(1.0))),
-        },
+        &choose,
+        &format!("row.{rows}.value"),
+        Slot::Filled(SheetValue::Literal(SheetLiteral::Number(1.0))),
     );
     assert_eq!(line(&builder, &choose).rows.len(), rows + 1);
     assert!(line(&builder, &choose).rows[rows].condition.is_blank());

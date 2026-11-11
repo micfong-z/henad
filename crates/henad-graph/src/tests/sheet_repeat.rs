@@ -1,22 +1,18 @@
 //! The order of changes inside a Repeat: among competing changes of one property, the line whose condition first held
 //! at the earliest time round wins, and the higher line wins a tie. Shares of agents on the host and the device
 //! against their closed forms, a Become from a state that never overrules an agent in another state, and display
-//! order against a change outside the Repeat.
+//! order whatever the line ids and against a change outside the Repeat.
 
-use henad_compute::entry::ModelState;
-use henad_compute::fault::FaultSink;
-use henad_compute::gpu::{GpuContext, wgpu};
 use henad_core::params::ParamValue;
 
-use super::support::test_device;
-use crate::host::{HostEvaluator, HostValue, HostWorld, RunContext};
+use super::sheet_support::{
+    ROLL, accumulators, agent_program_of, edited, host_of, lowered, pass_nodes, read, with_sets,
+};
+use super::support::{built, context, device_for, params_of};
+use crate::host::{HostValue, HostWorld, RunContext};
 use crate::node::Node;
 use crate::sheet::SheetFile;
-use crate::value::ConfigValue;
-use crate::wgsl::AgentProgram;
-
-/// Text of the test sheet whose Repeat of 4 rolls a number and becomes A below 0.5, and otherwise B.
-const ROLL: &str = include_str!("sheets/repeat_roll.toml");
+use crate::sheet::relations::CardRelations;
 
 /// Text of the test sheet whose Repeat of 4 becomes A with chance 0.1, and otherwise B with chance 0.5.
 const CHANCES: &str = include_str!("sheets/repeat_chances.toml");
@@ -36,49 +32,16 @@ const CHANCE_B: f64 = 0.784_631_25;
 /// Share of the chances sheet that no line changes: `0.45^4`.
 const CHANCE_NONE: f64 = 0.041_006_25;
 
-/// Returns `text` with `old` replaced by `new` once, where `text` must hold `old`.
-fn edited(text: &str, old: &str, new: &str) -> String {
-    assert!(text.contains(old), "the text holds no {old:?}");
-    text.replacen(old, new, 1)
-}
-
-/// Lowers `text`, which must lower.
-fn lowered(text: &str) -> SheetFile {
-    SheetFile::parse(text).unwrap_or_else(|error| panic!("the sheet does not lower: {error}"))
-}
-
 /// Returns `text` with the ids of lines `l3` and `l4` swapped.
 fn swapped_ids(text: &str) -> String {
     text.replace("l3", "l_swap").replace("l4", "l3").replace("l_swap", "l4")
-}
-
-/// Returns `text` with every Become of Status turned into a Set of a Number property Level starting at 0: to 1 for a
-/// Become to A, and to 2 for a Become to B.
-fn with_sets(text: &str) -> String {
-    let text = edited(
-        text,
-        "[[measure]]",
-        "[[agents.property]]\nid = \"level\"\nname = \"Level\"\ntype = \"number\"\n\n[agents.property.starts_as]\n\
-         rule = \"value\"\nvalue = 0\n\n[[measure]]",
-    );
-    let text = edited(
-        &text,
-        "property = \"status\"\nnew_state = \"a\"\nstart_state = \"s\"",
-        "property = \"level\"\nvalue = 1",
-    );
-    let text = edited(
-        &text,
-        "property = \"status\"\nnew_state = \"b\"\nstart_state = \"s\"",
-        "property = \"level\"\nvalue = 2",
-    );
-    text.replace("kind = \"become\"", "kind = \"set\"")
 }
 
 /// Returns the shares of `agents` agents of the sheet `text` whose property `property` holds each of `values` after
 /// one tick on the host.
 fn host_shares(text: &str, agents: u32, property: &str, values: &[HostValue]) -> Vec<f64> {
     let file = lowered(text);
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let evaluator = host_of(&file);
     let world = HostWorld::Agents {
         count: agents,
         width: 1000.0,
@@ -138,13 +101,7 @@ fn repeat_accumulators(file: &SheetFile) -> Vec<String> {
         .flat_map(|pass| &pass.body.nodes)
         .find(|node| node.op == "region.repeat")
         .expect("the Repeat's region");
-    match region.config.get("acc") {
-        Some(ConfigValue::Array(entries)) => entries
-            .iter()
-            .filter_map(|entry| entry.as_table()?.get("name")?.as_str().map(str::to_owned))
-            .collect(),
-        _ => Vec::new(),
-    }
+    accumulators(region)
 }
 
 /// Returns the chances sheet with a state C, agents that start in `start`, and a Repeat of 4 holding one Become of
@@ -206,6 +163,31 @@ fn becomes_that_test_one_roll_inside_a_repeat_split_evenly() {
     assert_eq!(repeat_accumulators(&lowered(ROLL)), ["l3_first", "l4_first"]);
 }
 
+/// Two Becomes inside a Repeat that test a Random number drawn inside it can each hold at a different time round, so
+/// they can both apply. The lower reads "otherwise", and the rows of the transition keep display order whatever the
+/// line ids.
+#[test]
+fn becomes_that_test_a_number_drawn_inside_a_repeat_keep_display_order() {
+    for (text, first, second) in [(ROLL.to_owned(), "l3", "l4"), (swapped_ids(ROLL), "l4", "l3")] {
+        let file = lowered(&text);
+        let transition = pass_nodes(&file, "tick_walker_tick")
+            .iter()
+            .find(|node| node.op == "cat.transition")
+            .expect("the transition of Status");
+        let targets: Vec<&str> = transition.config["rules"]
+            .as_array()
+            .expect("rules")
+            .iter()
+            .filter_map(|rule| rule.as_table()?.get("to")?.as_str())
+            .collect();
+        assert_eq!(targets, ["a", "b"], "{first} above {second}");
+        let document = read(&text);
+        let relations = CardRelations::new(&document, &document.cards[0]);
+        assert!(relations.can_both_apply(first, second));
+        assert_eq!(relations.otherwise_numbers(second), [3], "{first} above {second}");
+    }
+}
+
 /// Three Becomes with chances 0.2, 0.3 and 0.5 inside a Repeat of 4 decide a time round with chances 0.2, 0.24 and
 /// 0.28, and each takes that chance times `(1 - 0.28^4) / 0.72` of the agents, whatever the order of their line ids.
 #[test]
@@ -255,7 +237,7 @@ fn sixteen_competing_becomes_take_one_accumulator_each() {
     let lines: Vec<(&str, &str, &str, f64)> = ids.iter().map(|id| (id.as_str(), "s", "a", 0.1)).collect();
     let file = lowered(&becomes_by_chance("s", &lines));
     assert_eq!(repeat_accumulators(&file).len(), 16);
-    HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    host_of(&file);
 }
 
 /// A Become with chance 0.1 above one with chance 0.5 takes `0.1 (1 - 0.45^4) / 0.55` of the agents and the lower
@@ -368,39 +350,19 @@ fn a_change_outside_a_repeat_keeps_display_order_against_one_inside() {
 /// On the device, the chances sheet and the roll sheet over 200,000 agents take their closed-form shares after one
 /// tick, within five standard errors.
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "the skip is information for a reader of the test output"
-)]
 fn becomes_inside_a_repeat_take_the_first_time_shares_on_the_device() {
-    let Some(device) = test_device() else {
-        eprintln!("skipping becomes_inside_a_repeat_take_the_first_time_shares_on_the_device: no adapter");
+    let Some(device) = device_for("becomes_inside_a_repeat_take_the_first_time_shares_on_the_device") else {
         return;
     };
-    let ctx = GpuContext::new(
-        device.device,
-        device.queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        FaultSink::new(),
-    );
+    let ctx = context(device);
     let agents = 200_000;
     for (text, expected) in [(CHANCES, [CHANCE_NONE, CHANCE_A, CHANCE_B]), (ROLL, [0.0, 0.5, 0.5])] {
         let file = lowered(text);
-        let program = AgentProgram::compile_with_fault_names(file.lowered(), file.fault_names())
-            .unwrap_or_else(|problems| panic!("{problems:#?}"));
+        let program = agent_program_of(&file);
         let status = program.lane_buffer("status").expect("the status lane");
         let entry = program.entry();
-        let params: Vec<ParamValue> = entry
-            .param_descriptors()
-            .iter()
-            .map(|descriptor| match descriptor.id() {
-                "num_agents" => ParamValue::U32(agents),
-                _ => descriptor.kind().default_value(),
-            })
-            .collect();
-        let Ok(ModelState::Gpu(mut state)) = entry.build(&params, Some(SEED), Some(&ctx)) else {
-            panic!("the sheet builds on the device");
-        };
+        let params = params_of(&entry, &[("num_agents", ParamValue::U32(agents))]);
+        let mut state = built(&entry, &params, Some(SEED), &ctx);
         henad_compute::gpu::stepping::run_steps(&mut *state, &ctx, 1).expect("a tick runs");
         let words = state.read_buffer(status.buffer()).expect("the status lane reads back");
         let words = status.segment(&words);

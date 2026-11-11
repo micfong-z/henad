@@ -2,21 +2,19 @@
 //! index, the power rule of a chance once for each agent on the host and the device, the refusals of the lines this
 //! version does not lower and of a property changed two ways, the names of the folds and the cost in the model's words.
 
-use henad_compute::entry::{ModelEntry, ModelState};
-use henad_compute::fault::FaultSink;
-use henad_compute::gpu::{GpuContext, wgpu};
+use henad_compute::gpu::wgpu;
 use henad_core::params::ParamValue;
 
-use super::support::test_device;
+use super::sheet_support::{
+    MOBILE, accumulators, agent_program_of, boids_with, edited, entry_of, host_of, lowered, only_refusal, placed_at,
+    refusals, sheet_text,
+};
+use super::support::{built, context, device_for, node_id, params_of};
 use crate::document::{PassStage, World};
-use crate::host::{HostEvaluator, HostLanes, HostValue, HostWorld, RunContext};
-use crate::ids::NodeId;
-use crate::sheet::{NodeOwner, SheetFile, SheetFileError, sentence, starters};
+use crate::host::{HostLanes, HostValue, HostWorld, RunContext};
+use crate::sheet::{NodeOwner, SheetFile, sentence, starters};
 use crate::value::{ConfigValue, InputValue};
 use crate::wgsl::AgentProgram;
-
-/// Text of the test sheet of chances once for each infected person nearby.
-const MOBILE: &str = include_str!("sheets/mobile_sir.toml");
 
 /// Returns the agent starters with their file names.
 fn agent_sheets() -> Vec<(&'static str, &'static str)> {
@@ -27,69 +25,7 @@ fn agent_sheets() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// Returns the text of the agent starter `file_name`.
-fn sheet(file_name: &str) -> &'static str {
-    agent_sheets()
-        .into_iter()
-        .find(|(name, _)| *name == file_name)
-        .map(|(_, text)| text)
-        .unwrap_or_else(|| panic!("no agent starter {file_name}"))
-}
-
-/// Returns `text` with `old` replaced by `new` once, where `text` must hold `old`.
-fn edited(text: &str, old: &str, new: &str) -> String {
-    assert!(text.contains(old), "the text holds no {old:?}");
-    text.replacen(old, new, 1)
-}
-
-/// Lowers `text`, which must lower.
-fn lowered(text: &str) -> SheetFile {
-    SheetFile::parse(text).unwrap_or_else(|error| panic!("the sheet does not lower: {error}"))
-}
-
-/// Returns the errors of lowering `text`, which must hold some.
-fn refusals(text: &str) -> Vec<henad_core::diagnostic::CodeDiagnostic> {
-    match SheetFile::parse(text) {
-        Ok(_) => panic!("the sheet lowers:\n{text}"),
-        Err(SheetFileError::Invalid(errors)) => errors.as_slice().to_vec(),
-        Err(other) => panic!("the sheet does not read: {other}"),
-    }
-}
-
-/// Returns the bytes of `text` that `diagnostic` points at.
-fn placed_at<'a>(diagnostic: &henad_core::diagnostic::CodeDiagnostic, text: &'a str) -> &'a str {
-    let span = diagnostic
-        .span
-        .clone()
-        .unwrap_or_else(|| panic!("{diagnostic} has no place"));
-    &text[span]
-}
-
-/// Returns the entry of `file`, compiled with its fault names.
-fn entry_of(file: &SheetFile) -> ModelEntry {
-    program_of(file).entry()
-}
-
-/// Returns the program of `file`, a sheet of agents, compiled for the GPU.
-fn program_of(file: &SheetFile) -> AgentProgram {
-    AgentProgram::compile_with_fault_names(file.lowered(), file.fault_names())
-        .unwrap_or_else(|problems| panic!("{problems:#?}"))
-}
-
-/// Returns the parameters of `entry` at their defaults, with each of `set` in place of its default.
-fn params_of(entry: &ModelEntry, set: &[(&str, ParamValue)]) -> Vec<ParamValue> {
-    entry
-        .param_descriptors()
-        .iter()
-        .map(|descriptor| {
-            set.iter()
-                .find(|(id, _)| *id == descriptor.id())
-                .map_or_else(|| descriptor.kind().default_value(), |(_, value)| value.clone())
-        })
-        .collect()
-}
-
-/// Returns the ids of the nodes of every pass of `file` whose kind is `op`.
+/// Returns the nodes of every pass of `file` whose kind is `op`.
 fn nodes_of_kind<'a>(file: &'a SheetFile, op: &'a str) -> impl Iterator<Item = &'a crate::node::Node> + 'a {
     file.lowered()
         .document()
@@ -147,7 +83,7 @@ fn every_agent_sheet_lowers_checks_and_compiles_on_the_host() {
 
 #[test]
 fn the_agent_starters_lower_their_worlds_and_drop_an_unread_heading() {
-    let boids = lowered(sheet("boids.toml"));
+    let boids = lowered(sheet_text("boids.toml"));
     let World::Agents(world) = &boids.lowered().document().world else {
         panic!("boids lower to agents");
     };
@@ -166,7 +102,7 @@ fn the_agent_starters_lower_their_worlds_and_drop_an_unread_heading() {
         "Position is the position lane"
     );
     // Bounded confidence colours by opinion, and nothing reads its Heading.
-    let opinions = lowered(sheet("bounded_confidence.toml"));
+    let opinions = lowered(sheet_text("bounded_confidence.toml"));
     let lanes: Vec<&str> = opinions
         .lowered()
         .document()
@@ -191,20 +127,10 @@ fn the_agent_starters_lower_their_worlds_and_drop_an_unread_heading() {
 
 #[test]
 fn the_looks_of_a_card_share_one_fold_at_the_largest_distance() {
-    let boids = lowered(sheet("boids.toml"));
+    let boids = lowered(sheet_text("boids.toml"));
     let folds: Vec<_> = nodes_of_kind(&boids, "agent.radius_fold").collect();
     assert_eq!(folds.len(), 1, "Flockmates and Too close share one fold");
-    let names: Vec<&str> = folds[0]
-        .config
-        .get("acc")
-        .and_then(ConfigValue::as_array)
-        .expect("accumulators")
-        .iter()
-        .filter_map(|table| match table {
-            ConfigValue::Table(table) => table.get("name").and_then(ConfigValue::as_str),
-            _ => None,
-        })
-        .collect();
+    let names = accumulators(folds[0]);
     assert_eq!(
         names,
         [
@@ -223,13 +149,13 @@ fn the_looks_of_a_card_share_one_fold_at_the_largest_distance() {
     assert_eq!(nodes_of_kind(&boids, "cmp.le").count(), 2);
     // A reorder of the two looks leaves the code, since the accumulators follow the line ids.
     let swapped = edited(
-        sheet("boids.toml"),
+        sheet_text("boids.toml"),
         "lines = [\"l1\", \"l2\", \"l3\"",
         "lines = [\"l2\", \"l1\", \"l3\"",
     );
     assert_eq!(lowered(&swapped).code(), boids.code());
     // One look keeps every agent its fold walks.
-    let opinions = lowered(sheet("bounded_confidence.toml"));
+    let opinions = lowered(sheet_text("bounded_confidence.toml"));
     assert_eq!(nodes_of_kind(&opinions, "agent.radius_fold").count(), 1);
     let tick = opinions
         .lowered()
@@ -253,7 +179,7 @@ fn the_looks_of_a_card_share_one_fold_at_the_largest_distance() {
 
 #[test]
 fn the_radius_index_follows_the_current_largest_distance() {
-    let boids = lowered(sheet("boids.toml"));
+    let boids = lowered(sheet_text("boids.toml"));
     // One source of `cell_size` for every fold of every pass (V14).
     let sources: Vec<&InputValue> = nodes_of_kind(&boids, "agent.radius_fold")
         .filter_map(|node| node.inputs.get("cell_size"))
@@ -288,11 +214,11 @@ fn the_radius_index_follows_the_current_largest_distance() {
     );
 }
 
-/// Number of agents of the mobile test sheet whose Hit holds after each of `ticks` ticks on the host, from `agents`
-/// agents starting as `health` with chance `chance` per infected person nearby, summed over the ticks.
+/// Number of agents of the mobile sheet `text` whose Hit holds after each of `ticks` ticks on the host, from `agents`
+/// agents with chance `chance` per infected person nearby, summed over the ticks.
 fn host_hits(text: &str, agents: u32, chance: f32, ticks: u32) -> u64 {
     let file = lowered(text);
-    let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+    let evaluator = host_of(&file);
     let own = [ParamValue::F32(chance), ParamValue::F32(5.0)];
     let world = HostWorld::Agents {
         count: agents,
@@ -363,7 +289,7 @@ fn a_keep_between_holds_the_value_after_every_set() {
     let set = "kind = \"set\"\nproperty = \"level\"\nvalue = 5\ncondition = { kind = \"always\" }";
     for text in [levels_with(keep, set), levels_with(set, keep)] {
         let file = lowered(&text);
-        let evaluator = HostEvaluator::new(file.lowered()).expect("the host runs the lowered graph");
+        let evaluator = host_of(&file);
         let world = HostWorld::Agents {
             count: 3,
             width: 10.0,
@@ -389,10 +315,6 @@ fn a_keep_between_holds_the_value_after_every_set() {
 /// A chance of 1 once for each of no infected person never holds, on the host and on the device. With no guard the
 /// power `0^0` is not 1 on every device.
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "the skip is information for a reader of the test output"
-)]
 fn for_each_of_zero_with_chance_1_is_0_on_host_and_device() {
     let healthy = edited(
         MOBILE,
@@ -400,18 +322,12 @@ fn for_each_of_zero_with_chance_1_is_0_on_host_and_device() {
         "value = { state = \"susceptible\" }",
     );
     assert_eq!(host_hits(&healthy, 500, 1.0, 4), 0, "on the host");
-    let Some(device) = test_device() else {
-        eprintln!("skipping the device half of for_each_of_zero_with_chance_1_is_0_on_host_and_device: no adapter");
+    let Some(device) = device_for("the device half of for_each_of_zero_with_chance_1_is_0_on_host_and_device") else {
         return;
     };
-    let ctx = GpuContext::new(
-        device.device,
-        device.queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        FaultSink::new(),
-    );
+    let ctx = context(device);
     let file = lowered(&healthy);
-    let program = program_of(&file);
+    let program = agent_program_of(&file);
     let hit = program.lane_buffer("hit").expect("the hit lane");
     let entry = program.entry();
     let params = params_of(
@@ -423,9 +339,7 @@ fn for_each_of_zero_with_chance_1_is_0_on_host_and_device() {
             ("infection_chance", ParamValue::F32(1.0)),
         ],
     );
-    let Ok(ModelState::Gpu(mut state)) = entry.build(&params, Some(7), Some(&ctx)) else {
-        panic!("the mobile sheet builds on the device");
-    };
+    let mut state = built(&entry, &params, Some(7), &ctx);
     henad_compute::gpu::stepping::run_steps(&mut *state, &ctx, 3).expect("three ticks run");
     let words = state.read_buffer(hit.buffer()).expect("the hit lane reads back");
     let words = hit.segment(&words);
@@ -434,43 +348,25 @@ fn for_each_of_zero_with_chance_1_is_0_on_host_and_device() {
     // With every person infected, a chance of 1 for each of 499 holds for everyone.
     let sick = lowered(MOBILE);
     let entry = entry_of(&sick);
-    let Ok(ModelState::Gpu(mut state)) = entry.build(&params, Some(7), Some(&ctx)) else {
-        panic!("the mobile sheet builds on the device");
-    };
+    let mut state = built(&entry, &params, Some(7), &ctx);
     henad_compute::gpu::stepping::run_steps(&mut *state, &ctx, 1).expect("a tick runs");
     let words = state.read_buffer(hit.buffer()).expect("the hit lane reads back");
     assert!(hit.segment(&words).iter().all(|&word| word == 1));
 }
 
-/// Returns the boids with the line table `table` added as line `l9` of the card that runs each tick.
-fn boids_with(table: &str) -> String {
-    let text = edited(sheet("boids.toml"), "next_line = 9", "next_line = 10");
-    let text = edited(
-        &text,
-        "lines = [\"l1\", \"l2\", \"l3\", \"l4\", \"l5\", \"l6\", \"l7\"]",
-        "lines = [\"l1\", \"l2\", \"l3\", \"l4\", \"l5\", \"l6\", \"l7\", \"l9\"]",
-    );
-    edited(
-        &text,
-        "# Lines of Randomise headings",
-        &format!("{table}\n\n# Lines of Randomise headings"),
-    )
-}
-
 #[test]
 fn each_agent_refusal_gives_one_located_error() {
     let one = |text: &str, message: &str, at: &str| {
-        let errors = refusals(text);
-        assert_eq!(errors.len(), 1, "{errors:#?}");
-        assert_eq!(errors[0].message, message);
+        let error = only_refusal(text);
+        assert_eq!(error.message, message);
         assert!(
-            placed_at(&errors[0], text).starts_with(at),
+            placed_at(&error, text).starts_with(at),
             "{} is placed at {:?}",
-            errors[0].message,
-            placed_at(&errors[0], text)
+            error.message,
+            placed_at(&error, text)
         );
     };
-    let walls = edited(sheet("random_walk.toml"), "edges = \"wrap\"", "edges = \"walls\"");
+    let walls = edited(sheet_text("random_walk.toml"), "edges = \"wrap\"", "edges = \"walls\"");
     one(&walls, sentence::NOT_YET_AGENT_WALLS, "[world]");
     // A Move to below a Move by is refused at the Move to, and the pick that names its place lowers.
     let move_to = edited(
@@ -495,7 +391,7 @@ fn each_agent_refusal_gives_one_located_error() {
     let record_in_repeat = edited(
         &edited(
             &edited(
-                sheet("random_walk.toml"),
+                sheet_text("random_walk.toml"),
                 "lines = [\"l2\"]",
                 "lines = [\"l2\", \"l3\"]",
             ),
@@ -513,7 +409,7 @@ fn each_agent_refusal_gives_one_located_error() {
     // The checker refuses a look inside a Repeat and a second kind of agent, each at its table.
     let look_in_repeat = edited(
         &edited(
-            sheet("random_walk.toml"),
+            sheet_text("random_walk.toml"),
             "lines = [\"l2\"]",
             "lines = [\"l2\", \"l3\"]",
         ),
@@ -524,16 +420,15 @@ fn each_agent_refusal_gives_one_located_error() {
         "{look_in_repeat}\n\n[card.line.l3]\nkind = \"count\"\nname = \"Near\"\naround = \"agents_within\"\n\
          agent_kind = \"walker\"\ndistance = 5\ninclude_me = false\n\n[card.line.l3.whose]\nkind = \"always\"\n"
     );
-    let errors = refusals(&look_in_repeat);
-    assert_eq!(errors.len(), 1, "{errors:#?}");
+    let error = only_refusal(&look_in_repeat);
     assert!(
-        errors[0].message.contains("cannot sit inside a Repeat"),
+        error.message.contains("cannot sit inside a Repeat"),
         "{}",
-        errors[0].message
+        error.message
     );
-    assert!(placed_at(&errors[0], &look_in_repeat).starts_with("[card.line.l3]"));
+    assert!(placed_at(&error, &look_in_repeat).starts_with("[card.line.l3]"));
     let second = edited(
-        sheet("random_walk.toml"),
+        sheet_text("random_walk.toml"),
         "[[parameter]]",
         "[[agents]]\nid = \"runner\"\nname = \"Runner\"\ncount = 1\nmax_count = 1\n\n[[agents.property]]\nid = \
          \"spot\"\nname = \"Spot\"\ntype = \"position\"\n\n[agents.property.starts_as]\nrule = \"anywhere\"\nkey = 9\n\n\
@@ -548,7 +443,7 @@ fn each_agent_refusal_gives_one_located_error() {
 
 #[test]
 fn the_shortfalls_of_a_sheet_name_its_looks_in_the_model_words() {
-    let boids = lowered(sheet("boids.toml"));
+    let boids = lowered(sheet_text("boids.toml"));
     let entry = entry_of(&boids);
     let limits = wgpu::Limits {
         max_storage_buffer_binding_size: u64::MAX,
@@ -586,7 +481,7 @@ fn the_shortfalls_of_a_sheet_name_its_looks_in_the_model_words() {
 fn a_pass_cost_past_the_limit_names_its_line_in_the_model_words() {
     // A Repeat of at most 65536 Move by lines costs far more than one pass may per walker.
     let text = edited(
-        sheet("random_walk.toml"),
+        sheet_text("random_walk.toml"),
         "max = 16\ndefault = 4",
         "max = 65536\ndefault = 4",
     );
@@ -613,12 +508,12 @@ fn a_pass_cost_past_the_limit_names_its_line_in_the_model_words() {
 
 #[test]
 fn a_node_id_of_the_fold_is_a_node_the_sheet_owns() {
-    let boids = lowered(sheet("boids.toml"));
+    let boids = lowered(sheet_text("boids.toml"));
     let (node, _) = boids.fault_names().iter().next().expect("a fold name");
     let origin = boids.line_map().origin(node).expect("the fold's origin");
     assert_eq!(origin.owner, NodeOwner::Sheet);
     assert_eq!(origin.path, "card.bird_tick");
-    assert!(node < NodeId::new(1000).expect("an id"));
+    assert!(node < node_id(1000));
 }
 
 #[test]
@@ -649,7 +544,7 @@ fn a_card_editor_reads_each_lowering_refusal_with_its_card_and_line() {
         );
         assert!(!problem.skips_line);
     }
-    let parsed = crate::sheet::ParsedSheet::parse(sheet("boids.toml")).expect("boids reads");
+    let parsed = crate::sheet::ParsedSheet::parse(sheet_text("boids.toml")).expect("boids reads");
     assert!(
         SheetFile::lowering_problems(&parsed, &parsed.check()).is_empty(),
         "a sheet that lowers has no problem"

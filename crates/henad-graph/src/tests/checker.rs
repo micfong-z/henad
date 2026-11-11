@@ -3,9 +3,10 @@
 use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
 
 use super::corpus;
+use super::host::KEEP_X;
+use super::support::node_id;
 use crate::GraphFile;
 use crate::check::CheckReport;
-use crate::ids::NodeId;
 use crate::limits::MAX_PASS_COST;
 
 /// Header and declarations of a grid with a category lane `c`, a `u32` lane `x` and a few parameters.
@@ -66,26 +67,6 @@ kind = "bool"
 default = true
 "#;
 
-/// A tick pass that keeps `x`.
-const KEEP_X: &str = r#"
-[[pass]]
-id = "step"
-stage = "tick"
-kind = "map"
-domain = "cells"
-
-[[pass.node]]
-id = "n900"
-op = "lane.get"
-config.lane = "x"
-
-[[pass.node]]
-id = "n901"
-op = "lane.set"
-config.lane = "x"
-in.value = "n900"
-"#;
-
 /// Returns the report of [`GRID`] followed by `tables`.
 fn report(tables: &str) -> CheckReport {
     let text = format!("{GRID}\n{tables}");
@@ -131,15 +112,13 @@ fn the_corpus_checks_without_an_error_or_a_warning() {
     let files = corpus::all();
     assert!(files.len() >= 3);
     for (name, text) in files {
-        let report = GraphFile::parse(&text)
-            .unwrap_or_else(|error| panic!("{name}: {error}"))
-            .check();
+        let file = GraphFile::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let report = file.check();
         let found: Vec<String> = report.diagnostics.iter().map(ToString::to_string).collect();
         assert!(found.is_empty(), "{name}:\n{}", found.join("\n"));
         assert!(report.duplicate_ids.is_empty());
-        let document = GraphFile::parse(&text).expect("the file reads").document().clone();
         let mut ticks = 0;
-        for (pass, pass_report) in document.passes.iter().zip(&report.passes) {
+        for (pass, pass_report) in file.document().passes.iter().zip(&report.passes) {
             if pass.stage == crate::document::PassStage::Tick {
                 ticks += 1;
                 assert!(
@@ -178,10 +157,10 @@ fn the_checker_types_each_port() {
         .iter()
         .find(|pass| pass.id == "step")
         .expect("a step pass");
-    let count = &step.outputs[&NodeId::new(11).expect("an id")]["count"];
+    let count = &step.outputs[&node_id(11)]["count"];
     assert_eq!(count.value_type, Some(crate::types::ValueType::U32));
     assert_eq!(count.rate, crate::types::Rate::Element);
-    let base = &step.outputs[&NodeId::new(12).expect("an id")]["out"];
+    let base = &step.outputs[&node_id(12)]["out"];
     assert_eq!(base.rate, crate::types::Rate::Parameter);
 }
 
@@ -824,7 +803,7 @@ fn duplicate_node_ids_open_the_repair_state() {
         "{GRID}\n{KEEP_X}\n[[pass]]\nid = \"counts\"\nstage = \"stats\"\nkind = \"map\"\ndomain = \"cells\"\n\n[[pass.node]]\nid = \"n900\"\nop = \"lane.get\"\nconfig.lane = \"x\"\n"
     );
     let report = GraphFile::parse(&text).expect("the file reads").check();
-    assert_eq!(report.duplicate_ids, [NodeId::new(900).expect("an id")]);
+    assert_eq!(report.duplicate_ids, [node_id(900)]);
     assert!(
         report
             .errors()
@@ -1247,6 +1226,9 @@ fn the_checker_places_a_diagnostic_as_the_file_does() {
     }
     let found = file.check();
     let error = found.errors().next().expect("the unknown kind");
-    let op = file.places().passes[0].nodes[0].op.clone();
-    assert_eq!(*error, file.place(error.clone(), op).with_pass("step").with_node("n1"));
+    let kind = file.places().passes[0].nodes[0].op.clone();
+    assert_eq!(
+        *error,
+        file.place(error.clone(), kind).with_pass("step").with_node("n1")
+    );
 }

@@ -4,9 +4,21 @@
 use henad_compute::gpu::wgpu;
 use henad_core::params::ParamValue;
 
+use super::support::{big_category, node, powi_flood_tables, tally_pass};
 use crate::GraphFile;
 use crate::starters::starters;
-use crate::wgsl::{GridProgram, ShaderRole};
+use crate::wgsl::{GeneratedShader, GridProgram, ShaderRole};
+
+/// Writes the text of each of `shaders`, the shaders of the model `id`, to the directory `HENAD_DUMP_GRAPH_WGSL` names,
+/// and nothing when it is unset.
+fn dump(id: &str, shaders: &[GeneratedShader]) {
+    if let Some(directory) = std::env::var_os("HENAD_DUMP_GRAPH_WGSL") {
+        for shader in shaders {
+            let path = std::path::Path::new(&directory).join(format!("{id}_{}.wgsl", shader.label()));
+            std::fs::write(path, shader.text()).expect("a dump");
+        }
+    }
+}
 
 #[test]
 fn every_starter_compiles() {
@@ -14,36 +26,17 @@ fn every_starter_compiles() {
         let file = GraphFile::parse(starter.text).expect("the starter reads");
         let program =
             GridProgram::compile(&file).unwrap_or_else(|problems| panic!("{}: {problems:#?}", starter.file_name));
-        if let Some(directory) = std::env::var_os("HENAD_DUMP_GRAPH_WGSL") {
-            for shader in program.shaders() {
-                let path = std::path::Path::new(&directory).join(format!("{}_{}.wgsl", program.id(), shader.label()));
-                std::fs::write(path, shader.text()).expect("a dump");
-            }
-        }
+        dump(program.id(), program.shaders());
     }
 }
 
 /// Every agent starter and every agents fixture compiles, and `HENAD_DUMP_GRAPH_WGSL` writes each shader's text.
 #[test]
 fn every_agents_graph_compiles() {
-    let fixtures = super::corpus::fixtures();
-    let files = crate::starters::agent_starters()
-        .iter()
-        .map(|starter| (starter.file_name.to_owned(), starter.text.to_owned()))
-        .chain(fixtures);
-    for (name, text) in files {
-        let file = GraphFile::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
-        if !matches!(file.document().world, crate::document::World::Agents(_)) {
-            continue;
-        }
+    for (name, file) in super::corpus::agents() {
         let program =
             crate::wgsl::AgentProgram::compile(&file).unwrap_or_else(|problems| panic!("{name}: {problems:#?}"));
-        if let Some(directory) = std::env::var_os("HENAD_DUMP_GRAPH_WGSL") {
-            for shader in program.shaders() {
-                let path = std::path::Path::new(&directory).join(format!("{}_{}.wgsl", program.id(), shader.label()));
-                std::fs::write(path, shader.text()).expect("a dump");
-            }
-        }
+        dump(program.id(), program.shaders());
     }
 }
 
@@ -51,11 +44,7 @@ fn every_agents_graph_compiles() {
 /// and field updates included, so a workgroup barrier at the end of `main` sits in uniform control flow.
 #[test]
 fn no_step_returns_early() {
-    let files = starters()
-        .iter()
-        .chain(crate::starters::agent_starters())
-        .map(|starter| (starter.file_name.to_owned(), starter.text.to_owned()))
-        .chain(super::corpus::fixtures());
+    let files = super::corpus::all();
     let mut roles = std::collections::BTreeSet::new();
     for (name, text) in files {
         let file = GraphFile::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -236,7 +225,7 @@ in.value = "n1.hits"
 }
 
 /// Returns a grid file of a `u32` lane `x`, an `f32` lane `y` and an `f32` parameter `share`, with `passes`.
-pub(super) fn grid_file(passes: &str) -> String {
+fn grid_file(passes: &str) -> String {
     format!(
         r#"format = "henad-model"
 format_version = 1
@@ -469,11 +458,6 @@ fn flood_file(id: &str, declarations: &str, passes: &str) -> GraphFile {
     GraphFile::parse(&text).unwrap_or_else(|error| panic!("{id} reads: {error}"))
 }
 
-/// Returns a node `id` of kind `op` with the further lines `lines`.
-fn node(id: usize, op: &str, lines: &str) -> String {
-    format!("\n[[pass.node]]\nid = \"n{id}\"\nop = \"{op}\"\n{lines}")
-}
-
 /// Returns the shortfalls of `file` on a baseline device at its default size, after it compiles.
 fn baseline_shortfalls(file: &GraphFile) -> Vec<String> {
     let program = GridProgram::compile(file).unwrap_or_else(|problems| panic!("{problems:#?}"));
@@ -484,28 +468,16 @@ fn baseline_shortfalls(file: &GraphFile) -> Vec<String> {
 
 /// Returns a file whose stats pass counts a category of 256 variants with `counts` nodes, 1 KiB of tallies each.
 fn tally_flood(counts: usize) -> GraphFile {
-    let variants: Vec<String> = (0..256)
-        .map(|k| format!("{{ name = \"V{k}\", label = \"V{k}\", color = [{k}, 0, 0, 255] }}"))
-        .collect();
     let declarations = format!(
-        "\n[[category]]\nid = \"big\"\nvariants = [{}]\n\n\
-         [[lane]]\nid = \"c\"\ndomain = \"cells\"\ntype = \"cat:big\"\n\
+        "{}\n[[lane]]\nid = \"c\"\ndomain = \"cells\"\ntype = \"cat:big\"\n\
          storage = \"u8\"\ninitial = {{ cat = \"big.V0\" }}\n\n[[stat]]\nlabel = \"S0\"\nfrom = \"n2.V0\"\n\
          color = [1, 1, 1, 255]\n",
-        variants.join(", ")
+        big_category()
     );
     let mut passes = String::from("\n[[pass]]\nid = \"step\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"cells\"\n");
     passes.push_str(&node(9000, "lane.get", "config.lane = \"c\"\n"));
     passes.push_str(&node(9001, "lane.set", "config.lane = \"c\"\nin.value = \"n9000\"\n"));
-    passes.push_str("\n[[pass]]\nid = \"counts\"\nstage = \"stats\"\nkind = \"map\"\ndomain = \"cells\"\n");
-    passes.push_str(&node(1, "lane.get", "config.lane = \"c\"\n"));
-    for k in 0..counts {
-        passes.push_str(&node(
-            k + 2,
-            "stat.count_by",
-            "config.category = \"big\"\nin.value = \"n1\"\n",
-        ));
-    }
+    passes.push_str(&tally_pass("cells", counts));
     flood_file("node_tally_flood", &declarations, &passes)
 }
 
@@ -528,40 +500,8 @@ fn tallies_past_the_workgroup_memory_are_refused() {
 
 /// Returns a file whose step pass sums `powers` integer powers of 64 entries' tables each.
 fn powi_flood(powers: usize) -> GraphFile {
-    let declarations = "\n[[lane]]\nid = \"x\"\ndomain = \"cells\"\ntype = \"f32\"\ninitial = { f32 = 0.0 }\n";
-    let mut passes = String::from("\n[[pass]]\nid = \"step\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"cells\"\n");
-    passes.push_str(&node(1, "ctx.index", ""));
-    let mut sum: Option<usize> = None;
-    let mut next = 2;
-    for k in 0..powers {
-        let power = next;
-        let base = 1.0 + k as f32 / 1000.0;
-        passes.push_str(&node(
-            power,
-            "math.powi",
-            &format!("config.max_exponent = 64\nin.base = {{ f32 = {base:?} }}\nin.exponent = \"n1\"\n"),
-        ));
-        next += 1;
-        sum = Some(match sum {
-            None => power,
-            Some(previous) => {
-                passes.push_str(&node(
-                    next,
-                    "math.add",
-                    &format!("in.a = \"n{previous}\"\nin.b = \"n{power}\"\n"),
-                ));
-                next += 1;
-                next - 1
-            }
-        });
-    }
-    let value = sum.unwrap_or(1);
-    passes.push_str(&node(
-        next,
-        "lane.set",
-        &format!("config.lane = \"x\"\nin.value = \"n{value}\"\n"),
-    ));
-    flood_file("node_powi_flood", declarations, &passes)
+    let (declarations, passes) = powi_flood_tables("cells", powers);
+    flood_file("node_powi_flood", &declarations, &passes)
 }
 
 /// A step pass's uniform block, here the tables of its integer powers, is refused past the baseline's 64 KiB before a

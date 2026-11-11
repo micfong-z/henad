@@ -3,6 +3,7 @@
 use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::provenance::{CodeOrigin, ModelCode};
 
+use super::support::{graph_refusal, line_of, node_id};
 use crate::document::{LaneStorage, PassEnabled, PassStage, Topology, World};
 use crate::editor::NodeLayout;
 use crate::ids::NodeId;
@@ -30,18 +31,6 @@ backend = "gpu"
 
 fn parse(text: &str) -> GraphFile {
     GraphFile::parse(text).expect("the text reads")
-}
-
-fn id(number: u32) -> NodeId {
-    NodeId::new(number).expect("the number counts from 1")
-}
-
-/// Returns the error's diagnostic for `text`, which the reader has to refuse.
-fn refusal(text: &str) -> CodeDiagnostic {
-    GraphFile::parse(text)
-        .expect_err("the reader refuses the text")
-        .diagnostic()
-        .clone()
 }
 
 /// Returns [`MINIMAL`] with `body` after it.
@@ -611,7 +600,7 @@ fn the_editor_accessors_read_what_fits() {
     let editor = file.editor().expect("the file has an editor region");
     assert_eq!(editor.next_id(), Some(73));
     assert_eq!(
-        editor.node_layout(id(10)),
+        editor.node_layout(node_id(10)),
         Some(NodeLayout {
             pos: [40.4, 60.6],
             collapsed: false,
@@ -619,7 +608,7 @@ fn the_editor_accessors_read_what_fits() {
             output_pos: None,
         })
     );
-    assert!(editor.node_layout(id(99)).is_none());
+    assert!(editor.node_layout(node_id(99)).is_none());
 }
 
 #[test]
@@ -687,13 +676,13 @@ fn passes_read_in_stack_order_and_nodes_in_natural_order() {
 fn nested_regions_read_with_their_accumulators_and_paths() {
     let file = parse(FULL_GRAPH);
     let body: &NodeBody = &file.document().passes[1].body;
-    assert_eq!(body.region_path(id(22)), [id(21), id(20)]);
-    assert_eq!(body.region_path(id(21)), [id(20)]);
-    assert!(body.region_path(id(20)).is_empty());
-    let members: Vec<NodeId> = body.region_members(id(21)).map(|node| node.id).collect();
-    assert_eq!(members, [id(22), id(23)]);
+    assert_eq!(body.region_path(node_id(22)), [node_id(21), node_id(20)]);
+    assert_eq!(body.region_path(node_id(21)), [node_id(20)]);
+    assert!(body.region_path(node_id(20)).is_empty());
+    let members: Vec<NodeId> = body.region_members(node_id(21)).map(|node| node.id).collect();
+    assert_eq!(members, [node_id(22), node_id(23)]);
 
-    let repeat = body.node(id(20)).expect("the body holds n20");
+    let repeat = body.node(node_id(20)).expect("the body holds n20");
     let accumulators = repeat.accumulators().expect("the list reads");
     assert_eq!(accumulators.len(), 2);
     assert_eq!(accumulators[0].name, "hit");
@@ -703,7 +692,7 @@ fn nested_regions_read_with_their_accumulators_and_paths() {
     assert_eq!(
         repeat.inputs.get("init.position"),
         Some(&InputValue::Link(PortRef {
-            node: id(19),
+            node: node_id(19),
             port: None,
         }))
     );
@@ -712,9 +701,9 @@ fn nested_regions_read_with_their_accumulators_and_paths() {
         Some(&InputValue::Param("trials".to_owned()))
     );
     assert_eq!(
-        body.node(id(25)).expect("the body holds n25").inputs.get("value"),
+        body.node(node_id(25)).expect("the body holds n25").inputs.get("value"),
         Some(&InputValue::Link(PortRef {
-            node: id(20),
+            node: node_id(20),
             port: Some("prev.position".to_owned()),
         }))
     );
@@ -725,13 +714,16 @@ fn nested_regions_read_with_their_accumulators_and_paths() {
 fn a_broken_region_chain_returns_a_finite_path() {
     let text = pass_with_node("region = \"n1\"");
     let file = parse(&text);
-    assert!(file.document().passes[0].body.region_path(id(1)).is_empty());
-    assert!(file.document().passes[0].body.region_path(id(5)).is_empty());
+    assert!(file.document().passes[0].body.region_path(node_id(1)).is_empty());
+    assert!(file.document().passes[0].body.region_path(node_id(5)).is_empty());
     let cycle = minimal_with(
         "[[pass]]\nid = \"p\"\nstage = \"tick\"\nkind = \"map\"\n\n[[pass.node]]\nid = \"n1\"\nop = \"a\"\nregion = \"n2\"\n\n[[pass.node]]\nid = \"n2\"\nop = \"b\"\nregion = \"n3\"\n\n[[pass.node]]\nid = \"n3\"\nop = \"c\"\nregion = \"n2\"\n",
     );
     let file = parse(&cycle);
-    assert_eq!(file.document().passes[0].body.region_path(id(1)), [id(2), id(3)]);
+    assert_eq!(
+        file.document().passes[0].body.region_path(node_id(1)),
+        [node_id(2), node_id(3)]
+    );
 }
 
 #[test]
@@ -744,7 +736,7 @@ fn a_port_made_by_configuration_can_take_the_name_of_a_literal_tag() {
     assert_eq!(
         node.inputs.get("init.param"),
         Some(&InputValue::Link(PortRef {
-            node: id(3),
+            node: node_id(3),
             port: None,
         }))
     );
@@ -759,7 +751,10 @@ fn a_port_made_by_configuration_can_take_the_name_of_a_literal_tag() {
 #[test]
 fn a_function_calls_ports_stay_bare() {
     let file = parse(FULL_GRAPH);
-    let call = file.document().passes[1].body.node(id(28)).expect("the body holds n28");
+    let call = file.document().passes[1]
+        .body
+        .node(node_id(28))
+        .expect("the body holds n28");
     assert_eq!(call.inputs.get("init"), Some(&InputValue::Literal(Literal::F32(1.0))));
     let canonical = file.to_toml();
     assert!(canonical.contains("in.init = { f32 = 1.0 }\n"), "{canonical}");
@@ -802,7 +797,7 @@ fn a_lane_defaults_its_storage_by_type() {
 #[test]
 fn storage_on_another_lane_type_is_refused_in_place() {
     let text = minimal_with("[[lane]]\nid = \"x\"\ndomain = \"cells\"\ntype = \"f32\"\nstorage = \"u8\"\n");
-    let diagnostic = refusal(&text);
+    let diagnostic = graph_refusal(&text);
     assert!(diagnostic.message.contains("must not set `storage`"), "{diagnostic}");
     assert!(diagnostic.line.is_some(), "{diagnostic}");
 }
@@ -814,9 +809,9 @@ fn a_duplicate_node_id_reads_and_is_listed() {
     );
     let file = parse(&text);
     let body = &file.document().passes[0].body;
-    assert_eq!(body.duplicate_ids(), [id(1)]);
+    assert_eq!(body.duplicate_ids(), [node_id(1)]);
     assert_eq!(body.nodes.len(), 3);
-    assert_eq!(body.node(id(1)).expect("the body holds n1").op, "a");
+    assert_eq!(body.node(node_id(1)).expect("the body holds n1").op, "a");
     let canonical = file.to_toml();
     assert_eq!(parse(&canonical).to_toml(), canonical);
 }
@@ -874,17 +869,13 @@ fn a_place_maps_back_through_line_ends() {
 
 /// Asserts that `diagnostic` sits on the line of `text` that starts `line_needle`.
 fn assert_on_line(diagnostic: &CodeDiagnostic, text: &str, line_needle: &str) {
-    let line = text[..text.find(line_needle).expect("the text holds the line")]
-        .matches('\n')
-        .count()
-        + 1;
-    assert_eq!(diagnostic.line, Some(line as u32), "{diagnostic}");
+    assert_eq!(diagnostic.line, Some(line_of(text, line_needle)), "{diagnostic}");
 }
 
 #[test]
 fn another_backend_or_a_second_target_is_refused() {
     let cpu = MINIMAL.replace("backend = \"gpu\"", "backend = \"cpu\"");
-    let diagnostic = refusal(&cpu);
+    let diagnostic = graph_refusal(&cpu);
     assert!(
         diagnostic.message.contains("graph models compile to WGSL"),
         "{diagnostic}"
@@ -892,41 +883,41 @@ fn another_backend_or_a_second_target_is_refused() {
     assert_on_line(&diagnostic, &cpu, "backend = \"cpu\"");
 
     let two = format!("{MINIMAL}\n[[target]]\nbackend = \"gpu\"\nid = \"other\"\n");
-    assert!(refusal(&two).message.contains("second `[[target]]`"));
+    assert!(graph_refusal(&two).message.contains("second `[[target]]`"));
 
     let none = MINIMAL.replace("[[target]]\nbackend = \"gpu\"\n", "");
-    assert!(refusal(&none).message.contains("needs one `[[target]]`"));
+    assert!(graph_refusal(&none).message.contains("needs one `[[target]]`"));
 }
 
 #[test]
 fn network_keys_and_sequence_passes_are_refused() {
     let network = MINIMAL.replace("topology = \"grid\"", "topology = \"network\"");
-    let diagnostic = refusal(&network);
+    let diagnostic = graph_refusal(&network);
     assert!(diagnostic.message.contains("network"), "{diagnostic}");
     assert_on_line(&diagnostic, &network, "topology = ");
 
     let sequence = pass_with_node("").replace("kind = \"map\"", "kind = \"sequence\"");
-    assert!(refusal(&sequence).message.contains("sequence"));
+    assert!(graph_refusal(&sequence).message.contains("sequence"));
 
     let after = pass_with_node("after = \"start\"");
-    let diagnostic = refusal(&after);
+    let diagnostic = graph_refusal(&after);
     assert!(diagnostic.message.contains("after"), "{diagnostic}");
 
     let domain = pass_with_node("").replace("domain = \"cells\"", "domain = \"edges\"");
-    assert!(refusal(&domain).message.contains("edges"));
+    assert!(graph_refusal(&domain).message.contains("edges"));
 
     for type_name in ["node", "edge", "list:node", "opt:node", "opt:edge"] {
         let lane = minimal_with(&format!(
             "[[lane]]\nid = \"x\"\ndomain = \"cells\"\ntype = \"{type_name}\"\n"
         ));
-        assert!(refusal(&lane).message.contains("no value type"), "{type_name}");
+        assert!(graph_refusal(&lane).message.contains("no value type"), "{type_name}");
     }
 }
 
 #[test]
 fn an_apply_key_and_unknown_keys_are_refused() {
     let apply = minimal_with("[[param]]\nid = \"x\"\nkind = \"bool\"\ndefault = true\napply = \"live\"\n");
-    let diagnostic = refusal(&apply);
+    let diagnostic = graph_refusal(&apply);
     assert!(diagnostic.message.contains("apply"), "{diagnostic}");
     assert_on_line(&diagnostic, &apply, "apply = ");
 
@@ -941,7 +932,7 @@ fn an_apply_key_and_unknown_keys_are_refused() {
         ),
         (minimal_with("[network]\ncount = 1\n"), "network"),
     ] {
-        let diagnostic = refusal(&text);
+        let diagnostic = graph_refusal(&text);
         assert!(
             matches!(GraphFile::parse(&text), Err(GraphFileError::Toml(_))),
             "{diagnostic}"
@@ -970,7 +961,7 @@ fn the_header_is_checked_before_the_rest() {
         ("library = 1", "library = 0", "libraries count from 1"),
     ] {
         let text = format!("{}{unknown}", MINIMAL.replace(old, new));
-        let diagnostic = refusal(&text);
+        let diagnostic = graph_refusal(&text);
         assert!(diagnostic.message.contains(message), "{diagnostic}");
         assert_on_line(&diagnostic, &text, new);
     }
@@ -993,7 +984,7 @@ fn a_missing_header_key_is_refused() {
 fn a_file_past_the_limit_is_refused_before_parsing() {
     // Text that would fail to parse, so the message proves the size was checked first.
     let text = "[".repeat(MAX_FILE_BYTES + 1);
-    let diagnostic = refusal(&text);
+    let diagnostic = graph_refusal(&text);
     assert!(diagnostic.message.contains("at most"), "{diagnostic}");
     assert!(diagnostic.span.is_none());
 }
@@ -1008,7 +999,7 @@ fn a_file_whose_canonical_text_passes_the_limit_is_refused() {
         nodes.join(",")
     ));
     assert!(text.len() < MAX_FILE_BYTES, "{} bytes", text.len());
-    let diagnostic = refusal(&text);
+    let diagnostic = graph_refusal(&text);
     assert!(diagnostic.message.contains("canonical text"), "{diagnostic}");
 }
 
@@ -1075,7 +1066,7 @@ fn input_forms_are_refused_in_place() {
         ("region = \"x\"", "no node id"),
     ] {
         let text = pass_with_node(keys);
-        let diagnostic = refusal(&text);
+        let diagnostic = graph_refusal(&text);
         assert!(diagnostic.message.contains(message), "`{keys}`: {diagnostic}");
         assert!(diagnostic.line.is_some(), "`{keys}`: {diagnostic}");
         let line = keys.lines().next().unwrap_or_default();
@@ -1141,7 +1132,7 @@ fn declaration_values_are_refused_in_place() {
             "no value type",
         ),
     ] {
-        let diagnostic = refusal(&minimal_with(body));
+        let diagnostic = graph_refusal(&minimal_with(body));
         assert!(diagnostic.message.contains(message), "`{body}`: {diagnostic}");
         assert!(diagnostic.line.is_some(), "`{body}`: {diagnostic}");
     }
@@ -1150,7 +1141,7 @@ fn declaration_values_are_refused_in_place() {
         MINIMAL.replace("topology = \"grid\"", "topology = \"agents\"")
     );
     assert!(
-        refusal(&grid_on_agents)
+        graph_refusal(&grid_on_agents)
             .message
             .contains("does not belong to the agents topology")
     );
@@ -1158,7 +1149,7 @@ fn declaration_values_are_refused_in_place() {
         "{}\n[agents]\nwidth = nan\n",
         MINIMAL.replace("topology = \"grid\"", "topology = \"agents\"")
     );
-    assert!(refusal(&agents_width).message.contains("must be finite"));
+    assert!(graph_refusal(&agents_width).message.contains("must be finite"));
 }
 
 #[test]
@@ -1247,9 +1238,9 @@ fn rates_join_to_the_faster_one() {
 
 #[test]
 fn node_ids_order_naturally_and_refuse_other_spellings() {
-    assert!(id(9) < id(10));
-    assert_eq!("n10".parse::<NodeId>().expect("the id reads"), id(10));
-    assert_eq!(id(12).to_string(), "n12");
+    assert!(node_id(9) < node_id(10));
+    assert_eq!("n10".parse::<NodeId>().expect("the id reads"), node_id(10));
+    assert_eq!(node_id(12).to_string(), "n12");
     assert!(NodeId::new(0).is_none());
     for text in ["n", "n0", "n01", "x1", "N1", "n-1", "n+1", "n1.2", ""] {
         assert!(text.parse::<NodeId>().is_err(), "{text}");

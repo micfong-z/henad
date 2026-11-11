@@ -10,40 +10,95 @@
 //! A counter that a million agents add to, over thousands of workgroups, is held to the host's total too, and so is
 //! the word of a million deposits into one cell of a field that adds up.
 
-use henad_core::authoring::primitives::space::Boundary;
-
-use super::case_files::{node_case_file, pass_case_file};
-use super::known_answers::{input_literal, meets};
-use super::support::{AgentShape, ShaderRun, TestDevice, lane_buffers, lane_words, run_shader, test_device};
+use super::case_files::{agents_header_with_position, node_case_file, pass_case_file};
+use super::known_answers::{case_world, input_literal, meets, node_case_context, pass_case_context, plant};
+use super::support::{
+    AgentShape, ShaderRun, TestDevice, device_for, first_tally, lane_buffers, lane_words, node_id, run_shader,
+    shader_of_pass,
+};
 use crate::GraphFile;
 use crate::catalogue::{CaseForm, CaseScope, CaseValue, NodeCase, NodeDef, PassCase, definitions};
 use crate::document::{Domain, GraphDocument, Lane, PassStage, World};
+use crate::host::program::Program;
 use crate::host::value::HostValue;
 use crate::host::{HostEvaluator, HostLanes, HostWorld, RunContext, run};
-use crate::ids::NodeId;
 use crate::node::Node;
 use crate::types::{Rate, ValueType};
 use crate::value::{ConfigValue, InputValue, PortRef};
 use crate::wgsl::agent_hooks::AgentGraphHooks;
-use crate::wgsl::emit::FIRST_COUNTER;
+use crate::wgsl::agents::CompiledAgents;
+use crate::wgsl::emit::{FIRST_COUNTER, FieldPlan, SumLane};
 use crate::wgsl::uniform::Dispatch;
-use crate::wgsl::{Compiled, GeneratedShader, Probes, ShaderRole, compile_shaders};
+use crate::wgsl::{GeneratedShader, Probes, ShaderRole, compile_shaders};
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{Domain as EngineDomain, Geometry};
 use henad_core::spatial_hash::SpatialHash;
 
-/// Returns the id `n<number>`.
-fn id(number: u32) -> NodeId {
-    NodeId::new(number).expect("a node id")
+/// Returns the shader among `shaders` that runs the pass `case` of the case `what`.
+fn case_shader<'a>(shaders: &'a [GeneratedShader], what: &str) -> &'a GeneratedShader {
+    shader_of_pass(shaders, "case").unwrap_or_else(|| panic!("{what}: no shader runs the pass `case`"))
 }
 
-/// Returns the shader that runs the pass `case`.
-fn case_shader<'a>(compiled: &'a Compiled, what: &str) -> &'a GeneratedShader {
-    compiled
-        .shaders
+/// Returns the sum of each of the `sums` sums of the stats pass at `position`, with whether it takes two lanes, from
+/// the sum lanes `sum_lanes` of its shader and the total `lane_total` returns for each lane.
+fn sum_totals(
+    sums: usize,
+    sum_lanes: &[SumLane],
+    position: usize,
+    lane_total: impl Fn(usize) -> f64,
+) -> Vec<([f64; 2], bool)> {
+    (0..sums)
+        .map(|sum| {
+            let mine: Vec<usize> = sum_lanes
+                .iter()
+                .enumerate()
+                .filter(|(_, lane)| lane.pass == position && lane.sum == sum)
+                .map(|(lane, _)| lane)
+                .collect();
+            let total = |k: usize| mine.get(k).map_or(0.0, |&lane| lane_total(lane));
+            ([total(0), total(1)], mine.len() > 1)
+        })
+        .collect()
+}
+
+/// Checks each statistic of `stats` of the case `what` against the value at its port in `frame`, the frame of
+/// `program` that `run::finish` left.
+fn assert_stats(
+    what: &str,
+    stats: &[(&str, CaseValue)],
+    program: &Program,
+    frame: &[HostValue],
+    document: &GraphDocument,
+) {
+    for (port, expected) in stats {
+        let reference: PortRef = port.parse().expect("a port");
+        let found = port_value(program, frame, &reference).expect("a statistic");
+        assert!(
+            meets(*expected, found, document),
+            "{what}: {port} is {found:?} on the device, and the case expects {expected:?}"
+        );
+    }
+}
+
+/// Returns the plan of the field `field` of `compiled` and the position of its layer `layer`.
+fn field_layer<'a>(
+    compiled: &'a CompiledAgents,
+    document: &GraphDocument,
+    field: &str,
+    layer: &str,
+) -> (&'a FieldPlan, usize) {
+    let position = compiled
+        .plan
+        .fields
         .iter()
-        .find(|shader| shader.passes().iter().any(|pass| pass == "case"))
-        .unwrap_or_else(|| panic!("{what}: no shader runs the pass `case`"))
+        .position(|plan| plan.id == field)
+        .expect("a field of the case");
+    let layer = document.fields[position]
+        .layers
+        .iter()
+        .position(|known| known == layer)
+        .expect("a layer of the case");
+    (&compiled.plan.fields[position], layer)
 }
 
 /// Returns the palette index of `texel` in the palette `id` of `document`.
@@ -76,7 +131,7 @@ fn case_palette(document: &GraphDocument) -> Option<String> {
 }
 
 /// Returns the value at `port` in the frame of `program` that `run::finish` left.
-fn port_value(program: &crate::host::program::Program, frame: &[HostValue], port: &PortRef) -> Option<HostValue> {
+fn port_value(program: &Program, frame: &[HostValue], port: &PortRef) -> Option<HostValue> {
     let slot = if let Some(name) = &port.port {
         program.outputs.get(&(port.node, name.clone())).copied()
     } else {
@@ -92,10 +147,6 @@ fn port_value(program: &crate::host::program::Program, frame: &[HostValue], port
 }
 
 /// Runs a pass case on the device. Returns whether it ran, `false` for a pass of the init stage.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the lanes, statistics and colours of a case read in order"
-)]
 fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase) -> bool {
     let what = format!("{} '{name}'", def.id);
     let file = GraphFile::parse(&pass_case_file(case)).expect("the case reads");
@@ -113,29 +164,11 @@ fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase
     }
     let compiled = compile_shaders(document, &report, &evaluator, None, &Probes::default())
         .unwrap_or_else(|problems| panic!("{what}: {problems:#?}"));
-    let shader = case_shader(&compiled, &what);
-    let world = HostWorld::Grid {
-        width: case.width,
-        height: case.height,
-        boundary: if case.bounded {
-            Boundary::Bounded
-        } else {
-            Boundary::Torus
-        },
-    };
+    let shader = case_shader(&compiled.shaders, &what);
+    let world = case_world(case);
     let mut lanes = HostLanes::new(document, world).expect("the lanes");
-    for (lane, values) in case.before {
-        let column = lanes.column_mut(lane).expect("a lane of the case");
-        for (index, value) in values.iter().enumerate() {
-            let value = HostValue::from_literal(&input_literal(*value), document).expect("a value");
-            assert!(column.set(index, value), "{what}: lane {lane} takes {value:?}");
-        }
-    }
-    let context = if stage == PassStage::Action {
-        RunContext::action(None, 0, 1, 0)
-    } else {
-        RunContext::tick(None, 0)
-    };
+    plant(&mut lanes, case.before, document, &what);
+    let context = pass_case_context(stage);
     let params = evaluator.param_values(&[]);
     let uniform = shader
         .uniform_bytes(&evaluator, world, &params, &context)
@@ -181,14 +214,7 @@ fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase
         }
     }
     if !case.stats.is_empty() {
-        let mut first = 0;
-        for pass in shader.passes() {
-            if pass == "case" {
-                break;
-            }
-            let (_, program) = evaluator.program(pass).expect("a stats pass");
-            first += program.tallies;
-        }
+        let first = first_tally(&evaluator, shader, "case");
         let (_, program) = evaluator.program("case").expect("the case pass");
         let tallies: Vec<u64> = result.counters[first..first + program.tallies]
             .iter()
@@ -199,33 +225,14 @@ fn run_pass_case(device: &TestDevice, def: &NodeDef, name: &str, case: &PassCase
                 .map(|block| f64::from(f32::from_bits(result.named[0][block * sum_lanes.len() + lane])))
                 .sum()
         };
-        let sums = (0..program.sums.len())
-            .map(|sum| {
-                let mine: Vec<usize> = sum_lanes
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, lane)| lane.pass == position && lane.sum == sum)
-                    .map(|(lane, _)| lane)
-                    .collect();
-                let total = |k: usize| mine.get(k).map_or(0.0, |&lane| lane_total(lane));
-                ([total(0), total(1)], mine.len() > 1)
-            })
-            .collect();
         let readback = run::Readback {
             tallies,
-            sums,
+            sums: sum_totals(program.sums.len(), sum_lanes, position, lane_total),
             ..run::Readback::default()
         };
         let frame = run::finish(program, &params, &context, world, Some(&readback))
             .unwrap_or_else(|error| panic!("{what}: {error}"));
-        for (port, expected) in case.stats {
-            let reference: PortRef = port.parse().expect("a port");
-            let found = port_value(program, &frame, &reference).expect("a statistic");
-            assert!(
-                meets(*expected, found, document),
-                "{what}: {port} is {found:?} on the device, and the case expects {expected:?}"
-            );
-        }
+        assert_stats(&what, case.stats, program, &frame, document);
     }
     if !case.colors.is_empty() {
         let palette = case_palette(document).expect("the case colours from a palette");
@@ -317,11 +324,7 @@ fn run_agent_pass_case(
         .iter()
         .position(|pass| pass.id == "case")
         .expect("the case pass");
-    let shader = compiled
-        .shaders
-        .iter()
-        .find(|shader| shader.passes().iter().any(|pass| pass == "case"))
-        .unwrap_or_else(|| panic!("{what}: no shader runs the pass `case`"));
+    let shader = case_shader(&compiled.shaders, &what);
     let domain = shader.domain().expect("a shader of an agents world");
     let world = HostWorld::Agents {
         count: agents,
@@ -331,19 +334,9 @@ fn run_agent_pass_case(
     let (grid_width, grid_height, _) = world.domain_grid();
     let cells = grid_width * grid_height;
     let mut lanes = HostLanes::new(document, world).expect("the lanes");
-    for (lane, values) in case.before {
-        let column = lanes.column_mut(lane).expect("a lane or layer of the case");
-        for (index, value) in values.iter().enumerate() {
-            let value = HostValue::from_literal(&input_literal(*value), document).expect("a value");
-            assert!(column.set(index, value), "{what}: {lane} takes {value:?}");
-        }
-    }
+    plant(&mut lanes, case.before, document, &what);
     let params = evaluator.param_values(&[]);
-    let context = if stage == PassStage::Action {
-        RunContext::action(None, 0, 1, 0)
-    } else {
-        RunContext::tick(None, 0)
-    };
+    let context = pass_case_context(stage);
     let index = case_index(&evaluator, position, &lanes, &params, world);
     let geometry = Geometry {
         num_agents: agents,
@@ -433,18 +426,7 @@ fn run_agent_pass_case(
     let buffer_of = |label: &str| labels.iter().position(|known| known == label);
     for (id, expected) in case.after {
         let (column, found) = if let Some((field, layer)) = id.split_once('.') {
-            let field_position = compiled
-                .plan
-                .fields
-                .iter()
-                .position(|plan| plan.id == field)
-                .expect("a field of the case");
-            let plan = &compiled.plan.fields[field_position];
-            let layer = document.fields[field_position]
-                .layers
-                .iter()
-                .position(|known| known == layer)
-                .expect("a layer of the case");
+            let (plan, layer) = field_layer(&compiled, document, field, layer);
             let buffer = buffer_of(&plan.label()).expect("the field's buffer");
             let start = layer * cells as usize;
             let words = result.buffers[buffer][start..start + cells as usize].to_vec();
@@ -473,18 +455,7 @@ fn run_agent_pass_case(
     }
     for (id, expected) in case.deposits {
         let (field, layer) = id.split_once('.').expect("a field layer");
-        let field_position = compiled
-            .plan
-            .fields
-            .iter()
-            .position(|plan| plan.id == field)
-            .expect("a field of the case");
-        let plan = &compiled.plan.fields[field_position];
-        let layer = document.fields[field_position]
-            .layers
-            .iter()
-            .position(|known| known == layer)
-            .expect("a layer of the case");
+        let (plan, layer) = field_layer(&compiled, document, field, layer);
         let buffer = buffer_of(&plan.accum_label()).expect("the deposits' buffer");
         let start = layer * cells as usize;
         let column = lanes
@@ -514,14 +485,7 @@ fn run_agent_pass_case(
     }
     if !case.stats.is_empty() {
         let (_, program) = evaluator.program("case").expect("the case pass");
-        let mut first = 0;
-        for pass in shader.passes() {
-            if pass == "case" {
-                break;
-            }
-            let (_, earlier) = evaluator.program(pass).expect("a stats pass");
-            first += earlier.tallies;
-        }
+        let first = first_tally(&evaluator, shader, "case");
         let tally_base = FIRST_COUNTER + compiled.plan.counters;
         let partials = &result.named[1];
         let lane_total = |lane: usize| -> f64 {
@@ -529,38 +493,18 @@ fn run_agent_pass_case(
                 .map(|block| f64::from(f32::from_bits(partials[block * lanes_of_leaf + lane])))
                 .sum()
         };
-        let sums = (0..program.sums.len())
-            .map(|sum| {
-                let mine: Vec<usize> = shader
-                    .sum_lanes()
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, lane)| lane.pass == position && lane.sum == sum)
-                    .map(|(lane, _)| lane)
-                    .collect();
-                let total = |k: usize| mine.get(k).map_or(0.0, |&lane| lane_total(lane));
-                ([total(0), total(1)], mine.len() > 1)
-            })
-            .collect();
         let readback = run::Readback {
             tallies: (0..program.tallies)
                 .map(|k| u64::from(counters[tally_base + first + k]))
                 .collect(),
-            sums,
+            sums: sum_totals(program.sums.len(), shader.sum_lanes(), position, lane_total),
             counters: (0..compiled.plan.counters)
                 .map(|k| counters[FIRST_COUNTER + k])
                 .collect(),
         };
         let frame = run::finish(program, &params, &context, world, Some(&readback))
             .unwrap_or_else(|error| panic!("{what}: {error}"));
-        for (port, expected) in case.stats {
-            let reference: PortRef = port.parse().expect("a port");
-            let found = port_value(program, &frame, &reference).expect("a statistic");
-            assert!(
-                meets(*expected, found, document),
-                "{what}: {port} is {found:?} on the device, and the case expects {expected:?}"
-            );
-        }
+        assert_stats(&what, case.stats, program, &frame, document);
     }
     if !case.colors.is_empty() {
         let palette = case_palette(document).expect("the case colours from a palette");
@@ -587,8 +531,7 @@ fn run_agent_pass_case(
 /// lanes and passes over agents, with the number of agents.
 fn as_agents_world(case: &PassCase) -> (String, u32) {
     let agents = case.width * case.height;
-    let mut text = super::case_files::agents_header(agents, case.width, case.height);
-    text.push_str("\n[[lane]]\nid = \"case_position\"\ndomain = \"agents\"\ntype = \"vec2f\"\nrole = \"position\"\n\n");
+    let mut text = agents_header_with_position(agents, case.width, case.height);
     text.push_str(&case.tables.replace("domain = \"cells\"", "domain = \"agents\""));
     (text, agents)
 }
@@ -596,11 +539,7 @@ fn as_agents_world(case: &PassCase) -> (String, u32) {
 /// Returns the document of a node case as a pass: each input a socket takes per element read from a lane, and each
 /// output written to a lane, or coloured from the palette `ramp` in a view pass. The node is `n1`, the input lanes are
 /// `in_<k>` read by `n<200 + k>`, and the output lanes `out_<k>` written by `n<300 + k>`.
-fn node_case_document(
-    def: &NodeDef,
-    case: &NodeCase,
-    report_of: &dyn Fn(&GraphDocument) -> crate::check::CheckReport,
-) -> GraphDocument {
+fn node_case_document(def: &NodeDef, case: &NodeCase) -> GraphDocument {
     let file = GraphFile::parse(&node_case_file(def, case)).expect("the case reads");
     let mut document = file.document().clone();
     let position = document
@@ -624,13 +563,13 @@ fn node_case_document(
         if per_element && on_device {
             let lane = format!("in_{k}");
             added_lanes.push(Lane::new(&lane, Domain::Cells, value_type));
-            let mut get = Node::new(id(200 + k as u32), "lane.get");
+            let mut get = Node::new(node_id(200 + k as u32), "lane.get");
             get.config.insert("lane".to_owned(), ConfigValue::String(lane));
             added_nodes.push(get);
             n1.inputs.insert(
                 (*port).to_owned(),
                 InputValue::Link(PortRef {
-                    node: id(200 + k as u32),
+                    node: node_id(200 + k as u32),
                     port: None,
                 }),
             );
@@ -644,14 +583,18 @@ fn node_case_document(
     typed.lanes.extend(added_lanes.iter().cloned());
     typed.passes[position].body.nodes = std::iter::once(n1.clone()).chain(added_nodes.iter().cloned()).collect();
     let report = report_of(&typed);
-    let outputs = report.passes[position].outputs.get(&id(1)).cloned().unwrap_or_default();
+    let outputs = report.passes[position]
+        .outputs
+        .get(&node_id(1))
+        .cloned()
+        .unwrap_or_default();
     for (k, (port, _)) in case.outputs.iter().enumerate() {
         let link = InputValue::Link(PortRef {
-            node: id(1),
+            node: node_id(1),
             port: Some((*port).to_owned()),
         });
         if stage == PassStage::View {
-            let mut color = Node::new(id(300 + k as u32), "view.color");
+            let mut color = Node::new(node_id(300 + k as u32), "view.color");
             color
                 .config
                 .insert("palette".to_owned(), ConfigValue::String("ramp".to_owned()));
@@ -665,7 +608,7 @@ fn node_case_document(
             .unwrap_or(ValueType::U32);
         let lane = format!("out_{k}");
         added_lanes.push(Lane::new(&lane, Domain::Cells, value_type));
-        let mut set = Node::new(id(300 + k as u32), "lane.set");
+        let mut set = Node::new(node_id(300 + k as u32), "lane.set");
         set.config.insert("lane".to_owned(), ConfigValue::String(lane));
         set.inputs.insert("value".to_owned(), link);
         added_nodes.push(set);
@@ -697,7 +640,7 @@ fn report_of(document: &GraphDocument) -> crate::check::CheckReport {
 /// Runs a node case on the device. Returns whether it ran, `false` for a case in the init stage.
 fn run_node_case(device: &TestDevice, def: &NodeDef, name: &str, case: &NodeCase) -> bool {
     let what = format!("{} '{name}'", def.id);
-    let document = node_case_document(def, case, &report_of);
+    let document = node_case_document(def, case);
     let position = document
         .passes
         .iter()
@@ -719,7 +662,7 @@ fn run_node_case(device: &TestDevice, def: &NodeDef, name: &str, case: &NodeCase
         &Probes::default(),
     )
     .unwrap_or_else(|problems| panic!("{what}: {problems:#?}"));
-    let shader = case_shader(&compiled, &what);
+    let shader = case_shader(&compiled.shaders, &what);
     let context = &case.context;
     let width = context.element + 1;
     let World::Grid(grid) = document.world else {
@@ -743,17 +686,7 @@ fn run_node_case(device: &TestDevice, def: &NodeDef, name: &str, case: &NodeCase
             assert!(column.set(element, value), "{what}: input {k} takes {value:?}");
         }
     }
-    let run_context = RunContext {
-        seed: context.seed,
-        phase: context.phase,
-        tick: context.tick,
-        tick_word: if stage == PassStage::Action {
-            context.press
-        } else {
-            context.tick
-        },
-        press: context.press,
-    };
+    let run_context = node_case_context(context, stage);
     let params = evaluator.param_values(&[]);
     let uniform = shader
         .uniform_bytes(&evaluator, world, &params, &run_context)
@@ -807,11 +740,10 @@ fn sums_floats(case: &PassCase) -> bool {
 #[test]
 #[expect(
     clippy::print_stderr,
-    reason = "the skip and the cases left to the host are information for a reader of the test output"
+    reason = "the cases left to the host are information for a reader of the test output"
 )]
 fn every_known_answer_of_both_scopes_holds_on_the_device() {
-    let Some(device) = test_device() else {
-        eprintln!("skipping every_known_answer_of_both_scopes_holds_on_the_device: no adapter");
+    let Some(device) = device_for("every_known_answer_of_both_scopes_holds_on_the_device") else {
         return;
     };
     let (mut ran, mut on_host) = (0, Vec::new());
@@ -936,19 +868,13 @@ fn run_many_agents_step(
 /// A counter that every agent of a million adds to, half of them 0, ends at the host's total after one step on the
 /// device, each workgroup's tally flushed with one global atomic.
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "the skip is information for a reader of the test output"
-)]
 fn a_counter_over_many_workgroups_equals_the_host_total() {
-    let Some(device) = test_device() else {
-        eprintln!("skipping a_counter_over_many_workgroups_equals_the_host_total: no adapter");
+    let Some(device) = device_for("a_counter_over_many_workgroups_equals_the_host_total") else {
         return;
     };
-    let mut text = super::case_files::agents_header(MANY_AGENTS, 100, 100);
+    let mut text = agents_header_with_position(MANY_AGENTS, 100, 100);
     text.push_str(
-        "\n[[lane]]\nid = \"case_position\"\ndomain = \"agents\"\ntype = \"vec2f\"\nrole = \"position\"\n\n\
-         [[lane]]\nid = \"amount\"\ndomain = \"agents\"\ntype = \"u32\"\n\n[[counter]]\nid = \"events\"\n\n\
+        "[[lane]]\nid = \"amount\"\ndomain = \"agents\"\ntype = \"u32\"\n\n[[counter]]\nid = \"events\"\n\n\
          [[pass]]\nid = \"count\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"agents\"\n\n\
          [[pass.node]]\nid = \"n1\"\nop = \"lane.get\"\nconfig.lane = \"amount\"\n\n\
          [[pass.node]]\nid = \"n2\"\nop = \"counter.add\"\nconfig.counter = \"events\"\nin.amount = \"n1\"\n",
@@ -959,11 +885,7 @@ fn a_counter_over_many_workgroups_equals_the_host_total() {
     let (evaluator, _, compiled) = crate::wgsl::agents::compile_parts(&file, &Probes::default())
         .unwrap_or_else(|problems| panic!("{problems:#?}"));
     let document = evaluator.document();
-    let shader = compiled
-        .shaders
-        .iter()
-        .find(|shader| shader.passes().iter().any(|pass| pass == "count"))
-        .expect("the step shader");
+    let shader = shader_of_pass(&compiled.shaders, "count").expect("the step shader");
     let world = HostWorld::Agents {
         count: MANY_AGENTS,
         width: 100.0,
@@ -1009,19 +931,13 @@ fn deposited_amount(index: u32) -> f32 {
 /// word on the device and on the host after one step: the amounts each rounded half to even to a count of the
 /// resolution and added up, a negative amount and a NaN adding 0.
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "the skip is information for a reader of the test output"
-)]
 fn many_deposits_into_one_cell_add_up_exactly_on_device_and_host() {
-    let Some(device) = test_device() else {
-        eprintln!("skipping many_deposits_into_one_cell_add_up_exactly_on_device_and_host: no adapter");
+    let Some(device) = device_for("many_deposits_into_one_cell_add_up_exactly_on_device_and_host") else {
         return;
     };
-    let mut text = super::case_files::agents_header(MANY_AGENTS, 100, 100);
+    let mut text = agents_header_with_position(MANY_AGENTS, 100, 100);
     text.push_str(
-        "\n[[lane]]\nid = \"case_position\"\ndomain = \"agents\"\ntype = \"vec2f\"\nrole = \"position\"\n\n\
-         [[lane]]\nid = \"amount\"\ndomain = \"agents\"\ntype = \"f32\"\n\n\
+        "[[lane]]\nid = \"amount\"\ndomain = \"agents\"\ntype = \"f32\"\n\n\
          [[field]]\nid = \"f\"\ntype = \"f32\"\nlayers = [\"value\"]\nstatic = false\ncombine = \"sum\"\n\
          resolution = 0.0009765625\n\n\
          [[pass]]\nid = \"lay\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"agents\"\n\n\
@@ -1037,11 +953,7 @@ fn many_deposits_into_one_cell_add_up_exactly_on_device_and_host() {
     let (evaluator, _, compiled) = crate::wgsl::agents::compile_parts(&file, &Probes::default())
         .unwrap_or_else(|problems| panic!("{problems:#?}"));
     let document = evaluator.document();
-    let shader = compiled
-        .shaders
-        .iter()
-        .find(|shader| shader.passes().iter().any(|pass| pass == "lay"))
-        .expect("the step shader");
+    let shader = shader_of_pass(&compiled.shaders, "lay").expect("the step shader");
     let world = HostWorld::Agents {
         count: MANY_AGENTS,
         width: 100.0,
