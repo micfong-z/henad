@@ -4,41 +4,18 @@
 
 use henad_compute::entry::ModelEntry;
 use henad_core::params::ParamValue;
+use henad_graph::sheet::ParsedSheet;
 use henad_graph::sheet::document::SheetDocument;
-use henad_graph::sheet::sentence::{FORBIDDEN_WORDS, sheet_trying_value};
-use henad_graph::sheet::{ParsedSheet, starters};
-use web_time::Instant;
+use henad_graph::sheet::sentence::sheet_trying_value;
 
 use crate::state::AppState;
-use crate::tests::support::accessible_texts;
-use crate::ui::editor::preview::{DEBOUNCE, poll_at};
+use crate::tests::support::{
+    accessible_texts, forbidden_words, headless_app, settle_preview, starter_text, stat, wait_for_snapshot,
+};
 use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::sheet_pane::{SheetTrial, sheet_pane};
 use crate::ui::editor::{EditorModel, open_text};
 use crate::ui::params::{TrialChoice, apply_trial, params_ui, sheet_number};
-
-/// Returns an app over the example models on a headless device that runs compute shaders, or `None` to skip on a
-/// machine without a device.
-fn app() -> Option<AppState> {
-    AppState::headless(henad_models::example_models(), true)
-}
-
-/// Returns the text of the sheet starter whose file is named `file_name`.
-fn starter_text(file_name: &str) -> &'static str {
-    starters()
-        .iter()
-        .find(|starter| starter.file_name == file_name)
-        .expect("a sheet starter")
-        .text
-}
-
-/// Polls the preview once now and once after the debounce, as two frames that far apart would.
-fn settle(app: &mut AppState) {
-    let ctx = egui::Context::default();
-    let now = Instant::now();
-    poll_at(&ctx, app, now);
-    poll_at(&ctx, app, now + DEBOUNCE);
-}
 
 /// Opens the sheet starter `file_name` in the Editor and waits for its preview to build.
 fn preview(app: &mut AppState, file_name: &str) {
@@ -47,7 +24,7 @@ fn preview(app: &mut AppState, file_name: &str) {
         starter_text(file_name).to_owned(),
         Some(file_name.to_owned()),
     );
-    settle(app);
+    settle_preview(app);
     app.wait_for_build();
     assert!(app.previews_editor_sheet(), "{file_name} previews");
     assert!(app.params_drive_preview(), "the Parameters tab drives the preview");
@@ -75,25 +52,11 @@ fn try_value(app: &mut AppState, id: &str, value: f32) {
 }
 
 /// Takes the loaded run's snapshots until one whose tick passes `accept`, and returns its tick and the value of the
-/// stat `label`, or panics after ten seconds.
+/// stat `label`, or panics after [`DEADLINE`](crate::tests::support::DEADLINE).
 fn snapshot_where(app: &mut AppState, label: &str, accept: impl Fn(u64) -> bool) -> (u64, f64) {
     app.wait_for_build();
-    let thread = app.sim_thread.as_mut().expect("a model is loaded");
-    for _ in 0..1000 {
-        if let Some(snapshot) = thread.take_snapshot()
-            && accept(snapshot.tick)
-        {
-            let value = snapshot
-                .stats
-                .iter()
-                .find(|entry| entry.label() == label)
-                .map(|entry| entry.value().scalar())
-                .expect("the stat is published");
-            return (snapshot.tick, value);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("no snapshot of the loaded model passed the test");
+    let snapshot = wait_for_snapshot(app, accept);
+    (snapshot.tick, stat(snapshot, label))
 }
 
 /// Returns the document of the sheet in the Editor.
@@ -111,7 +74,7 @@ fn replace_sheet(app: &mut AppState, document: SheetDocument) {
 /// survives the rebuild after an edit of the world's size. An edit of the value on the sheet ends the trial.
 #[test]
 fn a_params_tab_change_rebuilds_the_preview_with_the_value_and_keeps_it_across_an_edit() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     preview(&mut app, "game_of_life.toml");
@@ -122,7 +85,7 @@ fn a_params_tab_change_rebuilds_the_preview_with_the_value_and_keeps_it_across_a
         app.editor.preview.is_due(),
         "a reload-only parameter rebuilds the preview"
     );
-    settle(&mut app);
+    settle_preview(&mut app);
     let (tick, alive) = snapshot_where(&mut app, "Alive", |tick| tick == 0);
     assert_eq!(tick, 0);
     assert!(alive > 2.0 * before, "{alive} alive at 0.9, {before} at 0.3");
@@ -138,7 +101,7 @@ fn a_params_tab_change_rebuilds_the_preview_with_the_value_and_keeps_it_across_a
     edited.world.width = 128;
     edited.world.height = 128;
     replace_sheet(&mut app, edited);
-    settle(&mut app);
+    settle_preview(&mut app);
     let (_, alive) = snapshot_where(&mut app, "Alive", |tick| tick == 0);
     let cells = 128.0 * 128.0;
     assert!(alive > 0.8 * cells, "{alive} of {cells} alive after the edit");
@@ -147,7 +110,7 @@ fn a_params_tab_change_rebuilds_the_preview_with_the_value_and_keeps_it_across_a
     let mut edited = document(&app);
     edited.parameters[0].default = 0.1;
     replace_sheet(&mut app, edited);
-    settle(&mut app);
+    settle_preview(&mut app);
     assert!(app.editor.preview.tried("initial_density").is_none(), "the trial ended");
     let (_, alive) = snapshot_where(&mut app, "Alive", |tick| tick == 0);
     assert!(alive < 0.2 * cells, "{alive} of {cells} alive at the sheet's 0.1");
@@ -157,7 +120,7 @@ fn a_params_tab_change_rebuilds_the_preview_with_the_value_and_keeps_it_across_a
 /// keeps counting from where it was.
 #[test]
 fn a_live_parameter_reaches_the_running_preview_and_the_tick_keeps_counting() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     preview(&mut app, "sir.toml");
@@ -171,7 +134,7 @@ fn a_live_parameter_reaches_the_running_preview_and_the_tick_keeps_counting() {
         app.loaded_values[index_of(&entry, "infection_rate")],
         ParamValue::F32(2.0)
     );
-    settle(&mut app);
+    settle_preview(&mut app);
     let (later, _) = snapshot_where(&mut app, "Infected", |tick| tick > reached + 5);
     assert!(later > reached, "the tick went on from {reached} to {later}");
     assert!(app.sim_running && app.preview().is_some());
@@ -181,7 +144,7 @@ fn a_live_parameter_reaches_the_running_preview_and_the_tick_keeps_counting() {
 /// selected.
 #[test]
 fn the_preview_mode_leaves_the_selected_model_alone() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     preview(&mut app, "sir.toml");
@@ -190,7 +153,7 @@ fn the_preview_mode_leaves_the_selected_model_alone() {
     let seed = app.seed;
     try_value(&mut app, "infection_rate", 0.7);
     try_value(&mut app, "initial_infected", 0.05);
-    settle(&mut app);
+    settle_preview(&mut app);
     app.wait_for_build();
     assert_eq!(app.selected_model, selected);
     assert_eq!(app.param_values, values);
@@ -206,7 +169,7 @@ fn the_preview_mode_leaves_the_selected_model_alone() {
 /// leaving the preview's key alone.
 #[test]
 fn reset_and_keep_end_a_trial() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     preview(&mut app, "sir.toml");
@@ -269,7 +232,7 @@ fn keep_widens_the_range_to_hold_the_value() {
 /// sheet, in the wording table's words and with no forbidden word.
 #[test]
 fn a_tried_value_shows_its_note_reset_keep_and_the_sheets_line() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     preview(&mut app, "sir.toml");
@@ -308,16 +271,8 @@ fn a_tried_value_shows_its_note_reset_keep_and_the_sheets_line() {
     assert_eq!(line, "The world is trying 0.5. The model keeps 0.3.");
     assert!(sheet_texts.contains(&line), "{sheet_texts:?}");
 
-    for text in texts.iter().chain(&sheet_texts) {
-        for word in text.split(|c: char| !c.is_alphanumeric()) {
-            assert!(
-                !FORBIDDEN_WORDS
-                    .iter()
-                    .any(|forbidden| forbidden.eq_ignore_ascii_case(word)),
-                "{word:?} in {text:?}"
-            );
-        }
-    }
+    let shown: Vec<String> = texts.into_iter().chain(sheet_texts).collect();
+    assert_eq!(forbidden_words(&shown), Vec::new());
 }
 
 /// A tried float reaches the sheet's line and Keep as its shortest decimal form, and a kind a sheet parameter cannot

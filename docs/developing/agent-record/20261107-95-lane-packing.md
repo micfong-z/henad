@@ -6,8 +6,8 @@ icon: material/package-variant-closed
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s29-lane-packing at bf04eaf, where the merge rebase found the branch already on the tip: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: cc9aa0b
+state: "37-node-editor, fast-forwarded to redesign/s29-lane-packing at f9aa190, where the merge rebase found the branch already on the tip: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: e5ddef1
 delta_state: "committed on `37-node-editor` by fast-forward: `chore: read lanes by id in tests [draft]`, `feat: pack lanes past eight bindings [draft]`, `fix: s29 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -23,7 +23,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `chore: read lanes 
 
 ## State before
 
-- `37-node-editor` at `cc9aa0b` (S24 merged).
+- `37-node-editor` at `e5ddef1` (S24 merged).
 - Every lane of a compiled graph had a buffer of its own at its lane position, `lane_<id>_<domain>`, and the grid's `GraphHooks`, the agents' `BufferSource::Lane`, the side tables, the position buffer and the reruns all took a lane's position for its buffer index.
 - Recon `engine.md` section 2.7 counted the ants and boids starters at exactly 8 storage bindings in their tick pass, so one more property on either passed the WebGPU default.
 - Tests in henad-models read lanes through `read_buffer(0)`, `read_buffer(1)` or a `lane_<id>_agents` label, and `planted_entry` planted whole buffers by label.
@@ -137,7 +137,7 @@ crates/henad-models/src/tests/
 
 ### Merge check
 
-- The merge rebase onto `37-node-editor` found the branch already on its tip, `cc9aa0b`, so no commit was replayed and no conflict arose.
+- The merge rebase onto `37-node-editor` found the branch already on its tip, `e5ddef1`, so no commit was replayed and no conflict arose.
 - The full check then ran on the branch with `HENAD_REQUIRE_GPU=1`.
   Every step exits 0 but two, and both fail as the baseline does.
   `cargo deny` reports the baseline's three advisories, RUSTSEC-2026-0370, 0371 and 0372, and no other.

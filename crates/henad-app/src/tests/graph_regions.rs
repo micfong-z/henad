@@ -12,7 +12,7 @@ use henad_graph::node::{Accumulator, Combine, OP_REGION_PUT, OP_REGION_REPEAT};
 use henad_graph::types::ValueType;
 use henad_graph::value::{ConfigValue, InputValue, Literal};
 
-use super::graph_canvas::{Harness, n};
+use crate::tests::support::{CanvasHarness, n};
 use crate::ui::editor::graph::{GraphEdit, GraphRequest};
 use crate::ui::mcs;
 
@@ -24,15 +24,15 @@ fn step() -> Scope {
 }
 
 /// Returns the harness of the SIR starter with [`WRAPPED`] wrapped in a Repeat, and the Repeat's id.
-fn wrapped() -> (Harness, NodeId) {
-    let mut harness = Harness::new("sir.toml");
+fn wrapped() -> (CanvasHarness, NodeId) {
+    let mut harness = CanvasHarness::new("sir.toml");
     harness.run(GraphRequest::WrapInRepeat(WRAPPED.map(n).to_vec()));
     let repeat = repeat_of(&harness, n(14));
     (harness, repeat)
 }
 
 /// Returns the region that holds node `id` in the open pass.
-fn repeat_of(harness: &Harness, id: NodeId) -> NodeId {
+fn repeat_of(harness: &CanvasHarness, id: NodeId) -> NodeId {
     harness
         .graph
         .open_pass()
@@ -42,12 +42,12 @@ fn repeat_of(harness: &Harness, id: NodeId) -> NodeId {
 }
 
 /// Returns the region of node `id` in the open pass, `None` outside every region.
-fn region(harness: &Harness, id: NodeId) -> Option<NodeId> {
+fn region(harness: &CanvasHarness, id: NodeId) -> Option<NodeId> {
     harness.graph.open_pass()?.body.node(id)?.region
 }
 
 /// Returns the canvas rectangle of the frame of `region`.
-fn frame(harness: &Harness, region: NodeId) -> Rect {
+fn frame(harness: &CanvasHarness, region: NodeId) -> Rect {
     let canvas = harness.graph.canvas(&harness.scope()).expect("a canvas");
     canvas
         .region_frame_rects(&HashSet::new())
@@ -58,7 +58,7 @@ fn frame(harness: &Harness, region: NodeId) -> Rect {
 }
 
 /// Returns the errors of the document.
-fn errors(harness: &Harness) -> Vec<String> {
+fn errors(harness: &CanvasHarness) -> Vec<String> {
     harness
         .graph
         .diagnostics()
@@ -134,7 +134,7 @@ fn a_repeat_draws_as_two_halves_inside_its_frame() {
 
 #[test]
 fn the_repeat_button_wraps_the_selected_nodes() {
-    let mut harness = Harness::new("sir.toml");
+    let mut harness = CanvasHarness::new("sir.toml");
     let grip = harness.node_grip(n(14));
     harness.click(grip);
     harness.modifiers = Modifiers::SHIFT;
@@ -307,7 +307,7 @@ fn dragging_the_output_half_records_its_place() {
 #[test]
 fn a_constant_count_sets_the_bound() {
     let (mut harness, repeat) = wrapped();
-    let max = |harness: &Harness| {
+    let max = |harness: &CanvasHarness| {
         harness
             .graph
             .open_pass()
@@ -334,7 +334,7 @@ fn a_bound_out_of_range_is_drawn_and_left_for_the_checker() {
         node: repeat,
     });
     harness.settle_framing();
-    let max = |harness: &Harness| {
+    let max = |harness: &CanvasHarness| {
         harness
             .graph
             .open_pass()
@@ -365,7 +365,7 @@ fn the_repeat_controls_add_rename_and_remove_an_accumulator() {
         node: repeat,
     });
     harness.settle_framing();
-    let accumulators = |harness: &Harness| -> Vec<Accumulator> {
+    let accumulators = |harness: &CanvasHarness| -> Vec<Accumulator> {
         harness
             .graph
             .open_pass()
@@ -431,7 +431,7 @@ fn quick_add_in_a_frame_adds_the_node_to_the_region() {
 
 #[test]
 fn quick_add_in_a_radius_fold_offers_no_region_and_the_add_is_refused() {
-    let mut harness = Harness::new("boids.toml");
+    let mut harness = CanvasHarness::new("boids.toml");
     harness.run(GraphRequest::FrameAll);
     harness.settle_framing();
     let corner = frame(&harness, n(25)).min + vec2(4.0, 4.0);

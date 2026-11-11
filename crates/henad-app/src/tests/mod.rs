@@ -11,6 +11,7 @@ mod graph_preview;
 mod graph_regions;
 mod install;
 mod model_ids;
+mod panes;
 mod preview_params;
 mod runaway;
 mod sheet_agent_lines;

@@ -307,12 +307,15 @@ status), `src/tests/graph_preview.rs` the preview, the WGSL view, View in viewpo
 `every_starter_previews_within_the_device_limits_and_the_work_budget`), and
 `src/tests/graph_canvas.rs` the canvas over a headless `egui::Context` (a fresh egui state per
 canvas, two drags as two undo steps, a dragged world field, a world value outside its range kept
-(`the_world_panel_keeps_a_value_outside_its_range`) and the accessible bounds of a node among them,
-and the `Harness`, `accessible` and `accessible_with_role` that `src/tests/graph_regions.rs`
-and `src/tests/graph_functions.rs` share. `graph_regions.rs` holds the region tests: two halves in a
-frame, the Repeat button, nested frames, a drop into a frame with its blue stroke and Move out of
-region, the output half's drag, the bound from a constant count, an out-of-range bound left as it
-is, the Repeat controls, quick-add in a frame and in a radius fold), and `graph_functions.rs` the function and expression tests (a call opens its function
+(`the_world_panel_keeps_a_value_outside_its_range`) and the accessible bounds of a node among them).
+The `CanvasHarness` (a `GraphEditor` alone on a context, `over` an editor before any frame or `new`
+over an arranged starter, with `accessible_nodes`, `accessible` and `accessible_with_role`), `n`,
+`link`, `graph_editor_of` (an editor of a graph starter) and `bind_spread_rate` (SIR's new parameter
+bound to node 12) that the graph test files share sit in `src/tests/support.rs`. `src/tests/graph_regions.rs` holds
+the region tests (two halves in a frame, the Repeat button, nested frames, a drop into a frame with
+its blue stroke and Move out of region, the output half's drag, the bound from a constant count, an
+out-of-range bound left as it is, the Repeat controls, quick-add in a frame and in a radius fold),
+and `src/tests/graph_functions.rs` the function and expression tests (a call opens its function
 under a breadcrumb on a canvas of its own, a problem in a function, make and ungroup, an added
 output with its node, one undo per added port and per unplaced import, an import with its origin, a
 wrap in a function, `can_join`'s and `can_add`'s rules, the node menu of a radius fold, and the

@@ -1,38 +1,35 @@
 //! Tests of rates on the Card pane: the rates SIR rebuilt from Blank by accessible names, the notes of its rate lines
 //! with the long tick and with a tried value, the card of a button that offers no rate, the competing lines of the SIRD
 //! sheet with "or", their bracket and their group note, a chance changed to a rate and back, the notice under the Time
-//! line, the time unit removed and set again from a rate's unit, the parameters that rate and chance pickers offer, and
-//! the words rule over every note, menu, picker and notice opened.
+//! line, the time unit removed and set again from a rate's unit, the parameters that rate and chance pickers offer, a
+//! parameter put into a rate taking the rate's unit, and the words rule over every note, menu, picker and notice
+//! opened.
 
 use egui::accesskit::Role;
 use egui::{Key, Modifiers};
 use henad_core::metadata::TimeUnit;
-use henad_graph::sheet::document::{LineKind, SheetDocument, SheetLiteral, SheetValue, Slot};
+use henad_graph::sheet::ParsedSheet;
+use henad_graph::sheet::document::{LineKind, ParameterType, SheetChip, SheetDocument, SheetLiteral, SheetValue, Slot};
+use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::rates::{chance_from_rate, tick_in};
 use henad_graph::sheet::sentence::{
-    ADD_BUTTON, AddButton, BUTTON_NAME_FIELD, CHANGE_TO_CHANCE, CHANGE_TO_RATE, CHOOSE_WHEN, DONE, NEW_PARAMETER,
-    NOT_RUN_TICK, TICK_LENGTH_NAME, TICK_UNIT_NAME, chances_per_tick_note, competing_tooltip, long_tick_note,
-    rate_grow_prompt, run_once, tick_set_notice, tick_unit_choice, unit_mismatch,
+    AddButton, CHANGE_TO_CHANCE, CHANGE_TO_RATE, CHOOSE_WHEN, NEW_PARAMETER, NOT_RUN_TICK, TICK_LENGTH_NAME,
+    TICK_UNIT_NAME, chances_per_tick_note, competing_tooltip, long_tick_note, rate_grow_prompt, tick_set_notice,
+    tick_unit_choice, unit_mismatch,
 };
 
-use henad_graph::sheet::relations::CardRelations;
-use henad_graph::sheet::sentence::{Blank, DrawKind, PARAMETERS, Sentences};
-use henad_graph::sheet::starters;
-use web_time::Instant;
+use henad_graph::sheet::sentence::{Blank, DrawKind, PARAMETERS};
 
-use super::sheet_card::{
-    Seen, TALL_SCREEN, add, add_states_property, assert_controls_hold_their_words, assert_no_forbidden_word, choose,
-    click, click_on_line, create_parameter, document_of, enter_into, is_open, line_text, new_blank, open_starter, pick,
-    sheet, shows, starter_document, text_and_code, type_and_enter, type_into,
+use crate::tests::panes::{
+    Seen, add, add_new_outbreak, apply_sheet_edit, assert_controls_hold_their_words, assert_no_forbidden_word,
+    build_sir_sections, choose, click, click_on_line, create_parameter, document_of, enter_into, is_open, line_text,
+    open_starter, pick, picker_labels, picker_offers, sheet, shows, shows_notice, start_infected_by_chance,
+    starter_document, text_and_code, type_and_enter,
 };
-use crate::tests::support::{Harness, align_with_starter};
-use crate::ui::editor::preview::{DEBOUNCE, poll_at};
+use crate::tests::support::{Harness, SIR_CHANCE, align_with_starter, edited, settle_preview, starter_text};
+use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::card_pane::competing_brackets;
-use crate::ui::editor::sheet::picker::{LineContext, picker_for};
 use crate::ui::params::{TrialChoice, apply_trial};
-
-/// Text of the chance SIR, a copy of the sheet henad-graph's and henad-models' tests read.
-const SIR_CHANCE: &str = include_str!("sheets/sir_chance.toml");
 
 /// Text of the SIRD sheet, a copy of henad-graph's test sheet: Recovered and Dead leave Infected at competing rates.
 const SIRD: &str = include_str!("sheets/sird.toml");
@@ -56,14 +53,6 @@ fn count_starting(harness: &mut Harness, start: &str) -> usize {
         .count()
 }
 
-/// Returns whether a settled frame shows the notice `notice` after its icon.
-fn shows_notice(harness: &mut Harness, notice: &str) -> bool {
-    harness
-        .accessible_texts()
-        .iter()
-        .any(|text| text.strip_suffix(notice).is_some_and(|icon| icon.ends_with(' ')))
-}
-
 /// Opens the menu of the line whose prefix is `prefix`, records what it shows, and returns whether it offers `item`.
 fn menu_offers(harness: &mut Harness, seen: &mut Seen, prefix: &str, item: &str) -> bool {
     click(harness, &format!("{prefix} actions"));
@@ -74,36 +63,12 @@ fn menu_offers(harness: &mut Harness, seen: &mut Seen, prefix: &str, item: &str)
     offered
 }
 
-/// Returns whether the open picker titled `dialog` offers an item named `item`.
-fn picker_offers(harness: &mut Harness, dialog: &str, item: &str) -> bool {
-    let nodes = harness.settle();
-    let area = nodes
-        .iter()
-        .find(|node| node.role == Role::Dialog && node.label == dialog)
-        .and_then(|node| node.bounds)
-        .unwrap_or_else(|| panic!("{dialog} is open"));
-    nodes
-        .iter()
-        .any(|node| node.label == item && node.bounds.is_some_and(|rect| area.contains(rect.center())))
-}
-
-/// Returns the labels of the parameters that the picker of a `blank` on line 3 of `document`'s first card offers.
-fn picker_labels(document: &SheetDocument, blank: Blank) -> Vec<String> {
-    let sentences = Sentences::new(document);
-    let relations = CardRelations::new(document, &document.cards[0]);
-    let (_, line) = document.line("l3").expect("line 3");
-    let context = LineContext {
-        document,
-        sentences: &sentences,
-        relations: &relations,
-        line_id: "l3",
-        line,
-    };
-    picker_for(&context, blank, None, true, "", DrawKind::Rate)
-        .groups
-        .iter()
-        .filter(|group| group.heading == PARAMETERS)
-        .flat_map(|group| group.items.iter().map(|item| item.label.clone()))
+/// Returns the labels of the parameters that the picker of a `blank` on line 3 of `document` offers.
+fn parameters_offered(document: &SheetDocument, blank: Blank) -> Vec<String> {
+    picker_labels(document, "l3", blank, true, DrawKind::Rate)
+        .into_iter()
+        .filter(|(heading, _)| heading == PARAMETERS)
+        .map(|(_, label)| label)
         .collect()
 }
 
@@ -125,68 +90,14 @@ fn draw_of(harness: &Harness, line: &str) -> (LineKind, Option<f64>) {
     (phrase.kind, typed)
 }
 
-/// Adds the button New outbreak, whose card makes a Susceptible cell Infected with chance Initial infected, and
-/// checks that its card offers no rate and its chance picker no rate parameter.
-fn add_new_outbreak(harness: &mut Harness, seen: &mut Seen) {
-    click(harness, ADD_BUTTON);
-    type_into(harness, BUTTON_NAME_FIELD, "New outbreak");
-    click(harness, &run_once("cell"));
-    click(harness, DONE);
-    harness.settle();
-    add(harness, seen, AddButton::Change, "Become");
-    pick(harness, seen, "Choose a state", "Infected");
-    pick(harness, seen, "Choose the old state", "Susceptible");
-    click(harness, "New outbreak line 1: choose when");
-    assert!(is_open(harness, CHOOSE_WHEN));
-    assert!(!shows(harness, "at rate ... per ..."), "a button's card takes no rate");
-    pick(harness, seen, CHOOSE_WHEN, "with chance ...");
-    click(harness, "New outbreak line 1: choose a chance");
-    assert!(picker_offers(harness, "Choose a chance", "Initial infected"));
-    for rate in ["Infection rate", "Recovery rate"] {
-        assert!(
-            !picker_offers(harness, "Choose a chance", rate),
-            "a chance's picker leaves out the rate parameter {rate}"
-        );
-    }
-    pick(harness, seen, "Choose a chance", "Initial infected");
-}
-
 #[test]
 fn a_blank_model_builds_the_rates_sir_with_its_lines_and_equals_the_starter() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     let starter = starter_document("sir.toml");
-    // The id comes from the name given in the New model dialog, and the toolbar renames the model keeping it.
-    new_blank(&mut harness, "SIR");
-    click(&mut harness, "Model name: SIR. Rename");
-    harness.settle();
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![egui::Event::Text("SIR epidemic".to_owned())]);
-    harness.press(Key::Enter, Modifiers::NONE);
-    harness.settle();
-    enter_into(&mut harness, "Width in cells", "1024");
-    enter_into(&mut harness, "Height in cells", "1024");
-    choose(&mut harness, TICK_UNIT_NAME, tick_unit_choice(Some(TimeUnit::Day)));
-    add_states_property(&mut harness, "Health", &["Susceptible", "Infected", "Recovered"]);
-    click(&mut harness, DONE);
-    harness.settle();
-    for state in ["Susceptible", "Infected", "Recovered"] {
-        click(&mut harness, &format!("Plot {state}"));
-    }
-    type_into(
-        &mut harness,
-        "Purpose",
-        starter.sheet.purpose.as_deref().unwrap_or_default(),
-    );
-    harness.press(Key::Escape, Modifiers::NONE);
-    harness.settle();
-
-    add(&mut harness, &mut seen, AddButton::LookAround, "Count");
-    pick(&mut harness, &mut seen, "Choose a property", "Health");
-    pick(&mut harness, &mut seen, "Choose a state", "Infected");
+    build_sir_sections(&mut harness, &mut seen, "SIR", &starter, Some(TimeUnit::Day));
 
     // Line 2 starts in the tick's unit, takes a new rate parameter "per day", and grows for each infected neighbour
     // from the note that asks.
@@ -225,11 +136,7 @@ fn a_blank_model_builds_the_rates_sir_with_its_lines_and_equals_the_starter() {
     assert!(shows(&mut harness, RECOVERY_NOTE), "line 3 has its rate note");
     seen.look(&mut harness);
 
-    choose(&mut harness, "Health starts as", "By chance");
-    click(&mut harness, "Health starts as, row 1: use a parameter");
-    click(&mut harness, NEW_PARAMETER);
-    create_parameter(&mut harness, &mut seen, "Initial infected", "0.01", Some("1"));
-
+    start_infected_by_chance(&mut harness, &mut seen);
     add_new_outbreak(&mut harness, &mut seen);
 
     let aligned = align_with_starter(sheet(&harness).document(), &starter);
@@ -246,10 +153,9 @@ fn a_blank_model_builds_the_rates_sir_with_its_lines_and_equals_the_starter() {
 
 #[test]
 fn the_run_once_card_offers_no_rate_after_rates_arrive() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "sir.toml");
     assert!(shows(&mut harness, INFECTION_NOTE));
@@ -305,10 +211,9 @@ fn the_run_once_card_offers_no_rate_after_rates_arrive() {
 
 #[test]
 fn the_sird_lines_3_and_4_read_or_with_one_bracket_and_one_group_note() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     harness.open_sheet(SIRD);
     assert_eq!(
@@ -344,10 +249,9 @@ fn the_sird_lines_3_and_4_read_or_with_one_bracket_and_one_group_note() {
 
 #[test]
 fn change_to_a_rate_and_back_keeps_the_chance_per_tick() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     harness.open_sheet(SIR_CHANCE);
     click_on_line(&mut harness, "Line 3", "Recovery chance");
@@ -409,10 +313,9 @@ fn change_to_a_rate_and_back_keeps_the_chance_per_tick() {
 
 #[test]
 fn the_long_tick_note_shows_at_one_day_and_leaves_at_a_quarter_day() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     open_starter(&mut harness, "sir.toml");
     let long = long_tick_note("up to 0.909 with 8");
     assert!(shows(&mut harness, &long), "1 − e^(−0.3 × 8) is above one half");
@@ -432,10 +335,9 @@ fn the_long_tick_note_shows_at_one_day_and_leaves_at_a_quarter_day() {
 
 #[test]
 fn removing_the_time_unit_marks_the_rate_lines_and_a_rate_unit_sets_it_again() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "sir.toml");
     assert_eq!(count_starting(&mut harness, NOT_RUN_TICK), 0);
@@ -476,26 +378,21 @@ fn removing_the_time_unit_marks_the_rate_lines_and_a_rate_unit_sets_it_again() {
 
 #[test]
 fn a_rate_picker_leaves_out_a_parameter_of_another_unit_and_a_chance_picker_every_rate_parameter() {
-    let text = starters()
-        .iter()
-        .find(|starter| starter.file_name == "sir.toml")
-        .expect("the starter")
-        .text
-        .replacen(
-            "[[parameter]]",
-            "[[parameter]]\nid = \"patch_size\"\nname = \"Patch size\"\ntype = \"number\"\nmin = 0\nmax = 10\n\
+    let text = edited(
+        starter_text("sir.toml"),
+        "[[parameter]]",
+        "[[parameter]]\nid = \"patch_size\"\nname = \"Patch size\"\ntype = \"number\"\nmin = 0\nmax = 10\n\
              default = 3\nstep = 1\nunit = \"cells\"\n\n[[parameter]]\nid = \"scale\"\nname = \"Scale\"\n\
              type = \"number\"\nmin = 0\nmax = 1\ndefault = 0.5\nstep = 0.1\n\n[[parameter]]",
-            1,
-        );
+    );
     let document = document_of(&text);
     assert_eq!(
-        picker_labels(&document, Blank::Rate),
+        parameters_offered(&document, Blank::Rate),
         ["Scale", "Infection rate", "Recovery rate", "Initial infected"],
         "a rate's picker keeps the parameters per unit of time and those with no Unit"
     );
     assert_eq!(
-        picker_labels(&document, Blank::Chance),
+        parameters_offered(&document, Blank::Chance),
         ["Patch size", "Scale", "Initial infected"],
         "a chance's picker leaves out the parameters per unit of time"
     );
@@ -503,14 +400,11 @@ fn a_rate_picker_leaves_out_a_parameter_of_another_unit_and_a_chance_picker_ever
 
 #[test]
 fn the_rate_notes_read_a_tried_value_and_the_default_after_reset() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     open_starter(&mut harness, "sir.toml");
-    let now = Instant::now();
-    poll_at(&harness.context, &mut harness.app, now);
-    poll_at(&harness.context, &mut harness.app, now + DEBOUNCE);
+    settle_preview(&mut harness.app);
     harness.app.wait_for_build();
     assert!(harness.app.previews_editor_sheet(), "the sheet previews");
     assert!(shows(&mut harness, INFECTION_NOTE));
@@ -539,4 +433,42 @@ fn the_rate_notes_read_a_tried_value_and_the_default_after_reset() {
         "line 2's note reads the default again"
     );
     assert!(!shows(&mut harness, tried));
+}
+
+/// A parameter with no unit put into a rate takes the rate's unit in the same edit, and one Undo takes both back.
+#[test]
+fn a_parameter_put_into_a_rate_takes_its_unit_and_one_undo_restores_both() {
+    let parsed = ParsedSheet::parse(starter_text("sir.toml")).expect("the starter reads");
+    let mut sheet = SheetEditor::new(parsed.document().clone());
+    apply_sheet_edit(
+        &mut sheet,
+        SheetEdit::AddParameter {
+            name: "Plain".to_owned(),
+            parameter_type: ParameterType::Number,
+            min: 0.0,
+            max: 1.0,
+            default: 0.5,
+            unit: None,
+        },
+    );
+    let before = sheet.document().clone();
+    apply_sheet_edit(
+        &mut sheet,
+        SheetEdit::SetSlot {
+            line: "l3".to_owned(),
+            path: "condition.rate".to_owned(),
+            value: Slot::Filled(SheetValue::Chip(SheetChip::Param("plain".to_owned()))),
+        },
+    );
+    let plain_unit = |document: &SheetDocument| {
+        document
+            .parameters
+            .iter()
+            .find(|parameter| parameter.id == "plain")
+            .and_then(|parameter| parameter.unit.clone())
+    };
+    assert_eq!(plain_unit(sheet.document()).as_deref(), Some("per day"));
+    assert!(sheet.undo(false), "one edit to undo");
+    assert_eq!(sheet.document(), &before, "one Undo restores the rate and the unit");
+    assert_eq!(plain_unit(sheet.document()), None);
 }

@@ -6,8 +6,8 @@ icon: material/table-edit
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s16b-sheet-editing-2 after the merge rebase onto 16fdc61: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: cc9aa0b
+state: "37-node-editor, fast-forwarded to redesign/s16b-sheet-editing-2 after the merge rebase onto 28c0d54: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: e5ddef1
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: edit parameters, measures, colours and buttons [draft]`, `feat: model name, undo and redo in the sheet editor [draft]`, `fix: s16b review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -21,7 +21,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: edit paramet
 
 ## State before
 
-`37-node-editor` at `cc9aa0b`, after S16a (World, Time and Cells edited on the sheet, Blank in the New model dialog) and S24 (tried parameter values in the preview, the sheet's trying line, Keep).
+`37-node-editor` at `e5ddef1`, after S16a (World, Time and Cells edited on the sheet, Blank in the New model dialog) and S24 (tried parameter values in the preview, the sheet's trying line, Keep).
 The Sheet pane drew Purpose, Parameters, Measures, Colours and Buttons read-only, the parameters as a `kv_grid` with the trying line between grids.
 `SheetEditor::edit` made one edit per form or field commit, but nothing recorded it for undo, and the Editor had no model name control in sheet mode.
 A `shaded` colour rule over a Number property lowered to a fixed blue-to-orange ramp over 0 to 1, with no way to store a hue or a range.
@@ -135,7 +135,7 @@ The Card pane stays read-only until S19, and so does a Run once button's card on
 
 ### Merge check
 
-- The merge rebase onto `37-node-editor` at `16fdc61` replayed the three commits over S29's lane packing.
+- The merge rebase onto `37-node-editor` at `28c0d54` replayed the three commits over S29's lane packing.
   One conflict arose, in the Added list of `CHANGELOG.md`, where S29's lane packing line and this milestone's sheet editing line were both kept.
   The rebase brought in no henad-app change, so the UI check was not repeated.
 - The full check then ran on the rebased branch with `HENAD_REQUIRE_GPU=1`.

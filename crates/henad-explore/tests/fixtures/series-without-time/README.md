@@ -13,30 +13,29 @@ The reference is therefore what the build before the change wrote, and the rule 
 
 ## Procedure
 
-Record the folder from commit `be338ec` of the `37-node-editor` branch, never from a changed tree.
+Record the folder from commit `f4088d7` of the `37-node-editor` branch, never from a changed tree.
 A tree that already writes the new header would record its own format, and the test would pass against it.
 
 From the repository root:
 
 ```bash
-mkdir -p /tmp/henad-s2-be338ec
-git archive be338ec | tar -x -C /tmp/henad-s2-be338ec
-(cd /tmp/henad-s2-be338ec && CARGO_TARGET_DIR=/tmp/henad-s2-be338ec-target cargo build --release -p henad-cli)
+mkdir -p /tmp/henad-s2-f4088d7
+git archive f4088d7 | tar -x -C /tmp/henad-s2-f4088d7
+(cd /tmp/henad-s2-f4088d7 && CARGO_TARGET_DIR=/tmp/henad-s2-f4088d7-target cargo build --release -p henad-cli)
 rm -f crates/henad-explore/tests/fixtures/series-without-time/*.json \
     crates/henad-explore/tests/fixtures/series-without-time/*.csv
-/tmp/henad-s2-be338ec-target/release/henad-cli sir --set grid_width=16 --set grid_height=16 \
+/tmp/henad-s2-f4088d7-target/release/henad-cli sir --set grid_width=16 --set grid_height=16 \
     --vary infection_rate=0.2,0.4 --reps 1 --steps 10 --stats-every 5 --seed 7 \
     --out crates/henad-explore/tests/fixtures/series-without-time
 rm crates/henad-explore/tests/fixtures/series-without-time/.lock
-rm -rf /tmp/henad-s2-be338ec /tmp/henad-s2-be338ec-target
+rm -rf /tmp/henad-s2-f4088d7 /tmp/henad-s2-f4088d7-target
 ```
 
 The sweep runs 2 configs of SIR with 1 replicate each, 2 runs of 10 steps on the CPU, sampled every 5 ticks.
 The `.lock` file the writer leaves is removed, since a reader never takes the lock.
 A tree extracted with `git archive` holds no `.git` directory, so the build stamps no commit and the manifest's `commit` fields are empty.
-The manifest's `argv` names the binary at the path above, and no test reads it.
-It also names this folder as `series-be338ec`, the name it had when it was recorded.
+The manifest's `argv` names the binary and this folder as they were when it was recorded, under the hash the commit had then (`/tmp/henad-s2-be338ec-target/...` and `series-be338ec`), and no test reads it.
 
 ## Recorded
 
-Recorded on 2026-11-07 on an Apple M4 Pro (macOS, aarch64, 14 logical CPUs), from a release build of `be338ec` (version 0.3.0) on the workspace's pinned toolchain.
+Recorded on 2026-11-07 on an Apple M4 Pro (macOS, aarch64, 14 logical CPUs), from a release build of `f4088d7` (version 0.3.0) on the workspace's pinned toolchain.

@@ -11,7 +11,7 @@ use henad_graph::node::{OP_FUNCTION_CALL, OP_FUNCTION_OUTPUT, OP_REGION_REPEAT};
 use henad_graph::types::ValueType;
 use henad_graph::value::{ConfigValue, InputValue, PortRef};
 
-use super::graph_canvas::{Harness, link, n};
+use crate::tests::support::{CanvasHarness, link, n};
 use crate::ui::editor::graph::canvas::{can_add, can_join};
 use crate::ui::editor::graph::{GraphEdit, GraphRequest};
 
@@ -20,28 +20,24 @@ fn clamp_speed() -> Scope {
 }
 
 /// Returns the canonical text's errors of the document under edit.
-fn errors(harness: &Harness) -> Vec<String> {
+fn errors(harness: &CanvasHarness) -> Vec<String> {
     let file = GraphFile::parse(&harness.graph.text()).expect("the text reads");
     file.check().errors().map(|error| error.message.clone()).collect()
 }
 
 /// Returns the accessible role of each widget whose label or value is `label`.
-fn roles_of(harness: &mut Harness, label: &str) -> Vec<Role> {
-    harness.context.enable_accesskit();
-    harness.frame(Vec::new());
-    let output = harness.frame_output(Vec::new());
-    let update = output.platform_output.accesskit_update.expect("an AccessKit update");
-    update
-        .nodes
-        .iter()
-        .filter(|(_, node)| node.label() == Some(label) || node.value() == Some(label))
-        .map(|(_, node)| node.role())
+fn roles_of(harness: &mut CanvasHarness, label: &str) -> Vec<Role> {
+    harness
+        .accessible_nodes()
+        .into_iter()
+        .filter(|node| node.label == label || node.value == label)
+        .map(|node| node.role)
         .collect()
 }
 
 #[test]
 fn a_call_opens_its_function_under_a_breadcrumb_on_a_canvas_of_its_own() {
-    let mut harness = Harness::new("boids.toml");
+    let mut harness = CanvasHarness::new("boids.toml");
     assert_eq!(harness.scope(), Scope::pass("flock"));
     let in_pass = roles_of(&mut harness, "flock");
     let pass_canvas = harness.graph.canvas(&Scope::pass("flock")).expect("a canvas").canvas_id;
@@ -72,7 +68,7 @@ fn a_call_opens_its_function_under_a_breadcrumb_on_a_canvas_of_its_own() {
 
 #[test]
 fn a_problem_in_a_function_shows_on_its_node_and_counts_for_the_function() {
-    let mut harness = Harness::new("boids.toml");
+    let mut harness = CanvasHarness::new("boids.toml");
     harness.run(GraphRequest::Open(clamp_speed()));
     assert!(
         harness.graph.trail().is_empty(),
@@ -99,7 +95,7 @@ fn a_problem_in_a_function_shows_on_its_node_and_counts_for_the_function() {
 
 #[test]
 fn a_selection_becomes_a_function_and_its_call_ungroups() {
-    let mut harness = Harness::new("sir.toml");
+    let mut harness = CanvasHarness::new("sir.toml");
     let before = harness.graph.document().passes[1].body.nodes.len();
     harness.run(GraphRequest::MakeFunction([12, 13, 15, 16, 17].map(n).to_vec()));
     assert_eq!(
@@ -124,7 +120,7 @@ fn a_selection_becomes_a_function_and_its_call_ungroups() {
 
 #[test]
 fn an_added_output_comes_with_its_node_and_names_the_links_to_each_call() {
-    let mut harness = Harness::new("boids.toml");
+    let mut harness = CanvasHarness::new("boids.toml");
     harness.run(GraphRequest::AddFunctionPort {
         function: "clamp_speed".to_owned(),
         side: PortSide::Output,
@@ -149,7 +145,7 @@ fn an_added_output_comes_with_its_node_and_names_the_links_to_each_call() {
 
 #[test]
 fn one_undo_takes_back_a_port_added_in_the_open_function() {
-    let mut harness = Harness::new("boids.toml");
+    let mut harness = CanvasHarness::new("boids.toml");
     harness.run(GraphRequest::Open(clamp_speed()));
     let before = harness.graph.text();
     let depth = harness.graph.history().undo_depth();
@@ -178,7 +174,7 @@ fn one_undo_takes_back_a_port_added_in_the_open_function() {
 
 #[test]
 fn one_undo_takes_back_an_import_with_no_placement() {
-    let mut harness = Harness::new("boids.toml");
+    let mut harness = CanvasHarness::new("boids.toml");
     // The ants starter's [editor] region holds frames and no node placement.
     let ants = henad_graph::starters::starter("ants.toml").expect("ants").text;
     harness.graph.set_import_source("ants.toml".to_owned(), ants.to_owned());
@@ -200,7 +196,7 @@ fn one_undo_takes_back_an_import_with_no_placement() {
 
 #[test]
 fn a_function_imports_from_a_picked_file_and_records_its_origin() {
-    let mut harness = Harness::new("boids.toml");
+    let mut harness = CanvasHarness::new("boids.toml");
     harness
         .graph
         .set_import_source("notes.toml".to_owned(), "no graph".to_owned());
@@ -240,7 +236,7 @@ fn a_function_imports_from_a_picked_file_and_records_its_origin() {
 
 #[test]
 fn a_function_scope_wraps_nodes_in_a_repeat() {
-    let mut harness = Harness::new("boids.toml");
+    let mut harness = CanvasHarness::new("boids.toml");
     harness.run(GraphRequest::Open(clamp_speed()));
     harness.run(GraphRequest::WrapInRepeat(vec![n(104), n(105)]));
     let body = &harness.graph.document().functions[0].body;
@@ -353,7 +349,7 @@ fn regions_join_as_library_one_nests_them_three_deep() {
 
 #[test]
 fn the_node_menu_offers_no_region_a_radius_fold_cannot_join() {
-    let mut harness = Harness::new("boids.toml");
+    let mut harness = CanvasHarness::new("boids.toml");
     harness.run(GraphRequest::AddNode {
         op: OP_REGION_REPEAT.to_owned(),
         pos: [0.0, 600.0],
@@ -375,7 +371,7 @@ fn the_node_menu_offers_no_region_a_radius_fold_cannot_join() {
 
 #[test]
 fn the_expression_editor_renames_an_input_and_moves_its_wire() {
-    let mut harness = Harness::new("boids.toml");
+    let mut harness = CanvasHarness::new("boids.toml");
     harness.run(GraphRequest::Frame {
         scope: Scope::pass("flock"),
         node: n(35),
@@ -405,7 +401,7 @@ fn the_expression_editor_renames_an_input_and_moves_its_wire() {
 
 #[test]
 fn the_expression_editor_refuses_the_name_of_another_input() {
-    let mut harness = Harness::new("boids.toml");
+    let mut harness = CanvasHarness::new("boids.toml");
     harness.run(GraphRequest::Frame {
         scope: Scope::pass("flock"),
         node: n(35),

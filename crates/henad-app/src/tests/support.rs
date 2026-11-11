@@ -1,15 +1,16 @@
 //! Models and helpers the app's tests share: SIR, replaced model code, a model with a time scale, a finished run and a
 //! scratch folder, held builds and steps, the widgets of a frame, a harness that draws the sheet editor and reads its
-//! accessible nodes, and the alignment of a sheet rebuilt in the editor with the starter it rebuilds.
+//! accessible nodes, a harness that draws the graph canvas alone, and the alignment of a sheet rebuilt in the editor
+//! with the starter it rebuilds.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
-use henad_compute::cpu::sim_thread::SimCommand;
 use henad_compute::entry::{ModelEntry, ModelSet, ModelState, register_grid_model};
 use henad_compute::fault::Fault;
 use henad_compute::gpu::GpuContext;
+use henad_compute::snapshot::Snapshot;
 use henad_core::action::{ActionDescriptor, Schedule};
 use henad_core::authoring::model::grid_model::GridModel;
 use henad_core::explore::measure::SeriesBuffer;
@@ -19,20 +20,66 @@ use henad_core::grid::Grid2D;
 use henad_core::helpers::f32_param;
 use henad_core::metadata::Backend;
 use henad_core::model::SimState;
-use henad_core::params::{ParamDescriptor, ParamValue};
+use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use henad_core::provenance::ModelCode;
 use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{EdgeView, GridView, PointView, StatDescriptor, StatEntry, StatValue};
 use henad_explore::model_file::ModelFile;
+use henad_graph::GraphFile;
+use henad_graph::edit::{EditCommand, Scope};
+use henad_graph::ids::NodeId;
+use henad_graph::value::{InputValue, PortRef};
 
 use henad_graph::sheet::document::{CardRuns, SheetDocument, SheetProperty};
 use henad_graph::sheet::sentence::is_forbidden_word;
+use henad_graph::sheet::starters;
+use web_time::Instant;
 
 use crate::state::AppState;
 use crate::ui::about::about_modal;
+use crate::ui::editor::graph::canvas::pin_key;
+use crate::ui::editor::graph::{GraphEditor, GraphRequest, graph_ui};
+use crate::ui::editor::preview::{DEBOUNCE, poll_at};
 use crate::ui::editor::sheet::new_model::new_model_modal;
 use crate::ui::editor::{editor_ui, open_text, unsaved_modal};
 use crate::ui::menu_bar::file_menu;
+
+/// Returns an app over the example models on a headless device that runs compute shaders, or `None` to skip on a
+/// machine without a device.
+pub fn headless_app() -> Option<AppState> {
+    AppState::headless(henad_models::example_models(), true)
+}
+
+/// Text of the chance SIR, a copy of the sheet henad-graph's and henad-models' tests read.
+pub const SIR_CHANCE: &str = include_str!("sheets/sir_chance.toml");
+
+/// Returns the text of the sheet starter whose file is named `file_name`.
+pub fn starter_text(file_name: &str) -> &'static str {
+    starters()
+        .iter()
+        .find(|starter| starter.file_name == file_name)
+        .unwrap_or_else(|| panic!("no sheet starter is named {file_name}"))
+        .text
+}
+
+/// Returns `text` with its first `old` replaced by `new`.
+///
+/// # Panics
+///
+/// Panics if `text` does not hold `old`. Otherwise a test whose text moved would run on the unedited text.
+pub fn edited(text: &str, old: &str, new: &str) -> String {
+    assert!(text.contains(old), "the text holds {old:?}");
+    text.replacen(old, new, 1)
+}
+
+/// Returns Game of Life with the old state of line 2 left blank. Line 2 is then skipped.
+pub fn life_with_a_skipped_line() -> String {
+    edited(
+        starter_text("game_of_life.toml"),
+        "new_state = \"alive\"\nstart_state = \"dead\"\n",
+        "new_state = \"alive\"\n",
+    )
+}
 
 /// Returns the entry of SIR from the example models.
 pub fn sir() -> ModelEntry {
@@ -172,6 +219,38 @@ pub fn recoded(entry: &ModelEntry, text: &str, builds: &Arc<AtomicUsize>) -> Mod
         })
 }
 
+/// Sets the selection's grid width and height to `side` cells.
+pub fn set_grid_side(app: &mut AppState, side: u32) {
+    for id in ["grid_width", "grid_height"] {
+        let index = app
+            .selected_entry()
+            .and_then(|entry| entry.param_index(id))
+            .expect("a grid model declares its size");
+        app.param_values[index] = ParamValue::U32(side);
+    }
+}
+
+/// Returns `entry` under a factory that first creates a buffer past the device's limit, labelled
+/// `henad_app_test_oversized`. The buffer is created on the thread the build runs on, outside the entry's own error
+/// scopes.
+pub fn with_oversized_buffer(entry: ModelEntry) -> ModelEntry {
+    entry.wrap_factory(|inner| {
+        Arc::new(
+            move |params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| -> Result<ModelState, Fault> {
+                if let Some(ctx) = gpu {
+                    drop(ctx.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("henad_app_test_oversized"),
+                        size: ctx.device.limits().max_buffer_size + 4096,
+                        usage: wgpu::BufferUsages::STORAGE,
+                        mapped_at_creation: false,
+                    }));
+                }
+                inner(params, seed, gpu)
+            },
+        )
+    })
+}
+
 /// Returns an app over the example GPU models whose adapter, as the app sees it, cannot run compute shaders, with no
 /// model offered and none selected, or `None` to skip on a machine without a device.
 pub fn gpu_only_app() -> Option<AppState> {
@@ -221,10 +300,33 @@ pub fn click_events(position: egui::Pos2) -> [Vec<egui::Event>; 3] {
     ]
 }
 
-/// Returns the value of the stat `label` in the loaded run's snapshot at tick 0, or panics after ten seconds.
-pub fn tick_zero_stat(app: &mut AppState, label: &str) -> f64 {
-    app.wait_for_build();
-    let snapshot = wait_for_snapshot(app, |tick| tick == 0);
+/// Polls the Editor's preview once now and once after the debounce, as two frames that far apart would.
+pub fn settle_preview(app: &mut AppState) {
+    let context = egui::Context::default();
+    let now = Instant::now();
+    poll_at(&context, app, now);
+    poll_at(&context, app, now + DEBOUNCE);
+}
+
+/// Longest time [`wait_until`] waits for a thread to reach the state a test expects.
+pub const DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Polls `condition` until it holds, or panics with `what` after [`DEADLINE`].
+pub fn wait_until(what: &str, condition: impl FnMut() -> bool) {
+    wait_within(what, DEADLINE, condition);
+}
+
+/// Polls `condition` until it holds, or panics with `what` after `limit`.
+pub fn wait_within(what: &str, limit: std::time::Duration, mut condition: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + limit;
+    while !condition() {
+        assert!(std::time::Instant::now() < deadline, "{what} never happened");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Returns the value of the stat `label` in `snapshot`.
+pub fn stat(snapshot: &Snapshot, label: &str) -> f64 {
     snapshot
         .stats
         .iter()
@@ -233,37 +335,39 @@ pub fn tick_zero_stat(app: &mut AppState, label: &str) -> f64 {
         .expect("the stat is published")
 }
 
+/// Returns the value of the stat `label` in the loaded run's snapshot at tick 0, or panics after [`DEADLINE`].
+pub fn tick_zero_stat(app: &mut AppState, label: &str) -> f64 {
+    app.wait_for_build();
+    stat(wait_for_snapshot(app, |tick| tick == 0), label)
+}
+
 /// Takes the loaded run's snapshots until one whose tick passes `accept`, keeps it as the app's snapshot and returns
-/// it, or panics after ten seconds.
-pub fn wait_for_snapshot(app: &mut AppState, accept: impl Fn(u64) -> bool) -> &henad_compute::snapshot::Snapshot {
+/// it, or panics after [`DEADLINE`].
+pub fn wait_for_snapshot(app: &mut AppState, accept: impl Fn(u64) -> bool) -> &Snapshot {
     let thread = app.sim_thread.as_mut().expect("a model is loaded");
-    for _ in 0..1000 {
-        if let Some(snapshot) = thread.take_snapshot()
-            && accept(snapshot.tick)
-        {
-            return app.snapshot.insert(snapshot);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("no snapshot of the loaded model passed the test");
+    let mut found = None;
+    wait_until("a snapshot of the loaded model that passes the test", || {
+        found = thread.take_snapshot().filter(|snapshot| accept(snapshot.tick));
+        found.is_some()
+    });
+    app.snapshot.insert(found.expect("the snapshot that passed"))
+}
+
+/// Asserts that the loaded model built into a runner with no fault. The message names `what` and the fault.
+pub fn assert_built(app: &AppState, what: &str) {
+    assert!(
+        app.sim_thread.is_some() && app.fault.is_none(),
+        "{what} failed to build: {:?}",
+        app.fault
+    );
 }
 
 /// Waits for a build that runs, steps the loaded model once and takes its snapshots until one is past `tick`, or
-/// panics after ten seconds.
+/// panics after [`DEADLINE`].
 pub fn step_past(app: &mut AppState, tick: u64) {
     app.wait_for_build();
-    let thread = app.sim_thread.as_mut().expect("a model is loaded");
-    thread.send(SimCommand::StepOnce);
-    for _ in 0..1000 {
-        if let Some(snapshot) = thread.take_snapshot()
-            && snapshot.tick > tick
-        {
-            app.snapshot = Some(snapshot);
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("the loaded model never passed tick {tick}");
+    app.step_once();
+    wait_for_snapshot(app, |seen| seen > tick);
 }
 
 /// Returns the text that `read` extracts from each accessible node that `add` draws in one frame.
@@ -520,8 +624,11 @@ impl SimState for Held {
 
 // The sheet editor in a frame
 
-/// An egui context that draws the File menu, the Editor tab, the New model dialog and the About modal over an app,
-/// driven by synthetic input.
+/// Size in points of a screen that holds every section of a long sheet and every line of its card.
+pub const TALL_SCREEN: egui::Vec2 = egui::vec2(1800.0, 2600.0);
+
+/// An egui context that draws the File menu, the Editor tab, the New model dialog, the unsaved changes dialog and the
+/// About modal over an app, driven by synthetic input.
 pub struct Harness {
     /// Context the frames run in, with AccessKit on.
     pub context: egui::Context,
@@ -561,18 +668,59 @@ pub struct Node {
     pub dialog: String,
 }
 
+/// Returns the accessible nodes of `update`, each with the name of the nearest dialog that holds it.
+fn nodes_of(update: &egui::accesskit::TreeUpdate) -> Vec<Node> {
+    let parents: std::collections::HashMap<egui::accesskit::NodeId, egui::accesskit::NodeId> = update
+        .nodes
+        .iter()
+        .flat_map(|(id, node)| node.children().iter().map(move |child| (*child, *id)))
+        .collect();
+    let dialogs: std::collections::HashMap<egui::accesskit::NodeId, &str> = update
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.role() == egui::accesskit::Role::Dialog)
+        .map(|(id, node)| (*id, node.label().unwrap_or_default()))
+        .collect();
+    let dialog_of = |id: egui::accesskit::NodeId| {
+        std::iter::successors(Some(id), |id| parents.get(id).copied())
+            .find_map(|ancestor| dialogs.get(&ancestor))
+            .map_or_else(String::new, |label| (*label).to_owned())
+    };
+    update
+        .nodes
+        .iter()
+        .map(|(id, node)| Node {
+            dialog: dialog_of(*id),
+            // A submenu's button ends with its arrow.
+            label: node.label().unwrap_or_default().trim_end_matches(" ⏵").to_owned(),
+            value: node.value().unwrap_or_default().to_owned(),
+            description: node.description().unwrap_or_default().to_owned(),
+            role: node.role(),
+            disabled: node.is_disabled(),
+            bounds: node.bounds().map(bounds),
+        })
+        .collect()
+}
+
 impl Harness {
     /// Returns a harness over the example models, or `None` to skip on a machine without a device.
     pub fn new() -> Option<Self> {
         let harness = Self {
             context: egui::Context::default(),
-            app: AppState::headless(henad_models::example_models(), true)?,
+            app: headless_app()?,
             time: 0.0,
             window_focused: true,
             screen: egui::vec2(1600.0, 1000.0),
             focused: String::new(),
         };
         harness.context.enable_accesskit();
+        Some(harness)
+    }
+
+    /// Returns a harness over the example models on a [`TALL_SCREEN`], or `None` to skip on a machine without a device.
+    pub fn tall() -> Option<Self> {
+        let mut harness = Self::new()?;
+        harness.screen = TALL_SCREEN;
         Some(harness)
     }
 
@@ -603,36 +751,7 @@ impl Harness {
             .and_then(|(_, node)| node.label())
             .unwrap_or_default()
             .to_owned();
-        let parents: std::collections::HashMap<egui::accesskit::NodeId, egui::accesskit::NodeId> = update
-            .nodes
-            .iter()
-            .flat_map(|(id, node)| node.children().iter().map(move |child| (*child, *id)))
-            .collect();
-        let dialogs: std::collections::HashMap<egui::accesskit::NodeId, &str> = update
-            .nodes
-            .iter()
-            .filter(|(_, node)| node.role() == egui::accesskit::Role::Dialog)
-            .map(|(id, node)| (*id, node.label().unwrap_or_default()))
-            .collect();
-        let dialog_of = |id: egui::accesskit::NodeId| {
-            std::iter::successors(Some(id), |id| parents.get(id).copied())
-                .find_map(|ancestor| dialogs.get(&ancestor))
-                .map_or_else(String::new, |label| (*label).to_owned())
-        };
-        update
-            .nodes
-            .iter()
-            .map(|(id, node)| Node {
-                dialog: dialog_of(*id),
-                // A submenu's button ends with its arrow.
-                label: node.label().unwrap_or_default().trim_end_matches(" ⏵").to_owned(),
-                value: node.value().unwrap_or_default().to_owned(),
-                description: node.description().unwrap_or_default().to_owned(),
-                role: node.role(),
-                disabled: node.is_disabled(),
-                bounds: node.bounds().map(bounds),
-            })
-            .collect()
+        nodes_of(&update)
     }
 
     /// Runs a few frames with no input, and returns the accessible nodes of the last.
@@ -691,6 +810,12 @@ impl Harness {
         self.frame(vec![event(true), event(false)]);
     }
 
+    /// Replaces the text of the field that holds the keyboard focus with `text`, through select all and a typed text.
+    pub fn replace_text(&mut self, text: &str) {
+        self.press(egui::Key::A, egui::Modifiers::COMMAND);
+        self.frame(vec![egui::Event::Text(text.to_owned())]);
+    }
+
     /// Returns the label and the value of every node of a settled frame. A label's text is its node's value.
     pub fn labels(&mut self) -> Vec<String> {
         self.settle()
@@ -699,27 +824,16 @@ impl Harness {
             .filter(|text| !text.is_empty())
             .collect()
     }
-}
 
-impl Harness {
     /// Returns the label, the value and the description of every node of a settled frame.
     pub fn accessible_texts(&mut self) -> Vec<String> {
-        self.settle()
-            .into_iter()
-            .flat_map(|node| [node.label, node.value, node.description])
-            .filter(|text| !text.is_empty())
-            .collect()
+        texts_of(self.settle())
     }
 
     /// Returns the label, the value and the description of every node of a settled frame that lies outside the
     /// dialog named `dialog`.
     pub fn accessible_texts_outside(&mut self, dialog: &str) -> Vec<String> {
-        self.settle()
-            .into_iter()
-            .filter(|node| node.dialog != dialog)
-            .flat_map(|node| [node.label, node.value, node.description])
-            .filter(|text| !text.is_empty())
-            .collect()
+        texts_of(self.settle().into_iter().filter(|node| node.dialog != dialog))
     }
 
     /// Opens the sheet `text` in the Editor and draws it.
@@ -727,6 +841,15 @@ impl Harness {
         open_text(&mut self.app.editor, text.to_owned(), Some("opened.toml".to_owned()));
         self.settle();
     }
+}
+
+/// Returns the label, the value and the description of each of `nodes` that is not empty.
+fn texts_of(nodes: impl IntoIterator<Item = Node>) -> Vec<String> {
+    nodes
+        .into_iter()
+        .flat_map(|node| [node.label, node.value, node.description])
+        .filter(|text| !text.is_empty())
+        .collect()
 }
 
 /// Returns the words of `text`, split at every character that is not a letter or a digit.
@@ -777,6 +900,304 @@ pub fn forbidden_words(texts: &[String]) -> Vec<(String, String)> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+// The graph canvas in a frame
+
+/// Frames a [`CanvasHarness`] runs after a change, long enough for egui's sizing passes to settle.
+const SETTLE_FRAMES: usize = 4;
+
+/// Returns node `number`'s id.
+pub fn n(number: u32) -> NodeId {
+    NodeId::new(number).expect("an id")
+}
+
+/// Returns the link to the output `port` of node `node`.
+pub fn link(node: NodeId, port: &str) -> InputValue {
+    InputValue::Link(PortRef {
+        node,
+        port: Some(port.to_owned()),
+    })
+}
+
+/// Returns an editor of the graph starter `name`.
+pub fn graph_editor_of(name: &str) -> GraphEditor {
+    let text = henad_graph::starters::starter(name).expect("a starter").text;
+    GraphEditor::new(&GraphFile::parse(text).expect("the starter reads"))
+}
+
+/// Returns the edit commands that add the parameter `spread_rate` and bind the infection term of the SIR starter's
+/// step, input `b` of node 12, to it.
+pub fn bind_spread_rate() -> Vec<EditCommand> {
+    vec![
+        EditCommand::AddParam(ParamDescriptor::new(
+            "spread_rate",
+            "Spread rate",
+            ParamKind::F32 {
+                min: 0.0,
+                max: 1.0,
+                default: 0.4,
+                step: None,
+            },
+        )),
+        EditCommand::BindParam {
+            scope: Scope::pass("step"),
+            node: n(12),
+            port: "b".to_owned(),
+            param: "spread_rate".to_owned(),
+        },
+    ]
+}
+
+/// An egui context that draws a [`GraphEditor`] alone, driven by synthetic input.
+pub struct CanvasHarness {
+    /// Context the frames run in.
+    pub context: egui::Context,
+    /// Graph the frames draw.
+    pub graph: GraphEditor,
+    /// Time of the last frame in seconds.
+    time: f64,
+    /// Modifiers held in the coming frames.
+    pub modifiers: egui::Modifiers,
+}
+
+impl CanvasHarness {
+    /// Returns a harness over the starter `name`, its tick pass open and arranged, and every node in view.
+    pub fn new(name: &str) -> Self {
+        let mut harness = Self::over(graph_editor_of(name));
+        harness.settle();
+        // The starters place some nodes edge to edge, where a pin of one node covers a pin of the next.
+        harness.graph.request(GraphRequest::Arrange);
+        harness.settle();
+        harness.settle_framing();
+        harness
+    }
+
+    /// Returns a harness over `graph` as it is, before any frame runs.
+    pub fn over(graph: GraphEditor) -> Self {
+        Self {
+            context: egui::Context::default(),
+            graph,
+            time: 0.0,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// Runs frames until the framing of the open canvas has settled, or panics after twenty.
+    pub fn settle_framing(&mut self) {
+        for _ in 0..20 {
+            let scope = self.scope();
+            if self.graph.canvas(&scope).is_some_and(|canvas| canvas.framing.is_none()) {
+                return;
+            }
+            self.frame(Vec::new());
+        }
+        panic!("the framing never settled");
+    }
+
+    /// Returns the nodes selected on the open canvas.
+    pub fn selected(&self) -> Vec<NodeId> {
+        self.graph
+            .canvas(&self.scope())
+            .expect("a canvas")
+            .selected(&self.context)
+    }
+
+    /// Runs one frame with `events`, and returns its output.
+    pub fn frame_output(&mut self, mut events: Vec<egui::Event>) -> egui::FullOutput {
+        self.time += 0.016;
+        events.insert(0, egui::Event::ModifiersChanged(self.modifiers));
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))),
+            time: Some(self.time),
+            events,
+            ..egui::RawInput::default()
+        };
+        let graph = &mut self.graph;
+        let mut output = self.context.run_ui(input, |ui| graph_ui(ui, graph));
+        output.textures_delta.clear();
+        output
+    }
+
+    /// Runs one frame with `events`.
+    pub fn frame(&mut self, events: Vec<egui::Event>) {
+        drop(self.frame_output(events));
+    }
+
+    /// Runs frames with no input.
+    pub fn settle(&mut self) {
+        for _ in 0..SETTLE_FRAMES {
+            self.frame(Vec::new());
+        }
+    }
+
+    pub fn scope(&self) -> Scope {
+        self.graph.scope().clone()
+    }
+
+    /// Returns the screen position of a canvas position.
+    pub fn screen(&self, canvas: egui::Pos2) -> egui::Pos2 {
+        self.graph.canvas(&self.scope()).expect("a canvas").transform * canvas
+    }
+
+    /// Returns the screen position of the top of node `id`, a point on its header that holds no widget.
+    pub fn node_grip(&self, id: NodeId) -> egui::Pos2 {
+        let rect = self
+            .graph
+            .canvas(&self.scope())
+            .and_then(|canvas| canvas.current_rect(id))
+            .expect("the node is drawn");
+        self.screen(rect.center_top() + egui::vec2(0.0, 4.0))
+    }
+
+    /// Returns the screen position of the centre of a pin of node `id`.
+    pub fn pin(&self, id: NodeId, output: bool, index: usize) -> egui::Pos2 {
+        let canvas = self.graph.canvas(&self.scope()).expect("a canvas");
+        let key = pin_key(canvas.canvas_id, id, output, index);
+        let rect = self
+            .context
+            .data(|data| data.get_temp::<egui::Rect>(key))
+            .expect("the pin is drawn");
+        self.screen(rect.center())
+    }
+
+    /// Returns the index of the input `port` of node `id` on the canvas.
+    pub fn input_index(&self, id: NodeId, port: &str) -> usize {
+        let canvas = self.graph.canvas(&self.scope()).expect("a canvas");
+        let view = canvas.snarl.get_node(canvas.nodes[&id]).expect("a view");
+        view.inputs
+            .iter()
+            .position(|input| input.port == port)
+            .expect("the port")
+    }
+
+    pub fn button(&self, position: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: self.modifiers,
+        }
+    }
+
+    /// Drags the primary button from `start` to `end` in screen points.
+    pub fn drag(&mut self, start: egui::Pos2, end: egui::Pos2) {
+        self.frame(vec![egui::Event::PointerMoved(start)]);
+        self.frame(vec![self.button(start, true)]);
+        for step in 1..=6 {
+            let reached = start + (end - start) * (step as f32 / 6.0);
+            self.frame(vec![egui::Event::PointerMoved(reached)]);
+        }
+        self.frame(vec![self.button(end, false)]);
+        self.settle();
+    }
+
+    /// Presses the primary button on `pin` and moves far enough to start a wire, and leaves the button down.
+    pub fn start_wire(&mut self, pin: egui::Pos2) {
+        self.frame(vec![egui::Event::PointerMoved(pin)]);
+        self.frame(vec![self.button(pin, true)]);
+        for step in 1..=3 {
+            self.frame(vec![egui::Event::PointerMoved(
+                pin + egui::vec2(0.0, step as f32 * 10.0),
+            )]);
+        }
+    }
+
+    /// Clicks the primary button with no modifier.
+    pub fn click(&mut self, position: egui::Pos2) {
+        self.frame(vec![egui::Event::PointerMoved(position)]);
+        self.frame(vec![self.button(position, true)]);
+        self.frame(vec![self.button(position, false)]);
+        self.settle();
+    }
+
+    /// Presses `key` with `modifiers`.
+    pub fn press(&mut self, key: egui::Key, modifiers: egui::Modifiers) {
+        let event = |pressed| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers,
+        };
+        self.frame(vec![event(true), event(false)]);
+        self.settle();
+    }
+
+    /// Returns a screen position on the canvas background, in its bottom right corner.
+    pub fn background(&self) -> egui::Pos2 {
+        self.graph
+            .canvas(&self.scope())
+            .expect("a canvas")
+            .canvas_rect
+            .right_bottom()
+            - egui::vec2(12.0, 12.0)
+    }
+
+    /// Returns the value of the input `port` of node `id` in the document.
+    pub fn input(&self, id: NodeId, port: &str) -> Option<InputValue> {
+        let pass = self.graph.open_pass().expect("a pass");
+        let node = pass.body.node(id)?;
+        node.inputs.get(port).cloned()
+    }
+
+    /// Returns whether the open body holds node `id`.
+    pub fn holds(&self, id: NodeId) -> bool {
+        self.graph.open_pass().expect("a pass").body.node(id).is_some()
+    }
+
+    /// Clicks the secondary button at `position`, which opens a menu of the canvas.
+    pub fn secondary_click(&mut self, position: egui::Pos2) {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        self.frame(vec![egui::Event::PointerMoved(position)]);
+        self.frame(vec![button(true)]);
+        self.frame(vec![button(false)]);
+        self.settle();
+    }
+
+    /// Returns the accessible nodes of a frame, after a frame that turns AccessKit on.
+    pub fn accessible_nodes(&mut self) -> Vec<Node> {
+        self.context.enable_accesskit();
+        self.frame(Vec::new());
+        let output = self.frame_output(Vec::new());
+        nodes_of(
+            output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .expect("an AccessKit update"),
+        )
+    }
+
+    /// Returns the screen rectangle of the one widget whose accessible label or value is `label`.
+    pub fn accessible(&mut self, label: &str) -> egui::Rect {
+        self.accessible_with_role(label, None)
+    }
+
+    /// Returns the screen rectangle of the one widget of role `role`, when set, whose accessible label or value is
+    /// `label`.
+    pub fn accessible_with_role(&mut self, label: &str, role: Option<egui::accesskit::Role>) -> egui::Rect {
+        let found: Vec<egui::Rect> = self
+            .accessible_nodes()
+            .into_iter()
+            .filter(|node| node.label == label || node.value == label)
+            .filter(|node| role.is_none_or(|role| node.role == role))
+            .filter_map(|node| node.bounds)
+            .collect();
+        assert_eq!(found.len(), 1, "one widget reads {label}: {found:?}");
+        found[0]
+    }
+
+    /// Runs `request` now and lets the canvas follow.
+    pub fn run(&mut self, request: GraphRequest) {
+        self.graph.request(request);
+        self.settle();
+    }
 }
 
 // Rebuilt starters

@@ -6,151 +6,25 @@
 //! and help popover opened on the way.
 
 use egui::accesskit::Role;
-use egui::{Event, Key, Modifiers};
+use egui::{Key, Modifiers};
+use henad_graph::sheet::ParsedSheet;
 use henad_graph::sheet::document::{SheetChip, SheetDocument, SheetLiteral, SheetValue, Slot};
 use henad_graph::sheet::sentence::{
-    ADD_AT_END_NOTE, ADD_BUTTON, ADD_PARAMETER, ADD_PROPERTY, ADD_STATE, AddButton, BUTTON_NAME_FIELD,
-    CHANCE_OUT_OF_RANGE, CHOOSE_WHEN, COLOR_CELLS_BY, CREATE_PARAMETER, DONE, DRAW_NEW_NUMBERS, LIST_HINT,
-    LIST_IN_ONE_NUMBER, NEW_PARAMETER, NOTHING_INSIDE, NUMBER_BOX_HINT, REMOVE_FROM_LIST, TYPE_ONE_NUMBER,
-    add_inside_label, add_inside_name, run_once, start_again_for,
+    ADD_AT_END_NOTE, ADD_BUTTON, ADD_PARAMETER, ADD_PROPERTY, AddButton, BUTTON_NAME_FIELD, CHANCE_OUT_OF_RANGE,
+    CHOOSE_WHEN, COLOR_CELLS_BY, DONE, DRAW_NEW_NUMBERS, LIST_HINT, LIST_IN_ONE_NUMBER, NEW_PARAMETER, NOTHING_INSIDE,
+    NUMBER_BOX_HINT, REMOVE_FROM_LIST, TYPE_ONE_NUMBER, add_inside_label, add_inside_name, run_once,
 };
-use henad_graph::sheet::{ParsedSheet, SheetFile, starters};
 
-use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{Blank, DrawKind, Sentences};
 
-use crate::tests::support::{Harness, Node, align_with_starter, forbidden_words};
-use crate::ui::editor::sheet::SheetEditor;
-use crate::ui::editor::sheet::picker::{LineContext, picker_for};
-
-/// Height in points of a screen that holds every section of a long sheet and every line of its card.
-pub(super) const TALL_SCREEN: egui::Vec2 = egui::vec2(1800.0, 2600.0);
-
-/// Text of the chance SIR, a copy of the sheet henad-graph's and henad-models' tests read.
-const SIR_CHANCE: &str = include_str!("sheets/sir_chance.toml");
-
-/// Sheet in the harness's Editor.
-pub(super) fn sheet(harness: &Harness) -> &SheetEditor {
-    harness.app.editor.model.sheet().expect("a sheet")
-}
-
-/// Returns the canonical text of the sheet in the harness's Editor.
-pub(super) fn text(harness: &Harness) -> String {
-    sheet(harness).text().to_owned()
-}
-
-/// Returns the nodes of a settled frame named exactly `name`, top to bottom.
-pub(super) fn named(harness: &mut Harness, name: &str) -> Vec<Node> {
-    let mut found: Vec<Node> = harness
-        .settle()
-        .into_iter()
-        .filter(|node| node.label == name && node.bounds.is_some())
-        .collect();
-    found.sort_by(|a, b| top_of(a).total_cmp(&top_of(b)));
-    found
-}
-
-/// Returns the top of `node` on the screen.
-fn top_of(node: &Node) -> f32 {
-    node.bounds.map_or(0.0, |rect| rect.top())
-}
-
-/// Clicks the one widget named exactly `name`.
-pub(super) fn click(harness: &mut Harness, name: &str) {
-    let found = named(harness, name);
-    assert_eq!(found.len(), 1, "one widget is named {name}: {found:?}");
-    let position = found[0].bounds.expect("bounds").center();
-    harness.click_at(position);
-}
-
-/// Clicks the last of the widgets named exactly `name`, the one lowest on the screen.
-pub(super) fn click_last(harness: &mut Harness, name: &str) {
-    let found = named(harness, name);
-    let last = found.last().unwrap_or_else(|| panic!("no widget is named {name}"));
-    let position = last.bounds.expect("bounds").center();
-    harness.click_at(position);
-}
-
-/// Returns the bounds of the one node of role `role` whose name starts with `name`.
-fn bounds_of(nodes: &[Node], role: Role, name: &str) -> egui::Rect {
-    let found: Vec<&Node> = nodes
-        .iter()
-        .filter(|node| node.role == role && node.label.starts_with(name) && node.bounds.is_some())
-        .collect();
-    assert_eq!(found.len(), 1, "one {role:?} is named {name}: {found:?}");
-    found[0].bounds.expect("bounds")
-}
-
-/// Clicks the widget named exactly `item` inside the open picker or menu titled `dialog`.
-pub(super) fn click_in(harness: &mut Harness, dialog: &str, item: &str) {
-    let nodes = harness.settle();
-    let area = bounds_of(&nodes, Role::Dialog, dialog);
-    let found: Vec<&Node> = nodes
-        .iter()
-        .filter(|node| node.label == item && node.bounds.is_some_and(|rect| area.contains(rect.center())))
-        .collect();
-    assert_eq!(
-        found.len(),
-        1,
-        "one widget of {dialog} is named {item}: {found:?} in {area:?} among {:?}",
-        nodes
-            .iter()
-            .filter(|node| node.label == item || node.label == dialog)
-            .collect::<Vec<_>>()
-    );
-    let position = found[0].bounds.expect("bounds").center();
-    harness.click_at(position);
-}
-
-/// Clicks the widget named exactly `item` on the line whose accessible name starts with `line`.
-pub(super) fn click_on_line(harness: &mut Harness, line: &str, item: &str) {
-    let nodes = harness.settle();
-    let area = bounds_of(&nodes, Role::Group, line);
-    let found: Vec<&Node> = nodes
-        .iter()
-        .filter(|node| node.label == item && node.bounds.is_some_and(|rect| area.contains(rect.center())))
-        .collect();
-    assert_eq!(found.len(), 1, "one widget of {line} is named {item}: {found:?}");
-    let position = found[0].bounds.expect("bounds").center();
-    harness.click_at(position);
-}
-
-/// Returns whether a picker or menu titled `dialog` is open.
-pub(super) fn is_open(harness: &mut Harness, dialog: &str) -> bool {
-    harness
-        .settle()
-        .iter()
-        .any(|node| node.role == Role::Dialog && node.label == dialog)
-}
-
-/// Types `text` into the field that holds the focus and presses Enter.
-pub(super) fn type_and_enter(harness: &mut Harness, text: &str) {
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text(text.to_owned())]);
-    harness.press(Key::Enter, Modifiers::NONE);
-    harness.settle();
-}
-
-/// Replaces the text of the field named `name` with `text`, without committing it.
-pub(super) fn type_into(harness: &mut Harness, name: &str, text: &str) {
-    click(harness, name);
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text(text.to_owned())]);
-}
-
-/// Replaces the text of the field named `name` with `text` and presses Enter.
-pub(super) fn enter_into(harness: &mut Harness, name: &str, text: &str) {
-    type_into(harness, name, text);
-    harness.press(Key::Enter, Modifiers::NONE);
-    harness.settle();
-}
-
-/// Chooses `item` in the select named `select`.
-pub(super) fn choose(harness: &mut Harness, select: &str, item: &str) {
-    click(harness, select);
-    click(harness, item);
-    harness.settle();
-}
+use crate::tests::panes::{
+    Seen, add, add_new_outbreak, add_states_property, add_to_first, assert_controls_hold_their_words,
+    assert_no_forbidden_word, bounds_of, build_life_sections, build_sir_sections, choose, click, click_in,
+    click_on_line, create_parameter, document_of, enter_into, is_open, line_text, named, new_blank, open_and_pick,
+    open_starter, pick, picker_labels, sheet, shows, shows_notice, start_infected_by_chance, starter_document, text,
+    text_and_code, type_and_enter, type_into,
+};
+use crate::tests::support::{Harness, SIR_CHANCE, align_with_starter, edited, starter_text};
 
 /// Chooses `item` in the select named `select`, after recording what its open list shows.
 fn choose_seen(harness: &mut Harness, seen: &mut Seen, select: &str, item: &str) {
@@ -158,202 +32,6 @@ fn choose_seen(harness: &mut Harness, seen: &mut Seen, select: &str, item: &str)
     seen.look(harness);
     click(harness, item);
     harness.settle();
-}
-
-/// Asserts that every control of every line of the sheet in the harness, every button of a note and every add row of
-/// a When block is drawn under its accessible name, and that the name of each but a select holds the words it shows.
-pub(super) fn assert_controls_hold_their_words(harness: &mut Harness) {
-    use crate::ui::editor::sheet::card_pane::{card_buttons, card_lines};
-
-    let nodes = harness.settle();
-    let editor = sheet(harness);
-    let document = editor.document();
-    let sentences = Sentences::new(document);
-    for index in 0..document.cards.len() {
-        let lines = card_lines(document, &sentences, editor.report(), index);
-        let controls = lines
-            .iter()
-            .flat_map(|line| line.controls().into_iter().map(|control| (line.label(), control)));
-        let buttons = card_buttons(document, &sentences, editor.report(), index)
-            .into_iter()
-            .map(|button| (format!("Card {}", index + 1), button));
-        for (owner, control) in controls.chain(buttons) {
-            assert!(
-                nodes.iter().any(|node| node.label == control.name),
-                "{owner} has no control named {}",
-                control.name
-            );
-            let words = control.visible.trim_end_matches("...").trim().to_lowercase();
-            assert!(
-                control.select || control.name.to_lowercase().contains(&words),
-                "{} does not hold {}",
-                control.name,
-                control.visible
-            );
-        }
-    }
-}
-
-/// Returns whether a settled frame shows `text` as a label, a value or a description.
-pub(super) fn shows(harness: &mut Harness, text: &str) -> bool {
-    harness.accessible_texts().iter().any(|shown| shown == text)
-}
-
-/// Returns the sentence of line `number` of the card pane's first card, read from its accessible name.
-pub(super) fn line_text(harness: &mut Harness, prefix: &str) -> String {
-    let nodes = harness.settle();
-    let found: Vec<&Node> = nodes
-        .iter()
-        .filter(|node| node.role == Role::Group && node.label.starts_with(&format!("{prefix}: ")))
-        .collect();
-    assert_eq!(found.len(), 1, "one line is named {prefix}: {found:?}");
-    found[0].label[prefix.len() + 2..].to_owned()
-}
-
-/// Every text a settled frame shows, gathered while menus, pickers and help popovers are open.
-#[derive(Debug, Default)]
-pub(super) struct Seen(Vec<String>);
-
-impl Seen {
-    /// Adds every text the harness shows now.
-    pub(super) fn look(&mut self, harness: &mut Harness) {
-        self.0.extend(harness.accessible_texts());
-    }
-}
-
-/// Opens the add button `button`'s menu under the lowest card, records what it shows, and chooses `item`.
-pub(super) fn add(harness: &mut Harness, seen: &mut Seen, button: AddButton, item: &str) {
-    click_last(harness, button.label());
-    choose_add_item(harness, seen, button, item);
-}
-
-/// Opens the add button `button`'s menu under the first card, records what it shows, and chooses `item`.
-fn add_to_first(harness: &mut Harness, seen: &mut Seen, button: AddButton, item: &str) {
-    let found = named(harness, button.label());
-    let position = found
-        .first()
-        .and_then(|node| node.bounds)
-        .expect("an add button")
-        .center();
-    harness.click_at(position);
-    choose_add_item(harness, seen, button, item);
-}
-
-/// Records what the open menu of `button` shows, and chooses `item`.
-fn choose_add_item(harness: &mut Harness, seen: &mut Seen, button: AddButton, item: &str) {
-    assert!(is_open(harness, button.heading()) || shows(harness, button.heading()));
-    seen.look(harness);
-    click_last(harness, item);
-    harness.settle();
-}
-
-/// Picks `item` in the open picker titled `dialog`, after recording what it shows.
-pub(super) fn pick(harness: &mut Harness, seen: &mut Seen, dialog: &str, item: &str) {
-    assert!(is_open(harness, dialog), "{dialog} is open");
-    seen.look(harness);
-    click_in(harness, dialog, item);
-    harness.settle();
-}
-
-/// Clicks the control named `control` and picks `item` in the picker titled `dialog` it opens.
-pub(super) fn open_and_pick(harness: &mut Harness, seen: &mut Seen, control: &str, dialog: &str, item: &str) {
-    click(harness, control);
-    pick(harness, seen, dialog, item);
-}
-
-/// Returns the canonical text and the lowered code of `document`.
-pub(super) fn text_and_code(document: &SheetDocument) -> (String, String) {
-    let text = document.to_text().expect("the sheet writes");
-    let code = SheetFile::parse(&text)
-        .expect("the sheet lowers")
-        .lowered()
-        .text()
-        .to_owned();
-    (text, code)
-}
-
-/// Returns the document of `text`.
-pub(super) fn document_of(text: &str) -> SheetDocument {
-    ParsedSheet::parse(text).expect("the sheet reads").into_document()
-}
-
-/// Returns the document of the starter whose file is named `file_name`.
-pub(super) fn starter_document(file_name: &str) -> SheetDocument {
-    let starter = starters()
-        .iter()
-        .find(|starter| starter.file_name == file_name)
-        .expect("the starter");
-    document_of(starter.text)
-}
-
-/// Opens the New model dialog, names the model `name`, and creates a blank model.
-pub(super) fn new_blank(harness: &mut Harness, name: &str) {
-    click(harness, "New model");
-    harness.click_name_field();
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text(name.to_owned())]);
-    click(harness, "Create");
-    harness.settle();
-}
-
-/// Adds a States property `name` with `states` through the property form, each state in its usual or default colour.
-pub(super) fn add_states_property(harness: &mut Harness, name: &str, states: &[&str]) {
-    click(harness, ADD_PROPERTY);
-    type_into(harness, "Property name", name);
-    for (index, state) in states.iter().enumerate() {
-        if index >= 2 {
-            click(harness, ADD_STATE);
-        }
-        type_into(harness, &format!("State {} name", index + 1), state);
-    }
-}
-
-/// Creates a parameter in the open New parameter dialog, with the default `default` and the top `max` when given.
-pub(super) fn create_parameter(harness: &mut Harness, seen: &mut Seen, name: &str, default: &str, max: Option<&str>) {
-    seen.look(harness);
-    type_into(harness, "Parameter name", name);
-    type_into(harness, "Default value", default);
-    if let Some(max) = max {
-        type_into(harness, "Max", max);
-    }
-    click(harness, CREATE_PARAMETER);
-    harness.settle();
-}
-
-/// Returns every text of `seen` that holds a forbidden word, with the word.
-pub(super) fn assert_no_forbidden_word(seen: &Seen) {
-    let found = forbidden_words(&seen.0);
-    assert!(found.is_empty(), "forbidden words: {found:?}");
-}
-
-/// Builds the sheet of the Game of Life starter from Blank in the harness, every section but the card's lines and
-/// Clear, and returns the text of the blank model.
-fn build_life_sheet(harness: &mut Harness, seen: &mut Seen, starter: &SheetDocument) -> String {
-    new_blank(harness, "Game of Life");
-    let first = text(harness);
-    enter_into(harness, "Width in cells", "1024");
-    enter_into(harness, "Height in cells", "1024");
-    add_states_property(harness, "Status", &["Dead", "Alive"]);
-    click(harness, "State 2 colour: Blue");
-    click(harness, "Green");
-    click(harness, DONE);
-    harness.settle();
-    choose(harness, "Status starts as", "By chance");
-    click(harness, "Status starts as, row 1: use a parameter");
-    click(harness, NEW_PARAMETER);
-    create_parameter(harness, seen, "Initial density", "0.3", None);
-    click(harness, "Plot Alive");
-    choose(harness, COLOR_CELLS_BY, "Status");
-    type_into(harness, "Purpose", starter.sheet.purpose.as_deref().unwrap_or_default());
-    harness.press(Key::Escape, Modifiers::NONE);
-    harness.settle();
-    click(harness, ADD_BUTTON);
-    type_into(harness, BUTTON_NAME_FIELD, "Randomise");
-    choose(harness, "Start again for", "Status");
-    click(harness, DONE);
-    harness.settle();
-    assert!(shows(harness, &start_again_for("Status")));
-    first
 }
 
 /// Asserts that Undo walks the sheet back to the text `first` and Redo forward to where it was.
@@ -371,13 +49,12 @@ fn assert_undo_walks_back_and_forth(harness: &mut Harness, first: &str) {
 
 #[test]
 fn a_blank_model_builds_game_of_life_with_its_lines_and_equals_the_starter() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     let starter = starter_document("game_of_life.toml");
-    let first = build_life_sheet(&mut harness, &mut seen, &starter);
+    let first = build_life_sections(&mut harness, &mut seen).remove(0);
 
     // Line 1: a Count. Its property's picker opens by itself, then its state's.
     add(&mut harness, &mut seen, AddButton::LookAround, "Count");
@@ -480,39 +157,12 @@ fn a_blank_model_builds_game_of_life_with_its_lines_and_equals_the_starter() {
 
 #[test]
 fn a_blank_model_builds_the_chance_sir_with_its_lines_and_equals_the_sheet() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
-    // The id comes from the name given in the New model dialog, and the toolbar renames the model keeping it.
-    new_blank(&mut harness, "SIR chance");
-    click(&mut harness, "Model name: SIR chance. Rename");
-    harness.settle();
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text("SIR epidemic".to_owned())]);
-    harness.press(Key::Enter, Modifiers::NONE);
-    harness.settle();
-    enter_into(&mut harness, "Width in cells", "1024");
-    enter_into(&mut harness, "Height in cells", "1024");
-    add_states_property(&mut harness, "Health", &["Susceptible", "Infected", "Recovered"]);
-    click(&mut harness, DONE);
-    harness.settle();
-    for state in ["Susceptible", "Infected", "Recovered"] {
-        click(&mut harness, &format!("Plot {state}"));
-    }
     let expected = document_of(SIR_CHANCE);
-    type_into(
-        &mut harness,
-        "Purpose",
-        expected.sheet.purpose.as_deref().unwrap_or_default(),
-    );
-    harness.press(Key::Escape, Modifiers::NONE);
-    harness.settle();
-
-    add(&mut harness, &mut seen, AddButton::LookAround, "Count");
-    pick(&mut harness, &mut seen, "Choose a property", "Health");
-    pick(&mut harness, &mut seen, "Choose a state", "Infected");
+    build_sir_sections(&mut harness, &mut seen, "SIR chance", &expected, None);
 
     add(&mut harness, &mut seen, AddButton::Chance, "Become, with chance");
     pick(&mut harness, &mut seen, "Choose a state", "Infected");
@@ -547,33 +197,8 @@ fn a_blank_model_builds_the_chance_sir_with_its_lines_and_equals_the_sheet() {
     pick(&mut harness, &mut seen, "Choose a chance", NEW_PARAMETER);
     create_parameter(&mut harness, &mut seen, "Recovery chance", "0.05", Some("1"));
 
-    choose(&mut harness, "Health starts as", "By chance");
-    click(&mut harness, "Health starts as, row 1: use a parameter");
-    click(&mut harness, NEW_PARAMETER);
-    create_parameter(&mut harness, &mut seen, "Initial infected", "0.01", Some("1"));
-
-    click(&mut harness, ADD_BUTTON);
-    type_into(&mut harness, BUTTON_NAME_FIELD, "New outbreak");
-    click(&mut harness, &run_once("cell"));
-    click(&mut harness, DONE);
-    harness.settle();
-    add(&mut harness, &mut seen, AddButton::Change, "Become");
-    pick(&mut harness, &mut seen, "Choose a state", "Infected");
-    pick(&mut harness, &mut seen, "Choose the old state", "Susceptible");
-    open_and_pick(
-        &mut harness,
-        &mut seen,
-        "New outbreak line 1: choose when",
-        CHOOSE_WHEN,
-        "with chance ...",
-    );
-    open_and_pick(
-        &mut harness,
-        &mut seen,
-        "New outbreak line 1: choose a chance",
-        "Choose a chance",
-        "Initial infected",
-    );
+    start_infected_by_chance(&mut harness, &mut seen);
+    add_new_outbreak(&mut harness, &mut seen);
 
     let aligned = align_with_starter(sheet(&harness).document(), &expected);
     assert_eq!(
@@ -585,15 +210,6 @@ fn a_blank_model_builds_the_chance_sir_with_its_lines_and_equals_the_sheet() {
     click(&mut harness, "Help: lines");
     seen.look(&mut harness);
     assert_no_forbidden_word(&seen);
-}
-
-/// Opens the starter `file_name` in the harness's Editor.
-pub(super) fn open_starter(harness: &mut Harness, file_name: &str) {
-    let starter = starters()
-        .iter()
-        .find(|starter| starter.file_name == file_name)
-        .expect("the starter");
-    harness.open_sheet(starter.text);
 }
 
 /// Returns the right side of the condition of line `line` of the sheet in the harness.
@@ -628,10 +244,9 @@ fn list(numbers: &[f64]) -> Slot {
 
 #[test]
 fn a_list_blank_takes_two_values() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     open_starter(&mut harness, "game_of_life.toml");
     // A filled item offers "Remove from list". Both removed, the list is a blank again.
     click_on_line(&mut harness, "Line 3", "2");
@@ -655,10 +270,9 @@ fn a_list_blank_takes_two_values() {
 
 #[test]
 fn a_states_blank_starts_a_list_that_takes_another_state() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "game_of_life.toml");
     add(&mut harness, &mut seen, AddButton::YesOrNo, "Compare");
@@ -687,10 +301,9 @@ fn a_states_blank_starts_a_list_that_takes_another_state() {
 
 #[test]
 fn a_single_blank_given_a_list_says_choose_is_one_of() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     open_starter(&mut harness, "game_of_life.toml");
     let before = text(&harness);
     click_on_line(&mut harness, "Line 2", "3");
@@ -710,10 +323,9 @@ fn a_single_blank_given_a_list_says_choose_is_one_of() {
 
 #[test]
 fn a_chance_of_1_5_is_refused_in_the_field() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     open_starter(&mut harness, "forest_fire.toml");
     let before = text(&harness);
     click(&mut harness, "Growth chance");
@@ -731,20 +343,15 @@ fn a_chance_of_1_5_is_refused_in_the_field() {
 
 #[test]
 fn chips_and_pickers_name_the_property_when_two_share_a_state_name() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
-    let starter = starters()
-        .iter()
-        .find(|starter| starter.file_name == "game_of_life.toml")
-        .expect("the starter");
-    let shared = starter.text.replacen(
+    let shared = edited(
+        starter_text("game_of_life.toml"),
         "[[parameter]]",
         "[[cells.property]]\nid = \"mood\"\nname = \"Mood\"\ntype = \"states\"\nstates = [\n  { id = \"calm\", name = \
          \"Calm\", color = \"#007AF5\" },\n  { id = \"alive_mood\", name = \"Alive\", color = \"#FFC107\" },\n]\n\n\
          [[parameter]]",
-        1,
     );
     let document = document_of(&shared);
     harness.open_sheet(&document.to_text().expect("the sheet writes"));
@@ -752,25 +359,10 @@ fn chips_and_pickers_name_the_property_when_two_share_a_state_name() {
         line_text(&mut harness, "Line 2"),
         "Become Status Alive from Dead, when Alive neighbours is 3"
     );
-    let items: Vec<String> = {
-        let editor = sheet(&harness);
-        let document = editor.document();
-        let sentences = Sentences::new(document);
-        let relations = CardRelations::new(document, &document.cards[0]);
-        let (_, line) = document.line("l2").expect("line 2");
-        let context = LineContext {
-            document,
-            sentences: &sentences,
-            relations: &relations,
-            line_id: "l2",
-            line,
-        };
-        picker_for(&context, Blank::State, None, true, "", DrawKind::Chance)
-            .groups
-            .iter()
-            .flat_map(|group| group.items.iter().map(|item| item.label.clone()))
-            .collect()
-    };
+    let items: Vec<String> = picker_labels(sheet(&harness).document(), "l2", Blank::State, true, DrawKind::Chance)
+        .into_iter()
+        .map(|(_, label)| label)
+        .collect();
     assert_eq!(items, ["Dead", "Status Alive", "Calm", "Mood Alive"]);
     click_on_line(&mut harness, "Line 2", "Status Alive");
     assert!(is_open(&mut harness, "Choose a state"));
@@ -789,19 +381,15 @@ fn chips_and_pickers_name_the_property_when_two_share_a_state_name() {
 
 #[test]
 fn the_line_menu_renames_a_result_and_deletes_a_line() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     open_starter(&mut harness, "game_of_life.toml");
     click(&mut harness, "Line 1 actions");
     click(&mut harness, "Rename line 1");
     let nodes = harness.settle();
     assert!(nodes.iter().any(|node| node.label == "Line 1: new name"));
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text("Neighbours".to_owned())]);
-    harness.press(Key::Enter, Modifiers::NONE);
-    harness.settle();
+    type_and_enter(&mut harness, "Neighbours");
     assert_eq!(
         line_text(&mut harness, "Line 2"),
         "Become Alive from Dead, when Neighbours is 3"
@@ -823,10 +411,9 @@ fn the_line_menu_renames_a_result_and_deletes_a_line() {
 
 #[test]
 fn focus_moves_to_the_next_blank_and_only_state_blanks_open_by_themselves() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "game_of_life.toml");
     // A new line's first blank opens, and a click on it keeps it open.
@@ -861,10 +448,9 @@ fn focus_moves_to_the_next_blank_and_only_state_blanks_open_by_themselves() {
 
 #[test]
 fn a_chance_result_is_named_happens_until_its_chance_names_it() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "forest_fire.toml");
     add(&mut harness, &mut seen, AddButton::Chance, "With chance");
@@ -877,25 +463,20 @@ fn a_chance_result_is_named_happens_until_its_chance_names_it() {
     );
     click(&mut harness, "Line 6 actions");
     click(&mut harness, "Rename line 6");
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text("Burning neighbours".to_owned())]);
-    harness.press(Key::Enter, Modifiers::NONE);
+    type_and_enter(&mut harness, "Burning neighbours");
     assert!(
         shows(&mut harness, "Another result is already called Burning neighbours."),
         "a taken name is refused under the field"
     );
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text("Spark".to_owned())]);
-    harness.press(Key::Enter, Modifiers::NONE);
+    type_and_enter(&mut harness, "Spark");
     assert_eq!(line_text(&mut harness, "Line 6"), "Spark = with chance 30%");
 }
 
 #[test]
 fn a_negative_rate_is_refused_in_the_field() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     open_starter(&mut harness, "sir.toml");
     let before = text(&harness);
     click(&mut harness, "Recovery rate");
@@ -907,10 +488,9 @@ fn a_negative_rate_is_refused_in_the_field() {
 
 #[test]
 fn the_one_side_offer_waits_while_the_range_is_being_filled() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "vote.toml");
     click(&mut harness, "Line 2: change the kind of condition");
@@ -947,10 +527,9 @@ fn the_one_side_offer_waits_while_the_range_is_being_filled() {
 
 #[test]
 fn a_count_chosen_as_a_chance_offers_to_count_it_for_each() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     harness.open_sheet(SIR_CHANCE);
     click(&mut harness, "Recovery chance");
     click_in(&mut harness, "Choose a chance", "Infected neighbours");
@@ -971,10 +550,9 @@ fn a_count_chosen_as_a_chance_offers_to_count_it_for_each() {
 fn changed_by_and_the_controls_of_the_rebuilt_lines_follow_the_wording_table() {
     use crate::ui::editor::sheet::card_pane::card_lines;
 
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     harness.open_sheet(SIR_CHANCE);
     assert!(
         shows(&mut harness, "lines 2, 3"),
@@ -997,11 +575,6 @@ fn changed_by_and_the_controls_of_the_rebuilt_lines_follow_the_wording_table() {
 }
 
 // Card structure: When blocks, moves and "otherwise"
-
-/// Returns whether a settled frame shows a text that ends with `text`, as a notice after its icon does.
-fn shows_ending(harness: &mut Harness, text: &str) -> bool {
-    harness.accessible_texts().iter().any(|shown| shown.ends_with(text))
-}
 
 /// Returns the ids of the lines inside line `line` of the sheet in the harness.
 fn inside(harness: &Harness, line: &str) -> Vec<String> {
@@ -1028,7 +601,7 @@ fn build_forest_fire_sheet(harness: &mut Harness, seen: &mut Seen, starter: &She
     new_blank(harness, "Forest fire");
     enter_into(harness, "Width in cells", "1024");
     enter_into(harness, "Height in cells", "1024");
-    add_states_property(harness, "Cover", &["Empty", "Tree", "Burning"]);
+    add_states_property(harness, ADD_PROPERTY, "Cover", &["Empty", "Tree", "Burning"]);
     click(harness, "State 1 colour: Dark grey");
     click(harness, "Black");
     click(harness, DONE);
@@ -1058,10 +631,9 @@ fn build_forest_fire_sheet(harness: &mut Harness, seen: &mut Seen, starter: &She
 
 #[test]
 fn a_blank_model_builds_the_forest_fire_with_otherwise_and_equals_the_starter() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     let starter = starter_document("forest_fire.toml");
 
@@ -1109,7 +681,7 @@ fn a_blank_model_builds_the_forest_fire_with_otherwise_and_equals_the_starter() 
     let notice = "Line 3 now starts with otherwise. Line 2 also changes Cover for a cell that is Tree. When both \
                   apply, line 2 wins.";
     assert!(
-        shows_ending(&mut harness, notice),
+        shows_notice(&mut harness, notice),
         "the notice explains the new otherwise"
     );
     seen.look(&mut harness);
@@ -1121,7 +693,7 @@ fn a_blank_model_builds_the_forest_fire_with_otherwise_and_equals_the_starter() 
         "otherwise (when line 2 does not apply) become Burning from Tree, with chance Lightning chance"
     );
     // The notice shows once. The next edit takes it away.
-    assert!(!shows_ending(&mut harness, notice));
+    assert!(!harness.accessible_texts().iter().any(|shown| shown.contains(notice)));
 
     // Line 4: Become Empty from Burning, always. Line 5: Become Tree from Empty, with chance Growth chance.
     add(&mut harness, &mut seen, AddButton::Change, "Become");
@@ -1161,10 +733,9 @@ fn a_blank_model_builds_the_forest_fire_with_otherwise_and_equals_the_starter() 
 
 #[test]
 fn the_run_once_condition_picker_offers_no_rate() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     open_starter(&mut harness, "game_of_life.toml");
     click(&mut harness, "Clear line 1: choose when, now always");
     assert!(is_open(&mut harness, CHOOSE_WHEN));
@@ -1188,10 +759,9 @@ fn the_run_once_condition_picker_offers_no_rate() {
 
 #[test]
 fn a_button_card_explains_its_otherwise_and_its_when_offers_changes_alone() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "game_of_life.toml");
     // Clear line 2, under Clear line 1's "from any state", reads "otherwise", and the notice names it by its prefix.
@@ -1200,7 +770,7 @@ fn a_button_card_explains_its_otherwise_and_its_when_offers_changes_alone() {
     pick(&mut harness, &mut seen, "Choose the old state", "Dead");
     assert!(line_text(&mut harness, "Clear line 2").starts_with("otherwise (when line 1 does not apply)"));
     assert!(
-        shows_ending(
+        shows_notice(
             &mut harness,
             "Clear line 2 now starts with otherwise. Line 1 also changes Status for a cell that is Dead. When both \
              apply, line 1 wins."
@@ -1211,17 +781,13 @@ fn a_button_card_explains_its_otherwise_and_its_when_offers_changes_alone() {
     assert_no_forbidden_word(&seen);
 
     // A When on a button's card, which only a written file can hold, offers changes alone inside it.
-    let starter = starters()
-        .iter()
-        .find(|starter| starter.file_name == "game_of_life.toml")
-        .expect("the starter");
     let when = "lines = [\"l5\"]\n\n[card.line.l5]\nkind = \"when\"\nlines = [\"l4\"]\n\n[card.line.l5.condition]\n\
                 kind = \"compare\"\ntest = \"is\"\nleft = { my = \"status\" }\nright = { state = \"alive\" }\n\n# Become \
                 Dead from any state";
-    let text = starter.text.replacen("next_line = 5", "next_line = 6", 1).replacen(
+    let text = edited(
+        &edited(starter_text("game_of_life.toml"), "next_line = 5", "next_line = 6"),
         "lines = [\"l4\"]\n\n# Become Dead from any state",
         when,
-        1,
     );
     assert!(ParsedSheet::parse(&text).is_ok_and(|parsed| parsed.check().diagnostics.is_empty()));
     harness.open_sheet(&text);
@@ -1268,10 +834,9 @@ fn add_dead_when(harness: &mut Harness, seen: &mut Seen) {
 
 #[test]
 fn a_nested_when_stores_its_parent_and_deleting_the_outer_when_keeps_its_lines() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "game_of_life.toml");
     let starter_text = text(&harness);
@@ -1368,10 +933,9 @@ fn a_nested_when_stores_its_parent_and_deleting_the_outer_when_keeps_its_lines()
 
 #[test]
 fn a_when_that_repeats_its_lines_offers_to_remove_itself() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "game_of_life.toml");
     add_dead_when(&mut harness, &mut seen);
@@ -1396,10 +960,9 @@ fn a_when_that_repeats_its_lines_offers_to_remove_itself() {
 
 #[test]
 fn moving_a_line_above_its_result_skips_it_and_moving_it_back_runs_it() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "game_of_life.toml");
     let starter_text = text(&harness);
@@ -1442,10 +1005,9 @@ fn formula_of_l5(harness: &Harness) -> Option<String> {
 
 #[test]
 fn a_calculate_line_keeps_its_values_as_a_draft_until_both_are_chosen() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "game_of_life.toml");
     add(&mut harness, &mut seen, AddButton::Calculate, "Calculate");

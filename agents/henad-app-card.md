@@ -291,7 +291,7 @@ inside notes and the lead, depths 0, 1 and 2, Delete and Undo),
 inside its crate. henad-graph's `the_copies_of_the_test_sheets_equal_their_source` holds it and
 `sird.toml` equal to the source.
 
-`src/tests/sheet_rates.rs` (helpers shared from `sheet_card.rs` as `pub(super)`) holds
+`src/tests/sheet_rates.rs` holds
 `a_blank_model_builds_the_rates_sir_with_its_lines_and_equals_the_starter` (the time set on the
 sheet, both rates through "New parameter..." in "per day", line 2's "for each" from the grow offer,
 New outbreak's "Choose when" with no rate, then alignment, label-in-name and the words rule),
@@ -302,7 +302,7 @@ chance" on a typed rate, none on New outbreak's typed chance),
 `change_to_a_rate_and_back_keeps_the_chance_per_tick` (with the Time notice),
 `the_long_tick_note_shows_at_one_day_and_leaves_at_a_quarter_day` and
 `removing_the_time_unit_marks_the_rate_lines_and_a_rate_unit_sets_it_again` (the tick notice and the
-mismatch warning). A label's AccessKit node holds a `TextRun` child with its text, so the tests
+mismatch warning) and `a_parameter_put_into_a_rate_takes_its_unit_and_one_undo_restores_both`. A label's AccessKit node holds a `TextRun` child with its text, so the tests
 count nodes other than text runs.
 
 **Agent lines**. Every card is editable. A card is over agents when its `every` is not

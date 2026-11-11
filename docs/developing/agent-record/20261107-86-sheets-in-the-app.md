@@ -6,8 +6,8 @@ icon: material/file-document-plus-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s13a-sheets-in-app, rebased onto S14's record cd05a96 with one CHANGELOG list conflict kept on both sides: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: fbd9aa9
+state: "37-node-editor, fast-forwarded to redesign/s13a-sheets-in-app, rebased onto S14's record 7d82540 with one CHANGELOG list conflict kept on both sides: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: d60a5c9
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: open, save and apply sheets in the editor [draft]`, `feat: new model dialog and paused preview [draft]`, `fix: s13a review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -22,7 +22,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: open, save a
 
 ## State before
 
-- The branch was cut from `37-node-editor` at `fbd9aa9`, with S6 (one editor model enum), S10 (every grid line kind) and S11 (sheets in model files) merged.
+- The branch was cut from `37-node-editor` at `d60a5c9`, with S6 (one editor model enum), S10 (every grid line kind) and S11 (sheets in model files) merged.
 - `EditorModel` held `Empty`, `Rule` and `Graph`. `receive_open` opened a file that `GraphFile::parse` read on the canvas, and any other text in the code view, so a sheet opened as text and Apply could already build it through `ModelFile`.
 - `AppState::load_preview` played every preview at once.
 - The Editor header held New grid rule and a New graph model menu, the File menu the same two, and the Model tab New grid rule. No New model dialog existed.
@@ -174,7 +174,7 @@ The app was run again under the UI lock on G15F1: the Forest fire sheet showed t
 
 ### Merge check
 
-- The branch was rebased from `fbd9aa9` onto `cd05a96`, the tip of `37-node-editor` after S14's merge.
+- The branch was rebased from `d60a5c9` onto `7d82540`, the tip of `37-node-editor` after S14's merge.
   S14 touched no henad-app file, so the egui MCP checks were not repeated.
 - One conflict came up, in `CHANGELOG.md` under Added, where S14's grid sheet oracles line and this milestone's sheets line meet.
   Both lines were kept, S14's first.

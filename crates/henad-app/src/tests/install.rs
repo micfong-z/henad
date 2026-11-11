@@ -16,7 +16,7 @@ use henad_explore::output::manifest::{BuildRole, RecordedBuild};
 
 use crate::icons::material_design_icons::MDI_RESTART;
 use crate::state::{AppState, OpenAt, PendingRebuild, remap_schedule, remap_values, same_code};
-use crate::tests::support::{counter, edited_sir, recoded, set_of, step_past};
+use crate::tests::support::{counter, edited_sir, headless_app, recoded, set_grid_side, set_of, step_past};
 use crate::ui::export::metadata::run_details;
 use crate::ui::params::INVALID_SEED;
 use crate::ui::params::{ParamsNoticeTone, notice_content};
@@ -27,8 +27,7 @@ use crate::ui::results::table::replay_warnings;
 fn app_with_small_sir() -> Option<AppState> {
     let mut app = AppState::headless(henad_models::example_models(), false)?;
     app.select_model("sir");
-    set_value(&mut app, "grid_width", ParamValue::U32(64));
-    set_value(&mut app, "grid_height", ParamValue::U32(64));
+    set_grid_side(&mut app, 64);
     Some(app)
 }
 
@@ -358,7 +357,7 @@ fn results_flag_runs_of_replaced_code() {
 
 #[test]
 fn install_works_for_every_model_type() {
-    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     for id in ["sir", "boids", "virus_network", "gpu_game_of_life", "gpu_boids"] {

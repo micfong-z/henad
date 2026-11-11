@@ -7,37 +7,22 @@ use henad_graph::document::World;
 use henad_graph::edit::EditCommand;
 use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::sentence::{CANCEL, DISCARD_CHANGES, SAVE_MODEL, unsaved_changes};
-use henad_graph::sheet::starters;
 
-use crate::tests::support::{Harness, Node};
+use crate::tests::panes::{apply_sheet_edit, sheet_mut};
+use crate::tests::support::{Harness, Node, starter_text};
 use crate::ui::editor::expert::{convert_sheet, swap_counterpart};
 use crate::ui::editor::graph::{GraphEdit, GraphRequest};
 use crate::ui::editor::{EditorModel, Replacement, apply, edit_model, life_starter, new_graph_model, replace_model};
 use crate::ui::files::{SaveResult, SaveTarget};
 
-/// Text of the Game of Life sheet starter.
-fn life_sheet() -> &'static str {
-    starters()
-        .iter()
-        .find(|starter| starter.file_name == "game_of_life.toml")
-        .expect("the Game of Life sheet")
-        .text
-}
-
 /// Sets the purpose of the sheet the Editor shows, an edit that leaves its code alone.
 fn edit_purpose(harness: &mut Harness, purpose: &str) {
-    let EditorModel::Sheet(sheet) = &mut harness.app.editor.model else {
-        panic!("the Editor holds a sheet");
-    };
-    sheet
-        .edit(false, true, |builder| {
-            builder
-                .apply(SheetEdit::SetPurpose {
-                    purpose: Some(purpose.to_owned()),
-                })
-                .map(drop)
-        })
-        .expect("the purpose is set");
+    apply_sheet_edit(
+        sheet_mut(harness),
+        SheetEdit::SetPurpose {
+            purpose: Some(purpose.to_owned()),
+        },
+    );
 }
 
 /// Returns the dialog of a settled frame, by its accessible name, `None` while no dialog asks.
@@ -71,7 +56,7 @@ fn the_editor_asks_before_replacing_a_model_with_unsaved_edits() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    harness.open_sheet(life_sheet());
+    harness.open_sheet(starter_text("game_of_life.toml"));
     assert!(
         harness.app.editor.unsaved_names().is_empty(),
         "an opened sheet holds no edit"
@@ -92,7 +77,7 @@ fn the_editor_asks_before_replacing_a_model_with_unsaved_edits() {
         "a drawn graph holds no edit"
     );
 
-    harness.open_sheet(life_sheet());
+    harness.open_sheet(starter_text("game_of_life.toml"));
     edit_purpose(&mut harness, "Cells live and die by their neighbours.");
     apply(&mut harness.app);
     harness.app.wait_for_build();
@@ -146,7 +131,7 @@ fn the_editor_asks_before_replacing_a_model_with_unsaved_edits() {
     assert!(harness.app.editor.unsaved_names().is_empty());
 
     // A save canceled in its own dialog keeps the model and its edits, and replaces nothing.
-    harness.open_sheet(life_sheet());
+    harness.open_sheet(starter_text("game_of_life.toml"));
     edit_purpose(&mut harness, "A second purpose.");
     replace_model(&mut harness.app, Replacement::NewGridRule);
     click_in(&mut harness, &sentence_of("Game of Life"), SAVE_MODEL);
@@ -160,9 +145,12 @@ fn the_editor_asks_before_replacing_a_model_with_unsaved_edits() {
     edit_model(&mut harness.app);
     assert!(asking(&mut harness).is_some());
     click_in(&mut harness, &sentence_of("Game of Life"), DISCARD_CHANGES);
-    let EditorModel::Sheet(sheet) = &harness.app.editor.model else {
-        panic!("the Editor holds the applied sheet");
-    };
+    let sheet = harness
+        .app
+        .editor
+        .model
+        .sheet()
+        .expect("the Editor holds the applied sheet");
     assert_eq!(
         sheet.document().sheet.purpose.as_deref(),
         Some("Cells live and die by their neighbours.")
@@ -178,7 +166,7 @@ fn a_close_request_with_unsaved_edits_asks_and_saves_before_closing() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    harness.open_sheet(life_sheet());
+    harness.open_sheet(starter_text("game_of_life.toml"));
     edit_purpose(&mut harness, "Cells live and die by their neighbours.");
     let sentence = sentence_of("Game of Life");
 
@@ -212,7 +200,7 @@ fn a_close_request_closes_at_once_without_edits_and_after_discard_with_them() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    harness.open_sheet(life_sheet());
+    harness.open_sheet(starter_text("game_of_life.toml"));
     assert!(
         !harness.app.hold_close(),
         "a model without edits held the close request"
@@ -240,7 +228,7 @@ fn the_sheet_beside_its_copy_keeps_its_unsaved_edits_and_saves_in_turn() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    harness.open_sheet(life_sheet());
+    harness.open_sheet(starter_text("game_of_life.toml"));
     edit_purpose(&mut harness, "Cells live and die by their neighbours.");
     convert_sheet(&mut harness.app);
     assert!(harness.app.editor.model.graph().is_some(), "the copy shows");
@@ -253,9 +241,7 @@ fn the_sheet_beside_its_copy_keeps_its_unsaved_edits_and_saves_in_turn() {
 
     swap_counterpart(&mut harness.app.editor);
     assert!(harness.app.editor.is_unsaved(), "the edits follow the sheet");
-    let EditorModel::Sheet(sheet) = &harness.app.editor.model else {
-        panic!("the sheet shows");
-    };
+    let sheet = harness.app.editor.model.sheet().expect("the sheet shows");
     assert_eq!(sheet.document().sheet.name, "Game of Life");
     swap_counterpart(&mut harness.app.editor);
     let copy = harness
@@ -269,9 +255,7 @@ fn the_sheet_beside_its_copy_keeps_its_unsaved_edits_and_saves_in_turn() {
         .clone();
 
     // An edit of the copy's world.
-    let EditorModel::Graph(graph) = &mut harness.app.editor.model else {
-        panic!("the copy shows");
-    };
+    let graph = harness.app.editor.model.graph_mut().expect("the copy shows");
     let mut world = graph.document().world;
     let World::Grid(grid) = &mut world else {
         panic!("Game of Life is a grid");

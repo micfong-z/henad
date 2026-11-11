@@ -5,15 +5,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use henad_compute::cpu::sim_thread::SimCommand;
-use henad_compute::entry::{ModelEntry, ModelState};
-use henad_compute::fault::{BUILDING, Fault, FaultKind};
-use henad_compute::gpu::GpuContext;
+use henad_compute::entry::ModelEntry;
+use henad_compute::fault::{BUILDING, FaultKind};
 use henad_compute::runner::DEFAULT_STOP_TIMEOUT;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::params::ParamValue;
 
 use crate::state::{AppState, BUILDING_MODEL, DID_NOT_STOP, OpenAt, STILL_STOPPING, STOP_WAIT};
-use crate::tests::support::{Gate, OpenOnDrop, Probe, StepHold, accessible_texts, held, set_of};
+use crate::tests::support::{
+    Gate, OpenOnDrop, Probe, StepHold, accessible_texts, held, set_grid_side, set_of, sir, wait_until,
+    with_oversized_buffer,
+};
 use crate::ui::playback::playback_ui;
 use crate::ui::results::ResultsPanel;
 use crate::ui::sweep::session::{SessionExecution, SessionState, SweepSession};
@@ -22,36 +24,10 @@ use crate::ui::viewport::viewport_ui;
 /// Time a call that must not wait on a stuck thread may take past [`STOP_WAIT`], for the scheduler.
 const SLACK: Duration = Duration::from_secs(1);
 
-/// Longest time a test waits for a thread to reach the state it expects.
-const DEADLINE: Duration = Duration::from_secs(30);
-
-/// Polls `condition` until it holds, or panics with `what` after [`DEADLINE`].
-fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
-    let deadline = Instant::now() + DEADLINE;
-    while !condition() {
-        assert!(Instant::now() < deadline, "{what} never happened");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// Returns the example SIR entry.
-fn sir() -> ModelEntry {
-    henad_models::example_models()
-        .get("sir")
-        .cloned()
-        .expect("the example models include sir")
-}
-
 /// Returns an app over `entry` alone, selected at a grid of 64 by 64, or `None` to skip on a machine without a device.
 fn app_over(entry: ModelEntry) -> Option<AppState> {
     let mut app = AppState::headless(set_of(entry), false)?;
-    for id in ["grid_width", "grid_height"] {
-        let index = app
-            .selected_entry()
-            .and_then(|entry| entry.param_index(id))
-            .expect("a grid model declares its size");
-        app.param_values[index] = ParamValue::U32(64);
-    }
+    set_grid_side(&mut app, 64);
     Some(app)
 }
 
@@ -83,6 +59,75 @@ fn sir_spec() -> SweepSpec {
     ];
     spec.run.steps = 4;
     spec
+}
+
+/// Time after which a [`Watchdog`] releases a held pool, and the test fails.
+const WATCHDOG: Duration = Duration::from_secs(20);
+
+/// Waits up to five seconds for every worker of the global pool to take an item of the held step of `probe`'s run. A
+/// worker busy with another test joins later.
+fn wait_for_held_workers(probe: &Probe) {
+    let workers = rayon::current_num_threads();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while probe.held_workers.load(Ordering::SeqCst) < workers && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Thread that opens a gate after a time, so a frame stuck on the threads the gate holds returns and the test fails.
+/// Dropping the watchdog opens the gate too, and joins the thread.
+struct Watchdog {
+    /// Whether the time ran out and the watchdog opened the gate.
+    fired: Arc<AtomicBool>,
+    /// Sender whose drop ends the watchdog's wait.
+    stop: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Watchdog {
+    /// Starts a watchdog that opens `gate` after `after`.
+    fn start(gate: &Gate, after: Duration) -> Self {
+        let fired = Arc::new(AtomicBool::new(false));
+        let (stop, stopped) = std::sync::mpsc::channel::<()>();
+        let watchdog_gate = gate.clone();
+        let watchdog_fired = Arc::clone(&fired);
+        let thread = std::thread::spawn(move || {
+            if stopped.recv_timeout(after).is_err() {
+                watchdog_fired.store(true, Ordering::SeqCst);
+                watchdog_gate.open();
+            }
+        });
+        Self {
+            fired,
+            stop: Some(stop),
+            thread: Some(thread),
+        }
+    }
+
+    /// Returns whether the time ran out before the watchdog was dropped.
+    fn fired(&self) -> bool {
+        self.fired.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        drop(self.stop.take());
+        if let Some(thread) = self.thread.take() {
+            let joined = thread.join();
+            assert!(joined.is_ok() || std::thread::panicking(), "the watchdog never panics");
+        }
+    }
+}
+
+/// Draws one frame of the Viewport over `app`, and asserts that it returned before `watchdog` fired, with `waited` as
+/// the message otherwise, and that it uploaded the grid.
+fn viewport_frame(app: &mut AppState, watchdog: &Watchdog, waited: &str) {
+    egui::Context::default()
+        .run_ui(egui::RawInput::default(), |ui| viewport_ui(ui, app))
+        .drop_without_applying_deltas();
+    assert!(!watchdog.fired(), "{waited}");
+    assert!(app.grid_texture.is_some(), "the frame uploaded the grid");
 }
 
 /// Returns the generation of the app's pool, and whether it is rayon's global pool.
@@ -184,9 +229,6 @@ fn a_slow_runner_is_waited_for_and_keeps_the_pool() {
 
 #[test]
 fn a_viewport_frame_after_a_detach_runs_on_the_fresh_pool() {
-    /// Time after which the watchdog releases the held global pool, and the test fails.
-    const WATCHDOG: Duration = Duration::from_secs(20);
-
     let probe = Arc::new(Probe::default());
     let gate = Gate::default();
     let _release = OpenOnDrop(gate.clone());
@@ -194,24 +236,10 @@ fn a_viewport_frame_after_a_detach_runs_on_the_fresh_pool() {
         return;
     };
     build_and_step(&mut app, &probe);
-    // Every worker of the global pool takes an item of the held step. A worker busy with another test joins later.
-    let workers = rayon::current_num_threads();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while probe.held_workers.load(Ordering::SeqCst) < workers && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_for_held_workers(&probe);
 
     // A frame stuck on the held global pool waits until the watchdog opens the gate.
-    let fired = Arc::new(AtomicBool::new(false));
-    let (stop_watchdog, watchdog) = std::sync::mpsc::channel::<()>();
-    let watchdog_gate = gate.clone();
-    let watchdog_fired = Arc::clone(&fired);
-    let watchdog = std::thread::spawn(move || {
-        if watchdog.recv_timeout(WATCHDOG).is_err() {
-            watchdog_fired.store(true, Ordering::SeqCst);
-            watchdog_gate.open();
-        }
-    });
+    let watchdog = Watchdog::start(&gate, WATCHDOG);
 
     app.reset_simulation();
     app.wait_for_build();
@@ -223,26 +251,19 @@ fn a_viewport_frame_after_a_detach_runs_on_the_fresh_pool() {
         first.is_some()
     });
     app.snapshot = first;
-    egui::Context::default()
-        .run_ui(egui::RawInput::default(), |ui| viewport_ui(ui, &mut app))
-        .drop_without_applying_deltas();
-    assert!(
-        !fired.load(Ordering::SeqCst),
-        "the viewport frame waited for the held global pool"
+    viewport_frame(
+        &mut app,
+        &watchdog,
+        "the viewport frame waited for the held global pool",
     );
-    assert!(app.grid_texture.is_some(), "the frame uploaded the grid");
 
-    drop(stop_watchdog);
-    watchdog.join().expect("the watchdog never panics");
+    drop(watchdog);
     gate.open();
     wait_until("the end of the detached run", || stopped(&mut app));
 }
 
 #[test]
 fn a_viewport_frame_beside_a_run_that_holds_its_pool_returns() {
-    /// Time after which the watchdog releases the held pool, and the test fails.
-    const WATCHDOG: Duration = Duration::from_secs(20);
-
     let probe = Arc::new(Probe::default());
     let gate = Gate::default();
     let _release = OpenOnDrop(gate.clone());
@@ -259,35 +280,18 @@ fn a_viewport_frame_beside_a_run_that_holds_its_pool_returns() {
     });
     // A step right after a publish holds every worker of the run's pool, and nothing stops the run.
     thread.send(SimCommand::StepOnce);
-    let workers = rayon::current_num_threads();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while probe.held_workers.load(Ordering::SeqCst) < workers && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    wait_for_held_workers(&probe);
     assert_eq!(pool_of(&app), (0, true), "the run holds the global pool");
 
-    let fired = Arc::new(AtomicBool::new(false));
-    let (stop_watchdog, watchdog) = std::sync::mpsc::channel::<()>();
-    let watchdog_gate = gate.clone();
-    let watchdog_fired = Arc::clone(&fired);
-    let watchdog = std::thread::spawn(move || {
-        if watchdog.recv_timeout(WATCHDOG).is_err() {
-            watchdog_fired.store(true, Ordering::SeqCst);
-            watchdog_gate.open();
-        }
-    });
+    let watchdog = Watchdog::start(&gate, WATCHDOG);
     app.snapshot = first;
-    egui::Context::default()
-        .run_ui(egui::RawInput::default(), |ui| viewport_ui(ui, &mut app))
-        .drop_without_applying_deltas();
-    assert!(
-        !fired.load(Ordering::SeqCst),
-        "the viewport frame waited for the pool the run holds"
+    viewport_frame(
+        &mut app,
+        &watchdog,
+        "the viewport frame waited for the pool the run holds",
     );
-    assert!(app.grid_texture.is_some(), "the frame uploaded the grid");
 
-    drop(stop_watchdog);
-    watchdog.join().expect("the watchdog never panics");
+    drop(watchdog);
     gate.open();
     app.offload_simulation();
     wait_until("the end of the run", || stopped(&mut app));
@@ -439,22 +443,7 @@ fn a_gpu_build_on_the_build_thread_reports_a_validation_error_as_a_fault() {
         .cloned()
         .expect("the example models include gpu_game_of_life");
     let name = gpu_life.name().to_owned();
-    // A buffer past the device's limit, created on the thread the build runs on and outside the entry's own scopes.
-    let invalid = gpu_life.wrap_factory(|inner| {
-        Arc::new(
-            move |params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| -> Result<ModelState, Fault> {
-                if let Some(ctx) = gpu {
-                    drop(ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("henad_app_test_oversized"),
-                        size: ctx.device.limits().max_buffer_size + 4096,
-                        usage: wgpu::BufferUsages::STORAGE,
-                        mapped_at_creation: false,
-                    }));
-                }
-                inner(params, seed, gpu)
-            },
-        )
-    });
+    let invalid = with_oversized_buffer(gpu_life);
     let Some(mut app) = AppState::headless(set_of(invalid), true) else {
         return;
     };

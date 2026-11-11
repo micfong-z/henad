@@ -265,7 +265,7 @@ fn a_series_header_with_other_columns_is_refused() {
     );
 }
 
-/// Returns the folder a sweep of SIR wrote at `be338ec`, before `series.csv` could hold a `time` column.
+/// Returns the folder a sweep of SIR wrote at `f4088d7`, before `series.csv` could hold a `time` column.
 ///
 /// `tests/fixtures/series-without-time/README.md` gives the procedure that recorded it.
 fn folder_without_time() -> std::path::PathBuf {

@@ -6,8 +6,8 @@ icon: material/bird
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s17-agent-sheets, whose review step had rebased it onto fc8aa77 and whose merge rebase found nothing to move: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: fbd9aa9
+state: "37-node-editor, fast-forwarded to redesign/s17-agent-sheets, whose review step had rebased it onto 2bed719 and whose merge rebase found nothing to move: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: d60a5c9
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: fault messages name author lines [draft]`, `feat: lower agent sheets with radius folds and pow [draft]`, `fix: s17 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -23,8 +23,8 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: fault messag
 
 ## State before
 
-- `37-node-editor` at `fbd9aa9`, S10 and S11 merged, with S13a and S14 open beside S17 on no shared file.
-  The review step rebased the branch onto `fc8aa77`, after S13a and S14 had merged.
+- `37-node-editor` at `d60a5c9`, S10 and S11 merged, with S13a and S14 open beside S17 on no shared file.
+  The review step rebased the branch onto `2bed719`, after S13a and S14 had merged.
 - The lowering held every grid line kind but rates and Repeat, and refused a world of agents at `[world]` with "Agents in open space are not supported yet." (D38).
 - The random walk, boids and bounded confidence sheets waited as test data in `crates/henad-graph/src/tests/sheets/`.
 - A radius fold's fault named the pass, the node and the line of the lowered graph's text, which a sheet's reader never sees.
@@ -200,8 +200,8 @@ docs/reference/
 
 A reviewer with a fresh context listed one must-fix, one should-fix and six nits, and `fix: s17 review findings [draft]` holds every one of them.
 
-- **Rebased before the merge step.** The branch started at `fbd9aa9`, and S13a and S14 merged after that.
-  The review step rebased it onto `fc8aa77`, since henad-app's fix only exists on the rebased tree.
+- **Rebased before the merge step.** The branch started at `d60a5c9`, and S13a and S14 merged after that.
+  The review step rebased it onto `2bed719`, since henad-app's fix only exists on the rebased tree.
   `CHANGELOG.md` and henad-models' `src/tests/mod.rs` conflicted in lists, and both sides were kept.
   `agents/henad-graph-sheet.md`'s starters paragraph now holds S14's sentence about the henad-models copy of `sir_chance.toml`.
   `agents/models.md` takes the tip's text with S17's paragraph added after S14's, without the reflow.
@@ -234,7 +234,7 @@ A reviewer with a fresh context listed one must-fix, one should-fix and six nits
 
 ### Merge check
 
-- The merge rebase onto `37-node-editor` found the branch up to date: its review step had already rebased it onto `fc8aa77`, and nothing merged since.
+- The merge rebase onto `37-node-editor` found the branch up to date: its review step had already rebased it onto `2bed719`, and nothing merged since.
   No conflict came up, and no henad-app change arrived, so no egui MCP check was repeated.
 - The full check ran on the branch with `HENAD_REQUIRE_GPU=1`.
   Every step exits 0 but two, and both fail as the baseline does.

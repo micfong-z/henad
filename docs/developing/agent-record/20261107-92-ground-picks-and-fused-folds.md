@@ -6,8 +6,8 @@ icon: material/map-marker-path
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s20-ground-picks-fused-folds after its merge rebase onto a3f0480 (S21 merged): two unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: f879ba2
+state: "37-node-editor, fast-forwarded to redesign/s20-ground-picks-fused-folds after its merge rebase onto d4766e5 (S21 merged): two unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: 717c3b5
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: ground, picks, repeat and fused folds in agent sheets [draft]`, `fix: s20 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -23,7 +23,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: ground, pick
 
 ## State before
 
-- `37-node-editor` at `f879ba2`, with S15 (the add-up merge) and S17 (agent sheets) merged, and S13b and S18 planned beside S20.
+- `37-node-editor` at `717c3b5`, with S15 (the add-up merge) and S17 (agent sheets) merged, and S13b and S18 planned beside S20.
 - A sheet of agents lowered one kind of agent in a wrapping world: looks at agents within a distance, Steer, Keep between, Move by and a Repeat of moves and steers.
 - The lowering refused at their tables walls, the ground, Pick a cell, the cell here or ahead, Move to, Leave, Record, a look at the cells around an agent, a Become, Set, Keep between, When or Repeat inside a Repeat, and an event count (D38).
 - The ants sheet waited as test data in `crates/henad-graph/src/tests/sheets/`.
@@ -216,11 +216,11 @@ Every one held against the code but part of the line-width nit, and `fix: s20 re
 - A sheet of agents lowers every line kind: the ground, picks, places, moves, marks, records and Repeats of moves, steers, Becomes and Sets, and rates since S21 merged first.
 - Eight sheet starters with S21's SIR, the ants the first on a ground, the New model dialog still offering the grid starters alone.
 - The looks and picks of a card over one neighbourhood share one fold on grid and agent cards alike.
-- `37-node-editor` holds the two unsigned commits, the feature and the review's fixes, fast-forwarded after the merge rebase onto `a3f0480`.
+- `37-node-editor` holds the two unsigned commits, the feature and the review's fixes, fast-forwarded after the merge rebase onto `d4766e5`.
 
 ### Merge check
 
-- The merge rebase onto `37-node-editor` at `a3f0480` brought in S13b (sheet and card panes) and S21 (rates).
+- The merge rebase onto `37-node-editor` at `d4766e5` brought in S13b (sheet and card panes) and S21 (rates).
   The first commit conflicted in eight files, the ones record #91 predicted.
   - `card.rs`: the agent arm of the refusal takes both removals, S20's of the ground refusals and S21's of `NOT_YET_RATE`, and returns no refusal of its own.
     The card's fields keep S21's `groups` beside S20's `cell_folds` and `leaves`.

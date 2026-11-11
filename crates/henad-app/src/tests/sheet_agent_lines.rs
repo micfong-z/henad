@@ -3,40 +3,27 @@
 //! changed two ways and of a look inside a Repeat shown on their lines, the words rule over every agent menu and
 //! picker opened on the way, and the Number box opening on a number typed in each kind of agent slot.
 
-use egui::{Event, Key, Modifiers};
+use egui::{Key, Modifiers};
 use henad_graph::sheet::check::check;
 use henad_graph::sheet::document::{
     LineKind, ParameterType, SheetDocument, SheetLine, SheetLiteral, SheetParameter, SheetValue, Slot,
 };
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit};
-use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
-    ADD_BUTTON, ADD_MEASURE, AGENTS_IN_OPEN_SPACE, ARROW_KIND, AVERAGE_MEASURE, AddButton, BUTTON_NAME_FIELD, Blank,
-    CHOOSE_WHEN, COLOR_AGENTS_BY, CREATE_PARAMETER, DONE, DrawKind, LOOK_IN_REPEAT, MEASURE_PROPERTY_NAME,
-    NEW_PARAMETER, NUMBER_BOX_HINT, OR_A_NEW_VALUE, Sentences, add_property_name, add_summary_name, moved_by_already,
-    run_once, steered_already, value_field_name,
+    ADD_BUTTON, ARROW_KIND, AddButton, BUTTON_NAME_FIELD, Blank, CHOOSE_WHEN, CREATE_PARAMETER, DONE, DrawKind,
+    LOOK_IN_REPEAT, NEW_PARAMETER, NUMBER_BOX_HINT, OR_A_NEW_VALUE, Sentences, add_property_name, add_summary_name,
+    moved_by_already, run_once, steered_already, value_field_name,
 };
 
-use super::sheet_card::{
-    Seen, TALL_SCREEN, assert_controls_hold_their_words, assert_no_forbidden_word, click, click_in, click_last,
-    click_on_line, enter_into, is_open, line_text, named, open_starter, pick, sheet, shows, starter_document,
-    text_and_code, type_into,
+use crate::tests::panes::{
+    Seen, add_average_measure, add_property, agent_sheet, assert_controls_hold_their_words, assert_no_forbidden_word,
+    click, click_in, click_last, click_on_line, field_value, is_open, labels_of, line_picker, line_text, named,
+    new_blank_agents, open_starter, pick, picker_labels, sheet, shows, starter_document, text_and_code, type_and_enter,
+    type_into,
 };
-use super::sheet_pane::field_value;
 use crate::tests::support::{Harness, align_with_starter};
 use crate::ui::editor::sheet::card_pane::{NoteColor, card_lines};
-use crate::ui::editor::sheet::picker::{LineContext, looked_at_picker, picker_for};
-
-/// Opens the New model dialog, names the model `name`, and creates a blank model of agents.
-fn new_blank_agents(harness: &mut Harness, name: &str) {
-    click(harness, "New model");
-    harness.click_name_field();
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text(name.to_owned())]);
-    click(harness, AGENTS_IN_OPEN_SPACE);
-    click(harness, "Create");
-    harness.settle();
-}
+use crate::ui::editor::sheet::picker::{looked_at_picker, picker_for};
 
 /// Opens the menu of the add button `button` of a card over agents, the first such button when `first` holds and the
 /// last otherwise, records what it shows, and chooses `item`.
@@ -105,53 +92,19 @@ fn rename(harness: &mut Harness, seen: &mut Seen, prefix: &str, word: &str, name
     seen.look(harness);
     click(harness, &format!("Rename {word}"));
     harness.settle();
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text(name.to_owned())]);
-    harness.press(Key::Enter, Modifiers::NONE);
-    harness.settle();
-}
-
-/// Sets the world to 1000 by 1000, names the agents `agents` with `count` of them at the start, colours them by
-/// heading and types the purpose of `starter`.
-fn agent_sheet(harness: &mut Harness, starter: &SheetDocument, agents: &str, count: &str) {
-    enter_into(harness, "Width in cells", "1000");
-    enter_into(harness, "Height in cells", "1000");
-    enter_into(harness, "Name of the agents", agents);
-    enter_into(harness, "Number of agents at the start", count);
-    click(harness, COLOR_AGENTS_BY);
-    let heading = named(harness, "Heading")
-        .into_iter()
-        .rfind(|node| node.role != egui::accesskit::Role::Label)
-        .and_then(|node| node.bounds)
-        .expect("the Heading colour");
-    harness.click_at(heading.center());
-    harness.settle();
-    type_into(harness, "Purpose", starter.sheet.purpose.as_deref().unwrap_or_default());
-    harness.press(Key::Escape, Modifiers::NONE);
-    harness.settle();
+    type_and_enter(harness, name);
 }
 
 #[test]
 fn a_blank_agent_model_builds_the_random_walk_with_its_lines_and_equals_the_starter() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     let starter = starter_document("random_walk.toml");
     new_blank_agents(&mut harness, "Random walk");
     agent_sheet(&mut harness, &starter, "Walker", "10000");
-    click(&mut harness, ADD_MEASURE);
-    click(&mut harness, AVERAGE_MEASURE);
-    click(&mut harness, MEASURE_PROPERTY_NAME);
-    let position = named(&mut harness, "Position")
-        .into_iter()
-        .rfind(|node| node.role != egui::accesskit::Role::Label)
-        .and_then(|node| node.bounds)
-        .expect("the Position item");
-    harness.click_at(position.center());
-    click(&mut harness, DONE);
-    harness.settle();
+    add_average_measure(&mut harness, "Position");
 
     // Line 1: Repeat Steps per tick times, with an integer parameter made in place.
     add_agent_line(&mut harness, &mut seen, AddButton::Repeat, "Repeat", false);
@@ -421,19 +374,14 @@ fn build_boids_motion(harness: &mut Harness, seen: &mut Seen) {
 
 #[test]
 fn a_blank_agent_model_builds_boids_with_its_lines_and_equals_the_starter() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     let expected = boids_as_the_editor_builds_it();
     new_blank_agents(&mut harness, "Boids");
     agent_sheet(&mut harness, &expected, "Bird", "50000");
-    click(&mut harness, &add_property_name("Bird"));
-    type_into(&mut harness, "Property name", "Velocity");
-    click(&mut harness, ARROW_KIND);
-    click(&mut harness, DONE);
-    harness.settle();
+    add_property(&mut harness, &add_property_name("Bird"), "Velocity", ARROW_KIND);
     click(&mut harness, ADD_BUTTON);
     type_into(&mut harness, BUTTON_NAME_FIELD, "Randomise headings");
     click(&mut harness, &run_once("bird"));
@@ -458,20 +406,9 @@ fn a_blank_agent_model_builds_boids_with_its_lines_and_equals_the_starter() {
 
 /// Returns the labels of the items the value picker of line `line_id` of `document` offers.
 fn value_items(document: &SheetDocument, line_id: &str) -> Vec<String> {
-    let sentences = Sentences::new(document);
-    let (card, line) = document.line(line_id).expect("the line");
-    let relations = CardRelations::new(document, &document.cards[card]);
-    let context = LineContext {
-        document,
-        sentences: &sentences,
-        relations: &relations,
-        line_id,
-        line,
-    };
-    picker_for(&context, Blank::Value, None, false, "", DrawKind::Chance)
-        .groups
-        .iter()
-        .flat_map(|group| group.items.iter().map(|item| item.label.clone()))
+    picker_labels(document, line_id, Blank::Value, false, DrawKind::Chance)
+        .into_iter()
+        .map(|(_, label)| label)
         .collect()
 }
 
@@ -504,17 +441,16 @@ fn my_new_velocity_is_offered_below_the_last_change_to_velocity_and_nowhere_abov
     assert!(!value_items(&moved, "l7").iter().any(|item| item == "my new Velocity"));
 
     // The card shows the picker's item under its name on line 7 of the starter.
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     open_starter(&mut harness, "boids.toml");
     click(&mut harness, "my new Velocity");
     assert!(is_open(&mut harness, "Choose a value"));
     assert!(shows(&mut harness, "this bird's Velocity after line 6"));
 }
 
-/// Returns the notes the card draws under line `line_id` of the sheet `text`, with their colours.
+/// Returns the notes the card draws under line `line_id` of `document` with `report`, with their colours.
 fn notes_of(
     document: &SheetDocument,
     report: &henad_graph::sheet::check::SheetReport,
@@ -541,10 +477,9 @@ fn opened_notes(harness: &mut Harness, document: &SheetDocument, line_id: &str) 
 
 #[test]
 fn a_property_changed_two_ways_and_a_look_inside_a_repeat_show_their_refusals_on_the_line() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let boids = starter_document("boids.toml");
     let add = |document: &SheetDocument, inside: Option<&str>, line: SheetLine| {
         let mut builder = SheetBuilder::new(document.clone()).with_key_seed(7);
@@ -607,10 +542,9 @@ fn a_property_changed_two_ways_and_a_look_inside_a_repeat_show_their_refusals_on
 
 #[test]
 fn opening_boids_leaves_a_default_off_its_slider_steps_as_it_is() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     // Protected range keeps 8 in 0.5 to 50, off the slider's steps of 0.2 from 0.5.
     open_starter(&mut harness, "boids.toml");
     let starter = starter_document("boids.toml");
@@ -626,26 +560,14 @@ fn opening_boids_leaves_a_default_off_its_slider_steps_as_it_is() {
 /// Returns the labels of the items the picker of a `want` place on line `line_id` of `document` offers, every group
 /// in order.
 fn picker_items(document: &SheetDocument, line_id: &str, want: Blank) -> Vec<String> {
-    let sentences = Sentences::new(document);
-    let (card, line) = document.line(line_id).expect("the line");
-    let relations = CardRelations::new(document, &document.cards[card]);
-    let context = LineContext {
-        document,
-        sentences: &sentences,
-        relations: &relations,
-        line_id,
-        line,
-    };
-    let picker = if want == Blank::Value && line.kind == LineKind::LookAround {
-        looked_at_picker(&context)
-    } else {
-        picker_for(&context, want, None, false, "", DrawKind::Chance)
-    };
-    picker
-        .groups
-        .iter()
-        .flat_map(|group| group.items.iter().map(|item| item.label.clone()))
-        .collect()
+    let picker = line_picker(document, line_id, |context| {
+        if want == Blank::Value && context.line.kind == LineKind::LookAround {
+            looked_at_picker(context)
+        } else {
+            picker_for(context, want, None, false, "", DrawKind::Chance)
+        }
+    });
+    labels_of(&picker).into_iter().map(|(_, label)| label).collect()
 }
 
 #[test]
@@ -729,10 +651,9 @@ fn each_agent_slot_offers_what_fits_it() {
 
 #[test]
 fn the_agent_menus_and_pickers_show_no_forbidden_word_and_name_each_control_by_its_words() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     let mut seen = Seen::default();
     open_starter(&mut harness, "ants.toml");
     for button in AddButton::AGENTS {
@@ -805,10 +726,9 @@ fn the_agent_menus_and_pickers_show_no_forbidden_word_and_name_each_control_by_i
 
 #[test]
 fn the_ants_note_on_slower_trail_formation_stays_under_its_line_after_an_edit() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     open_starter(&mut harness, "ants.toml");
     let note = starter_document("ants.toml")
         .cards
@@ -839,7 +759,6 @@ fn number_box_on_typed(
     typed: &str,
     line: &str,
 ) -> String {
-    harness.screen = TALL_SCREEN;
     let mut builder = SheetBuilder::new(starter_document(file_name)).with_key_seed(1);
     builder
         .apply(SheetEdit::SetSlot {
@@ -868,7 +787,7 @@ fn open_typed(harness: &mut Harness, typed: &str, line: &str) -> String {
 
 #[test]
 fn a_typed_number_of_times_opens_in_the_number_box() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
     let shown = number_box_on_typed(&mut harness, "random_walk.toml", ("l1", "times"), "3", "Line 1");
@@ -877,7 +796,7 @@ fn a_typed_number_of_times_opens_in_the_number_box() {
 
 #[test]
 fn a_typed_length_opens_in_the_number_box() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
     let shown = number_box_on_typed(
@@ -892,7 +811,7 @@ fn a_typed_length_opens_in_the_number_box() {
 
 #[test]
 fn a_typed_distance_opens_in_the_number_box() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
     let shown = number_box_on_typed(&mut harness, "boids.toml", ("l1", "distance"), "25", "Line 1");
@@ -901,7 +820,7 @@ fn a_typed_distance_opens_in_the_number_box() {
 
 #[test]
 fn a_typed_strength_opens_in_the_number_box() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
     let shown = number_box_on_typed(&mut harness, "boids.toml", ("l3", "strength"), "0.05", "Line 3");
@@ -910,7 +829,7 @@ fn a_typed_strength_opens_in_the_number_box() {
 
 #[test]
 fn a_typed_minimum_opens_in_the_number_box() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
     let shown = number_box_on_typed(&mut harness, "boids.toml", ("l6", "minimum"), "2", "Line 6");
@@ -919,7 +838,7 @@ fn a_typed_minimum_opens_in_the_number_box() {
 
 #[test]
 fn a_typed_maximum_opens_in_the_number_box() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
     let shown = number_box_on_typed(&mut harness, "boids.toml", ("l6", "maximum"), "6", "Line 6");
@@ -928,7 +847,7 @@ fn a_typed_maximum_opens_in_the_number_box() {
 
 #[test]
 fn a_typed_amount_opens_in_the_number_box() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
     let shown = number_box_on_typed(&mut harness, "ants.toml", ("l3", "amount"), "4", "Line 3");
@@ -937,10 +856,9 @@ fn a_typed_amount_opens_in_the_number_box() {
 
 #[test]
 fn a_typed_number_inside_a_row_of_a_choose_opens_in_the_number_box() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
     // Line 7 compares Way's amount with 0 inside the condition of its first row, `row.0.condition.items.0.right`.
     open_starter(&mut harness, "ants.toml");
     assert_eq!(open_typed(&mut harness, "0", "Line 7"), "0");

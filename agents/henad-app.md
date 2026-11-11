@@ -200,8 +200,10 @@ later run. `src/tests/runaway.rs` holds
 `a_sweep_after_a_detach_probes_in_the_fresh_pool` and
 `quitting_does_not_wait_for_a_sweep_held_in_its_model`, over the `held` entries
 of `support.rs`, whose first build waits on a `Gate` and whose first run's steps a `StepHold`
-holds, on the step's thread or on every worker of its pool. Keep them. A test that builds calls
-`AppState::wait_for_build` before it reads the runner.
+holds, on the step's thread or on every worker of its pool. The two viewport tests draw their frame
+under a `Watchdog` that opens the gate after `WATCHDOG`, so a frame stuck on the held pool fails
+instead of hanging. Keep them. A test that builds calls `AppState::wait_for_build` before it reads
+the runner, and `support::wait_until` polls any other state a thread reaches.
 **The Parameters tab's preview mode**. `params_ui` draws `preview_params_ui` instead
 of its rows while `AppState::params_drive_preview` holds: a preview runs or builds and the selection
 is still the one `load_preview` recorded. The selected model's `param_values`, seed and schedule

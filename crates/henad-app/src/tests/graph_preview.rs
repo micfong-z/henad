@@ -9,30 +9,26 @@ use henad_compute::fault::{BUILDING, Fault};
 use henad_compute::gpu::GpuContext;
 use henad_compute::simulation::RunSetup;
 use henad_core::action::Schedule;
-use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
+use henad_core::params::ParamValue;
 use henad_graph::GraphFile;
 use henad_graph::document::World;
 use henad_graph::edit::{EditCommand, Scope};
-use henad_graph::ids::NodeId;
 use henad_graph::wgsl::ShaderRole;
 use web_time::Instant;
 
 use crate::state::{AppState, PreviewRun};
-use crate::tests::support::step_past;
+use crate::tests::support::{
+    assert_built, bind_spread_rate, graph_editor_of, headless_app, n, settle_preview, step_past,
+};
 use crate::ui::editor::graph::{GraphEdit, GraphEditor, GraphRequest};
 use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState, poll_at, preview_values};
 use crate::ui::editor::{ApplyOutcome, apply, new_graph_model, new_grid_rule};
 use crate::ui::playback::{PREVIEW_APPLY, PREVIEW_ORPHANED, preview_hover};
 
-/// Returns node `number`'s id.
-fn n(number: u32) -> NodeId {
-    NodeId::new(number).expect("an id")
-}
-
 /// Returns an app over the example models on a headless device that runs compute shaders, with the SIR starter in the
 /// Editor, or `None` to skip on a machine without a device.
 fn app_with_sir() -> Option<AppState> {
-    let mut app = AppState::headless(henad_models::example_models(), true)?;
+    let mut app = headless_app()?;
     new_graph_model(&mut app, "sir.toml");
     Some(app)
 }
@@ -42,37 +38,9 @@ fn graph(app: &mut AppState) -> &mut GraphEditor {
     app.editor.model.graph_mut().expect("a graph")
 }
 
-/// Polls the preview once now and once after the debounce, as two frames that far apart would.
-fn settle(app: &mut AppState) {
-    let ctx = egui::Context::default();
-    let now = Instant::now();
-    poll_at(&ctx, app, now);
-    poll_at(&ctx, app, now + DEBOUNCE);
-}
-
 /// Runs an edit that adds the parameter `spread_rate` and binds the infection term of the step to it.
 fn bind_new_parameter(app: &mut AppState) {
-    let ran = graph(app).edit(
-        vec![
-            EditCommand::AddParam(ParamDescriptor::new(
-                "spread_rate",
-                "Spread rate",
-                ParamKind::F32 {
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.4,
-                    step: None,
-                },
-            )),
-            EditCommand::BindParam {
-                scope: Scope::pass("step"),
-                node: n(12),
-                port: "b".to_owned(),
-                param: "spread_rate".to_owned(),
-            },
-        ],
-        None,
-    );
+    let ran = graph(app).edit(bind_spread_rate(), None);
     assert!(ran, "{:?}", graph(app).status);
 }
 
@@ -117,10 +85,7 @@ fn a_new_graph_model_previews_at_the_preview_size() {
     assert!(!app.selection_is_loaded());
     assert_eq!(&app.loaded_values[..2], &[ParamValue::U32(side), ParamValue::U32(side)]);
     app.wait_for_build();
-    assert!(
-        app.sim_thread.is_some() && app.fault.is_none(),
-        "the preview failed to build"
-    );
+    assert_built(&app, "the preview");
     assert!(app.sim_running, "the preview plays");
     step_past(&mut app, 0);
 }
@@ -130,7 +95,7 @@ fn binding_a_parameter_restarts_the_preview() {
     let Some(mut app) = app_with_sir() else {
         return;
     };
-    settle(&mut app);
+    settle_preview(&mut app);
     step_past(&mut app, 0);
     assert!(!loaded_params(&app).contains(&"spread_rate".to_owned()));
 
@@ -189,9 +154,7 @@ fn another_document_clears_the_state_of_the_preview() {
     assert!(matches!(app.editor.preview.state, PreviewState::Faulted(_)));
 
     // The next document has a checker error, so no preview replaces the state.
-    let mut broken = GraphEditor::new(
-        &GraphFile::parse(henad_graph::starters::starter("sir.toml").expect("a starter").text).expect("reads"),
-    );
+    let mut broken = graph_editor_of("sir.toml");
     assert!(broken.edit(
         vec![EditCommand::Disconnect {
             scope: Scope::pass("step"),
@@ -203,7 +166,7 @@ fn another_document_clears_the_state_of_the_preview() {
     assert!(broken.has_errors(), "the disconnected input is an error");
     let file = GraphFile::parse(&broken.text()).expect("the broken document reads");
     app.editor.load_graph(&file, None);
-    settle(&mut app);
+    settle_preview(&mut app);
     assert_eq!(
         app.editor.preview.state,
         PreviewState::Idle,
@@ -220,7 +183,7 @@ fn a_preview_that_outlived_its_graph_reports_to_the_fault_dialog() {
     let Some(mut app) = app_with_sir() else {
         return;
     };
-    settle(&mut app);
+    settle_preview(&mut app);
     app.wait_for_build();
     assert!(app.preview().is_some());
     assert_eq!(preview_hover(&app), PREVIEW_APPLY);
@@ -243,7 +206,7 @@ fn an_invalid_edit_leaves_the_preview_running() {
     let Some(mut app) = app_with_sir() else {
         return;
     };
-    settle(&mut app);
+    settle_preview(&mut app);
     app.wait_for_build();
     let running = app.loaded_entry().expect("the preview runs").source().clone();
     let ran = graph(&mut app).edit(
@@ -255,7 +218,7 @@ fn an_invalid_edit_leaves_the_preview_running() {
         None,
     );
     assert!(ran && graph(&mut app).has_errors());
-    settle(&mut app);
+    settle_preview(&mut app);
     assert!(!app.editor.preview.is_due());
     assert_eq!(app.loaded_entry().map(|entry| entry.source()), Some(&running));
     assert!(app.sim_thread.is_some(), "the preview kept running");
@@ -271,7 +234,7 @@ fn an_edit_during_a_full_size_run_past_tick_zero_leaves_that_run_going() {
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     step_past(&mut app, 0);
     bind_new_parameter(&mut app);
-    settle(&mut app);
+    settle_preview(&mut app);
     assert_eq!(app.editor.preview.state, PreviewState::Waiting);
     assert_eq!(app.preview(), None, "the full-size run keeps going");
     assert_eq!(app.loaded_values[0], ParamValue::U32(1024));
@@ -279,7 +242,7 @@ fn an_edit_during_a_full_size_run_past_tick_zero_leaves_that_run_going() {
 
     // The run ends, and the preview takes the Viewport.
     app.offload_simulation();
-    settle(&mut app);
+    settle_preview(&mut app);
     assert!(matches!(app.editor.preview.state, PreviewState::Running(_)));
     assert!(loaded_params(&app).contains(&"spread_rate".to_owned()));
 }
@@ -292,12 +255,12 @@ fn a_build_after_the_edit_replaces_the_waiting_preview() {
     apply(&mut app);
     step_past(&mut app, 0);
     bind_new_parameter(&mut app);
-    settle(&mut app);
+    settle_preview(&mut app);
     assert_eq!(app.editor.preview.state, PreviewState::Waiting);
 
     app.reset_simulation();
     app.wait_for_build();
-    settle(&mut app);
+    settle_preview(&mut app);
     assert_eq!(app.editor.preview.state, PreviewState::Idle);
     assert!(!app.editor.preview.is_due());
     assert_eq!(app.preview(), None, "the Build keeps the Viewport");
@@ -305,7 +268,7 @@ fn a_build_after_the_edit_replaces_the_waiting_preview() {
 
 #[test]
 fn a_run_at_tick_zero_gives_way_to_the_preview() {
-    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     app.select_model("gpu_game_of_life");
@@ -313,7 +276,7 @@ fn a_run_at_tick_zero_gives_way_to_the_preview() {
     app.wait_for_build();
     assert!(app.run_at_start());
     new_graph_model(&mut app, "sir.toml");
-    settle(&mut app);
+    settle_preview(&mut app);
     assert_eq!(app.loaded_id(), Some("node_sir"));
     assert!(app.preview().is_some());
     assert_eq!(
@@ -328,7 +291,7 @@ fn apply_replaces_a_running_preview_with_the_full_size_run() {
     let Some(mut app) = app_with_sir() else {
         return;
     };
-    settle(&mut app);
+    settle_preview(&mut app);
     step_past(&mut app, 0);
     apply(&mut app);
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
@@ -337,25 +300,22 @@ fn apply_replaces_a_running_preview_with_the_full_size_run() {
     assert_eq!(&app.loaded_values[..2], &[ParamValue::U32(1024), ParamValue::U32(1024)]);
     assert!(app.selection_is_loaded());
     app.wait_for_build();
-    settle(&mut app);
+    settle_preview(&mut app);
     assert_eq!(app.preview(), None, "an unchanged document builds no preview");
 }
 
 #[test]
 fn an_agents_graph_previews_at_the_preview_count_and_applies_at_its_own() {
-    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     new_graph_model(&mut app, "boids.toml");
-    settle(&mut app);
+    settle_preview(&mut app);
     assert_eq!(app.preview(), Some(PreviewRun::Agents { count: PREVIEW_AGENTS }));
     assert_eq!(app.loaded_id(), Some("node_boids"));
     assert_eq!(app.loaded_values[0], ParamValue::U32(PREVIEW_AGENTS));
     app.wait_for_build();
-    assert!(
-        app.sim_thread.is_some() && app.fault.is_none(),
-        "the preview failed to build"
-    );
+    assert_built(&app, "the preview");
     let shaders = graph(&mut app).program().clone().expect("the starter compiles");
     assert!(
         shaders
@@ -369,7 +329,7 @@ fn an_agents_graph_previews_at_the_preview_count_and_applies_at_its_own() {
     assert_eq!(app.preview(), None);
     assert_eq!(app.loaded_values[0], ParamValue::U32(50000));
     app.wait_for_build();
-    assert!(app.sim_thread.is_some() && app.fault.is_none());
+    assert_built(&app, "the applied graph");
 }
 
 #[test]
@@ -377,7 +337,7 @@ fn moving_a_node_leaves_the_preview_running() {
     let Some(mut app) = app_with_sir() else {
         return;
     };
-    settle(&mut app);
+    settle_preview(&mut app);
     let run = app.preview().expect("the preview runs");
     let key = graph(&mut app).preview_key();
     assert!(graph(&mut app).edit(
@@ -406,7 +366,7 @@ fn a_preview_keeps_a_side_below_the_limit() {
         grid.width = 100;
     }
     assert!(graph(&mut app).edit(vec![EditCommand::SetWorld(world)], None));
-    settle(&mut app);
+    settle_preview(&mut app);
     assert_eq!(
         app.preview(),
         Some(PreviewRun::Grid {
@@ -444,7 +404,7 @@ fn view_in_viewport_previews_a_view_pass_of_the_output() {
     let Some(mut app) = app_with_sir() else {
         return;
     };
-    settle(&mut app);
+    settle_preview(&mut app);
     let text = graph(&mut app).text();
     let ctx = egui::Context::default();
     graph(&mut app).run(
@@ -468,7 +428,7 @@ fn view_in_viewport_previews_a_view_pass_of_the_output() {
         .expect("a display shader");
     assert_eq!(display.passes(), ["view_in_viewport"]);
     let before = app.loaded_entry().expect("the preview runs").source().clone();
-    settle(&mut app);
+    settle_preview(&mut app);
     assert_ne!(
         app.loaded_entry().map(|entry| entry.source()),
         Some(&before),
@@ -598,7 +558,7 @@ in.value = "n4"
 
 #[test]
 fn the_submission_budget_refuses_apply_at_full_size_and_lets_the_preview_run() {
-    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     let file = henad_graph::GraphFile::parse(&heavy_trials(4000)).expect("the file reads");
@@ -615,14 +575,14 @@ fn the_submission_budget_refuses_apply_at_full_size_and_lets_the_preview_run() {
     }
     assert!(!app.has_simulation(), "nothing was built");
 
-    settle(&mut app);
+    settle_preview(&mut app);
     assert!(
         matches!(app.editor.preview.state, PreviewState::Running(_)),
         "{:?}",
         app.editor.preview.state
     );
     app.wait_for_build();
-    assert!(app.sim_thread.is_some() && app.fault.is_none());
+    assert_built(&app, "the preview");
 }
 
 #[test]

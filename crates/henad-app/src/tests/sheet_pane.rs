@@ -1,13 +1,13 @@
 //! Tests of the Sheet pane's editing: a blank model built into Game of Life's start by accessible names, the empty
 //! world, the restart rule after the first tick, the grid limit, the New parameter dialog's starting values, the
-//! parameters, measures, colours and buttons, the model name, Undo and Redo, the rebuild of the Game of Life starter
-//! and the words rule over every section.
+//! parameters, measures, colours and buttons, the model name, Undo and Redo, the rebuild of the Game of Life starter,
+//! the pane's share of the Editor's width in each layout, and the words rule over every section.
 
-use egui::{Event, Key, Modifiers};
+use egui::{Key, Modifiers};
 use henad_graph::limits::MAX_GRID_SIDE;
 use henad_graph::sheet::document::{
-    ButtonStepRule, ColorRuleKind, Edges, MeasureRule, PropertyType, ShadeHue, SheetChip, SheetDocument, SheetLiteral,
-    SheetValue, Slot, StartRule,
+    ButtonStepRule, ColorRuleKind, Edges, MeasureRule, PropertyType, ShadeHue, SheetChip, SheetLiteral, SheetValue,
+    Slot, StartRule,
 };
 use henad_graph::sheet::edit::{PALETTE_COLORS, SheetEdit};
 use henad_graph::sheet::sentence::{
@@ -20,19 +20,24 @@ use henad_graph::sheet::sentence::{
     START_AGAIN_TO_SEE, STATES_KIND, TYPE_A_CHANCE, TYPE_ONE_NUMBER, UNDO, USE_A_PARAMETER, WALLS_SENTENCE,
     WORLD_EMPTY, WORLD_QUESTION, name_reserved, run_once, start_again_for, world_side_out_of_range,
 };
-use henad_graph::sheet::{ParsedSheet, starters};
-use web_time::Instant;
+use henad_graph::sheet::starters;
 
 use crate::state::PreviewRun;
-use crate::tests::support::{
-    Harness, Node, align_with_starter, forbidden_words, tick_zero_stat, wait_for_snapshot, without_card_lines,
+use crate::tests::panes::{
+    Seen, add_property, add_states_property, apply_sheet_edit, assert_control_holds, assert_no_forbidden_word,
+    build_life_sections, center_of, choose, click, enter_into, field_value, sheet, sheet_mut, shows_or_notice,
+    starter_document, text, type_and_enter, type_into,
 };
-use crate::ui::editor::EditorModel;
-use crate::ui::editor::preview::{DEBOUNCE, PreviewState, poll_at};
+use crate::tests::support::{
+    Harness, TALL_SCREEN, align_with_starter, settle_preview, starter_text, tick_zero_stat, wait_for_snapshot,
+    without_card_lines,
+};
+use crate::ui::dock::Layout;
+use crate::ui::editor::preview::PreviewState;
 use crate::ui::editor::sheet::new_model::create_blank_model;
 use crate::ui::editor::sheet::sheet_pane::slider_step;
 use crate::ui::editor::sheet::widgets::{NewParameterDialog, NumberUse, default_max};
-use crate::ui::editor::sheet::{CARD_PANE, SHEET_PANE, SheetEditor};
+use crate::ui::editor::sheet::{CARD_PANE, SHEET_PANE};
 
 /// Returns a harness whose Editor holds a blank model, or `None` to skip on a machine without a device.
 fn blank() -> Option<Harness> {
@@ -40,27 +45,6 @@ fn blank() -> Option<Harness> {
     create_blank_model(&mut harness.app, "");
     harness.settle();
     Some(harness)
-}
-
-/// Sheet in the harness's Editor.
-pub(super) fn sheet(harness: &Harness) -> &SheetEditor {
-    harness.app.editor.model.sheet().expect("a sheet")
-}
-
-/// Sheet in the harness's Editor, to change.
-pub(super) fn sheet_mut(harness: &mut Harness) -> &mut SheetEditor {
-    match &mut harness.app.editor.model {
-        EditorModel::Sheet(sheet) => sheet,
-        _ => panic!("no sheet"),
-    }
-}
-
-/// Polls the preview once now and once after the debounce, as two frames that far apart would.
-fn settle_preview(harness: &mut Harness) {
-    let ctx = egui::Context::default();
-    let now = Instant::now();
-    poll_at(&ctx, &mut harness.app, now);
-    poll_at(&ctx, &mut harness.app, now + DEBOUNCE);
 }
 
 /// Drags the divider between the Sheet pane and the Card pane to `x` points from the Editor's left edge.
@@ -91,59 +75,9 @@ fn drag_sheet_divider(harness: &mut Harness, x: f32) {
     harness.frame(vec![egui::Event::PointerGone]);
 }
 
-/// Returns the centre of the one node of a settled frame named exactly `name`.
-pub(super) fn center_of(harness: &mut Harness, name: &str) -> egui::Pos2 {
-    let nodes = harness.settle();
-    let found: Vec<&Node> = nodes
-        .iter()
-        .filter(|node| node.label == name && node.bounds.is_some())
-        .collect();
-    assert_eq!(found.len(), 1, "one widget is named {name}: {found:?}");
-    found[0].bounds.expect("bounds").center()
-}
-
-/// Clicks the one widget named exactly `name`.
-pub(super) fn click(harness: &mut Harness, name: &str) {
-    let position = center_of(harness, name);
-    harness.click_at(position);
-}
-
-/// Replaces the text of the field named `name` with `text`, without committing it.
-pub(super) fn type_into(harness: &mut Harness, name: &str, text: &str) {
-    click(harness, name);
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text(text.to_owned())]);
-}
-
-/// Replaces the text of the field named `name` with `text` and presses Enter.
-pub(super) fn enter_into(harness: &mut Harness, name: &str, text: &str) {
-    type_into(harness, name, text);
-    harness.press(Key::Enter, Modifiers::NONE);
-    harness.settle();
-}
-
-/// Chooses `item` in the select named `select`.
-pub(super) fn choose(harness: &mut Harness, select: &str, item: &str) {
-    click(harness, select);
-    click(harness, item);
-    harness.settle();
-}
-
-/// Returns whether a settled frame shows `text` as a label, a value or a description, or as the end of one after an
-/// icon.
-pub(super) fn shows(harness: &mut Harness, text: &str) -> bool {
-    harness
-        .accessible_texts()
-        .iter()
-        .any(|shown| shown == text || shown.ends_with(&format!(" {text}")))
-}
-
 /// Adds the property Status with the states Dead and Alive through the property form.
 fn add_status(harness: &mut Harness) {
-    click(harness, ADD_PROPERTY);
-    type_into(harness, "Property name", "Status");
-    type_into(harness, "State 1 name", "Dead");
-    type_into(harness, "State 2 name", "Alive");
+    add_states_property(harness, ADD_PROPERTY, "Status", &["Dead", "Alive"]);
     click(harness, DONE);
     harness.settle();
 }
@@ -166,7 +100,7 @@ fn a_blank_model_builds_the_life_start_by_accessible_names() {
     };
     click(&mut harness, "New model");
     assert!(
-        shows(&mut harness, WORLD_QUESTION),
+        shows_or_notice(&mut harness, WORLD_QUESTION),
         "Blank asks what the world is made of"
     );
     click(&mut harness, "Create");
@@ -175,7 +109,7 @@ fn a_blank_model_builds_the_life_start_by_accessible_names() {
     assert_eq!(document.sheet.name, "Untitled model");
     assert_eq!((document.world.width, document.world.height), (100, 100));
     assert_eq!(document.world.edges, Edges::Wrap);
-    assert!(shows(&mut harness, SHEET_EMPTY) && shows(&mut harness, BLANK_MODEL_CARD));
+    assert!(shows_or_notice(&mut harness, SHEET_EMPTY) && shows_or_notice(&mut harness, BLANK_MODEL_CARD));
 
     add_status(&mut harness);
     let status = &sheet(&harness).document().cells.as_ref().expect("cells")[0];
@@ -207,29 +141,26 @@ fn a_blank_model_builds_the_life_start_by_accessible_names() {
         Slot::Filled(SheetValue::Chip(SheetChip::Param("initial_density".to_owned())))
     );
     assert!(
-        shows(&mut harness, "Initial density"),
+        shows_or_notice(&mut harness, "Initial density"),
         "the parameter shows as its chip"
     );
 
     // The preview draws the start at tick 0. A count of Alive, added here by command, reads its share.
-    settle_preview(&mut harness);
-    sheet_mut(&mut harness)
-        .edit(false, false, |builder| {
-            builder
-                .apply(SheetEdit::AddMeasure {
-                    name: "Alive".to_owned(),
-                    rule: MeasureRule::CountInState,
-                    over: Some("cells".to_owned()),
-                    property: Some("status".to_owned()),
-                    state: Some("alive".to_owned()),
-                    event: None,
-                    value: Slot::Blank,
-                    color: None,
-                })
-                .map(drop)
-        })
-        .expect("the measure is added");
-    settle_preview(&mut harness);
+    settle_preview(&mut harness.app);
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::AddMeasure {
+            name: "Alive".to_owned(),
+            rule: MeasureRule::CountInState,
+            over: Some("cells".to_owned()),
+            property: Some("status".to_owned()),
+            state: Some("alive".to_owned()),
+            event: None,
+            value: Slot::Blank,
+            color: None,
+        },
+    );
+    settle_preview(&mut harness.app);
     assert_eq!(
         harness.app.preview(),
         Some(PreviewRun::Grid {
@@ -248,20 +179,20 @@ fn a_blank_world_shows_nothing_until_a_property_is_added() {
     };
     // A preview of another sheet runs, and the blank model takes it down.
     harness.open_sheet(starters()[0].text);
-    settle_preview(&mut harness);
+    settle_preview(&mut harness.app);
     assert!(harness.app.preview().is_some());
     create_blank_model(&mut harness.app, "");
-    settle_preview(&mut harness);
+    settle_preview(&mut harness.app);
     assert_eq!(harness.app.preview(), None, "the Viewport draws nothing");
     assert_eq!(harness.app.editor.preview.state, PreviewState::Idle);
     assert!(
-        shows(&mut harness, WORLD_EMPTY),
+        shows_or_notice(&mut harness, WORLD_EMPTY),
         "the preview line says how to see the world"
     );
 
     add_status(&mut harness);
-    assert!(!shows(&mut harness, WORLD_EMPTY));
-    settle_preview(&mut harness);
+    assert!(!shows_or_notice(&mut harness, WORLD_EMPTY));
+    settle_preview(&mut harness.app);
     assert!(matches!(harness.app.editor.preview.state, PreviewState::Running(_)));
 }
 
@@ -271,7 +202,7 @@ fn after_play_a_start_edit_waits_and_a_size_edit_restarts_with_the_notice() {
         return;
     };
     harness.open_sheet(starters()[0].text);
-    settle_preview(&mut harness);
+    settle_preview(&mut harness.app);
     harness.app.wait_for_build();
     // Until the first tick, a start edit draws the start again.
     let key = sheet(&harness).preview_key();
@@ -281,8 +212,8 @@ fn after_play_a_start_edit_waits_and_a_size_edit_restarts_with_the_notice() {
         key,
         "a start edit at tick 0 redraws the start"
     );
-    assert!(!shows(&mut harness, START_AGAIN_TO_SEE));
-    settle_preview(&mut harness);
+    assert!(!shows_or_notice(&mut harness, START_AGAIN_TO_SEE));
+    settle_preview(&mut harness.app);
     harness.app.wait_for_build();
 
     // Play, as Playback's button presses it.
@@ -293,8 +224,8 @@ fn after_play_a_start_edit_waits_and_a_size_edit_restarts_with_the_notice() {
     let key = sheet(&harness).preview_key();
     choose(&mut harness, "Status starts as", "All Alive");
     assert_eq!(sheet(&harness).preview_key(), key, "a start edit after Play waits");
-    assert!(shows(&mut harness, START_AGAIN_TO_SEE));
-    assert!(!shows(&mut harness, RESTART_NOTICE));
+    assert!(shows_or_notice(&mut harness, START_AGAIN_TO_SEE));
+    assert!(!shows_or_notice(&mut harness, RESTART_NOTICE));
     // A parameter made from a start's field is a changed start too.
     choose(&mut harness, "Status starts as", "By chance");
     click(&mut harness, "Status starts as, row 1: use a parameter");
@@ -310,14 +241,14 @@ fn after_play_a_start_edit_waits_and_a_size_edit_restarts_with_the_notice() {
             .any(|parameter| parameter.name == "Seed share")
     );
     assert_eq!(sheet(&harness).preview_key(), key, "a new parameter in a start waits");
-    assert!(shows(&mut harness, START_AGAIN_TO_SEE));
-    assert!(!shows(&mut harness, RESTART_NOTICE));
+    assert!(shows_or_notice(&mut harness, START_AGAIN_TO_SEE));
+    assert!(!shows_or_notice(&mut harness, RESTART_NOTICE));
 
     enter_into(&mut harness, "Width in cells", "200");
     assert_eq!(sheet(&harness).document().world.width, 200);
     assert_ne!(sheet(&harness).preview_key(), key, "a size edit restarts the world");
-    assert!(shows(&mut harness, RESTART_NOTICE));
-    settle_preview(&mut harness);
+    assert!(shows_or_notice(&mut harness, RESTART_NOTICE));
+    settle_preview(&mut harness.app);
     harness.app.wait_for_build();
     assert_eq!(
         harness.app.preview(),
@@ -350,15 +281,14 @@ fn the_world_takes_the_engine_grid_limit_and_refuses_past_it() {
         1024,
         "a side past the limit is refused"
     );
-    assert!(shows(&mut harness, &world_side_out_of_range(MAX_GRID_SIDE)));
-    let field = harness
-        .settle()
-        .into_iter()
-        .find(|node| node.label == "Width in cells")
-        .expect("the width field");
-    assert_eq!(field.value, past, "the field keeps the refused text");
+    assert!(shows_or_notice(&mut harness, &world_side_out_of_range(MAX_GRID_SIDE)));
+    assert_eq!(
+        field_value(&mut harness, "Width in cells"),
+        past,
+        "the field keeps the refused text"
+    );
     enter_into(&mut harness, "Width in cells", "abc");
-    assert!(shows(&mut harness, TYPE_ONE_NUMBER));
+    assert!(shows_or_notice(&mut harness, TYPE_ONE_NUMBER));
     for part in ["2.5", "50%"] {
         enter_into(&mut harness, "Width in cells", part);
         assert_eq!(
@@ -366,15 +296,18 @@ fn the_world_takes_the_engine_grid_limit_and_refuses_past_it() {
             1024,
             "{part} is no whole number of cells"
         );
-        assert!(shows(&mut harness, &world_side_out_of_range(MAX_GRID_SIDE)));
+        assert!(shows_or_notice(&mut harness, &world_side_out_of_range(MAX_GRID_SIDE)));
     }
     enter_into(&mut harness, "Width in cells", "120");
     assert_eq!(sheet(&harness).document().world.width, 120);
-    assert!(!shows(&mut harness, TYPE_ONE_NUMBER), "a kept value clears the message");
+    assert!(
+        !shows_or_notice(&mut harness, TYPE_ONE_NUMBER),
+        "a kept value clears the message"
+    );
 
     choose(&mut harness, "Edges", "Walls");
     assert_eq!(sheet(&harness).document().world.edges, Edges::Walls);
-    assert!(shows(&mut harness, WALLS_SENTENCE));
+    assert!(shows_or_notice(&mut harness, WALLS_SENTENCE));
 
     choose(&mut harness, "Unit of one tick", "days");
     let time = sheet(&harness).document().time.expect("a time scale");
@@ -387,16 +320,6 @@ fn the_world_takes_the_engine_grid_limit_and_refuses_past_it() {
     assert_eq!(sheet(&harness).document().time, None);
 }
 
-/// Returns the value of the field named exactly `name` in a settled frame.
-pub(super) fn field_value(harness: &mut Harness, name: &str) -> String {
-    harness
-        .settle()
-        .into_iter()
-        .find(|node| node.label == name)
-        .map(|node| node.value)
-        .unwrap_or_else(|| panic!("no field is named {name}"))
-}
-
 #[test]
 fn a_refused_text_stays_with_the_sheet_and_the_row_it_was_typed_in() {
     let Some(mut harness) = Harness::new() else {
@@ -405,32 +328,35 @@ fn a_refused_text_stays_with_the_sheet_and_the_row_it_was_typed_in() {
     let past = world_side_out_of_range(MAX_GRID_SIDE);
     harness.open_sheet(starters()[0].text);
     enter_into(&mut harness, "Width in cells", "20000");
-    assert!(shows(&mut harness, &past));
+    assert!(shows_or_notice(&mut harness, &past));
     create_blank_model(&mut harness.app, "");
     assert_eq!(field_value(&mut harness, "Width in cells"), "100");
-    assert!(!shows(&mut harness, &past), "a new sheet shows no message of the last");
+    assert!(
+        !shows_or_notice(&mut harness, &past),
+        "a new sheet shows no message of the last"
+    );
 
     // Two blank models both name their first property status.
     let chance = "Status starts as, row 1: chance";
     add_status(&mut harness);
     choose(&mut harness, "Status starts as", "By chance");
     enter_into(&mut harness, chance, "1.5");
-    assert!(shows(&mut harness, CHANCE_OUT_OF_RANGE));
+    assert!(shows_or_notice(&mut harness, CHANCE_OUT_OF_RANGE));
     create_blank_model(&mut harness.app, "");
     add_status(&mut harness);
     choose(&mut harness, "Status starts as", "By chance");
     assert_eq!(field_value(&mut harness, chance), "");
-    assert!(!shows(&mut harness, CHANCE_OUT_OF_RANGE));
+    assert!(!shows_or_notice(&mut harness, CHANCE_OUT_OF_RANGE));
 
     // A row that takes the place of a removed row shows its own chance.
     click(&mut harness, "Add row to Status starts as");
     enter_into(&mut harness, "Status starts as, row 2: chance", "0.2");
     enter_into(&mut harness, chance, "1.5");
-    assert!(shows(&mut harness, CHANCE_OUT_OF_RANGE));
+    assert!(shows_or_notice(&mut harness, CHANCE_OUT_OF_RANGE));
     click(&mut harness, "Remove row 1 of Status starts as");
     harness.settle();
     assert_eq!(field_value(&mut harness, chance), "0.2");
-    assert!(!shows(&mut harness, CHANCE_OUT_OF_RANGE));
+    assert!(!shows_or_notice(&mut harness, CHANCE_OUT_OF_RANGE));
 }
 
 #[test]
@@ -469,28 +395,19 @@ fn a_starts_as_chance_takes_a_percent_and_refuses_what_is_no_chance() {
     assert_eq!(chance(&harness), Slot::Blank, "a new row's chance is empty");
     let field = "Status starts as, row 1: chance";
     enter_into(&mut harness, field, "1.5");
-    assert!(shows(&mut harness, CHANCE_OUT_OF_RANGE));
+    assert!(shows_or_notice(&mut harness, CHANCE_OUT_OF_RANGE));
     assert_eq!(chance(&harness), Slot::Blank);
     enter_into(&mut harness, field, "abc");
-    assert!(shows(&mut harness, TYPE_A_CHANCE));
+    assert!(shows_or_notice(&mut harness, TYPE_A_CHANCE));
     enter_into(&mut harness, field, "30%");
     assert_eq!(
         chance(&harness),
         Slot::Filled(SheetValue::Literal(SheetLiteral::Percent(30.0)))
     );
-    let shown = harness
-        .settle()
-        .into_iter()
-        .find(|node| node.label == field)
-        .expect("the chance field");
-    assert_eq!(shown.value, "30%", "a percent shows as typed");
+    assert_eq!(field_value(&mut harness, field), "30%", "a percent shows as typed");
 
     // A Number property starts at a value, or at a random number between two values.
-    click(&mut harness, ADD_PROPERTY);
-    type_into(&mut harness, "Property name", "Food");
-    click(&mut harness, NUMBER_KIND);
-    click(&mut harness, DONE);
-    harness.settle();
+    add_property(&mut harness, ADD_PROPERTY, "Food", NUMBER_KIND);
     enter_into(&mut harness, "Food starts as: number", "2.5");
     let food = |harness: &Harness| {
         sheet(harness).document().cells.as_ref().expect("cells")[1]
@@ -551,7 +468,7 @@ fn editing_a_property_renames_recolors_and_changes_its_kind() {
     click(&mut harness, DELETE_PROPERTY);
     harness.settle();
     assert!(sheet(&harness).shows_nothing());
-    assert!(shows(&mut harness, SHEET_EMPTY));
+    assert!(shows_or_notice(&mut harness, SHEET_EMPTY));
 }
 
 #[test]
@@ -561,14 +478,14 @@ fn the_property_form_checks_in_the_order_of_the_page() {
     };
     click(&mut harness, ADD_PROPERTY);
     click(&mut harness, DONE);
-    assert!(shows(&mut harness, PROPERTY_NAME_MISSING));
+    assert!(shows_or_notice(&mut harness, PROPERTY_NAME_MISSING));
     type_into(&mut harness, "Property name", "Status");
     type_into(&mut harness, "State 1 name", "Dead");
     click(&mut harness, DONE);
-    assert!(shows(&mut harness, "Give the property at least two states."));
+    assert!(shows_or_notice(&mut harness, "Give the property at least two states."));
     type_into(&mut harness, "State 2 name", "dead");
     click(&mut harness, DONE);
-    assert!(shows(
+    assert!(shows_or_notice(
         &mut harness,
         "Two states have the same name. Give each state its own name."
     ));
@@ -578,15 +495,18 @@ fn the_property_form_checks_in_the_order_of_the_page() {
     click(&mut harness, ADD_PROPERTY);
     type_into(&mut harness, "Property name", "status");
     click(&mut harness, DONE);
-    assert!(shows(&mut harness, "A property called status already exists."));
+    assert!(shows_or_notice(
+        &mut harness,
+        "A property called status already exists."
+    ));
 
     // A name whose id Henad keeps for itself is refused in words, never by its id.
     type_into(&mut harness, "Property name", "Count");
     type_into(&mut harness, "State 1 name", "Few");
     type_into(&mut harness, "State 2 name", "Many");
     click(&mut harness, DONE);
-    assert!(shows(&mut harness, &name_reserved("Count")));
-    assert!(!shows(&mut harness, "The id 'count' is reserved."));
+    assert!(shows_or_notice(&mut harness, &name_reserved("Count")));
+    assert!(!shows_or_notice(&mut harness, "The id 'count' is reserved."));
 }
 
 #[test]
@@ -651,81 +571,71 @@ fn the_edited_sections_show_no_forbidden_word_in_any_state() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    let mut texts = Vec::new();
-    let mut states = 0;
-    let mut record = |harness: &mut Harness| {
-        texts.push(harness.accessible_texts());
-        states += 1;
-    };
+    let mut seen = Seen::default();
     click(&mut harness, "New model");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Create");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, ADD_PROPERTY);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, DONE);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "State 1 colour: Dark grey");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Purple");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, NUMBER_KIND);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, INTEGER_KIND);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, STATES_KIND);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, CANCEL);
     add_status(&mut harness);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Status starts as");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "By chance");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Status starts as, row 1: use a parameter");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, NEW_PARAMETER);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, CREATE_PARAMETER);
-    record(&mut harness);
+    seen.look(&mut harness);
     type_into(&mut harness, "Parameter name", "Initial density");
     click(&mut harness, CREATE_PARAMETER);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Initial density");
-    record(&mut harness);
+    seen.look(&mut harness);
     harness.press(Key::Escape, Modifiers::NONE);
     click(&mut harness, "Add row to Status starts as");
-    record(&mut harness);
+    seen.look(&mut harness);
     enter_into(&mut harness, "Status starts as, row 2: chance", "1.5");
-    record(&mut harness);
+    seen.look(&mut harness);
     enter_into(&mut harness, "Status starts as, row 2: chance", "abc");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Edges");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Walls");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Unit of one tick");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "days");
-    record(&mut harness);
+    seen.look(&mut harness);
     enter_into(&mut harness, "Length of one tick", "abc");
-    record(&mut harness);
+    seen.look(&mut harness);
     enter_into(&mut harness, "Width in cells", "0");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Edit property Status");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, CANCEL);
-    click(&mut harness, ADD_PROPERTY);
-    type_into(&mut harness, "Property name", "Food");
-    click(&mut harness, NUMBER_KIND);
-    click(&mut harness, DONE);
-    record(&mut harness);
+    add_property(&mut harness, ADD_PROPERTY, "Food", NUMBER_KIND);
+    seen.look(&mut harness);
     choose(&mut harness, "Food starts as", "A random number");
-    record(&mut harness);
-    assert!(states >= 25, "only {states} states were drawn");
-    let all: Vec<String> = texts.into_iter().flatten().collect();
-    let found = forbidden_words(&all);
-    assert!(found.is_empty(), "forbidden words: {found:?}");
+    seen.look(&mut harness);
+    assert!(seen.looks() >= 25, "only {} states were drawn", seen.looks());
+    assert_no_forbidden_word(&seen);
 
     // Each control with words of its own holds them in its name.
     let nodes = harness.settle();
@@ -747,104 +657,26 @@ fn the_edited_sections_show_no_forbidden_word_in_any_state() {
     }
 }
 
-/// Asserts that a button or a radio button of `nodes` shows `visible` and that its name holds it, a leading "+ " and
-/// a trailing "..." aside.
-pub(super) fn assert_control_holds(nodes: &[Node], visible: &str) {
-    use egui::accesskit::Role;
-
-    let words = visible.trim_start_matches("+ ").trim_end_matches("...").to_lowercase();
-    let named = nodes.iter().any(|node| {
-        matches!(node.role, Role::Button | Role::RadioButton | Role::CheckBox)
-            && node.label.to_lowercase().contains(&words)
-    });
-    assert!(named, "no control's name holds its visible words {visible:?}");
-}
-
 // Parameters, measures, colours, buttons, the model name and undo
-
-/// Height in points of a screen that holds every section of a long sheet.
-pub(super) const TALL_SCREEN: egui::Vec2 = egui::vec2(1600.0, 2600.0);
-
-/// Returns the document of the starter whose file is named `file_name`.
-pub(super) fn starter_document(file_name: &str) -> SheetDocument {
-    let starter = starters()
-        .iter()
-        .find(|starter| starter.file_name == file_name)
-        .expect("the starter");
-    ParsedSheet::parse(starter.text)
-        .expect("the starter reads")
-        .into_document()
-}
-
-/// Returns the canonical text of the sheet in the harness's Editor.
-pub(super) fn text(harness: &Harness) -> String {
-    sheet(harness).text().to_owned()
-}
-
-/// Pushes the sheet's text onto `texts` when it differs from the last text there.
-fn record_text(harness: &Harness, texts: &mut Vec<String>) {
-    let now = text(harness);
-    if texts.last() != Some(&now) {
-        texts.push(now);
-    }
-}
 
 #[test]
 fn a_blank_model_builds_the_life_sheet_and_undo_walks_back_to_blank() {
-    let Some(mut harness) = Harness::new() else {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    harness.screen = TALL_SCREEN;
-    click(&mut harness, "New model");
-    harness.click_name_field();
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text("Game of Life".to_owned())]);
-    click(&mut harness, "Create");
-    harness.settle();
-    let mut texts = vec![text(&harness)];
-
-    enter_into(&mut harness, "Width in cells", "1024");
-    record_text(&harness, &mut texts);
-    enter_into(&mut harness, "Height in cells", "1024");
-    record_text(&harness, &mut texts);
-    click(&mut harness, ADD_PROPERTY);
-    type_into(&mut harness, "Property name", "Status");
-    type_into(&mut harness, "State 1 name", "Dead");
-    type_into(&mut harness, "State 2 name", "Alive");
-    click(&mut harness, "State 2 colour: Blue");
-    click(&mut harness, "Green");
-    click(&mut harness, DONE);
-    harness.settle();
-    record_text(&harness, &mut texts);
-    choose(&mut harness, "Status starts as", "By chance");
-    record_text(&harness, &mut texts);
-    start_alive_by_chance(&mut harness);
-    record_text(&harness, &mut texts);
-    click(&mut harness, "Plot Alive");
-    record_text(&harness, &mut texts);
-    choose(&mut harness, COLOR_CELLS_BY, "Status");
-    record_text(&harness, &mut texts);
-    let starter = starter_document("game_of_life.toml");
-    let purpose = starter.sheet.purpose.clone().expect("a purpose");
-    type_into(&mut harness, "Purpose", &purpose);
-    harness.press(Key::Escape, Modifiers::NONE);
-    harness.settle();
-    record_text(&harness, &mut texts);
-    click(&mut harness, ADD_BUTTON);
-    type_into(&mut harness, BUTTON_NAME_FIELD, "Randomise");
-    choose(&mut harness, START_AGAIN_FOR, "Status");
-    click(&mut harness, DONE);
-    harness.settle();
-    record_text(&harness, &mut texts);
+    let mut texts = build_life_sections(&mut harness, &mut Seen::default());
     click(&mut harness, ADD_BUTTON);
     type_into(&mut harness, BUTTON_NAME_FIELD, "Clear");
     click(&mut harness, &run_once("cell"));
     click(&mut harness, DONE);
     harness.settle();
-    record_text(&harness, &mut texts);
-    assert!(shows(&mut harness, BUTTON_CARD_EMPTY), "the Clear card has no line yet");
+    texts.push(text(&harness));
+    assert!(
+        shows_or_notice(&mut harness, BUTTON_CARD_EMPTY),
+        "the Clear card has no line yet"
+    );
 
-    let expected = without_card_lines(&starter);
+    let expected = without_card_lines(&starter_document("game_of_life.toml"));
     let aligned = align_with_starter(sheet(&harness).document(), &expected);
     assert_eq!(
         aligned.to_text().expect("the rebuild writes"),
@@ -944,7 +776,7 @@ fn parameters_edit_on_the_sheet_by_the_rules_of_the_page() {
         return;
     };
     click(&mut harness, ADD_PARAMETER);
-    assert!(shows(&mut harness, NEW_PARAMETER_HEADING));
+    assert!(shows_or_notice(&mut harness, NEW_PARAMETER_HEADING));
     assert_eq!(field_value(&mut harness, "Default value"), "1");
     assert_eq!(field_value(&mut harness, "Max"), "10");
     type_into(&mut harness, "Parameter name", "Growth");
@@ -972,18 +804,21 @@ fn parameters_edit_on_the_sheet_by_the_rules_of_the_page() {
     enter_into(&mut harness, "Growth max", "12");
     assert_eq!((parameter(&harness).min, parameter(&harness).max), (12.0, 13.0));
     enter_into(&mut harness, "Growth min", "abc");
-    assert!(shows(&mut harness, TYPE_ONE_NUMBER));
+    assert!(shows_or_notice(&mut harness, TYPE_ONE_NUMBER));
     enter_into(&mut harness, "Growth min", "0");
 
     // A refused name puts the old name back with the reason.
     enter_into(&mut harness, "Name of Growth", " ");
-    assert!(shows(&mut harness, PARAMETER_NAME_MISSING));
+    assert!(shows_or_notice(&mut harness, PARAMETER_NAME_MISSING));
     assert_eq!(field_value(&mut harness, "Name of Growth"), "Growth");
     click(&mut harness, ADD_PARAMETER);
     type_into(&mut harness, "Parameter name", "Decay");
     click(&mut harness, CREATE_PARAMETER);
     enter_into(&mut harness, "Name of Decay", "growth");
-    assert!(shows(&mut harness, "A parameter called growth already exists."));
+    assert!(shows_or_notice(
+        &mut harness,
+        "A parameter called growth already exists."
+    ));
     enter_into(&mut harness, "Name of Decay", "Death rate");
     assert_eq!(sheet(&harness).document().parameters[1].name, "Death rate");
 
@@ -1014,7 +849,7 @@ fn a_parameter_edit_after_play_restarts_at_tick_zero_with_the_notice() {
         return;
     };
     harness.open_sheet(starters()[0].text);
-    settle_preview(&mut harness);
+    settle_preview(&mut harness.app);
     harness.app.wait_for_build();
     harness.app.play();
     wait_for_snapshot(&mut harness.app, |tick| tick > 0);
@@ -1023,7 +858,7 @@ fn a_parameter_edit_after_play_restarts_at_tick_zero_with_the_notice() {
     enter_into(&mut harness, "Initial density value", "0.5");
     assert_eq!(sheet(&harness).document().parameters[0].default, 0.5);
     assert_ne!(sheet(&harness).preview_key(), key, "the world starts again");
-    assert!(shows(&mut harness, RESTART_NOTICE));
+    assert!(shows_or_notice(&mut harness, RESTART_NOTICE));
 
     // A new name or purpose leaves the running world alone.
     let key = sheet(&harness).preview_key();
@@ -1039,11 +874,11 @@ fn a_parameter_edit_after_play_restarts_at_tick_zero_with_the_notice() {
     click(&mut harness, UNDO);
     assert_eq!(sheet(&harness).document().sheet.purpose, purpose);
     assert_eq!(sheet(&harness).preview_key(), key, "the undo leaves the world running");
-    assert!(!shows(&mut harness, RESTART_NOTICE));
+    assert!(!shows_or_notice(&mut harness, RESTART_NOTICE));
     click(&mut harness, REDO);
     assert_eq!(sheet(&harness).document().sheet.purpose.as_deref(), Some("Gliders"));
     assert_eq!(sheet(&harness).preview_key(), key, "the redo leaves the world running");
-    assert!(!shows(&mut harness, RESTART_NOTICE));
+    assert!(!shows_or_notice(&mut harness, RESTART_NOTICE));
 }
 
 #[test]
@@ -1053,35 +888,31 @@ fn measures_count_states_average_numbers_and_follow_their_state_colour() {
     };
     harness.screen = TALL_SCREEN;
     add_status(&mut harness);
-    click(&mut harness, ADD_PROPERTY);
-    type_into(&mut harness, "Property name", "Food");
-    click(&mut harness, NUMBER_KIND);
-    click(&mut harness, DONE);
-    harness.settle();
+    add_property(&mut harness, ADD_PROPERTY, "Food", NUMBER_KIND);
 
     click(&mut harness, ADD_MEASURE);
-    assert!(shows(&mut harness, NEW_MEASURE));
+    assert!(shows_or_notice(&mut harness, NEW_MEASURE));
     click(&mut harness, DONE);
-    assert!(shows(&mut harness, MEASURE_NEEDS_STATE));
+    assert!(shows_or_notice(&mut harness, MEASURE_NEEDS_STATE));
     click(&mut harness, AVERAGE_MEASURE);
     click(&mut harness, DONE);
-    assert!(shows(&mut harness, MEASURE_NEEDS_NUMBER_PROPERTY));
+    assert!(shows_or_notice(&mut harness, MEASURE_NEEDS_NUMBER_PROPERTY));
     choose(&mut harness, "Measure property", "Food");
     click(&mut harness, DONE);
     harness.settle();
     let measure = sheet(&harness).document().measures[0].clone();
     assert_eq!(measure.name, "Average of Food");
     assert_eq!(measure.rule, MeasureRule::Average);
-    assert!(shows(&mut harness, PLOTTED) && shows(&mut harness, "Average of Food"));
+    assert!(shows_or_notice(&mut harness, PLOTTED) && shows_or_notice(&mut harness, "Average of Food"));
     click(&mut harness, ADD_MEASURE);
     click(&mut harness, AVERAGE_MEASURE);
     choose(&mut harness, "Measure property", "Food");
     click(&mut harness, DONE);
-    assert!(shows(&mut harness, MEASURE_ALREADY_PLOTTED));
+    assert!(shows_or_notice(&mut harness, MEASURE_ALREADY_PLOTTED));
     click(&mut harness, CANCEL);
 
     // The preview plots the average, as the Charts tab draws it.
-    settle_preview(&mut harness);
+    settle_preview(&mut harness.app);
     assert_eq!(tick_zero_stat(&mut harness.app, "Average of Food"), 0.0);
 
     // A Plot measure takes its state's colour and follows a recoloured state.
@@ -1096,7 +927,7 @@ fn measures_count_states_average_numbers_and_follow_their_state_colour() {
             .cloned()
             .expect("the Alive measure")
     };
-    assert!(shows(&mut harness, "Number of cells whose Status is Alive"));
+    assert!(shows_or_notice(&mut harness, "Number of cells whose Status is Alive"));
     click(&mut harness, "Edit property Status");
     click(&mut harness, "State 2 colour: Blue");
     click(&mut harness, "Red");
@@ -1119,6 +950,51 @@ fn measures_count_states_average_numbers_and_follow_their_state_colour() {
     assert!(sheet(&harness).document().measures.is_empty());
 }
 
+/// The Sheet pane keeps a share of the Editor's width of its own in each layout: a share dragged in one layout leaves
+/// the other layout alone, and a narrower window keeps the share.
+#[test]
+fn each_layout_keeps_a_width_of_its_own_for_the_sheet_pane() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let sheet_share = |harness: &mut Harness| {
+        let nodes = harness.settle();
+        let pane = |name: &str| {
+            nodes
+                .iter()
+                .find(|node| node.role == egui::accesskit::Role::Group && node.label == name)
+                .and_then(|node| node.bounds)
+                .expect("the pane")
+        };
+        // The divider sits between the two panes' margins.
+        f32::midpoint(pane(SHEET_PANE).right(), pane(CARD_PANE).left()) / harness.screen.x
+    };
+    harness.screen = egui::vec2(1000.0, 1000.0);
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    let share = sheet_share(&mut harness);
+    assert!((share - 0.4).abs() < 0.02, "the default share is 0.4, not {share}");
+
+    // A drag of the divider in the default layout to 600 points.
+    drag_sheet_divider(&mut harness, 600.0);
+    let dragged = sheet_share(&mut harness);
+    assert!((dragged - 0.6).abs() < 0.02, "the drag left a share of {dragged}");
+
+    harness.app.layout = Layout::Editor;
+    let editor = sheet_share(&mut harness);
+    assert!(
+        (editor - 0.4).abs() < 0.02,
+        "the Editor layout took the share of the default layout: {editor}"
+    );
+
+    harness.app.layout = Layout::Default;
+    harness.screen = egui::vec2(700.0, 1000.0);
+    let narrower = sheet_share(&mut harness);
+    assert!(
+        (narrower - 0.6).abs() < 0.02,
+        "the default layout lost its share in a narrower window: {narrower}"
+    );
+}
+
 #[test]
 fn every_plot_box_of_three_states_stays_in_the_sheet_pane_and_takes_a_click() {
     let Some(mut harness) = blank() else {
@@ -1127,12 +1003,12 @@ fn every_plot_box_of_three_states_stays_in_the_sheet_pane_and_takes_a_click() {
     // A narrow Editor, as a docked tab beside the Viewport and Charts leaves it, its Sheet pane dragged to 290 points.
     harness.screen = egui::vec2(450.0, 1000.0);
     drag_sheet_divider(&mut harness, 290.0);
-    click(&mut harness, ADD_PROPERTY);
-    type_into(&mut harness, "Property name", "Health");
-    type_into(&mut harness, "State 1 name", "Susceptible");
-    type_into(&mut harness, "State 2 name", "Infected");
-    click(&mut harness, ADD_STATE);
-    type_into(&mut harness, "State 3 name", "Recovered");
+    add_states_property(
+        &mut harness,
+        ADD_PROPERTY,
+        "Health",
+        &["Susceptible", "Infected", "Recovered"],
+    );
     click(&mut harness, DONE);
     harness.settle();
 
@@ -1173,11 +1049,7 @@ fn a_number_property_shades_the_cells_in_a_hue_between_two_values() {
     let Some(mut harness) = blank() else {
         return;
     };
-    click(&mut harness, ADD_PROPERTY);
-    type_into(&mut harness, "Property name", "Food");
-    click(&mut harness, NUMBER_KIND);
-    click(&mut harness, DONE);
-    harness.settle();
+    add_property(&mut harness, ADD_PROPERTY, "Food", NUMBER_KIND);
     let rule = |harness: &Harness| sheet(harness).document().colors["cells"].clone();
     assert_eq!(
         rule(&harness).rule,
@@ -1200,7 +1072,7 @@ fn a_number_property_shades_the_cells_in_a_hue_between_two_values() {
     );
     // Equal ends are refused in the field, and reversed ends shade dark at the higher value.
     enter_into(&mut harness, LIGHTEST_NAME, "2");
-    assert!(shows(&mut harness, SHADE_ENDS_EQUAL));
+    assert!(shows_or_notice(&mut harness, SHADE_ENDS_EQUAL));
     assert_eq!(rule(&harness).lightest, Some(10.0));
     enter_into(&mut harness, DARKEST_NAME, "20");
     assert_eq!(
@@ -1225,15 +1097,15 @@ fn buttons_start_again_or_run_once_and_check_their_names() {
     add_status(&mut harness);
     click(&mut harness, ADD_BUTTON);
     click(&mut harness, DONE);
-    assert!(shows(&mut harness, BUTTON_NAME_MISSING));
+    assert!(shows_or_notice(&mut harness, BUTTON_NAME_MISSING));
     type_into(&mut harness, BUTTON_NAME_FIELD, "Reset");
     click(&mut harness, DONE);
     harness.settle();
-    assert!(shows(&mut harness, &start_again_for(EVERY_PROPERTY)));
+    assert!(shows_or_notice(&mut harness, &start_again_for(EVERY_PROPERTY)));
     click(&mut harness, ADD_BUTTON);
     type_into(&mut harness, BUTTON_NAME_FIELD, "reset");
     click(&mut harness, DONE);
-    assert!(shows(&mut harness, "A button called reset already exists."));
+    assert!(shows_or_notice(&mut harness, "A button called reset already exists."));
     click(&mut harness, CANCEL);
 
     click(&mut harness, "Edit button Reset");
@@ -1244,7 +1116,7 @@ fn buttons_start_again_or_run_once_and_check_their_names() {
     assert_eq!(document.buttons.len(), 1);
     assert_eq!(document.buttons[0].does[0].rule, ButtonStepRule::RunOnce);
     assert!(document.cards.iter().any(|card| card.id == "reset"));
-    assert!(shows(
+    assert!(shows_or_notice(
         &mut harness,
         "Lines of Reset: run once, every cell, when pressed"
     ));
@@ -1262,8 +1134,7 @@ fn the_model_name_renames_from_the_toolbar() {
     };
     click(&mut harness, "Model name: Untitled model. Rename");
     harness.settle();
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text("Life".to_owned())]);
+    harness.replace_text("Life");
     harness.press(Key::Escape, Modifiers::NONE);
     harness.settle();
     assert_eq!(
@@ -1273,10 +1144,7 @@ fn the_model_name_renames_from_the_toolbar() {
     );
     click(&mut harness, "Model name: Untitled model. Rename");
     harness.settle();
-    harness.press(Key::A, Modifiers::COMMAND);
-    harness.frame(vec![Event::Text("Life".to_owned())]);
-    harness.press(Key::Enter, Modifiers::NONE);
-    harness.settle();
+    type_and_enter(&mut harness, "Life");
     assert_eq!(sheet(&harness).document().sheet.name, "Life");
     center_of(&mut harness, "Model name: Life. Rename");
     harness.press(Key::Z, Modifiers::COMMAND);
@@ -1290,7 +1158,7 @@ fn the_charts_tab_says_how_to_plot_while_the_sheet_has_no_measure() {
         return;
     };
     add_status(&mut harness);
-    settle_preview(&mut harness);
+    settle_preview(&mut harness.app);
     harness.app.wait_for_build();
     let charts = |harness: &mut Harness| {
         crate::tests::support::accessible_texts(
@@ -1300,7 +1168,7 @@ fn the_charts_tab_says_how_to_plot_while_the_sheet_has_no_measure() {
     };
     assert!(charts(&mut harness).iter().any(|text| text == PLOT_EMPTY));
     click(&mut harness, "Plot Alive");
-    settle_preview(&mut harness);
+    settle_preview(&mut harness.app);
     harness.app.wait_for_build();
     assert!(!charts(&mut harness).iter().any(|text| text == PLOT_EMPTY));
 }
@@ -1311,83 +1179,73 @@ fn the_remaining_sections_show_no_forbidden_word_in_any_state() {
         return;
     };
     harness.screen = TALL_SCREEN;
-    let mut texts = Vec::new();
-    let mut states = 0;
-    let mut record = |harness: &mut Harness| {
-        texts.push(harness.accessible_texts());
-        states += 1;
-    };
-    record(&mut harness);
+    let mut seen = Seen::default();
+    seen.look(&mut harness);
     add_status(&mut harness);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, ADD_PARAMETER);
-    record(&mut harness);
+    seen.look(&mut harness);
     type_into(&mut harness, "Parameter name", "Growth");
     click(&mut harness, CREATE_PARAMETER);
-    record(&mut harness);
+    seen.look(&mut harness);
     enter_into(&mut harness, "Growth value", "abc");
-    record(&mut harness);
+    seen.look(&mut harness);
     enter_into(&mut harness, "Name of Growth", " ");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Growth unit");
-    record(&mut harness);
+    seen.look(&mut harness);
     harness.press(Key::Escape, Modifiers::NONE);
     click(&mut harness, "Plot Alive");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Colour of Alive: Blue");
-    record(&mut harness);
+    seen.look(&mut harness);
     harness.press(Key::Escape, Modifiers::NONE);
     click(&mut harness, ADD_MEASURE);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, DONE);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Measure property");
-    record(&mut harness);
+    seen.look(&mut harness);
     harness.press(Key::Escape, Modifiers::NONE);
     click(&mut harness, AVERAGE_MEASURE);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, DONE);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, CANCEL);
     click(&mut harness, COLOR_CELLS_BY);
-    record(&mut harness);
+    seen.look(&mut harness);
     harness.press(Key::Escape, Modifiers::NONE);
-    click(&mut harness, ADD_PROPERTY);
-    type_into(&mut harness, "Property name", "Food");
-    click(&mut harness, NUMBER_KIND);
-    click(&mut harness, DONE);
+    add_property(&mut harness, ADD_PROPERTY, "Food", NUMBER_KIND);
     choose(&mut harness, COLOR_CELLS_BY, "Food");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, SHADE);
-    record(&mut harness);
+    seen.look(&mut harness);
     harness.press(Key::Escape, Modifiers::NONE);
     enter_into(&mut harness, DARKEST_NAME, "abc");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, ADD_BUTTON);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, DONE);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, START_AGAIN_FOR);
-    record(&mut harness);
+    seen.look(&mut harness);
     harness.press(Key::Escape, Modifiers::NONE);
     type_into(&mut harness, BUTTON_NAME_FIELD, "Clear");
     click(&mut harness, &run_once("cell"));
     click(&mut harness, DONE);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, "Edit button Clear");
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, CANCEL);
     click(&mut harness, "Model name: Untitled model. Rename");
-    record(&mut harness);
+    seen.look(&mut harness);
     harness.press(Key::Escape, Modifiers::NONE);
     click(&mut harness, UNDO);
-    record(&mut harness);
+    seen.look(&mut harness);
     click(&mut harness, REDO);
-    record(&mut harness);
-    assert!(states >= 25, "only {states} states were drawn");
-    let all: Vec<String> = texts.into_iter().flatten().collect();
-    let found = forbidden_words(&all);
-    assert!(found.is_empty(), "forbidden words: {found:?}");
+    seen.look(&mut harness);
+    assert!(seen.looks() >= 25, "only {} states were drawn", seen.looks());
+    assert_no_forbidden_word(&seen);
 
     let nodes = harness.settle();
     for visible in [

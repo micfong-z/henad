@@ -1,7 +1,10 @@
 //! Tests of the sheet editor in the Editor tab: a sheet opens by the `kind` in its header, previews paused at tick 0,
-//! applies and saves its canonical text, and the New model dialog opens a sheet starter under a name.
+//! applies and saves its canonical text, and the New model dialog opens a sheet starter under a name. The Card pane
+//! reads each line as its sentence with its notes, red chips and "otherwise", the help popovers, the words rule and the
+//! label-in-name rule hold over every starter, a note edit installs nothing, and Open in Editor in the Results tab
+//! opens the sheet a sweep recorded.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use henad_compute::entry::ModelEntry;
@@ -17,18 +20,22 @@ use henad_explore::result_set::ResultSet;
 use henad_explore::sweep::{Provenance, SweepOptions, run_spec};
 use henad_graph::sheet::check::check;
 use henad_graph::sheet::document::{
-    LineKind, MadeOf, ParameterType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue,
-    Slot, StartRule, StartsAs,
+    LineKind, MadeOf, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, StartRule,
+    StartsAs,
 };
-use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::sentence::{A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE, STARTER_CHOICES};
 use henad_graph::sheet::{ParsedSheet, starters};
-use web_time::Instant;
 
 use crate::state::{AppState, PreviewRun};
-use crate::tests::support::{Harness, Node, forbidden_words, step_past, tick_zero_stat, top, wait_for_snapshot};
-use crate::ui::dock::{Layout, Tab};
-use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState, poll_at};
+use crate::tests::panes::{
+    Seen, assert_control_holds, assert_controls_hold_their_words, assert_no_forbidden_word, shows,
+};
+use crate::tests::support::{
+    Harness, Node, ScratchFolder, assert_built, edited, forbidden_words, headless_app, life_with_a_skipped_line,
+    settle_preview, starter_text, step_past, tick_zero_stat, top, wait_for_snapshot, wait_until,
+};
+use crate::ui::dock::Tab;
+use crate::ui::editor::preview::{PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState};
 use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::card_pane::{CardLine, LineNote, NoteColor, card_lines};
 use crate::ui::editor::sheet::new_model::starter_choices;
@@ -40,21 +47,6 @@ use crate::ui::playback::{press_build, run_refusal, tick_counter};
 use crate::ui::results::store::{ResultsSource, ResultsStore};
 use crate::ui::results::{open_folder, open_in_editor, poll};
 
-/// Returns an app over the example models on a headless device that runs compute shaders, or `None` to skip on a
-/// machine without a device.
-fn app() -> Option<AppState> {
-    AppState::headless(henad_models::example_models(), true)
-}
-
-/// Returns the text of the sheet starter whose file is named `file_name`.
-fn starter_text(file_name: &str) -> &'static str {
-    starters()
-        .iter()
-        .find(|starter| starter.file_name == file_name)
-        .expect("a sheet starter")
-        .text
-}
-
 /// Opens `text` in the Editor as Open model opens a picked file.
 fn open(app: &mut AppState, text: &str) {
     open_text(&mut app.editor, text.to_owned(), Some("opened.toml".to_owned()));
@@ -65,29 +57,9 @@ fn sheet(app: &AppState) -> &SheetEditor {
     app.editor.model.sheet().expect("a sheet")
 }
 
-/// Polls the preview once now and once after the debounce, as two frames that far apart would.
-fn settle(app: &mut AppState) {
-    let ctx = egui::Context::default();
-    let now = Instant::now();
-    poll_at(&ctx, app, now);
-    poll_at(&ctx, app, now + DEBOUNCE);
-}
-
-/// Returns Game of Life with the old state of line 2 left blank. Line 2 is then skipped.
-fn life_with_a_skipped_line() -> String {
-    let text = starter_text("game_of_life.toml");
-    let blanked = text.replacen(
-        "new_state = \"alive\"\nstart_state = \"dead\"\n",
-        "new_state = \"alive\"\n",
-        1,
-    );
-    assert_ne!(blanked, text, "the old state of line 2 was found");
-    blanked
-}
-
 #[test]
 fn every_sheet_starter_opens_as_a_sheet_previews_at_tick_zero_plays_and_applies() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     for starter in starters() {
@@ -104,7 +76,7 @@ fn every_sheet_starter_opens_as_a_sheet_previews_at_tick_zero_plays_and_applies(
             starter.file_name,
             sheet(&app).lowering_problems()
         );
-        settle(&mut app);
+        settle_preview(&mut app);
         let document = ParsedSheet::parse(starter.text)
             .expect("the starter reads")
             .into_document();
@@ -122,11 +94,7 @@ fn every_sheet_starter_opens_as_a_sheet_previews_at_tick_zero_plays_and_applies(
         assert_eq!(app.editor.preview.state, PreviewState::Running(run));
         assert_eq!(app.loaded_id(), Some(document.sheet.id.as_str()));
         app.wait_for_build();
-        assert!(
-            app.sim_thread.is_some() && app.fault.is_none(),
-            "{}: the preview failed to build",
-            starter.file_name
-        );
+        assert_built(&app, &format!("{}: the preview", starter.file_name));
         assert!(!app.sim_running, "{}: the preview waits for Play", starter.file_name);
         wait_for_snapshot(&mut app, |tick| tick == 0);
 
@@ -139,11 +107,7 @@ fn every_sheet_starter_opens_as_a_sheet_previews_at_tick_zero_plays_and_applies(
         assert_eq!(app.preview(), None, "{}: Apply replaces the preview", starter.file_name);
         assert_eq!(app.loaded_id(), Some(document.sheet.id.as_str()));
         app.wait_for_build();
-        assert!(
-            app.sim_thread.is_some() && app.fault.is_none(),
-            "{}: the applied sheet failed to build",
-            starter.file_name
-        );
+        assert_built(&app, &format!("{}: the applied sheet", starter.file_name));
         step_past(&mut app, 0);
         // The next starter's preview replaces nothing past tick 0.
         app.offload_simulation();
@@ -151,68 +115,8 @@ fn every_sheet_starter_opens_as_a_sheet_previews_at_tick_zero_plays_and_applies(
 }
 
 #[test]
-fn the_card_pane_reads_the_life_lines_as_their_sentences() {
-    let document = ParsedSheet::parse(starter_text("game_of_life.toml"))
-        .expect("the starter reads")
-        .into_document();
-    let sentences = henad_graph::sheet::sentence::Sentences::new(&document);
-    let lines: Vec<(usize, String)> = card_lines(&document, &sentences, &check(&document), 0)
-        .into_iter()
-        .map(|line| (line.number, line.sentence))
-        .collect();
-    assert_eq!(
-        lines,
-        [
-            (
-                1,
-                "Alive neighbours = count of the 8 cells around me whose Status is Alive".to_owned()
-            ),
-            (2, "Become Alive from Dead, when Alive neighbours is 3".to_owned()),
-            (
-                3,
-                "Become Dead from Alive, when Alive neighbours is none of the numbers 2, 3".to_owned()
-            ),
-        ]
-    );
-    assert_eq!(sentences.card_heading(&document.cards[0]), "Each tick, every cell");
-
-    let vote = ParsedSheet::parse(starter_text("vote.toml"))
-        .expect("the vote reads")
-        .into_document();
-    let sentences = henad_graph::sheet::sentence::Sentences::new(&vote);
-    let lines = card_lines(&vote, &sentences, &check(&vote), 0);
-    assert_eq!(
-        lines[2].sentence,
-        "otherwise (when line 2 does not apply) become A from any state, always"
-    );
-}
-
-#[test]
-fn apply_installs_and_builds_the_sheet() {
-    let Some(mut app) = app() else {
-        return;
-    };
-    open(&mut app, starter_text("game_of_life.toml"));
-    settle(&mut app);
-    app.wait_for_build();
-    apply(&mut app);
-    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
-    assert_eq!(app.preview(), None, "Apply replaces the preview");
-    assert_eq!(app.selected_model.as_deref(), Some("sheet_game_of_life"));
-    assert!(app.selection_is_loaded());
-    let installed = app.models.get("sheet_game_of_life").expect("the sheet is installed");
-    assert!(app.editor.is_applied(installed.source()));
-    app.wait_for_build();
-    assert!(
-        app.sim_thread.is_some() && app.fault.is_none(),
-        "the applied sheet failed to build"
-    );
-    step_past(&mut app, 0);
-}
-
-#[test]
 fn applying_the_life_sheet_keeps_the_example_model_of_that_name() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     let example = app
@@ -222,10 +126,14 @@ fn applying_the_life_sheet_keeps_the_example_model_of_that_name() {
         .clone();
     assert_eq!(example.source().origin(), CodeOrigin::Compiled);
     open(&mut app, starter_text("game_of_life.toml"));
-    settle(&mut app);
+    settle_preview(&mut app);
     app.wait_for_build();
     apply(&mut app);
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
+    assert_eq!(app.selected_model.as_deref(), Some("sheet_game_of_life"));
+    assert!(app.selection_is_loaded());
+    let installed = app.models.get("sheet_game_of_life").expect("the sheet is installed");
+    assert!(app.editor.is_applied(installed.source()));
     assert_eq!(app.loaded_id(), Some("sheet_game_of_life"));
     app.wait_for_build();
 
@@ -242,10 +150,7 @@ fn applying_the_life_sheet_keeps_the_example_model_of_that_name() {
     press_build(&mut app);
     assert_eq!(app.loaded_id(), Some("game_of_life"));
     app.wait_for_build();
-    assert!(
-        app.sim_thread.is_some() && app.fault.is_none(),
-        "the example failed to build"
-    );
+    assert_built(&app, "the example");
     assert_eq!(
         app.loaded_entry().map(|entry| entry.source().origin()),
         Some(CodeOrigin::Compiled)
@@ -255,7 +160,7 @@ fn applying_the_life_sheet_keeps_the_example_model_of_that_name() {
 
 #[test]
 fn save_writes_the_canonical_text_and_the_saved_file_reopens_to_the_same_document() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     for starter in starters() {
@@ -270,12 +175,12 @@ fn save_writes_the_canonical_text_and_the_saved_file_reopens_to_the_same_documen
     }
 
     // A hand-edited sheet saves as its canonical text.
-    let edited = starter_text("game_of_life.toml").replace(
+    let hand_edited = edited(
+        starter_text("game_of_life.toml"),
         "id = \"sheet_game_of_life\"\nname",
         "id    =   \"sheet_game_of_life\"\nname",
     );
-    assert_ne!(edited, starter_text("game_of_life.toml"), "the id line was found");
-    open(&mut app, &edited);
+    open(&mut app, &hand_edited);
     assert_eq!(app.editor.model.file_text(), starter_text("game_of_life.toml"));
 
     app.editor.file_name = None;
@@ -284,7 +189,7 @@ fn save_writes_the_canonical_text_and_the_saved_file_reopens_to_the_same_documen
 
 #[test]
 fn a_sheet_with_a_skipped_line_opens_and_previews() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     open(&mut app, &life_with_a_skipped_line());
@@ -292,22 +197,19 @@ fn a_sheet_with_a_skipped_line_opens_and_previews() {
     assert!(!report.has_errors(), "{:?}", report.diagnostics);
     assert!(report.is_skipped("l2"), "line 2 is skipped");
     assert!(!sheet(&app).has_errors());
-    settle(&mut app);
+    settle_preview(&mut app);
     assert!(app.preview().is_some(), "a skipped line leaves the preview running");
     app.wait_for_build();
-    assert!(
-        app.sim_thread.is_some() && app.fault.is_none(),
-        "the preview failed to build"
-    );
+    assert_built(&app, "the preview");
 }
 
 #[test]
 fn a_sheet_with_a_checker_error_opens_in_the_sheet_editor() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     // A parameter default outside its range is an error of the checker. The reader reads it.
-    let text = starter_text("game_of_life.toml").replace("default = 0.3\n", "default = 7\n");
+    let text = edited(starter_text("game_of_life.toml"), "default = 0.3\n", "default = 7\n");
     open(&mut app, &text);
     let sheet = sheet(&app);
     assert!(sheet.report().has_errors(), "{:?}", sheet.report().diagnostics);
@@ -320,7 +222,7 @@ fn a_sheet_with_a_checker_error_opens_in_the_sheet_editor() {
         "{:?}",
         sheet.lowering_problems()
     );
-    settle(&mut app);
+    settle_preview(&mut app);
     assert_eq!(app.preview(), None, "a sheet with an error builds no preview");
     apply(&mut app);
     assert!(
@@ -332,7 +234,7 @@ fn a_sheet_with_a_checker_error_opens_in_the_sheet_editor() {
 
 #[test]
 fn a_sheet_whose_text_does_not_read_opens_in_the_code_view_with_its_problem() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     let text = format!("{}\n[mystery]\nkey = 1\n", starter_text("game_of_life.toml"));
@@ -354,11 +256,11 @@ fn a_sheet_whose_text_does_not_read_opens_in_the_code_view_with_its_problem() {
 
 #[test]
 fn a_sheet_preview_waits_at_tick_zero_until_play() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     open(&mut app, starter_text("game_of_life.toml"));
-    settle(&mut app);
+    settle_preview(&mut app);
     app.wait_for_build();
     assert!(!app.sim_running, "the preview of a sheet waits for Play");
     let alive = tick_zero_stat(&mut app, "Alive");
@@ -385,7 +287,7 @@ fn a_sheet_preview_waits_at_tick_zero_until_play() {
 
     // A graph's preview still plays once it is built.
     crate::ui::editor::new_graph_model(&mut app, "sir.toml");
-    settle(&mut app);
+    settle_preview(&mut app);
     app.wait_for_build();
     assert!(app.sim_running, "the preview of a graph plays");
     assert!(!app.runs_editor_sheet());
@@ -409,11 +311,11 @@ fn the_sheet_preview_line_names_play_and_the_graph_line_is_unchanged() {
 
 #[test]
 fn a_rebuild_replays_the_same_start() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     open(&mut app, starter_text("game_of_life.toml"));
-    settle(&mut app);
+    settle_preview(&mut app);
     let first = tick_zero_stat(&mut app, "Alive");
     app.play();
     wait_for_snapshot(&mut app, |tick| tick > 0);
@@ -442,11 +344,11 @@ fn a_rebuild_replays_the_same_start() {
 /// Build again.
 #[test]
 fn run_to_tick_drives_the_sheet_preview() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     open(&mut app, starter_text("game_of_life.toml"));
-    settle(&mut app);
+    settle_preview(&mut app);
     app.wait_for_build();
     let first = tick_zero_stat(&mut app, "Alive");
     assert_eq!(run_refusal(&app, None, 0), None);
@@ -474,11 +376,11 @@ fn run_to_tick_drives_the_sheet_preview() {
 
 #[test]
 fn build_builds_another_selected_model_instead_of_the_sheet_preview() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     open(&mut app, starter_text("game_of_life.toml"));
-    settle(&mut app);
+    settle_preview(&mut app);
     app.wait_for_build();
     assert!(app.build_replays_preview());
 
@@ -611,8 +513,7 @@ fn new_model_opens_a_dialog_and_create_opens_the_chosen_sheet() {
 
     // A typed name stays when the starter changes.
     harness.click_name_field();
-    harness.press(egui::Key::A, egui::Modifiers::COMMAND);
-    harness.frame(vec![egui::Event::Text("My life".to_owned())]);
+    harness.replace_text("My life");
     harness.click("Game of Life");
     assert_eq!(name(&harness.settle()).as_deref(), Some("My life"));
 
@@ -746,6 +647,45 @@ fn the_empty_editor_names_every_way_in() {
     );
 }
 
+// The Card pane's lines: sentences, notes, red chips and "otherwise"
+
+#[test]
+fn the_card_pane_reads_the_life_lines_as_their_sentences() {
+    let document = ParsedSheet::parse(starter_text("game_of_life.toml"))
+        .expect("the starter reads")
+        .into_document();
+    let sentences = henad_graph::sheet::sentence::Sentences::new(&document);
+    let lines: Vec<(usize, String)> = card_lines(&document, &sentences, &check(&document), 0)
+        .into_iter()
+        .map(|line| (line.number, line.sentence))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            (
+                1,
+                "Alive neighbours = count of the 8 cells around me whose Status is Alive".to_owned()
+            ),
+            (2, "Become Alive from Dead, when Alive neighbours is 3".to_owned()),
+            (
+                3,
+                "Become Dead from Alive, when Alive neighbours is none of the numbers 2, 3".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(sentences.card_heading(&document.cards[0]), "Each tick, every cell");
+
+    let vote = ParsedSheet::parse(starter_text("vote.toml"))
+        .expect("the vote reads")
+        .into_document();
+    let sentences = henad_graph::sheet::sentence::Sentences::new(&vote);
+    let lines = card_lines(&vote, &sentences, &check(&vote), 0);
+    assert_eq!(
+        lines[2].sentence,
+        "otherwise (when line 2 does not apply) become A from any state, always"
+    );
+}
+
 /// Returns the lines of card `card` of the sheet `text` as the Card pane shows them.
 fn lines_of(text: &str, card: usize) -> Vec<CardLine> {
     let document = ParsedSheet::parse(text).expect("the sheet reads").into_document();
@@ -755,22 +695,20 @@ fn lines_of(text: &str, card: usize) -> Vec<CardLine> {
 
 /// Returns Game of Life with line 2 moved above line 1. Line 1 then uses Alive neighbours from below it.
 fn life_with_a_result_below() -> String {
-    let text = starter_text("game_of_life.toml");
-    let moved = text.replacen(
+    edited(
+        starter_text("game_of_life.toml"),
         "lines = [\"l1\", \"l2\", \"l3\"]",
         "lines = [\"l2\", \"l1\", \"l3\"]",
-        1,
-    );
-    assert_ne!(moved, text, "the lines of the card were found");
-    moved
+    )
 }
 
 /// Returns Game of Life with an old state on line 2 that Status lacks, an error of the checker at that line.
 fn life_with_an_error_at_line_two() -> String {
-    let text = starter_text("game_of_life.toml");
-    let broken = text.replacen("start_state = \"dead\"\n", "start_state = \"zombie\"\n", 1);
-    assert_ne!(broken, text, "the old state of line 2 was found");
-    broken
+    edited(
+        starter_text("game_of_life.toml"),
+        "start_state = \"dead\"\n",
+        "start_state = \"zombie\"\n",
+    )
 }
 
 #[test]
@@ -824,67 +762,6 @@ fn every_line_of_the_life_starter_reads_its_sentence_by_accessible_name() {
     ] {
         assert!(texts.iter().any(|known| known == text), "{text} is missing");
     }
-}
-
-/// The Sheet pane keeps a share of the Editor's width of its own in each layout: a share dragged in one layout leaves
-/// the other layout alone, and a narrower window keeps the share.
-#[test]
-fn each_layout_keeps_a_width_of_its_own_for_the_sheet_pane() {
-    let Some(mut harness) = Harness::new() else {
-        return;
-    };
-    let pane = |nodes: &[Node], name: &str| {
-        nodes
-            .iter()
-            .find(|node| node.role == egui::accesskit::Role::Group && node.label == name)
-            .and_then(|node| node.bounds)
-            .expect("the pane")
-    };
-    let sheet_share = |harness: &mut Harness| {
-        let nodes = harness.settle();
-        let (sheet, card) = (pane(&nodes, "Sheet"), pane(&nodes, "Card"));
-        // The divider sits between the two panes' margins.
-        let divider = f32::midpoint(sheet.right(), card.left());
-        (divider / harness.screen.x, divider)
-    };
-    harness.screen = egui::vec2(1000.0, 1000.0);
-    harness.open_sheet(starter_text("game_of_life.toml"));
-    let (share, divider) = sheet_share(&mut harness);
-    assert!((share - 0.4).abs() < 0.02, "the default share is 0.4, not {share}");
-
-    // A drag of the divider in the default layout to 600 points.
-    let y = harness.screen.y / 2.0;
-    let button = |pressed, x: f32| egui::Event::PointerButton {
-        pos: egui::pos2(x, y),
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: egui::Modifiers::NONE,
-    };
-    harness.frame(vec![egui::Event::PointerMoved(egui::pos2(divider, y))]);
-    harness.frame(vec![button(true, divider)]);
-    for step in 1..=10 {
-        let x = divider + (600.0 - divider) * step as f32 / 10.0;
-        harness.frame(vec![egui::Event::PointerMoved(egui::pos2(x, y))]);
-    }
-    harness.frame(vec![button(false, 600.0)]);
-    harness.frame(vec![egui::Event::PointerGone]);
-    let (dragged, _) = sheet_share(&mut harness);
-    assert!((dragged - 0.6).abs() < 0.02, "the drag left a share of {dragged}");
-
-    harness.app.layout = Layout::Editor;
-    let (editor, _) = sheet_share(&mut harness);
-    assert!(
-        (editor - 0.4).abs() < 0.02,
-        "the Editor layout took the share of the default layout: {editor}"
-    );
-
-    harness.app.layout = Layout::Default;
-    harness.screen = egui::vec2(700.0, 1000.0);
-    let (narrower, _) = sheet_share(&mut harness);
-    assert!(
-        (narrower - 0.6).abs() < 0.02,
-        "the default layout lost its share in a narrower window: {narrower}"
-    );
 }
 
 #[test]
@@ -966,15 +843,12 @@ fn a_checker_error_shows_at_its_line() {
 
 /// Returns Game of Life with a line table `l9` that no lines list names. The card never shows it.
 fn life_with_an_unlisted_line() -> String {
-    let text = starter_text("game_of_life.toml");
-    let added = text.replacen(
+    edited(
+        starter_text("game_of_life.toml"),
         "# Lines of Clear",
         "[card.line.l9]\nkind = \"become\"\nproperty = \"status\"\nnew_state = \"dead\"\nstart_state = \"alive\"\n\n\
          # Lines of Clear",
-        1,
-    );
-    assert_ne!(added, text, "the Clear card was found");
-    added
+    )
 }
 
 #[test]
@@ -1062,18 +936,16 @@ fn chips_name_the_property_when_two_share_a_state_name() {
 /// the first time round decides between them.
 #[test]
 fn otherwise_inside_a_repeat_says_the_higher_line_wins_at_the_same_time() {
-    let text = starter_text("random_walk.toml");
-    let text = text.replacen(
+    let text = edited(
+        starter_text("random_walk.toml"),
         "[[parameter]]",
         "[[agents.property]]\nid = \"status\"\nname = \"Status\"\ntype = \"states\"\nstates = [\n  \
          { id = \"s\", name = \"S\", color = \"#E8E8F0\" },\n  { id = \"a\", name = \"A\", color = \"#3DD58C\" },\n\
          ]\n\n[agents.property.starts_as]\nrule = \"value\"\nvalue = { state = \"s\" }\n\n[[parameter]]",
-        1,
     );
-    let text = text
-        .replacen("next_line = 3", "next_line = 6", 1)
-        .replacen("lines = [\"l1\"]", "lines = [\"l1\", \"l5\"]", 1)
-        .replacen("lines = [\"l2\"]", "lines = [\"l2\", \"l3\", \"l4\"]", 1);
+    let text = edited(&text, "next_line = 3", "next_line = 6");
+    let text = edited(&text, "lines = [\"l1\"]", "lines = [\"l1\", \"l5\"]");
+    let text = edited(&text, "lines = [\"l2\"]", "lines = [\"l2\", \"l3\", \"l4\"]");
     let become_line = |id: &str, key: u32| {
         format!(
             "\n[card.line.{id}]\nkind = \"become\"\nkey = {key}\nproperty = \"status\"\nnew_state = \"a\"\n\
@@ -1098,49 +970,6 @@ fn otherwise_inside_a_repeat_says_the_higher_line_wins_at_the_same_time() {
         "Lines 3 and 4 also change Status for a walker that is S. When more than one applies, the highest line wins. \
          Between lines in one Repeat, the first time round that one applies decides."
     );
-}
-
-/// A parameter with no unit put into a rate takes the rate's unit in the same edit, and one Undo takes both back.
-#[test]
-fn a_parameter_put_into_a_rate_takes_its_unit_and_one_undo_restores_both() {
-    let parsed = ParsedSheet::parse(starter_text("sir.toml")).expect("the starter reads");
-    let mut sheet = SheetEditor::new(parsed.document().clone());
-    let apply = |sheet: &mut SheetEditor, edit: SheetEdit| {
-        sheet
-            .edit(false, false, |builder| builder.apply(edit).map(drop))
-            .expect("the edit applies");
-    };
-    apply(
-        &mut sheet,
-        SheetEdit::AddParameter {
-            name: "Plain".to_owned(),
-            parameter_type: ParameterType::Number,
-            min: 0.0,
-            max: 1.0,
-            default: 0.5,
-            unit: None,
-        },
-    );
-    let before = sheet.document().clone();
-    apply(
-        &mut sheet,
-        SheetEdit::SetSlot {
-            line: "l3".to_owned(),
-            path: "condition.rate".to_owned(),
-            value: Slot::Filled(SheetValue::Chip(SheetChip::Param("plain".to_owned()))),
-        },
-    );
-    let plain_unit = |document: &SheetDocument| {
-        document
-            .parameters
-            .iter()
-            .find(|parameter| parameter.id == "plain")
-            .and_then(|parameter| parameter.unit.clone())
-    };
-    assert_eq!(plain_unit(sheet.document()).as_deref(), Some("per day"));
-    assert!(sheet.undo(false), "one edit to undo");
-    assert_eq!(sheet.document(), &before, "one Undo restores the rate and the unit");
-    assert_eq!(plain_unit(sheet.document()), None);
 }
 
 #[test]
@@ -1169,6 +998,8 @@ fn otherwise_carries_its_partner_as_a_description() {
         "line 3 reads its otherwise"
     );
 }
+
+// Help popovers, the words rule and the label-in-name rule
 
 #[test]
 fn a_help_popover_opens_and_closes() {
@@ -1205,9 +1036,11 @@ fn each_lines_help_button_opens_its_own_popover() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    let text = starter_text("game_of_life.toml");
-    let two_tick_cards = text.replacen("runs = \"once\"", "runs = \"each_tick\"", 1);
-    assert_ne!(two_tick_cards, text, "the Clear card was found");
+    let two_tick_cards = edited(
+        starter_text("game_of_life.toml"),
+        "runs = \"once\"",
+        "runs = \"each_tick\"",
+    );
     harness.open_sheet(&two_tick_cards);
     let nodes = harness.settle();
     let mut buttons: Vec<egui::Pos2> = nodes
@@ -1243,10 +1076,10 @@ fn the_sheet_editor_never_shows_a_forbidden_word() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    let mut texts = Vec::new();
+    let mut seen = Seen::default();
     for starter in starters() {
         harness.open_sheet(starter.text);
-        texts.extend(harness.accessible_texts());
+        seen.look(&mut harness);
         let made_of = ParsedSheet::parse(starter.text)
             .expect("the starter reads")
             .document()
@@ -1258,63 +1091,33 @@ fn the_sheet_editor_never_shows_a_forbidden_word() {
             .chain(["Help: lines".to_owned()]);
         for help in helps {
             harness.click(&help);
-            texts.extend(harness.accessible_texts());
+            seen.look(&mut harness);
             harness.press(egui::Key::Escape, egui::Modifiers::NONE);
         }
     }
     for text in [life_with_a_skipped_line(), life_with_a_result_below()] {
         harness.open_sheet(&text);
-        texts.extend(harness.accessible_texts());
+        seen.look(&mut harness);
     }
     harness.click("New model");
-    texts.extend(harness.accessible_texts());
-    assert!(
-        texts.iter().any(|text| text == "Start from"),
-        "the New model dialog was drawn"
-    );
-    let found = forbidden_words(&texts);
-    assert!(found.is_empty(), "forbidden words: {found:?}");
+    assert!(shows(&mut harness, "Start from"), "the New model dialog was drawn");
+    seen.look(&mut harness);
+    assert_no_forbidden_word(&seen);
 }
 
 #[test]
 fn every_accessible_name_holds_its_visible_words() {
-    let Some(mut harness) = Harness::new() else {
+    // Every section's help button, the last at the foot of a long sheet, takes a click.
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    // Every section's help button, the last at the foot of a long sheet, takes a click.
-    harness.screen = super::sheet_pane::TALL_SCREEN;
     for text in starters()
         .iter()
         .map(|starter| starter.text.to_owned())
         .chain([life_with_a_skipped_line(), life_with_a_result_below()])
     {
         harness.open_sheet(&text);
-        let nodes = harness.settle();
-        let document = ParsedSheet::parse(&text).expect("the sheet reads").into_document();
-        let sentences = henad_graph::sheet::sentence::Sentences::new(&document);
-        let report = check(&document);
-        for card in 0..document.cards.len() {
-            for line in card_lines(&document, &sentences, &report, card) {
-                for control in line.controls() {
-                    assert!(
-                        nodes.iter().any(|node| node.label == control.name),
-                        "{} has no control named {}",
-                        line.label(),
-                        control.name
-                    );
-                    if control.select {
-                        continue;
-                    }
-                    let visible = control.visible.trim_end_matches("...").trim().to_lowercase();
-                    assert!(
-                        control.name.to_lowercase().contains(&visible),
-                        "{:?} does not hold its visible words {:?}",
-                        control.name,
-                        control.visible
-                    );
-                }
-            }
-        }
+        assert_controls_hold_their_words(&mut harness);
     }
     // Each help popover and the New model dialog hold controls whose visible words are fixed.
     harness.open_sheet(starter_text("game_of_life.toml"));
@@ -1346,23 +1149,10 @@ const HELP_BUTTONS: [&str; 8] = [
     "Help: lines",
 ];
 
-/// Asserts that a button, a radio button or a check box of `nodes` shows `visible` and that its name holds it.
-fn assert_control_holds(nodes: &[Node], visible: &str) {
-    use egui::accesskit::Role;
-
-    let named = nodes.iter().any(|node| {
-        matches!(node.role, Role::Button | Role::RadioButton | Role::CheckBox)
-            && node.label.to_lowercase().contains(&visible.to_lowercase())
-    });
-    assert!(named, "no control's name holds its visible words {visible:?}");
-}
-
 #[test]
 fn the_world_tabs_show_no_forbidden_word_from_a_sheet() {
     for starter in starters() {
-        let entry = henad_explore::model_file::ModelFile::parse(starter.text)
-            .and_then(|file| file.entry())
-            .expect("the starter has an entry");
+        let entry = entry_of(starter.text);
         let mut texts = vec![entry.name().to_owned(), entry.description().to_owned()];
         texts.extend(
             entry
@@ -1398,24 +1188,24 @@ fn tick_counter_words(metadata: &henad_core::metadata::ModelMetadata) -> String 
     henad_graph::sheet::sentence::tick_counter(4, elapsed.as_deref())
 }
 
+// A note edit, Edit model and the sheet a sweep recorded
+
 /// Returns the Game of Life sheet with a note on line 2. The note leaves the lowered graph alone.
 fn noted_life() -> String {
-    let text = starter_text("game_of_life.toml");
-    let noted = text.replacen(
+    edited(
+        starter_text("game_of_life.toml"),
         "start_state = \"dead\"\n",
         "start_state = \"dead\"\nnote = \"Birth\"\n",
-        1,
-    );
-    assert_ne!(noted, text, "the old state of line 2 was found");
-    noted
+    )
 }
 
 /// Returns the Game of Life sheet on a 16 by 16 grid.
 fn small_life() -> String {
-    let text = starter_text("game_of_life.toml");
-    let small = text.replacen("width = 1024\nheight = 1024\n", "width = 16\nheight = 16\n", 1);
-    assert_ne!(small, text, "the grid size was found");
-    small
+    edited(
+        starter_text("game_of_life.toml"),
+        "width = 1024\nheight = 1024\n",
+        "width = 16\nheight = 16\n",
+    )
 }
 
 /// Returns the entry of the model file `text`, which must build.
@@ -1440,15 +1230,6 @@ fn density_sweep(id: &str) -> SweepSpec {
     spec
 }
 
-/// Folder removed when the test ends.
-struct ScratchFolder(PathBuf);
-
-impl Drop for ScratchFolder {
-    fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.0));
-    }
-}
-
 /// Sweeps `entry` over Initial density into `folder` on the app's device.
 fn sweep_into(app: &AppState, entry: &ModelEntry, folder: &Path) {
     drop(std::fs::remove_dir_all(folder));
@@ -1469,23 +1250,17 @@ fn sweep_into(app: &AppState, entry: &ModelEntry, folder: &Path) {
 fn open_results(app: &mut AppState, folder: &Path) {
     open_folder(app, folder.to_owned());
     let ctx = egui::Context::default();
-    for _ in 0..1000 {
+    wait_until("the folder's results to show", || {
         poll(&ctx, app);
-        let shown = app
-            .results
+        app.results
             .store()
-            .is_some_and(|store| store.source == ResultsSource::Folder(folder.to_owned()));
-        if shown {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("the folder's results did not show");
+            .is_some_and(|store| store.source == ResultsSource::Folder(folder.to_owned()))
+    });
 }
 
 #[test]
 fn a_note_edit_does_not_reinstall_the_model() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     open(&mut app, starter_text("game_of_life.toml"));
@@ -1523,7 +1298,7 @@ fn a_note_edit_does_not_reinstall_the_model() {
 
 #[test]
 fn open_in_editor_opens_the_sheet_a_sweep_recorded_or_else_its_graph() {
-    let Some(mut app) = app() else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     let text = small_life();
@@ -1541,7 +1316,7 @@ fn open_in_editor_opens_the_sheet_a_sweep_recorded_or_else_its_graph() {
     assert_eq!(app.focus_request, Some(Tab::Editor));
 
     // A folder records the sheet in its manifest.
-    let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-sheet-sweep-{}", std::process::id())));
+    let folder = ScratchFolder::new("sheet-sweep");
     sweep_into(&app, &entry, &folder.0);
     open_results(&mut app, &folder.0);
     // The sheet's id is its own, so a folder of a sheet the app has not applied finds no model of the set, and never
@@ -1572,8 +1347,7 @@ fn open_in_editor_opens_the_sheet_a_sweep_recorded_or_else_its_graph() {
         .to_code();
     let graph_entry = entry_of(code.text());
     assert_eq!(graph_entry.source().author(), None);
-    let graph_folder =
-        ScratchFolder(std::env::temp_dir().join(format!("henad-app-graph-sweep-{}", std::process::id())));
+    let graph_folder = ScratchFolder::new("graph-sweep");
     sweep_into(&app, &graph_entry, &graph_folder.0);
     open_results(&mut app, &graph_folder.0);
     open_in_editor(&mut app);

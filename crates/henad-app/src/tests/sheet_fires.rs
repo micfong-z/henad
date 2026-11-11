@@ -2,49 +2,27 @@
 //! counted tick of the sheet's preview, shown while it plays and kept while it is paused.
 
 use egui::accesskit::Role;
+use henad_graph::sheet::SheetFile;
 use henad_graph::sheet::document::{SheetLiteral, SheetValue, Slot};
 use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::sentence::{add_value_name, fire_count, for_each_optional_name};
-use henad_graph::sheet::{SheetFile, starters};
-use web_time::Instant;
 
-use crate::tests::support::{Harness, Node, top};
-use crate::ui::editor::EditorModel;
-use crate::ui::editor::preview::{DEBOUNCE, poll_at};
-
-/// Returns the text of the sheet starter whose file is named `file_name`.
-fn starter_text(file_name: &str) -> &'static str {
-    starters()
-        .iter()
-        .find(|starter| starter.file_name == file_name)
-        .expect("a sheet starter")
-        .text
-}
-
-/// Builds the preview of the sheet open in the harness, as two frames a debounce apart would.
-fn build_preview(harness: &mut Harness) {
-    let ctx = egui::Context::default();
-    let now = Instant::now();
-    poll_at(&ctx, &mut harness.app, now);
-    poll_at(&ctx, &mut harness.app, now + DEBOUNCE);
-    harness.app.wait_for_build();
-}
+use crate::tests::panes::{sheet, sheet_mut};
+use crate::tests::support::{Harness, Node, edited, settle_preview, starter_text, top, wait_until};
 
 /// Takes the preview's snapshots until one holds the counts of a step, keeps it as the app's snapshot and returns the
-/// tick of its counts, or panics after ten seconds.
+/// tick of its counts, or panics after [`DEADLINE`](crate::tests::support::DEADLINE).
 fn wait_for_counts(harness: &mut Harness) -> u64 {
-    let thread = harness.app.sim_thread.as_mut().expect("a preview runs");
-    for _ in 0..1000 {
-        if let Some(snapshot) = thread.take_snapshot() {
-            let tick = snapshot.fire_counts.tick;
-            harness.app.snapshot = Some(snapshot);
-            if tick > 0 {
-                return tick;
-            }
+    let app = &mut harness.app;
+    let mut counted = 0;
+    wait_until("a snapshot of the preview that holds counts", || {
+        if let Some(snapshot) = app.sim_thread.as_mut().expect("a preview runs").take_snapshot() {
+            counted = snapshot.fire_counts.tick;
+            app.snapshot = Some(snapshot);
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("no snapshot of the preview held counts");
+        counted > 0
+    });
+    counted
 }
 
 /// Returns the fire count labels of a settled frame, each with its description, top to bottom.
@@ -89,7 +67,8 @@ fn the_change_lines_show_their_counts_while_playing_and_keep_them_when_paused() 
         let text = starter_text(name);
         let file = SheetFile::parse(text).expect("the starter lowers");
         harness.open_sheet(text);
-        build_preview(&mut harness);
+        settle_preview(&mut harness.app);
+        harness.app.wait_for_build();
         assert!(
             count_labels(&mut harness).is_empty(),
             "{name}: no count before a tick runs"
@@ -192,14 +171,13 @@ fn a_sheet_shows_no_counts_of_a_run_of_other_code() {
     };
     let text = starter_text("game_of_life.toml");
     harness.open_sheet(text);
-    build_preview(&mut harness);
+    settle_preview(&mut harness.app);
+    harness.app.wait_for_build();
     harness.app.play();
     wait_for_counts(&mut harness);
     assert_eq!(count_labels(&mut harness).len(), 2);
 
-    let edited = text.replacen("right = 3\n", "right = 4\n", 1);
-    assert_ne!(edited, text, "line 2's number was found");
-    harness.open_sheet(&edited);
+    harness.open_sheet(&edited(text, "right = 3\n", "right = 4\n"));
     assert!(
         count_labels(&mut harness).is_empty(),
         "the run is the sheet before the edit"
@@ -209,10 +187,7 @@ fn a_sheet_shows_no_counts_of_a_run_of_other_code() {
 
 /// Sets slot `path` of line `line` of the sheet open in the harness to `value`, as one edit in the Card pane.
 fn set_slot(harness: &mut Harness, line: &str, path: &str, value: Slot) {
-    let EditorModel::Sheet(sheet) = &mut harness.app.editor.model else {
-        panic!("a sheet is open");
-    };
-    sheet
+    sheet_mut(harness)
         .edit(true, false, |builder| {
             builder
                 .apply(SheetEdit::SetSlot {
@@ -235,7 +210,8 @@ fn an_edit_hides_the_counts_and_a_blank_keeps_the_column() {
     // A narrow window wraps line 3 onto a second row.
     harness.screen = egui::vec2(700.0, 1400.0);
     harness.open_sheet(starter_text("game_of_life.toml"));
-    build_preview(&mut harness);
+    settle_preview(&mut harness.app);
+    harness.app.wait_for_build();
     harness.app.play();
     wait_for_counts(&mut harness);
     assert_eq!(count_labels(&mut harness).len(), 2);
@@ -256,10 +232,9 @@ fn an_edit_hides_the_counts_and_a_blank_keeps_the_column() {
     assert_eq!(sentence(&harness.settle()), counting);
 
     set_slot(&mut harness, "l2", "condition.right", Slot::Blank);
-    let EditorModel::Sheet(sheet) = &harness.app.editor.model else {
-        panic!("a sheet is open");
-    };
-    let file = sheet.file().expect("a blank skips its line and the sheet lowers");
+    let file = sheet(&harness)
+        .file()
+        .expect("a blank skips its line and the sheet lowers");
     assert_eq!(file.fire_lines().lines(), ["l3"]);
     assert!(count_labels(&mut harness).is_empty());
     assert_eq!(

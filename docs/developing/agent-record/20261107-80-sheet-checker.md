@@ -6,8 +6,8 @@ icon: material/clipboard-check-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s5-sheet-checker, two unsigned [draft] commits and this record after 18f2792; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: 71074c6
+state: "37-node-editor, fast-forwarded to redesign/s5-sheet-checker, two unsigned [draft] commits and this record after 2f0030e; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: bb1a562
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheet checker and the otherwise rule [draft]`, `fix: s5 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -21,7 +21,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheet checke
 
 ## State before
 
-- `37-node-editor` at `71074c6` (S4 merged), with S9 open in a parallel worktree.
+- `37-node-editor` at `bb1a562` (S4 merged), with S9 open in a parallel worktree.
 - S1a's reader read a sheet and checked its shape, S4's writer wrote its canonical text, and `sheet::sentence` held every word the editor shows.
   Nothing checked what a sheet means: a chip naming a deleted line, a state of another property or a rate with no time scale read and wrote without a word.
 - `Sentences::line` took the numbers of the higher lines that override a line, and the writer passed none, so the vote's line 3, the forest fire's line 3 and the ants' line 16 had lost their "otherwise".
@@ -217,9 +217,9 @@ crates/
 - Every committed sheet checks clean and is a fixed point of the writer, its comments now carrying "otherwise".
 - Checks run in the worktree: `cargo fmt --all -- --check`; `cargo clippy -p henad-graph -p henad --all-targets --all-features -- -D warnings -W clippy::all`; `HENAD_REQUIRE_GPU=1 cargo test -p henad-graph --all-targets --all-features` (279 passed, 1 ignored); `cargo test -p henad-graph --doc` (5 passed); `cargo test -p henad --all-features --test facade_paths` (4 passed); `RUSTDOCFLAGS="-D warnings" cargo doc -p henad-graph --no-deps --all-features`; `cargo check -p henad-graph --all-features --lib --target wasm32-unknown-unknown` and the same for the facade.
   The full check runs at the merge point.
-- The merge check rebased the branch onto `37-node-editor` at `18f2792`, which had gained S9's time axis (record #79) since `71074c6`.
+- The merge check rebased the branch onto `37-node-editor` at `2f0030e`, which had gained S9's time axis (record #79) since `bb1a562`.
   The rebase met no conflict, and S9 changed no file of henad-graph.
-- The full check of plan section 2.3 ran on the rebased branch at `66abcc9`, with `HENAD_REQUIRE_GPU=1`.
+- The full check of plan section 2.3 ran on the rebased branch at `f156924`, with `HENAD_REQUIRE_GPU=1`.
   Every step exits as the baseline does.
   The native and wasm32 typechecks, fmt, packaging, clippy, the doc tests, the README program, rustdoc, the scripts' tests and the web build exit 0.
   `cargo deny` exits 1 on RUSTSEC-2026-0370, 0371 and 0372, the baseline's three advisories.

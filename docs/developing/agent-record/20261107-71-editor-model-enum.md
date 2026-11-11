@@ -6,8 +6,8 @@ icon: material/code-braces-box
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s6-editor-model-enum, two unsigned [draft] commits and this record after be338ec; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: be338ec
+state: "37-node-editor, fast-forwarded to redesign/s6-editor-model-enum, two unsigned [draft] commits and this record after f4088d7; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: f4088d7
 delta_state: "committed on `37-node-editor` by fast-forward: `chore: one editor model enum [draft]`, `fix: s6 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -23,7 +23,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `chore: one editor 
 
 ## State before
 
-`37-node-editor` at `be338ec` held rounds 1 to 3 of #37 and records #61 to #70.
+`37-node-editor` at `f4088d7` held rounds 1 to 3 of #37 and records #61 to #70.
 `crates/henad-app/src/ui/editor/mod.rs` declared `EditorPanel` with two fields for the model:
 
 - `text: String`, a grid rule's text as typed, empty while the Editor held a graph.
@@ -119,9 +119,9 @@ crates/henad-app/src/
 
 ## State after
 
-- `redesign/s6-editor-model-enum` holds two unsigned commits after `be338ec`, `chore: one editor model enum [draft]` and `fix: s6 review findings [draft]`.
+- `redesign/s6-editor-model-enum` holds two unsigned commits after `f4088d7`, `chore: one editor model enum [draft]` and `fix: s6 review findings [draft]`.
 - In the worktree: `cargo fmt --all -- --check` passes, `cargo clippy -p henad-app --all-targets --all-features -- -D warnings -W clippy::all` passes, `HENAD_REQUIRE_GPU=1 cargo test -p henad-app --all-targets --all-features` runs 349 tests that pass, `RUSTDOCFLAGS="-D warnings" cargo doc -p henad-app --no-deps --all-features` passes, and the wasm32 typechecks of henad-app and the facade with every feature pass.
-- The merge check ran the full check of plan section 2.3 on the branch at `72c116d`, which needed no rebase since `37-node-editor` was still at `be338ec`.
+- The merge check ran the full check of plan section 2.3 on the branch at `845f566`, which needed no rebase since `37-node-editor` was still at `f4088d7`.
   Every step exits as the baseline does.
   The native and wasm32 typechecks, fmt, packaging, clippy, the doc tests, the README program, rustdoc, the scripts' tests and the web build exit 0.
   `cargo deny` exits 1 on RUSTSEC-2026-0370, 0371 and 0372, the baseline's three advisories.
@@ -136,7 +136,7 @@ crates/henad-app/src/
   `PreviewSource::key` is the graph's `[u64; 3]`, and a sheet key either fits that shape or the field becomes a hash of its own.
 - **`receive_open` still decides the kind with `GraphFile::parse`.** S13a's dispatch on the header kind replaces it.
 - **`Empty` and an empty `Rule` read alike.** Both count as no model. A rule's text cleared by hand stays a `Rule` and is never set back to `Empty`, which no caller distinguishes.
-- **`cargo doc --document-private-items` fails on henad-app at `be338ec` already**, on an unresolved `STOP_WAIT` link in `state.rs`. CI's rustdoc runs without private items and passes.
+- **`cargo doc --document-private-items` fails on henad-app at `f4088d7` already**, on an unresolved `STOP_WAIT` link in `state.rs`. CI's rustdoc runs without private items and passes.
 
 ## Review
 

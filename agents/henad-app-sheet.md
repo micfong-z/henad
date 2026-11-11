@@ -344,9 +344,9 @@ with 1000 agents and room for a million, a Position that starts anywhere at rand
 at tick 0 in the preview run of its world, `PreviewRun::Grid` or `PreviewRun::Agents`, plays past
 it, applies and builds), `the_new_model_dialog_offers_every_starter_with_its_description`,
 `the_card_pane_reads_the_life_lines_as_their_sentences` (and the vote's "otherwise"),
-`apply_installs_and_builds_the_sheet` (as `sheet_game_of_life`),
-`applying_the_life_sheet_keeps_the_example_model_of_that_name` (the example `game_of_life` keeps its
-compiled source beside the sheet and builds it),
+`applying_the_life_sheet_keeps_the_example_model_of_that_name` (Apply installs, selects and loads
+the sheet as `sheet_game_of_life`, and the example `game_of_life` keeps its compiled source beside the
+sheet and builds it),
 `save_writes_the_canonical_text_and_the_saved_file_reopens_to_the_same_document` (a hand-edited
 sheet saves canonical, and `save_name` without a file),
 `a_sheet_with_a_skipped_line_opens_and_previews` (Game of Life with line 2's old state blank),
@@ -366,10 +366,10 @@ line), `a_result_used_above_its_line_is_red_with_its_tooltip`,
 list groups, chips, selects and help buttons), `a_help_popover_opens_and_closes`,
 `the_sheet_editor_never_shows_a_forbidden_word` (every starter, every help popover, a skipped and a
 red line, the New model dialog, the control that opens a node graph exempt),
-`every_accessible_name_holds_its_visible_words` (each control's name in the tree and holding
-its words, selects aside), `the_world_tabs_show_no_forbidden_word_from_a_sheet`, and over a
-`Harness` that draws the File menu, the Editor tab, the dialog and the About modal with AccessKit
-on:
+`every_accessible_name_holds_its_visible_words` (each control of a line, note button and add row
+in the tree and holding its words through `assert_controls_hold_their_words`, selects aside), `the_world_tabs_show_no_forbidden_word_from_a_sheet`, and over a
+`Harness` that draws the File menu, the Editor tab, the dialog, the unsaved changes dialog and the
+About modal with AccessKit on:
 `new_model_opens_a_dialog_and_create_opens_the_chosen_sheet` (the dialog role, the three radios in
 order, Name following the starter, a typed name kept, Create, the three lines, Cancel and Escape),
 `enter_in_the_name_field_creates_the_model` and
@@ -405,23 +405,30 @@ then the ants' agent and ground starts),
 `a_parameter_edit_after_play_restarts_at_tick_zero_with_the_notice` (a purpose, its Undo and its
 Redo do not),
 `measures_count_states_average_numbers_and_follow_their_state_colour` (the average published by the
-preview), `every_plot_box_of_three_states_stays_in_the_sheet_pane_and_takes_a_click` (a 450-point
-Editor), `a_number_property_shades_the_cells_in_a_hue_between_two_values` (equal ends refused in
+preview), `each_layout_keeps_a_width_of_its_own_for_the_sheet_pane` (through `drag_sheet_divider`),
+`every_plot_box_of_three_states_stays_in_the_sheet_pane_and_takes_a_click` (a 450-point Editor), `a_number_property_shades_the_cells_in_a_hue_between_two_values` (equal ends refused in
 the field, reversed ends kept),
 `buttons_start_again_or_run_once_and_check_their_names`, `the_model_name_renames_from_the_toolbar`,
 `the_charts_tab_says_how_to_plot_while_the_sheet_has_no_measure`,
 `the_remaining_sections_show_no_forbidden_word_in_any_state` (at least 25 states) and
-`keep_on_the_parameters_tab_is_one_step_of_undo`. `Harness::screen` (1600 by 1000, `TALL_SCREEN`
-for a long sheet), `align_with_starter` (keys of drawing lines and starts, a parameter's `step` and
+`keep_on_the_parameters_tab_is_one_step_of_undo`. `Harness::screen` (1600 by 1000, or
+`TALL_SCREEN`, 1800 by 2600, through `Harness::tall` for a long sheet), `headless_app` (the example
+models on a device that runs compute shaders), `align_with_starter` (keys of drawing lines and starts, a parameter's `step` and
 `means`, a state's or measure's colour the palette names alike, no id) and `without_card_lines`
 (card lines, the cards that run each tick and `next_line`) sit in `src/tests/support.rs`. Keep
 them. The alignment covers the properties of every thing and copies no parameter's type. The
 random walk's rebuild, which has no card lines, sets Steps per tick to Number in the expected
-document. `src/tests/sheet_agents.rs`, on the helpers
-`sheet_pane.rs` shares as `pub(super)`, holds
+document. The helpers that drive the Sheet and Card panes through the `Harness` (clicks by exact
+name, fields, selects, pickers, the property and New parameter forms, `Seen` and the label-in-name
+checks) sit in `src/tests/panes.rs` for every sheet and card test file, with the sections two
+rebuilds from Blank share: `build_life_sections` (the Life sheet but its lines and Clear, returning
+the text after each step for the undo walk), `build_sir_sections` with `start_infected_by_chance`
+and `add_new_outbreak` for the chance and rates SIR, and `new_blank_agents`, `agent_sheet` and
+`add_average_measure` for the random walk.
+`src/tests/sheet_agents.rs` holds
 `a_blank_agent_model_builds_the_random_walk_sheet_by_accessible_names` (New model, Agents in open
-space, 1000 by 1000, Walker, 10000, two parameters, Average of Position, Colour agents by Heading,
-the purpose, then equal to `without_card_lines` of the starter after `align_with_starter`),
+space, 1000 by 1000, Walker, 10000, Colour agents by Heading, the purpose, two parameters, Average
+of Position, then equal to `without_card_lines` of the starter after `align_with_starter`),
 `the_agents_take_a_name_and_an_integer_up_to_the_most_the_world_holds`,
 `agents_take_states_numbers_and_yes_or_no_and_no_start_on_an_unpainted_ground` (the kinds
 offered, starts, no on-ground start on a ground made on the pane, a count of agents, the buttons),

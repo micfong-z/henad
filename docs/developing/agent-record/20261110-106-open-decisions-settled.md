@@ -1,14 +1,14 @@
 ---
 date: 2026-11-10
 title: "Open decisions settled"
-description: "Round 5 of the #37 redesign settles the nine decisions rounds 1 to 4 left open. Option A was the tiebreaker, and the session's own call went against it three times: no push, the first-time rule inside a Repeat, and benchmarks A and C together. Sixteen commits in five packages and the CHANGELOG commit `0801358` re-key the grid rule streams on pcg4d, replace the failing budget test, state the float results contract, fix the Apply line and lower the first-time rule. The full check passes every step, the device tests pass on lavapipe, and the benchmarks hold the gates of rounds 1 to 3 at the tip."
+description: "Round 5 of the #37 redesign settles the nine decisions rounds 1 to 4 left open. Option A was the tiebreaker, and the session's own call went against it three times: no push, the first-time rule inside a Repeat, and benchmarks A and C together. Sixteen commits in five packages and the CHANGELOG commit `8524e13` re-key the grid rule streams on pcg4d, replace the failing budget test, state the float results contract, fix the Apply line and lower the first-time rule. The full check passes every step, the device tests pass on lavapipe, and the benchmarks hold the gates of rounds 1 to 3 at the tip."
 icon: material/scale-balance
 status: ai-generated
 model: "claude-fable-5-2 (Claude Code): decisions, analysis and reviews. Implementation by Opus and Sonnet subagents"
 issue: "#37"
-state: "37-node-editor at 0801358 plus two docs follow-ups and this record: seventeen implementation commits after 2c13265, 20 commits in all, all unsigned [draft] commits, nothing pushed. The full check with HENAD_REQUIRE_GPU=1 at 0801358 exits 0 on every step"
-baseline_commit: 2c13265
-delta_state: "committed on `37-node-editor`: seventeen implementation commits by fast-forward from five branches, two docs follow-ups (`3b4fda8` and a second one after this record) and this record, unsigned, for the maintainer to reword and sign"
+state: "37-node-editor at 8524e13 plus two docs follow-ups and this record: seventeen implementation commits after a28b1e7, 20 commits in all, all unsigned [draft] commits, nothing pushed. The full check with HENAD_REQUIRE_GPU=1 at 8524e13 exits 0 on every step"
+baseline_commit: a28b1e7
+delta_state: "committed on `37-node-editor`: seventeen implementation commits by fast-forward from five branches, two docs follow-ups (`165b0ce` and a second one after this record) and this record, unsigned, for the maintainer to reword and sign"
 ---
 
 # Open decisions settled
@@ -23,7 +23,7 @@ delta_state: "committed on `37-node-editor`: seventeen implementation commits by
 
 ## State before
 
-`37-node-editor` at `2c13265` held S0 to S32, records #71 to #105, as 233 unsigned `[draft]` commits that the remote lacked.
+`37-node-editor` at `a28b1e7` held S0 to S32, records #71 to #105, as 233 unsigned `[draft]` commits that the remote lacked.
 The full check failed on two steps, as at every merge point of the redesign: `cargo deny` on RUSTSEC-2026-0370, 0371 and 0372, and the workspace test `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets` on `boids.toml`.
 No benchmark had run since round 3, and no device test had run on a second adapter.
 The artifact of round 4 listed nine decisions for the maintainer in its chapter 19, each with its options.
@@ -60,7 +60,7 @@ The streams reviewer reproduced the four pairs independently.
 At 256 by 256 and seed 5 the old chain shares all 65,536 start states between ticks 3 and 326, while the new seeding shares 1.007 states a tick pair on average over 300 pairs, against 1.0 by chance, and 5 at worst.
 
 **The boids budget (decision 3).**
-Probes at `2c13265` admit the boids graph at 200,000 agents and refuse it at 210,000 in the default world.
+Probes at `a28b1e7` admit the boids graph at 200,000 agents and refuse it at 210,000 in the default world.
 At 1,000,000 it runs in a 10000 by 10000 world at 18.5 steps a second and is refused at the default density, at 7.5e11 units.
 Stock `gpu_boids` at 1,000,000 in the default world runs, at 0.316 steps a second, 3.2 s a step.
 The boids and bounded confidence sheets reach their largest population in the largest world too, and their `max_count` stays, which answers record #87's question.
@@ -80,7 +80,7 @@ Package "apply" fixed that line.
 
 **The second adapter (decisions 2 and 5).**
 Docker on the maintainer's machine gives `llvmpipe (LLVM 19.1.7)` on Vulkan, Mesa 25.0.7 on aarch64, with Rust 1.97.1.
-At `2c13265` henad-graph passed 491 tests and failed none.
+At `a28b1e7` henad-graph passed 491 tests and failed none.
 henad-models passed 193 and failed 1, the budget test of decision 3, with `graph_ants_parity`, the sheet tests and the grid lockstep passing.
 Both ignored float tests, henad-graph's `a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` and henad-models' `a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit`, fail there as on Metal, at "the device and the host": LLVM contracts the multiply and the add.
 Contraction is therefore no Metal peculiarity, and decision 2's A reads the float tests as probes of a device.
@@ -88,13 +88,13 @@ The run at the final tree is under [The second adapter](#the-second-adapter).
 
 ### The packages
 
-Each package ran in its own worktree from `2c13265`, and a reviewer with a fresh context read it before its merge.
+Each package ran in its own worktree from `a28b1e7`, and a reviewer with a fresh context read it before its merge.
 The session reviewed package "contract" itself, and reviewers on the session's model read the other four.
-A Sonnet subagent rebased the five branches onto `37-node-editor` in the order below with no conflicts, fast-forwarded each, wrote the CHANGELOG commit `0801358` and ran the full check.
+A Sonnet subagent rebased the five branches onto `37-node-editor` in the order below with no conflicts, fast-forwarded each, wrote the CHANGELOG commit `8524e13` and ran the full check.
 
 #### contract (Sonnet): decisions 2 and 4
 
-Commits `a9ba2df`, `f7a2872` and `6edc206`.
+Commits `15a3f7a`, `0cec2c1` and `7aa8b62`.
 
 - `deny.toml` ignores RUSTSEC-2026-0370, 0371 and 0372, each with its crate, "unmaintained, merged into zbus 6" and the path in through `accesskit_unix` under eframe's `accesskit` feature. The implementer confirmed the path with `cargo tree -i zvariant`.
 - `docs/reference/model-files.md` gains a section "Results across devices", between "Fields of a graph model" and "Sheets", where it reaches graph models and sheets alike.
@@ -103,11 +103,11 @@ Commits `a9ba2df`, `f7a2872` and `6edc206`.
 
 The session's review found one fault: the section promised that every whole-number result is equal on every device and equal to the host.
 A whole number worked out from floats, such as a count of agents within a distance, can differ where the floats do.
-`3b4fda8` rewords the promise to computations over whole numbers and adds that sentence.
+`165b0ce` rewords the promise to computations over whole numbers and adds that sentence.
 
 #### budget (Opus): decision 3
 
-Commits `f2282ff` and `17da2b6`.
+Commits `d302f33` and `1caa52b`.
 Two tests in `crates/henad-models/src/tests/graph_agent_runs.rs` replace the failing one, over the agents corpus and the agent sheet starters.
 
 - `every_agent_file_at_its_largest_population_in_its_largest_world_fits_the_work_budgets` sets `num_agents`, `world_width` and `world_height` to their maxima and holds every file to the submission budget.
@@ -126,7 +126,7 @@ The fix round changed nothing.
 
 #### streams (Opus): decision 1
 
-Commits `9f87da2`, `abaee77`, `3ca1622` and `d3ac4b9`.
+Commits `16949d5`, `fcdfcf5`, `937c0d4` and `ea8f8fa`.
 
 - `the_draw_core_keeps_its_words` pins the words of henad-graph's draw core. It went in first and passed against the code before the move.
 - `pcg4d` moves into henad-core as `rng::pcg4d` and its WGSL twin `henad::rng::pcg4d`, with a doc example, cases in the device parity test and a line in `docs/reference/primitives.md`. henad-graph's `draw.rs` re-exports it and `draw.wgsl` imports it, so one definition remains.
@@ -142,7 +142,7 @@ It was noted, and the CHANGELOG's Grid rules line keeps the description.
 
 #### apply (Opus): decision 9
 
-Commits `53927e8`, `2411bc5` and `a1469b3`.
+Commits `be490dd`, `384caaf` and `23029b5`.
 `EditorPanel::settle_outcome` in `crates/henad-app/src/ui/editor/mod.rs` takes the source of the model Build would build now: the selected model's source, or none while `AppState::build_replays_preview()` holds.
 An `ApplyOutcome::Installed` whose source no longer matches is cleared, and the Editor then shows the preview line and "Press Apply to check and install the model.".
 Apply, Build and Offload behave as before, and no dialog was added.
@@ -154,11 +154,11 @@ The fix also covers Apply of a sheet at tick 0 followed by an edit whose preview
 The implementer checked the fix in the running app on the built-in display, since the secondary display was not connected: Game of Life applied and paused at tick 169, then SIR applied beside it, Offload, the Build line gone, Build replaying the preview at 256 by 256 and Apply building the sheet at 1024 by 1024.
 
 The reviewer reverted the fix in a scratch copy: the sheet and selection tests fail there, and the graph and grid rule tests pass both ways, as guards against clearing the line on every Offload.
-Four findings, all fixed in `a1469b3`: apply-1 (should fix) added the four tests to the list in `agents/henad-app-editor.md`, apply-2 renamed `built` to `next_build`, apply-3 qualified the guide's quote with "or the number of agents", and apply-4 corrected the doc of `editor_texts`.
+Four findings, all fixed in `23029b5`: apply-1 (should fix) added the four tests to the list in `agents/henad-app-editor.md`, apply-2 renamed `built` to `next_build`, apply-3 qualified the guide's quote with "or the number of agents", and apply-4 corrected the doc of `editor_texts`.
 
 #### repeat (Opus): decision 7
 
-Commits `dbe044d`, `10490fb`, `fe68f87` and `d6d16b4`.
+Commits `5e8b5b4`, `64a1c21`, `27ad248` and `43e14e8`.
 
 - `crates/henad-graph/src/sheet/lower/repeat.rs` gives each competing line a `u32` `min` accumulator `<line>_first`, to which each time round puts its number when the line's condition holds. A line's row holds where it held and no lower competing line first held earlier.
 - Two lines compete when both are a Become or both a Set, change one property and can both apply. A Become from a state below a Become from any state records its first round only for an agent in its state, through a `cmp.eq` outside the region.
@@ -179,7 +179,7 @@ R5 (nit): `agents/henad-graph-sheet-lower.md` neared 40,000 bytes. Noted, with t
 
 ### The full check
 
-The full check of `AGENTS.md`'s commands ran at `0801358` with `HENAD_REQUIRE_GPU=1` on the Apple M4 Pro, each line as its own step.
+The full check of `AGENTS.md`'s commands ran at `8524e13` with `HENAD_REQUIRE_GPU=1` on the Apple M4 Pro, each line as its own step.
 Every step exits 0: the native and wasm32 checks, the facade's two wasm32 checks, fmt, packaging, `cargo deny`, clippy, the workspace tests, the doc tests, the README program, `cargo doc`, the scripts' tests and the web build.
 The workspace tests pass 2,219 and ignore 2, the float probes, and none fail.
 `cargo deny` reports no advisory.
@@ -187,7 +187,7 @@ This is the first full check of the redesign with no failing step.
 
 ### The second adapter
 
-At `0801358` in the same container on lavapipe, every suite passes.
+At `8524e13` in the same container on lavapipe, every suite passes.
 Both runs set `HENAD_REQUIRE_GPU=1`.
 
 | Crate | Passed | Failed |
@@ -207,7 +207,7 @@ Nothing was pushed.
 The benchmarks ran on the maintainer's Apple M4 Pro (14 cores, 24 GB) on Metal, release builds, from 01:38 to 02:07 on 2026-11-10, with nothing else of the session running.
 The machine was not cooled or idle: the load average went from 1.0 to 4.6 while the maintainer's own apps ran.
 GPU utilisation went from 81 to 99 percent, with a median of 99, over 79 samples logged every 10 s from 01:53.
-The binaries were `e816b44` (before #37), `be338ec` (the end of round 3), the tip `0801358`, and the tip with `sheet_probes` returning empty probes ("silent", record #104's patch, never committed).
+The binaries were `e816b44` (before #37), `f4088d7` (the end of round 3), the tip `8524e13`, and the tip with `sheet_probes` returning empty probes ("silent", record #104's patch, never committed).
 Each round ran every contender of a set once in rotated order, 255 runs in all, a run being `--steps S --reps 3 --json` and its time the median rep.
 A ratio below is a contender's time over the reference's time in the same round, and the table gives the median over the rounds with the lowest and highest beside it, so a ratio below 1 is faster.
 Read them as the gates of rounds 1 to 3 were read: a median paired ratio with its range, not a gate result from a cooled machine.
@@ -235,11 +235,11 @@ The sets marked short ran about 0.5 s a rep, and their ranges are wide for that 
 
 Every median lies within 0.985 to 1.016 over the twelve configurations, so the gates of rounds 1 to 3 (A1, G2 and A2) hold at the tip in one comparison.
 
-#### Graph files, tip against `be338ec`
+#### Graph files, tip against `f4088d7`
 
 Five rounds per set, measuring change J (the workgroup counters) and the other engine changes since round 3.
 
-| File and size | Steps | `be338ec` steps/s | Tip steps/s | Ratio | Range | Load |
+| File and size | Steps | `f4088d7` steps/s | Tip steps/s | Ratio | Range | Load |
 | --- | --- | --- | --- | --- | --- | --- |
 | `gpu_boids.toml` 100,000 | 192 | 71.8 | 71.8 | 0.998 | 0.996 to 1.001 | 1.6 to 3.3 |
 | Boids starter 100,000 | 192 | 71.7 | 72.0 | 1.000 | 0.997 to 1.002 | 1.2 to 2.9 |
@@ -361,9 +361,9 @@ zensical.toml                                  nav entry for this record
 
 ## State after
 
-- `37-node-editor` holds the seventeen implementation commits `a9ba2df` to `0801358`, two docs follow-ups (`3b4fda8` and a second one after this record) and this record after `2c13265`, 20 commits in all. All are unsigned `[draft]` commits, and nothing was pushed, tagged or opened as a PR.
-- The full check at `0801358` with `HENAD_REQUIRE_GPU=1` exits 0 on every step, with 2,219 tests passing, 2 ignored and none failing.
-- The device tests at `0801358` pass on lavapipe, and the two float probes fail there as on Metal.
+- `37-node-editor` holds the seventeen implementation commits `15a3f7a` to `8524e13`, two docs follow-ups (`165b0ce` and a second one after this record) and this record after `a28b1e7`, 20 commits in all. All are unsigned `[draft]` commits, and nothing was pushed, tagged or opened as a PR.
+- The full check at `8524e13` with `HENAD_REQUIRE_GPU=1` exits 0 on every step, with 2,219 tests passing, 2 ignored and none failing.
+- The device tests at `8524e13` pass on lavapipe, and the two float probes fail there as on Metal.
 - The two docs follow-ups and this record change only docs and the nav, so the full check was not run again. `uv run zensical build --clean` builds the site with them.
 - Decision rows D114 to D124 hold the round's calls, below.
 
@@ -396,13 +396,13 @@ This round adds these rows.
 | D117 | Agent budgets | The submission budget refuses a population past what its world's density admits. A file's largest population must be admitted in its declared world or in the largest world its parameters allow, and the test pins the largest population each declared world admits (boids starters 201,012, `gpu_boids.toml` 195,355, the bounded confidence sheet 552,857, every other file its `max_count`). The three ants files reach their `max_count` in the declared world. In a 10000 by 10000 world their ground's init on the host passes the host budget at every population (7.7e9 to 15.3e9 units against 4e9), accepted as the budget's answer and pinned in the test. The sheets' `max_count` stays | Decision 3, probes, review finding B1 |
 | D118 | cargo-deny | RUSTSEC-2026-0370, 0371 and 0372 are ignored with reasons | Decision 4 |
 | D119 | Second adapter | The device tests ran on lavapipe in a local container. Nothing was pushed | Decision 5 |
-| D120 | Benchmarks | Run in this session on the final tree `0801358`, alone, 255 interleaved runs, load 1.0 to 4.6, GPU at a median of 99 percent. Stock models, tip against `e816b44`: every median paired ratio from 0.985 to 1.016 over twelve configurations, so the gates of rounds 1 to 3 hold at the tip. Graph files, tip against `be338ec`: 0.976 to 1.005 over six. Sheets against their graph starters, as ratios of median times: Game of Life 1.06, boids 0.99, ants 1.12 (the starter is faster than stock `gpu_ants`, the sheet 4 percent faster than stock). Lane packing costs nothing measurable. Game of Life as a graph or a sheet runs 45 to 47 times slower than the bit-packed stock model at 4096 squared. The SIR sheet figures are confounded by the trajectory | Decision 6 |
+| D120 | Benchmarks | Run in this session on the final tree `8524e13`, alone, 255 interleaved runs, load 1.0 to 4.6, GPU at a median of 99 percent. Stock models, tip against `e816b44`: every median paired ratio from 0.985 to 1.016 over twelve configurations, so the gates of rounds 1 to 3 hold at the tip. Graph files, tip against `f4088d7`: 0.976 to 1.005 over six. Sheets against their graph starters, as ratios of median times: Game of Life 1.06, boids 0.99, ants 1.12 (the starter is faster than stock `gpu_ants`, the sheet 4 percent faster than stock). Lane packing costs nothing measurable. Game of Life as a graph or a sheet runs 45 to 47 times slower than the bit-packed stock model at 4096 squared. The SIR sheet figures are confounded by the trajectory | Decision 6 |
 | D121 | Order inside a Repeat | Among the changes of one property inside one Repeat, the change that first held in the earliest time round wins, and the higher line wins a tie. Between a change inside a Repeat and one outside it, or in another Repeat, the higher line wins as before. Replaces the any-time rule of S20 | Decision 7, round 1 section 6 |
 | D122 | A press's draws | Keyed on the button's place among the buttons | Decision 8 |
 | D123 | Apply beside another model's run | Installs, selects and leaves the run. Build replaces it. Answers record #55's open question | Decision 9 |
 | D124 | Fire counts | Counts stay on for every sheet, as answer 9a chose. Counting costs 3.0 percent on the Game of Life sheet and 2.4 percent on the SIR sheet at 4096 squared in 64-step submissions (five rounds, ranges 1.010 to 1.048 and 1.015 to 1.032), and nothing measurable on the boids sheet at 200,000. A build switch for sweeps would recover it and would make a sweep's shader differ from the app's, so it is left out | D48, decision 6 |
 
-D116's sentence on whole numbers holds for computations over whole numbers alone, as `3b4fda8` words it in the reference.
+D116's sentence on whole numbers holds for computations over whole numbers alone, as `165b0ce` words it in the reference.
 D1 to D75 and D80 to D113 stand as built, read against their alternatives.
 Record #105's eleven choices stand, except the order inside a Repeat (F2), which D121 replaces.
 D48 stands, with its measurement in D124.

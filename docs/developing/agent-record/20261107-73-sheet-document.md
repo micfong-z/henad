@@ -6,15 +6,15 @@ icon: material/file-document-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s1a-sheet-document, four unsigned [draft] commits and this record after 5967809; the full check at 4bac972 equals the baseline at be338ec"
-baseline_commit: be338ec
+state: "37-node-editor, fast-forwarded to redesign/s1a-sheet-document, four unsigned [draft] commits and this record after 98be226; the full check at 1b60221 equals the baseline at f4088d7"
+baseline_commit: f4088d7
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: time units in henad-core [draft]`, `feat: sheet document and reader [draft]`, `fix: s1a review findings [draft]`, `feat: percent literal in sheets [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
 # Sheet document
 
-> S0, the gate of the #37 redesign, sent the design to code: its verdict is go, every round C finding and every open item of the three change lists has a disposition, and S1a may start from `be338ec`.
-> Its baseline at `be338ec` fails two steps of the full check: `cargo deny` on RUSTSEC-2026-0370, 0371 and 0372, and the workspace tests on the budget test of record #68 alone.
+> S0, the gate of the #37 redesign, sent the design to code: its verdict is go, every round C finding and every open item of the three change lists has a disposition, and S1a may start from `f4088d7`.
+> Its baseline at `f4088d7` fails two steps of the full check: `cargo deny` on RUSTSEC-2026-0370, 0371 and 0372, and the workspace tests on the budget test of record #68 alone.
 > S1a builds the first layer of the sheet, the author document a researcher builds on the sheet and its cards.
 > henad-core gains `TimeUnit`, second to year, the one unit of time that the sheet's `[time]`, a rate's unit and the later time scale share.
 > henad-graph gains `henad_graph::sheet`: `SheetDocument`, the whole author format as plain public data, and `ParsedSheet`, its reader.
@@ -30,12 +30,12 @@ S0 wrote the gate on 2026-11-07.
 - **Verdict: go.** The study's rules applied to round C send the design to code, and no "goes back" rule holds.
   Every round C finding is fixed in the final specification and the prototype, or settled by a decision row from D80 to D102.
   Round D, on the smaller model, was still running, and the gate lets S1a, S3 and S6 start before its addendum.
-- **Baseline at `be338ec`.** The full check of the plan's section 2.3 exits 0 on every step but `deny` (1) and `test` (101).
+- **Baseline at `f4088d7`.** The full check of the plan's section 2.3 exits 0 on every step but `deny` (1) and `test` (101).
   `cargo deny` reports RUSTSEC-2026-0370, 0371 and 0372, the unmaintained `zvariant`, `zbus_names` and `zvariant_derive`.
   The one failing test is `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets`, the budget test of record #68.
 - **Scope changes for S1a.** The gate's section 11 adds the explicit `always` and `any_state` (D81), the outside test (D82) and `rate_unit_from_tick` (D83) to the stored form, and changes the copied examples: D81's values written in, Game of Life's Clear a Run once card (D98), and SIR's button renamed New outbreak (D97).
 
-In the code at `be338ec`:
+In the code at `f4088d7`:
 
 - Three places read a model file's header: the graph reader (`reader.rs`, with its own `HeaderTable` and `[graph] library`), and `ModelFile::parse` and `GridRuleFile::parse` in henad-explore (one `HeaderTable` taking the allowed kinds).
   Their messages differed: "this reader only reads 'graph'" against "this build only reads 'gpu_grid' and 'graph'".
@@ -228,8 +228,8 @@ The reader runs when a sheet opens or saves, outside every tick, so the mileston
 
 ## State after
 
-- `37-node-editor` holds four unsigned `[draft]` commits after `5967809`, fast-forwarded from `redesign/s1a-sheet-document`: `feat: time units in henad-core [draft]`, `feat: sheet document and reader [draft]`, `fix: s1a review findings [draft]` and `feat: percent literal in sheets [draft]`, then this record and its `zensical.toml` entry.
-  The branch was rebased onto `5967809`, the tip after S3, before the merge.
+- `37-node-editor` holds four unsigned `[draft]` commits after `98be226`, fast-forwarded from `redesign/s1a-sheet-document`: `feat: time units in henad-core [draft]`, `feat: sheet document and reader [draft]`, `fix: s1a review findings [draft]` and `feat: percent literal in sheets [draft]`, then this record and its `zensical.toml` entry.
+  The branch was rebased onto `98be226`, the tip after S3, before the merge.
   `AGENTS.md`'s topic table conflicted in its list, and the merge keeps both rows, S3's `agents/henad-graph-wgsl.md` and S1a's `agents/henad-graph-sheet.md`.
   `agents/henad-graph.md` merged without a conflict.
 - Before the rebase, in the worktree, with `HENAD_REQUIRE_GPU=1`:
@@ -239,7 +239,7 @@ The reader runs when a sheet opens or saves, outside every tick, so the mileston
   - `RUSTDOCFLAGS="-D warnings" cargo doc -p henad-graph -p henad-core -p henad-explore --no-deps --all-features` and `./scripts/check_packaging.sh` pass.
   - `cargo check --lib --target wasm32-unknown-unknown` passes for henad-core, henad-graph and henad-explore with every feature, and for the facade with none and with every feature. henad-cli, henad-app and henad-models typecheck with every target.
 - After the percent literal, `cargo fmt`, `cargo clippy -p henad-graph -p henad-core --all-targets --all-features -- -D warnings -W clippy::all` and the tests of both crates pass with `HENAD_REQUIRE_GPU=1`: henad-core 294, henad-graph 193 with 1 ignored, and their doc tests.
-- The full check of the plan's section 2.3 at `4bac972`, the branch tip before this record, run from the worktree in three chunks with `HENAD_REQUIRE_GPU=1`, equals the baseline at `be338ec`.
+- The full check of the plan's section 2.3 at `1b60221`, the branch tip before this record, run from the worktree in three chunks with `HENAD_REQUIRE_GPU=1`, equals the baseline at `f4088d7`.
   Every step exits 0 but `deny` (1) and `test` (101), the two the baseline fails.
   `cargo deny` reports RUSTSEC-2026-0370, 0371 and 0372 alone, with bans, licences and sources ok.
   The workspace tests pass 1682 with 2 ignored, and the one failure is the baseline's budget test of record #68, so the list of failing tests holds nothing the baseline's lacks.

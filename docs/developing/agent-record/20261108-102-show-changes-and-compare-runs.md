@@ -6,8 +6,8 @@ icon: material/compare-horizontal
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s30-show-changes-compare, which was already on its tip d574226: four unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: d574226
+state: "37-node-editor, fast-forwarded to redesign/s30-show-changes-compare, which was already on its tip 384c1b3: four unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: 384c1b3
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: show changes, notes and categories in the expert mode [draft]`, `feat: compare runs of a sheet and its copy [draft]`, `docs: editor guide for show changes and compare runs [draft]`, `fix: s30 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -21,7 +21,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: show changes
 
 ## State before
 
-`37-node-editor` at `d574226`, after S27 (the first half of the expert mode).
+`37-node-editor` at `384c1b3`, after S27 (the first half of the expert mode).
 A sheet converted to a node graph copy, and the copy's banner read unedited, edited with node counts, original changed or original not found, with Open <sheet> alone.
 henad-graph's `changes_since_conversion` already grouped a copy's changes by frame, and the copy's `[editor]` region already held notes of the purpose and each parameter's meaning, but the app called the one only for the banner's counts and drew none of the notes.
 The graph editor's Categories section showed each variant's colour as a coloured square, added a variant in grey, and could not add a category.
@@ -116,11 +116,11 @@ The screenshots stay outside the repository.
 ## State after
 
 The expert mode is complete in the app: a sheet converts to a copy, the copy lists and marks its changes since the conversion, runs beside its sheet to show whether and where an edit moved the results, and shows the sheet's prose, and its categories take new states and colours.
-`37-node-editor` holds the four unsigned commits `139a57e`, `815a3ac`, `17c168f` and `de02ce5`, fast-forwarded with no merge-check fix.
+`37-node-editor` holds the four unsigned commits `06cfe4e`, `23473af`, `811b684` and `500f0dc`, fast-forwarded with no merge-check fix.
 
 ### Merge check
 
-- The branch already sat on the tip of `37-node-editor` (`d574226`), so the rebase replayed nothing and raised no conflict.
+- The branch already sat on the tip of `37-node-editor` (`384c1b3`), so the rebase replayed nothing and raised no conflict.
 - The full check then ran on the branch with `HENAD_REQUIRE_GPU=1`.
   Every step exits 0 but two, and both fail as the baseline does.
   `cargo deny` reports the baseline's three advisories, RUSTSEC-2026-0370, 0371 and 0372, and no other.

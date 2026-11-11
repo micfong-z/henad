@@ -1,14 +1,13 @@
 //! Tests of the graph editor in the Editor tab: a starter opens as a graph, files open by their kind, every edit runs
 //! through the edit commands with snapshot undo, and Apply reads the graph's canonical text.
 
-use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
+use henad_core::params::{ParamKind, ParamValue};
 use henad_graph::GraphFile;
 use henad_graph::edit::{EditCommand, Scope};
-use henad_graph::ids::NodeId;
 use henad_graph::value::InputValue;
 
 use crate::state::AppState;
-use crate::tests::support::step_past;
+use crate::tests::support::{assert_built, bind_spread_rate, graph_editor_of, n, step_past};
 use crate::ui::dock::Tab;
 use crate::ui::editor::graph::world::param_with;
 use crate::ui::editor::graph::{GraphEdit, GraphEditor, GraphRequest, GraphStatus};
@@ -16,17 +15,6 @@ use crate::ui::editor::{
     ApplyOutcome, EditorModel, FileStatus, apply, editor_ui, new_graph_model, new_grid_rule, receive_open, save_name,
 };
 use crate::ui::files::{DialogFile, OpenResult};
-
-/// Returns node `number`'s id.
-fn n(number: u32) -> NodeId {
-    NodeId::new(number).expect("an id")
-}
-
-/// Returns an editor of the starter `name`.
-fn editor(name: &str) -> GraphEditor {
-    let text = henad_graph::starters::starter(name).expect("a starter").text;
-    GraphEditor::new(&GraphFile::parse(text).expect("the starter reads"))
-}
 
 /// Runs `request` on `graph` as the canvas runs it once the button is up.
 fn run(graph: &mut GraphEditor, request: GraphRequest) {
@@ -114,7 +102,7 @@ fn apply_installs_the_graph_and_builds_it_at_its_own_size() {
     assert_eq!(app.loaded_id(), Some("node_sir"), "nothing ran, so the graph was built");
     assert_eq!(app.preview(), None, "Apply builds no preview");
     app.wait_for_build();
-    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+    assert_built(&app, "the graph");
     assert_eq!(
         &app.loaded_values[..2],
         &[ParamValue::U32(1024), ParamValue::U32(1024)],
@@ -164,7 +152,7 @@ fn a_graph_edit_past_tick_zero_waits_on_the_rebuild_dialog() {
 
 #[test]
 fn a_refused_edit_changes_nothing_and_names_the_problem() {
-    let mut graph = editor("sir.toml");
+    let mut graph = graph_editor_of("sir.toml");
     let before = graph.text();
     let refused = graph.edit(vec![EditCommand::RemoveParam("infection_rate".to_owned())], None);
     assert!(!refused);
@@ -182,7 +170,7 @@ fn a_refused_edit_changes_nothing_and_names_the_problem() {
 
 #[test]
 fn undo_and_redo_restore_the_canonical_text() {
-    let mut graph = editor("sir.toml");
+    let mut graph = graph_editor_of("sir.toml");
     let start = graph.text();
     run(
         &mut graph,
@@ -206,7 +194,7 @@ fn undo_and_redo_restore_the_canonical_text() {
 
 #[test]
 fn edits_under_one_key_make_one_undo_step() {
-    let mut graph = editor("sir.toml");
+    let mut graph = graph_editor_of("sir.toml");
     let start = graph.text();
     for value in [0.5_f32, 0.6, 0.7] {
         let command = EditCommand::SetLiteral {
@@ -224,7 +212,7 @@ fn edits_under_one_key_make_one_undo_step() {
 
 #[test]
 fn a_node_added_from_a_dropped_wire_takes_the_wire() {
-    let mut graph = editor("sir.toml");
+    let mut graph = graph_editor_of("sir.toml");
     run(
         &mut graph,
         GraphRequest::AddNode {
@@ -249,7 +237,7 @@ fn a_node_added_from_a_dropped_wire_takes_the_wire() {
 
 #[test]
 fn renaming_or_removing_the_open_pass_keeps_a_pass_open() {
-    let mut graph = editor("sir.toml");
+    let mut graph = graph_editor_of("sir.toml");
     run(
         &mut graph,
         GraphRequest::Edit(GraphEdit::one(EditCommand::RenamePass {
@@ -267,7 +255,7 @@ fn renaming_or_removing_the_open_pass_keeps_a_pass_open() {
 
 #[test]
 fn issue_counts_follow_the_checker_per_pass() {
-    let mut graph = editor("sir.toml");
+    let mut graph = graph_editor_of("sir.toml");
     assert_eq!(graph.issue_counts(&Scope::pass("step")), (0, 0));
     run(
         &mut graph,
@@ -289,28 +277,8 @@ fn issue_counts_follow_the_checker_per_pass() {
 
 #[test]
 fn a_new_parameter_binds_to_an_input() {
-    let mut graph = editor("sir.toml");
-    let ran = graph.edit(
-        vec![
-            EditCommand::AddParam(ParamDescriptor::new(
-                "spread_rate",
-                "Spread rate",
-                ParamKind::F32 {
-                    min: 0.0,
-                    max: 1.0,
-                    default: 0.4,
-                    step: None,
-                },
-            )),
-            EditCommand::BindParam {
-                scope: Scope::pass("step"),
-                node: n(12),
-                port: "b".to_owned(),
-                param: "spread_rate".to_owned(),
-            },
-        ],
-        None,
-    );
+    let mut graph = graph_editor_of("sir.toml");
+    let ran = graph.edit(bind_spread_rate(), None);
     assert!(ran, "{:?}", graph.status);
     assert!(!graph.report().has_errors());
     let node = graph.open_pass().expect("a pass").body.node(n(12)).expect("a node");
@@ -373,7 +341,7 @@ fn a_label_or_range_edit_keeps_the_tick_length_hidden() {
 
 #[test]
 fn arrange_places_the_open_pass_in_one_undo_step() {
-    let mut graph = editor("sir.toml");
+    let mut graph = graph_editor_of("sir.toml");
     let start = graph.text();
     run(&mut graph, GraphRequest::Arrange);
     assert_ne!(graph.text(), start);

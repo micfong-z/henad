@@ -6,8 +6,8 @@ icon: material/account-group
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s26-agents-sheet on 4a22a38 with no rebase needed: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: 4a22a38
+state: "37-node-editor, fast-forwarded to redesign/s26-agents-sheet on 5b7115c with no rebase needed: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: 5b7115c
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: agents and the ground on the sheet pane [draft]`, `fix: the agents' largest number on a row of its own [draft]`, `fix: s26 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -21,7 +21,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: agents and t
 
 ## State before
 
-`37-node-editor` at `4a22a38`, after S16b (every section of a grid sheet edited on the Sheet pane, the toolbar, Undo and Redo) and S20 (the agent lowering with the ground, picks, Repeat and the add-up merge).
+`37-node-editor` at `5b7115c`, after S16b (every section of a grid sheet edited on the Sheet pane, the toolbar, Undo and Redo) and S20 (the agent lowering with the ground, picks, Repeat and the add-up merge).
 The New model dialog held the agent starters out and showed "Agents in open space" disabled under Blank.
 An agent sheet opened from a file showed the Cells section's empty text, since every section read the cells alone.
 henad-graph had commands to add properties to the ground or to a kind of agent, but none to set the number of agents, a ground property's marks or fading, or the blocked states.
@@ -160,7 +160,7 @@ The Card pane of an agent sheet stays read-only until S28.
 
 ### Merge check
 
-- The branch already sat on the tip of `37-node-editor` at `4a22a38`, so the merge rebase replayed nothing and raised no conflict.
+- The branch already sat on the tip of `37-node-editor` at `5b7115c`, so the merge rebase replayed nothing and raised no conflict.
   The rebase brought in no henad-app change, so the UI check was not repeated.
 - The full check then ran on the branch with `HENAD_REQUIRE_GPU=1`.
   Every step exits 0 but two, and both fail as the baseline does.

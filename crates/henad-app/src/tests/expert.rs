@@ -9,48 +9,47 @@ use henad_graph::sheet::sentence::{
     CONVERT, CONVERT_HEADING, CONVERT_NEEDS_FINISHED_LINES, CONVERT_NEEDS_FIXES, DIAGRAM, EDIT_AS_NODE_GRAPH,
     LINES_VIEW, MODEL_ACTIONS, Sentences, convert_text, converted_banner, converted_link, diagram_name, open_original,
 };
-use henad_graph::sheet::starters;
 use henad_graph::value::Literal;
 
-use crate::tests::support::{Harness, ScratchFolder, forbidden_words};
+use crate::tests::panes::{apply_sheet_edit, sheet, sheet_mut, shows_notice};
+use crate::tests::support::{
+    Harness, ScratchFolder, edited, forbidden_words, life_with_a_skipped_line, n, starter_text, wait_within,
+};
 use crate::ui::editor::expert::{CopyState, convert_refusal, copy_banner, find_original, open_original_of, today};
 use crate::ui::editor::graph::arrange::NODE_SIZE;
 use crate::ui::editor::sheet::diagram::diagram_boxes;
-use crate::ui::editor::{EditorModel, FileStatus, open_text};
+use crate::ui::editor::{FileStatus, open_text};
 
 /// Title of the frame of line 2 in the copy of Game of Life.
 const LINE_2: &str = "Line 2: Become Alive from Dead, when Alive neighbours is 3";
 
-/// Returns Game of Life with the old state of line 2 left blank. Line 2 is then skipped.
-fn life_with_a_skipped_line() -> String {
-    starter_text("game_of_life.toml").replacen(
-        "new_state = \"alive\"\nstart_state = \"dead\"\n",
-        "new_state = \"alive\"\n",
-        1,
-    )
-}
-
 /// Returns Game of Life with line 2 changing to a state Status does not hold, which the check reports as an error.
 fn life_with_an_error() -> String {
-    starter_text("game_of_life.toml").replacen("new_state = \"alive\"", "new_state = \"zombie\"", 1)
+    edited(
+        starter_text("game_of_life.toml"),
+        "new_state = \"alive\"",
+        "new_state = \"zombie\"",
+    )
 }
 
 /// Opens Game of Life in the Editor of `harness` and converts it through the model menu and the dialog.
 fn convert_life(harness: &mut Harness) {
-    harness.open_sheet(starter_text("game_of_life.toml"));
+    convert_starter(harness, "game_of_life.toml");
+}
+
+/// Opens the sheet starter `file_name` in the Editor of `harness` and converts it through the model menu and the
+/// dialog.
+fn convert_starter(harness: &mut Harness, file_name: &str) {
+    harness.open_sheet(starter_text(file_name));
+    convert_open_sheet(harness);
+}
+
+/// Converts the sheet open in the Editor of `harness` through the model menu and the dialog.
+fn convert_open_sheet(harness: &mut Harness) {
     harness.click(MODEL_ACTIONS);
     harness.click(CONVERT_HEADING);
     harness.click(CONVERT);
     harness.settle();
-}
-
-/// Returns the text of the sheet starter whose file is named `file_name`.
-fn starter_text(file_name: &str) -> &'static str {
-    starters()
-        .iter()
-        .find(|starter| starter.file_name == file_name)
-        .expect("a sheet starter")
-        .text
 }
 
 #[test]
@@ -61,7 +60,7 @@ fn the_graph_view_draws_one_box_per_line_and_edits_nothing() {
     harness.open_sheet(starter_text("game_of_life.toml"));
     harness.click(DIAGRAM);
     let nodes = harness.settle();
-    let sheet = harness.app.editor.model.sheet().expect("a sheet");
+    let sheet = sheet(&harness);
     assert!(sheet.diagram, "the toggle turns the Diagram on");
     let document = sheet.document();
     let boxes = diagram_boxes(document, &Sentences::new(document), sheet.report(), 0);
@@ -119,7 +118,7 @@ fn both_segments_of_the_card_toggle_take_the_focus_and_a_key() {
         );
     }
     harness.click(DIAGRAM);
-    assert!(harness.app.editor.model.sheet().expect("a sheet").diagram);
+    assert!(sheet(&harness).diagram);
     // Tab walks the keyboard path from the start until it reaches Lines.
     for _ in 0..200 {
         if harness.focused == LINES_VIEW {
@@ -130,18 +129,12 @@ fn both_segments_of_the_card_toggle_take_the_focus_and_a_key() {
     assert_eq!(harness.focused, LINES_VIEW, "Lines is on the keyboard path");
     harness.press(egui::Key::Space, egui::Modifiers::NONE);
     harness.settle();
-    assert!(
-        !harness.app.editor.model.sheet().expect("a sheet").diagram,
-        "Space on Lines returns to the lines"
-    );
+    assert!(!sheet(&harness).diagram, "Space on Lines returns to the lines");
     harness.press(egui::Key::Tab, egui::Modifiers::NONE);
     harness.press(egui::Key::Enter, egui::Modifiers::NONE);
     harness.settle();
     assert_eq!(harness.focused, DIAGRAM);
-    assert!(
-        harness.app.editor.model.sheet().expect("a sheet").diagram,
-        "Enter on Diagram shows the Diagram"
-    );
+    assert!(sheet(&harness).diagram, "Enter on Diagram shows the Diagram");
 }
 
 #[test]
@@ -150,7 +143,7 @@ fn the_diagram_frames_the_lines_inside_each_when() {
         return;
     };
     harness.open_sheet(starter_text("ants.toml"));
-    let sheet = harness.app.editor.model.sheet().expect("a sheet");
+    let sheet = sheet(&harness);
     let document = sheet.document();
     let sentences = Sentences::new(document);
     let boxes = diagram_boxes(document, &sentences, sheet.report(), 0);
@@ -248,7 +241,7 @@ fn convert_is_disabled_with_its_tooltip() {
         ),
     ] {
         harness.open_sheet(&text);
-        let sheet = harness.app.editor.model.sheet().expect("a sheet");
+        let sheet = sheet(&harness);
         assert_eq!(convert_refusal(sheet), Some(refusal));
         assert_eq!(refusal.tooltip(), tooltip);
         harness.click(MODEL_ACTIONS);
@@ -330,10 +323,9 @@ fn converting_game_of_life_opens_the_copy_with_frames_titled_by_line_and_the_ban
     assert_eq!(banner.state, CopyState::Unedited);
     assert_eq!(banner.text(), converted_banner("Game of Life", &today()));
     let texts = harness.accessible_texts();
-    // The banner is a notice, its text after the notice's icon.
     assert!(
-        texts.iter().any(|text| text.ends_with(&format!(" {}", banner.text()))),
-        "the banner shows: {texts:?}"
+        shows_notice(&mut harness, &banner.text()),
+        "the banner shows as a notice: {texts:?}"
     );
     assert!(texts.contains(&open_original("Game of Life")));
 
@@ -386,11 +378,14 @@ fn editing_a_node_of_the_copy_changes_the_banner_and_a_new_node_joins_no_frame()
         return;
     };
     convert_life(&mut harness);
-    let EditorModel::Graph(graph) = &mut harness.app.editor.model else {
-        panic!("the copy opens in the Editor");
-    };
+    let graph = harness
+        .app
+        .editor
+        .model
+        .graph_mut()
+        .expect("the copy opens in the Editor");
     let frames_before = graph.editor_region().frames();
-    let n2001 = NodeId::new(2001).expect("an id");
+    let n2001 = n(2001);
     assert!(graph.edit(
         vec![EditCommand::SetLiteral {
             scope: Scope::pass("tick_cell_tick"),
@@ -408,9 +403,12 @@ fn editing_a_node_of_the_copy_changes_the_banner_and_a_new_node_joins_no_frame()
         banner.text()
     );
 
-    let EditorModel::Graph(graph) = &mut harness.app.editor.model else {
-        panic!("the copy stays in the Editor");
-    };
+    let graph = harness
+        .app
+        .editor
+        .model
+        .graph_mut()
+        .expect("the copy stays in the Editor");
     assert!(graph.edit(
         vec![EditCommand::AddNode {
             scope: Scope::pass("tick_cell_tick"),
@@ -449,18 +447,12 @@ fn open_original_returns_to_the_sheet_and_its_line_opens_the_copy() {
 
     // An edit of the sheet since the conversion changes the banner.
     harness.click(&open_original("Game of Life"));
-    let EditorModel::Sheet(sheet) = &mut harness.app.editor.model else {
-        panic!("the sheet is back");
-    };
-    sheet
-        .edit(false, true, |builder| {
-            builder
-                .apply(henad_graph::sheet::edit::SheetEdit::SetSheetName {
-                    name: "Life".to_owned(),
-                })
-                .map(drop)
-        })
-        .expect("a new name");
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        henad_graph::sheet::edit::SheetEdit::SetSheetName {
+            name: "Life".to_owned(),
+        },
+    );
     harness.click(&converted_link("Game of Life (expert)"));
     let banner = copy_banner(&mut harness.app.editor).expect("a banner");
     assert_eq!(banner.state, CopyState::OriginalChanged);
@@ -480,9 +472,7 @@ fn a_sheet_with_a_file_has_its_copy_written_beside_it_and_found_again() {
     open_text(&mut harness.app.editor, text.to_owned(), Some("life.toml".to_owned()));
     harness.app.editor.file_path = Some(sheet_path);
     harness.settle();
-    harness.click(MODEL_ACTIONS);
-    harness.click(CONVERT_HEADING);
-    harness.click(CONVERT);
+    convert_open_sheet(&mut harness);
     let copy_path = folder.0.join("sheet_game_of_life_expert_2.toml");
     assert_eq!(harness.app.editor.file_path.as_ref(), Some(&copy_path));
     assert_eq!(
@@ -623,7 +613,6 @@ fn highlife(copy: &henad_graph::GraphFile) -> henad_graph::GraphFile {
     use henad_graph::node::Node as GraphNode;
     use henad_graph::value::{InputValue, PortRef};
 
-    let id = |number: u32| NodeId::new(number).expect("an id");
     let mut document = copy.document().clone();
     let tick = document
         .passes
@@ -631,11 +620,11 @@ fn highlife(copy: &henad_graph::GraphFile) -> henad_graph::GraphFile {
         .find(|pass| pass.id == "tick_cell_tick")
         .expect("the tick pass");
     let count = PortRef {
-        node: id(1001),
+        node: n(1001),
         port: None,
     };
     let equals = |number: u32, value: u32| {
-        let mut node = GraphNode::new(id(number), "cmp.eq");
+        let mut node = GraphNode::new(n(number), "cmp.eq");
         node.inputs.insert("a".to_owned(), InputValue::Link(count.clone()));
         node.inputs
             .insert("b".to_owned(), InputValue::Literal(Literal::U32(value)));
@@ -647,14 +636,14 @@ fn highlife(copy: &henad_graph::GraphFile) -> henad_graph::GraphFile {
         .body
         .nodes
         .iter_mut()
-        .find(|node| node.id == id(2001))
+        .find(|node| node.id == n(2001))
         .expect("line 2's comparison");
-    *birth = GraphNode::new(id(2001), "logic.or");
+    *birth = GraphNode::new(n(2001), "logic.or");
     for (port, source) in [("a", 9001), ("b", 9002)] {
         birth.inputs.insert(
             port.to_owned(),
             InputValue::Link(PortRef {
-                node: id(source),
+                node: n(source),
                 port: None,
             }),
         );
@@ -666,11 +655,14 @@ fn highlife(copy: &henad_graph::GraphFile) -> henad_graph::GraphFile {
 /// would, keeping the sheet as the copy's counterpart.
 fn convert_to_highlife(harness: &mut Harness) {
     convert_life(harness);
-    let EditorModel::Graph(graph) = &mut harness.app.editor.model else {
-        panic!("the copy opens in the Editor");
-    };
+    let graph = harness
+        .app
+        .editor
+        .model
+        .graph_mut()
+        .expect("the copy opens in the Editor");
     let edited = highlife(&graph.to_file().expect("the copy reads"));
-    **graph = crate::ui::editor::graph::GraphEditor::new(&edited);
+    *graph = crate::ui::editor::graph::GraphEditor::new(&edited);
     harness.settle();
 }
 
@@ -711,17 +703,10 @@ fn show_changes_lists_a_highlife_edit_under_the_frame_of_line_2_and_marks_it_on_
         .iter()
         .find(|group| group.title.as_deref() == Some(LINE_2))
         .expect("the group of line 2");
-    assert_eq!(
-        line_2.changed,
-        [NodeId::new(2001).expect("an id")],
-        "one node under line 2"
-    );
+    assert_eq!(line_2.changed, [n(2001)], "one node under line 2");
     let marks = marks_of(&graph.shown_changes.groups, &Scope::pass("tick_cell_tick"));
-    assert_eq!(
-        marks.get(&NodeId::new(2001).expect("an id")),
-        Some(&ChangeMark::Changed)
-    );
-    assert_eq!(marks.get(&NodeId::new(9002).expect("an id")), Some(&ChangeMark::Added));
+    assert_eq!(marks.get(&n(2001)), Some(&ChangeMark::Changed));
+    assert_eq!(marks.get(&n(9002)), Some(&ChangeMark::Added));
     assert_eq!(marks.len(), 3);
     assert!(
         texts.iter().filter(|text| *text == NODE_ADDED).count() == 2 && texts.iter().any(|text| text == NODE_CHANGED),
@@ -771,10 +756,7 @@ fn the_notes_of_the_author_model_show_under_its_section() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    harness.open_sheet(starter_text("sir.toml"));
-    harness.click(MODEL_ACTIONS);
-    harness.click(CONVERT_HEADING);
-    harness.click(CONVERT);
+    convert_starter(&mut harness, "sir.toml");
     let graph = harness.app.editor.model.graph().expect("the copy opens");
     let notes = graph.editor_region().notes();
     assert!(notes.len() >= 2, "the purpose and the parameters' meanings: {notes:?}");
@@ -801,10 +783,7 @@ fn add_category_on_a_converted_sir_adds_a_state_with_its_colour_and_the_copy_sti
     };
     // A tall screen keeps the forms under the categories above the Editor's list of problems.
     harness.screen = egui::vec2(1600.0, 1600.0);
-    harness.open_sheet(starter_text("sir.toml"));
-    harness.click(MODEL_ACTIONS);
-    harness.click(CONVERT_HEADING);
-    harness.click(CONVERT);
+    convert_starter(&mut harness, "sir.toml");
     let graph = harness.app.editor.model.graph().expect("the copy opens");
     let category = graph.document().categories.first().expect("SIR's states").clone();
     let color = next_variant_color(&category);
@@ -899,13 +878,16 @@ fn a_removed_node_is_listed_by_the_name_of_its_kind() {
         return;
     };
     convert_life(&mut harness);
-    let EditorModel::Graph(graph) = &mut harness.app.editor.model else {
-        panic!("the copy opens in the Editor");
-    };
+    let graph = harness
+        .app
+        .editor
+        .model
+        .graph_mut()
+        .expect("the copy opens in the Editor");
     let removed = graph.edit(
         vec![EditCommand::RemoveNode {
             scope: Scope::pass("tick_cell_tick"),
-            node: NodeId::new(2001).expect("an id"),
+            node: n(2001),
         }],
         None,
     );
@@ -920,17 +902,15 @@ fn a_removed_node_is_listed_by_the_name_of_its_kind() {
 ///
 /// Panics after two minutes, or when a run failed.
 fn wait_for_comparison(harness: &mut Harness) -> crate::ui::editor::compare::CompareOutcome {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-    loop {
+    let mut outcome = None;
+    wait_within("the end of both runs", std::time::Duration::from_secs(120), || {
         harness.frame(Vec::new());
         let comparison = harness.app.editor.comparison.as_ref().expect("a comparison runs");
         assert_eq!(comparison.failure, None, "the runs finish");
-        if let Some(outcome) = comparison.outcome() {
-            return outcome;
-        }
-        assert!(std::time::Instant::now() < deadline, "the runs never finished");
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+        outcome = comparison.outcome();
+        outcome.is_some()
+    });
+    outcome.expect("the outcome that ended the wait")
 }
 
 #[test]
@@ -973,11 +953,7 @@ fn compare_runs_of_a_model_that_does_not_replay_exactly_names_no_first_differenc
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    harness.open_sheet(starter_text("bounded_confidence.toml"));
-    harness.click(MODEL_ACTIONS);
-    harness.click(CONVERT_HEADING);
-    harness.click(CONVERT);
-    harness.settle();
+    convert_starter(&mut harness, "bounded_confidence.toml");
     harness.click(COMPARE_RUNS);
     let outcome = wait_for_comparison(&mut harness);
     assert_eq!(outcome, CompareOutcome::Inexact);
@@ -1004,12 +980,15 @@ fn an_edit_of_the_copy_drops_the_comparison_of_the_copy_before_it() {
     assert!(harness.accessible_texts().contains(&text));
 
     // Moving a node changes no code, and the comparison stays.
-    let EditorModel::Graph(graph) = &mut harness.app.editor.model else {
-        panic!("the copy opens in the Editor");
-    };
+    let graph = harness
+        .app
+        .editor
+        .model
+        .graph_mut()
+        .expect("the copy opens in the Editor");
     let moved = graph.edit(
         vec![EditCommand::Move {
-            node: NodeId::new(2001).expect("an id"),
+            node: n(2001),
             pos: [10.0, 10.0],
         }],
         None,
@@ -1018,9 +997,12 @@ fn an_edit_of_the_copy_drops_the_comparison_of_the_copy_before_it() {
     harness.settle();
     assert!(harness.app.editor.comparison.is_some(), "a move keeps the comparison");
 
-    let EditorModel::Graph(graph) = &mut harness.app.editor.model else {
-        panic!("the copy opens in the Editor");
-    };
+    let graph = harness
+        .app
+        .editor
+        .model
+        .graph_mut()
+        .expect("the copy opens in the Editor");
     let mood = Category::new("mood", vec![Variant::new("calm", STATE_COLORS[0])]);
     assert!(graph.edit(vec![EditCommand::AddCategory(mood)], None));
     harness.settle();

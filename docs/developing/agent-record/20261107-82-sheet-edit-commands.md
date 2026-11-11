@@ -6,8 +6,8 @@ icon: material/pencil-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s12-sheet-edit, rebased onto S7's record 451abd0: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: 2282556
+state: "37-node-editor, fast-forwarded to redesign/s12-sheet-edit, rebased onto S7's record 31422d4: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: 480305c
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheet edit commands and a shared key stream [draft]`, `fix: s12 review findings [draft]`, `fix: s12 merge check [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -24,7 +24,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheet edit c
 
 ## State before
 
-- `37-node-editor` at `2282556` (S5 merged), with S7 open in a parallel worktree.
+- `37-node-editor` at `480305c` (S5 merged), with S7 open in a parallel worktree.
 - S1a's reader, S4's writer and wording table and S5's checker read, wrote and checked a sheet, but nothing edited one: every test that changed a sheet changed its `SheetDocument` fields by hand, as the writer's three diffs of the author format did.
 - `GraphBuilder` held its own `xorshift64` state and drew its keys from `clipboard::entropy`.
 - The baseline of the full check is the gate's: `cargo deny` fails on RUSTSEC-2026-0370, 0371 and 0372, and the workspace tests on `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets` alone.
@@ -208,7 +208,7 @@ crates/
 - `KeyStream` is the one source of draw keys for graphs and sheets.
 - Checks run in the worktree: `cargo fmt --all -- --check`; `cargo clippy -p henad-graph -p henad --all-targets --all-features -- -D warnings -W clippy::all`; `HENAD_REQUIRE_GPU=1 cargo test -p henad-graph -p henad --all-targets --all-features` (henad-graph 306 passed, 1 ignored after the review, and the facade's tests); `cargo test -p henad-graph --doc` (9 passed); `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` for henad-graph and the facade; `cargo check --all-features --lib --target wasm32-unknown-unknown` for henad-graph and the facade; `cargo clippy -p henad-graph -- -W missing_debug_implementations` reports nothing.
   The full check runs at the merge point.
-- The merge rebased S12 onto `451abd0` (S7 merged, with its record #81).
+- The merge rebased S12 onto `31422d4` (S7 merged, with its record #81).
   The lists of `AGENTS.md`, `CHANGELOG.md`, `sheet/mod.rs` (its module doc and its module list) and `src/tests/mod.rs` conflicted and keep both sides, as does the module paragraph of `agents/henad-graph-sheet.md`.
   The joined topic file held 40,919 characters, and `fix: s12 merge check [draft]` moved the edit commands into `agents/henad-graph-sheet-edit.md`.
 - The full check at the merge point, with `HENAD_REQUIRE_GPU=1`: the native, wasm32 and facade typechecks, fmt, packaging, clippy, the doc tests, the README program, rustdoc, the scripts' tests and the web build exit 0.

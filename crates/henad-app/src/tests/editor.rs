@@ -1,26 +1,24 @@
 //! Tests of the Editor tab: a grid rule's model file applied to the running app, the problems of a text that is
 //! refused, a fault of the applied code, and the line of an Apply beside another model's run.
 
-use std::sync::Arc;
-
-use henad_compute::entry::{ModelEntry, ModelState};
+use henad_compute::entry::ModelEntry;
 use henad_compute::fault::{BUILDING, Fault, FaultKind};
-use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::runtime_grid::{GridRule, LIFE_STEP};
 use henad_core::diagnostic::CodeDiagnostic;
-use henad_core::params::ParamValue;
 use henad_core::provenance::ModelSource;
 use henad_explore::model_file::ModelFile;
 use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::sentence::PREVIEW_WAITS as SHEET_PREVIEW_WAITS;
-use henad_graph::sheet::starters;
-use web_time::Instant;
 
 use crate::state::AppState;
-use crate::tests::support::{accessible_texts, set_of, step_past};
+use crate::tests::panes::apply_sheet_edit;
+use crate::tests::support::{
+    accessible_texts, assert_built, edited, headless_app, set_grid_side, set_of, settle_preview, starter_text,
+    step_past, with_oversized_buffer,
+};
 use crate::ui::dock::Tab;
 use crate::ui::editor::code_view::{cursor_index, move_cursor};
-use crate::ui::editor::preview::{DEBOUNCE, PreviewState, poll_at};
+use crate::ui::editor::preview::PreviewState;
 use crate::ui::editor::{
     ApplyOutcome, EditableModel, EditorModel, FileStatus, NO_COMPUTE, apply, edit_model, editable_model, editor_ui,
     life_starter, move_cursor_to, new_graph_model, new_grid_rule, open_text, receive_open,
@@ -31,10 +29,13 @@ use crate::ui::playback::press_build;
 /// Line of the Life starter's step that a rule edit extends.
 const BIRTH_LINE: &str = "    if (alive == 3u || (cell == ALIVE && alive == 2u)) {";
 
+/// [`BIRTH_LINE`] with birth on 3 or 6, as in High Life.
+const HIGHLIFE_LINE: &str = "    if (alive == 3u || (cell == DEAD && alive == 6u) || (cell == ALIVE && alive == 2u)) {";
+
 /// Returns an app over the example models on a headless device that runs compute shaders, with the Life starter in
 /// the Editor, or `None` to skip on a machine without a device.
 fn app_with_starter() -> Option<AppState> {
-    let mut app = AppState::headless(henad_models::example_models(), true)?;
+    let mut app = headless_app()?;
     new_grid_rule(&mut app);
     Some(app)
 }
@@ -131,7 +132,7 @@ fn applying_an_edit_installs_and_rebuilds_from_tick_zero() {
     assert_eq!(app.selected_model.as_deref(), Some("life_rule"));
     assert_eq!(app.loaded_id(), Some("life_rule"), "nothing ran, so the rule was built");
     app.wait_for_build();
-    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+    assert_built(&app, "the model");
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     let life = app.loaded_entry().expect("the rule runs").source().clone();
     assert_eq!(
@@ -142,13 +143,7 @@ fn applying_an_edit_installs_and_rebuilds_from_tick_zero() {
     step_past(&mut app, 0);
     let life_stats = stats(&app);
 
-    // Birth on 3 or 6, as in HighLife.
-    let edited = app.editor.model.file_text().replace(
-        BIRTH_LINE,
-        "    if (alive == 3u || (cell == DEAD && alive == 6u) || (cell == ALIVE && alive == 2u)) {",
-    );
-    assert_ne!(edited, app.editor.model.file_text());
-    app.editor.model = EditorModel::Rule(edited);
+    app.editor.model = EditorModel::Rule(edited(&app.editor.model.file_text(), BIRTH_LINE, HIGHLIFE_LINE));
     apply(&mut app);
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::AwaitingRebuild));
     assert!(
@@ -179,7 +174,7 @@ fn applying_an_edit_installs_and_rebuilds_from_tick_zero() {
         "the rule runs after Rebuild"
     );
     app.wait_for_build();
-    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the rebuild failed");
+    assert_built(&app, "the rebuilt model");
     step_past(&mut app, 0);
     assert_ne!(
         stats(&app),
@@ -208,9 +203,9 @@ fn an_edit_after_apply_drops_the_applied_line() {
     let press_apply = "Press Apply to check and install the model.";
     apply(&mut app);
     app.wait_for_build();
-    assert!(shows(&editor_texts(&mut app), applied));
+    assert!(holds_line(&editor_texts(&mut app), applied));
     assert!(
-        shows(&editor_texts(&mut app), applied),
+        holds_line(&editor_texts(&mut app), applied),
         "a frame with no edit keeps the line"
     );
     let EditorModel::Rule(text) = &mut app.editor.model else {
@@ -218,7 +213,10 @@ fn an_edit_after_apply_drops_the_applied_line() {
     };
     text.push_str("\n# Birth on 3, survival on 2 or 3.\n");
     let texts = editor_texts(&mut app);
-    assert!(!shows(&texts, applied) && shows(&texts, press_apply), "{texts:?}");
+    assert!(
+        !holds_line(&texts, applied) && holds_line(&texts, press_apply),
+        "{texts:?}"
+    );
     assert_eq!(app.editor.outcome, None);
 
     apply(&mut app);
@@ -227,53 +225,39 @@ fn an_edit_after_apply_drops_the_applied_line() {
         Some(ApplyOutcome::Unchanged),
         "a comment leaves the code"
     );
-    assert!(shows(&editor_texts(&mut app), unchanged));
+    assert!(holds_line(&editor_texts(&mut app), unchanged));
     let EditorModel::Rule(text) = &mut app.editor.model else {
         panic!("the Editor holds the rule");
     };
     text.push('\n');
-    assert!(!shows(&editor_texts(&mut app), unchanged));
+    assert!(!holds_line(&editor_texts(&mut app), unchanged));
 
-    let life = starters()
-        .iter()
-        .find(|starter| starter.file_name == "game_of_life.toml")
-        .expect("the Game of Life sheet");
-    open_text(&mut app.editor, life.text.to_owned(), None);
+    open_text(&mut app.editor, starter_text("game_of_life.toml").to_owned(), None);
     apply(&mut app);
     app.wait_for_build();
-    assert!(shows(&editor_texts(&mut app), applied));
+    assert!(holds_line(&editor_texts(&mut app), applied));
     let EditorModel::Sheet(sheet) = &mut app.editor.model else {
         panic!("the Editor holds the sheet");
     };
-    sheet
-        .edit(false, true, |builder| {
-            builder
-                .apply(SheetEdit::SetPurpose {
-                    purpose: Some("Cells live and die by their neighbours.".to_owned()),
-                })
-                .map(drop)
-        })
-        .expect("the purpose is set");
+    apply_sheet_edit(
+        sheet,
+        SheetEdit::SetPurpose {
+            purpose: Some("Cells live and die by their neighbours.".to_owned()),
+        },
+    );
     let texts = editor_texts(&mut app);
-    assert!(!shows(&texts, applied) && shows(&texts, press_apply), "{texts:?}");
+    assert!(
+        !holds_line(&texts, applied) && holds_line(&texts, press_apply),
+        "{texts:?}"
+    );
 }
 
 /// Builds the example SIR model on a 64 by 64 grid and steps it past tick 0.
 fn run_sir_past_tick_zero(app: &mut AppState) {
     app.select_model("sir");
-    for (index, size) in [(0, 64), (1, 64)] {
-        app.param_values[index] = ParamValue::U32(size);
-    }
+    set_grid_side(app, 64);
     app.reset_simulation();
     step_past(app, 0);
-}
-
-/// Polls the Editor's preview once now and once after the debounce, as two frames that far apart would.
-fn settle_preview(app: &mut AppState) {
-    let ctx = egui::Context::default();
-    let now = Instant::now();
-    poll_at(&ctx, app, now);
-    poll_at(&ctx, app, now + DEBOUNCE);
 }
 
 /// Draws one frame of the Editor tab over `app`, and returns the value of every accessible node, or its name where it
@@ -282,8 +266,8 @@ fn editor_texts(app: &mut AppState) -> Vec<String> {
     accessible_texts(|ui| editor_ui(ui, app), |node| node.value().or_else(|| node.label()))
 }
 
-/// Returns whether one of `texts` holds `line`.
-fn shows(texts: &[String], line: &str) -> bool {
+/// Returns whether one of `texts` holds `line` anywhere in it.
+fn holds_line(texts: &[String], line: &str) -> bool {
     texts.iter().any(|text| text.contains(line))
 }
 
@@ -308,20 +292,16 @@ fn applying_beside_another_run_past_tick_zero_waits_for_build() {
         .settle_outcome(loaded.as_ref(), next_build.as_ref(), app.pending_rebuild.is_some());
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     app.wait_for_build();
-    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+    assert_built(&app, "the model");
 }
 
 #[test]
 fn a_sheet_applied_beside_another_run_drops_the_build_line_once_its_preview_loads() {
-    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     run_sir_past_tick_zero(&mut app);
-    let life = starters()
-        .iter()
-        .find(|starter| starter.file_name == "game_of_life.toml")
-        .expect("the Game of Life sheet");
-    open_text(&mut app.editor, life.text.to_owned(), None);
+    open_text(&mut app.editor, starter_text("game_of_life.toml").to_owned(), None);
     settle_preview(&mut app);
     assert_eq!(app.editor.preview.state, PreviewState::Waiting);
 
@@ -331,25 +311,25 @@ fn a_sheet_applied_beside_another_run_drops_the_build_line_once_its_preview_load
     let installed = ApplyOutcome::Installed.summary().0;
     let texts = editor_texts(&mut app);
     assert!(
-        shows(&texts, SHEET_PREVIEW_WAITS) && shows(&texts, installed),
+        holds_line(&texts, SHEET_PREVIEW_WAITS) && holds_line(&texts, installed),
         "{texts:?}"
     );
 
     // Offload ends the run, and the sheet's preview takes its place. Build then replays the preview.
     app.offload_simulation();
     assert!(
-        shows(&editor_texts(&mut app), installed),
+        holds_line(&editor_texts(&mut app), installed),
         "Build still builds the sheet"
     );
     settle_preview(&mut app);
     assert!(app.build_replays_preview());
     let texts = editor_texts(&mut app);
     assert!(
-        !shows(&texts, installed),
+        !holds_line(&texts, installed),
         "the Editor names Build, which replays the preview"
     );
     assert_eq!(app.editor.outcome, None);
-    assert!(shows(
+    assert!(holds_line(
         &texts,
         "Press Play to run it, or Apply to run the model at its own size."
     ));
@@ -359,12 +339,12 @@ fn a_sheet_applied_beside_another_run_drops_the_build_line_once_its_preview_load
     assert_eq!(app.loaded_id(), Some("sheet_game_of_life"));
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     app.wait_for_build();
-    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+    assert_built(&app, "the model");
 }
 
 #[test]
 fn a_graph_applied_beside_another_run_keeps_the_build_line_over_its_preview() {
-    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     run_sir_past_tick_zero(&mut app);
@@ -379,7 +359,7 @@ fn a_graph_applied_beside_another_run_keeps_the_build_line_over_its_preview() {
     assert!(app.preview().is_some(), "the graph's preview loads once the run ends");
     let installed = ApplyOutcome::Installed.summary().0;
     assert!(
-        shows(&editor_texts(&mut app), installed),
+        holds_line(&editor_texts(&mut app), installed),
         "Build builds the applied graph behind its preview"
     );
 
@@ -390,7 +370,7 @@ fn a_graph_applied_beside_another_run_keeps_the_build_line_over_its_preview() {
     editor_texts(&mut app);
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     app.wait_for_build();
-    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+    assert_built(&app, "the model");
 }
 
 #[test]
@@ -407,7 +387,7 @@ fn a_grid_rule_applied_beside_another_run_keeps_the_build_line_after_offload() {
     assert_eq!(app.preview(), None, "a grid rule has no preview");
     let installed = ApplyOutcome::Installed.summary().0;
     assert!(
-        shows(&editor_texts(&mut app), installed),
+        holds_line(&editor_texts(&mut app), installed),
         "Build builds the applied rule"
     );
 
@@ -416,7 +396,7 @@ fn a_grid_rule_applied_beside_another_run_keeps_the_build_line_after_offload() {
     editor_texts(&mut app);
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     app.wait_for_build();
-    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+    assert_built(&app, "the model");
 }
 
 #[test]
@@ -431,7 +411,7 @@ fn selecting_another_model_drops_the_build_line() {
     // Build now builds SIR again.
     app.select_model("sir");
     let installed = ApplyOutcome::Installed.summary().0;
-    assert!(!shows(&editor_texts(&mut app), installed));
+    assert!(!holds_line(&editor_texts(&mut app), installed));
     assert_eq!(app.editor.outcome, None);
     app.select_model("life_rule");
     editor_texts(&mut app);
@@ -446,10 +426,7 @@ fn applying_again_after_cancel_asks_to_rebuild_again() {
     apply(&mut app);
     step_past(&mut app, 0);
     let life = app.loaded_entry().expect("the rule runs").source().clone();
-    app.editor.model = EditorModel::Rule(app.editor.model.file_text().replace(
-        BIRTH_LINE,
-        "    if (alive == 3u || (cell == DEAD && alive == 6u) || (cell == ALIVE && alive == 2u)) {",
-    ));
+    app.editor.model = EditorModel::Rule(edited(&app.editor.model.file_text(), BIRTH_LINE, HIGHLIFE_LINE));
     apply(&mut app);
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::AwaitingRebuild));
 
@@ -483,9 +460,7 @@ fn applying_during_another_build_replaces_it_and_cancel_waits_for_build() {
         return;
     };
     app.select_model("sir");
-    for index in [0, 1] {
-        app.param_values[index] = ParamValue::U32(64);
-    }
+    set_grid_side(&mut app, 64);
     app.reset_simulation();
     assert!(app.is_building(), "SIR builds on the build thread");
 
@@ -494,14 +469,11 @@ fn applying_during_another_build_replaces_it_and_cancel_waits_for_build() {
     assert_eq!(app.loaded_id(), Some("life_rule"), "SIR's build was not abandoned");
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     app.wait_for_build();
-    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+    assert_built(&app, "the model");
     assert_eq!(app.loaded_id(), Some("life_rule"));
 
     // An edit at tick 0 builds at once, and Cancel stops that build.
-    app.editor.model = EditorModel::Rule(app.editor.model.file_text().replace(
-        BIRTH_LINE,
-        "    if (alive == 3u || (cell == DEAD && alive == 6u) || (cell == ALIVE && alive == 2u)) {",
-    ));
+    app.editor.model = EditorModel::Rule(edited(&app.editor.model.file_text(), BIRTH_LINE, HIGHLIFE_LINE));
     apply(&mut app);
     assert!(app.is_building(), "an edit at tick 0 builds at once");
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
@@ -526,7 +498,7 @@ fn applying_during_another_build_replaces_it_and_cancel_waits_for_build() {
         .settle_outcome(loaded.as_ref(), next_build.as_ref(), app.pending_rebuild.is_some());
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied), "Build runs the rule");
     app.wait_for_build();
-    assert!(app.sim_thread.is_some() && app.fault.is_none(), "the build failed");
+    assert_built(&app, "the model");
 }
 
 #[test]
@@ -647,9 +619,7 @@ fn a_fault_in_the_apply_window_is_shown_in_the_editor() {
     app.fault = None;
 
     app.select_model("sir");
-    for index in [0, 1] {
-        app.param_values[index] = ParamValue::U32(64);
-    }
+    set_grid_side(&mut app, 64);
     app.reset_simulation();
     app.wait_for_build();
     report(&mut app, "a fault of another model");
@@ -667,29 +637,7 @@ fn a_build_fault_of_the_applied_code_reaches_the_editor_from_the_build_thread() 
     let applied = app.loaded_entry().expect("the rule runs").source().clone();
     // The applied rule under a factory that first creates a buffer past the device's limit. Its build fails on the
     // build thread, as the build of a rule the device refuses does.
-    let refused = app
-        .models
-        .get("life_rule")
-        .cloned()
-        .expect("the rule was installed")
-        .wrap_factory(|inner| {
-            Arc::new(
-                move |params: &[ParamValue],
-                      seed: Option<u64>,
-                      gpu: Option<&GpuContext>|
-                      -> Result<ModelState, Fault> {
-                    if let Some(ctx) = gpu {
-                        drop(ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                            label: Some("henad_app_test_oversized"),
-                            size: ctx.device.limits().max_buffer_size + 4096,
-                            usage: wgpu::BufferUsages::STORAGE,
-                            mapped_at_creation: false,
-                        }));
-                    }
-                    inner(params, seed, gpu)
-                },
-            )
-        });
+    let refused = with_oversized_buffer(app.models.get("life_rule").cloned().expect("the rule was installed"));
     app.install_models(&set_of(refused));
     assert!(
         app.pending_rebuild.is_none() && app.sim_thread.is_some(),
@@ -876,7 +824,7 @@ fn editor_frame(ctx: &egui::Context, app: &mut AppState, events: Vec<egui::Event
 
 #[test]
 fn typing_into_an_empty_editor_starts_a_grid_rule() {
-    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     assert!(matches!(app.editor.model, EditorModel::Empty));

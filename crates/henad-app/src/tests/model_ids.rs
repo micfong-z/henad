@@ -10,11 +10,9 @@ use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{StatDescriptor, StatValue};
 use henad_graph::sheet::document::{PropertyType, SheetLiteral, SheetValue, Slot, StartRule, StartsAs};
 use henad_graph::sheet::edit::SheetEdit;
-use henad_graph::sheet::starters;
-use web_time::Instant;
 
 use crate::state::AppState;
-use crate::ui::editor::preview::{DEBOUNCE, poll_at};
+use crate::tests::support::{edited, headless_app, settle_preview, starter_text};
 use crate::ui::editor::sheet::new_model::{create_blank_agent_model, create_blank_model, create_model};
 use crate::ui::editor::{ApplyOutcome, EditorModel, apply, new_graph_model, new_grid_rule, new_model_id};
 
@@ -110,10 +108,7 @@ fn add_a_number(app: &mut AppState) {
 
 /// Waits for the preview of the Editor's model, applies it, and waits for the build.
 fn apply_and_build(app: &mut AppState) {
-    let ctx = egui::Context::default();
-    let now = Instant::now();
-    poll_at(&ctx, app, now);
-    poll_at(&ctx, app, now + DEBOUNCE);
+    settle_preview(app);
     app.wait_for_build();
     apply(app);
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
@@ -149,14 +144,11 @@ fn a_held_id_takes_the_prefix_and_then_a_number_and_runtime_code_holds_none() {
 
     // A model applied from the Editor is runtime code, and a new model may take its id and replace it.
     let mut models = models;
-    let applied = henad_explore::model_file::ModelFile::parse(
-        &starters()
-            .iter()
-            .find(|starter| starter.file_name == "game_of_life.toml")
-            .expect("the Life starter")
-            .text
-            .replace("id = \"sheet_game_of_life\"", "id = \"my_life\""),
-    )
+    let applied = henad_explore::model_file::ModelFile::parse(&edited(
+        starter_text("game_of_life.toml"),
+        "id = \"sheet_game_of_life\"",
+        "id = \"my_life\"",
+    ))
     .and_then(|file| file.entry())
     .expect("the edited starter builds");
     models.insert(applied).expect("a new id");
@@ -234,7 +226,7 @@ fn starters_keep_their_ids_unless_a_compiled_model_holds_them() {
     );
 
     // Over the example models alone, each keeps the id it ships with.
-    let Some(mut app) = AppState::headless(henad_models::example_models(), true) else {
+    let Some(mut app) = headless_app() else {
         return;
     };
     new_grid_rule(&mut app);

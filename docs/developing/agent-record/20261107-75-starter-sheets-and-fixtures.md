@@ -6,8 +6,8 @@ icon: material/file-star-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s1b-starter-sheets, two unsigned [draft] commits and this record after e0ad6c9; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: be338ec
+state: "37-node-editor, fast-forwarded to redesign/s1b-starter-sheets, two unsigned [draft] commits and this record after d1838bb; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: f4088d7
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: starter sheets and hand-lowered fixtures [draft]`, `fix: s1b review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -23,7 +23,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: starter shee
 
 ## State before
 
-- `37-node-editor` at `bfda55f`, with S1a, S3 and S6 merged.
+- `37-node-editor` at `15d8717`, with S1a, S3 and S6 merged.
   S1a's sheet reader read four test sheets in `crates/henad-graph/src/tests/sheets/`: Game of Life, SIR with rates, boids and ants, copied from the author format's examples with the gate's stored forms written in.
 - No sheet starter existed, and nothing in the repository held round 1's other four models as sheets.
 - The hand-lowered graph files of round 1 and of the rates design existed only in the design folders, which git ignores.
@@ -76,7 +76,7 @@ The directory sits apart from `tests/fixtures/graphs/`, whose corpus loaders pan
 - the rate conversion 1 - exp(-r × Δt × n), the competing group's thresholds and the contrast file's bias,
 - the check: a 20-step `henad-cli --model-file` run with one `--act <id>@10` per action, and what to read in the exported statistics.
 
-Before the commit each of the eleven files ran that check in this worktree, a debug build at `bfda55f` with the fixtures added.
+Before the commit each of the eleven files ran that check in this worktree, a debug build at `15d8717` with the fixtures added.
 All eleven read, checked, compiled, pressed every action and wrote 21 rows.
 The statistics behaved as the procedure lists: Game of Life's Alive count went to 0 after Clear, the SIR counts summed to the cells at every tick with Recovered never falling, the forest fire began with no cell burning and burned within a few ticks, Replant drew the cover again, the random walk's average position stayed near the centre, the spread of opinion fell except at Mix opinions, and Reset colony cleared the ants' trails.
 
@@ -137,7 +137,7 @@ crates/
 ### Deviations from the plan
 
 - **The record is not committed here.** The orchestration asks for the record in the design folder, numbered and committed at the merge step, so the plan's `docs: record starter sheets and fixtures [draft]` commit is left to that step.
-- **The fixtures ran in the milestone's worktree, not on the main checkout.** The worktree held the main checkout's tip, `bfda55f`, and the rule of the run keeps agents out of the main checkout. The run used a debug build and pressed every action at tick 10, which the plan did not ask for.
+- **The fixtures ran in the milestone's worktree, not on the main checkout.** The worktree held the main checkout's tip, `15d8717`, and the rule of the run keeps agents out of the main checkout. The run used a debug build and pressed every action at tick 10, which the plan did not ask for.
 - **`Starter` is reused.** The plan names `starters()` without a type. A second type with the same two fields would have one caller, and S13a lists both kinds of starter, so the graph starters' `Starter` holds the sheets too, with its doc widened.
 - **The chance SIR's sheet id is `sir_chance`**, so it never shares an id with the rates SIR, while its name stays round 1's "SIR epidemic".
 - **Bounded confidence's colour rule holds no colours.** Round 1 says "Shaded by Opinion, 0 blue to 1 orange", and the author format's `shaded` rule has a `property` and a `scale` but no colour at either end. The sheet writes `rule = "shaded"` and `property = "opinion"`, and the ramp is left to the agent lowering. The lowered fixture holds the eight-step ramp round 1 used.
@@ -175,16 +175,16 @@ S1b adds data and one function returning static text, outside every tick.
 
 ## State after
 
-- `redesign/s1b-starter-sheets` held two unsigned `[draft]` commits after `bfda55f`, the feature and the review fix, and after the rebase it holds them after `e0ad6c9`.
+- `redesign/s1b-starter-sheets` held two unsigned `[draft]` commits after `15d8717`, the feature and the review fix, and after the rebase it holds them after `d1838bb`.
 - In the worktree, with `HENAD_REQUIRE_GPU=1`:
   - `cargo fmt --all -- --check` passes.
   - `cargo clippy -p henad-graph -p henad-models --all-targets --all-features -- -D warnings -W clippy::all` passes.
   - `cargo test -p henad-graph -p henad-models --all-targets --all-features --no-fail-fast`: henad-graph 195 passed and 1 ignored, henad-models' library 160 passed, 1 ignored and 1 failed, the baseline's `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets`, and every integration test of henad-models passes.
   - `cargo test -p henad-graph -p henad-models --doc`, `RUSTDOCFLAGS="-D warnings" cargo doc -p henad-graph --no-deps --all-features` and `./scripts/check_packaging.sh` pass.
   - `cargo check --lib --target wasm32-unknown-unknown --all-features` passes for henad-graph, henad-models and the facade.
-- The merge check rebased the branch onto `37-node-editor` at `e0ad6c9`, with S8 (record #74) merged since the branch began.
+- The merge check rebased the branch onto `37-node-editor` at `d1838bb`, with S8 (record #74) merged since the branch began.
   The rebase met one conflict, in `CHANGELOG.md`'s Added list, resolved by keeping both lines, and auto-merged the module list of henad-models' `src/tests/mod.rs`.
-- The full check of plan section 2.3 ran on the rebased branch at `dfe52c9`.
+- The full check of plan section 2.3 ran on the rebased branch at `57e6517`.
   Every step exits as the baseline does.
   The native and wasm32 typechecks, fmt, packaging, clippy, the doc tests, the README program, rustdoc, the scripts' tests and the web build exit 0.
   `cargo deny` exits 1 on RUSTSEC-2026-0370, 0371 and 0372, the baseline's three advisories.

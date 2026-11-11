@@ -46,7 +46,7 @@ fn every_lowered_fixture_reads() {
     }
 }
 
-/// Code hash of each graph starter and corpus file at `be338ec`, the commit before the `hidden` and `tick_unit` keys,
+/// Code hash of each graph starter and corpus file at `f4088d7`, the commit before the `hidden` and `tick_unit` keys,
 /// and of each `round1/` fixture as it was committed.
 const CODE_HASHES: [(&str, u64); 18] = [
     ("game_of_life.toml", 0xfa47_7f66_5e31_10fc),

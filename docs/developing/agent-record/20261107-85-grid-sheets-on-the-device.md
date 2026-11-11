@@ -6,8 +6,8 @@ icon: material/chip
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s14-grid-sheets-device, rebased onto S10's record fbd9aa9 with no conflict: two unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: fbd9aa9
+state: "37-node-editor, fast-forwarded to redesign/s14-grid-sheets-device, rebased onto S10's record d60a5c9 with no conflict: two unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: d60a5c9
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: grid sheet gates on the device [draft]`, `fix: s14 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -22,7 +22,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: grid sheet g
 
 ## State before
 
-- `37-node-editor` at `fbd9aa9` (S10 merged after S11), with S13a and S17 planned beside S14.
+- `37-node-editor` at `d60a5c9` (S10 merged after S11), with S13a and S17 planned beside S14.
 - The grid lowering held every line kind of a cells card but rates and Repeat, and `henad_graph::sheet::starters()` returned Game of Life, Majority vote and the forest fire.
   `sir_chance.toml` (round 1's SIR with chances per tick) was henad-graph test data.
 - S11's `ModelFile` built a sheet's entry through its lowered graph, and henad-cli ran sheets.
@@ -152,7 +152,7 @@ The eleven `sheet_grid` tests pass with `HENAD_REQUIRE_GPU=1`, and clippy and ru
 
 ### Merge check
 
-- The branch already started at `fbd9aa9`, the tip of `37-node-editor`, so the rebase changed nothing and brought in no conflict.
+- The branch already started at `d60a5c9`, the tip of `37-node-editor`, so the rebase changed nothing and brought in no conflict.
 - The full check ran on the rebased branch with `HENAD_REQUIRE_GPU=1`.
   Every step exits 0 but two, and both fail as the baseline does.
   `cargo deny` reports the baseline's three advisories, RUSTSEC-2026-0370, 0371 and 0372, and no other.

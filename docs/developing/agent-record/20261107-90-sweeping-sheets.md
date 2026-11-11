@@ -6,8 +6,8 @@ icon: material/file-restore-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s18-sweeping-sheets after its merge rebase onto d7b04f2 (S23 and S13b merged): three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test, and the egui MCP checks were repeated on the rebased branch"
-baseline_commit: e0dece6
+state: "37-node-editor, fast-forwarded to redesign/s18-sweeping-sheets after its merge rebase onto c02e9e0 (S23 and S13b merged): three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test, and the egui MCP checks were repeated on the rebased branch"
+baseline_commit: e2ea3f1
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheet text in results folders [draft]`, `feat: open a sweep's sheet from results [draft]`, `fix: s18 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -23,7 +23,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheet text i
 
 ## State before
 
-- `37-node-editor` at `e0dece6`, S17 merged, with S13b and S20 planned beside S18.
+- `37-node-editor` at `e2ea3f1`, S17 merged, with S13b and S20 planned beside S18.
 - A sheet's entry recorded `runtime:<sheet id>` and the lowered graph's code `henad-graph/1`, and nothing of the sheet itself.
   A results folder made from a sheet held the IR alone, and Edit model on a sheet's model opened the lowered graph on the canvas.
 - `ModelSource` derived `PartialEq` over every field, and the app decides that a model changed with `==` (`state/install.rs` `same_code`, and `apply` in `ui/editor/mod.rs`).
@@ -175,7 +175,7 @@ No fix changed what the app shows, so the UI check was not repeated.
 `cargo fmt`, clippy over henad-core and henad-app, their tests with `HENAD_REQUIRE_GPU=1` and a `zensical build` pass after the fixes.
 
 The last nit concerns the merge point.
-`git merge-tree` against `37-node-editor` at `f879ba2` reports conflicts in `CHANGELOG.md`, a list conflict kept on both sides, and in `docs/reference/model-files.md`, where S23's "A sheet converted to a graph model" and S18's "The sheet in a results folder" were both added after "Code identity of a sheet".
+`git merge-tree` against `37-node-editor` at `717c3b5` reports conflicts in `CHANGELOG.md`, a list conflict kept on both sides, and in `docs/reference/model-files.md`, where S23's "A sheet converted to a graph model" and S18's "The sheet in a results folder" were both added after "Code identity of a sheet".
 The rebase keeps both sections, S23's first, and then checks the `#opening-results` link and the `#code-identity-of-a-sheet` anchor `sweeps.md` now links to.
 
 ## State after
@@ -186,7 +186,7 @@ The rebase keeps both sections, S23's first, and then checks the `#opening-resul
 
 ### Merge check
 
-- The merge rebase onto `37-node-editor` at `d7b04f2` brought in S23 (conversion) and S13b (sheet and card panes), and conflicted in the first two commits.
+- The merge rebase onto `37-node-editor` at `c02e9e0` brought in S23 (conversion) and S13b (sheet and card panes), and conflicted in the first two commits.
   - `CHANGELOG.md` keeps both Added lines, S23's conversion and S18's sheet text in results.
   - `docs/reference/model-files.md` keeps both sections after "Code identity of a sheet", S23's "A sheet converted to a graph model" first and S18's "The sheet in a results folder" after it.
     The `#opening-results` link of the new section and the `#code-identity-of-a-sheet` anchor that `sweeps.md` links to both resolve.

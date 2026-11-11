@@ -6,9 +6,9 @@ icon: material/graph-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor with E1 as unsigned [draft] commits b67d2d0 to e7a4289 on top of the G2 review record 9a44ed9; every E1 gate met natively and in Chrome, the restart after the binding in Chrome observed by the round 2 audit fixes (record #67); eight review findings fixed; HENAD_REQUIRE_GPU=1 check.sh lines passing apart from cargo deny's three advisories that master fails too"
-baseline_commit: 9a44ed9
-delta_state: "committed on `37-node-editor`: unsigned commits `b67d2d0` to `e7a4289`, for the maintainer to reword and sign"
+state: "37-node-editor with E1 as unsigned [draft] commits c279184 to b74dfff on top of the G2 review record fd905d1; every E1 gate met natively and in Chrome, the restart after the binding in Chrome observed by the round 2 audit fixes (record #67); eight review findings fixed; HENAD_REQUIRE_GPU=1 check.sh lines passing apart from cargo deny's three advisories that master fails too"
+baseline_commit: fd905d1
+delta_state: "committed on `37-node-editor`: unsigned commits `c279184` to `b74dfff`, for the maintainer to reword and sign"
 ---
 
 # Graph editor and live preview
@@ -202,7 +202,7 @@ agents/henad-app.md, agents/henad-graph.md, CHANGELOG.md, zensical.toml
 
 ## State after
 
-`37-node-editor` holds E1 as unsigned `[draft]` commits `b67d2d0` to `e7a4289`, on top of the G2 review record `9a44ed9`, nothing pushed.
+`37-node-editor` holds E1 as unsigned `[draft]` commits `c279184` to `b74dfff`, on top of the G2 review record `fd905d1`, nothing pushed.
 The worktree branch `37-e1` that E1 started on no longer exists.
 `HENAD_REQUIRE_GPU=1` runs of every `check.sh` line pass: the cargo checks and the three wasm32 checks, `cargo fmt`, `check_packaging.sh`, clippy with every feature, the workspace tests, the doc tests, the facade's README test, `cargo doc` with `-D warnings`, the scripts' tests and the default web build.
 `cargo deny` stops at RUSTSEC-2026-0370, 0371 and 0372, unmaintained `zbus_names`, `zvariant` and `zvariant_derive`, which master fails too.
