@@ -1,6 +1,6 @@
 //! Colours of the cells or agents: none when they take the colours of their first States property, and otherwise the
 //! view pass `colours`. The engine draws the first States property without a view pass. The ground's colours lower as
-//! [`super::ground`] describes.
+//! [`super::shades`] describes.
 //!
 //! An agent coloured by its heading takes one of the eight compass colours of the palette `by_heading` through
 //! `space.heading_octant`.
@@ -11,13 +11,13 @@
 //! value reverses the palette and passes the lower value to `view.ramp` as its low end. Only a linear shading lowers,
 //! so a rule with a log scale or a number of decades is refused.
 
-use super::ids::{GROUP_PART, Owner, SheetKey};
+use super::ids::GROUP_PART;
+use super::value::{number, output};
 use super::{Builder, Site, text};
 use crate::document::{Palette, Pass, PassStage};
 use crate::sheet::check::Place;
 use crate::sheet::document::{ColorRule, ColorRuleKind, PropertyType, ShadeHue, ShadeScale};
 use crate::types::ValueType;
-use crate::value::{InputValue, Literal, PortRef};
 
 /// Id of the view pass of the cells' colours.
 const COLOR_PASS: &str = "colours";
@@ -52,94 +52,73 @@ const HEADING_PALETTE: (&str, [[u8; 4]; 8]) = (
 /// Writes the view pass of the colour rule of the sheet's kind of thing, when the rule needs one.
 pub(super) fn lower(builder: &mut Builder<'_>) {
     if builder.is_ground() {
-        super::ground::colors(builder);
+        super::shades::colors(builder);
         return;
     }
+    let document = builder.document;
     let thing = builder.thing_id();
-    let Some(rule) = builder.document.colors.get(thing) else {
+    let Some(rule) = document.colors.get(thing) else {
         return;
     };
-    let place = Place::Color(thing.to_owned());
+    if let Err(message) = color_rule(builder, rule) {
+        builder.problem(message, Place::Color(thing.to_owned()));
+    }
+}
+
+/// Writes the view pass of the colour rule `rule` of the sheet's kind of thing, when the rule needs one.
+///
+/// # Errors
+///
+/// Returns the message for a rule this version does not lower, or that names no property it can colour by.
+fn color_rule(builder: &mut Builder<'_>, rule: &ColorRule) -> Result<(), String> {
     if rule.scale == Some(ShadeScale::Log) || rule.decades.is_some() {
-        builder.problem(
-            format!(
-                "the colour rule of {} shades on a log scale, and shading lowers on a linear scale only",
-                builder.thing_words()
-            ),
-            place,
-        );
-        return;
+        return Err(format!(
+            "the colour rule of {} shades on a log scale, and shading lowers on a linear scale only",
+            builder.thing_words()
+        ));
     }
     if rule.rule == ColorRuleKind::ByHeading && builder.is_agents() {
-        if let Err(message) = by_heading(builder) {
-            builder.problem(message, place);
-        }
-        return;
+        return by_heading(builder);
     }
-    let Some((index, property)) = rule.property.as_deref().and_then(|id| builder.property(id)) else {
-        builder.problem(
-            format!("the colour rule names no property of {}", builder.thing_words()),
-            place,
-        );
-        return;
-    };
+    let (index, property) = rule
+        .property
+        .as_deref()
+        .and_then(|id| builder.property(id))
+        .ok_or_else(|| format!("the colour rule names no property of {}", builder.thing_words()))?;
     let first_states = builder
         .properties()
         .iter()
         .position(|candidate| candidate.property_type == PropertyType::States);
     let shaded = match rule.rule {
         ColorRuleKind::ByState if rule.shade_state.is_some() || !rule.shades.is_empty() => {
-            builder.problem(
-                format!(
-                    "the colour rule of {} shades a state, and only the ground of agents shades a state",
-                    builder.thing_words()
-                ),
-                place,
-            );
-            return;
+            return Err(format!(
+                "the colour rule of {} shades a state, and only the ground of agents shades a state",
+                builder.thing_words()
+            ));
         }
-        ColorRuleKind::ByState if first_states == Some(index) => return,
+        ColorRuleKind::ByState if first_states == Some(index) => return Ok(()),
         ColorRuleKind::ByState => false,
         ColorRuleKind::Shaded if property.property_type != PropertyType::States => true,
         ColorRuleKind::Shaded | ColorRuleKind::ByHeading => {
-            builder.problem(
-                format!(
-                    "the colour rule cannot colour {} by this property",
-                    builder.thing_words()
-                ),
-                place,
-            );
-            return;
+            return Err(format!(
+                "the colour rule cannot colour {} by this property",
+                builder.thing_words()
+            ));
         }
     };
     let site = color_site(builder);
-    let read = match builder.read(site.pass, &property.id) {
-        Ok(read) => read,
-        Err(message) => {
-            builder.problem(message, place);
-            return;
-        }
-    };
+    let read = builder.read(site.pass, &property.id)?;
     if shaded {
-        let rule = rule.clone();
-        if let Err(message) = shade(builder, &site, &read, &property.id, &rule) {
-            builder.problem(message, place);
-        }
-        return;
+        return shade(builder, &site, &read, &property.id, rule);
     }
-    let colored = builder
-        .input_as(&site, &read, &builder.lane_type(property), false)
-        .map(|index_input| {
-            builder.emit(
-                &site,
-                "view.color",
-                vec![("palette", text(&property.id))],
-                vec![("index".to_owned(), index_input)],
-            );
-        });
-    if let Err(message) = colored {
-        builder.problem(message, place);
-    }
+    let index_input = builder.input_as(&site, &read, &builder.lane_type(property))?;
+    builder.emit(
+        &site,
+        "view.color",
+        vec![("palette", text(&property.id))],
+        vec![("index".to_owned(), index_input)],
+    );
+    Ok(())
 }
 
 /// Adds the view pass of the colours, `colours` or `colours_ground` for the ground, and returns the site of its nodes.
@@ -150,15 +129,7 @@ pub(super) fn color_site(builder: &mut Builder<'_>) -> Site {
         COLOR_PASS.to_owned()
     };
     let pass = builder.add_pass(Pass::new(&id, PassStage::View, Some(builder.domain())));
-    Site {
-        pass,
-        owner: Owner::Sheet(SheetKey {
-            group: GROUP_PART,
-            index: 0,
-        }),
-        path: format!("color.{}", builder.thing_id()),
-        region: None,
-    }
+    Site::sheet(pass, GROUP_PART, 0, format!("color.{}", builder.thing_id()))
 }
 
 /// Writes the colour of each agent by its heading: the palette of eight compass colours, and the octant of the heading
@@ -182,19 +153,13 @@ fn by_heading(builder: &mut Builder<'_>) -> Result<(), String> {
     builder.graph.palettes.push(Palette::new(palette, colors.to_vec()));
     let site = color_site(builder);
     let read = builder.read(site.pass, &heading.id)?;
-    let read = builder.input_as(&site, &read, &ValueType::Vec2F, false)?;
+    let read = builder.input_as(&site, &read, &ValueType::Vec2F)?;
     let octant = builder.emit(&site, "space.heading_octant", Vec::new(), vec![("v".to_owned(), read)]);
     builder.emit(
         &site,
         "view.color",
         vec![("palette", text(palette))],
-        vec![(
-            "index".to_owned(),
-            InputValue::Link(PortRef {
-                node: octant,
-                port: None,
-            }),
-        )],
+        vec![("index".to_owned(), output(octant))],
     );
     Ok(())
 }
@@ -237,22 +202,22 @@ pub(super) fn shade(
         (darkest, lightest)
     };
     builder.graph.palettes.push(Palette::new(&palette, colors));
-    let value = builder.input_as(site, read, &ValueType::F32, false)?;
+    let value = builder.input_as(site, read, &ValueType::F32)?;
     let node = builder.emit(
         site,
         "view.ramp",
         vec![("palette", text(&palette))],
         vec![
             ("value".to_owned(), value),
-            ("low".to_owned(), InputValue::Literal(Literal::F32(low as f32))),
-            ("high".to_owned(), InputValue::Literal(Literal::F32(high as f32))),
+            ("low".to_owned(), number(low as f32)),
+            ("high".to_owned(), number(high as f32)),
         ],
     );
     builder.emit(
         site,
         "view.color",
         vec![("palette", text(&palette))],
-        vec![("index".to_owned(), InputValue::Link(PortRef { node, port: None }))],
+        vec![("index".to_owned(), output(node))],
     );
     Ok(())
 }

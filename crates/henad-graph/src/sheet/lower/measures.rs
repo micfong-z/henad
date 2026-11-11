@@ -6,13 +6,13 @@
 //! An average is a `stat.mean`, a total a `stat.sum`, and a spread the square root of the mean square less the
 //! squared mean, in `f64` after the reduction.
 
-use super::ids::{GROUP_MEASURE, GROUP_PART, Owner, SheetKey};
-use super::value::Operand;
+use super::ids::{GROUP_MEASURE, GROUP_PART};
+use super::value::{Operand, literal_operand, port};
 use super::{Builder, Site, text};
 use crate::document::{Pass, PassStage, Stat};
 use crate::ids::NodeId;
 use crate::sheet::check::Place;
-use crate::sheet::document::{LineKind, MeasureRule, SheetChip, SheetLiteral, SheetMeasure, SheetValue};
+use crate::sheet::document::{LineKind, MeasureRule, SheetChip, SheetMeasure, SheetValue};
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, Literal, PortRef};
 
@@ -27,7 +27,7 @@ const MEASURE_PASS: &str = "measures";
 pub(super) fn lower(builder: &mut Builder<'_>) {
     let measures = &builder.document.measures;
     let ground = builder.is_ground();
-    let has_ground = builder.is_agents() && !builder.ground_layers.is_empty();
+    let has_ground = builder.is_agents() && !builder.ground_fields.is_empty();
     let mine: Vec<usize> = (0..measures.len())
         .filter(|&index| {
             let over_ground =
@@ -79,15 +79,7 @@ fn measure_source(
     if measure.over.as_deref() != Some(thing) && measure.rule != MeasureRule::EventCount {
         return Err(format!("a measure of this sheet is over {}", builder.thing_words()));
     }
-    let site = Site {
-        pass,
-        owner: Owner::Sheet(SheetKey {
-            group: GROUP_MEASURE,
-            index: index as u32,
-        }),
-        path: format!("measure.{}", measure.id),
-        region: None,
-    };
+    let site = Site::sheet(pass, GROUP_MEASURE, index as u32, format!("measure.{}", measure.id));
     match measure.rule {
         MeasureRule::CountInState => {
             let property = measure
@@ -95,22 +87,18 @@ fn measure_source(
                 .as_deref()
                 .ok_or("a count in a state names no property")?;
             let state = measure.state.as_deref().ok_or("a count in a state names no state")?;
-            let (property_index, _) = builder
-                .property(property)
-                .ok_or_else(|| format!("'{property}' is no property of {}", builder.thing_words()))?;
+            let (property_index, _) = builder.required_property(property)?;
             let node = if let Some((_, node)) = counts.iter().find(|(id, _)| id == property) {
                 *node
             } else {
                 let read = builder.read(pass, property)?;
-                let count_site = Site {
-                    owner: Owner::Sheet(SheetKey {
-                        group: GROUP_PART,
-                        index: property_index as u32,
-                    }),
-                    path: format!("{}.{property}.count", builder.property_path()),
-                    ..site.clone()
-                };
-                let value = builder.input_as(&count_site, &read, &ValueType::Category(property.to_owned()), false)?;
+                let count_site = Site::sheet(
+                    pass,
+                    GROUP_PART,
+                    property_index as u32,
+                    format!("{}.{property}.count", builder.property_path()),
+                );
+                let value = builder.input_as(&count_site, &read, &ValueType::Category(property.to_owned()))?;
                 let node = builder.emit(
                     &count_site,
                     "stat.count_by",
@@ -132,7 +120,7 @@ fn measure_source(
             } else {
                 ValueType::F32
             };
-            let value = builder.input_as(&site, &read, &value_type, false)?;
+            let value = builder.input_as(&site, &read, &value_type)?;
             let (op, port) = if measure.rule == MeasureRule::Average {
                 ("stat.mean", "mean")
             } else {
@@ -168,32 +156,17 @@ fn measure_source(
 /// Returns the output of the spread of `read` over the cells, written at `site`: the square root of the mean square
 /// less the squared mean, at least 0.
 fn spread(builder: &mut Builder<'_>, site: &Site, read: &Operand) -> Result<PortRef, String> {
-    let value = builder.input_as(site, read, &ValueType::F32, false)?;
+    let value = builder.input_as(site, read, &ValueType::F32)?;
     let mean = mean_of(builder, site, value.clone());
-    let square = builder.node_value(
-        site,
-        "math.mul",
-        vec![("a", value.clone()), ("b", value)],
-        ValueType::F32,
-    );
-    let square = builder.input_as(site, &square, &ValueType::F32, false)?;
+    let square = builder.node_input(site, "math.mul", vec![("a", value.clone()), ("b", value)]);
     let mean_square = mean_of(builder, site, square);
-    let squared_mean = builder.node_value(site, "math.mul", vec![("a", mean.clone()), ("b", mean)], ValueType::F64);
-    let squared_mean = builder.input_as(site, &squared_mean, &ValueType::F64, false)?;
-    let variance = builder.node_value(
-        site,
-        "math.sub",
-        vec![("a", mean_square), ("b", squared_mean)],
-        ValueType::F64,
-    );
-    let variance = builder.input_as(site, &variance, &ValueType::F64, false)?;
-    let clamped = builder.node_value(
+    let squared_mean = builder.node_input(site, "math.mul", vec![("a", mean.clone()), ("b", mean)]);
+    let variance = builder.node_input(site, "math.sub", vec![("a", mean_square), ("b", squared_mean)]);
+    let clamped = builder.node_input(
         site,
         "math.max",
         vec![("a", variance), ("b", InputValue::Literal(Literal::F64(0.0)))],
-        ValueType::F64,
     );
-    let clamped = builder.input_as(site, &clamped, &ValueType::F64, false)?;
     let node = builder.emit(site, "math.sqrt", Vec::new(), vec![("a".to_owned(), clamped)]);
     Ok(PortRef { node, port: None })
 }
@@ -206,10 +179,7 @@ fn mean_of(builder: &mut Builder<'_>, site: &Site, value: InputValue) -> InputVa
         vec![("chunk_acc", ConfigValue::String("f64".to_owned()))],
         vec![("value".to_owned(), value)],
     );
-    InputValue::Link(PortRef {
-        node,
-        port: Some("mean".to_owned()),
-    })
+    port(node, "mean")
 }
 
 /// Returns the value measure `measure` reads for each cell or agent, written at `site`: one of my properties, a
@@ -227,11 +197,9 @@ fn measure_value(
             super::calculate::calculate(&mut scope, &site.at("value"), phrase)
         }
         Some(SheetValue::Chip(SheetChip::Param(id))) => builder.param(id),
-        Some(SheetValue::Literal(SheetLiteral::Bool(value))) => Ok(Operand::Constant(Literal::Bool(*value))),
-        Some(SheetValue::Literal(literal)) => literal
-            .number()
-            .map(Operand::Number)
-            .ok_or_else(|| "the measure reads no number".to_owned()),
+        Some(SheetValue::Literal(literal)) => {
+            literal_operand(literal).ok_or_else(|| "the measure reads no number".to_owned())
+        }
         _ => Err("a measure reads a property, a parameter, a number or a Calculate of them".to_owned()),
     }
 }

@@ -41,9 +41,12 @@ mod keys;
 mod look;
 mod measures;
 mod motion;
+mod paint;
 mod pick;
+mod place;
 mod rates;
 mod repeat;
+mod shades;
 mod start;
 pub(super) mod table;
 mod value;
@@ -54,14 +57,16 @@ use std::collections::{HashMap, HashSet};
 use self::ids::{Numberer, Owner, SheetKey};
 use self::table::{FireLines, LineMap, NodeOrigin};
 use self::value::Operand;
-use super::check::{Place, SheetReport, Thing};
-use super::document::{Edges, LineKind, LineMode, MadeOf, PropertyType, SheetDocument, SheetProperty};
+use super::check::{Place, SheetReport, Thing, formula, formula_chip};
+use super::document::{
+    Edges, LineKind, LineMode, MadeOf, PropertyType, SheetChip, SheetDocument, SheetLine, SheetProperty, SheetValue,
+};
 use super::sentence;
 use crate::document::{Domain, GraphDocument, Pass, PassStage};
 use crate::ids::NodeId;
 use crate::node::Node;
 use crate::types::ValueType;
-use crate::value::{ConfigValue, InputValue, Literal, MemberName, PortRef};
+use crate::value::{ConfigValue, InputValue, PortRef};
 use crate::wgsl::{FaultNames, Probes};
 
 /// A sheet lowered to a graph document, with the table of its nodes.
@@ -147,6 +152,33 @@ fn refuse_agent_tables(builder: &mut Builder<'_>) {
     }
 }
 
+/// Calls `visit` with each chip that `line` reads: the chips in its slots and the references of its formula, in its
+/// phrases at any depth too.
+pub(super) fn visit_chips(document: &SheetDocument, line: &SheetLine, visit: &mut dyn FnMut(&SheetChip)) {
+    if let Some(references) = line.formula.as_deref().and_then(|text| formula::references(text).ok()) {
+        for reference in references {
+            visit(&formula_chip(reference, document));
+        }
+    }
+    for value in line.slot_values() {
+        visit_value_chips(document, value, visit);
+    }
+}
+
+/// Calls `visit` with each chip that `value` holds, in its phrases at any depth too.
+pub(super) fn visit_value_chips(document: &SheetDocument, value: &SheetValue, visit: &mut dyn FnMut(&SheetChip)) {
+    match value {
+        SheetValue::Chip(chip) => visit(chip),
+        SheetValue::Phrase(phrase) => visit_chips(document, phrase, visit),
+        SheetValue::List(items) => {
+            for item in items {
+                visit_value_chips(document, item, visit);
+            }
+        }
+        SheetValue::Literal(_) => {}
+    }
+}
+
 /// Returns whether a card of `document` moves agents to places. The Heading of such agents is a step between cells.
 fn moves_to_cells(document: &SheetDocument) -> bool {
     document
@@ -170,6 +202,17 @@ struct Site {
 }
 
 impl Site {
+    /// Returns the site of a node the sheet owns in pass `pass`, at `index` of the walk group `group`, with the slot
+    /// path `path`, outside every region.
+    fn sheet(pass: usize, group: u32, index: u32, path: String) -> Self {
+        Self {
+            pass,
+            owner: Owner::Sheet(SheetKey { group, index }),
+            path,
+            region: None,
+        }
+    }
+
     /// Returns the site with `segment` added to its slot path.
     fn at(&self, segment: &str) -> Self {
         let path = if self.path.is_empty() {
@@ -242,15 +285,15 @@ struct Builder<'a> {
     results: Vec<(NodeId, String)>,
     /// Whether a card moves the agents to places, so the Heading is a whole step between cells.
     cell_mover: bool,
-    /// Field and layer of each property of the ground, by property id.
-    ground_layers: HashMap<String, (String, String)>,
+    /// Field of each property of the ground, by property id. The property is the field's layer of its own id.
+    ground_fields: HashMap<String, String>,
     /// Function that fades each field of the ground whose properties fade: its id, the share kept per tick and the
     /// slot path of its nodes.
     fades: Vec<(String, InputValue, String)>,
     /// Index of the measure of each `[[stat]]` written so far, in the order of the stats.
     stat_measures: Vec<usize>,
-    /// Boolean output that holds where each change line applies, as a temporary id and a port, with the line's id.
-    fires: Vec<(NodeId, Option<String>, String)>,
+    /// Boolean output that holds where each change line applies, its node a temporary id, with the line's id.
+    fires: Vec<(PortRef, String)>,
 }
 
 impl<'a> Builder<'a> {
@@ -275,7 +318,7 @@ impl<'a> Builder<'a> {
             fault_names: Vec::new(),
             results: Vec::new(),
             cell_mover: document.world.made_of == MadeOf::Agents && moves_to_cells(document),
-            ground_layers: HashMap::new(),
+            ground_fields: HashMap::new(),
             fades: Vec::new(),
             stat_measures: Vec::new(),
             fires: Vec::new(),
@@ -284,13 +327,18 @@ impl<'a> Builder<'a> {
 
     /// Runs `lower` over the ground, when the sheet's agents walk on a ground with properties.
     fn on_ground(&mut self, lower: fn(&mut Self)) {
-        if !self.is_agents() || self.ground_layers.is_empty() {
-            return;
+        if self.is_agents() && !self.ground_fields.is_empty() {
+            self.with_thing(Thing::Ground, lower);
         }
-        let thing = self.thing;
-        self.thing = Thing::Ground;
-        lower(self);
+    }
+
+    /// Runs `lower` over the kind of thing `thing`, and returns what it returns.
+    fn with_thing<R>(&mut self, thing: Thing, lower: impl FnOnce(&mut Self) -> R) -> R {
+        let outer = self.thing;
         self.thing = thing;
+        let result = lower(self);
+        self.thing = outer;
+        result
     }
 
     /// Returns whether the sheet's kind of thing, as lowered now, is the ground.
@@ -337,6 +385,56 @@ impl<'a> Builder<'a> {
             .iter()
             .enumerate()
             .find(|(_, property)| property.id == id)
+    }
+
+    /// Returns the property `id` of the sheet's kind of thing with its index.
+    ///
+    /// # Errors
+    ///
+    /// Returns the message for an id that names no property of the kind of thing.
+    fn required_property(&self, id: &str) -> Result<(usize, &'a SheetProperty), String> {
+        self.property(id)
+            .ok_or_else(|| format!("'{id}' is no property of {}", self.thing_words()))
+    }
+
+    /// Returns the property `id` of the ground.
+    ///
+    /// # Errors
+    ///
+    /// Returns the message for an id that names no property of the ground.
+    fn ground_property(&self, id: &str) -> Result<&'a SheetProperty, String> {
+        self.document
+            .ground
+            .as_ref()
+            .and_then(|ground| ground.properties.iter().find(|property| property.id == id))
+            .ok_or_else(|| format!("'{id}' is no property of the ground"))
+    }
+
+    /// Returns the id of the field of the ground property `property`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the message for a property of the ground that has no field.
+    fn ground_field(&self, property: &str) -> Result<&str, String> {
+        self.ground_fields
+            .get(property)
+            .map(String::as_str)
+            .ok_or_else(|| format!("'{property}' is no property of the ground"))
+    }
+
+    /// Returns the first Position property of the sheet's kind of thing with its index.
+    fn position(&self) -> Option<(usize, &'a SheetProperty)> {
+        self.properties()
+            .iter()
+            .enumerate()
+            .find(|(_, property)| property.property_type == PropertyType::Position)
+    }
+
+    /// Returns the first Heading property of the sheet's kind of thing that has a lane, with its index.
+    fn heading_lane(&self) -> Option<(usize, &'a SheetProperty)> {
+        self.properties().iter().enumerate().find(|(_, property)| {
+            property.property_type == PropertyType::Heading && !self.dropped.contains(&property.id)
+        })
     }
 
     /// Id of the sheet's kind of thing as a card's `every` names it: `cells`, or the id of the kind of agent.
@@ -439,7 +537,7 @@ impl<'a> Builder<'a> {
     /// Records the output `port` of the temporary node `node`, or its only output with `None`, as an output that holds
     /// for each element where line `line_id` applies.
     fn record_fire(&mut self, node: NodeId, port: Option<String>, line_id: &str) {
-        self.fires.push((node, port, line_id.to_owned()));
+        self.fires.push((PortRef { node, port }, line_id.to_owned()));
     }
 
     /// Returns the probes of the recorded fires that a tick pass computes outside every region, each with its line,
@@ -461,15 +559,13 @@ impl<'a> Builder<'a> {
         let (outputs, lines) = self
             .fires
             .iter()
-            .filter(|(node, _, _)| counted(*node))
-            .map(|(node, port, line)| {
-                (
-                    PortRef {
-                        node: renumber(*node),
-                        port: port.clone(),
-                    },
-                    line.clone(),
-                )
+            .filter(|(output, _)| counted(output.node))
+            .map(|(output, line)| {
+                let output = PortRef {
+                    node: renumber(output.node),
+                    port: output.port.clone(),
+                };
+                (output, line.clone())
             })
             .unzip();
         FireLines::new(Probes::new(outputs), lines)
@@ -499,22 +595,17 @@ impl<'a> Builder<'a> {
         if let Some(read) = self.passes[pass].reads.get(property) {
             return Ok(read.clone());
         }
-        let (index, found) = self
-            .property(property)
-            .ok_or_else(|| format!("'{property}' is no property of {}", self.thing_words()))?;
+        let (index, found) = self.required_property(property)?;
         if self.dropped.contains(property) {
             return Err(format!("'{property}' has no value to read"));
         }
         let value_type = self.lane_type(found);
-        let site = Site {
+        let site = Site::sheet(
             pass,
-            owner: Owner::Sheet(SheetKey {
-                group: ids::GROUP_READ,
-                index: index as u32,
-            }),
-            path: format!("{}.{property}", self.property_path()),
-            region: None,
-        };
+            ids::GROUP_READ,
+            index as u32,
+            format!("{}.{property}", self.property_path()),
+        );
         let node = if self.is_ground() {
             let (config, inputs) = self.ground_access(property)?;
             self.emit(&site, "field.get", config, inputs)
@@ -556,19 +647,10 @@ impl<'a> Builder<'a> {
     ///
     /// Returns the message for a property of the ground that has no field.
     fn ground_access(&self, property: &str) -> Result<GroundAccess, String> {
-        let (field, layer) = self
-            .ground_layers
-            .get(property)
-            .ok_or_else(|| format!("'{property}' is no property of the ground"))?;
+        let field = self.ground_field(property)?;
         Ok((
             vec![("field", text(field))],
-            vec![(
-                "layer".to_owned(),
-                InputValue::Literal(Literal::Layer(MemberName {
-                    owner: field.clone(),
-                    member: layer.clone(),
-                })),
-            )],
+            vec![("layer".to_owned(), value::layer_literal(field, property))],
         ))
     }
 
@@ -579,63 +661,8 @@ impl<'a> Builder<'a> {
         if !self.problems.is_empty() {
             return Err(self.problems);
         }
-        let mut numberer = Numberer::default();
-        let mut renumbered: HashMap<NodeId, NodeId> = HashMap::new();
         let mut map = LineMap::default();
-        let numbering = |numberer: &mut Numberer, owner: &Owner| match owner {
-            Owner::Line { number, .. } => numberer.next_of_line(*number),
-            Owner::Sheet(_) => numberer.next_of_sheet(),
-        };
-        for pass in &self.passes {
-            // The sheet's nodes in their walk, then every line's in the order each line wrote them.
-            let mut order: Vec<usize> = (0..pass.drafts.len()).collect();
-            order.sort_by_key(|&index| match &pass.drafts[index].owner {
-                Owner::Sheet(key) => (0, *key),
-                Owner::Line { .. } => (1, SheetKey { group: 0, index: 0 }),
-            });
-            for index in order {
-                let draft = &pass.drafts[index];
-                let number = numbering(&mut numberer, &draft.owner).map_err(|message| {
-                    let place = match &draft.owner {
-                        Owner::Line { id, .. } => self.line_place(id),
-                        Owner::Sheet(_) => Place::Sheet,
-                    };
-                    vec![Problem { message, place }]
-                })?;
-                let id = NodeId::new(number).unwrap_or_else(|| unreachable!("node ids count from 1"));
-                renumbered.insert(draft.node.id, id);
-                map.insert(
-                    id,
-                    NodeOrigin {
-                        owner: draft.owner.table_owner(),
-                        path: draft.path.clone(),
-                    },
-                );
-            }
-        }
-        for (id, kept, path) in std::mem::take(&mut self.fades) {
-            let function = ground::fade_function(&id, kept, || {
-                numberer
-                    .next_of_sheet()
-                    .map(|number| NodeId::new(number).unwrap_or_else(|| unreachable!("node ids count from 1")))
-                    .map_err(|message| {
-                        vec![Problem {
-                            message,
-                            place: Place::Sheet,
-                        }]
-                    })
-            })?;
-            for node in &function.body.nodes {
-                map.insert(
-                    node.id,
-                    NodeOrigin {
-                        owner: table::NodeOwner::Sheet,
-                        path: path.clone(),
-                    },
-                );
-            }
-            self.graph.functions.push(function);
-        }
+        let renumbered = self.number_nodes(&mut map).map_err(|problem| vec![problem])?;
         let renumber = |id: NodeId| renumbered.get(&id).copied().unwrap_or(id);
         let fires = self.fire_lines(renumber);
         for draft in self.passes {
@@ -669,6 +696,66 @@ impl<'a> Builder<'a> {
             fault_names,
             fires,
         })
+    }
+
+    /// Numbers the nodes of every pass and builds the fade functions from the next ids, recording each node in `map`,
+    /// and returns the id of each node of a pass by its temporary id.
+    ///
+    /// # Errors
+    ///
+    /// Returns the problem of a line or a sheet past its node limit.
+    fn number_nodes(&mut self, map: &mut LineMap) -> Result<HashMap<NodeId, NodeId>, Problem> {
+        let mut numberer = Numberer::default();
+        let mut renumbered = HashMap::new();
+        for pass in &self.passes {
+            // The sheet's nodes in their walk, then every line's in the order each line wrote them.
+            let mut order: Vec<usize> = (0..pass.drafts.len()).collect();
+            order.sort_by_key(|&index| match &pass.drafts[index].owner {
+                Owner::Sheet(key) => (0, *key),
+                Owner::Line { .. } => (1, SheetKey { group: 0, index: 0 }),
+            });
+            for index in order {
+                let draft = &pass.drafts[index];
+                let numbered = match &draft.owner {
+                    Owner::Line { number, .. } => numberer.next_of_line(*number),
+                    Owner::Sheet(_) => numberer.next_of_sheet(),
+                };
+                let id = numbered.map_err(|message| {
+                    let place = match &draft.owner {
+                        Owner::Line { id, .. } => self.line_place(id),
+                        Owner::Sheet(_) => Place::Sheet,
+                    };
+                    Problem { message, place }
+                })?;
+                renumbered.insert(draft.node.id, id);
+                map.insert(
+                    id,
+                    NodeOrigin {
+                        owner: draft.owner.table_owner(),
+                        path: draft.path.clone(),
+                    },
+                );
+            }
+        }
+        for (id, kept, path) in std::mem::take(&mut self.fades) {
+            let function = ground::fade_function(&id, kept, || {
+                numberer.next_of_sheet().map_err(|message| Problem {
+                    message,
+                    place: Place::Sheet,
+                })
+            })?;
+            for node in &function.body.nodes {
+                map.insert(
+                    node.id,
+                    NodeOrigin {
+                        owner: table::NodeOwner::Sheet,
+                        path: path.clone(),
+                    },
+                );
+            }
+            self.graph.functions.push(function);
+        }
+        Ok(renumbered)
     }
 
     /// Returns the place of line `line_id`: its line table in the card that holds it.

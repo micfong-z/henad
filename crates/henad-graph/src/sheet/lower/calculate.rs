@@ -9,13 +9,14 @@
 use std::collections::BTreeMap;
 
 use super::card::CardLowering;
-use super::value::Operand;
+use super::value::{Operand, port_of};
 use super::{Builder, Site, text};
+use crate::ids::NodeId;
 use crate::sheet::check::formula::{self, FormulaTree};
 use crate::sheet::check::formula_chip;
 use crate::sheet::document::{SheetChip, SheetLine};
 use crate::types::ValueType;
-use crate::value::{ConfigValue, InputValue, PortRef};
+use crate::value::{ConfigValue, InputValue};
 
 /// Name of the output of a formula's expression node.
 const OUTPUT: &str = "out";
@@ -79,6 +80,18 @@ pub(super) fn calculate(scope: &mut dyn Scope<'_>, site: &Site, line: &SheetLine
     let mut inputs: Vec<(String, InputValue, ValueType)> = Vec::new();
     let mut names: BTreeMap<String, (String, ValueType)> = BTreeMap::new();
     let (expression, value_type) = formula_text(scope, &formula_site, &tree, &mut inputs, &mut names)?;
+    let node = expression_node(scope.builder(), site, &expression, inputs);
+    Ok(port_of(node, OUTPUT, value_type))
+}
+
+/// Writes the `math.expr` node `out = <expression>` over `inputs` at `site`, each input a name, its value and its
+/// type, and returns its id.
+pub(super) fn expression_node(
+    builder: &mut Builder<'_>,
+    site: &Site,
+    expression: &str,
+    inputs: Vec<(String, InputValue, ValueType)>,
+) -> NodeId {
     let declared: Vec<ConfigValue> = inputs
         .iter()
         .map(|(name, _, value_type)| {
@@ -88,7 +101,7 @@ pub(super) fn calculate(scope: &mut dyn Scope<'_>, site: &Site, line: &SheetLine
             ]))
         })
         .collect();
-    let node = scope.builder().emit(
+    builder.emit(
         site,
         "math.expr",
         vec![
@@ -97,14 +110,7 @@ pub(super) fn calculate(scope: &mut dyn Scope<'_>, site: &Site, line: &SheetLine
             ("outputs", ConfigValue::Array(vec![text(OUTPUT)])),
         ],
         inputs.into_iter().map(|(name, input, _)| (name, input)).collect(),
-    );
-    Ok(Operand::Link(
-        PortRef {
-            node,
-            port: Some(OUTPUT.to_owned()),
-        },
-        value_type,
-    ))
+    )
 }
 
 /// Returns the expression text of `tree` and its type, adding an input to `inputs` for each reference that `names`
@@ -142,7 +148,7 @@ fn formula_text(
             } else {
                 ValueType::F32
             };
-            let input = scope.builder().input_as(site, &operand, &value_type, false)?;
+            let input = scope.builder().input_as(site, &operand, &value_type)?;
             let name = format!("v{}", inputs.len() + 1);
             inputs.push((name.clone(), input, value_type.clone()));
             names.insert((*reference).to_owned(), (name.clone(), value_type.clone()));

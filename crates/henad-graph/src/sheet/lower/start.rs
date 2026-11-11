@@ -1,6 +1,6 @@
 //! Starts of the cells, agents or ground: the init pass `start_cells`, `start_<kind>` or `start_ground`, and the init
 //! passes a button that starts some properties again reruns. A painted ground and a start on the ground lower as
-//! [`super::ground`] describes.
+//! [`super::paint`] describes.
 //!
 //! An agent's Position starts anywhere at random, at a uniform point of the world. An Arrow starts as a random
 //! direction, its length a number, a parameter or a random number between two values. "All Dead" and a number write
@@ -9,16 +9,16 @@
 //! running total of chances passes `u`, and the "otherwise" state when none does. One row draws with `rand.chance`, a
 //! node that makes that comparison itself.
 
-use super::ids::{GROUP_PART, Owner, SheetKey};
-use super::value::Operand;
+use super::ids::GROUP_PART;
+use super::value::{Operand, literal_operand, number, output, port, state_literal};
 use super::{Builder, Site, keys};
 use crate::document::{Pass, PassEnabled, PassStage};
 use crate::sheet::check::Place;
 use crate::sheet::document::{
-    LineKind, PropertyType, SheetChip, SheetLine, SheetLiteral, SheetProperty, SheetValue, StartRule, StartsAs,
+    LineKind, PropertyType, SheetChip, SheetLine, SheetProperty, SheetValue, StartRule, StartsAs,
 };
 use crate::types::ValueType;
-use crate::value::{ConfigValue, InputValue, Literal, PortRef};
+use crate::value::{ConfigValue, InputValue};
 
 /// Returns the id of the init pass of the starts: `start_cells`, or `start_<kind>` for a kind of agent.
 pub(super) fn start_pass(builder: &Builder<'_>) -> String {
@@ -60,18 +60,48 @@ fn start_property(builder: &mut Builder<'_>, pass: usize, index: usize, button: 
     let Some(start) = property.starts_as.as_ref() else {
         return;
     };
-    let site = Site {
+    let site = Site::sheet(
         pass,
-        owner: Owner::Sheet(SheetKey {
-            group: GROUP_PART,
-            index: index as u32,
-        }),
-        path: format!("{}.{}.starts_as", builder.property_path(), property.id),
-        region: None,
-    };
+        GROUP_PART,
+        index as u32,
+        format!("{}.{}.starts_as", builder.property_path(), property.id),
+    );
     let place = builder.property_place(index);
-    if let Err(message) = start_value(builder, &site, property, start, button) {
+    let draws = StartDraws {
+        key: keys::owner_key(start.key, &builder.document.sheet.id, &property.id),
+        button,
+        owner: format!("the start of property '{}'", property.id),
+        place: place.clone(),
+    };
+    if let Err(message) = start_value(builder, &site, property, start, &draws) {
         builder.problem(format!("property '{}': {message}", property.id), place);
+    }
+}
+
+/// Draws of one start: the key they compose with their slot paths, and the start in words and as a table for the check
+/// of their keys.
+#[derive(Debug)]
+pub(super) struct StartDraws<'a> {
+    /// Key of the property that owns the start.
+    key: u32,
+    /// Button that reruns the start, whose id the keys are composed with.
+    button: Option<&'a str>,
+    /// Start in words.
+    owner: String,
+    /// Table of the start.
+    place: Place,
+}
+
+impl StartDraws<'_> {
+    /// Records the draw at the slot path `path` and returns its key.
+    pub(super) fn record(&self, builder: &mut Builder<'_>, path: &str) -> u32 {
+        let path = match self.button {
+            Some(button) => format!("{path}.{button}"),
+            None => path.to_owned(),
+        };
+        let key = keys::draw_key(self.key, &path);
+        builder.record_draw(key, self.owner.clone(), self.place.clone());
+        key
     }
 }
 
@@ -82,35 +112,16 @@ fn start_value(
     site: &Site,
     property: &SheetProperty,
     start: &StartsAs,
-    button: Option<&str>,
+    draws: &StartDraws<'_>,
 ) -> Result<(), String> {
     let lane_type = builder.lane_type(property);
-    let document = builder.document;
-    let key = keys::owner_key(start.key, &document.sheet.id, &property.id);
-    let draw_key = |path: &str| {
-        let path = match button {
-            Some(button) => format!("{path}.{button}"),
-            None => path.to_owned(),
-        };
-        keys::draw_key(key, &path)
-    };
-    let owner = format!("the start of property '{}'", property.id);
-    let place = builder.property_place(builder.property(&property.id).map_or(0, |(index, _)| index));
     let value = match start.rule {
-        StartRule::Anywhere if property.property_type == PropertyType::Position => anywhere(
-            builder,
-            site,
-            draw_key("starts_as.x"),
-            draw_key("starts_as.y"),
-            &owner,
-            &place,
-        ),
+        StartRule::Anywhere if property.property_type == PropertyType::Position => anywhere(builder, site, draws),
         StartRule::Value if lane_type == ValueType::Vec2F => match start.value.value() {
             Some(SheetValue::Phrase(phrase)) if phrase.kind == LineKind::RandomDirection => {
-                let length = start_number(builder, site, phrase, &draw_key, &owner, &place)?;
-                let draw = draw_key("starts_as.value");
-                builder.record_draw(draw, owner.clone(), place.clone());
-                random_direction(builder, site, draw, length)
+                let length = start_number(builder, site, phrase, draws)?;
+                let key = draws.record(builder, "starts_as.value");
+                random_direction(builder, site, key, length)
             }
             _ => return Err("an arrow starts as a random direction".to_owned()),
         },
@@ -120,33 +131,18 @@ fn start_value(
                     // A draw truncated to a whole number would never reach the high end.
                     return Err("a random number between two values starts a Number property only".to_owned());
                 }
-                let low = start_operand(builder, phrase.low.value())?;
-                let high = start_operand(builder, phrase.high.value())?;
-                let low = builder.input_as(site, &low, &ValueType::F32, false)?;
-                let high = builder.input_as(site, &high, &ValueType::F32, false)?;
-                let span = builder.node_value(site, "math.sub", vec![("a", high), ("b", low.clone())], ValueType::F32);
-                let span = builder.input_as(site, &span, &ValueType::F32, false)?;
-                let draw = draw_key("starts_as.value");
-                builder.record_draw(draw, owner, place);
-                let node = builder.emit(
-                    site,
-                    "rand.float",
-                    vec![("key", ConfigValue::Integer(i64::from(draw)))],
-                    vec![("max".to_owned(), span)],
-                );
-                let drawn = InputValue::Link(PortRef { node, port: None });
-                let sum = builder.node_value(site, "math.add", vec![("a", drawn), ("b", low)], ValueType::F32);
-                builder.input_as(site, &sum, &lane_type, true)?
+                let drawn = random_between(builder, site, phrase, draws, "starts_as.value")?;
+                builder.input_truncated(site, &drawn, &lane_type)?
             }
             value => {
                 let operand = start_operand(builder, value)?;
-                builder.input_as(site, &operand, &lane_type, true)?
+                builder.input_truncated(site, &operand, &lane_type)?
             }
         },
-        StartRule::ByChance => by_chance(builder, site, property, start, draw_key("starts_as.row"), owner, place)?,
-        StartRule::Painted if builder.is_ground() => super::ground::painted(builder, site, property, start)?,
+        StartRule::ByChance => by_chance(builder, site, property, start, draws)?,
+        StartRule::Painted if builder.is_ground() => super::paint::painted(builder, site, property, start)?,
         StartRule::OnGround if builder.is_agents() && property.property_type == PropertyType::Position => {
-            super::ground::on_ground(builder, site, start, draw_key("starts_as.cell"), owner, place)?
+            super::paint::on_ground(builder, site, start, draws)?
         }
         StartRule::Painted | StartRule::Anywhere | StartRule::OnGround => {
             return Err(format!(
@@ -158,26 +154,16 @@ fn start_value(
     builder.write(site, &property.id, value)
 }
 
-/// Returns the state of a start by chance of `property` at `site`: one draw with key `draw` per cell, and the state of
-/// the first row whose running total of chances passes it, or the "otherwise" state.
-///
-/// `owner` and `place` name the start for the check of the draw's key.
+/// Returns the state of a start by chance of `property` at `site`: one draw of `draws` at the path `starts_as.row` per
+/// cell, and the state of the first row whose running total of chances passes it, or the "otherwise" state.
 fn by_chance(
     builder: &mut Builder<'_>,
     site: &Site,
     property: &SheetProperty,
     start: &StartsAs,
-    draw: u32,
-    owner: String,
-    place: Place,
+    draws: &StartDraws<'_>,
 ) -> Result<InputValue, String> {
-    let lane_type = builder.lane_type(property);
-    let state = |id: &str| {
-        InputValue::Literal(Literal::Category(crate::value::MemberName {
-            owner: property.id.clone(),
-            member: id.to_owned(),
-        }))
-    };
+    let state = |id: &str| InputValue::Literal(state_literal(&property.id, id));
     let otherwise = start
         .otherwise
         .as_deref()
@@ -187,47 +173,33 @@ fn by_chance(
     for row in &start.rows {
         let row_state = row.state.as_deref().ok_or_else(|| "a row has no state".to_owned())?;
         let chance = start_operand(builder, row.chance.value())?;
-        rows.push((row_state, builder.input_as(site, &chance, &ValueType::F32, false)?));
+        rows.push((row_state, builder.input_as(site, &chance, &ValueType::F32)?));
     }
-    let key = ("key", ConfigValue::Integer(i64::from(draw)));
     let conditions: Vec<InputValue> = match rows.as_slice() {
         [] => Vec::new(),
         [(_, chance)] => {
-            builder.record_draw(draw, owner, place);
+            let key = (
+                "key",
+                ConfigValue::Integer(i64::from(draws.record(builder, "starts_as.row"))),
+            );
             let node = builder.emit(site, "rand.chance", vec![key], vec![("p".to_owned(), chance.clone())]);
-            vec![InputValue::Link(PortRef { node, port: None })]
+            vec![output(node)]
         }
         _ => {
-            builder.record_draw(draw, owner, place);
-            let node = builder.emit(
-                site,
-                "rand.float",
-                vec![key],
-                vec![("max".to_owned(), InputValue::Literal(Literal::F32(1.0)))],
+            let key = (
+                "key",
+                ConfigValue::Integer(i64::from(draws.record(builder, "starts_as.row"))),
             );
-            let drawn = InputValue::Link(PortRef { node, port: None });
+            let node = builder.emit(site, "rand.float", vec![key], vec![("max".to_owned(), number(1.0))]);
+            let drawn = output(node);
             let mut total: Option<InputValue> = None;
             let mut conditions = Vec::new();
             for (_, chance) in &rows {
                 let running = match total {
                     None => chance.clone(),
-                    Some(sum) => {
-                        let added = builder.node_value(
-                            site,
-                            "math.add",
-                            vec![("a", sum), ("b", chance.clone())],
-                            ValueType::F32,
-                        );
-                        builder.input_as(site, &added, &ValueType::F32, false)?
-                    }
+                    Some(sum) => builder.node_input(site, "math.add", vec![("a", sum), ("b", chance.clone())]),
                 };
-                let below = builder.node_value(
-                    site,
-                    "cmp.lt",
-                    vec![("a", drawn.clone()), ("b", running.clone())],
-                    ValueType::Bool,
-                );
-                conditions.push(builder.condition_input(site, &below)?);
+                conditions.push(builder.node_input(site, "cmp.lt", vec![("a", drawn.clone()), ("b", running.clone())]));
                 total = Some(running);
             }
             conditions
@@ -235,13 +207,7 @@ fn by_chance(
     };
     let mut value = state(otherwise);
     for ((row_state, _), condition) in rows.iter().zip(conditions).rev() {
-        let selected = builder.node_value(
-            site,
-            "logic.select",
-            vec![("cond", condition), ("if_true", state(row_state)), ("if_false", value)],
-            lane_type.clone(),
-        );
-        value = builder.input_as(site, &selected, &lane_type, false)?;
+        value = builder.select(site, condition, state(row_state), value);
     }
     Ok(value)
 }
@@ -249,60 +215,37 @@ fn by_chance(
 /// Returns the operand of a value a start holds: a number, a percent, yes or no, a parameter or a state.
 fn start_operand(builder: &Builder<'_>, value: Option<&SheetValue>) -> Result<Operand, String> {
     match value {
-        Some(SheetValue::Literal(SheetLiteral::Bool(value))) => Ok(Operand::Constant(Literal::Bool(*value))),
-        Some(SheetValue::Literal(literal)) => literal
-            .number()
-            .map(Operand::Number)
-            .ok_or_else(|| "a start holds no number".to_owned()),
+        Some(SheetValue::Literal(literal)) => {
+            literal_operand(literal).ok_or_else(|| "a start holds no number".to_owned())
+        }
         Some(SheetValue::Chip(SheetChip::State(state))) => Ok(Operand::State(state.clone())),
         Some(SheetValue::Chip(SheetChip::Param(id))) => builder.param(id),
         _ => Err("a start holds a value it cannot start from".to_owned()),
     }
 }
 
-/// Returns a uniform point of the world, drawn at `site` with the keys `x` and `y`.
-///
-/// `owner` and `place` name the start for the check of the draws' keys.
-fn anywhere(builder: &mut Builder<'_>, site: &Site, x: u32, y: u32, owner: &str, place: &Place) -> InputValue {
+/// Returns a uniform point of the world, drawn at `site` with the draws of `draws` at the paths `starts_as.x` and
+/// `starts_as.y`.
+fn anywhere(builder: &mut Builder<'_>, site: &Site, draws: &StartDraws<'_>) -> InputValue {
     let world = builder.emit(site, "ctx.world", Vec::new(), Vec::new());
-    let sides = builder.emit(
-        site,
-        "vec.split",
-        Vec::new(),
-        vec![(
-            "v".to_owned(),
-            InputValue::Link(PortRef {
-                node: world,
-                port: None,
-            }),
-        )],
-    );
-    let mut drawn = Vec::with_capacity(2);
-    for (key, side) in [(x, "x"), (y, "y")] {
-        builder.record_draw(key, owner.to_owned(), place.clone());
+    let sides = builder.emit(site, "vec.split", Vec::new(), vec![("v".to_owned(), output(world))]);
+    let [x, y] = [("starts_as.x", "x"), ("starts_as.y", "y")].map(|(path, side)| {
+        let key = draws.record(builder, path);
         let node = builder.emit(
             site,
             "rand.float",
             vec![("key", ConfigValue::Integer(i64::from(key)))],
-            vec![(
-                "max".to_owned(),
-                InputValue::Link(PortRef {
-                    node: sides,
-                    port: Some(side.to_owned()),
-                }),
-            )],
+            vec![("max".to_owned(), port(sides, side))],
         );
-        drawn.push(InputValue::Link(PortRef { node, port: None }));
-    }
-    let y = drawn.pop().unwrap_or_else(|| unreachable!("two draws were written"));
-    let x = drawn.pop().unwrap_or_else(|| unreachable!("two draws were written"));
+        output(node)
+    });
     let node = builder.emit(
         site,
         "vec.make",
         Vec::new(),
         vec![("x".to_owned(), x), ("y".to_owned(), y)],
     );
-    InputValue::Link(PortRef { node, port: None })
+    output(node)
 }
 
 /// Returns an arrow of length `length` in a random direction, its angle drawn at `site` with key `key`.
@@ -311,62 +254,55 @@ pub(super) fn random_direction(builder: &mut Builder<'_>, site: &Site, key: u32,
         site,
         "rand.float",
         vec![("key", ConfigValue::Integer(i64::from(key)))],
-        vec![(
-            "max".to_owned(),
-            InputValue::Literal(Literal::F32(std::f32::consts::TAU)),
-        )],
+        vec![("max".to_owned(), number(std::f32::consts::TAU))],
     );
-    let node = builder.emit(
+    builder.node_input(
         site,
         "vec.from_angle",
-        Vec::new(),
-        vec![
-            (
-                "angle".to_owned(),
-                InputValue::Link(PortRef {
-                    node: angle,
-                    port: None,
-                }),
-            ),
-            ("length".to_owned(), length),
-        ],
+        vec![("angle", output(angle)), ("length", length)],
+    )
+}
+
+/// Returns the random number between two values of the phrase `phrase` a start holds, `low + rand.float(high - low)`,
+/// written at `site` with the draw of `draws` at the slot path `path`.
+fn random_between(
+    builder: &mut Builder<'_>,
+    site: &Site,
+    phrase: &SheetLine,
+    draws: &StartDraws<'_>,
+    path: &str,
+) -> Result<Operand, String> {
+    let low = start_operand(builder, phrase.low.value())?;
+    let high = start_operand(builder, phrase.high.value())?;
+    let low = builder.input_as(site, &low, &ValueType::F32)?;
+    let high = builder.input_as(site, &high, &ValueType::F32)?;
+    let span = builder.node_input(site, "math.sub", vec![("a", high), ("b", low.clone())]);
+    let key = draws.record(builder, path);
+    let node = builder.emit(
+        site,
+        "rand.float",
+        vec![("key", ConfigValue::Integer(i64::from(key)))],
+        vec![("max".to_owned(), span)],
     );
-    InputValue::Link(PortRef { node, port: None })
+    Ok(builder.node_value(site, "math.add", vec![("a", output(node)), ("b", low)], ValueType::F32))
 }
 
 /// Returns the length of the random direction `phrase` a start holds: a number, a parameter, or a random number
-/// between two values drawn with the key of the path `starts_as.value.length`.
+/// between two values drawn with the draw of `draws` at the path `starts_as.value.length`.
 fn start_number(
     builder: &mut Builder<'_>,
     site: &Site,
     phrase: &SheetLine,
-    draw_key: &dyn Fn(&str) -> u32,
-    owner: &str,
-    place: &Place,
+    draws: &StartDraws<'_>,
 ) -> Result<InputValue, String> {
     match phrase.length.value() {
         Some(SheetValue::Phrase(length)) if length.kind == LineKind::RandomNumber => {
-            let low = start_operand(builder, length.low.value())?;
-            let high = start_operand(builder, length.high.value())?;
-            let low = builder.input_as(site, &low, &ValueType::F32, false)?;
-            let high = builder.input_as(site, &high, &ValueType::F32, false)?;
-            let span = builder.node_value(site, "math.sub", vec![("a", high), ("b", low.clone())], ValueType::F32);
-            let span = builder.input_as(site, &span, &ValueType::F32, false)?;
-            let draw = draw_key("starts_as.value.length");
-            builder.record_draw(draw, owner.to_owned(), place.clone());
-            let node = builder.emit(
-                site,
-                "rand.float",
-                vec![("key", ConfigValue::Integer(i64::from(draw)))],
-                vec![("max".to_owned(), span)],
-            );
-            let drawn = InputValue::Link(PortRef { node, port: None });
-            let sum = builder.node_value(site, "math.add", vec![("a", drawn), ("b", low)], ValueType::F32);
-            builder.input_as(site, &sum, &ValueType::F32, false)
+            let drawn = random_between(builder, site, length, draws, "starts_as.value.length")?;
+            builder.input_as(site, &drawn, &ValueType::F32)
         }
         value => {
             let operand = start_operand(builder, value)?;
-            builder.input_as(site, &operand, &ValueType::F32, false)
+            builder.input_as(site, &operand, &ValueType::F32)
         }
     }
 }

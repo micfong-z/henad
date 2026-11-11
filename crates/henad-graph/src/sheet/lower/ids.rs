@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use super::table::NodeOwner;
+use crate::ids::NodeId;
 use crate::sheet::limits::{MAX_NODES_PER_LINE, MAX_SHEET_NODES};
 use crate::sheet::sentence::{LINE_NUMBER_TOO_LARGE, LINE_TOO_LONG, SHEET_TOO_LARGE};
 
@@ -37,6 +38,13 @@ pub(super) const GROUP_LOOK: u32 = 4;
 pub(super) const GROUP_CELL_FOLD: u32 = 5;
 /// Group of the nodes a pass over agents shares for the ground: the cell of my position.
 pub(super) const GROUP_GROUND: u32 = 6;
+
+/// Index in [`GROUP_CHANGE`] of the merged deposit of the Leave lines on the first field, past the index of every
+/// property so the deposits follow the property changes.
+pub(super) const LEAVE_INDEX_BASE: u32 = 10_000;
+
+/// Number of node ids in the block each line owns.
+const LINE_BLOCK: u32 = 1000;
 
 /// Owner of a node while the lowering writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,34 +89,40 @@ pub(super) struct Numberer {
 }
 
 impl Numberer {
-    /// Returns the id number of the next node of line `l<number>`.
+    /// Returns the id of the next node of line `l<number>`.
     ///
     /// # Errors
     ///
     /// Returns the message for a line past [`MAX_NODES_PER_LINE`] nodes, or a line number whose ids pass `u32`. The
     /// message is placed at the line, and names it by neither its id nor its number.
-    pub(super) fn next_of_line(&mut self, number: u32) -> Result<u32, String> {
+    pub(super) fn next_of_line(&mut self, number: u32) -> Result<NodeId, String> {
         let count = self.line_counts.entry(number).or_insert(0);
         *count += 1;
         if *count as usize > MAX_NODES_PER_LINE {
             return Err(LINE_TOO_LONG.to_owned());
         }
         number
-            .checked_mul(1000)
+            .checked_mul(LINE_BLOCK)
             .and_then(|base| base.checked_add(*count))
+            .map(node_id)
             .ok_or_else(|| LINE_NUMBER_TOO_LARGE.to_owned())
     }
 
-    /// Returns the id number of the next node the sheet owns.
+    /// Returns the id of the next node the sheet owns.
     ///
     /// # Errors
     ///
     /// Returns the message for a sheet past [`MAX_SHEET_NODES`] nodes of its own.
-    pub(super) fn next_of_sheet(&mut self) -> Result<u32, String> {
+    pub(super) fn next_of_sheet(&mut self) -> Result<NodeId, String> {
         self.sheet_count += 1;
         if self.sheet_count as usize > MAX_SHEET_NODES {
             return Err(SHEET_TOO_LARGE.to_owned());
         }
-        Ok(self.sheet_count)
+        Ok(node_id(self.sheet_count))
     }
+}
+
+/// Returns the node id `number`, which counts from 1.
+fn node_id(number: u32) -> NodeId {
+    NodeId::new(number).unwrap_or_else(|| unreachable!("node ids count from 1"))
 }

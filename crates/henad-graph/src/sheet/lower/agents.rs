@@ -11,21 +11,19 @@
 //! them is the fold's `delta`, the offset away from them its negation, and the distance to them the square root of its
 //! `dist_sq`. An average, largest and smallest value of no agent are 0, and a Steer towards one adds nothing.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use super::Site;
 use super::card::CardLowering;
-use super::ids::{GROUP_LOOK, Owner, SheetKey, line_number};
-use super::look::{Fold, FoldKind, accumulator, guard_by_count, port_of, summary_accumulator};
-use super::value::Operand;
-use super::{Site, text};
+use super::ids::{GROUP_LOOK, line_number};
+use super::look::{Fold, FoldKind, accumulator, summary_accumulator, summary_accumulator_type, write_accumulators};
+use super::value::{Operand, number, port, port_of};
 use crate::ids::NodeId;
 use crate::limits::MAX_ACCUMULATORS;
-use crate::sheet::document::{
-    Around, ChipRelation, LineKind, PropertyType, SheetChip, SheetLine, SheetValue, SummaryKind,
-};
+use crate::sheet::document::{Around, ChipRelation, LineKind, SheetChip, SheetLine, SheetValue, SummaryKind};
 use crate::sheet::sentence;
 use crate::types::ValueType;
-use crate::value::{ConfigValue, InputValue, Literal, PortRef};
+use crate::value::{ConfigValue, InputValue, Literal};
 
 /// The folds of a card's looks at agents.
 #[derive(Debug)]
@@ -85,37 +83,24 @@ impl<'a> CardLowering<'_, 'a> {
             distance.insert(id, operand);
         }
         let groups = group_looks(&lines)?;
-        let card_site = |pass: usize, index: u32, card: &str| Site {
-            pass,
-            owner: Owner::Sheet(SheetKey {
-                group: GROUP_LOOK,
-                index,
-            }),
-            path: format!("card.{card}"),
-            region: None,
-        };
+        let card_site =
+            |pass: usize, index: u32, card: &str| Site::sheet(pass, GROUP_LOOK, index, format!("card.{card}"));
         let shared = card_site(self.pass, 0, &self.card.id);
         let every: Vec<Operand> = lines
             .iter()
             .filter_map(|(_, id, _)| distance.get(id).cloned())
             .collect();
         let largest = self.largest(&shared, &every)?;
-        let cell_size = self.builder.node_value(
-            &shared,
-            "math.div",
-            vec![("a", largest.clone()), ("b", InputValue::Literal(Literal::F32(3.0)))],
-            ValueType::F32,
-        );
-        let cell_size = self.builder.input_as(&shared, &cell_size, &ValueType::F32, false)?;
-        let position = self
+        let cell_size = self
             .builder
-            .properties()
-            .iter()
-            .find(|property| property.property_type == PropertyType::Position)
-            .map(|property| property.id.clone())
+            .node_input(&shared, "math.div", vec![("a", largest.clone()), ("b", number(3.0))]);
+        let (_, position) = self
+            .builder
+            .position()
             .ok_or_else(|| "the agents have no Position to look around from".to_owned())?;
-        let center = self.builder.read(self.pass, &position)?;
-        let center = self.builder.input_as(&shared, &center, &ValueType::Vec2F, false)?;
+        let center = self.builder.read(self.pass, &position.id)?;
+        let center = self.builder.input_as(&shared, &center, &ValueType::Vec2F)?;
+        let card_distances = every.iter().map(distance_key).collect::<BTreeSet<_>>().len();
         let mut folds = Vec::with_capacity(groups.len());
         let mut fold_of = HashMap::new();
         for (index, group) in groups.into_iter().enumerate() {
@@ -124,16 +109,9 @@ impl<'a> CardLowering<'_, 'a> {
             } = group;
             let site = card_site(self.pass, index as u32 + 1, &self.card.id);
             let own: Vec<Operand> = members.iter().filter_map(|id| distance.get(id).cloned()).collect();
-            let mut keys: Vec<String> = own.iter().map(distance_key).collect();
-            keys.sort_unstable();
-            keys.dedup();
-            let radius = if keys.len()
-                == every
-                    .iter()
-                    .map(distance_key)
-                    .collect::<std::collections::BTreeSet<_>>()
-                    .len()
-            {
+            let distances = own.iter().map(distance_key).collect::<BTreeSet<_>>().len();
+            // A fold whose looks hold every distance of the card shares the card's largest.
+            let radius = if distances == card_distances {
                 largest.clone()
             } else {
                 self.largest(&site, &own)?
@@ -159,7 +137,7 @@ impl<'a> CardLowering<'_, 'a> {
             }
             folds.push(AgentFold {
                 node,
-                filtered: keys.len() > 1,
+                filtered: distances > 1,
                 accumulators: Vec::new(),
             });
         }
@@ -214,15 +192,12 @@ impl<'a> CardLowering<'_, 'a> {
         }
         let mut largest: Option<InputValue> = None;
         for distance in distinct.into_values() {
-            let input = self.builder.input_as(site, distance, &ValueType::F32, false)?;
+            let input = self.builder.input_as(site, distance, &ValueType::F32)?;
             largest = Some(match largest {
                 None => input,
-                Some(known) => {
-                    let node =
-                        self.builder
-                            .node_value(site, "math.max", vec![("a", known), ("b", input)], ValueType::F32);
-                    self.builder.input_as(site, &node, &ValueType::F32, false)?
-                }
+                Some(known) => self
+                    .builder
+                    .node_input(site, "math.max", vec![("a", known), ("b", input)]),
             });
         }
         largest.ok_or_else(|| "a look at agents has no distance".to_owned())
@@ -252,23 +227,17 @@ impl<'a> CardLowering<'_, 'a> {
         let within = match (filtered, distance) {
             (true, Some(distance)) => {
                 let distance_site = site.at("distance");
-                let d = self
-                    .builder
-                    .input_as(&distance_site, &distance, &ValueType::F32, false)?;
-                let squared = self.builder.node_value(
+                let distance = self.builder.input_as(&distance_site, &distance, &ValueType::F32)?;
+                let squared = self.builder.node_input(
                     &distance_site,
                     "math.mul",
-                    vec![("a", d.clone()), ("b", d)],
-                    ValueType::F32,
+                    vec![("a", distance.clone()), ("b", distance)],
                 );
-                let squared = self
-                    .builder
-                    .input_as(&distance_site, &squared, &ValueType::F32, false)?;
                 let inside = distance_site.inside(node);
                 self.builder.node_value(
                     &inside,
                     "cmp.le",
-                    vec![("a", inner(node, "dist_sq")), ("b", squared)],
+                    vec![("a", port(node, "dist_sq")), ("b", squared)],
                     ValueType::Bool,
                 )
             }
@@ -310,12 +279,7 @@ impl<'a> CardLowering<'_, 'a> {
         let test = self.with_only(&site.at("only").inside(node), test, &line.only)?;
         let when = self.builder.condition_input(&whose_site, &test)?;
         let name = format!("{id}_count");
-        self.builder.emit(
-            &whose_site,
-            "region.put",
-            vec![("acc", text(&name))],
-            vec![("when".to_owned(), when)],
-        );
+        self.builder.put(&whose_site, &name, None, when);
         self.add_accumulator(id, 0, accumulator(&name, "u32", "count"));
         Ok(port_of(node, &name, ValueType::U32))
     }
@@ -328,43 +292,7 @@ impl<'a> CardLowering<'_, 'a> {
         let body = self.look_agents_body(site, id, line, node, &within);
         self.folds.pop();
         let types = body?;
-        let count_name = format!("{id}_count");
-        let count = port_of(node, &count_name, ValueType::U32);
-        self.parts.insert((id, "count"), count.clone());
-        for (summary, value_type) in line.summaries.iter().zip(types) {
-            let name = format!("{id}_{}", summary_accumulator(&summary.id));
-            let part = match summary.summary {
-                Some(SummaryKind::Count) => count.clone(),
-                Some(SummaryKind::Total) => port_of(node, &name, value_type),
-                Some(SummaryKind::Average) => {
-                    let total = port_of(node, &name, value_type.clone());
-                    let total = self.builder.input_as(site, &total, &value_type, false)?;
-                    let number = self.builder.input_as(site, &count, &ValueType::F32, false)?;
-                    let average = if value_type == ValueType::Vec2F {
-                        let share = self
-                            .builder
-                            .node_value(site, "math.recip", vec![("a", number)], ValueType::F32);
-                        let share = self.builder.input_as(site, &share, &ValueType::F32, false)?;
-                        self.builder
-                            .node_value(site, "vec.scale", vec![("v", total), ("s", share)], ValueType::Vec2F)
-                    } else {
-                        self.builder
-                            .node_value(site, "math.div", vec![("a", total), ("b", number)], ValueType::F32)
-                    };
-                    self.empty.insert((id, summary.id.as_str()), count.clone());
-                    guard_by_count(self.builder, site, &count, &average, &value_type)?
-                }
-                Some(SummaryKind::Largest | SummaryKind::Smallest) => {
-                    let extreme = port_of(node, &name, ValueType::F32);
-                    self.empty.insert((id, summary.id.as_str()), count.clone());
-                    guard_by_count(self.builder, site, &count, &extreme, &ValueType::F32)?
-                }
-                Some(SummaryKind::Any | SummaryKind::All) => port_of(node, &name, ValueType::Bool),
-                None => continue,
-            };
-            self.parts.insert((id, summary.id.as_str()), part);
-        }
-        Ok(())
+        self.summary_parts(site, id, node, id, &line.summaries, &types)
     }
 
     /// Writes the body of the Look around line `id` in the fold `node`, `within` its distance: the `only` test, the
@@ -381,12 +309,7 @@ impl<'a> CardLowering<'_, 'a> {
         let test = self.with_only(&site.at("only").inside(node), within.clone(), &line.only)?;
         let when = self.builder.condition_input(&inside, &test)?;
         let count_name = format!("{id}_count");
-        self.builder.emit(
-            &inside,
-            "region.put",
-            vec![("acc", text(&count_name))],
-            vec![("when".to_owned(), when.clone())],
-        );
+        self.builder.put(&inside, &count_name, None, when.clone());
         self.add_accumulator(id, 0, accumulator(&count_name, "u32", "count"));
         let mut types = Vec::with_capacity(line.summaries.len());
         for (index, summary) in line.summaries.iter().enumerate() {
@@ -399,24 +322,10 @@ impl<'a> CardLowering<'_, 'a> {
             }
             let summary_site = inside.at(&format!("summaries.{index}.value"));
             let value = self.slot(&summary_site, &summary.value)?;
-            let (value_type, combine) = match kind {
-                SummaryKind::Total | SummaryKind::Average if value.value_type() == Some(ValueType::Vec2F) => {
-                    (ValueType::Vec2F, "sum")
-                }
-                SummaryKind::Total | SummaryKind::Average => (ValueType::F32, "sum"),
-                SummaryKind::Largest => (ValueType::F32, "max"),
-                SummaryKind::Smallest => (ValueType::F32, "min"),
-                SummaryKind::Any => (ValueType::Bool, "or"),
-                _ => (ValueType::Bool, "and"),
-            };
-            let value = self.builder.input_as(&summary_site, &value, &value_type, false)?;
+            let (value_type, combine) = summary_accumulator_type(kind, value.value_type() == Some(ValueType::Vec2F));
+            let value = self.builder.input_as(&summary_site, &value, &value_type)?;
             let name = format!("{id}_{}", summary_accumulator(&summary.id));
-            self.builder.emit(
-                &summary_site,
-                "region.put",
-                vec![("acc", text(&name))],
-                vec![("value".to_owned(), value), ("when".to_owned(), when.clone())],
-            );
+            self.builder.put(&summary_site, &name, Some(value), when.clone());
             self.add_accumulator(id, index + 1, accumulator(&name, &value_type.to_string(), combine));
             types.push(value_type);
         }
@@ -433,20 +342,14 @@ impl<'a> CardLowering<'_, 'a> {
         let node = fold.node;
         let site = site.inside(node);
         Ok(match relation {
-            ChipRelation::OffsetToThem => Operand::Link(
-                PortRef {
-                    node,
-                    port: Some("delta".to_owned()),
-                },
-                ValueType::Vec2F,
-            ),
+            ChipRelation::OffsetToThem => port_of(node, "delta", ValueType::Vec2F),
             ChipRelation::OffsetAwayFromThem => {
                 self.builder
-                    .node_value(&site, "math.neg", vec![("a", inner(node, "delta"))], ValueType::Vec2F)
+                    .node_value(&site, "math.neg", vec![("a", port(node, "delta"))], ValueType::Vec2F)
             }
             ChipRelation::DistanceToThem => {
                 self.builder
-                    .node_value(&site, "math.sqrt", vec![("a", inner(node, "dist_sq"))], ValueType::F32)
+                    .node_value(&site, "math.sqrt", vec![("a", port(node, "dist_sq"))], ValueType::F32)
             }
         })
     }
@@ -456,22 +359,8 @@ impl<'a> CardLowering<'_, 'a> {
         let Some(looks) = self.looks.as_mut() else {
             return;
         };
-        let pass = self.pass;
-        let mut written = Vec::with_capacity(looks.folds.len());
         for fold in &mut looks.folds {
-            fold.accumulators.sort_by_key(|(key, _)| *key);
-            written.push((
-                fold.node,
-                fold.accumulators
-                    .iter()
-                    .map(|(_, config)| config.clone())
-                    .collect::<Vec<_>>(),
-            ));
-        }
-        for (node, accumulators) in written {
-            if let Some(found) = self.builder.node_mut(pass, node) {
-                found.config.insert("acc".to_owned(), ConfigValue::Array(accumulators));
-            }
+            write_accumulators(self.builder, self.pass, fold.node, &mut fold.accumulators);
         }
     }
 }
@@ -517,12 +406,4 @@ fn group_looks<'a>(lines: &[(u32, &'a str, &'a SheetLine)]) -> Result<Vec<LookGr
         }
     }
     Ok(groups)
-}
-
-/// Returns the inner output `port` of the fold `node` as an input.
-fn inner(node: NodeId, port: &str) -> InputValue {
-    InputValue::Link(PortRef {
-        node,
-        port: Some(port.to_owned()),
-    })
 }

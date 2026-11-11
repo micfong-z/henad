@@ -250,8 +250,9 @@ the card draws under the line. `SheetFile::parse_planted` (`#[cfg(test)]`, crate
 with a closure run on the lowered document before it is read back, which the mapping tests use to
 plant a node the checker refuses.
 
-**The lowering** (`sheet/lower/`) has its own file, `agents/henad-graph-sheet-lower.md`: the grid
-and agent lowering, node ids, keys, the line table, the interim refusals and their tests.
+**The lowering** (`sheet/lower/`) has its own files, `agents/henad-graph-sheet-lower.md` (the grid
+lowering, node ids, keys, the line table, the interim refusals and their tests) and
+`agents/henad-graph-sheet-lower-agents.md` (what a sheet of agents adds, and the ground).
 
 **Tests** of the wording table and the sentences are in `agents/henad-graph-sheet-wording.md`.
 Writer tests sit in `src/tests/sheet_writer.rs`: `every_sheet_is_a_fixed_point`,

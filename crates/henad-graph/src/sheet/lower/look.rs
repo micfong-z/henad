@@ -12,14 +12,14 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::card::CardLowering;
 use super::text;
-use super::value::Operand;
+use super::value::{Operand, port, port_of, state_literal};
 use super::{Builder, Site};
 use crate::ids::NodeId;
 use crate::sheet::document::{
-    Around, CompareTest, LineKind, PropertyType, SheetChip, SheetLine, SheetValue, Slot, SummaryKind,
+    Around, CompareTest, LineKind, LookSummary, PropertyType, SheetChip, SheetLine, SheetValue, Slot, SummaryKind,
 };
 use crate::types::ValueType;
-use crate::value::{ConfigValue, InputValue, Literal, MemberName, PortRef};
+use crate::value::{ConfigValue, InputValue, Literal, PortRef};
 
 /// A `grid.fold` over the cells around, or an `agent.radius_fold` over the agents within a distance, that `their`
 /// chips read inside.
@@ -49,7 +49,7 @@ pub(super) enum FoldKind {
 /// # Errors
 ///
 /// Returns the message for agents within a distance, which are no cells.
-fn stencil(around: Option<Around>) -> Result<(bool, bool), String> {
+pub(super) fn stencil(around: Option<Around>) -> Result<(bool, bool), String> {
     match around {
         Some(Around::Cells8) => Ok((true, false)),
         Some(Around::Cells4) => Ok((false, false)),
@@ -78,17 +78,6 @@ pub(super) fn accumulator(name: &str, value_type: &str, combine: &str) -> Config
     ]))
 }
 
-/// Returns the output `port` of the node `node`.
-pub(super) fn port_of(node: NodeId, port: &str, value_type: ValueType) -> Operand {
-    Operand::Link(
-        PortRef {
-            node,
-            port: Some(port.to_owned()),
-        },
-        value_type,
-    )
-}
-
 impl<'a> CardLowering<'_, 'a> {
     /// Returns the read of the neighbour's `property` in the innermost fold.
     pub(super) fn their(&mut self, site: &Site, property: &str) -> Result<Operand, String> {
@@ -101,10 +90,7 @@ impl<'a> CardLowering<'_, 'a> {
         }
         let fold_node = fold.node;
         let kind = fold.kind;
-        let neighbour = InputValue::Link(PortRef {
-            node: fold_node,
-            port: Some(if kind == FoldKind::Agents { "other" } else { "cell" }.to_owned()),
-        });
+        let neighbour = port(fold_node, if kind == FoldKind::Agents { "other" } else { "cell" });
         let read = if kind == FoldKind::Ground {
             self.ground_at(&site.inside(fold_node), property, neighbour)?
         } else {
@@ -141,15 +127,14 @@ impl<'a> CardLowering<'_, 'a> {
         let (moore, include_center) = stencil(line.around)?;
         let whose = line.whose.value().ok_or_else(|| "a Count needs a test".to_owned())?;
         let only_site = site.at("only");
-        let line_site = site;
-        let site = site.at("whose");
+        let whose_site = site.at("whose");
         if line.only.is_blank()
             && let Some((property, states)) = self.counted_states(whose)
         {
             let mut total: Option<Operand> = None;
             for state in states {
                 let node = self.builder.emit(
-                    &site,
+                    &whose_site,
                     "grid.count",
                     vec![
                         ("lane", text(&property)),
@@ -159,10 +144,7 @@ impl<'a> CardLowering<'_, 'a> {
                     vec![
                         (
                             "value".to_owned(),
-                            InputValue::Literal(Literal::Category(MemberName {
-                                owner: property.clone(),
-                                member: state,
-                            })),
+                            InputValue::Literal(state_literal(&property, &state)),
                         ),
                         ("when".to_owned(), InputValue::Literal(Literal::Bool(true))),
                     ],
@@ -171,28 +153,23 @@ impl<'a> CardLowering<'_, 'a> {
                 total = Some(match total {
                     None => count,
                     Some(sum) => {
-                        let a = self.builder.input_as(&site, &sum, &ValueType::U32, false)?;
-                        let b = self.builder.input_as(&site, &count, &ValueType::U32, false)?;
+                        let a = self.builder.input_as(&whose_site, &sum, &ValueType::U32)?;
+                        let b = self.builder.input_as(&whose_site, &count, &ValueType::U32)?;
                         self.builder
-                            .node_value(&site, "math.add", vec![("a", a), ("b", b)], ValueType::U32)
+                            .node_value(&whose_site, "math.add", vec![("a", a), ("b", b)], ValueType::U32)
                     }
                 });
             }
             return Ok(total.unwrap_or(Operand::Constant(Literal::U32(0))));
         }
-        let look = self.enter_cells(line_site, line, 1)?;
+        let look = self.enter_cells(site, line, 1)?;
         let name = format!("{}_count", look.prefix);
-        let inside = site.inside(look.node);
+        let inside = whose_site.inside(look.node);
         let test = self.value(&inside, whose).and_then(|test| {
             let test = self.with_only(&only_site.inside(look.node), test, &line.only)?;
             let test = self.builder.join(&inside, "logic.and", &look.within, &test)?;
             let when = self.builder.condition_input(&inside, &test)?;
-            self.builder.emit(
-                &inside,
-                "region.put",
-                vec![("acc", text(&name))],
-                vec![("when".to_owned(), when)],
-            );
+            self.builder.put(&inside, &name, None, when);
             Ok(())
         });
         self.folds.pop();
@@ -243,16 +220,13 @@ impl<'a> CardLowering<'_, 'a> {
     pub(super) fn look_around(&mut self, site: &Site, id: &'a str, line: &'a SheetLine) -> Result<(), String> {
         let mut accumulators = Vec::new();
         for summary in &line.summaries {
-            let (value_type, combine) = match summary.summary {
-                Some(SummaryKind::Count) => continue,
-                Some(SummaryKind::Total | SummaryKind::Average) => ("f32", "sum"),
-                Some(SummaryKind::Largest) => ("f32", "max"),
-                Some(SummaryKind::Smallest) => ("f32", "min"),
-                Some(SummaryKind::Any) => ("bool", "or"),
-                Some(SummaryKind::All) => ("bool", "and"),
-                None => return Err(format!("summary '{}' says nothing of how to summarize", summary.id)),
-            };
-            accumulators.push((summary.id.as_str(), value_type, combine));
+            let kind = summary
+                .summary
+                .ok_or_else(|| format!("summary '{}' says nothing of how to summarize", summary.id))?;
+            if kind != SummaryKind::Count {
+                let (value_type, combine) = summary_accumulator_type(kind, false);
+                accumulators.push((summary.id.as_str(), value_type, combine));
+            }
         }
         let look = self.enter_cells(site, line, accumulators.len() + 1)?;
         self.builder.record_result(look.node, id);
@@ -264,31 +238,53 @@ impl<'a> CardLowering<'_, 'a> {
         self.add_cell_accumulator(&look, 0, accumulator(&count_name, "u32", "count"));
         for (order, (summary, value_type, combine)) in accumulators.iter().enumerate() {
             let name = format!("{}_{}", look.prefix, summary_accumulator(summary));
-            self.add_cell_accumulator(&look, order + 1, accumulator(&name, value_type, combine));
+            self.add_cell_accumulator(&look, order + 1, accumulator(&name, &value_type.to_string(), combine));
         }
-        let count = port_of(look.node, &count_name, ValueType::U32);
+        let types = vec![ValueType::F32; line.summaries.len()];
+        self.summary_parts(site, id, look.node, &look.prefix, &line.summaries, &types)
+    }
+
+    /// Records each part of the result of the Look around line `id`, from the fold `node` whose accumulators are named
+    /// from `prefix`: `count`, and each of `summaries` by its id, written at `site`.
+    ///
+    /// `types` holds the type of the accumulator of each summary. Only a total or an average reads it.
+    pub(super) fn summary_parts(
+        &mut self,
+        site: &Site,
+        id: &'a str,
+        node: NodeId,
+        prefix: &str,
+        summaries: &'a [LookSummary],
+        types: &[ValueType],
+    ) -> Result<(), String> {
+        let count = port_of(node, &format!("{prefix}_count"), ValueType::U32);
         self.parts.insert((id, "count"), count.clone());
-        for summary in &line.summaries {
-            let name = format!("{}_{}", look.prefix, summary_accumulator(&summary.id));
+        for (summary, value_type) in summaries.iter().zip(types) {
+            let name = format!("{prefix}_{}", summary_accumulator(&summary.id));
             let part = match summary.summary {
                 Some(SummaryKind::Count) => count.clone(),
-                Some(SummaryKind::Total) => port_of(look.node, &name, ValueType::F32),
+                Some(SummaryKind::Total) => port_of(node, &name, value_type.clone()),
                 Some(SummaryKind::Average) => {
-                    let total = port_of(look.node, &name, ValueType::F32);
-                    let total = self.builder.input_as(site, &total, &ValueType::F32, false)?;
-                    let number = self.builder.input_as(site, &count, &ValueType::F32, false)?;
-                    let average =
+                    let total = port_of(node, &name, value_type.clone());
+                    let total = self.builder.input_as(site, &total, value_type)?;
+                    let number = self.builder.input_as(site, &count, &ValueType::F32)?;
+                    let average = if *value_type == ValueType::Vec2F {
+                        let share = self.builder.node_input(site, "math.recip", vec![("a", number)]);
                         self.builder
-                            .node_value(site, "math.div", vec![("a", total), ("b", number)], ValueType::F32);
+                            .node_value(site, "vec.scale", vec![("v", total), ("s", share)], ValueType::Vec2F)
+                    } else {
+                        self.builder
+                            .node_value(site, "math.div", vec![("a", total), ("b", number)], ValueType::F32)
+                    };
                     self.empty.insert((id, summary.id.as_str()), count.clone());
-                    guard_by_count(self.builder, site, &count, &average, &ValueType::F32)?
+                    guard_by_count(self.builder, site, &count, &average, value_type)?
                 }
                 Some(SummaryKind::Largest | SummaryKind::Smallest) => {
-                    let extreme = port_of(look.node, &name, ValueType::F32);
+                    let extreme = port_of(node, &name, ValueType::F32);
                     self.empty.insert((id, summary.id.as_str()), count.clone());
                     guard_by_count(self.builder, site, &count, &extreme, &ValueType::F32)?
                 }
-                Some(SummaryKind::Any | SummaryKind::All) => port_of(look.node, &name, ValueType::Bool),
+                Some(SummaryKind::Any | SummaryKind::All) => port_of(node, &name, ValueType::Bool),
                 None => continue,
             };
             self.parts.insert((id, summary.id.as_str()), part);
@@ -300,29 +296,21 @@ impl<'a> CardLowering<'_, 'a> {
     fn look_body(&mut self, inside: &Site, line: &'a SheetLine, look: &super::fuse::CellLook) -> Result<(), String> {
         let test = self.with_only(&inside.at("only"), look.within.clone(), &line.only)?;
         let when = self.builder.condition_input(inside, &test)?;
-        self.builder.emit(
-            inside,
-            "region.put",
-            vec![("acc", text(&format!("{}_count", look.prefix)))],
-            vec![("when".to_owned(), when.clone())],
-        );
+        self.builder
+            .put(inside, &format!("{}_count", look.prefix), None, when.clone());
         for (index, summary) in line.summaries.iter().enumerate() {
             let value_type = match summary.summary {
                 Some(SummaryKind::Count) | None => continue,
-                Some(SummaryKind::Any | SummaryKind::All) => ValueType::Bool,
-                Some(_) => ValueType::F32,
+                Some(kind) => summary_accumulator_type(kind, false).0,
             };
             let summary_site = inside.at(&format!("summaries.{index}.value"));
             let value = self.slot(&summary_site, &summary.value)?;
-            let value = self.builder.input_as(&summary_site, &value, &value_type, false)?;
-            self.builder.emit(
+            let value = self.builder.input_as(&summary_site, &value, &value_type)?;
+            self.builder.put(
                 &summary_site,
-                "region.put",
-                vec![(
-                    "acc",
-                    text(&format!("{}_{}", look.prefix, summary_accumulator(&summary.id))),
-                )],
-                vec![("value".to_owned(), value), ("when".to_owned(), when.clone())],
+                &format!("{}_{}", look.prefix, summary_accumulator(&summary.id)),
+                Some(value),
+                when.clone(),
             );
         }
         Ok(())
@@ -334,6 +322,34 @@ pub(super) fn summary_accumulator(id: &str) -> String {
     format!("summary_{id}")
 }
 
+/// Sets the accumulators of the fold `node` in pass `pass` to `accumulators`, sorted by their keys.
+pub(super) fn write_accumulators<K: Ord>(
+    builder: &mut Builder<'_>,
+    pass: usize,
+    node: NodeId,
+    accumulators: &mut [(K, ConfigValue)],
+) {
+    accumulators.sort_by(|(first, _), (second, _)| first.cmp(second));
+    if let Some(found) = builder.node_mut(pass, node) {
+        let configs = accumulators.iter().map(|(_, config)| config.clone()).collect();
+        found.config.insert("acc".to_owned(), ConfigValue::Array(configs));
+    }
+}
+
+/// Returns the type and the combine of the accumulator of a summary of kind `kind`, a sum of arrows for a total or an
+/// average when `arrow` holds.
+pub(super) fn summary_accumulator_type(kind: SummaryKind, arrow: bool) -> (ValueType, &'static str) {
+    match kind {
+        SummaryKind::Count => (ValueType::U32, "count"),
+        SummaryKind::Total | SummaryKind::Average if arrow => (ValueType::Vec2F, "sum"),
+        SummaryKind::Total | SummaryKind::Average => (ValueType::F32, "sum"),
+        SummaryKind::Largest => (ValueType::F32, "max"),
+        SummaryKind::Smallest => (ValueType::F32, "min"),
+        SummaryKind::Any => (ValueType::Bool, "or"),
+        SummaryKind::All => (ValueType::Bool, "and"),
+    }
+}
+
 /// Returns `value`, of `value_type`, when `count` is above 0, and its zero otherwise, written at `site`.
 pub(super) fn guard_by_count(
     builder: &mut Builder<'_>,
@@ -342,24 +358,12 @@ pub(super) fn guard_by_count(
     value: &Operand,
     value_type: &ValueType,
 ) -> Result<Operand, String> {
-    let count = builder.input_as(site, count, &ValueType::U32, false)?;
+    let count = builder.input_as(site, count, &ValueType::U32)?;
     let some = builder.node_value(
         site,
         "cmp.gt",
         vec![("a", count), ("b", InputValue::Literal(Literal::U32(0)))],
         ValueType::Bool,
     );
-    let condition = builder.condition_input(site, &some)?;
-    let value = builder.input_as(site, value, value_type, false)?;
-    let zero = Literal::zero_of(value_type).ok_or_else(|| format!("a {value_type} has no zero"))?;
-    Ok(builder.node_value(
-        site,
-        "logic.select",
-        vec![
-            ("cond", condition),
-            ("if_true", value),
-            ("if_false", InputValue::Literal(zero)),
-        ],
-        value_type.clone(),
-    ))
+    builder.where_applies(site, &some, value, value_type)
 }

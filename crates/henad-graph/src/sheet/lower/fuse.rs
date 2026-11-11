@@ -19,17 +19,15 @@
 use std::collections::BTreeMap;
 
 use super::card::CardLowering;
-use super::ids::{GROUP_CELL_FOLD, Owner, SheetKey};
-use super::look::{Fold, FoldKind};
-use super::value::Operand;
-use super::{Site, text};
+use super::ids::{GROUP_CELL_FOLD, Owner};
+use super::look::{Fold, FoldKind, stencil, write_accumulators};
+use super::value::{Operand, port};
+use super::{Site, text, visit_chips};
 use crate::ids::NodeId;
 use crate::limits::MAX_ACCUMULATORS;
-use crate::sheet::check::formula;
-use crate::sheet::check::formula_chip;
-use crate::sheet::document::{Around, Edges, LineKind, SheetChip, SheetDocument, SheetLine, SheetValue};
+use crate::sheet::document::{Around, Edges, LineKind, SheetChip, SheetLine, SheetValue};
 use crate::types::ValueType;
-use crate::value::{ConfigValue, InputValue, Literal, PortRef};
+use crate::value::{ConfigValue, InputValue, Literal};
 
 /// The folds over the cells around of one card.
 #[derive(Debug, Default)]
@@ -76,33 +74,6 @@ pub(super) struct CellLook {
     pub(super) within: Operand,
 }
 
-/// Calls `visit` with each chip that `line` reads: the chips in its slots and the references of its formula, in its
-/// phrases at any depth too.
-fn visit_chips(document: &SheetDocument, line: &SheetLine, visit: &mut dyn FnMut(&SheetChip)) {
-    if let Some(references) = line.formula.as_deref().and_then(|text| formula::references(text).ok()) {
-        for reference in references {
-            visit(&formula_chip(reference, document));
-        }
-    }
-    for value in line.slot_values() {
-        visit_value_chips(document, value, visit);
-    }
-}
-
-/// Calls `visit` with each chip that `value` holds, in its phrases at any depth too.
-fn visit_value_chips(document: &SheetDocument, value: &SheetValue, visit: &mut dyn FnMut(&SheetChip)) {
-    match value {
-        SheetValue::Chip(chip) => visit(chip),
-        SheetValue::Phrase(phrase) => visit_chips(document, phrase, visit),
-        SheetValue::List(items) => {
-            for item in items {
-                visit_value_chips(document, item, visit);
-            }
-        }
-        SheetValue::Literal(_) => {}
-    }
-}
-
 impl CardLowering<'_, '_> {
     /// Opens the look `line` over the cells around, which takes `needed` accumulators, at `site`: joins or writes its
     /// fold, pushes the fold on [`CardLowering::folds`] for the reads inside it, and returns the look.
@@ -116,12 +87,7 @@ impl CardLowering<'_, '_> {
     /// and for a look outside a line.
     pub(super) fn enter_cells(&mut self, site: &Site, line: &SheetLine, needed: usize) -> Result<CellLook, String> {
         let around = line.around;
-        let moore = match around {
-            Some(Around::Cells8 | Around::Block3x3) => true,
-            Some(Around::Cells4) => false,
-            Some(Around::AgentsWithin) => return Err("agents within a distance are no cells".to_owned()),
-            None => return Err("the line names no cells to look at".to_owned()),
-        };
+        let (moore, _) = stencil(around)?;
         if needed > MAX_ACCUMULATORS {
             return Err(format!(
                 "the line holds {needed} summaries with its count, and a look holds at most {MAX_ACCUMULATORS}"
@@ -255,13 +221,7 @@ impl CardLowering<'_, '_> {
         let mut inputs = vec![("when".to_owned(), InputValue::Literal(Literal::Bool(true)))];
         if agents {
             let cell = self.builder.my_cell(self.pass)?;
-            inputs.push((
-                "at".to_owned(),
-                InputValue::Link(PortRef {
-                    node: cell,
-                    port: Some("xy".to_owned()),
-                }),
-            ));
+            inputs.push(("at".to_owned(), port(cell, "xy")));
         }
         let node = self.builder.emit(
             &site,
@@ -289,13 +249,13 @@ impl CardLowering<'_, '_> {
     /// Returns the site of the nodes the sheet owns for the fold at `index`, inside `region`.
     fn cell_fold_site(&self, index: usize, region: Option<NodeId>) -> Site {
         Site {
-            pass: self.pass,
-            owner: Owner::Sheet(SheetKey {
-                group: GROUP_CELL_FOLD,
-                index: index as u32,
-            }),
-            path: format!("card.{}", self.card.id),
             region,
+            ..Site::sheet(
+                self.pass,
+                GROUP_CELL_FOLD,
+                index as u32,
+                format!("card.{}", self.card.id),
+            )
         }
     }
 
@@ -310,7 +270,7 @@ impl CardLowering<'_, '_> {
             &site,
             "cmp.ne",
             vec![
-                ("a", inner(node, "offset")),
+                ("a", port(node, "offset")),
                 ("b", InputValue::Literal(Literal::Vec2I([0, 0]))),
             ],
             ValueType::Bool,
@@ -325,7 +285,7 @@ impl CardLowering<'_, '_> {
             return Ok(open.clone());
         }
         let site = self.cell_fold_site(look.fold, Some(look.node));
-        let cell = inner(look.node, "cell");
+        let cell = port(look.node, "cell");
         let open = self.open_at(&site, &cell)?;
         self.cell_folds.folds[look.fold].open = Some(open.clone());
         Ok(open)
@@ -348,30 +308,8 @@ impl CardLowering<'_, '_> {
 
     /// Writes the accumulators of every fold over the cells around, in line id order.
     pub(super) fn finish_cell_folds(&mut self) {
-        let pass = self.pass;
-        let mut written = Vec::with_capacity(self.cell_folds.folds.len());
         for fold in &mut self.cell_folds.folds {
-            fold.accumulators.sort_by_key(|(key, _)| *key);
-            written.push((
-                fold.node,
-                fold.accumulators
-                    .iter()
-                    .map(|(_, config)| config.clone())
-                    .collect::<Vec<_>>(),
-            ));
-        }
-        for (node, accumulators) in written {
-            if let Some(found) = self.builder.node_mut(pass, node) {
-                found.config.insert("acc".to_owned(), ConfigValue::Array(accumulators));
-            }
+            write_accumulators(self.builder, self.pass, fold.node, &mut fold.accumulators);
         }
     }
-}
-
-/// Returns the inner output `port` of the fold `node` as an input.
-pub(super) fn inner(node: NodeId, port: &str) -> InputValue {
-    InputValue::Link(PortRef {
-        node,
-        port: Some(port.to_owned()),
-    })
 }

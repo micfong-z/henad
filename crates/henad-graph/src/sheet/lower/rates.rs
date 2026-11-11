@@ -24,7 +24,7 @@
 
 use super::Site;
 use super::card::CardLowering;
-use super::value::Operand;
+use super::value::{Operand, number, output};
 use crate::sheet::document::{LineKind, SheetLine, SheetValue};
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue, Literal, PortRef};
@@ -71,58 +71,54 @@ impl<'a> Group<'a> {
     }
 }
 
-/// Returns the output of the temporary node `node` as an input.
-fn link(node: crate::ids::NodeId) -> InputValue {
-    InputValue::Link(PortRef { node, port: None })
-}
-
-/// Returns the `f32` literal `value`.
-fn number(value: f32) -> InputValue {
-    InputValue::Literal(Literal::F32(value))
-}
-
 impl<'a> CardLowering<'_, 'a> {
     /// Writes `op` over `inputs` at `site`, whose one output is an `f32`, and returns that output as an input.
-    fn float(&mut self, site: &Site, op: &str, inputs: Vec<(&str, InputValue)>) -> Result<InputValue, String> {
-        let value = self.builder.node_value(site, op, inputs, ValueType::F32);
-        self.builder.input_as(site, &value, &ValueType::F32, false)
+    fn float(&mut self, site: &Site, op: &str, inputs: Vec<(&str, InputValue)>) -> InputValue {
+        self.builder.node_input(site, op, inputs)
     }
 
     /// Returns `1 - e^(-hazard)` written at `site` with no cancellation: the series `h (1 - h (1/2 - h/6))` below
     /// [`SMALL_HAZARD`], and [`Self::chance_of`] from there up.
-    fn exact_chance_of(&mut self, site: &Site, hazard: InputValue) -> Result<InputValue, String> {
-        let direct = self.chance_of(site, hazard.clone())?;
-        let sixth = self.float(site, "math.div", vec![("a", hazard.clone()), ("b", number(6.0))])?;
-        let half = self.float(site, "math.sub", vec![("a", number(0.5)), ("b", sixth)])?;
-        let second = self.float(site, "math.mul", vec![("a", hazard.clone()), ("b", half)])?;
-        let first = self.float(site, "math.sub", vec![("a", number(1.0)), ("b", second)])?;
-        let series = self.float(site, "math.mul", vec![("a", hazard.clone()), ("b", first)])?;
-        let small = self.builder.node_value(
-            site,
-            "cmp.lt",
-            vec![("a", hazard), ("b", number(SMALL_HAZARD))],
-            ValueType::Bool,
-        );
-        let small = self.builder.condition_input(site, &small)?;
-        self.float(
-            site,
-            "logic.select",
-            vec![("cond", small), ("if_true", series), ("if_false", direct)],
-        )
+    fn exact_chance_of(&mut self, site: &Site, hazard: InputValue) -> InputValue {
+        let direct = self.chance_of(site, hazard.clone());
+        let sixth = self.float(site, "math.div", vec![("a", hazard.clone()), ("b", number(6.0))]);
+        let half = self.float(site, "math.sub", vec![("a", number(0.5)), ("b", sixth)]);
+        let second = self.float(site, "math.mul", vec![("a", hazard.clone()), ("b", half)]);
+        let first = self.float(site, "math.sub", vec![("a", number(1.0)), ("b", second)]);
+        let series = self.float(site, "math.mul", vec![("a", hazard.clone()), ("b", first)]);
+        let small = self
+            .builder
+            .node_input(site, "cmp.lt", vec![("a", hazard), ("b", number(SMALL_HAZARD))]);
+        self.builder.select(site, small, series, direct)
     }
 
     /// Returns `1 - e^(-hazard)` written at `site`.
-    fn chance_of(&mut self, site: &Site, hazard: InputValue) -> Result<InputValue, String> {
-        let negated = self.float(site, "math.neg", vec![("a", hazard)])?;
-        let stays = self.float(site, "math.exp", vec![("a", negated)])?;
+    fn chance_of(&mut self, site: &Site, hazard: InputValue) -> InputValue {
+        let stays = self.stays(site, hazard);
         self.float(site, "math.sub", vec![("a", number(1.0)), ("b", stays)])
+    }
+
+    /// Returns `e^(-hazard)`, the chance that nothing happens, written at `site`.
+    fn stays(&mut self, site: &Site, hazard: InputValue) -> InputValue {
+        let negated = self.float(site, "math.neg", vec![("a", hazard)]);
+        self.float(site, "math.exp", vec![("a", negated)])
+    }
+
+    /// Returns `value` where `count` is above 0, and 1 elsewhere, written at `site`.
+    ///
+    /// Note that `e^0` and `0^0` are not exactly 1 on every device.
+    pub(super) fn one_where_none(&mut self, site: &Site, count: InputValue, value: InputValue) -> InputValue {
+        let none = self
+            .builder
+            .node_input(site, "cmp.le", vec![("a", count), ("b", number(0.0))]);
+        self.builder.select(site, none, number(1.0), value)
     }
 
     /// Returns the rate of the rate phrase `line` in the tick's unit, read from `rate`, the operand of its rate slot.
     ///
     /// A rate in another unit than the tick's is multiplied by the ratio of the two units as a literal.
     fn rate_in_tick_unit(&mut self, site: &Site, line: &SheetLine, rate: &Operand) -> Result<InputValue, String> {
-        let rate = self.builder.input_as(site, rate, &ValueType::F32, false)?;
+        let rate = self.builder.input_as(site, rate, &ValueType::F32)?;
         let unit = line
             .rate_unit
             .ok_or_else(|| "a rate needs its unit of time".to_owned())?;
@@ -136,7 +132,7 @@ impl<'a> CardLowering<'_, 'a> {
             return Ok(rate);
         }
         // The ratio of two units lies between 1/31557600 and 31557600. An `f32` holds it to its precision.
-        self.float(site, "math.mul", vec![("a", rate), ("b", number(factor as f32))])
+        Ok(self.float(site, "math.mul", vec![("a", rate), ("b", number(factor as f32))]))
     }
 
     /// Returns the count of the rate phrase `line` as an `f32` input, `None` when it has no "for each".
@@ -146,7 +142,7 @@ impl<'a> CardLowering<'_, 'a> {
         }
         let tries = self.slot(&site.at("tries"), &line.tries)?;
         self.builder
-            .input_as(&site.at("tries"), &tries, &ValueType::F32, false)
+            .input_as(&site.at("tries"), &tries, &ValueType::F32)
             .map(Some)
     }
 
@@ -157,61 +153,45 @@ impl<'a> CardLowering<'_, 'a> {
     /// `rand.chance`, whose chance is resolved to 2^-24.
     pub(super) fn rate(&mut self, site: &Site, line: &'a SheetLine) -> Result<Operand, String> {
         let rate = self.slot(&site.at("rate"), &line.rate)?;
-        let uniform = matches!(rate, Operand::Number(_) | Operand::Constant(_) | Operand::Param(..));
+        let uniform = rate.is_uniform();
         let scaled = self.rate_in_tick_unit(site, line, &rate)?;
         let hazard = self.float(
             site,
             "math.mul",
             vec![("a", scaled), ("b", InputValue::Param(TICK_LENGTH.to_owned()))],
-        )?;
+        );
         if uniform && line.tries.is_blank() {
-            let probability = self.exact_chance_of(site, hazard)?;
-            let threshold = self
-                .builder
-                .node_value(site, "rng.threshold", vec![("p", probability)], ValueType::U32);
-            let threshold = self.builder.input_as(site, &threshold, &ValueType::U32, false)?;
+            let probability = self.exact_chance_of(site, hazard);
+            let threshold = self.builder.node_input(site, "rng.threshold", vec![("p", probability)]);
             let node = self.draw(site, "rand.below", vec![("threshold", threshold)])?;
             return Ok(Operand::Link(PortRef { node, port: None }, ValueType::Bool));
         }
         let probability = if line.tries.is_blank() {
-            self.chance_of(site, hazard)?
+            self.chance_of(site, hazard)
         } else {
             match self.count_bound(line.tries.value()) {
                 Some(bound) if uniform => {
                     let tries_site = site.at("tries");
                     let tries = self.slot(&tries_site, &line.tries)?;
-                    let exponent = self.builder.input_as(&tries_site, &tries, &ValueType::U32, false)?;
-                    let negated = self.float(site, "math.neg", vec![("a", hazard)])?;
-                    let stays = self.float(site, "math.exp", vec![("a", negated)])?;
+                    let exponent = self.builder.input_as(&tries_site, &tries, &ValueType::U32)?;
+                    let stays = self.stays(site, hazard);
                     let node = self.builder.emit(
                         site,
                         "math.powi",
                         vec![("max_exponent", ConfigValue::Integer(i64::from(bound)))],
                         vec![("base".to_owned(), stays), ("exponent".to_owned(), exponent)],
                     );
-                    self.float(site, "math.sub", vec![("a", number(1.0)), ("b", link(node))])?
+                    self.float(site, "math.sub", vec![("a", number(1.0)), ("b", output(node))])
                 }
                 _ => {
                     let tries = self
                         .tries(site, line)?
                         .ok_or_else(|| "a rate for each has no count".to_owned())?;
-                    let total = self.float(site, "math.mul", vec![("a", hazard), ("b", tries.clone())])?;
-                    let negated = self.float(site, "math.neg", vec![("a", total)])?;
-                    let stays = self.float(site, "math.exp", vec![("a", negated)])?;
+                    let total = self.float(site, "math.mul", vec![("a", hazard), ("b", tries.clone())]);
+                    let stays = self.stays(site, total);
                     // No exposure at all keeps the cell, whatever the rate.
-                    let none = self.builder.node_value(
-                        site,
-                        "cmp.le",
-                        vec![("a", tries), ("b", number(0.0))],
-                        ValueType::Bool,
-                    );
-                    let none = self.builder.condition_input(site, &none)?;
-                    let guarded = self.float(
-                        site,
-                        "logic.select",
-                        vec![("cond", none), ("if_true", number(1.0)), ("if_false", stays)],
-                    )?;
-                    self.float(site, "math.sub", vec![("a", number(1.0)), ("b", guarded)])?
+                    let guarded = self.one_where_none(site, tries, stays);
+                    self.float(site, "math.sub", vec![("a", number(1.0)), ("b", guarded)])
                 }
             }
         };
@@ -244,16 +224,9 @@ impl<'a> CardLowering<'_, 'a> {
         let rate = self.slot(&rate_site.at("rate"), &phrase.rate)?;
         let mut hazard = self.rate_in_tick_unit(&rate_site, phrase, &rate)?;
         if let Some(tries) = self.tries(&rate_site, phrase)? {
-            hazard = self.float(&rate_site, "math.mul", vec![("a", hazard), ("b", tries)])?;
+            hazard = self.float(&rate_site, "math.mul", vec![("a", hazard), ("b", tries)]);
         }
-        if gate != Operand::Constant(Literal::Bool(true)) {
-            let cond = self.builder.condition_input(&rate_site, &gate)?;
-            hazard = self.float(
-                &rate_site,
-                "logic.select",
-                vec![("cond", cond), ("if_true", hazard), ("if_false", number(0.0))],
-            )?;
-        }
+        let hazard = self.builder.amount_where(&rate_site, &gate, hazard)?;
         self.groups[group].lowered.push(GroupLine {
             line: id,
             site: rate_site,
@@ -306,7 +279,7 @@ impl<'a> CardLowering<'_, 'a> {
                 .last()
                 .cloned()
                 .unwrap_or_else(|| unreachable!("the sums hold the first hazard"));
-            sums.push(self.float(&site, "math.add", vec![("a", previous), ("b", line.hazard.clone())])?);
+            sums.push(self.float(&site, "math.add", vec![("a", previous), ("b", line.hazard.clone())]));
         }
         let total = sums
             .last()
@@ -316,24 +289,12 @@ impl<'a> CardLowering<'_, 'a> {
             &site,
             "math.mul",
             vec![("a", total.clone()), ("b", InputValue::Param(TICK_LENGTH.to_owned()))],
-        )?;
-        let negated = self.float(&site, "math.neg", vec![("a", hazard)])?;
-        let exp = self.float(&site, "math.exp", vec![("a", negated)])?;
-        // A total hazard of 0 keeps the cell, as a lone rate at a count of 0 does.
-        let none = self.builder.node_value(
-            &site,
-            "cmp.le",
-            vec![("a", total.clone()), ("b", number(0.0))],
-            ValueType::Bool,
         );
-        let none = self.builder.condition_input(&site, &none)?;
-        let stays = self.float(
-            &site,
-            "logic.select",
-            vec![("cond", none), ("if_true", number(1.0)), ("if_false", exp)],
-        )?;
-        let leaves = self.float(&site, "math.sub", vec![("a", number(1.0)), ("b", stays)])?;
-        let divisor = self.float(&site, "math.max", vec![("a", total), ("b", number(SMALLEST_TOTAL))])?;
+        let exp = self.stays(&site, hazard);
+        // A total hazard of 0 keeps the cell, as a lone rate at a count of 0 does.
+        let stays = self.one_where_none(&site, total.clone(), exp);
+        let leaves = self.float(&site, "math.sub", vec![("a", number(1.0)), ("b", stays)]);
+        let divisor = self.float(&site, "math.max", vec![("a", total), ("b", number(SMALLEST_TOTAL))]);
         let drawn = self.draw(&site, "rand.float", vec![("max", number(1.0))])?;
         let last = lines.len() - 1;
         for (index, line) in lines.iter().enumerate() {
@@ -344,13 +305,13 @@ impl<'a> CardLowering<'_, 'a> {
                     &line.site,
                     "math.div",
                     vec![("a", sums[index].clone()), ("b", divisor.clone())],
-                )?;
-                self.float(&line.site, "math.mul", vec![("a", leaves.clone()), ("b", share)])?
+                );
+                self.float(&line.site, "math.mul", vec![("a", leaves.clone()), ("b", share)])
             };
             let below = self.builder.node_value(
                 &line.site,
                 "cmp.lt",
-                vec![("a", link(drawn)), ("b", threshold)],
+                vec![("a", output(drawn)), ("b", threshold)],
                 ValueType::Bool,
             );
             let condition = self.builder.join(&line.site, "logic.and", &line.gate, &below)?;

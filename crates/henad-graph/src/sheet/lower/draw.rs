@@ -13,12 +13,12 @@ use super::Site;
 use super::card::CardLowering;
 use super::keys;
 use super::look::neighbor_count;
-use super::value::Operand;
+use super::value::{Operand, number, output};
 use crate::ids::NodeId;
 use crate::sheet::check::Place;
 use crate::sheet::document::{LineKind, SheetChip, SheetLine, SheetValue, SummaryKind};
 use crate::types::ValueType;
-use crate::value::{ConfigValue, InputValue, Literal, PortRef};
+use crate::value::{ConfigValue, InputValue, PortRef};
 
 impl<'a> CardLowering<'_, 'a> {
     /// Writes the draw `op` over `inputs` at `site`, keyed by the line that owns `site` and the site's slot path, and
@@ -49,68 +49,40 @@ impl<'a> CardLowering<'_, 'a> {
     /// Returns the outcome of a chance, drawn once for each of its count when it has one.
     pub(super) fn chance(&mut self, site: &Site, line: &'a SheetLine) -> Result<Operand, String> {
         let chance = self.slot(&site.at("chance"), &line.chance)?;
-        let chance_input = self.builder.input_as(site, &chance, &ValueType::F32, false)?;
+        let chance_input = self.builder.input_as(site, &chance, &ValueType::F32)?;
         let probability = if line.tries.is_blank() {
             chance_input
         } else {
             let tries_site = site.at("tries");
             let tries = self.slot(&tries_site, &line.tries)?;
-            let missed = self.builder.node_value(
-                site,
-                "math.sub",
-                vec![("a", InputValue::Literal(Literal::F32(1.0))), ("b", chance_input)],
-                ValueType::F32,
-            );
-            let missed = self.builder.input_as(site, &missed, &ValueType::F32, false)?;
-            let uniform = matches!(chance, Operand::Number(_) | Operand::Constant(_) | Operand::Param(..));
+            let missed = self
+                .builder
+                .node_input(site, "math.sub", vec![("a", number(1.0)), ("b", chance_input)]);
+            let uniform = chance.is_uniform();
             let missed_every_try = match self.count_bound(line.tries.value()) {
                 Some(bound) if uniform => {
-                    let exponent = self.builder.input_as(&tries_site, &tries, &ValueType::U32, false)?;
+                    let exponent = self.builder.input_as(&tries_site, &tries, &ValueType::U32)?;
                     let node = self.builder.emit(
                         site,
                         "math.powi",
                         vec![("max_exponent", ConfigValue::Integer(i64::from(bound)))],
                         vec![("base".to_owned(), missed), ("exponent".to_owned(), exponent)],
                     );
-                    InputValue::Link(PortRef { node, port: None })
+                    output(node)
                 }
                 _ => {
-                    let exponent = self.builder.input_as(&tries_site, &tries, &ValueType::F32, false)?;
-                    let power = self.builder.node_value(
+                    let exponent = self.builder.input_as(&tries_site, &tries, &ValueType::F32)?;
+                    let power = self.builder.node_input(
                         site,
                         "math.pow",
                         vec![("base", missed), ("exponent", exponent.clone())],
-                        ValueType::F32,
                     );
-                    let power = self.builder.input_as(site, &power, &ValueType::F32, false)?;
                     // No try at all misses every try, whatever the chance.
-                    let none = self.builder.node_value(
-                        site,
-                        "cmp.le",
-                        vec![("a", exponent), ("b", InputValue::Literal(Literal::F32(0.0)))],
-                        ValueType::Bool,
-                    );
-                    let none = self.builder.condition_input(site, &none)?;
-                    let guarded = self.builder.node_value(
-                        site,
-                        "logic.select",
-                        vec![
-                            ("cond", none),
-                            ("if_true", InputValue::Literal(Literal::F32(1.0))),
-                            ("if_false", power),
-                        ],
-                        ValueType::F32,
-                    );
-                    self.builder.input_as(site, &guarded, &ValueType::F32, false)?
+                    self.one_where_none(site, exponent, power)
                 }
             };
-            let hit = self.builder.node_value(
-                site,
-                "math.sub",
-                vec![("a", InputValue::Literal(Literal::F32(1.0))), ("b", missed_every_try)],
-                ValueType::F32,
-            );
-            self.builder.input_as(site, &hit, &ValueType::F32, false)?
+            self.builder
+                .node_input(site, "math.sub", vec![("a", number(1.0)), ("b", missed_every_try)])
         };
         let node = self.draw(site, "rand.chance", vec![("p", probability)])?;
         Ok(Operand::Link(PortRef { node, port: None }, ValueType::Bool))
@@ -144,16 +116,14 @@ impl<'a> CardLowering<'_, 'a> {
     pub(super) fn random_number(&mut self, site: &Site, line: &'a SheetLine) -> Result<Operand, String> {
         let low = self.slot(&site.at("low"), &line.low)?;
         let high = self.slot(&site.at("high"), &line.high)?;
-        let low = self.builder.input_as(site, &low, &ValueType::F32, false)?;
-        let high = self.builder.input_as(site, &high, &ValueType::F32, false)?;
+        let low = self.builder.input_as(site, &low, &ValueType::F32)?;
+        let high = self.builder.input_as(site, &high, &ValueType::F32)?;
         let span = self
             .builder
-            .node_value(site, "math.sub", vec![("a", high), ("b", low.clone())], ValueType::F32);
-        let span = self.builder.input_as(site, &span, &ValueType::F32, false)?;
+            .node_input(site, "math.sub", vec![("a", high), ("b", low.clone())]);
         let node = self.draw(site, "rand.float", vec![("max", span)])?;
-        let drawn = InputValue::Link(PortRef { node, port: None });
         Ok(self
             .builder
-            .node_value(site, "math.add", vec![("a", drawn), ("b", low)], ValueType::F32))
+            .node_value(site, "math.add", vec![("a", output(node)), ("b", low)], ValueType::F32))
     }
 }

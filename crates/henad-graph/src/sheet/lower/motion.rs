@@ -11,11 +11,11 @@
 
 use super::Site;
 use super::card::{CardLowering, Change, ChangeKind};
-use super::ids::{GROUP_CHANGE, Owner, SheetKey};
-use super::value::Operand;
-use crate::sheet::document::{LineMode, PropertyType, SheetChip, SheetLine, SheetValue};
+use super::look::guard_by_count;
+use super::value::{Operand, number, output};
+use crate::sheet::document::{LineMode, SheetChip, SheetLine, SheetProperty, SheetValue};
 use crate::types::ValueType;
-use crate::value::{InputValue, Literal, PortRef};
+use crate::value::Literal;
 
 /// Smallest length an arrow is divided by when Keep between scales it.
 const SMALLEST_LENGTH: f32 = 0.000_001;
@@ -32,32 +32,6 @@ impl<'a> CardLowering<'_, 'a> {
         self.inherit(site, id, own)
     }
 
-    /// Returns `value` where `condition` holds and the zero of `value_type` elsewhere, written at `site`.
-    fn where_applies(
-        &mut self,
-        site: &Site,
-        condition: &Operand,
-        value: &Operand,
-        value_type: &ValueType,
-    ) -> Result<Operand, String> {
-        if matches!(condition, Operand::Constant(Literal::Bool(true))) {
-            return Ok(value.clone());
-        }
-        let zero = Literal::zero_of(value_type).ok_or_else(|| format!("a {value_type} has no zero"))?;
-        let cond = self.builder.condition_input(site, condition)?;
-        let if_true = self.builder.input_as(site, value, value_type, false)?;
-        Ok(self.builder.node_value(
-            site,
-            "logic.select",
-            vec![
-                ("cond", cond),
-                ("if_true", if_true),
-                ("if_false", InputValue::Literal(zero)),
-            ],
-            value_type.clone(),
-        ))
-    }
-
     /// Returns `value` times the number `strength`, a scaled arrow or a product of numbers, written at `site`.
     fn scaled(
         &mut self,
@@ -66,8 +40,8 @@ impl<'a> CardLowering<'_, 'a> {
         strength: &Operand,
         value_type: &ValueType,
     ) -> Result<Operand, String> {
-        let value = self.builder.input_as(site, value, value_type, false)?;
-        let strength = self.builder.input_as(site, strength, &ValueType::F32, false)?;
+        let value = self.builder.input_as(site, value, value_type)?;
+        let strength = self.builder.input_as(site, strength, &ValueType::F32)?;
         Ok(if *value_type == ValueType::Vec2F {
             self.builder
                 .node_value(site, "vec.scale", vec![("v", value), ("s", strength)], ValueType::Vec2F)
@@ -91,8 +65,8 @@ impl<'a> CardLowering<'_, 'a> {
         let towards = line.mode == Some(LineMode::Towards);
         let pushed = if towards {
             let current = self.builder.read(self.pass, &property.id)?;
-            let a = self.builder.input_as(site, &value, &value_type, false)?;
-            let b = self.builder.input_as(site, &current, &value_type, false)?;
+            let a = self.builder.input_as(site, &value, &value_type)?;
+            let b = self.builder.input_as(site, &current, &value_type)?;
             self.builder
                 .node_value(site, "math.sub", vec![("a", a), ("b", b)], value_type.clone())
         } else {
@@ -101,21 +75,16 @@ impl<'a> CardLowering<'_, 'a> {
         let mut term = self.scaled(site, &pushed, &strength, &value_type)?;
         if towards && let Some(count) = self.empty_count(line.value.value()) {
             // A Steer towards a value of no one adds nothing.
-            let count = self.builder.input_as(site, &count, &ValueType::U32, false)?;
-            let found = self.builder.node_value(
-                site,
-                "cmp.gt",
-                vec![("a", count), ("b", InputValue::Literal(Literal::U32(0)))],
-                ValueType::Bool,
-            );
-            term = self.where_applies(site, &found, &term, &value_type)?;
+            term = guard_by_count(self.builder, site, &count, &term, &value_type)?;
         }
         let condition = self.change_condition(site, id, line)?;
         self.fires_when(id, &condition);
         if let Some(repeat) = self.repeat_of(id) {
             return self.put_in_repeat(site, repeat, index, &term, &condition);
         }
-        let term = self.where_applies(&site.at("condition"), &condition, &term, &value_type)?;
+        let term = self
+            .builder
+            .where_applies(&site.at("condition"), &condition, &term, &value_type)?;
         self.add_change(
             index,
             id,
@@ -149,11 +118,9 @@ impl<'a> CardLowering<'_, 'a> {
 
     /// Lowers the Move by line `id`: its arrow, added to the position, or into the Repeat that holds it.
     pub(super) fn move_by(&mut self, site: &Site, id: &'a str, line: &'a SheetLine) -> Result<(), String> {
-        let index = self
+        let (index, _) = self
             .builder
-            .properties()
-            .iter()
-            .position(|property| property.property_type == PropertyType::Position)
+            .position()
             .ok_or_else(|| "the agents have no Position to move".to_owned())?;
         let arrow = self.slot(&site.at("value"), &line.value)?;
         let condition = self.change_condition(site, id, line)?;
@@ -161,7 +128,9 @@ impl<'a> CardLowering<'_, 'a> {
         if let Some(repeat) = self.repeat_of(id) {
             return self.put_in_repeat(site, repeat, index, &arrow, &condition);
         }
-        let arrow = self.where_applies(&site.at("condition"), &condition, &arrow, &ValueType::Vec2F)?;
+        let arrow = self
+            .builder
+            .where_applies(&site.at("condition"), &condition, &arrow, &ValueType::Vec2F)?;
         self.add_change(
             index,
             id,
@@ -173,25 +142,12 @@ impl<'a> CardLowering<'_, 'a> {
     /// Returns a random direction of the phrase or line `line`'s length, its angle drawn at `site`.
     pub(super) fn random_direction(&mut self, site: &Site, line: &'a SheetLine) -> Result<Operand, String> {
         let length = self.slot(&site.at("length"), &line.length)?;
-        let length = self.builder.input_as(site, &length, &ValueType::F32, false)?;
-        let angle = self.draw(
-            site,
-            "rand.float",
-            vec![("max", InputValue::Literal(Literal::F32(std::f32::consts::TAU)))],
-        )?;
+        let length = self.builder.input_as(site, &length, &ValueType::F32)?;
+        let angle = self.draw(site, "rand.float", vec![("max", number(std::f32::consts::TAU))])?;
         Ok(self.builder.node_value(
             site,
             "vec.from_angle",
-            vec![
-                (
-                    "angle",
-                    InputValue::Link(PortRef {
-                        node: angle,
-                        port: None,
-                    }),
-                ),
-                ("length", length),
-            ],
+            vec![("angle", output(angle)), ("length", length)],
             ValueType::Vec2F,
         ))
     }
@@ -218,8 +174,8 @@ impl<'a> CardLowering<'_, 'a> {
             let site = self.change_site(change.line)?;
             match &change.kind {
                 ChangeKind::Steer { term } => {
-                    let a = self.builder.input_as(&site, &value, value_type, false)?;
-                    let b = self.builder.input_as(&site, term, value_type, false)?;
+                    let a = self.builder.input_as(&site, &value, value_type)?;
+                    let b = self.builder.input_as(&site, term, value_type)?;
                     value = self
                         .builder
                         .node_value(&site, "math.add", vec![("a", a), ("b", b)], value_type.clone());
@@ -230,14 +186,10 @@ impl<'a> CardLowering<'_, 'a> {
                         kept
                     } else {
                         let cond = self.builder.condition_input(&site, &change.condition)?;
-                        let if_true = self.builder.input_as(&site, &kept, value_type, false)?;
-                        let if_false = self.builder.input_as(&site, &value, value_type, false)?;
-                        self.builder.node_value(
-                            &site,
-                            "logic.select",
-                            vec![("cond", cond), ("if_true", if_true), ("if_false", if_false)],
-                            value_type.clone(),
-                        )
+                        let if_true = self.builder.input_as(&site, &kept, value_type)?;
+                        let if_false = self.builder.input_as(&site, &value, value_type)?;
+                        self.builder
+                            .select_value(&site, cond, if_true, if_false, value_type.clone())
                     };
                 }
                 ChangeKind::Become { .. }
@@ -260,9 +212,9 @@ impl<'a> CardLowering<'_, 'a> {
         value_type: &ValueType,
     ) -> Result<Operand, String> {
         if *value_type != ValueType::Vec2F {
-            let x = self.builder.input_as(site, value, value_type, false)?;
-            let lo = self.builder.input_as(site, low, value_type, false)?;
-            let hi = self.builder.input_as(site, high, value_type, false)?;
+            let x = self.builder.input_as(site, value, value_type)?;
+            let lo = self.builder.input_as(site, low, value_type)?;
+            let hi = self.builder.input_as(site, high, value_type)?;
             return Ok(self.builder.node_value(
                 site,
                 "math.clamp",
@@ -270,65 +222,44 @@ impl<'a> CardLowering<'_, 'a> {
                 value_type.clone(),
             ));
         }
-        let arrow = self.builder.input_as(site, value, &ValueType::Vec2F, false)?;
-        let lo = self.builder.input_as(site, low, &ValueType::F32, false)?;
-        let hi = self.builder.input_as(site, high, &ValueType::F32, false)?;
-        let length = self
-            .builder
-            .node_value(site, "vec.length", vec![("v", arrow.clone())], ValueType::F32);
-        let length = self.builder.input_as(site, &length, &ValueType::F32, false)?;
-        let clamped = self.builder.node_value(
+        let arrow = self.builder.input_as(site, value, &ValueType::Vec2F)?;
+        let lo = self.builder.input_as(site, low, &ValueType::F32)?;
+        let hi = self.builder.input_as(site, high, &ValueType::F32)?;
+        let length = self.builder.node_input(site, "vec.length", vec![("v", arrow.clone())]);
+        let clamped = self.builder.node_input(
             site,
             "math.clamp",
             vec![("x", length.clone()), ("lo", lo.clone()), ("hi", hi)],
-            ValueType::F32,
         );
-        let clamped = self.builder.input_as(site, &clamped, &ValueType::F32, false)?;
-        let divisor = self.builder.node_value(
+        let divisor = self.builder.node_input(
             site,
             "math.max",
-            vec![
-                ("a", length.clone()),
-                ("b", InputValue::Literal(Literal::F32(SMALLEST_LENGTH))),
-            ],
-            ValueType::F32,
+            vec![("a", length.clone()), ("b", number(SMALLEST_LENGTH))],
         );
-        let divisor = self.builder.input_as(site, &divisor, &ValueType::F32, false)?;
         let ratio = self
             .builder
-            .node_value(site, "math.div", vec![("a", clamped), ("b", divisor)], ValueType::F32);
-        let ratio = self.builder.input_as(site, &ratio, &ValueType::F32, false)?;
+            .node_input(site, "math.div", vec![("a", clamped), ("b", divisor)]);
         let scaled = self
             .builder
-            .node_value(site, "vec.scale", vec![("v", arrow), ("s", ratio)], ValueType::Vec2F);
-        let scaled = self.builder.input_as(site, &scaled, &ValueType::Vec2F, false)?;
-        let moving = self.builder.node_value(
-            site,
-            "cmp.gt",
-            vec![("a", length), ("b", InputValue::Literal(Literal::F32(0.0)))],
-            ValueType::Bool,
-        );
-        let moving = self.builder.condition_input(site, &moving)?;
-        let along_x = self.builder.node_value(
-            site,
-            "vec.make",
-            vec![("x", lo), ("y", InputValue::Literal(Literal::F32(0.0)))],
-            ValueType::Vec2F,
-        );
-        let along_x = self.builder.input_as(site, &along_x, &ValueType::Vec2F, false)?;
-        Ok(self.builder.node_value(
-            site,
-            "logic.select",
-            vec![("cond", moving), ("if_true", scaled), ("if_false", along_x)],
-            ValueType::Vec2F,
-        ))
+            .node_input(site, "vec.scale", vec![("v", arrow), ("s", ratio)]);
+        let moving = self
+            .builder
+            .node_input(site, "cmp.gt", vec![("a", length), ("b", number(0.0))]);
+        let along_x = self
+            .builder
+            .node_input(site, "vec.make", vec![("x", lo), ("y", number(0.0))]);
+        Ok(self
+            .builder
+            .select_value(site, moving, scaled, along_x, ValueType::Vec2F))
     }
 
-    /// Writes the position after the Move by lines among `changes`, and the Heading when it has a lane, and returns the
-    /// new position. `site` is the site of the position's write and `current` its value at the start of the tick.
+    /// Writes the position `position` after the Move by lines among `changes`, and the Heading when it has a lane, and
+    /// returns the new position. `site` is the site of the position's write and `current` its value at the start of the
+    /// tick.
     pub(super) fn write_position(
         &mut self,
         site: &Site,
+        position: &SheetProperty,
         current: &Operand,
         changes: &[Change<'a>],
     ) -> Result<Operand, String> {
@@ -341,8 +272,8 @@ impl<'a> CardLowering<'_, 'a> {
                 None => arrow.clone(),
                 Some(sum) => {
                     let line_site = self.change_site(change.line)?;
-                    let a = self.builder.input_as(&line_site, &sum, &ValueType::Vec2F, false)?;
-                    let b = self.builder.input_as(&line_site, arrow, &ValueType::Vec2F, false)?;
+                    let a = self.builder.input_as(&line_site, &sum, &ValueType::Vec2F)?;
+                    let b = self.builder.input_as(&line_site, arrow, &ValueType::Vec2F)?;
                     self.builder
                         .node_value(&line_site, "math.add", vec![("a", a), ("b", b)], ValueType::Vec2F)
                 }
@@ -352,73 +283,30 @@ impl<'a> CardLowering<'_, 'a> {
             return Ok(current.clone());
         };
         let world = self.builder.emit(site, "ctx.world", Vec::new(), Vec::new());
-        let start = self.builder.input_as(site, current, &ValueType::Vec2F, false)?;
-        let by = self.builder.input_as(site, &total, &ValueType::Vec2F, false)?;
-        let moved = self.builder.node_value(
-            site,
-            "math.add",
-            vec![("a", start), ("b", by.clone())],
-            ValueType::Vec2F,
-        );
-        let moved = self.builder.input_as(site, &moved, &ValueType::Vec2F, false)?;
+        let start = self.builder.input_as(site, current, &ValueType::Vec2F)?;
+        let by = self.builder.input_as(site, &total, &ValueType::Vec2F)?;
+        let moved = self
+            .builder
+            .node_input(site, "math.add", vec![("a", start), ("b", by.clone())]);
         let wrapped = self.builder.node_value(
             site,
             "space.wrap",
-            vec![
-                ("v", moved),
-                (
-                    "world",
-                    InputValue::Link(PortRef {
-                        node: world,
-                        port: None,
-                    }),
-                ),
-            ],
+            vec![("v", moved), ("world", output(world))],
             ValueType::Vec2F,
         );
-        let position = self
-            .builder
-            .properties()
-            .iter()
-            .find(|property| property.property_type == PropertyType::Position)
-            .map(|property| property.id.as_str())
-            .ok_or_else(|| "the agents have no Position to move".to_owned())?;
-        let written = self.builder.input_as(site, &wrapped, &ValueType::Vec2F, false)?;
-        self.builder.write(site, position, written)?;
-        let heading = self.builder.properties().iter().enumerate().find(|(_, property)| {
-            property.property_type == PropertyType::Heading && !self.builder.dropped.contains(&property.id)
-        });
-        if let Some((index, heading)) = heading {
-            let heading_site = Site {
-                owner: Owner::Sheet(SheetKey {
-                    group: GROUP_CHANGE,
-                    index: index as u32,
-                }),
-                path: format!("card.{}.{}", self.card.id, heading.id),
-                ..site.clone()
-            };
+        let written = self.builder.input_as(site, &wrapped, &ValueType::Vec2F)?;
+        self.builder.write(site, &position.id, written)?;
+        if let Some((index, heading)) = self.builder.heading_lane() {
+            let heading_site = self.change_write_site(index, &heading.id);
             let last = self.builder.read(self.pass, &heading.id)?;
-            let last = self.builder.input_as(&heading_site, &last, &ValueType::Vec2F, false)?;
+            let last = self.builder.input_as(&heading_site, &last, &ValueType::Vec2F)?;
             let length = self
                 .builder
-                .node_value(&heading_site, "vec.length", vec![("v", by.clone())], ValueType::F32);
-            let length = self.builder.input_as(&heading_site, &length, &ValueType::F32, false)?;
-            let moving = self.builder.node_value(
-                &heading_site,
-                "cmp.gt",
-                vec![("a", length), ("b", InputValue::Literal(Literal::F32(0.0)))],
-                ValueType::Bool,
-            );
-            let moving = self.builder.condition_input(&heading_site, &moving)?;
-            let new_heading = self.builder.node_value(
-                &heading_site,
-                "logic.select",
-                vec![("cond", moving), ("if_true", by), ("if_false", last)],
-                ValueType::Vec2F,
-            );
-            let new_heading = self
+                .node_input(&heading_site, "vec.length", vec![("v", by.clone())]);
+            let moving = self
                 .builder
-                .input_as(&heading_site, &new_heading, &ValueType::Vec2F, false)?;
+                .node_input(&heading_site, "cmp.gt", vec![("a", length), ("b", number(0.0))]);
+            let new_heading = self.builder.select(&heading_site, moving, by, last);
             self.builder.write(&heading_site, &heading.id, new_heading)?;
         }
         Ok(wrapped)

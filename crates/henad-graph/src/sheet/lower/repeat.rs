@@ -21,14 +21,15 @@
 use std::collections::BTreeMap;
 
 use super::card::{CardLowering, ChangeKind};
-use super::value::Operand;
-use super::{Site, text};
+use super::look::accumulator;
+use super::value::{Operand, port, port_of};
+use super::{Site, visit_value_chips};
 use crate::ids::NodeId;
 use crate::limits::MAX_REPEAT_ITERATIONS;
 use crate::sheet::document::{LineKind, LineMode, PropertyType, SheetChip, SheetLine, SheetValue, Slot};
 use crate::sheet::sentence::ANY_STATE_ID;
 use crate::types::ValueType;
-use crate::value::{ConfigValue, InputValue, Literal, PortRef};
+use crate::value::{ConfigValue, InputValue, Literal};
 
 /// A Repeat line lowered: its region, the accumulator of each property its lines change and its competing changes.
 #[derive(Debug, Clone)]
@@ -52,12 +53,12 @@ struct Contest {
 }
 
 /// Returns the name of the `or` accumulator of the Become or Set line `line` inside a Repeat.
-fn applies(line: &str) -> String {
+fn applies_name(line: &str) -> String {
     format!("{line}_applies")
 }
 
 /// Returns the name of the `min` accumulator of the first time round at which the competing line `line` held.
-fn first(line: &str) -> String {
+fn first_round_name(line: &str) -> String {
     format!("{line}_first")
 }
 
@@ -83,11 +84,9 @@ impl<'a> CardLowering<'_, 'a> {
                 changes.push(inner);
             }
             let index = match inner_line.kind {
-                LineKind::Move if inner_line.mode == Some(LineMode::By) => self
-                    .builder
-                    .properties()
-                    .iter()
-                    .position(|property| property.property_type == PropertyType::Position),
+                LineKind::Move if inner_line.mode == Some(LineMode::By) => {
+                    self.builder.position().map(|(index, _)| index)
+                }
                 LineKind::Steer => inner_line
                     .property
                     .as_deref()
@@ -103,26 +102,18 @@ impl<'a> CardLowering<'_, 'a> {
         let mut config = Vec::with_capacity(changed.len());
         for (&index, value_type) in &changed {
             let name = format!("change_{}", self.builder.properties()[index].id);
-            config.push(ConfigValue::Table(BTreeMap::from([
-                ("name".to_owned(), text(&name)),
-                ("type".to_owned(), text(&value_type.to_string())),
-                ("combine".to_owned(), text("sum")),
-            ])));
+            config.push(accumulator(&name, &value_type.to_string(), "sum"));
             accumulators.insert(index, name);
         }
         let contests = self.contests(&changes);
         changes.sort_by_key(|line| super::ids::line_number(line));
         for line in &changes {
             let (name, value_type, combine) = if contests.contains_key(*line) {
-                (first(line), "u32", "min")
+                (first_round_name(line), "u32", "min")
             } else {
-                (applies(line), "bool", "or")
+                (applies_name(line), "bool", "or")
             };
-            config.push(ConfigValue::Table(BTreeMap::from([
-                ("name".to_owned(), text(&name)),
-                ("type".to_owned(), text(value_type)),
-                ("combine".to_owned(), text(combine)),
-            ])));
+            config.push(accumulator(&name, value_type, combine));
         }
         let node = self.builder.emit(
             site,
@@ -137,13 +128,7 @@ impl<'a> CardLowering<'_, 'a> {
             ],
         );
         for (index, value_type) in changed {
-            let total = Operand::Link(
-                PortRef {
-                    node,
-                    port: Some(accumulators[&index].clone()),
-                },
-                value_type.clone(),
-            );
+            let total = port_of(node, &accumulators[&index], value_type.clone());
             let kind = if value_type == ValueType::Vec2F
                 && self.builder.properties()[index].property_type == PropertyType::Position
             {
@@ -260,18 +245,11 @@ impl<'a> CardLowering<'_, 'a> {
             .map(|block| (block.node, block.contests.get(id).cloned()))
             .ok_or_else(|| format!("the Repeat line {repeat} did not lower"))?;
         let Some(contest) = contest else {
-            let name = applies(id);
+            let name = applies_name(id);
             let value = self.builder.condition_input(site, &condition)?;
-            self.builder.emit(
-                site,
-                "region.put",
-                vec![("acc", text(&name))],
-                vec![
-                    ("value".to_owned(), value),
-                    ("when".to_owned(), InputValue::Literal(Literal::Bool(true))),
-                ],
-            );
-            return Ok(Operand::Link(PortRef { node, port: Some(name) }, ValueType::Bool));
+            self.builder
+                .put(site, &name, Some(value), InputValue::Literal(Literal::Bool(true)));
+            return Ok(port_of(node, &name, ValueType::Bool));
         };
         let mut kept = condition;
         if let Some(state) = &contest.gate {
@@ -279,20 +257,9 @@ impl<'a> CardLowering<'_, 'a> {
             kept = self.builder.join(site, "logic.and", &kept, &in_state)?;
         }
         let when = self.builder.condition_input(site, &kept)?;
-        let round = InputValue::Link(PortRef {
-            node,
-            port: Some("k".to_owned()),
-        });
-        self.builder.emit(
-            site,
-            "region.put",
-            vec![("acc", text(&first(id)))],
-            vec![("value".to_owned(), round), ("when".to_owned(), when)],
-        );
-        let own = InputValue::Link(PortRef {
-            node,
-            port: Some(first(id)),
-        });
+        let round = port(node, "k");
+        self.builder.put(site, &first_round_name(id), Some(round), when);
+        let own = port(node, &first_round_name(id));
         let change_site = self.change_site(id)?;
         // The line held where its first time round is below the largest `u32`, the start of a `min` accumulator.
         let mut decided = self.builder.node_value(
@@ -302,14 +269,10 @@ impl<'a> CardLowering<'_, 'a> {
             ValueType::Bool,
         );
         for lower in &contest.lower {
-            let other = InputValue::Link(PortRef {
-                node,
-                port: Some(first(lower)),
-            });
             let not_earlier = self.builder.node_value(
                 &change_site,
                 "cmp.ge",
-                vec![("a", other), ("b", own.clone())],
+                vec![("a", port(node, &first_round_name(lower))), ("b", own.clone())],
                 ValueType::Bool,
             );
             decided = self.builder.join(&change_site, "logic.and", &decided, &not_earlier)?;
@@ -331,10 +294,10 @@ impl<'a> CardLowering<'_, 'a> {
             ..site.clone()
         };
         let category = ValueType::Category(property.to_owned());
-        let a = self.builder.input_as(&outside, &current, &category, false)?;
+        let a = self.builder.input_as(&outside, &current, &category)?;
         let b = self
             .builder
-            .input_as(&outside, &Operand::State(state.to_owned()), &category, false)?;
+            .input_as(&outside, &Operand::State(state.to_owned()), &category)?;
         Ok(self
             .builder
             .node_value(&outside, "cmp.eq", vec![("a", a), ("b", b)], ValueType::Bool))
@@ -342,27 +305,15 @@ impl<'a> CardLowering<'_, 'a> {
 
     /// Returns whether `slot` reads, at any depth, the result of a line inside the Repeat line `repeat`.
     pub(super) fn reads_inside(&self, slot: &Slot, repeat: &str) -> bool {
-        slot.value().is_some_and(|value| self.value_reads_inside(value, repeat))
-    }
-
-    /// Returns whether `value` reads, at any depth, the result of a line inside the Repeat line `repeat`.
-    fn value_reads_inside(&self, value: &SheetValue, repeat: &str) -> bool {
-        match value {
-            SheetValue::Chip(SheetChip::Result { line, .. }) => self.repeat_of(line) == Some(repeat),
-            SheetValue::Phrase(phrase) => {
-                let formula = phrase.formula.as_deref().is_some_and(|text| {
-                    crate::sheet::check::formula::references(text).is_ok_and(|references| {
-                        references.into_iter().any(|reference| {
-                            let chip = crate::sheet::check::formula_chip(reference, self.builder.document);
-                            matches!(chip, SheetChip::Result { line, .. } if self.repeat_of(&line) == Some(repeat))
-                        })
-                    })
-                });
-                formula || phrase.slot_values().any(|inner| self.value_reads_inside(inner, repeat))
-            }
-            SheetValue::List(items) => items.iter().any(|item| self.value_reads_inside(item, repeat)),
-            SheetValue::Literal(_) | SheetValue::Chip(_) => false,
+        let mut reads = false;
+        if let Some(value) = slot.value() {
+            visit_value_chips(self.builder.document, value, &mut |chip| {
+                if let SheetChip::Result { line, .. } = chip {
+                    reads |= self.repeat_of(line) == Some(repeat);
+                }
+            });
         }
+        reads
     }
 
     /// Adds `value` to the accumulator of the property at `index` in the Repeat line `repeat`, where `condition` holds,
@@ -382,14 +333,9 @@ impl<'a> CardLowering<'_, 'a> {
             .cloned()
             .ok_or_else(|| format!("the Repeat line {repeat} did not lower"))?;
         let value_type = self.builder.lane_type(&self.builder.properties()[index]);
-        let value = self.builder.input_as(site, value, &value_type, false)?;
+        let value = self.builder.input_as(site, value, &value_type)?;
         let when = self.builder.condition_input(site, condition)?;
-        self.builder.emit(
-            site,
-            "region.put",
-            vec![("acc", text(&name))],
-            vec![("value".to_owned(), value), ("when".to_owned(), when)],
-        );
+        self.builder.put(site, &name, Some(value), when);
         Ok(())
     }
 }

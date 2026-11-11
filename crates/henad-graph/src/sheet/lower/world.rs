@@ -10,17 +10,17 @@ use henad_core::authoring::primitives::space::Boundary;
 use henad_core::metadata::TimeScale;
 use henad_core::params::{ParamDescriptor, ParamKind};
 
-use super::Builder;
 use super::rates::TICK_LENGTH;
+use super::value::state_literal;
+use super::{Builder, visit_chips, visit_value_chips};
 use crate::document::{AgentsWorld, Category, GridWorld, Lane, LaneRole, LaneStorage, Variant, World};
-use crate::sheet::check::{Place, formula, formula_chip};
+use crate::sheet::check::Place;
 use crate::sheet::document::{
     CellWhich, ColorRuleKind, Edges, LineKind, MadeOf, ParameterFormat, ParameterType, PropertyType, SheetChip,
     SheetDocument, SheetLine, SheetParameter, SheetProperty, SheetTime, SheetValue,
 };
 use crate::sheet::sentence::ONE_TICK_IS;
 use crate::types::ValueType;
-use crate::value::{Literal, MemberName};
 
 /// Returns the world of `document`: its grid, or the open space of its one kind of agent.
 pub(super) fn world(document: &SheetDocument) -> World {
@@ -101,24 +101,16 @@ fn looks_ahead(line: &SheetLine) -> bool {
 
 /// Returns whether `line`, a phrase in it or its formula reads property `id`.
 fn line_reads(document: &SheetDocument, line: &SheetLine, id: &str) -> bool {
-    let in_formula = line.formula.as_deref().is_some_and(|text| {
-        formula::references(text).is_ok_and(|references| {
-            references
-                .into_iter()
-                .any(|reference| chip_reads(&formula_chip(reference, document), id))
-        })
-    });
-    in_formula || line.slot_values().any(|value| value_reads(document, value, id))
+    let mut reads = false;
+    visit_chips(document, line, &mut |chip| reads |= chip_reads(chip, id));
+    reads
 }
 
 /// Returns whether `value` reads property `id`.
 fn value_reads(document: &SheetDocument, value: &SheetValue, id: &str) -> bool {
-    match value {
-        SheetValue::Chip(chip) => chip_reads(chip, id),
-        SheetValue::Phrase(phrase) => line_reads(document, phrase, id),
-        SheetValue::List(items) => items.iter().any(|item| value_reads(document, item, id)),
-        SheetValue::Literal(_) => false,
-    }
+    let mut reads = false;
+    visit_value_chips(document, value, &mut |chip| reads |= chip_reads(chip, id));
+    reads
 }
 
 /// Returns whether `chip` reads property `id` of mine or of another agent.
@@ -194,12 +186,10 @@ pub(super) fn declare(builder: &mut Builder<'_>) {
             builder.graph.categories.push(category(property));
             // A category holds at most 256 variants, and one byte holds each.
             lane.storage = Some(LaneStorage::U8);
-            lane.initial = property.states.first().map(|state| {
-                Literal::Category(MemberName {
-                    owner: property.id.clone(),
-                    member: state.id.clone(),
-                })
-            });
+            lane.initial = property
+                .states
+                .first()
+                .map(|state| state_literal(&property.id, &state.id));
         }
         builder.graph.lanes.push(lane);
     }
