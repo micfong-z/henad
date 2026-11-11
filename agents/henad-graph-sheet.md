@@ -153,8 +153,8 @@ replacing it. The vote, forest fire, random walk and bounded confidence keep the
 as ids. henad-models' `no_starter_takes_the_id_of_an_example_model` holds every sheet and graph
 starter's id apart from `example_models()`. A sheet enters `sheets/` and `starters()` only in
 the milestone whose lowering runs it, and a test looping over `starters()` passes at every merge.
-The app's New model dialog lists only the starters whose world it offers (`starter_choices`), the
-grid sheets today. Until then a sheet is test data in `src/tests/sheets/`. `sir_chance.toml`,
+Until then a sheet is test data in `src/tests/sheets/`. The app's New model dialog lists Blank, then
+every starter, grid and agent alike (`starter_choices`). `sir_chance.toml`,
 `mobile_sir.toml` (chances once for each infected person nearby) and `sird.toml` (SIR with a Dead
 state, two competing rates of 0.05 per day out of Infected, its lines numbered in creation order)
 stay test data. `sir_chance.toml` and `sird.toml` have copies in henad-models'

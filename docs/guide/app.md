@@ -11,7 +11,7 @@ Before we start, make sure you have [installed Henad](installation.md) and can [
 
 <figure markdown="span">
   ![The Henad window running Ant Foraging on the GPU](../assets/app/overview.png){ width="900" }
-<figcaption>Ant Foraging (GPU) at roughly 35,000 ticks per second.</figcaption>
+<figcaption>Ant Foraging (GPU) at roughly 30,000 ticks per second.</figcaption>
 </figure>
 
 ## Overview
@@ -49,6 +49,11 @@ An app built on Henad shows its own name there, and adds a **Built on** row with
 
 Henad has two layouts, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> lists them under the tabs.
 
+<figure markdown="span">
+  ![The View menu, listing the 13 tabs with the open ones highlighted, then Default layout, Editor layout, the Open models in the Editor layout checkbox and Reset layout](../assets/app/view-menu.png){ width="232" }
+<figcaption>The View menu in the default layout.</figcaption>
+</figure>
+
 **Default layout**
 : For running a model, sweeping and reading results.
   The <span class="ui" markdown>:material-code-braces: Editor</span> is closed.
@@ -58,6 +63,11 @@ Henad has two layouts, and <span class="ui" markdown>:material-view-dashboard-ou
   The <span class="ui" markdown>:material-code-braces: Editor</span> takes most of the window, with <span class="ui" markdown>:material-flask-outline: Sweep</span> and <span class="ui" markdown>:material-chart-box-outline: Results</span> behind it.
   A column on the right holds the <span class="ui" markdown>:material-cube-outline: Viewport</span>, then <span class="ui" markdown>:material-play-circle-outline: Playback</span> with <span class="ui" markdown>:material-speedometer: Pacing</span> behind it, then <span class="ui" markdown>:material-chart-line: Charts</span> with <span class="ui" markdown>:material-tune: Parameters</span>, <span class="ui" markdown>:material-table: Statistics</span> and <span class="ui" markdown>:material-cog-outline: Model</span> behind it.
   Performance, System and Export are closed.
+
+<figure markdown="span">
+  ![The Editor layout with a forest fire sheet in the Editor on the left, and the Viewport, Playback and Charts in the column on the right](../assets/app/editor-layout.png){ width="900" }
+<figcaption>The Editor layout with the Forest fire starter, paused at tick 592 of its preview.</figcaption>
+</figure>
 
 Henad starts in the default layout.
 Each layout keeps your changes while the other one shows.
@@ -388,7 +398,7 @@ There are three types of statistics available:
 Every stat contributes a line to one time series, plotted against tick on an axis labelled **Tick**.
 For a model with a [time scale](../reference/model-files.md#time-scale), the axis reads in its unit, such as **Day**, and each sample sits at its tick times the length of one tick.
 The left axis always includes 0.
-A stat with one sample so far, as at tick 0, shows as a dot.
+A stat with one sample so far, as at tick 0, shows as a dot, and the axis then runs from that tick to the next.
 Each non-scalar stat is also plotted for the latest snapshot: an arrow from the origin for a vector, with a circle at its current magnitude, and a bar chart for a histogram.
 
 The charts are powered by [egui_plot](https://github.com/emilk/egui_plot).
@@ -1048,15 +1058,18 @@ It is closed in the default layout.
 When a model opens in it, from <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> or <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab or <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> in the Results tab, Henad switches to the [Editor layout](#layouts) with the Editor in front.
 Select it in the View menu to open it in the layout that shows, to the right of the <span class="ui" markdown>:material-cube-outline: Viewport</span> in the default layout.
 
+The Editor's header holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-graph-outline: New node graph</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, with <span class="ui" markdown>:material-check: Apply</span> at the right end, over a row that names the model.
+Under the panes, the Editor lists its messages, each with a bar and an icon: blue for information, orange for a warning and red for an error.
+
 ### Sheets
 
 A *sheet* describes a model in sentences.
-Press <span class="ui" markdown>:material-file-document-plus-outline: New model</span> in the Editor, the Model tab or the File menu, choose a starter under **Start from** (Game of Life, SIR epidemic, Majority vote or Forest fire), type a name, and press **Create**.
-The **Name** field follows the starter's name until you type in it.
+Press <span class="ui" markdown>:material-file-document-plus-outline: New model</span> in the Editor, the Model tab or the File menu, choose **Blank** or one of the eight starters under **Start from**, such as Game of Life, Forest fire or Boids, type a name, and press **Create**.
+The **Name** field follows the choice until you type in it.
 
 The sheet opens in two panes.
 **Sheet** lists what every cell has and what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.
-**Card** lists the lines every cell follows each tick, numbered from 1, each as a sentence such as "Become Alive from Dead, when Alive neighbours is 3".
+**Card** lists the lines every cell, or every agent, follows each tick, numbered from 1, each as a sentence such as "Become Alive from Dead, when Alive neighbours is 3".
 In a sentence, each chosen value is a chip: a result in blue, a state with its colour, a parameter with a slider mark, and "my" before a property in grey.
 An empty slot is a dashed box that names what it wants, such as "old state".
 Hover over a result chip to highlight the line that works it out.
@@ -1065,7 +1078,7 @@ Press the help button beside a heading for a short explanation with an example.
 The world stays in the Viewport, Playback, Pacing, Parameters and Charts tabs.
 
 A sheet starts at a small size in the Viewport, paused at tick 0 with the start drawn.
-Press Play in the Playback tab to run it, and <span class="ui" markdown>:material-restart: Build</span> to start it again from tick 0 as it started before.
+Press Play in the Playback tab to run it, <span class="ui" markdown>:material-fast-forward: Run</span> beside [**Run to tick**](#run-to-tick) to run it to a tick, and <span class="ui" markdown>:material-restart: Build</span> to start it again from tick 0 as it started before.
 Once you select another model in the Model tab, Build builds that model instead.
 The tick counter says what a tick is: "Tick 4 (a tick is one step of time)".
 Press <span class="ui" markdown>:material-check: Apply</span> to install the model at its own size, and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the sheet as a model file.
@@ -1074,8 +1087,8 @@ A sheet that holds a problem still opens, with the problem under its line on the
 ### Grid rules
 
 The code fills the tab, with its line numbers in a gutter beside it, and long lines scroll sideways rather than wrap.
-Above it, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> replace or save the text, and <span class="ui" markdown>:material-check: Apply</span> checks it and installs the rule.
-Below it, a list shows the outcome of the last Apply and each problem at its line and column.
+Above it, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> in the header replace or save the text, and <span class="ui" markdown>:material-check: Apply</span> checks it and installs the rule.
+Below it, the Editor lists the outcome of the last Apply and each problem at its line and column.
 Press a problem to move the cursor to it.
 
 A text that fails the check leaves the running model alone.

@@ -631,6 +631,10 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::SET_IN_REPEAT),
         ),
         (
+            "A look around, a count or a pick of a cell cannot sit inside a Repeat.",
+            fixed(sentence::LOOK_IN_REPEAT),
+        ),
+        (
             "An arrow cannot be compared with a number. Compare its length instead.",
             fixed(sentence::ARROW_COMPARED_WITH_NUMBER),
         ),

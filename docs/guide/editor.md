@@ -31,15 +31,32 @@ Untick **Open models in the Editor layout** in the View menu to open the Editor 
 - Press <span class="ui" markdown>:material-graph-outline: New node graph</span> in the Editor and pick an example to open it as a node graph: Game of Life, Vote or SIR Epidemic on a grid, or Boids Flocking, Ant Foraging or Random Walk of agents.
 - In the menu bar, <span class="ui" markdown>:material-file-outline: File</span> holds New model, New grid rule, New node graph, Open model and Save model, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> toggles the Editor like any other tab and switches between the default layout and the Editor layout.
 
+The Editor's header holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-graph-outline: New node graph</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, and <span class="ui" markdown>:material-check: Apply</span> at the right end.
+The row under it shows the model's name, a dot while the model holds changes you have not saved, and the name of its file.
+For a sheet, the row also holds <span class="ui" markdown>:material-undo: Undo</span>, <span class="ui" markdown>:material-redo: Redo</span> and the **Model actions** menu.
+
+Under the panes, the Editor lists its messages: the state of the preview, the outcome of the last open, save or Apply, and each problem.
+Each message starts with a bar and an icon in the colour of its kind, blue for information, orange for a warning and red for an error.
+
 New model, New grid rule, New node graph and Open model replace the Editor's model, and so does Open in Editor in the Results tab.
 Edit model replaces it too, but keeps the model, your edits since the last Apply included, while the selected model runs the code the Editor applied last.
 While the model holds changes you have not saved since you opened or made it, a dialog names it first, such as **Game of Life has unsaved changes.**
 Press <span class="ui">Save model</span> to save it and then replace it, <span class="ui">Discard changes</span> to replace it without saving, or <span class="ui">Cancel</span> to keep it.
+
+![The Unsaved changes dialog reading Forest fire has unsaved changes, with Cancel, Discard changes and Save model](../assets/app/editor-unsaved.png){ width="446" }
+
 Closing the window of the desktop app asks the same, and the app closes once the model is saved or its changes discarded.
 Apply does not save the model, and a save you cancel keeps it in the Editor.
 A sheet converted to a node graph is held beside its copy, and the dialog names it too while it holds unsaved changes.
 
 ## Sheets
+
+<span class="ui" markdown>:material-file-document-plus-outline: New model</span> opens the **New model** dialog.
+Under **Start from** it lists **Blank**, then eight starters, each with a line on what it models: Game of Life, SIR epidemic, Majority vote and Forest fire on a grid of cells, and Random walk, Boids, Bounded confidence and Ant foraging of agents.
+While **Blank** is chosen, **What is the world made of?** under it picks **Cells on a grid** or **Agents in open space**.
+**Name** follows the choice until you type in it, and <span class="ui">Create</span> or <kbd>Enter</kbd> opens the model.
+
+![The New model dialog with Forest fire chosen under Start from, between the grid starters and the agent starters, and its name in the Name field](../assets/app/editor-new-model.png){ width="446" }
 
 A sheet opens in two panes beside each other.
 **Sheet** lists what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.
@@ -47,12 +64,15 @@ A sheet opens in two panes beside each other.
 The world itself runs in the <span class="ui" markdown>:material-cube-outline: Viewport</span>, and the Playback, Pacing, Parameters and Charts tabs control it as they control any model.
 Each heading has a help button with a short explanation and an example.
 
-![The Sheet pane of a forest fire and its card, where line 3 starts with otherwise and a notice above the card says why](../assets/app/editor-sheet.png){ width="710" }
+![The Editor holding a forest fire: the header with the name row, the Sheet pane, and the card, where line 5 starts with otherwise and a notice above the card says why](../assets/app/editor-sheet.png){ width="700" }
 
 Every change on either pane is one step of <span class="ui" markdown>:material-undo: Undo</span> and <span class="ui" markdown>:material-redo: Redo</span>, on the second row of the Editor's header beside the model's name.
-A click on the name renames the model, and a dot after the name says the model holds changes you have not saved.
+A click on the name renames the model.
 
 ### The Sheet pane
+
+The pane holds one framed section for each part of the model, its title in small capitals and its help button at the right end.
+A section that lists several things, such as the properties under **Cells** or the **Parameters**, lists them in a table under a row of column headings, and a button at its end adds one more, such as **+ Add parameter**.
 
 **World** sets the size of the grid in cells, its edges, and how much time one tick stands for.
 With **Wrap around**, the left edge joins the right edge and the top edge joins the bottom.
@@ -74,9 +94,12 @@ An average keeps the name it was given, such as "Average of Food", in step with 
 
 ### The Card pane
 
-Under the card's heading, a grey box holds the rule every line follows: everyone reads the world as it was at the start of the tick, all changes land together at the end of it, and whatever no line changes stays as it was.
+Each card is a frame with its heading, such as "Each tick, every cell", and its number of lines at the right end.
+Under the heading, a grey bar marks the rule every line follows: everyone reads the world as it was at the start of the tick, all changes land together at the end of it, and whatever no line changes stays as it was.
 
 A line either works out a result, which lines below it can use, or changes one of the cell's properties.
+A bar at the left of each line shows its kind by colour, as the square on each add button does: blue for a look around, purple for a chance, yellow for a yes or no, grey for a calculation, green for a change, and white for a When or a Repeat.
+Hover over the bar to read the kind.
 In a sentence, each chosen value is a *chip*: a result in blue, a state with its colour, a parameter with a slider mark, and "my" before a property in grey.
 An empty slot is a dashed *blank* that names what it wants, such as "state" or "old state".
 Hover over a result chip to highlight the line that works it out.
@@ -95,9 +118,12 @@ A button's card runs its lines once when the button is pressed, and offers **+ C
 ### Writing a line
 
 A new line's first blank opens its *picker*, which lists only what fits there, in groups.
+A picker opens as a framed list under its blank, titled with what it asks for, such as **Choose a value**, and a press on a filled chip opens it again.
 A number takes a typed number, a result of a line above, one of the cell's properties, a parameter, or **New parameter...**, which creates one in a dialog and puts it in the blank.
 A chance takes a number from 0 to 1 or a percent such as 30%, and refuses anything else as you type it.
 "is one of the numbers" takes a list, such as 2, 3, typed in one go.
+
+![The card of a forest fire with a When block at line 6, its value chip open on the Choose a value picker, which lists Burning neighbours from line 1, my Cover, three parameters and New parameter, over a box to type a number](../assets/app/editor-picker.png){ width="536" }
 
 After a choice the keyboard moves to the next blank of the line.
 An empty state blank opens by itself, as does the upper number of "is less than ... or more than ..." after the lower one.
@@ -178,7 +204,7 @@ When the length of one tick changes, a notice under the Time line names the line
 
 ### When blocks
 
-A *When block* is a When line and the lines inside it, indented one step.
+A *When block* is a When line and the lines inside it, indented one step, with a thin guide down the indent.
 The lines inside apply only to the cells for which the When's condition holds, and a When can hold another When.
 A When cannot be always.
 
@@ -192,7 +218,7 @@ A grey note under it says which condition it holds under, such as "Only when lin
 A result inside a When is still worked out for every cell, and only the lines after it inside that When can use it.
 An empty When says "Nothing inside yet."
 
-![A When on my Cover is Empty holding a When with chance 0.01, which holds a Become, each block ending with its add row](../assets/app/editor-when.png){ width="400" }
+![A When on my Cover is Empty holding a When with chance 0.01, which holds a Become, each block ending with its add row](../assets/app/editor-when.png){ width="530" }
 
 Two offers fold a When that holds no more than its lines need:
 
@@ -309,10 +335,10 @@ Inside a Repeat a Become counts the agents it changed, and every other change sh
 
 ### The Diagram
 
-Press **Diagram** beside the Card heading to draw each card as boxes and arrows in place of its lines.
+Press **Diagram**, beside **Lines** after the Card heading, to draw each card as boxes and arrows in place of its lines.
 Each line is a box with its sentence, the result it works out on its right, and on its left the results of lines above that it reads.
 An arrow runs from a result to every line that reads it, and a dashed frame labelled "Inside line N" surrounds the lines inside each When.
-The Diagram is read-only: edit the lines to change it, and press **Diagram** again to return to them.
+The Diagram is read-only: edit the lines to change it, and press **Lines** to return to them.
 
 ### Converting to a node graph
 
