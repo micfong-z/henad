@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use henad_compute::entry::register_grid_model;
 use henad_core::explore::design::DesignKind;
-use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::plan::Shard;
-use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
+use henad_core::explore::spec::{BlockSpec, SweepSpec};
 
 use crate::exec::Concurrency;
 use crate::output::manifest::{BuildRole, ManifestStatus, RecordedBuild};
@@ -18,36 +18,8 @@ use crate::sweep::{ExploreError, SweepOptions, SweepWarning};
 use crate::tests::broken::DividesByParam;
 use crate::tests::support::{
     OutputTables, Recorder, ScratchDir, SecondResume, dry_run, entry, manifest, other_engine, provenance,
-    rewrite_manifest, sweep, sweep_options, sweep_with,
+    rewrite_manifest, sir_spec, sweep, sweep_options, sweep_with, values,
 };
-
-fn values(raw: &[&str]) -> LevelSpec {
-    LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
-}
-
-/// Returns 3 configs of SIR on a 16 by 16 grid with `replicates` replicates, and an action whose tick varies.
-fn sir_spec(replicates: u64) -> SweepSpec {
-    let mut spec = SweepSpec::new("sir");
-    spec.fixed = vec![
-        ("grid_width".to_owned(), "16".to_owned()),
-        ("grid_height".to_owned(), "16".to_owned()),
-    ];
-    spec.run.steps = 30;
-    spec.run.replicates = replicates;
-    spec.measure.stats_every = 3;
-    spec.measure.series_every = 6;
-    spec.seeds.root = 8;
-    spec.actions = vec![ActionSpec::new("seed_outbreak", 12)];
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Zip,
-        factors: vec![
-            FactorSpec::param("infection_rate", values(&["0.2", "0.4", "0.6"])),
-            FactorSpec::action("seed_outbreak", values(&["6", "12", "18"])),
-        ],
-        design_seed: None,
-    }];
-    spec
-}
 
 /// Runs a resume of `spec` into `output_dir` with `options`, and returns the ids of the runs it committed.
 fn resume(entry_id: &str, spec: &SweepSpec, output_dir: &Path, options: SweepOptions) -> Vec<u64> {

@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeSet;
 use std::fmt;
-use std::io::{self, BufRead};
+#[cfg(not(target_arch = "wasm32"))]
+use std::io;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use henad_core::explore::fingerprint::schema_hash;
@@ -24,9 +26,9 @@ use henad_core::explore::value::parse_value;
 use henad_core::provenance::{ModelCode, ModelSource};
 
 use crate::output::manifest::{
-    BuildRole, Manifest, ManifestError, ManifestMode, ManifestModelCode, ManifestStatus, RecordedBuild,
+    BuildRole, Manifest, ManifestError, ManifestMode, ManifestModelCode, ManifestStatus, RecordedBuild, hex, parse_hex,
 };
-use crate::output::read::{ReadError, parse_one, record_ends};
+use crate::output::read::{CompleteRecords, ReadError, parse_one};
 use crate::output::runs_csv::{ID_COLUMNS, NOTE_COLUMN, OUTCOME_COLUMNS};
 use crate::output::search_tables::{
     ARCHIVE_ID_COLUMNS, EVALUATION_ID_COLUMNS, GENERATION_COLUMNS, OBJECTIVE_BATCH_COLUMNS, PATTERN_BATCH_COLUMNS,
@@ -38,7 +40,6 @@ use crate::output::{
 };
 use crate::search_run::{SearchPlan, SearchPlanError};
 use crate::spec_file::{SpecFile, SpecFileError};
-use crate::sweep::hex;
 
 /// Results of one sweep, read from an output directory or from its files' bytes.
 #[derive(Debug, Clone)]
@@ -227,28 +228,17 @@ impl ResultSet {
     ///
     /// Returns [`ResultSetError::Table`] when `series` cannot be read, its header does not list the manifest's stat
     /// columns, or a row is not one the sweep writes.
-    fn read_series(
-        &mut self,
-        mut series: impl BufRead,
-        path: &Path,
-        series_budget: usize,
-    ) -> Result<(), ResultSetError> {
+    fn read_series(&mut self, series: impl BufRead, path: &Path, series_budget: usize) -> Result<(), ResultSetError> {
         let width = self.stat_columns.len();
         let row_bytes = (width + 1) * size_of::<f64>();
-        let mut line = Vec::new();
-        if !read_line(&mut series, &mut line, path)? {
+        let Some(mut rows) = SeriesRows::open(series, path, &self.stat_columns)? else {
             self.mark_series_missing();
             return Ok(());
-        }
-        let timed = check_series_header(&line, &self.stat_columns, path)?;
+        };
         let mut budget_spent = false;
-        let mut values = Vec::with_capacity(width);
-        let mut record_number = 1;
         // Position of the run the last row went to. Its series is trimmed to its rows once another run's rows start.
         let mut last_position = None;
-        while read_line(&mut series, &mut line, path)? {
-            record_number += 1;
-            let (run_id, tick) = parse_series_row(&line, timed, width, &mut values, path, record_number)?;
+        while let Some(SeriesRow { run_id, tick, values }) = rows.next_row()? {
             let Some(&position) = self.positions.get(&run_id) else {
                 continue;
             };
@@ -271,7 +261,7 @@ impl ResultSet {
                 continue;
             }
             self.series_bytes += row_bytes;
-            run.outcome.series.push(tick, &values);
+            run.outcome.series.push(tick, values);
         }
         if let Some(last) = last_position {
             self.runs[last].outcome.series.shrink_to_fit();
@@ -554,24 +544,17 @@ pub fn read_directory_series(
             source,
         })
     })?;
-    let mut lines = io::BufReader::new(file);
     let mut read = DirectorySeries::default();
     let stat_width = stat_columns.len();
     let row_bytes = (stat_width + 1) * size_of::<f64>();
     let mut series_bytes = 0;
     let mut budget_spent = false;
-    let mut line = Vec::new();
-    let mut values = Vec::with_capacity(stat_width);
-    let mut record_number = 1;
     // Run the last row went to. Its series is trimmed to its rows once another run's rows start.
     let mut last_run = None;
-    if !read_line(&mut lines, &mut line, &path)? {
+    let Some(mut rows) = SeriesRows::open(io::BufReader::new(file), &path, stat_columns)? else {
         return Ok(read);
-    }
-    let timed = check_series_header(&line, stat_columns, &path)?;
-    while read_line(&mut lines, &mut line, &path)? {
-        record_number += 1;
-        let (run_id, tick) = parse_series_row(&line, timed, stat_width, &mut values, &path, record_number)?;
+    };
+    while let Some(SeriesRow { run_id, tick, values }) = rows.next_row()? {
         if !run_ids.contains(&run_id) || read.dropped_runs.contains(&run_id) {
             continue;
         }
@@ -593,7 +576,7 @@ pub fn read_directory_series(
         read.series
             .entry(run_id)
             .or_insert_with(|| SeriesBuffer::new(stat_width))
-            .push(tick, &values);
+            .push(tick, values);
     }
     if let Some(series) = last_run.and_then(|last| read.series.get_mut(&last)) {
         series.shrink_to_fit();
@@ -675,6 +658,76 @@ fn check_series_header(line: &[u8], stat_columns: &[String], path: &Path) -> Res
         }
     }
     Ok(timed)
+}
+
+/// One row of a `series.csv`.
+struct SeriesRow<'r> {
+    run_id: u64,
+    tick: u64,
+    values: &'r [f64],
+}
+
+/// Complete rows of a `series.csv`, read one at a time after its header is checked.
+struct SeriesRows<'p, R> {
+    lines: R,
+    path: &'p Path,
+    /// Whether the rows hold a `time` field after the tick.
+    timed: bool,
+    width: usize,
+    line: Vec<u8>,
+    values: Vec<f64>,
+    record_number: usize,
+}
+
+impl<'p, R: BufRead> SeriesRows<'p, R> {
+    /// Reads the header of `lines`, the `series.csv` at `path`, and checks that it lists `stat_columns`.
+    ///
+    /// Returns `None` for a file without a complete header line.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResultSetError::Table`] when `lines` cannot be read or its header does not list `stat_columns`.
+    fn open(mut lines: R, path: &'p Path, stat_columns: &[String]) -> Result<Option<Self>, ResultSetError> {
+        let mut line = Vec::new();
+        if !read_line(&mut lines, &mut line, path)? {
+            return Ok(None);
+        }
+        let timed = check_series_header(&line, stat_columns, path)?;
+        Ok(Some(Self {
+            lines,
+            path,
+            timed,
+            width: stat_columns.len(),
+            line,
+            values: Vec::with_capacity(stat_columns.len()),
+            record_number: 1,
+        }))
+    }
+
+    /// Reads the next complete row, or returns `None` past the last one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResultSetError::Table`] when the file cannot be read or the row is not one a sweep writes.
+    fn next_row(&mut self) -> Result<Option<SeriesRow<'_>>, ResultSetError> {
+        if !read_line(&mut self.lines, &mut self.line, self.path)? {
+            return Ok(None);
+        }
+        self.record_number += 1;
+        let (run_id, tick) = parse_series_row(
+            &self.line,
+            self.timed,
+            self.width,
+            &mut self.values,
+            self.path,
+            self.record_number,
+        )?;
+        Ok(Some(SeriesRow {
+            run_id,
+            tick,
+            values: &self.values,
+        }))
+    }
 }
 
 /// Reads the next complete line of `lines` into `line`, and returns whether there was a complete line.
@@ -762,42 +815,23 @@ struct RunsColumnNames {
 /// first run.
 fn read_runs(bytes: &[u8], path: &Path, width: usize) -> Result<(RunsColumnNames, Vec<RunRow>), ResultSetError> {
     let table_error = ResultSetError::Table;
-    let ends = record_ends(bytes);
-    let complete = ends.last().copied().unwrap_or(0);
-    let text = std::str::from_utf8(&bytes[..complete]).map_err(|error| {
-        table_error(ReadError::Io {
-            path: path.to_owned(),
-            source: io::Error::new(io::ErrorKind::InvalidData, error),
-        })
-    })?;
-    let Some((&header_end, record_ends)) = ends.split_first() else {
+    let Some(complete) = CompleteRecords::read(bytes, path).map_err(table_error)? else {
         let columns = RunsColumnNames {
             value_columns: Vec::new(),
             reducer_columns: Vec::new(),
         };
         return Ok((columns, Vec::new()));
     };
-    let header = parse_one(text, 0..header_end, path, 1).map_err(table_error)?;
-    let column_positions = RunsColumnPositions::find(&header, path).map_err(table_error)?;
-    let mut records = Vec::with_capacity(record_ends.len());
-    let mut start = header_end;
-    for (index, &end) in record_ends.iter().enumerate() {
-        let record_number = index + 2;
-        let fields = parse_one(text, start..end, path, record_number).map_err(table_error)?;
-        if fields.len() != header.len() {
-            return Err(table_error(ReadError::FieldCount {
-                path: path.to_owned(),
-                record_number,
-                found: fields.len(),
-                expected: header.len(),
-            }));
-        }
+    let header = &complete.header;
+    let column_positions = RunsColumnPositions::find(header, path).map_err(table_error)?;
+    let mut records = Vec::with_capacity(complete.record_count());
+    for record in complete.records() {
+        let (record_number, fields, _) = record.map_err(table_error)?;
         records.push(
             column_positions
-                .record(&header, &fields, width, path, record_number)
+                .record(header, &fields, width, path, record_number)
                 .map_err(table_error)?,
         );
-        start = end;
     }
     let columns = RunsColumnNames {
         value_columns: header[column_positions.values.clone()].to_vec(),
@@ -885,7 +919,7 @@ impl RunsColumnPositions {
                 rep: integer(3)?,
                 seed: integer(4)?,
             },
-            run_key: u64::from_str_radix(&fields[5], 16).ok().ok_or_else(|| bad_field(5))?,
+            run_key: parse_hex(&fields[5]).ok_or_else(|| bad_field(5))?,
             status: fields[status].parse().ok().ok_or_else(|| bad_field(status))?,
             stop_reason: fields[status + 1].parse().ok().ok_or_else(|| bad_field(status + 1))?,
             ticks: integer(status + 2)?,

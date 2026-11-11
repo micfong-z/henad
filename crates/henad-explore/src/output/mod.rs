@@ -355,15 +355,7 @@ impl OutputDir {
         };
         let mut records: Vec<_> = runs.records.iter().collect();
         records.sort_by_key(|record| record.run_id);
-        let segments: Vec<SeriesSegment> = series
-            .segments
-            .iter()
-            .map(|range| SeriesSegment {
-                path: series_path.clone(),
-                range: range.clone(),
-                input_index: 0,
-            })
-            .collect();
+        let segments: Vec<SeriesSegment> = series.segments_at(&series_path, 0).collect();
         let runs_header_line = runs_csv::header_line(runs_header);
         self.replace_tables(
             |dest| {
@@ -414,19 +406,32 @@ impl OutputDir {
     /// cannot be written, and [`OutputError::Summary`] when `runs.csv` cannot be summarized.
     pub fn write_summary(&self) -> Result<(), OutputError> {
         let runs_path = self.path.join(RUNS_FILE);
-        let read_error = |source| OutputError::Read {
+        let runs = File::open(&runs_path).map_err(|source| OutputError::Read {
             path: runs_path.clone(),
             source,
-        };
-        let runs = File::open(&runs_path).map_err(read_error)?;
+        })?;
         let summary_path = self.path.join(SUMMARY_FILE);
         let summary = create_fresh(&summary_path).map_err(write_error_at(&summary_path))?;
-        match write_summary(BufReader::new(runs), BufWriter::new(summary)) {
-            Ok(_) => Ok(()),
-            Err(SummaryError::Read(source)) => Err(read_error(source)),
-            Err(SummaryError::Io(source)) => Err(write_error_at(&summary_path)(source)),
-            Err(error) => Err(OutputError::Summary(error)),
+        write_summary(BufReader::new(runs), BufWriter::new(summary))
+            .map(drop)
+            .map_err(|error| OutputError::from_summary(error, &runs_path, &summary_path))
+    }
+
+    /// Cuts `runs.csv` to `runs_bytes` bytes and `series.csv` to `series_bytes` bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputError::Write`] when a table cannot be opened or cut.
+    pub(crate) fn truncate_tables(&self, runs_bytes: u64, series_bytes: u64) -> Result<(), OutputError> {
+        for (file, length) in [(RUNS_FILE, runs_bytes), (SERIES_FILE, series_bytes)] {
+            let path = self.path.join(file);
+            OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .and_then(|table| table.set_len(length))
+                .map_err(|source| OutputError::Write { path, source })?;
         }
+        Ok(())
     }
 }
 
@@ -641,6 +646,23 @@ pub enum OutputError {
     Summary(SummaryError),
     /// Serializing the manifest failed.
     Manifest(serde_json::Error),
+}
+
+impl OutputError {
+    /// Returns the error of a summary that `runs_path` was read for and `summary_path` was written to.
+    pub(crate) fn from_summary(error: SummaryError, runs_path: &Path, summary_path: &Path) -> Self {
+        match error {
+            SummaryError::Read(source) => Self::Read {
+                path: runs_path.to_owned(),
+                source,
+            },
+            SummaryError::Io(source) => Self::Write {
+                path: summary_path.to_owned(),
+                source,
+            },
+            error => Self::Summary(error),
+        }
+    }
 }
 
 impl fmt::Display for OutputError {

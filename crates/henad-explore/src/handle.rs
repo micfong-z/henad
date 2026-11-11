@@ -28,7 +28,7 @@ use crate::progress::{Progress, ProgressEvent};
 use crate::pumped::{PumpedSweep, SweepCommand};
 use crate::search_run::{SearchPlan, SearchPlanError, SearchUpdate};
 use crate::spec_file::SpecFileError;
-use crate::sweep::{Provenance, SpecSource, SweepEnd, SweepOutline, SweepRecord, SweepWarning};
+use crate::sweep::{Provenance, SpecPlan, SpecSource, SweepEnd, SweepOutline, SweepRecord, SweepWarning};
 
 /// Maximum total size in bytes of the series that the events of a sweep carry, unless the host requests a different
 /// budget.
@@ -257,9 +257,7 @@ impl std::error::Error for SweepStartError {
 /// `stop` waits within a timeout instead.
 #[derive(Debug)]
 pub struct SweepRun {
-    plan: Arc<Plan>,
-    /// Plan of a search, `None` for a sweep.
-    search_plan: Option<Arc<SearchPlan>>,
+    planned: SpecPlan,
     control: SweepControl,
     active_runs: ActiveRuns,
     events: Receiver<SweepEvent>,
@@ -300,7 +298,7 @@ impl SweepRun {
         output: SweepOutput,
         options: SweepRunOptions,
     ) -> Result<Self, SweepStartError> {
-        let (plan, search_plan) = plan_for_start(&entry, &spec)?;
+        let planned = plan_for_start(&entry, &spec)?;
         match &output {
             SweepOutput::Memory => {}
             #[cfg(not(target_arch = "wasm32"))]
@@ -314,8 +312,7 @@ impl SweepRun {
         Self::launch(SweepLaunch {
             entry,
             spec,
-            plan,
-            search_plan,
+            planned,
             options,
             #[cfg(not(target_arch = "wasm32"))]
             gpu,
@@ -357,7 +354,7 @@ impl SweepRun {
         let spec = SpecFile::from_json(&manifest.spec)
             .and_then(SpecFile::into_spec)
             .map_err(SweepStartError::Spec)?;
-        let (plan, search_plan) = plan_for_start(&entry, &spec)?;
+        let planned = plan_for_start(&entry, &spec)?;
         let shard = manifest.shard.to_shard().ok_or(SweepStartError::Shard)?;
         let options = SweepRunOptions {
             spec_source: SpecSource::from(&manifest.spec_source),
@@ -366,8 +363,7 @@ impl SweepRun {
         Self::launch(SweepLaunch {
             entry,
             spec,
-            plan,
-            search_plan,
+            planned,
             options,
             gpu,
             output: SweepOutput::Directory(dir.to_owned()),
@@ -378,7 +374,7 @@ impl SweepRun {
 
     /// Plan of the sweep's configs and runs, or of a search's fixed values and actions alone.
     pub fn plan(&self) -> &Arc<Plan> {
-        &self.plan
+        self.planned.base()
     }
 
     /// Plan of a search, `None` for a sweep.
@@ -386,7 +382,7 @@ impl SweepRun {
     /// A search's configs are chosen as it runs. Each config arrives in a [`SweepEvent::SearchBatchTold`], and
     /// [`SearchPlan::replay`] rebuilds any of its runs.
     pub fn search_plan(&self) -> Option<&Arc<SearchPlan>> {
-        self.search_plan.as_ref()
+        self.planned.search()
     }
 
     /// Holds every run at its next slice of steps.
@@ -482,11 +478,7 @@ impl SweepRun {
             None => SweepPhase::Planning,
         };
         let ended = progress_state.final_phase.is_some();
-        let runs_total = progress_state.runs_total.unwrap_or_else(|| {
-            self.search_plan
-                .as_ref()
-                .map_or_else(|| self.plan.run_count(), |search_plan| search_plan.run_count())
-        });
+        let runs_total = progress_state.runs_total.unwrap_or_else(|| self.planned.run_count());
         let runs_done = progress_state.runs_done;
         let elapsed = self.clock.elapsed(progress_state.ended_at.unwrap_or_else(Instant::now));
         let runs_waiting = if ended {
@@ -516,15 +508,13 @@ impl SweepRun {
     #[cfg(not(target_arch = "wasm32"))]
     fn launch(launch: SweepLaunch) -> Result<Self, SweepStartError> {
         use crate::output::manifest::ManifestRuntime;
-        use crate::search_run::{run_search_in_memory, run_search_into_directory};
-        use crate::sweep::{SweepInputs, SweepOptions, run_in_memory, run_into_directory, sweep_device};
+        use crate::sweep::{SweepInputs, SweepOptions, run_planned, sweep_device};
         use henad_compute::fault::catching;
 
         let (mut channel, events, shared_progress) = SweepChannel::open(&launch.options);
         let control = SweepControl::new();
         let active_runs = ActiveRuns::new();
-        let plan = Arc::clone(&launch.plan);
-        let search_plan = launch.search_plan.clone();
+        let planned = launch.planned.clone();
         let mut sweep_options = SweepOptions::new(launch.options.provenance.clone());
         sweep_options.concurrency = launch.options.concurrency;
         sweep_options.memory_budget = launch.options.memory_budget;
@@ -543,8 +533,7 @@ impl SweepRun {
                     entry,
                     gpu,
                     spec,
-                    plan,
-                    search_plan,
+                    planned,
                     output,
                     ..
                 } = launch;
@@ -564,20 +553,11 @@ impl SweepRun {
                     gpu,
                     runtime: &runtime,
                     spec: &spec,
-                    source: &sweep_options.spec_source,
-                    provenance: &sweep_options.provenance,
                     options: &sweep_options,
                     folder,
                     dry_run: false,
                 };
-                let ran = catching(RUNNING_SWEEP, || match (folder, search_plan) {
-                    (None, None) => run_in_memory(&inputs, Some(plan), &mut channel),
-                    (Some(dir), None) => run_into_directory(&inputs, Some(plan), dir, &mut channel),
-                    (None, Some(search_plan)) => run_search_in_memory(&inputs, Some(search_plan), &mut channel),
-                    (Some(dir), Some(search_plan)) => {
-                        run_search_into_directory(&inputs, Some(search_plan), dir, &mut channel)
-                    }
-                });
+                let ran = catching(RUNNING_SWEEP, || run_planned(&inputs, planned, &mut channel));
                 match ran {
                     Ok(Ok(record)) => channel.finish(record),
                     Ok(Err(error)) => channel.fail(&error),
@@ -586,8 +566,7 @@ impl SweepRun {
             })
             .map_err(SweepStartError::Spawn)?;
         Ok(Self {
-            plan,
-            search_plan,
+            planned,
             control,
             active_runs,
             events,
@@ -601,20 +580,11 @@ impl SweepRun {
     #[cfg(target_arch = "wasm32")]
     fn launch(launch: SweepLaunch) -> Result<Self, SweepStartError> {
         let (channel, events, shared_progress) = SweepChannel::open(&launch.options);
-        let plan = Arc::clone(&launch.plan);
-        let search_plan = launch.search_plan.clone();
-        let sweep = PumpedSweep::new(
-            launch.entry,
-            launch.spec,
-            launch.plan,
-            launch.search_plan,
-            channel,
-            launch.options,
-        )?;
+        let planned = launch.planned.clone();
+        let sweep = PumpedSweep::new(launch.entry, launch.spec, launch.planned, channel, launch.options)?;
         let (control, active_runs) = (sweep.control().clone(), sweep.active_runs().clone());
         Ok(Self {
-            plan,
-            search_plan,
+            planned,
             control,
             active_runs,
             events,
@@ -655,8 +625,7 @@ const ACQUIRING_DEVICE: &str = "acquiring the sweep's GPU device";
 struct SweepLaunch {
     entry: ModelEntry,
     spec: SweepSpec,
-    plan: Arc<Plan>,
-    search_plan: Option<Arc<SearchPlan>>,
+    planned: SpecPlan,
     options: SweepRunOptions,
     #[cfg(not(target_arch = "wasm32"))]
     gpu: Option<GpuContext>,
@@ -668,17 +637,13 @@ struct SweepLaunch {
     resume: bool,
 }
 
-/// Returns the plan of `spec` over `entry` that a handle starts, and for a search its search plan. For a search, the
-/// first plan is the search plan's base.
+/// Returns the plan of `spec` over `entry` that a handle starts, a search plan when `spec` has a `[search]` table.
 ///
 /// # Errors
 ///
 /// Returns [`SweepStartError`] when the spec specifies a different model, targets a GPU model in a browser,
 /// or cannot be planned.
-fn plan_for_start(
-    entry: &ModelEntry,
-    spec: &SweepSpec,
-) -> Result<(Arc<Plan>, Option<Arc<SearchPlan>>), SweepStartError> {
+pub(crate) fn plan_for_start(entry: &ModelEntry, spec: &SweepSpec) -> Result<SpecPlan, SweepStartError> {
     if spec.model != entry.id() {
         return Err(SweepStartError::ModelMismatch {
             spec_model: spec.model.clone(),
@@ -690,10 +655,10 @@ fn plan_for_start(
     }
     if spec.search.is_some() {
         let search_plan = SearchPlan::new(spec, &entry.schema()).map_err(SweepStartError::Search)?;
-        return Ok((Arc::clone(search_plan.base()), Some(Arc::new(search_plan))));
+        return Ok(SpecPlan::Search(Arc::new(search_plan)));
     }
     let plan = spec.plan(&entry.schema()).map_err(SweepStartError::Plan)?;
-    Ok((Arc::new(plan), None))
+    Ok(SpecPlan::Sweep(Arc::new(plan)))
 }
 
 /// Time a sweep has run, pauses left out.

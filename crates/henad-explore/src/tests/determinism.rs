@@ -19,19 +19,8 @@ use crate::output::OutputWriter;
 use crate::output::runs_csv::RunsWriter;
 use crate::output::series_csv::SeriesWriter;
 use crate::tests::support::{
-    Collected, OutputTables, ScratchDir, entry, lanes, planned, run_plan, sweep, without_timing,
+    Collected, OutputTables, ScratchDir, entry, fixed, lanes, planned, run_plan, sweep, values, without_timing,
 };
-
-fn values(raw: &[&str]) -> LevelSpec {
-    LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
-}
-
-fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-    pairs
-        .iter()
-        .map(|&(id, value)| (id.to_owned(), value.to_owned()))
-        .collect()
-}
 
 fn lane_count(count: usize) -> Concurrency {
     Concurrency::Fixed(NonZeroUsize::new(count).expect("a test lane count is above 0"))
@@ -237,9 +226,10 @@ fn common_random_numbers_share_seeds_across_configs() {
 /// cadence, and compares the rows at the ticks both cadences sample and the state exported at the end.
 mod sampling_cadence_does_not_change_the_trajectory {
     use super::{
-        Collected, MeasurePlan, ModelEntry, ModelState, SimState, SweepSpec, entry, fixed, lanes, planned, point_rows,
+        Collected, MeasurePlan, ModelEntry, ModelState, SimState, SweepSpec, entry, lanes, planned, point_rows,
         run_plan, write_edges, write_grid, write_points,
     };
+    use crate::tests::support::fixed;
 
     /// Final tick of every case. It is not a multiple of the coarser cadence, so the final tick is sampled in addition.
     const STEPS: u64 = 25;

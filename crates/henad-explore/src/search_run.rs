@@ -13,8 +13,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-#[cfg(not(target_arch = "wasm32"))]
-use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -43,25 +41,30 @@ use henad_core::provenance::ModelSource;
 use crate::exec::{BatchEnd, RunRequest};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::exec::{Executor, RunSink};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::output::manifest::now_unix_ms;
 use crate::output::manifest::{
-    Manifest, ManifestAxisRanges, ManifestMode, ManifestPlan, ManifestSearch, ResultCounts, now_unix_ms,
+    Manifest, ManifestAxisRanges, ManifestMode, ManifestPlan, ManifestSearch, ResultCounts, hex,
 };
 use crate::output::memory::{SweepFiles, memory_writer};
 use crate::output::read::{ReadError, RunsCsv, SeriesScan, parse_one};
-use crate::output::resume::{ResumeError, check_code, check_directory_code, check_model};
-use crate::output::runs_csv::{ID_COLUMNS, OUTCOME_COLUMNS, column_names};
+use crate::output::resume::{ResumeError, check_identity, check_schema};
+use crate::output::runs_csv::{ID_COLUMNS, OUTCOME_COLUMNS};
 use crate::output::search_tables::{ConfigColumns, SearchTablesWriter, write_archive, write_ranking};
+use crate::output::series_csv;
 use crate::output::{
     ARCHIVE_FILE, BATCHES_FILE, BEST_FILE, EVALUATIONS_FILE, GENERATIONS_FILE, MANIFEST_FILE, OutputDir, OutputError,
-    OutputWriter, RUNS_FILE, SERIES_FILE, runs_csv, series_csv, table_paths,
+    OutputWriter, RUNS_FILE, SERIES_FILE, runs_csv, table_paths,
 };
-use crate::probe::{ProbeReport, TimedProbe, check_capacity};
+use crate::probe::{ProbeReport, TimedProbe};
+use crate::progress::Progress;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::progress::ProgressEvent;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::progress::ProgressMeter;
-use crate::progress::{Progress, ProgressEvent};
 use crate::sweep::{
-    ExploreError, ManifestParts, SweepEnd, SweepInputs, SweepOutline, SweepRecord, SweepReport, SweepWarning,
-    build_warnings, finish_manifest, hex, running_manifest, sized_layout,
+    ExploreError, ManifestParts, PreparedStart, SweepEnd, SweepInputs, SweepOutline, SweepRecord, SweepReport,
+    announce, finish_manifest, running_manifest, sized_layout,
 };
 
 /// A search spec checked against a model, with its space resolved.
@@ -223,14 +226,19 @@ impl SearchPlan {
             batch_size: self.search.batch_size,
             objective: self.search.objective.clone(),
             watched_columns: self.search.watched_columns().into_iter().map(str::to_owned).collect(),
-            pattern_axes: match &self.search.algorithm {
-                SearchAlgorithm::PatternSpaceExploration(settings) => {
-                    Some([settings.x_axis.clone(), settings.y_axis.clone()])
-                }
-                SearchAlgorithm::Random | SearchAlgorithm::HillClimb(_) | SearchAlgorithm::Genetic(_) => None,
-            },
+            pattern_axes: self
+                .pattern_settings()
+                .map(|settings| [settings.x_axis.clone(), settings.y_axis.clone()]),
             space: self.search.space.clone(),
             search_seed: search_seed(self.base.seed_settings().root),
+        }
+    }
+
+    /// Settings of a Pattern Space Exploration (PSE), `None` for a search that scores its candidates.
+    pub(crate) fn pattern_settings(&self) -> Option<&PatternSpaceSettings> {
+        match &self.search.algorithm {
+            SearchAlgorithm::PatternSpaceExploration(settings) => Some(settings),
+            SearchAlgorithm::Random | SearchAlgorithm::HillClimb(_) | SearchAlgorithm::Genetic(_) => None,
         }
     }
 }
@@ -628,10 +636,10 @@ impl SearchSession {
             .collect();
         self.searcher.tell(&evaluations);
         let searcher = &self.searcher;
-        let pattern_settings = match &self.plan.search.algorithm {
-            SearchAlgorithm::PatternSpaceExploration(settings) => Some(searcher.pattern_settings().unwrap_or(settings)),
-            SearchAlgorithm::Random | SearchAlgorithm::HillClimb(_) | SearchAlgorithm::Genetic(_) => None,
-        };
+        let pattern_settings = self
+            .plan
+            .pattern_settings()
+            .map(|settings| searcher.pattern_settings().unwrap_or(settings));
         let mut touched = BTreeSet::new();
         let evaluated: Vec<EvaluatedCandidate> = candidates
             .into_iter()
@@ -728,18 +736,15 @@ impl SearchSession {
         let mut record = manifest_search(&self.plan);
         record.evaluations = self.evaluations;
         record.batch_count = self.batch_count;
-        match &self.plan.search.algorithm {
-            SearchAlgorithm::PatternSpaceExploration(_) => {
-                record.filled_cells = Some(self.searcher.filled_cells());
-                record.axis_ranges = self.searcher.pattern_settings().and_then(ManifestAxisRanges::of);
-            }
-            SearchAlgorithm::Random | SearchAlgorithm::HillClimb(_) | SearchAlgorithm::Genetic(_) => {
-                let best = self.searcher.best();
-                record.best_candidate_id = best.as_ref().map(|entry| entry.candidate_id);
-                record.best_objective = best
-                    .map(|entry| entry.objective)
-                    .filter(|objective| objective.is_finite());
-            }
+        if self.plan.pattern_settings().is_some() {
+            record.filled_cells = Some(self.searcher.filled_cells());
+            record.axis_ranges = self.searcher.pattern_settings().and_then(ManifestAxisRanges::of);
+        } else {
+            let best = self.searcher.best();
+            record.best_candidate_id = best.as_ref().map(|entry| entry.candidate_id);
+            record.best_objective = best
+                .map(|entry| entry.objective)
+                .filter(|objective| objective.is_finite());
         }
         record
     }
@@ -755,24 +760,19 @@ impl SearchSession {
         dest: W,
         columns: &ConfigColumns,
     ) -> io::Result<W> {
-        match &self.plan.search.algorithm {
-            SearchAlgorithm::PatternSpaceExploration(settings) => {
+        match self.plan.pattern_settings() {
+            Some(settings) => {
                 let settings = self.searcher.pattern_settings().unwrap_or(settings);
                 write_archive(dest, settings, &report.archive, &self.configs, columns)
             }
-            SearchAlgorithm::Random | SearchAlgorithm::HillClimb(_) | SearchAlgorithm::Genetic(_) => {
-                write_ranking(dest, &report.ranking, &self.configs, columns)
-            }
+            None => write_ranking(dest, &report.ranking, &self.configs, columns),
         }
     }
 }
 
 /// Returns the record of a search of `plan` before its first batch.
 fn manifest_search(plan: &SearchPlan) -> ManifestSearch {
-    let pattern_settings = match &plan.search.algorithm {
-        SearchAlgorithm::PatternSpaceExploration(settings) => Some(settings),
-        SearchAlgorithm::Random | SearchAlgorithm::HillClimb(_) | SearchAlgorithm::Genetic(_) => None,
-    };
+    let pattern_settings = plan.pattern_settings();
     ManifestSearch {
         algorithm: plan.search.algorithm.as_str().to_owned(),
         search_hash: hex(plan.search_hash),
@@ -791,9 +791,10 @@ fn manifest_search(plan: &SearchPlan) -> ManifestSearch {
 
 /// Returns the name of the closing table a search of `plan` writes, `best.csv` or `archive.csv`.
 fn closing_table_file(plan: &SearchPlan) -> &'static str {
-    match plan.search.algorithm {
-        SearchAlgorithm::PatternSpaceExploration(_) => ARCHIVE_FILE,
-        SearchAlgorithm::Random | SearchAlgorithm::HillClimb(_) | SearchAlgorithm::Genetic(_) => BEST_FILE,
+    if plan.pattern_settings().is_some() {
+        ARCHIVE_FILE
+    } else {
+        BEST_FILE
     }
 }
 
@@ -872,21 +873,8 @@ impl RecordedSearch {
         config_column_count: usize,
     ) -> Result<Self, ResumeError> {
         let recorded = Manifest::read(&path.join(MANIFEST_FILE)).map_err(ResumeError::Manifest)?;
-        if recorded.mode != ManifestMode::Search {
-            return Err(ResumeError::ModeChanged {
-                recorded: recorded.mode,
-                current: ManifestMode::Search,
-            });
-        }
-        check_model(&recorded, plan.base.model())?;
-        check_code(&recorded, source)?;
-        let current_schema = hex(plan.base.schema_hash());
-        if recorded.model.schema_hash != current_schema {
-            return Err(ResumeError::SchemaChanged {
-                recorded: recorded.model.schema_hash.clone(),
-                current: current_schema,
-            });
-        }
+        check_identity(&recorded, ManifestMode::Search, plan.base.model(), source)?;
+        check_schema(&recorded, plan.base.schema_hash())?;
         let current_search = hex(plan.search_hash);
         let recorded_search = recorded
             .search
@@ -972,20 +960,17 @@ impl RecordedSearch {
     /// Cuts the tables of `dir` to the runs kept, or removes both tables when they are written afresh.
     #[cfg(not(target_arch = "wasm32"))]
     fn repair(&self, dir: &OutputDir) -> Result<(), OutputError> {
-        for (file, length) in [(RUNS_FILE, self.runs_bytes), (SERIES_FILE, self.series_bytes)] {
+        if !self.fresh_tables {
+            return dir.truncate_tables(self.runs_bytes, self.series_bytes);
+        }
+        for file in [RUNS_FILE, SERIES_FILE] {
             let path = dir.path().join(file);
-            let repaired = if self.fresh_tables {
-                match std::fs::remove_file(&path) {
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-                    removed => removed,
+            match std::fs::remove_file(&path) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                    return Err(OutputError::Write { path, source: error });
                 }
-            } else {
-                OpenOptions::new()
-                    .write(true)
-                    .open(&path)
-                    .and_then(|table| table.set_len(length))
-            };
-            repaired.map_err(|source| OutputError::Write { path, source })?;
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -998,8 +983,8 @@ impl RecordedSearch {
 /// `runs.csv` and `series.csv` and each batch to the search tables. Once the budget is spent it writes `best.csv` or
 /// `archive.csv`, rebuilds `summary.csv` and replaces the manifest with its final status.
 ///
-/// `plan`, when given, is the search plan of `inputs.spec`, and the spec is planned here otherwise. With
-/// `options.resume`, a directory holding runs of the same search is replayed, as the module documentation describes.
+/// `plan` is the search plan of `inputs.spec`. With `options.resume`, a directory holding runs of the same search is
+/// replayed, as the module documentation describes.
 /// A search runs whole, so `options.shard` must be the whole plan, and it never retries failed runs.
 ///
 /// # Errors
@@ -1010,7 +995,7 @@ impl RecordedSearch {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_search_into_directory(
     inputs: &SweepInputs<'_>,
-    plan: Option<Arc<SearchPlan>>,
+    plan: Arc<SearchPlan>,
     output_dir: &Path,
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
@@ -1023,8 +1008,8 @@ pub(crate) fn run_search_into_directory(
 
 /// Runs the search of `inputs.spec`, holding its files in memory, and returns its record.
 ///
-/// `plan`, when given, is the search plan of `inputs.spec`, and the spec is planned here otherwise. The files hold the
-/// bytes a directory would. The caller passes `inputs` with no `folder`.
+/// `plan` is the search plan of `inputs.spec`. The files hold the bytes a directory would. The caller passes `inputs`
+/// with no `folder`.
 ///
 /// # Errors
 ///
@@ -1032,7 +1017,7 @@ pub(crate) fn run_search_into_directory(
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_search_in_memory(
     inputs: &SweepInputs<'_>,
-    plan: Option<Arc<SearchPlan>>,
+    plan: Arc<SearchPlan>,
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
     let preparation = SearchPreparation::new(inputs, plan, None)?;
@@ -1072,17 +1057,15 @@ pub(crate) struct SearchWriters<W: Write> {
     pub(crate) session: SearchSession,
     pub(crate) writer: OutputWriter<W>,
     pub(crate) tables: SearchTablesWriter<W>,
-    /// Column layout of a config in the search tables.
-    pub(crate) columns: ConfigColumns,
 }
 
 impl SearchPreparation {
-    /// Checks and probes `plan`, the search of `inputs.spec`, and chooses its layout. With no `plan`, the spec is
-    /// planned first. `probe`, when given, replaces the report that [`ProbeReport::for_plan`] returns for
-    /// [`SearchPlan::base`], and its clock readings replace the ones taken on entry.
+    /// Checks and probes `plan`, the search of `inputs.spec`, and chooses its layout. `probe`, when given, replaces
+    /// the report that [`ProbeReport::for_plan`] returns for [`SearchPlan::base`], and its clock readings replace the
+    /// ones taken on entry.
     pub(crate) fn new(
         inputs: &SweepInputs<'_>,
-        plan: Option<Arc<SearchPlan>>,
+        plan: Arc<SearchPlan>,
         probe: Option<TimedProbe>,
     ) -> Result<Self, ExploreError> {
         let (entry, gpu, options) = (inputs.entry, inputs.gpu, inputs.options);
@@ -1092,58 +1075,32 @@ impl SearchPreparation {
         if options.retry_failed {
             return Err(SearchPlanError::RetryFailed.into());
         }
-        let (started, started_unix_ms, probe) = match probe {
-            Some(timed) => (timed.started, timed.started_unix_ms, Some(timed.report)),
-            None => (Instant::now(), now_unix_ms(), None),
-        };
-        let plan = match plan {
-            Some(plan) => plan,
-            None => Arc::new(SearchPlan::new(inputs.spec, &entry.schema())?),
-        };
-        let resume_dir = inputs
-            .folder
-            .filter(|output_dir| options.resume && OutputDir::holds_results(output_dir));
-        let locked = match (resume_dir, inputs.folder) {
-            (None, Some(output_dir)) => {
-                OutputDir::check_free(output_dir)?;
-                None
-            }
-            // The directory is locked before the scan and held until the last write. Otherwise another writer could
-            // change the tables between the two.
-            (Some(output_dir), _) if !inputs.dry_run => Some(OutputDir::open(output_dir)?),
-            _ => None,
-        };
         let base = plan.base();
-        if let Some(output_dir) = resume_dir {
-            check_directory_code(output_dir, ManifestMode::Search, base.model(), entry.source())?;
-        }
-        if let Some(ctx) = gpu {
-            check_capacity(entry, base, &ctx.device.limits())?;
-        }
-        let probe = match probe {
-            Some(probe) => probe,
-            None => options.in_build_pool(|| ProbeReport::for_plan(entry, gpu, base))?,
-        };
-        let measure = MeasurePlan::new(base.run_settings(), base.measure_settings(), probe.columns.clone())?;
-        let watched_reducers = plan.watched_reducers(&measure)?;
-        let resumed = resume_dir
+        let start = PreparedStart::new(inputs, ManifestMode::Search, base, probe)?;
+        let watched_reducers = plan.watched_reducers(&start.measure)?;
+        let resumed = start
+            .resume_dir
             .map(|output_dir| {
-                let params = entry.param_descriptors();
-                let columns = column_names(params, base.actions(), measure.reducers().names());
+                let (runs_header, series_header) = start.header_lines(entry, base);
                 RecordedSearch::read(
                     output_dir,
                     &plan,
                     entry.source(),
-                    &runs_csv::header_line(&columns),
-                    &series_csv::header_line(
-                        measure.columns(),
-                        series_csv::tick_length_position(entry.metadata().time.as_ref(), params).is_some(),
-                    ),
+                    &runs_header,
+                    &series_header,
                     &watched_reducers,
-                    params.len() + base.actions().len(),
+                    entry.param_descriptors().len() + base.actions().len(),
                 )
             })
             .transpose()?;
+        let PreparedStart {
+            started,
+            started_unix_ms,
+            locked,
+            probe,
+            measure,
+            ..
+        } = start;
         if let Some(recorded) = resumed.as_ref().filter(|recorded| !recorded.runs.is_empty()) {
             // Every held run is checked before anything is written. The search tables are emptied before the
             // batches replay, and a changed run found then would leave them holding their headers alone.
@@ -1167,9 +1124,7 @@ impl SearchPreparation {
             layout,
             projected_bytes,
             series_rows: pending.saturating_mul(measure.series_row_count()),
-            stat_columns: (0..measure.columns().len())
-                .map(|column| measure.columns().name(column).to_owned())
-                .collect(),
+            stat_columns: series_csv::stat_column_names(measure.columns()),
             reducer_columns: measure.reducers().names().to_vec(),
             dry_run: inputs.dry_run,
             search: Some(plan.outline()),
@@ -1190,21 +1145,8 @@ impl SearchPreparation {
     /// Reports the outline, then each warning of the plan and of a resume under a build that differs from the engine
     /// or model build of `inputs`.
     pub(crate) fn announce(&self, inputs: &SweepInputs<'_>, progress: &mut dyn Progress) {
-        progress.report(&ProgressEvent::Planned(&self.outline));
-        let mut warnings: Vec<SweepWarning> = self
-            .plan
-            .base
-            .warnings()
-            .iter()
-            .cloned()
-            .map(SweepWarning::Plan)
-            .collect();
-        if let Some(resumed) = &self.resumed {
-            warnings.extend(build_warnings(&resumed.recorded, inputs.provenance, inputs.entry));
-        }
-        for warning in &warnings {
-            progress.report(&ProgressEvent::Warned(warning));
-        }
+        let recorded = self.resumed.as_ref().map(|resumed| &resumed.recorded);
+        announce(inputs, &self.outline, &self.plan.base, recorded, progress);
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1264,26 +1206,51 @@ impl SearchPreparation {
         let time = inputs.entry.metadata().time.as_ref();
         let writer = memory_writer(&self.plan.base, params, &self.measure, time)?;
         let generations = writes_generations(&self.plan).then(Vec::new);
-        let tables = SearchTablesWriter::new(
+        let output = self.writers(
+            inputs,
+            writer,
             Vec::new(),
             Vec::new(),
             generations,
-            params,
-            self.plan.base.actions(),
-            self.is_pattern_search(),
-        )
-        .map_err(|source| table_error(Path::new(EVALUATIONS_FILE), source))?;
-        let output = SearchWriters {
-            session: self.session()?,
-            writer,
-            tables,
-            columns: ConfigColumns::new(params, self.plan.base.actions()),
-        };
+            Path::new(EVALUATIONS_FILE),
+        )?;
         Ok((output, self.manifest(inputs)?))
     }
 
+    /// Returns the session of the search and the writers of its tables, writing the headers of the search tables to
+    /// `evaluations`, `batches` and `generations`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputError::Write`] for `evaluations_path` when a header cannot be written, and the error of
+    /// [`SearchSession::new`].
+    fn writers<W: Write>(
+        &self,
+        inputs: &SweepInputs<'_>,
+        writer: OutputWriter<W>,
+        evaluations: W,
+        batches: W,
+        generations: Option<W>,
+        evaluations_path: &Path,
+    ) -> Result<SearchWriters<W>, ExploreError> {
+        let tables = SearchTablesWriter::new(
+            evaluations,
+            batches,
+            generations,
+            inputs.entry.param_descriptors(),
+            self.plan.base.actions(),
+            self.is_pattern_search(),
+        )
+        .map_err(|source| table_error(evaluations_path, source))?;
+        Ok(SearchWriters {
+            session: self.session()?,
+            writer,
+            tables,
+        })
+    }
+
     fn is_pattern_search(&self) -> bool {
-        matches!(self.plan.search.algorithm, SearchAlgorithm::PatternSpaceExploration(_))
+        self.plan.pattern_settings().is_some()
     }
 
     /// Writes the manifest with status `running`, runs the search into `output_dir` and replaces the manifest with
@@ -1360,21 +1327,14 @@ impl SearchPreparation {
         } else {
             None
         };
-        let tables = SearchTablesWriter::new(
+        let mut output = self.writers(
+            inputs,
+            writer,
             dir.create_table(EVALUATIONS_FILE)?,
             dir.create_table(BATCHES_FILE)?,
             generations,
-            params,
-            self.plan.base.actions(),
-            self.is_pattern_search(),
-        )
-        .map_err(|source| table_error(&dir.path().join(EVALUATIONS_FILE), source))?;
-        let mut output = SearchWriters {
-            session: self.session()?,
-            writer,
-            tables,
-            columns: ConfigColumns::new(params, self.plan.base.actions()),
-        };
+            &dir.path().join(EVALUATIONS_FILE),
+        )?;
         let end = self.run_all(&executor, &mut output, progress);
         *standing = Some(output.session.manifest_search());
         let end = end?;
@@ -1382,8 +1342,8 @@ impl SearchPreparation {
             session,
             writer,
             tables,
-            columns,
         } = output;
+        let columns = tables.columns().clone();
         let written = writer.counts();
         writer.finish().map_err(|source| OutputError::Write {
             path: dir.path().to_owned(),
@@ -1409,19 +1369,7 @@ impl SearchPreparation {
     /// Returns the error of [`Executor::new`].
     #[cfg(not(target_arch = "wasm32"))]
     fn executor<'a>(&self, inputs: &SweepInputs<'a>) -> Result<Executor<'a>, ExploreError> {
-        let options = inputs.options;
-        let executor = Executor::new(
-            inputs.entry,
-            inputs.gpu,
-            Arc::clone(&self.measure),
-            self.outline.layout,
-            options.control.clone(),
-        )?;
-        Ok(executor
-            .with_timeout(self.plan.base.run_settings().timeout)
-            .with_active_runs(options.active_runs.clone())
-            .with_gpu_memory_budget(options.gpu_memory_budget)
-            .with_build_pool(options.build_pool.clone()))
+        crate::sweep::executor(inputs, &self.plan.base, &self.measure, self.outline.layout)
     }
 
     /// Runs batches on `executor` until the budget is spent or its control aborts, writing each run and each batch to
@@ -1483,8 +1431,8 @@ impl SearchPreparation {
             session,
             writer,
             tables,
-            columns,
         } = output;
+        let columns = tables.columns().clone();
         let counts = writer.counts();
         let end = finish_manifest(&mut manifest, end, counts);
         manifest.search = Some(session.manifest_search());
@@ -1512,13 +1460,7 @@ impl SearchPreparation {
     }
 
     pub(crate) fn report(&self, end: SweepEnd, counts: ResultCounts, output_dir: Option<PathBuf>) -> SweepReport {
-        SweepReport {
-            outline: self.outline.clone(),
-            end,
-            counts,
-            elapsed: self.started.elapsed(),
-            output_dir,
-        }
+        SweepReport::new(&self.outline, self.started, end, counts, output_dir)
     }
 }
 

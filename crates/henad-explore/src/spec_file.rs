@@ -1625,13 +1625,14 @@ memory = 1000000
         spec
     }
 
-    fn parse(text: &str) -> Result<SpecFile, SpecFileError> {
-        SpecFile::parse(text)
+    /// Returns the spec that the spec file `text` holds.
+    fn read_spec(text: &str) -> Result<SweepSpec, SpecFileError> {
+        SpecFile::parse(text).and_then(SpecFile::into_spec)
     }
 
     #[test]
     fn a_spec_file_reads_as_the_sweep_it_writes() {
-        let file = parse(SWEEP).expect("a valid spec file");
+        let file = SpecFile::parse(SWEEP).expect("a valid spec file");
         assert_eq!(
             file.execution.concurrent,
             Concurrency::Fixed(NonZeroUsize::new(4).expect("4 is above 0"))
@@ -1642,7 +1643,7 @@ memory = 1000000
 
     #[test]
     fn list_values_reach_the_parser_as_command_line_text() {
-        let file = parse(
+        let file = SpecFile::parse(
             r#"
 model = "sir"
 [set]
@@ -1661,9 +1662,7 @@ e = 1e-3
 
     #[test]
     fn a_missing_table_takes_the_defaults() {
-        let spec = parse("model = \"sir\"\n[measure]\nstats_every = 4\n")
-            .and_then(SpecFile::into_spec)
-            .expect("a valid spec file");
+        let spec = read_spec("model = \"sir\"\n[measure]\nstats_every = 4\n").expect("a valid spec file");
         let mut expected = SweepSpec::new("sir");
         expected.measure.stats_every = 4;
         expected.measure.series_every = 4;
@@ -1681,7 +1680,7 @@ e = 1e-3
             "model = \"sir\"\n[[block]]\nfactors = [{ param = \"a\", range = { from = 0, to = 1 } }]\n",
             "model = \"sir\"\n[execution]\nthreads = 3\n",
         ] {
-            let error = parse(text).expect_err("an unknown key");
+            let error = SpecFile::parse(text).expect_err("an unknown key");
             assert!(matches!(error, SpecFileError::Parse { .. }), "{text}");
         }
     }
@@ -1696,7 +1695,7 @@ e = 1e-3
             "model = \"sir\"\n[set]\na = [1, 2]\n",
             "model = \"sir\"\n[run]\nsteps = -5\n",
         ] {
-            assert!(parse(text).is_err(), "{text}");
+            assert!(SpecFile::parse(text).is_err(), "{text}");
         }
     }
 
@@ -1708,17 +1707,15 @@ e = 1e-3
             "{ param = \"a\", values = [1], range = { min = 0, max = 1 } }",
         ] {
             let text = format!("model = \"sir\"\n[[block]]\nfactors = [{factor}]\n");
-            let error = parse(&text)
-                .and_then(SpecFile::into_spec)
-                .expect_err("not exactly one form");
+            let error = read_spec(&text).expect_err("not exactly one form");
             assert!(
                 matches!(error, SpecFileError::FactorLevels { block: 0, .. }),
                 "{factor} gave {error:?}"
             );
         }
-        let error = parse("model = \"sir\"\n[measure]\nreducers = [{ column = \"Infected\", kinds = [\"median\"] }]\n")
-            .and_then(SpecFile::into_spec)
-            .expect_err("no such reducer kind");
+        let error =
+            read_spec("model = \"sir\"\n[measure]\nreducers = [{ column = \"Infected\", kinds = [\"median\"] }]\n")
+                .expect_err("no such reducer kind");
         assert!(matches!(error, SpecFileError::Reducer(_)), "{error:?}");
     }
 
@@ -1760,16 +1757,12 @@ e = 1e-3
 
     #[test]
     fn a_seed_past_the_largest_toml_integer_is_a_string() {
-        let spec = parse("model = \"sir\"\n[seeds]\nroot = \"18446744073709551615\"\n")
-            .and_then(SpecFile::into_spec)
-            .expect("a valid seed");
+        let spec = read_spec("model = \"sir\"\n[seeds]\nroot = \"18446744073709551615\"\n").expect("a valid seed");
         assert_eq!(spec.seeds.root, u64::MAX);
         let file = SpecFile::from(&spec);
         let text = file.to_toml().expect("a spec file serializes");
         assert!(text.contains("root = \"18446744073709551615\""), "{text}");
-        let small = parse("model = \"sir\"\n[seeds]\nroot = \"7\"\n")
-            .and_then(SpecFile::into_spec)
-            .expect("a valid seed");
+        let small = read_spec("model = \"sir\"\n[seeds]\nroot = \"7\"\n").expect("a valid seed");
         assert_eq!(small.seeds.root, 7);
     }
 
@@ -1777,7 +1770,7 @@ e = 1e-3
     fn a_spec_survives_a_round_trip_through_toml_and_json() {
         let spec = sweep();
         let text = SpecFile::from(&spec).to_toml().expect("a spec file serializes");
-        let file = parse(&text).expect("the written file reads back");
+        let file = SpecFile::parse(&text).expect("the written file reads back");
         assert_eq!(file.clone().into_spec().expect("a valid spec file"), spec, "{text}");
         let json = serde_json::to_value(&file).expect("a spec file serializes");
         assert_eq!(
@@ -1800,7 +1793,7 @@ e = 1e-3
         let mut stop = sweep();
         stop.run.stop = Some(StopSpec::parse("Agents (k=3) <= 0.5", 4).expect("a well-formed condition"));
         let text = SpecFile::from(&stop).to_toml().expect("a spec file serializes");
-        let back = parse(&text).and_then(SpecFile::into_spec).expect("the stop reads back");
+        let back = read_spec(&text).expect("the stop reads back");
         assert_eq!(back, stop, "{text}");
 
         let mut window = SweepSpec::new("sir");
@@ -1891,9 +1884,7 @@ factors = [{ action = "seed_outbreak", values = [100, 200] }]
 
     #[test]
     fn a_spec_file_reads_actions_stops_and_sampled_designs() {
-        let spec = parse(ACTIONS_AND_SAMPLED_DESIGNS)
-            .and_then(SpecFile::into_spec)
-            .expect("a valid spec file");
+        let spec = read_spec(ACTIONS_AND_SAMPLED_DESIGNS).expect("a valid spec file");
         let stop = spec.run.stop.as_ref().expect("the run stops");
         assert_eq!((stop.to_string().as_str(), stop.min_tick), ("Infected <= 0", 20));
         assert_eq!(spec.run.timeout, Some(Duration::from_millis(1500)));
@@ -1930,9 +1921,7 @@ factors = [{ action = "seed_outbreak", values = [100, 200] }]
         assert_eq!(spec.blocks[1].design, DesignKind::Random { samples: 3 });
 
         let text = SpecFile::from(&spec).to_toml().expect("a spec file serializes");
-        let back = parse(&text)
-            .and_then(SpecFile::into_spec)
-            .expect("the written file reads back");
+        let back = read_spec(&text).expect("the written file reads back");
         assert_eq!(back, spec, "{text}");
         let models = henad_models::example_models();
         let sir = models.get("sir").expect("sir is registered");
@@ -1989,7 +1978,7 @@ network = "Geometric"
 design = "factorial"
 factors = [{ param = "virus_spread_chance", values = [0.01, 0.05] }]
 "#;
-        let spec = parse(text).and_then(SpecFile::into_spec).expect("the sweep reads");
+        let spec = read_spec(text).expect("the sweep reads");
         let plan = spec.plan(&owned).expect("the spec plans against owned descriptors");
         let network = params
             .iter()
@@ -2008,9 +1997,7 @@ factors = [{ param = "virus_spread_chance", values = [0.01, 0.05] }]
         );
 
         let text = SpecFile::from(&spec).to_toml().expect("a spec file serializes");
-        let back = parse(&text)
-            .and_then(SpecFile::into_spec)
-            .expect("the written file reads back");
+        let back = read_spec(&text).expect("the written file reads back");
         assert_eq!(back, spec, "{text}");
         assert_eq!(
             back.plan(&owned).expect("the written spec plans").plan_hash(),
@@ -2046,12 +2033,9 @@ factors = [{ param = "virus_spread_chance", values = [0.01, 0.05] }]
             }
         );
         let text = SpecFile::from(&spec).to_toml().expect("a spec file serializes");
-        let inline = parse(&text)
-            .and_then(SpecFile::into_spec)
-            .expect("the table is written in the spec");
+        let inline = read_spec(&text).expect("the table is written in the spec");
         assert_eq!(inline, spec, "{text}");
-        let unread = parse("model = \"sir\"\n[[block]]\ndesign = \"table\"\nfile = \"design.csv\"\n")
-            .and_then(SpecFile::into_spec)
+        let unread = read_spec("model = \"sir\"\n[[block]]\ndesign = \"table\"\nfile = \"design.csv\"\n")
             .expect_err("a table read from nowhere");
         assert!(matches!(unread, SpecFileError::Design { block: 0, .. }), "{unread:?}");
     }
@@ -2118,9 +2102,7 @@ factors = [{ param = "virus_spread_chance", values = [0.01, 0.05] }]
             design_seed: Some(9),
         }];
         let text = SpecFile::from(&spec).to_toml().expect("a spec file serializes");
-        let back = parse(&text)
-            .and_then(SpecFile::into_spec)
-            .expect("the written file reads back");
+        let back = read_spec(&text).expect("the written file reads back");
         assert_eq!(back.blocks[0].design_seed, None, "{text}");
         let models = henad_models::example_models();
         let sir = models.get("sir").expect("sir is registered");
@@ -2141,9 +2123,7 @@ factors = [{ param = "virus_spread_chance", values = [0.01, 0.05] }]
             "design = \"table\"\nfile = \"design.csv\"\ntable_text = \"a\\n1\\n\"",
         ] {
             let text = format!("model = \"sir\"\n[[block]]\n{block}\n");
-            let error = parse(&text)
-                .and_then(SpecFile::into_spec)
-                .expect_err("keys that do not fit");
+            let error = read_spec(&text).expect_err("keys that do not fit");
             assert!(
                 matches!(error, SpecFileError::Design { block: 0, .. }),
                 "{block} gave {error:?}"
@@ -2151,9 +2131,7 @@ factors = [{ param = "virus_spread_chance", values = [0.01, 0.05] }]
         }
         for factor in ["{ values = [1] }", "{ param = \"a\", action = \"b\", values = [1] }"] {
             let text = format!("model = \"sir\"\n[[block]]\nfactors = [{factor}]\n");
-            let error = parse(&text)
-                .and_then(SpecFile::into_spec)
-                .expect_err("no single target");
+            let error = read_spec(&text).expect_err("no single target");
             assert!(
                 matches!(error, SpecFileError::FactorTarget { block: 0 }),
                 "{factor} gave {error:?}"
@@ -2161,9 +2139,7 @@ factors = [{ param = "virus_spread_chance", values = [0.01, 0.05] }]
         }
         for run in ["stop = { condition = \"Infected\" }", "timeout_s = -1.0"] {
             let text = format!("model = \"sir\"\n[run]\n{run}\n");
-            let error = parse(&text)
-                .and_then(SpecFile::into_spec)
-                .expect_err("an unreadable run table");
+            let error = read_spec(&text).expect_err("an unreadable run table");
             assert!(
                 matches!(error, SpecFileError::Stop(_) | SpecFileError::Timeout { .. }),
                 "{run} gave {error:?}"
@@ -2197,7 +2173,7 @@ patience = 3
         use henad_core::explore::search::hill_climb::HillClimbSettings;
         use henad_core::explore::search::{Aggregate, Goal, SearchAlgorithm};
 
-        let spec = parse(SEARCH).and_then(SpecFile::into_spec).expect("a valid search");
+        let spec = read_spec(SEARCH).expect("a valid search");
         let search = spec.search.as_ref().expect("the spec is a search");
         assert_eq!(
             search.algorithm,
@@ -2218,9 +2194,7 @@ patience = 3
             FactorSpec::action("seed_outbreak", text(&["10", "20", "30"]))
         );
         let written = SpecFile::from(&spec).to_toml().expect("a spec file serializes");
-        let back = parse(&written)
-            .and_then(SpecFile::into_spec)
-            .expect("the written file reads back");
+        let back = read_spec(&written).expect("the written file reads back");
         assert_eq!(back, spec, "{written}");
     }
 
@@ -2240,7 +2214,7 @@ patience = 3
             ),
             (with("[[block]]\nfactors = []\n"), "blocks beside a search"),
         ] {
-            let error = parse(&text).and_then(SpecFile::into_spec).expect_err(reason);
+            let error = read_spec(&text).expect_err(reason);
             assert!(matches!(error, SpecFileError::Search { .. }), "{reason}: {error:?}");
         }
         for text in [
@@ -2249,11 +2223,10 @@ patience = 3
             SEARCH.replace("batch_size = 8", "batch = 8"),
             SEARCH.replace("goal = \"maximize\"", "goal = \"max\""),
         ] {
-            let error = parse(&text).expect_err("an unknown key or value");
+            let error = SpecFile::parse(&text).expect_err("an unknown key or value");
             assert!(matches!(error, SpecFileError::Parse { .. }), "{text}");
         }
-        let error = parse(&SEARCH.replace("{ action = \"seed_outbreak\", values", "{ values"))
-            .and_then(SpecFile::into_spec)
+        let error = read_spec(&SEARCH.replace("{ action = \"seed_outbreak\", values", "{ values"))
             .expect_err("a factor with no target");
         assert!(matches!(error, SpecFileError::SearchFactorTarget), "{error:?}");
     }
@@ -2274,9 +2247,7 @@ patience = 3
                     ),
                 )
         };
-        let spec = parse(&pse("{ column = \"Infected:max\", cells = 16 }"))
-            .and_then(SpecFile::into_spec)
-            .expect("an automatic range reads");
+        let spec = read_spec(&pse("{ column = \"Infected:max\", cells = 16 }")).expect("an automatic range reads");
         let search = spec.search.as_ref().expect("the spec is a search");
         let SearchAlgorithm::PatternSpaceExploration(settings) = &search.algorithm else {
             panic!("a pse search reads as one: {:?}", search.algorithm);
@@ -2284,18 +2255,14 @@ patience = 3
         assert_eq!(settings.x_axis, PatternAxis::automatic("Infected:max", 16));
         assert_eq!(settings.y_axis, PatternAxis::bounded("Infected:argmax", 0.0, 50.0, 10));
         let written = SpecFile::from(&spec).to_toml().expect("a spec file serializes");
-        let back = parse(&written)
-            .and_then(SpecFile::into_spec)
-            .expect("the written file reads back");
+        let back = read_spec(&written).expect("the written file reads back");
         assert_eq!(back, spec, "{written}");
 
         for (x_axis, bound) in [
             ("{ column = \"Infected:max\", min = 0, cells = 16 }", "min"),
             ("{ column = \"Infected:max\", max = 900, cells = 16 }", "max"),
         ] {
-            let error = parse(&pse(x_axis))
-                .and_then(SpecFile::into_spec)
-                .expect_err("one bound alone");
+            let error = read_spec(&pse(x_axis)).expect_err("one bound alone");
             assert!(matches!(error, SpecFileError::Search { .. }), "{bound}: {error:?}");
             assert_eq!(
                 error.to_string(),

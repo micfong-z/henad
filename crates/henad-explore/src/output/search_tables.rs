@@ -15,11 +15,11 @@ use henad_core::explore::plan::Config;
 use henad_core::explore::search::pse::{ArchiveEntry, PatternCell, PatternPlacement, PatternSpaceSettings};
 use henad_core::explore::search::{GenerationSummary, RankingEntry, SearchAlgorithm, SearchSpec};
 use henad_core::explore::spec::ActionSpec;
-use henad_core::explore::value::format_value;
 use henad_core::export::csv::{escape_field, fmt_f64};
 use henad_core::params::{ParamDescriptor, ParamKind};
 
-use crate::output::read::{ReadError, parse_one, record_ends};
+use crate::output::read::{CompleteRecords, ReadError};
+use crate::output::runs_csv::push_config_values;
 use crate::output::{BATCHES_FILE, EVALUATIONS_FILE, GENERATIONS_FILE};
 use crate::search_run::{EvaluatedCandidate, EvaluationReading, SearchUpdate};
 
@@ -102,13 +102,7 @@ impl ConfigColumns {
 
     /// Appends a comma and the value of each column of `config` to `row`.
     fn push_values(&self, row: &mut String, config: &Config) {
-        for (kind, value) in self.kinds.iter().zip(&config.params) {
-            row.push(',');
-            row.push_str(&escape_field(&format_value(kind, value)));
-        }
-        for tick in &config.action_ticks {
-            row.push_str(&format!(",{tick}"));
-        }
+        push_config_values(row, &self.kinds, config);
     }
 }
 
@@ -250,6 +244,11 @@ impl<W: Write> SearchTablesWriter<W> {
         }
         row.push('\n');
         row
+    }
+
+    /// Parameter and action columns of a config in the tables.
+    pub(crate) fn columns(&self) -> &ConfigColumns {
+        &self.columns
     }
 
     /// Flushes the writers and returns them in the order `evaluations.csv`, `batches.csv`, `generations.csv`.
@@ -444,47 +443,10 @@ impl SearchHistory {
     ) -> Result<Self, ReadError> {
         let mut history = Self::default();
         if let Some(text) = batches {
-            let table = SearchCsvTable::read(text, BATCHES_FILE)?;
-            let (batch, evaluations, runs) = (
-                table.column("batch")?,
-                table.column("evaluations")?,
-                table.column("runs")?,
-            );
-            let best_candidate_id = table.optional_column("best_candidate_id");
-            let best_objective = table.optional_column("best_objective");
-            let filled_cells = table.optional_column("filled_cells");
-            for record in 0..table.rows.len() {
-                history.batches.push(BatchStanding {
-                    batch: table.field(record, batch)?,
-                    evaluations: table.field(record, evaluations)?,
-                    runs: table.field(record, runs)?,
-                    best_candidate_id: best_candidate_id
-                        .map(|column| table.optional_field(record, column))
-                        .transpose()?
-                        .flatten(),
-                    best_objective: best_objective
-                        .map(|column| table.optional_field(record, column))
-                        .transpose()?
-                        .flatten(),
-                    filled_cells: filled_cells
-                        .map(|column| table.field(record, column))
-                        .transpose()?
-                        .unwrap_or(0),
-                });
-            }
+            history.batches = read_batches(text)?;
         }
         if let Some(text) = generations {
-            let table = SearchCsvTable::read(text, GENERATIONS_FILE)?;
-            let generation = table.column("generation")?;
-            let (best, median, worst) = (table.column("best")?, table.column("median")?, table.column("worst")?);
-            for record in 0..table.rows.len() {
-                history.generations.push(GenerationSummary {
-                    generation: table.field(record, generation)?,
-                    best: table.float(record, best)?,
-                    median: table.float(record, median)?,
-                    worst: table.float(record, worst)?,
-                });
-            }
+            history.generations = read_generations(text)?;
         }
         if let Some(text) = evaluations {
             let table = SearchCsvTable::read(text, EVALUATIONS_FILE)?;
@@ -492,55 +454,118 @@ impl SearchHistory {
             // The config columns are the model's parameter ids, so every column after them is found by its place.
             // The last column distinguishes a PSE's table from a scored table.
             if table.header.last().map(String::as_str) == PLACEMENT_COLUMNS.last().copied() {
-                let [failed, x, y, x_index, y_index, outside, new_cell] = table.trailing_columns(PLACEMENT_COLUMNS)?;
-                history.pattern_settings = match search.map(|search| (&search.algorithm, search.max_evaluations)) {
-                    Some((SearchAlgorithm::PatternSpaceExploration(settings), max_evaluations)) => {
-                        table.ranged_settings(settings, max_evaluations, [candidate_id, x, y])?
-                    }
-                    _ => None,
-                };
-                for record in 0..table.rows.len() {
-                    table.field::<u64>(record, failed)?;
-                    table.optional_field::<bool>(record, new_cell)?;
-                    if table.optional_field::<bool>(record, outside)? == Some(true) {
-                        history.outside_count += 1;
-                    }
-                    let written = table
-                        .optional_field(record, x_index)?
-                        .zip(table.optional_field(record, y_index)?)
-                        .map(|(x_index, y_index)| PatternCell { x_index, y_index });
-                    let cell = match (written, &history.pattern_settings) {
-                        // A row written before an automatic range was taken is placed with the range taken since.
-                        (None, Some(settings)) => {
-                            let (x, y) = (table.float(record, x)?, table.float(record, y)?);
-                            (x.is_finite() && y.is_finite())
-                                .then(|| settings.locate(x, y).cell)
-                                .flatten()
-                        }
-                        (written, _) => written,
-                    };
-                    let Some(cell) = cell else {
-                        continue;
-                    };
-                    // The first evaluation to land in a cell is its exemplar, as in the archive.
-                    let entry = match history.archive.entry(cell) {
-                        std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                        std::collections::btree_map::Entry::Vacant(entry) => entry.insert(ArchiveEntry {
-                            cell,
-                            hits: 0,
-                            candidate_id: table.field(record, candidate_id)?,
-                            x: table.float(record, x)?,
-                            y: table.float(record, y)?,
-                        }),
-                    };
-                    entry.hits += 1;
-                }
+                history.read_placements(&table, candidate_id, search)?;
             } else {
                 table.check_objectives(candidate_id)?;
             }
         }
         Ok(history)
     }
+
+    /// Reads the placements of a PSE's `evaluations.csv`, `table`, whose candidate ids are in column `candidate_id`,
+    /// into the archive, the outside count and the pattern settings.
+    fn read_placements(
+        &mut self,
+        table: &SearchCsvTable,
+        candidate_id: usize,
+        search: Option<&SearchSpec>,
+    ) -> Result<(), ReadError> {
+        let [failed, x, y, x_index, y_index, outside, new_cell] = table.trailing_columns(PLACEMENT_COLUMNS)?;
+        self.pattern_settings = match search.map(|search| (&search.algorithm, search.max_evaluations)) {
+            Some((SearchAlgorithm::PatternSpaceExploration(settings), max_evaluations)) => {
+                table.ranged_settings(settings, max_evaluations, [candidate_id, x, y])?
+            }
+            _ => None,
+        };
+        for record in 0..table.rows.len() {
+            table.field::<u64>(record, failed)?;
+            table.optional_field::<bool>(record, new_cell)?;
+            if table.optional_field::<bool>(record, outside)? == Some(true) {
+                self.outside_count += 1;
+            }
+            let written = table
+                .optional_field(record, x_index)?
+                .zip(table.optional_field(record, y_index)?)
+                .map(|(x_index, y_index)| PatternCell { x_index, y_index });
+            let cell = match (written, &self.pattern_settings) {
+                // A row written before an automatic range was taken is placed with the range taken since.
+                (None, Some(settings)) => {
+                    let (x, y) = (table.float(record, x)?, table.float(record, y)?);
+                    (x.is_finite() && y.is_finite())
+                        .then(|| settings.locate(x, y).cell)
+                        .flatten()
+                }
+                (written, _) => written,
+            };
+            let Some(cell) = cell else {
+                continue;
+            };
+            // The first evaluation to land in a cell is its exemplar, as in the archive.
+            let entry = match self.archive.entry(cell) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => entry.insert(ArchiveEntry {
+                    cell,
+                    hits: 0,
+                    candidate_id: table.field(record, candidate_id)?,
+                    x: table.float(record, x)?,
+                    y: table.float(record, y)?,
+                }),
+            };
+            entry.hits += 1;
+        }
+        Ok(())
+    }
+}
+
+/// Reads the standing after each batch from `text`, the text of `batches.csv`.
+fn read_batches(text: &str) -> Result<Vec<BatchStanding>, ReadError> {
+    let table = SearchCsvTable::read(text, BATCHES_FILE)?;
+    let (batch, evaluations, runs) = (
+        table.column("batch")?,
+        table.column("evaluations")?,
+        table.column("runs")?,
+    );
+    let best_candidate_id = table.optional_column("best_candidate_id");
+    let best_objective = table.optional_column("best_objective");
+    let filled_cells = table.optional_column("filled_cells");
+    (0..table.rows.len())
+        .map(|record| {
+            Ok(BatchStanding {
+                batch: table.field(record, batch)?,
+                evaluations: table.field(record, evaluations)?,
+                runs: table.field(record, runs)?,
+                best_candidate_id: best_candidate_id
+                    .map(|column| table.optional_field(record, column))
+                    .transpose()?
+                    .flatten(),
+                best_objective: best_objective
+                    .map(|column| table.optional_field(record, column))
+                    .transpose()?
+                    .flatten(),
+                filled_cells: filled_cells
+                    .map(|column| table.field(record, column))
+                    .transpose()?
+                    .unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+/// Reads the summary of each generation from `text`, the text of `generations.csv`.
+fn read_generations(text: &str) -> Result<Vec<GenerationSummary>, ReadError> {
+    let table = SearchCsvTable::read(text, GENERATIONS_FILE)?;
+    let generation = table.column("generation")?;
+    let (best, median, worst) = (table.column("best")?, table.column("median")?, table.column("worst")?);
+    (0..table.rows.len())
+        .map(|record| {
+            Ok(GenerationSummary {
+                generation: table.field(record, generation)?,
+                best: table.float(record, best)?,
+                median: table.float(record, median)?,
+                worst: table.float(record, worst)?,
+            })
+        })
+        .collect()
 }
 
 /// Complete records of one search table, read for a [`SearchHistory`].
@@ -552,27 +577,22 @@ struct SearchCsvTable {
 
 impl SearchCsvTable {
     fn read(text: &str, file: &'static str) -> Result<Self, ReadError> {
-        let path = Path::new(file);
-        let mut start = 0;
-        let mut records = record_ends(text.as_bytes())
-            .into_iter()
-            .enumerate()
-            .map(|(index, end)| {
-                let record = parse_one(text, start..end, path, index + 1);
-                start = end;
-                record
+        let Some(complete) = CompleteRecords::read(text.as_bytes(), Path::new(file))? else {
+            return Ok(Self {
+                file,
+                header: Vec::new(),
+                rows: Vec::new(),
             });
-        let header = records.next().transpose()?.unwrap_or_default();
-        let rows = records.collect::<Result<Vec<_>, _>>()?;
-        if let Some(position) = rows.iter().position(|row| row.len() != header.len()) {
-            return Err(ReadError::FieldCount {
-                path: path.to_owned(),
-                record_number: position + 2,
-                found: rows[position].len(),
-                expected: header.len(),
-            });
-        }
-        Ok(Self { file, header, rows })
+        };
+        let rows = complete
+            .records()
+            .map(|record| record.map(|(_, fields, _)| fields))
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            file,
+            header: complete.header,
+            rows,
+        })
     }
 
     fn optional_column(&self, name: &str) -> Option<usize> {

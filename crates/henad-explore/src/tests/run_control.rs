@@ -1,7 +1,7 @@
 //! Checks of the controls on one run: stop conditions, actions and their ticks as factors.
 
 use henad_core::explore::design::DesignKind;
-use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::plan::PlanWarning;
 use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
 use henad_core::explore::stop::StopSpec;
@@ -9,18 +9,9 @@ use henad_core::explore::stop::StopSpec;
 use crate::exec::Concurrency;
 use crate::sweep::SweepWarning;
 use crate::tests::broken::{Bug, BuggyState};
-use crate::tests::support::{OutputTables, Recorder, ScratchDir, entry, sweep, sweep_options, sweep_with};
-
-fn values(raw: &[&str]) -> LevelSpec {
-    LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
-}
-
-fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-    pairs
-        .iter()
-        .map(|&(id, value)| (id.to_owned(), value.to_owned()))
-        .collect()
-}
+use crate::tests::support::{
+    OutputTables, Recorder, ScratchDir, entry, fixed, sweep, sweep_options, sweep_with, values,
+};
 
 /// Returns an SIR sweep of 2 replicates on a 24 by 24 grid, keeping every sample in the series.
 fn sir_spec(steps: u64, stats_every: u64) -> SweepSpec {

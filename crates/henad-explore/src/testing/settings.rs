@@ -30,10 +30,24 @@ pub struct CheckSettings {
     gpu: Option<GpuContext>,
     ticks: u64,
     thread_counts: (usize, usize),
-    /// Model id, parameter id and value text of each override.
-    texts: Vec<(String, String, String)>,
-    /// Model id, check and reason of each exemption.
-    exemptions: Vec<(String, ModelCheck, String)>,
+    overrides: Vec<ParamOverride>,
+    exemptions: Vec<Exemption>,
+}
+
+/// Parameter of one model set from text, as `--set` reads it.
+#[derive(Debug, Clone)]
+struct ParamOverride {
+    model_id: String,
+    param_id: String,
+    text: String,
+}
+
+/// Check that one model skips, and the reason recorded in its report.
+#[derive(Debug, Clone)]
+struct Exemption {
+    model_id: String,
+    check: ModelCheck,
+    reason: String,
 }
 
 /// No device, 20 ticks, 1 and 7 threads, no overrides and no exemptions.
@@ -43,7 +57,7 @@ impl Default for CheckSettings {
             gpu: None,
             ticks: DEFAULT_TICKS,
             thread_counts: (1, 7),
-            texts: Vec::new(),
+            overrides: Vec::new(),
             exemptions: Vec::new(),
         }
     }
@@ -96,14 +110,21 @@ impl CheckSettings {
     /// not declare, or a value that the parameter rejects, fails every such check, including a check that cannot run
     /// for want of a device.
     pub fn set_text(mut self, model_id: &str, param_id: &str, text: &str) -> Self {
-        self.texts
-            .push((model_id.to_owned(), param_id.to_owned(), text.to_owned()));
+        self.overrides.push(ParamOverride {
+            model_id: model_id.to_owned(),
+            param_id: param_id.to_owned(),
+            text: text.to_owned(),
+        });
         self
     }
 
     /// Skips `check` for model `model_id`, recording `reason` in its report.
     pub fn exempt(mut self, model_id: &str, check: ModelCheck, reason: &str) -> Self {
-        self.exemptions.push((model_id.to_owned(), check, reason.to_owned()));
+        self.exemptions.push(Exemption {
+            model_id: model_id.to_owned(),
+            check,
+            reason: reason.to_owned(),
+        });
         self
     }
 
@@ -123,17 +144,17 @@ impl CheckSettings {
     pub(super) fn exemption(&self, model_id: &str, check: ModelCheck) -> Option<&str> {
         self.exemptions
             .iter()
-            .find(|(model, exempt, _)| model == model_id && *exempt == check)
-            .map(|(_, _, reason)| reason.as_str())
+            .find(|exemption| exemption.model_id == model_id && exemption.check == check)
+            .map(|exemption| exemption.reason.as_str())
     }
 
     /// Returns every model id that an override or an exemption specifies, each once.
     pub(super) fn named_models(&self) -> impl Iterator<Item = &str> {
         let mut ids: Vec<&str> = self
-            .texts
+            .overrides
             .iter()
-            .map(|(model, _, _)| model.as_str())
-            .chain(self.exemptions.iter().map(|(model, _, _)| model.as_str()))
+            .map(|param_override| param_override.model_id.as_str())
+            .chain(self.exemptions.iter().map(|exemption| exemption.model_id.as_str()))
             .collect();
         ids.sort_unstable();
         ids.dedup();
@@ -142,9 +163,9 @@ impl CheckSettings {
 
     /// Returns whether an override sets parameter `param_id` of `entry`.
     pub(super) fn overrides(&self, entry: &ModelEntry, param_id: &str) -> bool {
-        self.texts
+        self.overrides
             .iter()
-            .any(|(model, param, _)| model == entry.id() && param == param_id)
+            .any(|param_override| param_override.model_id == entry.id() && param_override.param_id == param_id)
     }
 
     /// Returns the values that a check building `entry` uses: the declared defaults, the sizes made small, then the
@@ -174,7 +195,11 @@ impl CheckSettings {
     }
 
     fn apply_overrides(&self, entry: &ModelEntry, mut values: Vec<ParamValue>) -> Result<Vec<ParamValue>, String> {
-        for (_, param_id, text) in self.texts.iter().filter(|(model, _, _)| model == entry.id()) {
+        for ParamOverride { param_id, text, .. } in self
+            .overrides
+            .iter()
+            .filter(|param_override| param_override.model_id == entry.id())
+        {
             let index = entry
                 .param_index(param_id)
                 .ok_or_else(|| format!("The settings set parameter '{param_id}', which the model does not declare."))?;

@@ -12,7 +12,7 @@ use henad_compute::simulation::RunSetup;
 use henad_compute::snapshot::Snapshot;
 use henad_core::action::Schedule;
 use henad_core::explore::design::DesignKind;
-use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::measure::Sampler;
 use henad_core::explore::outcome::RunStatus;
 use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
@@ -22,18 +22,9 @@ use henad_core::view::StatEntry;
 
 use crate::exec::Concurrency;
 use crate::result_set::ResultSet;
-use crate::tests::support::{Collected, ScratchDir, entry, headless_device, lanes, planned, run_plan, sweep};
-
-fn values(raw: &[&str]) -> LevelSpec {
-    LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
-}
-
-fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-    pairs
-        .iter()
-        .map(|&(id, value)| (id.to_owned(), value.to_owned()))
-        .collect()
-}
+use crate::tests::support::{
+    Collected, ScratchDir, entry, fixed, headless_device, lanes, planned, run_plan, sweep, values,
+};
 
 /// Time that [`snapshot_at`] waits for a loop to publish its target tick.
 ///

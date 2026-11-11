@@ -35,10 +35,11 @@ use crate::pumped::PumpedSweep;
 use crate::result_set::{ResultSet, ResultSetError};
 use crate::search_run::{EvaluationReading, SearchPlan, SearchPlanError};
 use crate::spec_file::SpecFile;
-use crate::sweep::{ExploreError, SweepEnd, SweepOptions, SweepReport, SweepWarning};
+use crate::sweep::{ExploreError, SpecPlan, SweepEnd, SweepOptions, SweepReport, SweepWarning};
 use crate::tests::support::{
-    CommitLimit, OutputTables, Recorder, ScratchDir, SecondResume, dry_run, entry, headless_device, other_engine,
-    planned, provenance, rewrite_manifest, sweep, sweep_options, unbuildable, without_clocks, without_timing,
+    CommitLimit, OutputTables, Recorder, ScratchDir, SecondResume, dry_run, entry, fixed, headless_device,
+    other_engine, planned, provenance, rewrite_manifest, sweep, sweep_options, unbuildable, without_clocks,
+    without_timing,
 };
 
 /// Maximum time a test waits for a search to end.
@@ -52,13 +53,6 @@ const SEARCH_FILES: [&str; 5] = [
     BEST_FILE,
     ARCHIVE_FILE,
 ];
-
-fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-    pairs
-        .iter()
-        .map(|&(id, value)| (id.to_owned(), value.to_owned()))
-        .collect()
-}
 
 fn range(min: f64, max: f64) -> LevelSpec {
     LevelSpec::Range { min, max, step: None }
@@ -1020,15 +1014,8 @@ fn the_pumped_search_writes_what_a_directory_search_writes() {
     let search_plan = Arc::new(SearchPlan::new(&spec, &sir.schema()).expect("a valid search"));
     let options = || SweepRunOptions::new(provenance());
     let (channel, events, _) = SweepChannel::open(&options());
-    let mut pumped = PumpedSweep::new(
-        sir,
-        spec.clone(),
-        Arc::clone(search_plan.base()),
-        Some(search_plan),
-        channel,
-        options(),
-    )
-    .expect("a CPU model pumps");
+    let mut pumped = PumpedSweep::new(sir, spec.clone(), SpecPlan::Search(search_plan), channel, options())
+        .expect("a CPU model pumps");
     let deadline = Instant::now() + SEARCH_TIMEOUT;
     while matches!(pumped.pump(), Pace::Now) {
         assert!(Instant::now() < deadline, "the pumped search never went idle");

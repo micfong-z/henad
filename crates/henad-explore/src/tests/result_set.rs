@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use henad_core::explore::design::DesignKind;
-use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
 
@@ -15,11 +15,7 @@ use crate::output::read::ReadError;
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::progress::{Progress, ProgressEvent};
 use crate::result_set::{ResultReplayError, ResultSet, ResultSetError, read_directory_series};
-use crate::tests::support::{ScratchDir, entry, sweep_options, sweep_with};
-
-fn values(raw: &[&str]) -> LevelSpec {
-    LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
-}
+use crate::tests::support::{ScratchDir, entry, sweep_options, sweep_with, values};
 
 /// Returns 3 configs of SIR on a 16 by 16 grid with 2 replicates of 30 steps, and an action whose tick varies.
 fn sir_spec() -> SweepSpec {

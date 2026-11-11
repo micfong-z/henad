@@ -34,6 +34,13 @@ pub(crate) fn tick_length_position(time: Option<&TimeScale>, params: &[ParamDesc
     time?.tick_length_index(params)
 }
 
+/// Returns the name of each column of the stat layout `columns`, in order.
+pub(crate) fn stat_column_names(columns: &StatColumns) -> Vec<String> {
+    (0..columns.len())
+        .map(|column| columns.name(column).to_owned())
+        .collect()
+}
+
 /// Returns the header line of `series.csv` for the stat layout `columns`, with its line ending.
 ///
 /// `timed` adds the `time` column after the ids.

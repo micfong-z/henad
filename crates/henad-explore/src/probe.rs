@@ -362,24 +362,20 @@ pub(crate) fn check_capacity(entry: &ModelEntry, plan: &Plan, limits: &wgpu::Lim
 
 #[cfg(test)]
 mod tests {
-    use henad_compute::entry::{ModelEntry, register_grid_model};
+    use crate::tests::support::entry;
+    use henad_compute::entry::register_grid_model;
     use henad_compute::fault::install_panic_hook;
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::spec::{BlockSpec, SweepSpec};
     use henad_core::params::ParamValue;
-    use henad_models::example_models;
 
     use super::{MAX_LISTED_CONFIGS, MAX_PROBED_CONFIGS, ProbeError, ProbeReport, check_capacity};
     use crate::tests::broken::DividesByParam;
 
-    fn entry(id: &str) -> ModelEntry {
-        example_models().get(id).cloned().expect("the model is registered")
-    }
-
     #[test]
     fn a_probe_reads_the_columns_and_footprint_of_config_zero() {
-        let entry = entry("boids");
+        let entry = entry("boids", None);
         let mut spec = SweepSpec::new("boids");
         spec.fixed = vec![("num_agents".to_owned(), "300".to_owned())];
         let plan = spec.plan(&entry.schema()).expect("a valid spec");
@@ -437,7 +433,7 @@ mod tests {
         assert_eq!(listed, (1..=MAX_LISTED_CONFIGS as u64).collect::<Vec<_>>());
         assert!(error.refused.iter().all(|config| !config.reasons.is_empty()));
 
-        let game_of_life = entry("game_of_life");
+        let game_of_life = entry("game_of_life", None);
         let plan = square_grids("game_of_life", &sides)
             .plan(&game_of_life.schema())
             .expect("a valid spec");
@@ -495,7 +491,7 @@ mod tests {
 
     #[test]
     fn a_rebuild_on_a_narrower_pool_holds_less_scratch() {
-        let entry = entry("ants");
+        let entry = entry("ants", None);
         let mut spec = SweepSpec::new("ants");
         spec.fixed = vec![
             ("num_agents".to_owned(), "300".to_owned()),

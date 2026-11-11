@@ -12,7 +12,7 @@ use henad_core::explore::plan::Shard;
 
 use crate::output::manifest::{
     BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, ManifestTimestamps, RecordedBuild, ResultCounts,
-    code_text, codes_differ, now_unix_ms, rfc3339,
+    code_text, codes_differ, distinct_builds, now_unix_ms,
 };
 use crate::output::read::{ReadError, RunRecord, RunsCsv, SeriesScan, SeriesSegment, merge_series};
 use crate::output::runs_csv::header_line;
@@ -107,11 +107,9 @@ pub fn merge(
         ManifestStatus::Incomplete
     };
     // `merged_manifest` credited every session of every shard, so the counts go in without `Manifest::finish`.
-    let finished = now_unix_ms();
     manifest.status = status;
     manifest.results = Some(counts);
-    manifest.timestamps.finished_unix_ms = Some(finished);
-    manifest.timestamps.finished = Some(rfc3339(finished));
+    manifest.timestamps.finish_at(now_unix_ms());
     dir.write_manifest(&manifest).map_err(MergeError::Output)?;
     Ok(MergeReport {
         counts,
@@ -132,13 +130,7 @@ fn write_tables(
     let segments: Vec<SeriesSegment> = shards
         .iter()
         .enumerate()
-        .flat_map(|(input_index, input)| {
-            input.series.segments.iter().map(move |range| SeriesSegment {
-                path: input.series.path.clone(),
-                range: range.clone(),
-                input_index,
-            })
-        })
+        .flat_map(|(input_index, input)| input.series.segments_at(&input.series.path, input_index))
         .collect();
     dir.replace_tables(
         |dest| {
@@ -350,13 +342,7 @@ fn build_warnings(shards: &[ShardInput]) -> Vec<SweepWarning> {
         let Some(reference) = listed.by_ref().find(|builds| !builds.is_empty()) else {
             continue;
         };
-        let mut others: Vec<RecordedBuild> = Vec::new();
-        for build in listed.flatten() {
-            if !others.iter().any(|known| known.reads_as(&build)) {
-                others.push(build);
-            }
-        }
-        for other in others {
+        for other in distinct_builds(listed.flatten()) {
             if reference.iter().any(|build| build.same_build(&other)) {
                 continue;
             }
@@ -391,15 +377,10 @@ fn merged_manifest(shards: &[ShardInput], shard_dirs: &[PathBuf]) -> Manifest {
     manifest.sessions = shards
         .iter()
         .flat_map(|input| {
-            let mut recorded = input.manifest.clone();
-            recorded.record_session_engines();
-            // A session whose process ended before `Manifest::finish` never had its runs counted.
-            if matches!(recorded.status, ManifestStatus::Running | ManifestStatus::Failed)
-                && let Some(last) = recorded.sessions.last_mut()
-            {
-                last.ran = (input.runs.records.len() as u64).saturating_sub(last.skipped);
-            }
-            recorded.sessions
+            input
+                .manifest
+                .clone()
+                .into_credited_sessions(input.runs.records.len() as u64)
         })
         .collect();
     let started = shards

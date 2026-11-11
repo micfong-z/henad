@@ -1,7 +1,7 @@
 # henad-explore
 
 **henad-explore**: sweeps and searches, a sibling of henad-models over henad-compute, below the
-two front ends. `sweep.rs` holds `run_spec`, which runs a sweep, or a search for a spec with a
+two front ends. `sweep/mod.rs` holds `run_spec`, which runs a sweep, or a search for a spec with a
 `[search]` table, into a `SweepOutput`, and `plan_spec`, the dry run, which reads a folder as a
 resume would. Both acquire a device for a GPU model handed none (`sweep_device`), and the
 manifest records the adapter of the context the sweep steps on. `SweepOptions::new(provenance)`
@@ -86,14 +86,14 @@ parameter values and writes `TimeScale::time_at` of each tick. An `OutputDir` ho
 operating system's advisory lock on `.lock` (`DirLock`, `File::try_lock`) while it lives, and a
 second writer gets `OutputError::Locked`. The file stays when the writer ends, and the next writer
 locks it again. The lock goes with a killed process. A resume, of a sweep or a search, opens the
-directory in `SweepPreparation::new` or `SearchPreparation::new`, before its scan reads the
-tables, and holds the lock through its last write. A writer creates afresh each file it replaces
-(`create_fresh`), appends to and cuts `runs.csv` and `series.csv` only after `open` refuses a
-symbolic link in place of either, and `check_free` counts a dangling link as a result file.
-`output/read.rs` reads the tables
-back, keeping complete records only (`RunsCsv`, `SeriesScan`), and `merge_series` interleaves
-series segments by run id. `record_ends` follows the CSV grammar (`RecordScan`), and a quote
-inside an unquoted field fails its record instead of hiding the records after it.
+directory in `PreparedStart::new` (`sweep/prepare.rs`, shared by `SweepPreparation::new` and
+`SearchPreparation::new`), before its scan reads the tables, and holds the lock through its last
+write. A writer creates afresh each file it replaces (`create_fresh`), appends to and cuts
+`runs.csv` and `series.csv` only after `open` refuses a symbolic link in place of either, and
+`check_free` counts a dangling link as a result file. `output/read.rs` reads the tables back,
+keeping complete records only (`CompleteRecords`, `RunsCsv`, `SeriesScan`), and `merge_series`
+interleaves series segments by run id. `record_ends` follows the CSV grammar (`RecordScan`), and a
+quote inside an unquoted field fails its record instead of hiding the records after it.
 `output/resume.rs` (`ResumeScan`) accepts a directory only with the same model id, plan hash,
 schema hash and shard, and no more replicates than the sweep runs. It keeps `ok`, `non_finite`
 and, without `--retry-failed`, failed runs, always reruns a `timed_out` one, renumbers kept runs when the
@@ -153,7 +153,8 @@ plan checks (`MergeError::CodeChanged`). Compiled against compiled keeps `BuildC
 Author text: `ManifestModel.author` (`ManifestModelCode`, `#[serde(default,
 skip_serializing_if = "Option::is_none")]`) records `ModelSource::author`, a sheet's canonical
 text in henad-graph's `SHEET_CODE_FORMAT` (`henad-sheet/1`), filled beside `code` in
-`sweep.rs`. It stays outside the code identity, so no resume, merge or build comparison reads it.
+`sweep/manifest.rs`. It stays outside the code identity, so no resume, merge or build comparison
+reads it.
 The model block is rebuilt from the current entry each session, so a resume after a note edit
 records the new text, and a merge keeps the lowest shard's block.
 `ManifestModelCode::to_code` rebuilds a `ModelCode` (the hash recomputed), and

@@ -8,6 +8,8 @@ use henad_core::metadata::Backend;
 use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind};
 use henad_core::provenance::CodeOrigin;
 
+use crate::output::manifest::hex;
+use crate::output::series_csv::stat_column_names;
 use crate::probe::ProbeReport;
 
 /// Version of the object [`schema_json`] returns.
@@ -42,15 +44,14 @@ pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
         "model": entry.id(),
         "name": entry.name(),
         "backend": backend_name(entry.metadata().backend),
-        "schema_hash": format!("{:016x}", schema_hash(&entry.schema())),
+        "schema_hash": hex(schema_hash(&entry.schema())),
         "params": params,
         "stats": stats,
         "actions": actions,
         "seed": { "type": "u64" },
     });
     if let Some(probe) = probe {
-        let columns: Vec<&str> = (0..probe.columns.len()).map(|i| probe.columns.name(i)).collect();
-        schema["stat_columns"] = json!(columns);
+        schema["stat_columns"] = json!(stat_column_names(&probe.columns));
     }
     if let Some(time) = &entry.metadata().time {
         schema["time"] = json!({ "unit": time.unit.as_str(), "tick_length": time.tick_length });
@@ -58,7 +59,7 @@ pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
     let source = entry.source();
     if source.origin() != CodeOrigin::Compiled {
         schema["origin"] = json!(source.origin().as_str());
-        schema["code_hash"] = json!(source.code_hash().map(|hash| format!("{hash:016x}")));
+        schema["code_hash"] = json!(source.code_hash().map(hex));
     }
     schema
 }

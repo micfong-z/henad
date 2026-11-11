@@ -10,10 +10,12 @@ use std::time::{Duration, Instant};
 use henad_compute::entry::{ModelEntry, ModelState};
 use henad_compute::fault::{Fault, catching};
 use henad_compute::gpu::GpuContext;
+use henad_core::explore::design::DesignKind;
+use henad_core::explore::factor::{FactorSpec, LevelSpec};
 use henad_core::explore::measure::MeasurePlan;
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::plan::Plan;
-use henad_core::explore::spec::SweepSpec;
+use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
 use henad_core::export::csv::parse_records;
 use henad_core::params::ParamValue;
 use henad_models::example_models;
@@ -60,6 +62,41 @@ pub fn entry(id: &str, gpu: Option<&GpuContext>) -> ModelEntry {
         .lookup(id, gpu)
         .cloned()
         .unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Returns `pairs` of parameter ids and value texts as a spec's fixed values.
+pub fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|&(id, value)| (id.to_owned(), value.to_owned()))
+        .collect()
+}
+
+/// Returns `raw` as a factor's levels written as text.
+pub fn values(raw: &[&str]) -> LevelSpec {
+    LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
+}
+
+/// Returns 3 configs of SIR on a 16 by 16 grid with `replicates` replicates of 30 steps, and an action whose tick
+/// varies.
+pub fn sir_spec(replicates: u64) -> SweepSpec {
+    let mut spec = SweepSpec::new("sir");
+    spec.fixed = fixed(&[("grid_width", "16"), ("grid_height", "16")]);
+    spec.run.steps = 30;
+    spec.run.replicates = replicates;
+    spec.measure.stats_every = 3;
+    spec.measure.series_every = 6;
+    spec.seeds.root = 8;
+    spec.actions = vec![ActionSpec::new("seed_outbreak", 12)];
+    spec.blocks = vec![BlockSpec {
+        design: DesignKind::Zip,
+        factors: vec![
+            FactorSpec::param("infection_rate", values(&["0.2", "0.4", "0.6"])),
+            FactorSpec::action("seed_outbreak", values(&["6", "12", "18"])),
+        ],
+        design_seed: None,
+    }];
+    spec
 }
 
 /// Returns `entry` with a build that faults every time, for a test that checks the model is refused before any build.

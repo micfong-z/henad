@@ -14,9 +14,9 @@ use henad_compute::runner::{Pace, SimLoop as _};
 use henad_core::authoring::model::binding::BindingDecl;
 use henad_core::authoring::model::gpu_grid_model::{GpuGridAction, GpuGridModel};
 use henad_core::explore::design::DesignKind;
-use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::outcome::RunOutcome;
-use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
+use henad_core::explore::spec::{BlockSpec, SweepSpec};
 use henad_core::explore::stop::StopSpec;
 use henad_core::export::csv::parse_records;
 use henad_core::params::{ParamDescriptor, ParamValue};
@@ -30,47 +30,14 @@ use crate::output::memory::SweepFiles;
 use crate::output::{MANIFEST_FILE, OutputError, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::pumped::PumpedSweep;
 use crate::result_set::ResultSet;
-use crate::sweep::{SweepEnd, SweepOptions, SweepRecord};
+use crate::sweep::{SpecPlan, SweepEnd, SweepOptions, SweepRecord};
 use crate::tests::support::{
-    CommitLimit, ScratchDir, entry, headless_device, provenance, sweep, sweep_options, sweep_with, ticks_seen,
-    without_clocks, without_timing,
+    CommitLimit, ScratchDir, entry, fixed, headless_device, provenance, sir_spec, sweep, sweep_options, sweep_with,
+    ticks_seen, values, without_clocks, without_timing,
 };
 
 /// Maximum time a test waits for a sweep to reach a state.
 const PATIENCE: Duration = Duration::from_secs(60);
-
-fn values(raw: &[&str]) -> LevelSpec {
-    LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
-}
-
-fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-    pairs
-        .iter()
-        .map(|&(id, value)| (id.to_owned(), value.to_owned()))
-        .collect()
-}
-
-/// Returns 3 configs of SIR on a 16 by 16 grid with `replicates` replicates of 30 steps, and an action whose tick
-/// varies.
-fn sir_spec(replicates: u64) -> SweepSpec {
-    let mut spec = SweepSpec::new("sir");
-    spec.fixed = fixed(&[("grid_width", "16"), ("grid_height", "16")]);
-    spec.run.steps = 30;
-    spec.run.replicates = replicates;
-    spec.measure.stats_every = 3;
-    spec.measure.series_every = 6;
-    spec.seeds.root = 8;
-    spec.actions = vec![ActionSpec::new("seed_outbreak", 12)];
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Zip,
-        factors: vec![
-            FactorSpec::param("infection_rate", values(&["0.2", "0.4", "0.6"])),
-            FactorSpec::action("seed_outbreak", values(&["6", "12", "18"])),
-        ],
-        design_seed: None,
-    }];
-    spec
-}
 
 /// Returns 2 runs of Game of Life on a 64 by 64 grid that step for far longer than any test waits.
 fn endless_spec() -> SweepSpec {
@@ -310,7 +277,8 @@ fn the_pumped_sweep_writes_what_a_directory_sweep_writes() {
     let sir = entry("sir", None);
     let plan = Arc::new(spec.plan(&sir.schema()).expect("a valid spec"));
     let (channel, events, _) = SweepChannel::open(&options());
-    let mut pumped = PumpedSweep::new(sir, spec.clone(), plan, None, channel, options()).expect("a CPU model pumps");
+    let mut pumped =
+        PumpedSweep::new(sir, spec.clone(), SpecPlan::Sweep(plan), channel, options()).expect("a CPU model pumps");
     let pumped_events = pump_until_idle(&mut pumped, &events);
     let ids: Vec<u64> = outcomes(&pumped_events)
         .iter()
@@ -337,7 +305,8 @@ fn a_paused_pumped_sweep_does_no_work_until_resumed() {
     let life = entry("game_of_life", None);
     let plan = Arc::new(spec.plan(&life.schema()).expect("a valid spec"));
     let (channel, events, _) = SweepChannel::open(&options());
-    let mut pumped = PumpedSweep::new(life, spec, plan, None, channel, options()).expect("a CPU model pumps");
+    let mut pumped =
+        PumpedSweep::new(life, spec, SpecPlan::Sweep(plan), channel, options()).expect("a CPU model pumps");
     for _ in 0..20 {
         assert!(matches!(pumped.pump(), Pace::Now));
     }
@@ -373,7 +342,7 @@ fn the_pumped_sweep_refuses_a_gpu_model() {
     let spec = SweepSpec::new("gpu_sir");
     let plan = Arc::new(spec.plan(&gpu_sir.schema()).expect("a valid spec"));
     let (channel, _events, _) = SweepChannel::open(&options());
-    let refused = PumpedSweep::new(gpu_sir, spec, plan, None, channel, options());
+    let refused = PumpedSweep::new(gpu_sir, spec, SpecPlan::Sweep(plan), channel, options());
     assert!(matches!(refused, Err(SweepStartError::GpuNeedsNative)));
 }
 

@@ -402,6 +402,7 @@ pub(crate) fn milliseconds(duration: Duration) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use crate::tests::support::entry;
     use std::sync::Arc;
 
     use henad_compute::entry::{ModelEntry, ModelState, register_grid_model};
@@ -413,17 +414,12 @@ mod tests {
     use henad_core::export::StatColumns;
     use henad_core::model::SimState;
     use henad_core::params::ParamValue;
-    use henad_models::example_models;
 
     use super::{CursorState, RunCursor};
     use crate::exec::RunRequest;
     use crate::tests::broken::DividesByParam;
 
     const SEED: u64 = 11;
-
-    fn entry(id: &str) -> ModelEntry {
-        example_models().get(id).cloned().expect("the model is registered")
-    }
 
     fn cpu_state(entry: &ModelEntry, params: &[ParamValue]) -> Box<dyn SimState> {
         match entry.build(params, Some(SEED), None) {
@@ -484,7 +480,7 @@ mod tests {
 
     #[test]
     fn a_cursor_samples_what_a_hand_stepped_run_gives() {
-        let entry = entry("sir");
+        let entry = entry("sir", None);
         let params = params(&entry, 24);
         let plan = Arc::new(measure(&entry, &params, 2, 20, 6));
         let mut cursor = RunCursor::new(&entry, &plan, &request(&params), None);
@@ -511,7 +507,7 @@ mod tests {
 
     #[test]
     fn the_slice_size_does_not_change_the_outcome() {
-        let entry = entry("game_of_life");
+        let entry = entry("game_of_life", None);
         let params = params(&entry, 16);
         let plan = Arc::new(measure(&entry, &params, 0, 30, 4));
         let outcomes: Vec<_> = [1, 3, 1000]

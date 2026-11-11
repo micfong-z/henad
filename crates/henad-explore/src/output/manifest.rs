@@ -111,8 +111,7 @@ impl Manifest {
     pub fn finish(&mut self, status: ManifestStatus, results: ResultCounts, finished_unix_ms: u64) {
         self.status = status;
         self.results = Some(results);
-        self.timestamps.finished_unix_ms = Some(finished_unix_ms);
-        self.timestamps.finished = Some(rfc3339(finished_unix_ms));
+        self.timestamps.finish_at(finished_unix_ms);
         if let Some(session) = self.sessions.last_mut() {
             session.ran = results.rows.saturating_sub(session.skipped);
         }
@@ -134,14 +133,7 @@ impl Manifest {
                 } else {
                     String::new()
                 },
-                dirty: None,
-                source_hash: None,
-                debug_build: self.engine.debug_build,
-                type_path: None,
-                origin: None,
-                code_hash: None,
-                crate_hashes: BTreeMap::new(),
-                crate_versions: BTreeMap::new(),
+                ..RecordedBuild::blank(self.engine.debug_build)
             })),
             BuildRole::Model => session.model_source.clone(),
         }
@@ -156,16 +148,10 @@ impl Manifest {
     /// resume credits that last session with its runs. A 0.2 session could end without its runs credited, and always
     /// counts.
     pub fn recorded_builds(&self, role: BuildRole) -> Vec<RecordedBuild> {
-        let mut builds: Vec<RecordedBuild> = Vec::new();
-        for build in self
-            .run_sessions()
-            .filter_map(|session| self.session_build(session, role))
-        {
-            if !builds.iter().any(|known| known.reads_as(&build)) {
-                builds.push(build);
-            }
-        }
-        builds
+        distinct_builds(
+            self.run_sessions()
+                .filter_map(|session| self.session_build(session, role)),
+        )
     }
 
     /// Returns the model build of each session that wrote runs, in session order, `None` for a session that records
@@ -205,7 +191,7 @@ impl Manifest {
     ///
     /// A resume or a merge calls this before the manifest's `engine` block changes. A 0.2 session then keeps the
     /// version it ran.
-    pub(crate) fn record_session_engines(&mut self) {
+    fn record_session_engines(&mut self) {
         let builds: Vec<Option<RecordedBuild>> = self
             .sessions
             .iter()
@@ -222,8 +208,21 @@ impl Manifest {
     pub fn fail(&mut self, finished_unix_ms: u64) {
         self.status = ManifestStatus::Failed;
         self.results = None;
-        self.timestamps.finished_unix_ms = Some(finished_unix_ms);
-        self.timestamps.finished = Some(rfc3339(finished_unix_ms));
+        self.timestamps.finish_at(finished_unix_ms);
+    }
+
+    /// Returns the sessions, with the engine build each implies recorded, and the last session of a manifest left
+    /// `running` or `failed` credited with the rows of the `held_rows` that it did not skip.
+    ///
+    /// A session whose process ended before [`Self::finish`] never had its runs counted.
+    pub(crate) fn into_credited_sessions(mut self, held_rows: u64) -> Vec<ManifestSession> {
+        self.record_session_engines();
+        if matches!(self.status, ManifestStatus::Running | ManifestStatus::Failed)
+            && let Some(last) = self.sessions.last_mut()
+        {
+            last.ran = held_rows.saturating_sub(last.skipped);
+        }
+        self.sessions
     }
 }
 
@@ -431,12 +430,7 @@ impl From<&BuildInfo> for RecordedBuild {
             commit_date: build.commit_date().to_owned(),
             dirty: build.dirty(),
             source_hash: build.source_hash(),
-            debug_build: build.debug_build(),
-            type_path: None,
-            origin: None,
-            code_hash: None,
-            crate_hashes: BTreeMap::new(),
-            crate_versions: BTreeMap::new(),
+            ..Self::blank(build.debug_build())
         }
     }
 }
@@ -446,23 +440,9 @@ impl From<&ModelSource> for RecordedBuild {
     /// source with no build, a runtime source or a compiled source that no set recorded a build on, is
     /// recorded as an empty package.
     fn from(source: &ModelSource) -> Self {
-        let mut build = source.build().map_or_else(
-            || Self {
-                package: String::new(),
-                version: String::new(),
-                commit: String::new(),
-                commit_date: String::new(),
-                dirty: None,
-                source_hash: None,
-                debug_build: cfg!(debug_assertions),
-                type_path: None,
-                origin: None,
-                code_hash: None,
-                crate_hashes: BTreeMap::new(),
-                crate_versions: BTreeMap::new(),
-            },
-            Self::from,
-        );
+        let mut build = source
+            .build()
+            .map_or_else(|| Self::blank(cfg!(debug_assertions)), Self::from);
         build.type_path = Some(source.type_path().to_owned());
         if source.origin() != CodeOrigin::Compiled {
             build.origin = Some(source.origin().as_str().to_owned());
@@ -476,6 +456,24 @@ impl From<&ModelSource> for RecordedBuild {
 pub const ENGINE_PACKAGE: &str = "henad";
 
 impl RecordedBuild {
+    /// Returns a build that records nothing but whether it is a debug build.
+    fn blank(debug_build: bool) -> Self {
+        Self {
+            package: String::new(),
+            version: String::new(),
+            commit: String::new(),
+            commit_date: String::new(),
+            dirty: None,
+            source_hash: None,
+            debug_build,
+            type_path: None,
+            origin: None,
+            code_hash: None,
+            crate_hashes: BTreeMap::new(),
+            crate_versions: BTreeMap::new(),
+        }
+    }
+
     /// Returns the record of [`ENGINE_BUILD`](crate::ENGINE_BUILD) under the package name `henad`, with the version of
     /// each engine crate and the source hashes of henad-compute and henad-explore.
     pub fn engine() -> Self {
@@ -496,7 +494,7 @@ impl RecordedBuild {
             .collect();
         let hashes = [
             ("henad-compute", compute.source_hash()),
-            ("henad-explore", u64::from_str_radix(crate::CRATE_HASH, 16).ok()),
+            ("henad-explore", parse_hex(crate::CRATE_HASH)),
         ];
         build.crate_hashes = hashes
             .into_iter()
@@ -737,7 +735,7 @@ mod hex_hash {
     #[expect(clippy::ref_option, reason = "serde hands a field to its writer by reference")]
     pub(super) fn serialize<S: Serializer>(hash: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
         match hash {
-            Some(hash) => serializer.serialize_str(&format!("{hash:016x}")),
+            Some(hash) => serializer.serialize_str(&super::hex(*hash)),
             None => serializer.serialize_none(),
         }
     }
@@ -756,7 +754,7 @@ mod hex_hash_map {
     use serde::{Deserialize as _, Deserializer, Serializer};
 
     pub(super) fn serialize<S: Serializer>(hashes: &BTreeMap<String, u64>, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_map(hashes.iter().map(|(package, hash)| (package, format!("{hash:016x}"))))
+        serializer.collect_map(hashes.iter().map(|(package, hash)| (package, super::hex(*hash))))
     }
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<String, u64>, D::Error> {
@@ -822,7 +820,7 @@ impl From<&ModelCode> for ManifestModelCode {
     fn from(code: &ModelCode) -> Self {
         Self {
             format: code.format().to_owned(),
-            fnv1a64: format!("{:016x}", code.hash()),
+            fnv1a64: hex(code.hash()),
             text: code.text().to_owned(),
         }
     }
@@ -1034,6 +1032,12 @@ impl ManifestTimestamps {
             finished: None,
         }
     }
+
+    /// Records the finish at `finished_unix_ms`.
+    pub(crate) fn finish_at(&mut self, finished_unix_ms: u64) {
+        self.finished_unix_ms = Some(finished_unix_ms);
+        self.finished = Some(rfc3339(finished_unix_ms));
+    }
 }
 
 /// One process that wrote runs into the directory.
@@ -1104,6 +1108,27 @@ impl Add for ResultCounts {
             failed: self.failed + other.failed,
         }
     }
+}
+
+/// Returns `builds` in order, each build that [`RecordedBuild::reads_as`] finds alike to an earlier one left out.
+pub(crate) fn distinct_builds(builds: impl IntoIterator<Item = RecordedBuild>) -> Vec<RecordedBuild> {
+    let mut distinct: Vec<RecordedBuild> = Vec::new();
+    for build in builds {
+        if !distinct.iter().any(|known| known.reads_as(&build)) {
+            distinct.push(build);
+        }
+    }
+    distinct
+}
+
+/// Returns `hash` as 16 hexadecimal digits.
+pub(crate) fn hex(hash: u64) -> String {
+    format!("{hash:016x}")
+}
+
+/// Returns the hash that `text` writes in hexadecimal digits, `None` for text that is not a hash.
+pub(crate) fn parse_hex(text: &str) -> Option<u64> {
+    u64::from_str_radix(text, 16).ok()
 }
 
 /// Returns the system clock in milliseconds since the Unix epoch. A clock set before the epoch is treated as 0.

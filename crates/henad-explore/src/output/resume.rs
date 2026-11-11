@@ -8,7 +8,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fs::OpenOptions;
 use std::path::Path;
 
 use henad_core::explore::outcome::RunStatus;
@@ -16,12 +15,11 @@ use henad_core::explore::plan::{Plan, Shard};
 use henad_core::provenance::ModelSource;
 
 use crate::output::manifest::{
-    Manifest, ManifestError, ManifestMode, ManifestShard, RecordedBuild, ResultCounts, code_text, codes_differ,
+    Manifest, ManifestError, ManifestMode, ManifestShard, RecordedBuild, ResultCounts, code_text, codes_differ, hex,
 };
 use crate::output::read::{ReadError, RunRecord, RunsCsv, SeriesScan, SeriesSegment, merge_series};
 use crate::output::runs_csv::header_line;
 use crate::output::{MANIFEST_FILE, OutputDir, OutputError, RUNS_FILE, SERIES_FILE, table_paths};
-use crate::sweep::hex;
 
 /// Runs a directory holds for a resume, and the repair its tables need.
 #[derive(Debug)]
@@ -173,17 +171,7 @@ impl ResumeScan {
             Repair::Truncate {
                 runs_bytes,
                 series_bytes,
-            } => {
-                for (file, length) in [(RUNS_FILE, runs_bytes), (SERIES_FILE, series_bytes)] {
-                    let path = dir.path().join(file);
-                    OpenOptions::new()
-                        .write(true)
-                        .open(&path)
-                        .and_then(|table| table.set_len(length))
-                        .map_err(|source| OutputError::Write { path, source })?;
-                }
-                Ok(())
-            }
+            } => dir.truncate_tables(runs_bytes, series_bytes),
             Repair::Rewrite => self.rewrite(dir),
         }
     }
@@ -202,16 +190,7 @@ impl ResumeScan {
         // Opening the directory moved any staged tables into place, so the scanned series is at the path of
         // `series.csv`.
         let series_path = dir.path().join(SERIES_FILE);
-        let segments: Vec<SeriesSegment> = self
-            .series
-            .segments
-            .iter()
-            .map(|range| SeriesSegment {
-                path: series_path.clone(),
-                range: range.clone(),
-                input_index: 0,
-            })
-            .collect();
+        let segments: Vec<SeriesSegment> = self.series.segments_at(&series_path, 0).collect();
         dir.replace_tables(
             |dest| {
                 dest.write_all(self.runs_header.as_bytes())?;
@@ -231,21 +210,8 @@ impl ResumeScan {
 /// Checks that `recorded`, the manifest of a directory to resume, holds a sweep of `plan` in `shard` with no more
 /// replicates than `plan`, run with the code of `source` when either is runtime code.
 fn check_recorded(recorded: &Manifest, plan: &Plan, source: &ModelSource, shard: Shard) -> Result<(), ResumeError> {
-    if recorded.mode != ManifestMode::Sweep {
-        return Err(ResumeError::ModeChanged {
-            recorded: recorded.mode,
-            current: ManifestMode::Sweep,
-        });
-    }
-    check_model(recorded, plan.model())?;
-    check_code(recorded, source)?;
-    let current_schema = hex(plan.schema_hash());
-    if recorded.model.schema_hash != current_schema {
-        return Err(ResumeError::SchemaChanged {
-            recorded: recorded.model.schema_hash.clone(),
-            current: current_schema,
-        });
-    }
+    check_identity(recorded, ManifestMode::Sweep, plan.model(), source)?;
+    check_schema(recorded, plan.schema_hash())?;
     let current_plan = hex(plan.plan_hash());
     if recorded.plan.plan_hash != current_plan {
         return Err(ResumeError::PlanChanged {
@@ -268,11 +234,44 @@ fn check_recorded(recorded: &Manifest, plan: &Plan, source: &ModelSource, shard:
     Ok(())
 }
 
+/// Checks that `recorded`, the manifest of a directory to resume, records `mode`, the model `model` and, when either
+/// is runtime code, the code of `source`, in that order.
+pub(crate) fn check_identity(
+    recorded: &Manifest,
+    mode: ManifestMode,
+    model: &str,
+    source: &ModelSource,
+) -> Result<(), ResumeError> {
+    if recorded.mode != mode {
+        return Err(ResumeError::ModeChanged {
+            recorded: recorded.mode,
+            current: mode,
+        });
+    }
+    check_model(recorded, model)?;
+    check_code(recorded, source)
+}
+
+/// Checks that `recorded`, the manifest of a directory to resume, records the schema hash `schema_hash`.
+///
+/// Called after [`check_identity`], for the reason [`check_model`] gives.
+pub(crate) fn check_schema(recorded: &Manifest, schema_hash: u64) -> Result<(), ResumeError> {
+    let current = hex(schema_hash);
+    if recorded.model.schema_hash == current {
+        Ok(())
+    } else {
+        Err(ResumeError::SchemaChanged {
+            recorded: recorded.model.schema_hash.clone(),
+            current,
+        })
+    }
+}
+
 /// Checks that `recorded`, the manifest of a directory to resume, records the model `model`.
 ///
 /// Called before the schema hash is compared. The hash covers the model's id, and another model would look like a
 /// changed version of the recorded model.
-pub(crate) fn check_model(recorded: &Manifest, model: &str) -> Result<(), ResumeError> {
+fn check_model(recorded: &Manifest, model: &str) -> Result<(), ResumeError> {
     if recorded.model.id == model {
         Ok(())
     } else {
@@ -300,14 +299,7 @@ pub(crate) fn check_directory_code(
     source: &ModelSource,
 ) -> Result<(), ResumeError> {
     let recorded = Manifest::read(&path.join(MANIFEST_FILE)).map_err(ResumeError::Manifest)?;
-    if recorded.mode != mode {
-        return Err(ResumeError::ModeChanged {
-            recorded: recorded.mode,
-            current: mode,
-        });
-    }
-    check_model(&recorded, model)?;
-    check_code(&recorded, source)
+    check_identity(&recorded, mode, model, source)
 }
 
 /// Checks that every session of `recorded` that wrote runs ran the code of `source`, the model that resumes, when
@@ -315,7 +307,7 @@ pub(crate) fn check_directory_code(
 ///
 /// Called after the model id and before the schema hash. A runtime model's edit can change its declarations as well,
 /// and the changed code is then the error reported.
-pub(crate) fn check_code(recorded: &Manifest, source: &ModelSource) -> Result<(), ResumeError> {
+fn check_code(recorded: &Manifest, source: &ModelSource) -> Result<(), ResumeError> {
     let current = RecordedBuild::from(source);
     match recorded
         .run_model_builds()
