@@ -458,6 +458,63 @@ fn a_small_rate_keeps_its_chance_in_the_threshold() {
     );
 }
 
+/// A chance line whose chance is a parameter keeps its value to 2^-32: Lightning chance 1e-8 on the forest fire sheet is
+/// a threshold of 42 in the tick's uniform block, where a draw of a float fires at 2^-24, about six times as often. A
+/// chance of 1 holds whatever the draw, through a test of the chance that the threshold cannot express.
+#[test]
+fn a_small_chance_keeps_its_value_in_the_threshold() {
+    let file = lowered(sheet_text("forest_fire.toml"));
+    let params = [ParamValue::F32(1.0), ParamValue::F32(0.0), ParamValue::F32(1e-8)];
+    let threshold = (1e-8f32 * u32::MAX as f32) as u32;
+    assert_eq!(threshold, 42, "1e-8 of the 32-bit draws");
+    let values = tick_uniforms(&file, &params);
+    assert!(
+        values.iter().any(|value| value.to_bits() == threshold),
+        "{values:?} holds no threshold of 1e-8"
+    );
+    let document = file.lowered().document();
+    let tick = document
+        .passes
+        .iter()
+        .find(|pass| pass.id == "tick_cell_tick")
+        .expect("the tick pass");
+    let node = |id| tick.body.nodes.iter().find(|node| node.id == id).expect("a node");
+    let draws: Vec<_> = tick
+        .body
+        .nodes
+        .iter()
+        .filter(|node| node.op.starts_with("rand."))
+        .collect();
+    assert!(
+        !draws.is_empty() && draws.iter().all(|draw| draw.op == "rand.below"),
+        "{draws:?}"
+    );
+    for draw in draws {
+        let or = tick
+            .body
+            .nodes
+            .iter()
+            .find(|reader| {
+                reader.op == "logic.or"
+                    && reader
+                        .inputs
+                        .values()
+                        .any(|input| matches!(input, InputValue::Link(link) if link.node == draw.id))
+            })
+            .expect("the draw holds or the chance is certain");
+        let certain = or
+            .inputs
+            .values()
+            .find_map(|input| match input {
+                InputValue::Link(link) if link.node != draw.id => Some(node(link.node)),
+                _ => None,
+            })
+            .expect("the test of the chance");
+        assert_eq!(certain.op, "cmp.ge");
+        assert_eq!(certain.inputs.get("b"), Some(&InputValue::Literal(Literal::F32(1.0))));
+    }
+}
+
 /// Each other form of rate on the SIR sheet lowers, checks and compiles: a rate line whose result a Become reads, a
 /// rate in an all of with a comparison, and a rate worked out for each cell.
 #[test]

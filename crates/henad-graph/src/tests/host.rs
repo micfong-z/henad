@@ -1,6 +1,7 @@
 //! The host evaluator: inits replay, reruns draw on the action stream, and a Repeat runs as its definition says.
 
 use henad_core::authoring::primitives::rng::random_float;
+use henad_core::diagnostic::CodeDiagnostic;
 use henad_core::params::ParamValue;
 
 use super::corpus;
@@ -204,6 +205,13 @@ fn a_file_with_errors_is_refused() {
     ))
     .expect("the file reads");
     assert!(matches!(HostEvaluator::new(&file), Err(HostError::Checked(_))));
+    let one = HostError::Checked(vec![CodeDiagnostic::error("a problem")]);
+    assert_eq!(one.to_string(), "the file has 1 error");
+    let two = HostError::Checked(vec![
+        CodeDiagnostic::error("a first problem"),
+        CodeDiagnostic::error("a second problem"),
+    ]);
+    assert_eq!(two.to_string(), "the file has 2 errors");
 }
 
 #[test]
@@ -668,6 +676,14 @@ fn lanes_of_another_file_fault_and_never_panic() {
         let ran = evaluator.run_pass("seed", &mut lanes, &[], &RunContext::init(None), &mut 1);
         assert!(matches!(ran, Err(HostError::Fault { .. })), "{ran:?}");
     }
+    // The count of each part takes its noun in the singular for 1.
+    let mut lanes = HostLanes::new(short.document(), WORLD).expect("the lanes");
+    let ran = evaluator.run_pass("seed", &mut lanes, &[], &RunContext::init(None), &mut 1);
+    assert!(
+        matches!(&ran, Err(HostError::Fault { reason, .. })
+            if reason == "the lanes hold 1 column, and the file declares 2 lanes and 0 field layers"),
+        "{ran:?}"
+    );
     let mut lanes = HostLanes::new(evaluator.document(), WORLD).expect("the lanes");
     evaluator
         .run_pass("seed", &mut lanes, &[], &RunContext::init(None), &mut 1)

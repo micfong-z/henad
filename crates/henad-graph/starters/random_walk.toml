@@ -237,3 +237,29 @@ id = "n41"
 op = "stat.mean"
 config.chunk_acc = "f64"
 in.value = "n40"
+
+[editor]
+version = 1
+next_id = 42
+node.n1 = { pos = [40.0, 40.0] }
+node.n2 = { pos = [246.0, 40.0] }
+node.n3 = { pos = [482.0, 40.0] }
+node.n4 = { pos = [482.0, 149.0] }
+node.n5 = { pos = [789.0, 40.0] }
+node.n6 = { pos = [1047.0, 40.0] }
+node.n20 = { pos = [40.0, 40.0] }
+node.n21 = { pos = [40.0, 128.0] }
+node.n22 = { pos = [257.0, 40.0], output_pos = [2092.0, 40.0] }
+node.n23 = { pos = [709.0, 40.0] }
+node.n24 = { pos = [1007.0, 40.0] }
+node.n25 = { pos = [1312.0, 40.0] }
+node.n26 = { pos = [1564.0, 40.0] }
+node.n27 = { pos = [1840.0, 40.0] }
+node.n28 = { pos = [1312.0, 148.0] }
+node.n29 = { pos = [2345.0, 40.0] }
+node.n30 = { pos = [2345.0, 128.0] }
+node.n35 = { pos = [40.0, 40.0] }
+node.n36 = { pos = [257.0, 40.0] }
+node.n37 = { pos = [600.0, 40.0] }
+node.n40 = { pos = [40.0, 40.0] }
+node.n41 = { pos = [257.0, 40.0] }

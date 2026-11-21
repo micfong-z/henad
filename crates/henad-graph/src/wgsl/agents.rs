@@ -164,10 +164,19 @@ fn merged_lane(field: &str) -> String {
     format!("henad_merged_{field}")
 }
 
+/// Returns the key of the call in the update of the field `field`: the low 32 bits of FNV-1a 64 over the field's id.
+///
+/// A draw inside the `finish` composes its key with this one, so the updates of two fields that share a `finish` draw
+/// different numbers, and another field leaves the key alone.
+pub(crate) fn update_call_key(field: &str) -> u32 {
+    // The truncation keeps the low 32 bits.
+    (henad_core::explore::fingerprint::fnv1a64(format!("henad_update/{field}").as_bytes()) & u64::from(u32::MAX)) as u32
+}
+
 /// Returns `document` with a lane and a tick pass for the update of each field that takes deposits and has a `finish`
-/// function: the pass reads the lane, calls the function and writes the lane, which the update's shader binds to the
-/// merged value and to the field. The passes follow the last tick pass, where the reader would sort them, and each
-/// comes with its field's id and its position.
+/// function: the pass reads the lane, calls the function with the key [`update_call_key`] and writes the lane, which
+/// the update's shader binds to the merged value and to the field. The passes follow the last tick pass, where the
+/// reader would sort them, and each comes with its field's id and its position.
 fn with_field_updates(document: &GraphDocument) -> (GraphDocument, Vec<(String, usize)>) {
     let mut augmented = document.clone();
     let mut insert_position = document
@@ -192,7 +201,10 @@ fn with_field_updates(document: &GraphDocument) -> (GraphDocument, Vec<(String, 
         let mut call = Node::new(ids[1], "fn.call");
         call.config
             .insert("function".to_owned(), ConfigValue::String(finish.clone()));
-        call.config.insert("key".to_owned(), ConfigValue::Integer(1));
+        call.config.insert(
+            "key".to_owned(),
+            ConfigValue::Integer(i64::from(update_call_key(&field.id))),
+        );
         call.inputs.insert(
             "value".to_owned(),
             InputValue::Link(PortRef {
@@ -666,6 +678,13 @@ pub(crate) fn compile_parts(
             ))]
         })?
         .check();
+    let update_problems: Vec<CodeDiagnostic> = report
+        .errors()
+        .filter_map(|problem| update_problem(file, &evaluator, problem))
+        .collect();
+    if !update_problems.is_empty() {
+        return Err(update_problems);
+    }
     let compiled = compile_agent_shaders(document, &report, &evaluator, &updates, probes).map_err(|problems| {
         problems
             .into_iter()
@@ -673,6 +692,51 @@ pub(crate) fn compile_parts(
             .collect::<Vec<_>>()
     })?;
     Ok((evaluator, report, compiled))
+}
+
+/// Returns `problem`, an error the check of the normalised document found in the update of a field, as an error of
+/// that field placed at its table, and `None` for an error elsewhere.
+///
+/// The update passes exist in the normalised document alone, and [`GraphFile::check`] holds their `finish` functions
+/// to the rules a tick pass over cells meets. A problem it does not foresee is reported here, the copies of the
+/// function's nodes named by the nodes as the function writes them, and a copy inlined through a call of a pass of
+/// the file named with that call.
+fn update_problem(file: &GraphFile, evaluator: &HostEvaluator, problem: &CodeDiagnostic) -> Option<CodeDiagnostic> {
+    let document = file.document();
+    let index = document
+        .fields
+        .iter()
+        .position(|field| problem.pass.as_deref() == Some(format!("henad_update_{}", field.id).as_str()))?;
+    let field = &document.fields[index];
+    let written = |id: NodeId| document.passes.iter().any(|pass| pass.body.node(id).is_some());
+    // Each node id of the message that a copy holds becomes the node as its function writes it.
+    let reason = problem
+        .message
+        .split(' ')
+        .map(|word| {
+            let trimmed = word.trim_end_matches([',', ':', ')']);
+            let origin = trimmed.parse::<NodeId>().ok().and_then(|id| evaluator.origin(id));
+            let Some((function, origin)) = origin.and_then(|origin| Some((origin.function.as_deref()?, origin))) else {
+                return word.to_owned();
+            };
+            let named = match origin.calls.first().filter(|call| written(**call)) {
+                Some(call) => format!("{} of the function '{function}' called by {call}", origin.node),
+                None => format!("{} of the function '{function}'", origin.node),
+            };
+            word.replacen(trimmed, &named, 1)
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let diagnostic = CodeDiagnostic::error(format!(
+        "the field '{}' cannot run its `finish` '{}' in its update over cells",
+        field.id,
+        field.finish.as_deref().unwrap_or_default()
+    ))
+    .with_note(reason);
+    Some(match file.places().fields.get(index) {
+        Some(span) => file.place(diagnostic, span.clone()),
+        None => diagnostic,
+    })
 }
 
 /// Shaders and the buffer plan of one graph of agents.

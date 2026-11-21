@@ -753,6 +753,21 @@ in.value = "n1.out"
 }
 
 #[test]
+fn an_expression_call_counts_its_arguments_in_the_right_number() {
+    let call = |text: &str| {
+        format!(
+            "{}\n[[pass.node]]\nid = \"n1\"\nop = \"math.expr\"\nconfig.text = \"{text}\"\n\
+             config.inputs = [{{ name = \"v\", type = \"f32\" }}]\nconfig.outputs = [\"out\"]\n\
+             in.v = {{ f32 = 1.0 }}\n\n[[pass.node]]\nid = \"n2\"\nop = \"lane.set\"\nconfig.lane = \"v\"\n\
+             in.value = \"n1.out\"\n",
+            tick!("math", "")
+        )
+    };
+    refuses(&call("out = min(v)"), "calls `min` with 1 argument, expected 2");
+    refuses(&call("out = min(v, v, v)"), "calls `min` with 3 arguments, expected 2");
+}
+
+#[test]
 fn a_radius_fold_past_its_candidate_cap_faults_with_its_place() {
     let text = format!(
         "{AGENTS}{}{}",
@@ -944,4 +959,82 @@ fn a_radius_fold_past_its_cell_cap_faults_before_it_walks() {
     evaluator
         .run_pass("flock", &mut lanes, &[], &RunContext::tick(None, 0), &mut 1)
         .expect("a narrower walk runs");
+}
+
+/// Returns the tables of a field `g` that takes deposits and finishes with the function `finish`, whose ports and
+/// nodes are `function`, and a tick pass over agents.
+fn finished_field(function: &str) -> String {
+    format!(
+        "\n[[field]]\nid = \"g\"\ntype = \"f32\"\nlayers = [\"value\"]\nstatic = false\ncombine = \"max\"\n\
+         finish = \"finish\"\n\n[[function]]\nid = \"finish\"\nkind = \"pure\"\n{function}\n{}",
+        tick!(
+            "walk",
+            "\n[[pass.node]]\nid = \"n51\"\nop = \"lane.get\"\nconfig.lane = \"pos\"\n\n\
+             [[pass.node]]\nid = \"n52\"\nop = \"lane.set\"\nconfig.lane = \"pos\"\nin.value = \"n51\"\n"
+        )
+    )
+}
+
+/// Ports of a `finish` that take and return one `f32` named `value`.
+const VALUE_PORTS: &str = "\n[[function.input]]\nport = \"value\"\ntype = \"f32\"\n\n\
+                           [[function.output]]\nport = \"value\"\ntype = \"f32\"\n";
+
+/// Returns a `finish` body that passes `value` through `nodes`, the last of which is `n3`, to its output.
+fn finish_body(nodes: &str) -> String {
+    format!(
+        "{VALUE_PORTS}\n[[function.node]]\nid = \"n1\"\nop = \"fn.input\"\nconfig.port = \"value\"\n{nodes}\n\
+         [[function.node]]\nid = \"n9\"\nop = \"fn.output\"\nconfig.port = \"value\"\nin.value = \"n3\"\n"
+    )
+}
+
+#[test]
+fn a_finish_takes_and_returns_one_value() {
+    accepts(&finished_field(&finish_body(
+        "\n[[function.node]]\nid = \"n3\"\nop = \"math.mul\"\nin.a = \"n1\"\nin.b = { f32 = 0.5 }\n",
+    )));
+    let other_input = "\n[[function.input]]\nport = \"x\"\ntype = \"f32\"\n\n\
+                       [[function.output]]\nport = \"value\"\ntype = \"f32\"\n\n\
+                       [[function.node]]\nid = \"n1\"\nop = \"fn.input\"\nconfig.port = \"x\"\n\n\
+                       [[function.node]]\nid = \"n9\"\nop = \"fn.output\"\nconfig.port = \"value\"\nin.value = \"n1\"\n";
+    let whole_output = "\n[[function.input]]\nport = \"value\"\ntype = \"f32\"\n\n\
+                        [[function.output]]\nport = \"value\"\ntype = \"u32\"\n\n\
+                        [[function.node]]\nid = \"n1\"\nop = \"fn.input\"\nconfig.port = \"value\"\n\n\
+                        [[function.node]]\nid = \"n2\"\nop = \"conv.to_u32\"\nin.a = \"n1\"\n\n\
+                        [[function.node]]\nid = \"n9\"\nop = \"fn.output\"\nconfig.port = \"value\"\nin.value = \"n2\"\n";
+    for function in [other_input, whole_output] {
+        refuses(
+            &finished_field(function),
+            "the function 'finish' finishes the field 'g' and must take one input `value` of type f32 and return one \
+             output `value` of type f32",
+        );
+    }
+}
+
+#[test]
+fn a_finish_reads_no_lane_of_agents() {
+    refuses(
+        &finished_field(&finish_body(
+            "\n[[function.node]]\nid = \"n2\"\nop = \"lane.get\"\nconfig.lane = \"v\"\n\n\
+             [[function.node]]\nid = \"n3\"\nop = \"math.add\"\nin.a = \"n1\"\nin.b = \"n2\"\n",
+        )),
+        "Read lane n2 uses the lane 'v' of agents, and the update of the field 'g' runs this function over cells",
+    );
+}
+
+#[test]
+fn a_finish_costs_no_more_than_a_pass() {
+    let repeat = |max: u32| {
+        finished_field(&finish_body(&format!(
+            "\n[[function.node]]\nid = \"n2\"\nop = \"region.repeat\"\nconfig.max = {max}\n\
+             config.acc = [{{ name = \"added\", type = \"f32\", combine = \"sum\" }}]\nin.count = {{ u32 = {max} }}\n\n\
+             [[function.node]]\nid = \"n4\"\nop = \"region.put\"\nregion = \"n2\"\nconfig.acc = \"added\"\n\
+             in.value = \"n1\"\n\n\
+             [[function.node]]\nid = \"n3\"\nop = \"math.add\"\nin.a = \"n1\"\nin.b = \"n2.added\"\n"
+        )))
+    };
+    accepts(&repeat(1000));
+    refuses(
+        &repeat(crate::limits::MAX_REPEAT_ITERATIONS),
+        "the update of the field 'g' costs 131077 units per cell, expected at most 65536",
+    );
 }

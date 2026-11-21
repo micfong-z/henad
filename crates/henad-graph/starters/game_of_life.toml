@@ -226,17 +226,26 @@ in.value = { cat = "life.Dead" }
 [editor]
 version = 1
 next_id = 41
-node.n1 = { pos = [40.0, 60.0], label = "Alive threshold" }
-node.n2 = { pos = [40.0, 160.0] }
-node.n3 = { pos = [260.0, 110.0] }
-node.n4 = { pos = [460.0, 110.0] }
-node.n5 = { pos = [660.0, 110.0] }
-node.n10 = { pos = [40.0, 40.0], label = "This cell" }
-node.n11 = { pos = [40.0, 160.0], label = "Alive neighbors" }
-node.n12 = { pos = [300.0, 100.0], label = "B3/S23" }
-node.n13 = { pos = [540.0, 100.0] }
+node.n1 = { pos = [40.0, 40.0], label = "Alive threshold" }
+node.n2 = { pos = [40.0, 128.0] }
+node.n3 = { pos = [381.0, 40.0] }
+node.n4 = { pos = [582.0, 40.0] }
+node.n5 = { pos = [811.0, 40.0] }
+node.n10 = { pos = [40.0, 76.0], label = "This cell" }
+node.n11 = { pos = [40.0, 164.0], label = "Alive neighbors" }
+node.n12 = { pos = [363.0, 40.0], label = "B3/S23" }
+node.n13 = { pos = [628.0, 40.0] }
 node.n20 = { pos = [40.0, 40.0] }
-node.n21 = { pos = [260.0, 40.0] }
+node.n21 = { pos = [257.0, 40.0] }
+node.n30 = { pos = [40.0, 40.0] }
+node.n31 = { pos = [40.0, 128.0] }
+node.n32 = { pos = [328.0, 40.0] }
+node.n33 = { pos = [509.0, 40.0] }
+node.n34 = { pos = [717.0, 40.0] }
+node.n35 = { pos = [40.0, 216.0] }
+node.n36 = { pos = [898.0, 40.0] }
+node.n37 = { pos = [1172.0, 40.0] }
+node.n38 = { pos = [1406.0, 40.0] }
 node.n40 = { pos = [40.0, 40.0] }
 view."pass.step" = { pan = [0.0, 0.0], zoom = 1.0 }
 

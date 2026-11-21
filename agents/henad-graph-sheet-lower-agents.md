@@ -195,7 +195,7 @@ beside Set everywhere of the trails is one action with `runs = ["start_ant"]` an
 Tests in `src/tests/sheet_ground.rs`: `the_ants_sheet_lowers_checks_and_runs_on_the_host` (starts at
 the nest, the painted ground, 20 ticks on open cell centres),
 `the_ants_card_lowers_to_one_fused_fold_per_neighbourhood` (one fold, eight accumulators, one merged
-deposit, one counter, the tick pass's node count, `ANTS_TICK_NODES`, 110),
+deposit, one counter, the tick pass's node count, `ANTS_TICK_NODES`, 116),
 `seventeen_accumulators_split_into_two_folds`,
 `a_block_and_the_8_cells_around_share_a_fold_with_a_guard` (and the values sheet's two folds),
 `a_ground_property_that_adds_up_lowers_to_a_sum_and_runs` (100 ticks on the device),

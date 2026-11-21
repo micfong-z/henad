@@ -25,7 +25,7 @@ fn tick_file(nodes: &str) -> GraphFile {
 }
 
 /// Returns the lanes after one run of the pass `step` of `nodes` on the device at `tick`, one word per element.
-fn on_device(device: &TestDevice, nodes: &str, seed: Option<u64>, tick: u32) -> Vec<Vec<u32>> {
+pub(super) fn on_device(device: &TestDevice, nodes: &str, seed: Option<u64>, tick: u32) -> Vec<Vec<u32>> {
     let file = tick_file(nodes);
     let report = file.check();
     let evaluator = HostEvaluator::new(&file).unwrap_or_else(|error| panic!("{:?}", error.diagnostics()));
@@ -60,7 +60,7 @@ fn on_device(device: &TestDevice, nodes: &str, seed: Option<u64>, tick: u32) -> 
 }
 
 /// Returns the lanes after one run of the pass `step` of `nodes` on the host at `tick`, one word per element.
-fn on_host(nodes: &str, seed: Option<u64>, tick: u32) -> Vec<Vec<u32>> {
+pub(super) fn on_host(nodes: &str, seed: Option<u64>, tick: u32) -> Vec<Vec<u32>> {
     let evaluator = HostEvaluator::new(&tick_file(nodes)).unwrap_or_else(|error| panic!("{:?}", error.diagnostics()));
     let mut lanes = HostLanes::new(evaluator.document(), WORLD).expect("the lanes");
     let mut stream = 0;

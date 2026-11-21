@@ -270,6 +270,36 @@ enum SlotName {
     Unnamed,
 }
 
+/// Returns the WGSL of the integer division or remainder `op` of `a` by the constant `divisor`, when a component of the
+/// divisor is 0, and `None` otherwise.
+///
+/// A component divided by 0 is the component of `a` and its remainder 0, as `math.div` and `math.rem` define. naga
+/// refuses a division by a constant 0, so those components are written without one.
+fn by_constant_zero(op: BinaryOp, a: &str, divisor: HostValue) -> Option<String> {
+    let component = |part: &str, divisor_part: String, zero: &str, is_zero: bool| match (op, is_zero) {
+        (BinaryOp::Div, true) => Some(part.to_owned()),
+        (BinaryOp::Rem, true) => Some(zero.to_owned()),
+        (BinaryOp::Div, false) => Some(format!("{part} / {divisor_part}")),
+        (BinaryOp::Rem, false) => Some(format!("{part} % {divisor_part}")),
+        _ => None,
+    };
+    match divisor {
+        HostValue::U32(0) => component(a, String::new(), "0u", true),
+        HostValue::I32(0) => component(a, String::new(), "0i", true),
+        HostValue::Vec2U([x, y]) if x == 0 || y == 0 => Some(format!(
+            "vec2<u32>({}, {})",
+            component(&format!("{a}.x"), literal(HostValue::U32(x))?, "0u", x == 0)?,
+            component(&format!("{a}.y"), literal(HostValue::U32(y))?, "0u", y == 0)?
+        )),
+        HostValue::Vec2I([x, y]) if x == 0 || y == 0 => Some(format!(
+            "vec2<i32>({}, {})",
+            component(&format!("{a}.x"), literal(HostValue::I32(x))?, "0i", x == 0)?,
+            component(&format!("{a}.y"), literal(HostValue::I32(y))?, "0i", y == 0)?
+        )),
+        _ => None,
+    }
+}
+
 /// Returns the WGSL name of output `port` of node `node`: `n<id>_<port>`, each `.` written `__`.
 ///
 /// A port segment starts with a letter and holds no `__`, so a run of two underscores marks the dot and a run of
@@ -405,6 +435,8 @@ struct Block<'a> {
     iteration: Option<String>,
     /// Stores of field writes, run at the end of the pass, each as its line.
     deferred: Vec<String>,
+    /// Constants of the program by slot, which a division by a constant reads.
+    constants: BTreeMap<usize, HostValue>,
 }
 
 impl<'a> Block<'a> {
@@ -489,6 +521,7 @@ impl<'a> Block<'a> {
             owners,
             iteration: input.outer_iteration.map(|word| format!("{word}u")),
             deferred: Vec::new(),
+            constants: program.constants.iter().map(|(slot, value)| (*slot, *value)).collect(),
         };
         (block, device_prelude)
     }
@@ -1092,8 +1125,10 @@ impl Emitter<'_> {
                 lines.push_str(&format!("{indent}henad_write_{id} = {value};\n"));
             }
             Operation::Binary { op, a, b } => {
+                let divisor = block.constants.get(b).copied();
                 let (a, b) = (self.slot(block, *a, node), self.slot(block, *b, node));
-                let_out!(match op {
+                let by_zero = divisor.and_then(|divisor| by_constant_zero(*op, &a, divisor));
+                let_out!(by_zero.unwrap_or_else(|| match op {
                     BinaryOp::Add => format!("{a} + {b}"),
                     BinaryOp::Sub => format!("{a} - {b}"),
                     BinaryOp::Mul => format!("{a} * {b}"),
@@ -1104,7 +1139,7 @@ impl Emitter<'_> {
                     BinaryOp::Xor => format!("{a} ^ {b}"),
                     BinaryOp::And => format!("{a} & {b}"),
                     BinaryOp::Or => format!("{a} | {b}"),
-                });
+                }));
             }
             Operation::Shift { a, b, left } => {
                 let (a, b) = (self.slot(block, *a, node), self.slot(block, *b, node));
@@ -1720,11 +1755,23 @@ impl Emitter<'_> {
                     self.slot(block, *world, node),
                 );
                 self.uses.space.insert("axis_delta");
+                self.uses.space.insert("wrap_coord");
                 self.uses.space.insert("TORUS");
-                let delta = format!("henad_delta_n{}", node.number());
+                let n = node.number();
+                let (near, half, delta) = (
+                    format!("henad_near_n{n}"),
+                    format!("henad_half_n{n}"),
+                    format!("henad_delta_n{n}"),
+                );
+                // `axis_delta` corrects once, which covers two points within one world of each other. A difference it
+                // leaves outside half a world is reduced as the host reduces it, by the Euclidean remainder.
                 lines.push_str(&format!(
-                    "{indent}let {delta} = vec2<f32>(axis_delta({a}.x, {b}.x, {world}.x, TORUS), axis_delta({a}.y, \
-                     {b}.y, {world}.y, TORUS));\n"
+                    "{indent}let {near} = vec2<f32>(axis_delta({a}.x, {b}.x, {world}.x, TORUS), axis_delta({a}.y, \
+                     {b}.y, {world}.y, TORUS));\n\
+                     {indent}let {half} = {world} * 0.5;\n\
+                     {indent}let {delta} = select({near}, vec2<f32>(wrap_coord({b}.x - {a}.x + {half}.x, {world}.x) - \
+                     {half}.x, wrap_coord({b}.y - {a}.y + {half}.y, {world}.y) - {half}.y), ({near} < -{half}) | \
+                     ({near} >= {half}));\n"
                 ));
                 if *squared {
                     let_out!(format!("{delta}.x * {delta}.x + {delta}.y * {delta}.y"));

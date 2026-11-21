@@ -713,6 +713,10 @@ impl Builder<'_> {
 ///
 /// Returns the message for a call with another number of arguments.
 fn fixed_operands<const N: usize>(name: &str, operands: Vec<Operand>) -> Result<[Operand; N], String> {
-    <[Operand; N]>::try_from(operands)
-        .map_err(|operands| format!("calls `{name}` with {} arguments, expected {N}", operands.len()))
+    <[Operand; N]>::try_from(operands).map_err(|operands| {
+        format!(
+            "calls `{name}` with {}, expected {N}",
+            crate::model_text::counted(operands.len(), "argument")
+        )
+    })
 }

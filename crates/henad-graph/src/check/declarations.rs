@@ -419,18 +419,35 @@ fn check_fields(checker: &mut Checker<'_>) {
                 place.clone(),
             );
         }
-        if let Some(finish) = &field.finish
-            && document.function(finish).is_none()
-        {
-            checker.error(
-                format!(
-                    "the field '{}' finishes with the function '{finish}', which the file does not declare",
-                    field.id
+        if let Some(finish) = &field.finish {
+            match document.function(finish) {
+                None => checker.error(
+                    format!(
+                        "the field '{}' finishes with the function '{finish}', which the file does not declare",
+                        field.id
+                    ),
+                    place,
                 ),
-                place,
-            );
+                // The update of the field passes the merged value to the function and stores what it returns.
+                Some(function) if !field.is_static && !is_finish_interface(function) => checker.error(
+                    format!(
+                        "the function '{finish}' finishes the field '{}' and must take one input `value` of type \
+                         f32 and return one output `value` of type f32",
+                        field.id
+                    ),
+                    place,
+                ),
+                Some(_) => {}
+            }
         }
     }
+}
+
+/// Returns whether `function` takes one `f32` input `value` and returns one `f32` output `value`, as the `finish` of a
+/// field.
+fn is_finish_interface(function: &crate::document::Function) -> bool {
+    let is_value = |ports: &[crate::document::FunctionPort]| matches!(ports, [port] if port.port == "value" && port.value_type == ValueType::F32);
+    is_value(&function.inputs) && is_value(&function.outputs)
 }
 
 fn check_counters(checker: &mut Checker<'_>) {

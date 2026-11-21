@@ -492,3 +492,56 @@ fn accessible_bounds_of_a_node_follow_the_canvas_transform() {
         bounds[0]
     );
 }
+
+/// Every canvas of every graph starter, drawn with the app's fonts and style, holds no node over another, so no pin
+/// or port label hides under a neighbour.
+#[test]
+fn every_starter_opens_with_no_node_over_another() {
+    for starter in henad_graph::starters::starters()
+        .iter()
+        .chain(henad_graph::starters::agent_starters())
+    {
+        let mut harness = CanvasHarness::over(crate::tests::support::graph_editor_of(starter.file_name));
+        crate::init::setup_custom_fonts(&harness.context);
+        crate::init::setup_custom_styles(&harness.context);
+        harness.settle();
+        let document = harness.graph.document().clone();
+        let scopes = document.passes.iter().map(|pass| Scope::pass(&pass.id)).chain(
+            document
+                .functions
+                .iter()
+                .map(|function| Scope::Function(function.id.clone())),
+        );
+        for scope in scopes {
+            harness.graph.request(GraphRequest::Open(scope.clone()));
+            harness.settle();
+            let canvas = harness.graph.canvas(&scope).expect("a canvas");
+            let rects: Vec<(String, Rect)> = canvas
+                .nodes
+                .keys()
+                .filter_map(|id| Some((id.to_string(), canvas.drawn_rect(*id)?)))
+                .chain(
+                    canvas
+                        .output_halves
+                        .keys()
+                        .filter_map(|id| Some((format!("{id} output"), canvas.drawn_output_half_rect(*id)?))),
+                )
+                .collect();
+            assert_eq!(
+                rects.len(),
+                canvas.nodes.len() + canvas.output_halves.len(),
+                "{} {scope:?}: every node is drawn",
+                starter.file_name
+            );
+            for (index, (first, first_rect)) in rects.iter().enumerate() {
+                for (second, second_rect) in &rects[index + 1..] {
+                    assert!(
+                        !first_rect.intersect(*second_rect).is_positive(),
+                        "{} {scope:?}: {first} at {first_rect:?} lies over {second} at {second_rect:?}",
+                        starter.file_name
+                    );
+                }
+            }
+        }
+    }
+}

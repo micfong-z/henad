@@ -298,36 +298,36 @@ in.value = "n50"
 [editor]
 version = 1
 next_id = 52
-node.n1 = { pos = [40.0, 60.0] }
-node.n2 = { pos = [40.0, 160.0] }
-node.n3 = { pos = [260.0, 110.0] }
-node.n4 = { pos = [460.0, 110.0] }
-node.n5 = { pos = [660.0, 110.0] }
-node.n10 = { pos = [40.0, 40.0], label = "This cell" }
-node.n11 = { pos = [40.0, 160.0], label = "Infected neighbors" }
-node.n12 = { pos = [260.0, 220.0] }
-node.n13 = { pos = [460.0, 220.0], label = "Chance to stay safe" }
-node.n14 = { pos = [260.0, 340.0] }
-node.n15 = { pos = [660.0, 260.0] }
-node.n16 = { pos = [460.0, 140.0] }
-node.n17 = { pos = [860.0, 200.0], label = "Infected this tick" }
-node.n18 = { pos = [660.0, 380.0], label = "Recovers this tick" }
-node.n19 = { pos = [1060.0, 120.0] }
-node.n20 = { pos = [1260.0, 120.0] }
+node.n1 = { pos = [40.0, 40.0] }
+node.n2 = { pos = [40.0, 128.0] }
+node.n3 = { pos = [323.0, 40.0] }
+node.n4 = { pos = [525.0, 40.0] }
+node.n5 = { pos = [753.0, 40.0] }
+node.n10 = { pos = [40.0, 76.0], label = "This cell" }
+node.n11 = { pos = [40.0, 164.0], label = "Infected neighbors" }
+node.n12 = { pos = [40.0, 331.0] }
+node.n13 = { pos = [384.0, 441.0], label = "Chance to stay safe" }
+node.n14 = { pos = [40.0, 441.0] }
+node.n15 = { pos = [720.0, 331.0] }
+node.n16 = { pos = [384.0, 331.0] }
+node.n17 = { pos = [923.0, 331.0], label = "Infected this tick" }
+node.n18 = { pos = [384.0, 549.0], label = "Recovers this tick" }
+node.n19 = { pos = [1199.0, 331.0] }
+node.n20 = { pos = [1565.0, 40.0] }
 node.n30 = { pos = [40.0, 40.0] }
-node.n31 = { pos = [260.0, 40.0] }
+node.n31 = { pos = [257.0, 40.0] }
 node.n40 = { pos = [40.0, 40.0] }
-node.n41 = { pos = [260.0, 40.0] }
-node.n42 = { pos = [40.0, 160.0] }
-node.n43 = { pos = [40.0, 260.0] }
-node.n44 = { pos = [240.0, 260.0] }
-node.n45 = { pos = [440.0, 200.0] }
-node.n46 = { pos = [640.0, 200.0] }
-node.n47 = { pos = [640.0, 320.0] }
-node.n48 = { pos = [840.0, 250.0] }
-node.n49 = { pos = [1040.0, 120.0] }
-node.n50 = { pos = [1240.0, 120.0] }
-node.n51 = { pos = [1440.0, 120.0] }
+node.n41 = { pos = [328.0, 446.0] }
+node.n42 = { pos = [40.0, 164.0] }
+node.n43 = { pos = [40.0, 252.0] }
+node.n44 = { pos = [328.0, 164.0] }
+node.n45 = { pos = [509.0, 164.0] }
+node.n46 = { pos = [717.0, 164.0] }
+node.n47 = { pos = [40.0, 340.0] }
+node.n48 = { pos = [898.0, 164.0] }
+node.n49 = { pos = [1172.0, 40.0] }
+node.n50 = { pos = [1351.0, 40.0] }
+node.n51 = { pos = [1585.0, 40.0] }
 view."pass.step" = { pan = [0.0, 0.0], zoom = 1.0 }
 
 [[editor.frame]]

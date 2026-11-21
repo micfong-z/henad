@@ -254,8 +254,8 @@ fn the_forest_fire_lowers_its_spread_line_before_its_lightning_line() {
             .unwrap_or_else(|| panic!("no rule {id}"))
     };
     assert!(place("l2") < place("l3"), "{ids:?}");
-    // Both chances lower to a draw keyed by their own line.
-    let draws = tick.body.nodes.iter().filter(|node| node.op == "rand.chance").count();
+    // Both chances lower to a draw keyed by their own line, compared with a threshold of all 32 bits.
+    let draws = tick.body.nodes.iter().filter(|node| node.op == "rand.below").count();
     assert_eq!(draws, 2);
 }
 
@@ -282,7 +282,7 @@ fn a_chance_inside_a_when_draws_with_its_lines_composed_key() {
         .body
         .nodes
         .iter()
-        .filter(|node| node.op == "rand.chance")
+        .filter(|node| node.op == "rand.below")
         .filter_map(|node| match node.config.get("key") {
             Some(ConfigValue::Integer(key)) => Some(*key),
             _ => None,

@@ -19,7 +19,7 @@ use crate::document::{FieldCombine, GraphDocument, Pass};
 use crate::ids::NodeId;
 use crate::node::{Combine, Node};
 use crate::reader::read_u64;
-use crate::types::Rate;
+use crate::types::{Rate, ValueType};
 use crate::value::{ConfigValue, InputValue, PortRef};
 
 /// Moves every instruction of a region body in `program`'s element block that is pure and reads only values the same
@@ -1139,6 +1139,14 @@ impl<'a> Compiler<'a> {
                 Combine::Min => extreme_of(&accumulator.value_type, true),
                 Combine::Max => extreme_of(&accumulator.value_type, false),
                 Combine::And => Some(HostValue::Bool(true)),
+                // A carry requires `init.<acc>`, so its identity is never read, and a reference or a layer, which has
+                // no zero, takes the reference to no cell, the first agent or the first layer.
+                Combine::Carry => HostValue::zero_of(&accumulator.value_type).or(match accumulator.value_type {
+                    ValueType::Cell => Some(HostValue::Cell(u32::MAX)),
+                    ValueType::Agent => Some(HostValue::Agent(0)),
+                    ValueType::Layer(_) => Some(HostValue::Layer(0)),
+                    _ => None,
+                }),
                 _ => HostValue::zero_of(&accumulator.value_type),
             }
             .ok_or_else(|| {

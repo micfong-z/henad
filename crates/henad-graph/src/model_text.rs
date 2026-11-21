@@ -147,6 +147,17 @@ pub(crate) fn or_list(items: &[&str]) -> String {
     }
 }
 
+/// Returns `count` and `noun`, the noun in the plural unless the count is 1, such as `1 byte` or `3 bytes`.
+///
+/// `noun` is a singular noun whose plural adds an `s`.
+pub(crate) fn counted(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
+}
+
 /// The `kind` key of a model file, read ignoring every other key and its type.
 #[derive(Deserialize)]
 struct HeaderKind {

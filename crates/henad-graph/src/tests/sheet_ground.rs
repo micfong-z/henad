@@ -142,7 +142,7 @@ fn the_ants_card_lowers_to_one_fused_fold_per_neighbourhood() {
 }
 
 /// Nodes of the ants' lowered tick pass.
-const ANTS_TICK_NODES: usize = 110;
+const ANTS_TICK_NODES: usize = 116;
 
 /// Game of Life with Look around lines `l5` and `l6` added to the card that runs each tick, each with `first` and
 /// `second` summaries of whether any neighbour is alive.

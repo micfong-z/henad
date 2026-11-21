@@ -257,11 +257,13 @@ A tick pass reads a field with `field.get` and deposits into it with `field.depo
 | `static` | `true` for a field that only init passes write and that takes no deposits |
 | `combine` | Rule that merges the deposits of a field that is not static: `"max"` or `"sum"` |
 | `resolution` | Step that a `"sum"` counts deposits in, a power of two from 1 down to 2^-24 written as a number, such as `1.52587890625e-5` for 2^-16. Required with `"sum"`, and refused with any other rule |
-| `finish` | Id of a function run on each cell after the merge. Optional |
+| `finish` | Id of a function run on each cell after the merge, taking one `f32` input `value` and returning one `f32` output `value`. Optional |
 | `initial` | Value of every cell at the start. When left out, 0 or the category's first variant |
 
 A deposit below 0 counts as 0, and so does a NaN.
 After the last tick pass of each tick, the field update merges the deposits into the field, then runs `finish` on each cell.
+The update is a tick pass over cells on the GPU, so the `finish` and the functions it calls are checked as such a pass: they read no lane of agents, and the update costs at most 65536 units per cell, as a pass does.
+The updates of two fields that share a `finish` draw different random numbers.
 With `"max"`, a cell becomes the larger of itself and its largest deposit.
 With `"sum"`, each deposit is rounded half to even to a whole number of resolutions, the numbers add up in one 32-bit word per cell, and the cell becomes itself plus the word times the resolution.
 Whole numbers add up in any order to the same word, so a run replays exactly on one device and the word on the device equals the word the host evaluator computes.
@@ -388,7 +390,8 @@ A rate `r` per unit holds within one tick with the chance 1 − e^(−r Δt), wh
 A rate in another unit than the tick's is multiplied by the ratio of the two units, so a rate per week in a model of days is divided by 7.
 A value that reads only parameters and typed numbers is the same for every cell, and the host computes it once per build.
 Such a rate with no count keeps its chance to 2^-32, so a rate as small as 1e-8 per tick still holds at its own chance.
-Every other rate and every chance is resolved to 2^-24: a chance per tick below about 1e-6 runs measurably off its value, a chance below 2^-24 runs at 2^-24, and such a rate below about 3e-8 per tick never holds.
+A chance line or phrase whose chance is a parameter or a typed number, with no count, keeps its chance to 2^-32 too, and a chance of 1 always holds.
+Every other rate and every other chance is resolved to 2^-24: a chance per tick below about 1e-6 runs measurably off its value, a chance below 2^-24 runs at 2^-24, and such a rate below about 3e-8 per tick never holds.
 A rate for each of the cells around reads e^(−r Δt k) for each count `k` from a table the host computes, and the device computes no exponential.
 A rate worked out for each cell, or for each of a count of agents, takes one exponential per element.
 

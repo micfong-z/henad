@@ -8,9 +8,11 @@
 //! runs on the host alone, since a model's init passes never run on the device.
 //!
 //! A counter that a million agents add to, over thousands of workgroups, is held to the host's total too, and so is
-//! the word of a million deposits into one cell of a field that adds up.
+//! the word of a million deposits into one cell of a field that adds up. So are an integer division and remainder by
+//! a constant 0, a fold that carries a cell, and a difference on a torus between points several worlds apart.
 
 use super::case_files::{agents_header_with_position, node_case_file, pass_case_file};
+use super::gpu_repeat::{on_device, on_host};
 use super::known_answers::{case_world, input_literal, meets, node_case_context, pass_case_context, plant};
 use super::support::{
     AgentShape, ShaderRun, TestDevice, device_for, first_tally, lane_buffers, lane_words, node_id, run_shader,
@@ -1008,4 +1010,184 @@ fn many_deposits_into_one_cell_add_up_exactly_on_device_and_host() {
         result.buffers[accum][1..].iter().all(|&word| word == 0),
         "no other cell takes a deposit"
     );
+}
+
+/// Returns a pass node `id` of the kind `op`, with the inputs `inputs` as TOML lines.
+fn pass_node(id: &str, op: &str, inputs: &str) -> String {
+    format!("\n[[pass.node]]\nid = \"{id}\"\nop = \"{op}\"\n{inputs}")
+}
+
+/// Returns the nodes of a tick pass that writes to the lane `x` the `op`, `math.div` or `math.rem`, of a value of
+/// `value_type` made from the cell's index by the constant `divisor`, folded to one `u32`.
+///
+/// A signed value runs negative below the 30th cell, and the two components of a vector land in the two halves of the
+/// word.
+fn division_by_constant(op: &str, value_type: &str, divisor: &str) -> String {
+    let mut nodes = pass_node("n1", "ctx.index", "");
+    nodes += &pass_node("n2", "conv.to_i32", "in.a = \"n1\"\n");
+    nodes += &pass_node("n3", "math.sub", "in.a = \"n2\"\nin.b = { i32 = 30 }\n");
+    let dividend = match value_type {
+        "u32" => "n1",
+        "i32" => "n3",
+        "vec2u" => {
+            nodes += &pass_node("n4", "vec.make", "in.x = \"n1\"\nin.y = \"n1\"\n");
+            "n4"
+        }
+        _ => {
+            nodes += &pass_node("n4", "vec.make", "in.x = \"n3\"\nin.y = \"n2\"\n");
+            "n4"
+        }
+    };
+    nodes += &pass_node(
+        "n10",
+        op,
+        &format!("in.a = \"{dividend}\"\nin.b = {{ {value_type} = {divisor} }}\n"),
+    );
+    let written = match value_type {
+        "u32" => "n10",
+        "i32" => {
+            nodes += &pass_node("n11", "conv.to_u32", "in.a = \"n10\"\n");
+            "n11"
+        }
+        _ => {
+            let unsigned = if value_type == "vec2u" {
+                "n10"
+            } else {
+                nodes += &pass_node("n11", "conv.to_vec2u", "in.a = \"n10\"\n");
+                "n11"
+            };
+            nodes += &pass_node("n12", "vec.split", &format!("in.v = \"{unsigned}\"\n"));
+            nodes += &pass_node("n13", "math.mul", "in.a = \"n12.x\"\nin.b = { u32 = 65536 }\n");
+            nodes += &pass_node("n14", "math.add", "in.a = \"n13\"\nin.b = \"n12.y\"\n");
+            "n14"
+        }
+    };
+    nodes += &pass_node(
+        "n20",
+        "lane.set",
+        &format!("config.lane = \"x\"\nin.value = \"{written}\"\n"),
+    );
+    nodes
+}
+
+/// An integer division by a constant with a component of 0, and an integer remainder by a constant 0, build and give
+/// the documented results on the device as on the host: the dividend's component for a quotient and 0 for a remainder.
+#[test]
+fn an_integer_division_by_a_constant_zero_runs_as_the_host_does() {
+    let Some(device) = device_for("an_integer_division_by_a_constant_zero_runs_as_the_host_does") else {
+        return;
+    };
+    for (op, value_type, divisor) in [
+        ("math.div", "u32", "0"),
+        ("math.rem", "u32", "0"),
+        ("math.div", "i32", "0"),
+        ("math.rem", "i32", "0"),
+        ("math.div", "vec2u", "[3, 0]"),
+        ("math.div", "vec2i", "[0, -2]"),
+        ("math.div", "vec2u", "[0, 0]"),
+    ] {
+        let nodes = division_by_constant(op, value_type, divisor);
+        let host = on_host(&nodes, None, 0);
+        assert_eq!(
+            on_device(&device, &nodes, None, 0)[0],
+            host[0],
+            "{op} of a {value_type} by {divisor}"
+        );
+        if (op, value_type) == ("math.div", "u32") {
+            assert_eq!(
+                host[0],
+                (0..64).collect::<Vec<u32>>(),
+                "a quotient by 0 is the dividend"
+            );
+        }
+        if (op, value_type) == ("math.rem", "u32") {
+            assert!(host[0].iter().all(|word| *word == 0), "a remainder by 0 is 0");
+        }
+    }
+}
+
+/// A grid fold that carries a cell, from the cell itself to each position it visits, ends at the last position of its
+/// table on the device as on the host.
+#[test]
+fn a_fold_carries_a_cell_on_the_device_as_on_the_host() {
+    let Some(device) = device_for("a_fold_carries_a_cell_on_the_device_as_on_the_host") else {
+        return;
+    };
+    let mut nodes = pass_node("n1", "ctx.cell_xy", "");
+    nodes += &pass_node("n2", "space.cell_index", "in.xy = \"n1.xy\"\n");
+    nodes += &pass_node(
+        "n3",
+        "grid.fold",
+        "config.order = \"von_neumann\"\nconfig.acc = [{ name = \"best\", type = \"cell\", combine = \"carry\" }]\n\
+         in.when = { bool = true }\nin.init.best = \"n2.cell\"\n",
+    );
+    nodes += &pass_node(
+        "n4",
+        "region.put",
+        "region = \"n3\"\nconfig.acc = \"best\"\nin.value = \"n3.cell\"\nin.when = { bool = true }\n",
+    );
+    nodes += &pass_node("n5", "conv.to_u32", "in.a = \"n3.best\"\n");
+    nodes += &pass_node("n6", "lane.set", "config.lane = \"x\"\nin.value = \"n5\"\n");
+    let host = on_host(&nodes, None, 0);
+    // The last position of the von Neumann table is the cell below, on a torus of 8 by 8.
+    let below: Vec<u32> = (0..64).map(|cell| (cell + 8) % 64).collect();
+    assert_eq!(host[0], below, "the carry ends at the cell below");
+    assert_eq!(
+        on_device(&device, &nodes, None, 0)[0],
+        host[0],
+        "the device and the host"
+    );
+}
+
+/// Returns the nodes of a tick pass that writes to the lane `y` the largest component of the difference on a torus of
+/// 100 by 100 from points up to six worlds below a far point to the far point, or its squared distance when
+/// `squared` holds.
+fn far_difference(squared: bool) -> String {
+    let mut nodes = pass_node("n1", "ctx.index", "");
+    nodes += &pass_node("n2", "conv.to_f32", "in.a = \"n1\"\n");
+    nodes += &pass_node("n3", "math.mul", "in.a = \"n2\"\nin.b = { f32 = 13.7 }\n");
+    nodes += &pass_node("n4", "math.sub", "in.a = \"n3\"\nin.b = { f32 = 600.0 }\n");
+    nodes += &pass_node("n5", "vec.make", "in.x = \"n4\"\nin.y = \"n4\"\n");
+    let ends = "in.a = \"n5\"\nin.b = { vec2f = [51.0, -260.0] }\nin.world = { vec2f = [100.0, 100.0] }\n";
+    let written = if squared {
+        nodes += &pass_node("n6", "space.dist_sq", ends);
+        "n6"
+    } else {
+        nodes += &pass_node("n6", "space.delta", ends);
+        nodes += &pass_node("n7", "vec.split", "in.v = \"n6\"\n");
+        nodes += &pass_node("n8", "math.abs", "in.a = \"n7.x\"\n");
+        nodes += &pass_node("n9", "math.abs", "in.a = \"n7.y\"\n");
+        nodes += &pass_node("n10", "math.max", "in.a = \"n8\"\nin.b = \"n9\"\n");
+        "n10"
+    };
+    nodes += &pass_node(
+        "n20",
+        "lane.set",
+        &format!("config.lane = \"y\"\nin.value = \"{written}\"\n"),
+    );
+    nodes
+}
+
+/// The difference and the squared distance on a torus between points up to several worlds apart agree on the device
+/// and on the host, each component of the difference within half a world.
+#[test]
+fn a_difference_between_far_points_is_reduced_on_the_device_as_on_the_host() {
+    let Some(device) = device_for("a_difference_between_far_points_is_reduced_on_the_device_as_on_the_host") else {
+        return;
+    };
+    for squared in [false, true] {
+        let nodes = far_difference(squared);
+        let host = on_host(&nodes, None, 0);
+        let on_device = on_device(&device, &nodes, None, 0);
+        for (cell, (device_word, host_word)) in on_device[1].iter().zip(&host[1]).enumerate() {
+            let (device_value, host_value) = (f32::from_bits(*device_word), f32::from_bits(*host_word));
+            if !squared {
+                assert!(host_value <= 50.0, "cell {cell}: {host_value} is past half a world");
+            }
+            assert!(
+                (device_value - host_value).abs() <= 1e-3 * host_value.max(1.0),
+                "cell {cell}, squared {squared}: {device_value} on the device, {host_value} on the host"
+            );
+        }
+    }
 }

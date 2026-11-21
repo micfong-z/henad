@@ -431,3 +431,150 @@ fn each_counter_flushes_once_per_workgroup_after_a_top_level_barrier() {
         .sum();
     assert_eq!(flushes, 1, "the ants flush their deliveries once");
 }
+
+/// Returns two fields `a` and `b` that take deposits and finish with the function `noise`, which adds a random number
+/// with the key 77 to the merged value, then a tick pass `walk` that calls `noise` with the key `call_key`.
+fn shared_finish(call_key: u32) -> GraphFile {
+    let field = |id: &str| {
+        format!(
+            "\n[[field]]\nid = \"{id}\"\ntype = \"f32\"\nlayers = [\"v\"]\nstatic = false\ncombine = \"max\"\n\
+             finish = \"noise\"\n"
+        )
+    };
+    let declarations = format!(
+        "\n[[lane]]\nid = \"w\"\ndomain = \"agents\"\ntype = \"f32\"\n{}{}\n[[function]]\nid = \"noise\"\nkind = \"pure\"\n\n\
+         [[function.input]]\nport = \"value\"\ntype = \"f32\"\n\n[[function.output]]\nport = \"value\"\ntype = \"f32\"\n\n\
+         [[function.node]]\nid = \"n1\"\nop = \"fn.input\"\nconfig.port = \"value\"\n\n\
+         [[function.node]]\nid = \"n2\"\nop = \"rand.float\"\nconfig.key = 77\nin.max = {{ f32 = 1.0 }}\n\n\
+         [[function.node]]\nid = \"n3\"\nop = \"math.add\"\nin.a = \"n1\"\nin.b = \"n2\"\n\n\
+         [[function.node]]\nid = \"n4\"\nop = \"fn.output\"\nconfig.port = \"value\"\nin.value = \"n3\"\n",
+        field("a"),
+        field("b")
+    );
+    let passes = format!(
+        "\n[[pass]]\nid = \"walk\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"agents\"\n\n\
+         [[pass.node]]\nid = \"n10\"\nop = \"fn.call\"\nconfig.function = \"noise\"\nconfig.key = {call_key}\n\
+         in.value = {{ f32 = 0.0 }}\n\n\
+         [[pass.node]]\nid = \"n11\"\nop = \"lane.set\"\nconfig.lane = \"w\"\nin.value = \"n10.value\"\n"
+    );
+    agents_file("node_shared_finish", &declarations, &passes)
+}
+
+/// Returns the keys of the draws in the pass `pass` of the document `evaluator` runs.
+fn draw_keys(evaluator: &crate::host::HostEvaluator, pass: &str) -> Vec<i64> {
+    let document = evaluator.document();
+    let pass = document
+        .passes
+        .iter()
+        .find(|known| known.id == pass)
+        .unwrap_or_else(|| panic!("no pass {pass}"));
+    pass.body
+        .nodes
+        .iter()
+        .filter(|node| node.op == "rand.float")
+        .filter_map(|node| node.config_integer("key"))
+        .collect()
+}
+
+/// The updates of two fields that share a `finish` with a draw draw with keys of their own, apart from each other and
+/// from a call of the same function with the key 1 in a tick pass.
+#[test]
+fn the_updates_of_two_fields_that_share_a_finish_draw_apart() {
+    let (evaluator, _, _) = crate::wgsl::agents::compile_parts(&shared_finish(1), &crate::wgsl::Probes::default())
+        .unwrap_or_else(|problems| panic!("{problems:#?}"));
+    let (a, b, walk) = (
+        draw_keys(&evaluator, "henad_update_a"),
+        draw_keys(&evaluator, "henad_update_b"),
+        draw_keys(&evaluator, "walk"),
+    );
+    assert_eq!((a.len(), b.len(), walk.len()), (1, 1, 1), "one draw in each pass");
+    assert_ne!(a, b, "the two updates");
+    assert_ne!(a, walk, "an update and the call with the key 1");
+    assert_ne!(b, walk, "an update and the call with the key 1");
+}
+
+/// A call whose key is the key of a field's update draws what the update draws, and the build refuses it at the
+/// field's table, naming the function's node as written and the call of the tick pass.
+#[test]
+fn a_call_with_the_key_of_an_update_is_refused_at_the_field() {
+    let (evaluator, _, _) = crate::wgsl::agents::compile_parts(&shared_finish(1), &crate::wgsl::Probes::default())
+        .unwrap_or_else(|problems| panic!("{problems:#?}"));
+    assert!(
+        draw_keys(&evaluator, "henad_update_a") != draw_keys(&evaluator, "walk"),
+        "a call with another key draws apart"
+    );
+    let file = shared_finish(crate::wgsl::agents::update_call_key("a"));
+    assert!(!file.check().has_errors(), "{:#?}", file.check().diagnostics);
+    let Err(problems) = AgentProgram::compile(&file) else {
+        panic!("the build refuses a call with the update's key");
+    };
+    let [problem] = problems.as_slice() else {
+        panic!("{problems:#?}");
+    };
+    assert_eq!(
+        problem.message,
+        "the field 'a' cannot run its `finish` 'noise' in its update over cells"
+    );
+    assert!(problem.line.is_some(), "{problem:#?}");
+    assert!(
+        problem
+            .notes
+            .iter()
+            .any(|note| note.contains("n2 of the function 'noise' has")
+                && note.contains("n2 of the function 'noise' called by n10")),
+        "{problem:#?}"
+    );
+    assert!(!format!("{problem:?}").contains("henad_update"), "{problem:#?}");
+}
+
+/// A fold around an agent that carries a layer of a field, from the first layer to the second, and deposits into the
+/// layer it carries, builds on the host and compiles for the GPU.
+#[test]
+fn a_fold_that_carries_a_layer_builds() {
+    let declarations = "\n[[field]]\nid = \"a\"\ntype = \"f32\"\nlayers = [\"v\", \"w\"]\nstatic = false\n\
+                        combine = \"max\"\n";
+    let passes = "\n[[pass]]\nid = \"walk\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"agents\"\n\n\
+                  [[pass.node]]\nid = \"n1\"\nop = \"lane.get\"\nconfig.lane = \"pos\"\n\n\
+                  [[pass.node]]\nid = \"n2\"\nop = \"space.cell_of\"\nin.p = \"n1\"\n\n\
+                  [[pass.node]]\nid = \"n3\"\nop = \"grid.fold\"\nconfig.order = \"von_neumann\"\n\
+                  config.acc = [{ name = \"best\", type = \"layer:a\", combine = \"carry\" }]\nin.at = \"n2.xy\"\n\
+                  in.when = { bool = true }\nin.init.best = { layer = \"a.v\" }\n\n\
+                  [[pass.node]]\nid = \"n4\"\nop = \"region.put\"\nregion = \"n3\"\nconfig.acc = \"best\"\n\
+                  in.value = { layer = \"a.w\" }\nin.when = { bool = true }\n\n\
+                  [[pass.node]]\nid = \"n5\"\nop = \"field.deposit\"\nconfig.field = \"a\"\nin.layer = \"n3.best\"\n\
+                  in.at = \"n2.cell\"\nin.value = { f32 = 1.0 }\n";
+    let file = agents_file("node_carry_layer", declarations, passes);
+    assert!(!file.check().has_errors(), "{:#?}", file.check().diagnostics);
+    assert!(
+        crate::host::HostEvaluator::new(&file).is_ok(),
+        "the host compiles the carry"
+    );
+    if let Err(problems) = AgentProgram::compile(&file) {
+        panic!("{problems:#?}");
+    }
+}
+
+/// A radius fold that carries an agent, from the agent a lane names to each agent it visits, builds on the host and
+/// compiles for the GPU.
+#[test]
+fn a_fold_that_carries_an_agent_builds() {
+    let declarations = "\n[[lane]]\nid = \"mate\"\ndomain = \"agents\"\ntype = \"agent\"\n";
+    let passes = "\n[[pass]]\nid = \"walk\"\nstage = \"tick\"\nkind = \"map\"\ndomain = \"agents\"\n\n\
+                  [[pass.node]]\nid = \"n1\"\nop = \"lane.get\"\nconfig.lane = \"pos\"\n\n\
+                  [[pass.node]]\nid = \"n2\"\nop = \"lane.get\"\nconfig.lane = \"mate\"\n\n\
+                  [[pass.node]]\nid = \"n3\"\nop = \"agent.radius_fold\"\n\
+                  config.acc = [{ name = \"last\", type = \"agent\", combine = \"carry\" }]\nin.center = \"n1\"\n\
+                  in.radius = { f32 = 5.0 }\nin.cell_size = { f32 = 5.0 }\nin.init.last = \"n2\"\n\n\
+                  [[pass.node]]\nid = \"n4\"\nop = \"region.put\"\nregion = \"n3\"\nconfig.acc = \"last\"\n\
+                  in.value = \"n3.other\"\n\n\
+                  [[pass.node]]\nid = \"n5\"\nop = \"lane.set\"\nconfig.lane = \"mate\"\nin.value = \"n3.last\"\n";
+    let file = agents_file("node_carry_agent", declarations, passes);
+    assert!(!file.check().has_errors(), "{:#?}", file.check().diagnostics);
+    assert!(
+        crate::host::HostEvaluator::new(&file).is_ok(),
+        "the host compiles the carry"
+    );
+    if let Err(problems) = AgentProgram::compile(&file) {
+        panic!("{problems:#?}");
+    }
+}

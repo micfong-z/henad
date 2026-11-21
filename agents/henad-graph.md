@@ -167,8 +167,11 @@ block, as it reads every other prelude value. An element value that
 reads a reducer is refused. Each scope orders its members by Kahn's algorithm with ties by node
 id, a region counting every link of its body, and consecutive `draw_order` entries add edges. A
 Repeat seeds each accumulator (`init` or the combine's identity: largest finite value for
-`min`, smallest for `max`), copies the running value to `prev.<acc>` at the start of each
-iteration, and a `region.put` folds into the running value. Nothing panics on a checked file:
+`min`, smallest for `max`, and for a `carry`, which requires `init`, an unread value, the reference
+to no cell for a `cell`, agent 0 and layer 0: `a_fold_carries_a_cell_on_the_device_as_on_the_host`,
+`a_fold_that_carries_a_layer_builds`, `a_fold_that_carries_an_agent_builds`), copies the running
+value to `prev.<acc>` at the start of each iteration, and a `region.put` folds into the running
+value. Nothing panics on a checked file:
 a bad value is `HostError::Fault` with the pass and node, and the mutation test runs the host
 on every edited file that checks. `run_pass` and `rerun` first check that the `HostLanes` hold
 the document's lanes (count, ids, types, one value per element) and return `Fault` otherwise.
@@ -356,7 +359,13 @@ for its function's ports (`ConfigPorts::FunctionInterface`). Context sets, rates
 therefore reach a call site through its copies. `agents.rs`: field writes (static fields in init
 alone, one write per layer, no deposit into a static field), no `field.get` of a field in its own
 `finish` or a function that one calls (`check_finishes`, since the update writes the field in
-place), `lane.get_at` reading only `cell` or
+place), and in those functions no kind a tick pass over cells on the GPU refuses and no lane of
+agents (`check_update_node`, each node once). `check_fields` holds a dynamic field's `finish` to one
+`f32` input `value` and one `f32` output `value`, and `cost::check_field_updates` holds its update,
+a `lane.get`, the call and a `lane.set`, to `MAX_PASS_COST` at the field's table and counts its
+nodes toward the inlined limit (`a_finish_takes_and_returns_one_value`,
+`a_finish_reads_no_lane_of_agents`, `a_finish_costs_no_more_than_a_pass`). `lane.get_at` reading
+only `cell` or
 `other` of a fold around it, nesting (Repeat holds Repeat or `grid.fold`, `grid.fold` holds Repeat,
 a radius fold holds and sits in no region), V12 (no radius fold after the tick pass that writes
 positions), V14 (one `cell_size` source, compared structurally), and V18 after inlining (a composed

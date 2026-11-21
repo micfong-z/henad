@@ -1,7 +1,9 @@
 //! Lines that draw: a chance and a random number.
 //!
 //! Each draw takes the key of the line that holds it composed with its slot path, as [`super::keys`] describes. A
-//! chance is one `rand.chance`. A chance once for each of a count `n` holds with `1 - (1 - p)^n`, each one counted
+//! chance the same for every element with no count is a `u32` threshold the host computes, compared with all 32 bits
+//! of one `rand.below`, and a chance of 1 or more always holds. Any other chance is one `rand.chance`, whose chance is
+//! resolved to 2^-24. A chance once for each of a count `n` holds with `1 - (1 - p)^n`, each one counted
 //! being a separate try. When `p` is the same for every cell and `n` counts the cells around, the power is a
 //! `math.powi` whose `max_exponent` is the number of cells around (8, 4 or 9), and otherwise a `math.pow` behind a
 //! `logic.select` that takes 1 for a count of 0, since a power of 0 to the 0 is not 1 on every device. A count of
@@ -50,6 +52,22 @@ impl<'a> CardLowering<'_, 'a> {
     pub(super) fn chance(&mut self, site: &Site, line: &'a SheetLine) -> Result<Operand, String> {
         let chance = self.slot(&site.at("chance"), &line.chance)?;
         let chance_input = self.builder.input_as(site, &chance, &ValueType::F32)?;
+        if line.tries.is_blank() && chance.is_uniform() {
+            let threshold = self
+                .builder
+                .node_input(site, "rng.threshold", vec![("p", chance_input.clone())]);
+            let below = self.draw(site, "rand.below", vec![("threshold", threshold)])?;
+            // A threshold tops out at `u32::MAX`, which the largest draw is not below.
+            let certain = self
+                .builder
+                .node_input(site, "cmp.ge", vec![("a", chance_input), ("b", number(1.0))]);
+            return Ok(self.builder.node_value(
+                site,
+                "logic.or",
+                vec![("a", certain), ("b", output(below))],
+                ValueType::Bool,
+            ));
+        }
         let probability = if line.tries.is_blank() {
             chance_input
         } else {

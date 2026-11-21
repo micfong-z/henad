@@ -27,6 +27,7 @@ use crate::document::{Domain, FieldCombine, GraphDocument, PassEnabled, PassStag
 use crate::draw::{PHASE_INIT, PHASE_TICK, action_phase};
 use crate::file::GraphFile;
 use crate::ids::NodeId;
+use crate::model_text::counted;
 use crate::types::ValueType;
 use crate::value::PortRef;
 
@@ -437,7 +438,7 @@ impl fmt::Display for HostError {
             }
         };
         match self {
-            Self::Checked(diagnostics) => write!(f, "the file has {} errors", diagnostics.len()),
+            Self::Checked(diagnostics) => write!(f, "the file has {}", counted(diagnostics.len(), "error")),
             Self::Unsupported { pass, node, reason } => {
                 write!(f, "the host cannot run ")?;
                 place(f, pass, node)?;
@@ -609,9 +610,10 @@ impl HostEvaluator {
         let layers: usize = self.document.fields.iter().map(|field| field.layers.len()).sum();
         if lanes.lanes != declared.len() || lanes.columns.len() != declared.len() + layers {
             return Err(fault(format!(
-                "the lanes hold {} columns, and the file declares {} lanes and {layers} field layers",
-                lanes.columns.len(),
-                declared.len()
+                "the lanes hold {}, and the file declares {} and {}",
+                counted(lanes.columns.len(), "column"),
+                counted(declared.len(), "lane"),
+                counted(layers, "field layer")
             )));
         }
         for (column, lane) in lanes.columns().iter().zip(declared) {
@@ -626,9 +628,9 @@ impl HostEvaluator {
             }
             if lanes.world.elements(lane.domain) != Some(column.len()) {
                 return Err(fault(format!(
-                    "the column '{}' holds {} values, and its world holds another number of {}",
+                    "the column '{}' holds {}, and its world holds another number of {}",
                     column.id(),
-                    column.len(),
+                    counted(column.len(), "value"),
                     lane.domain.as_str()
                 )));
             }

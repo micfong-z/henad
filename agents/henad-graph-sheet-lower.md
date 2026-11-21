@@ -56,7 +56,7 @@ below `SMALL_HAZARD` (2^-10) through a `logic.select`, since `1 - e^(-h)` in `f3
 grid and is 0 below about 3e-8, and draws by `rng.threshold` and `rand.below` at 2^-32
 (`a_small_rate_keeps_its_chance_in_the_threshold`, and henad-models'
 `a_rate_below_the_resolution_of_a_float_draw_recovers_its_share` on the device). Every other rate
-and every chance line keeps `rand.chance`, resolved to 2^-24. A "for each" over a grid count
+keeps `rand.chance`, resolved to 2^-24. A "for each" over a grid count
 (`count_bound`) with a rate the same for every element is `1 - powi(e^(-h), n)` with `max_exponent`
 8, 4 or 9. Any other count, agents included, is `1 - select(n <= 0, 1, exp(-h * n))` in `f32`, P's
 guard, since `exp(0)` is not exactly 1 on every device. A rate that differs per element with no "for
@@ -142,7 +142,10 @@ average, `max`, `min`, `bool` `or` for any and `and` for all; a Count summary re
 chips (`count` and each summary id). An average divides by `count` through
 `conv.to_f32`, and an average, largest or smallest of no neighbour is 0 through a `logic.select` on
 `count > 0`. A Look around in a slot is an error, since it gives several values. Draws (`draw.rs`):
-a chance is one `rand.chance`, and with `tries` it holds with `1 - (1 - p)^n` (P), through
+a chance of a number, a percent or a parameter with no `tries` is `rng.threshold` and `rand.below`
+at 2^-32, joined by `logic.or` with `cmp.ge(p, 1)`, since the threshold tops out at `u32::MAX`
+(`a_small_chance_keeps_its_value_in_the_threshold`). Any other chance is one `rand.chance`, resolved
+to 2^-24, and with `tries` it holds with `1 - (1 - p)^n` (P), through
 `math.powi` with `max_exponent` 8, 4 or 9 when `p` is a number, percent or parameter and `n` is a
 grid Count or a grid Look around's `count` part or Count summary, and `math.pow` with `n` in `f32`
 otherwise behind a `logic.select` that takes 1 (missed every try) for `n <= 0`, since `pow(0, 0)` is

@@ -72,7 +72,12 @@ nodes (`CanvasKey`: a node, or a region's output half) in columns by longest pat
 its widest drawn node, a region's input half then moved right to the column before its first reader
 (`the_input_half_of_a_region_sits_in_the_column_before_its_body`): a link to an inner output leaves
 the input half, a link to an accumulator the output half, and every node inside a region reads the
-input half and feeds the output half, so a body sits between its halves. `place_unplaced` places an
+input half and feeds the output half, so a body sits between its halves. Every canvas of the six
+graph starters places every node in its `[editor]` region, laid out once by `arrange` with the
+app's fonts and style and each frame as a group, and
+`every_starter_opens_with_no_node_over_another` (`graph_canvas.rs`, with `setup_custom_fonts` and
+`setup_custom_styles`) holds that no two drawn nodes of a starter's canvas intersect. A change to
+the node drawing that breaks it calls for laying the starters out again. `place_unplaced` places an
 output half only in a body placed from scratch, and counts a node as placed by
 `EditorRegion::node_pos`, so a converted copy's labelled nodes with no `pos` are arranged too. It
 runs at load, on every edit's draft before the snapshot (`GraphEditor::keep`, which `edit`,

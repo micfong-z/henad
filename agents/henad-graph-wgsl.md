@@ -26,11 +26,14 @@ that reads the tick with no tick pass gets an `advance_tick` step. A step's boun
 body in a block, and no step returns early (`agents/gpu-traps.md`). Every other binding is one
 `lane_<id>_cells`, read-only or read-write. A Repeat is a counted `for` loop with its accumulators
 as `var`s, a grid count is unrolled over its stencil through `henad_at` (`offset_cell` of
-`henad::space`), and a draw calls `draw_core`. Each shader goes through `compose_wgsl` with
-`DRAW_WGSL`, and a problem there is a compiler fault, placed on the node whose `NodeRange` holds
-its span. A text past `compose::MAX_FILE_BYTES` (1 MiB) is checked first and refused as a
-problem of the file, placed on the pass whose ranges hold the most bytes (`oversized`), since a
-checked file of many grid counts can expand that far.
+`henad::space`), and a draw calls `draw_core`. naga refuses an integer division by a constant 0, so
+`by_constant_zero` writes a `math.div` component over a constant 0 as the dividend's component and
+a `math.rem` by a constant 0 as 0, the catalogue's results
+(`an_integer_division_by_a_constant_zero_runs_as_the_host_does` in `gpu_cases.rs`). Each shader goes
+through `compose_wgsl` with `DRAW_WGSL`, and a problem there is a compiler fault, placed on the node
+whose `NodeRange` holds its span. A text past `compose::MAX_FILE_BYTES` (1 MiB) is checked first
+and refused as a problem of the file, placed on the pass whose ranges hold the most bytes
+(`oversized`), since a checked file of many grid counts can expand that far.
 `GeneratedShader` exposes `text` (before composition), `composed`, `ranges`,
 `node_at(offset)`, `role`, `passes`, `label` and `cost`, which the Editor's WGSL view reads.
 `GridProgram::spec` builds the `GpuGridSpec` (workgroup 16, `counters` the reduce tallies,
@@ -53,8 +56,18 @@ takes deposits and has a `finish`, after the last tick pass where the reader sor
 `HostEvaluator` of that document with `from_document`, and types it with a check of the normalised
 document through its canonical text (`GraphFile::from_normalised`, which skips the two size limits
 of `parse`, since the inlined node limit bounds that text and it can pass 1 MiB for a far smaller
-file), since the written report has no types for copies. Positions of passes and lanes are those of
-that document everywhere after. Every shader but the display is a linear pass
+file), since the written report has no types for copies. The update's call takes the key
+`update_call_key`, FNV-1a over the field's id, so two fields that share a `finish` with a draw draw
+apart (`the_updates_of_two_fields_that_share_a_finish_draw_apart`). That check is not clean for a
+valid model: the merged lanes and the update passes break the agents topology's own rules, in errors
+that name no pass. Only its errors in an update pass refuse the build, through `update_problem`: an
+error at the field's table, "the field ... cannot run its `finish` ... in its update over cells",
+with the inner message as a note, each copy named as its function writes it, and the call of a pass
+of the file it was inlined through
+(`a_call_with_the_key_of_an_update_is_refused_at_the_field`). The checker's own rules on a `finish`
+leave this for what they do not foresee, such as a call that takes an update's key. Positions of
+passes and lanes are those of that document everywhere after. Every shader but the display is a
+linear pass
 (`@workgroup_size(256)`, `linear_index` over `henad_groups_x`), each pass body inside `henad_index <
 params.henad_agents` or `henad_cells`. Steps: each enabled tick pass, then one `update_<field>` per
 field that takes deposits over `Cells(layers)` (`max(field, bitcast(accum))` or a sum's add, `accum`
@@ -74,8 +87,13 @@ and an action one shader per action (a second action pass is refused). Forms: `l
 bounds-checks with `arrayLength`, `field.get` reads 0 off the grid, `field.set` stores at the end of
 the pass, `field.deposit` and `counter.add` are below, `grid.fold` a loop over a constant offset
 table through `henad_step`,
+`space.delta` and `space.dist_sq` `axis_delta`'s one correction, then `wrap_coord` of the difference
+plus half a world, less half a world, where that left a component outside half a world, as the host
+reduces it (`a_difference_between_far_points_is_reduced_on_the_device_as_on_the_host`),
 `agent.radius_fold` the `henad::hash` walk over `cell_start` and `sorted`, its prefilter `d.x * d.x
-+ d.y * d.y <= r * r` as the host's, its draws keyed on the other agent, and
++ d.y * d.y <= r * r` as the host's, its difference corrected once and no more, which misses an
+agent a world and a half or more away on an axis (the kind's semantics say so), its draws keyed on
+the other agent, and
 `atomicMax(&counters[0], code)` past `MAX_VISITS` (code `2p + 1` for the fold at position `p` of the
 plan's faults), or `2p + 2` before the walk when `walk_cells` of its bounds passes `MAX_WALK_CELLS`.
 `AgentGraphHooks::fault` turns the code into the pass and node as written (through

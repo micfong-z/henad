@@ -348,7 +348,10 @@ impl<'f> Parser<'f> {
                 if count == takes {
                     self.made(FormulaTree::Call(name, values))
                 } else {
-                    Err(format!("{name} takes {takes} values in a formula, got {count}"))
+                    Err(format!(
+                        "{name} takes {} in a formula, got {count}",
+                        crate::model_text::counted(takes, "value")
+                    ))
                 }
             }
             Token::Symbol(_) => Err(format!("the formula holds an unexpected {}", describe(&token))),
@@ -436,6 +439,7 @@ mod tests {
             ("(a", "unexpected end of formula, expected ')'"),
             ("a b", "the formula holds an unexpected 'b'"),
             ("smaller(a)", "smaller takes 2 values in a formula, got 1"),
+            ("length(a, b)", "length takes 1 value in a formula, got 2"),
             ("length a", "the formula holds an unexpected 'a', expected '('"),
             ("a % b", "the formula cannot be read at '% b'"),
             ("*", "the formula holds an unexpected '*'"),

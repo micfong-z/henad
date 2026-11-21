@@ -676,7 +676,10 @@ fn read_color(bytes: &Spanned<Vec<u8>>) -> Result<Color, Placed> {
         [red, green, blue] => Ok([red, green, blue, 255]),
         [red, green, blue, alpha] => Ok([red, green, blue, alpha]),
         _ => Err(Placed(
-            format!("the colour has {} bytes, expected 3 or 4", bytes.get_ref().len()),
+            format!(
+                "the colour has {}, expected 3 or 4",
+                crate::model_text::counted(bytes.get_ref().len(), "byte")
+            ),
             bytes.span(),
         )),
     }
@@ -1142,7 +1145,10 @@ fn read_pair<T>(
         RawValue::Array(items) => match items.as_slice() {
             [first, second] => Ok([component(first)?, component(second)?]),
             _ => Err(Placed(
-                format!("this vector has {} components, expected 2", items.len()),
+                format!(
+                    "this vector has {}, expected 2",
+                    crate::model_text::counted(items.len(), "component")
+                ),
                 value.span(),
             )),
         },

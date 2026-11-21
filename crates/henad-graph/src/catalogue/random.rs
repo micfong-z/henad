@@ -153,7 +153,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "rand.chance",
         label: "Chance",
-        semantics: "`random_float(bits, 1.0) < p` of one draw, the float form of a probability. A `p` of 1 always holds, and a `p` of 0 never does.",
+        semantics: "`random_float(bits, 1.0) < p` of one draw, the float form of a probability. A `p` of 1 always holds, and a `p` of 0 never does. The draw's top 24 bits decide, so `p` is resolved to 2^-24, and a positive `p` below 2^-24 holds as often as 2^-24 does. `rng.threshold` and `rand.below` compare all 32 bits.",
         inputs: &[input("p", F32_TYPE)],
         outputs: &[pinned("out", BOOL_TYPE, Rate::Element)],
         cases: &[

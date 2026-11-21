@@ -1048,7 +1048,8 @@ fn input_forms_are_refused_in_place() {
         ("in.a = { u64 = \"0x\" }", "invalid `u64`"),
         ("in.a = { u64 = \"18446744073709551616\" }", "invalid `u64`"),
         ("in.a = { u64 = \"\" }", "invalid `u64`"),
-        ("in.a = { vec2f = [1.0] }", "components, expected 2"),
+        ("in.a = { vec2f = [1.0] }", "has 1 component, expected 2"),
+        ("in.a = { vec2f = [1.0, 2.0, 3.0] }", "has 3 components, expected 2"),
         ("in.a = { vec2f = 1.0 }", "array of 2"),
         ("in.a = { vec2u = [1, -1] }", "out of range"),
         ("in.a = { bool = 1 }", "`true` or `false`"),
@@ -1082,7 +1083,11 @@ fn declaration_values_are_refused_in_place() {
     for (body, message) in [
         (
             "[[category]]\nid = \"c\"\nvariants = [{ name = \"a\", color = [1, 2] }]\n",
-            "expected 3 or 4",
+            "has 2 bytes, expected 3 or 4",
+        ),
+        (
+            "[[category]]\nid = \"c\"\nvariants = [{ name = \"a\", color = [1] }]\n",
+            "has 1 byte, expected 3 or 4",
         ),
         (
             "[[palette]]\nid = \"p\"\ncolors = [[1, 2, 3, 4, 5]]\n",

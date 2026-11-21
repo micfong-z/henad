@@ -178,12 +178,15 @@ fn check_nesting(checker: &mut Checker<'_>, view: &BodyView<'_>, position: usize
     );
 }
 
-/// Reports a `field.get` of a field in its own `finish` function, or in a function that function calls.
+/// Reports what the update of a field cannot run in its `finish` function, or in a function that function calls: a
+/// `field.get` of the same field, and a node that a tick pass over cells on the GPU does not allow.
 ///
 /// The update of a field runs the `finish` once per cell of each layer and writes the result in place, so a read of
-/// the same field in that pass would race with the invocations that write it.
+/// the same field in that pass would race with the invocations that write it. A node of a function used by two fields
+/// is reported once.
 pub(super) fn check_finishes(checker: &mut Checker<'_>, functions: &[BodyView<'_>]) {
     let document = checker.file.document();
+    let mut reported: std::collections::BTreeSet<(&str, usize)> = std::collections::BTreeSet::new();
     for field in document.fields.iter().filter(|field| !field.is_static) {
         let Some(finish) = field.finish.as_deref() else {
             continue;
@@ -219,8 +222,52 @@ pub(super) fn check_finishes(checker: &mut Checker<'_>, functions: &[BodyView<'_
                         view.config_place(position, "field"),
                     );
                 }
+                if reported.insert((id, position)) {
+                    check_update_node(checker, view, position, &field.id);
+                }
             }
         }
+    }
+}
+
+/// Reports the node at `position` of a function that the update of the field `field` runs, when a tick pass over
+/// cells on the GPU does not allow it: a kind of another stage, domain or backend, or a lane of agents.
+fn check_update_node(checker: &mut Checker<'_>, view: &BodyView<'_>, position: usize, field: &str) {
+    let Some(def) = view.defs[position] else { return };
+    let name = view.name(position);
+    let reason = if !def.contexts.allows(PassStage::Tick) {
+        Some(format!("{name} does not belong in a tick pass"))
+    } else if def.domain == Some(Domain::Agents) {
+        Some(format!("{name} runs over agents"))
+    } else if !def.backends.wgsl {
+        Some(format!("{name} cannot run on the GPU"))
+    } else {
+        None
+    };
+    if let Some(reason) = reason {
+        view.error(
+            checker,
+            position,
+            format!(
+                "{reason}, and the update of the field '{field}' runs this function every tick over cells on the GPU"
+            ),
+            view.op_place(position),
+        );
+        return;
+    }
+    if let Some(id) = view.nodes[position].config_str("lane")
+        && let Some(lane) = view.document.lane(id)
+        && lane.domain != Domain::Cells
+    {
+        view.error(
+            checker,
+            position,
+            format!(
+                "{name} uses the lane '{id}' of {}, and the update of the field '{field}' runs this function over cells",
+                lane.domain.as_str()
+            ),
+            view.config_place(position, "lane"),
+        );
     }
 }
 

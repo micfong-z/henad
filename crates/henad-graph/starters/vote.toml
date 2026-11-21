@@ -143,15 +143,15 @@ in.value = "n20"
 [editor]
 version = 1
 next_id = 22
-node.n1 = { pos = [40.0, 60.0] }
-node.n2 = { pos = [40.0, 160.0] }
-node.n3 = { pos = [260.0, 110.0] }
-node.n4 = { pos = [460.0, 110.0] }
-node.n5 = { pos = [660.0, 110.0] }
-node.n10 = { pos = [40.0, 80.0], label = "Ones in the 3x3 block" }
-node.n11 = { pos = [300.0, 80.0], label = "Majority" }
-node.n12 = { pos = [500.0, 80.0] }
-node.n13 = { pos = [700.0, 80.0] }
+node.n1 = { pos = [40.0, 40.0] }
+node.n2 = { pos = [40.0, 128.0] }
+node.n3 = { pos = [323.0, 40.0] }
+node.n4 = { pos = [525.0, 40.0] }
+node.n5 = { pos = [753.0, 40.0] }
+node.n10 = { pos = [40.0, 40.0], label = "Ones in the 3x3 block" }
+node.n11 = { pos = [398.0, 40.0], label = "Majority" }
+node.n12 = { pos = [638.0, 40.0] }
+node.n13 = { pos = [871.0, 40.0] }
 node.n20 = { pos = [40.0, 40.0] }
-node.n21 = { pos = [260.0, 40.0] }
+node.n21 = { pos = [257.0, 40.0] }
 view."pass.step" = { pan = [0.0, 0.0], zoom = 1.0 }

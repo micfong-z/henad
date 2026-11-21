@@ -53,6 +53,7 @@ pub(super) fn check(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> Costs {
             report_pass_cost(checker, view, index, body.cost, &sizes);
         }
     }
+    inlined = inlined.saturating_add(check_field_updates(checker, &sizes));
     let inlinable = inlined <= MAX_NODES_INLINED as u64;
     if !inlinable {
         checker.error(
@@ -68,6 +69,43 @@ pub(super) fn check(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> Costs {
         functions: function_costs,
         inlinable,
     }
+}
+
+/// Reports the update of a field that costs more than [`MAX_PASS_COST`] per cell, and returns the nodes the updates
+/// hold once their calls are inlined.
+///
+/// The update of a field that takes deposits and has a `finish` is a pass over cells that reads the merged value,
+/// calls the `finish` and writes the result, so it costs a `lane.get`, the call and a `lane.set`.
+fn check_field_updates(checker: &mut Checker<'_>, sizes: &BTreeMap<&str, FunctionSize>) -> u64 {
+    let document = checker.file.document();
+    let units = |op: &str| match crate::catalogue::lookup(op, document.library).map(|def| def.cost) {
+        Some(NodeCost::Units(units)) => u64::from(units),
+        _ => 1,
+    };
+    let mut nodes = 0u64;
+    for (index, field) in document.fields.iter().enumerate().filter(|(_, field)| !field.is_static) {
+        let Some((finish, size)) = field
+            .finish
+            .as_deref()
+            .and_then(|finish| Some((finish, sizes.get(finish)?)))
+        else {
+            continue;
+        };
+        nodes = nodes.saturating_add(size.nodes).saturating_add(3);
+        let cost = units("lane.get")
+            .saturating_add(size.cost.saturating_add(1))
+            .saturating_add(units("lane.set"));
+        if cost > u64::from(MAX_PASS_COST) {
+            let diagnostic = henad_core::diagnostic::CodeDiagnostic::error(format!(
+                "the update of the field '{}' costs {cost} units per cell, expected at most {MAX_PASS_COST}",
+                field.id
+            ))
+            .with_note(format!("the function '{finish}' costs {}", size.cost));
+            let place = checker.file.places().fields.get(index).cloned();
+            checker.add(diagnostic, place);
+        }
+    }
+    nodes
 }
 
 /// Returns the end of the message on a pass past [`MAX_PASS_COST`], shared with [`is_pass_cost`].
