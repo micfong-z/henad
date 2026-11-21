@@ -148,12 +148,15 @@ impl HenadApp {
 
 impl eframe::App for HenadApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // A close request of the window waits while a model the Editor holds has unsaved edits. A browser tab has no close
-        // request the app can hold.
+        // A close request of the window, Cmd+Q on macOS included, waits while a model the Editor holds has unsaved
+        // edits. A browser tab cannot wait, and the browser asks before it closes instead.
         #[cfg(not(target_arch = "wasm32"))]
-        if ctx.input(|i| i.viewport().close_requested()) && self.state.hold_close() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        }
+        native::guard_close(ctx, &mut self.state);
+        #[cfg(target_arch = "wasm32")]
+        web::set_unsaved_edits(!self.state.editor.unsaved_names().is_empty());
+
+        // A modal dialog that showed in the last frame holds the run until it closes.
+        self.state.hold_for_modal(ui::modal_shown(ctx));
 
         // Takes the runner of a build that has finished on its thread, with its first snapshot.
         self.state.poll_build();

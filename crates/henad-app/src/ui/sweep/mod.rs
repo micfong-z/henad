@@ -38,6 +38,7 @@ use crate::icons::material_design_icons::MDI_FLASK_OUTLINE;
 use crate::state::{AppState, ModelPool, default_values, lookup_message};
 use crate::ui::dock::Tab;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
+use crate::ui::model::model_label;
 use crate::ui::plural;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::ui::results::spawn_reporting;
@@ -280,15 +281,15 @@ impl SweepPanel {
         self.last_check = None;
     }
 
-    /// Forgets what the tab learned from the code of model `id` that the set has replaced: the build of its stat
-    /// columns, its draft when `declarations_changed`, and the last check.
+    /// Forgets what the tab learned from the code of a model that the set has replaced, `previous` replaced by
+    /// `current`: the build of its stat columns and the last check. When `declarations_changed`, the model's draft is
+    /// carried to `current`, as [`SweepDraft::carry_to`] carries it.
     ///
-    /// The draft lists one row per parameter of the previous code. The next frame builds the replacement for its
-    /// columns.
-    pub fn forget_model(&mut self, id: &str, declarations_changed: bool) {
-        self.column_builds.remove(id);
-        if declarations_changed {
-            self.drafts.remove(id);
+    /// The next frame builds the replacement for its columns.
+    pub fn forget_model(&mut self, previous: &ModelSchema<'_>, current: &ModelSchema<'_>, declarations_changed: bool) {
+        self.column_builds.remove(current.id);
+        if declarations_changed && let Some(draft) = self.drafts.get_mut(current.id) {
+            draft.carry_to(previous, current);
         }
         self.last_check = None;
     }
@@ -622,11 +623,12 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
     let entry = &entry;
     let schema = entry.schema();
     let wake = app.repaint_waker();
+    let label = model_label(app, entry.id(), entry.name());
     app.sweep.learn_stat_columns(entry, &wake);
     // Every text the panels draw is built here. The form borrows the draft once they have drawn.
     let check = app.sweep.cached_check(&schema, &app.param_values);
     let summary = CheckSummary::new(check, entry, &schema);
-    let plan = PlanSummary::for_draft(check, &schema, entry.name(), &summary);
+    let plan = PlanSummary::for_draft(check, &schema, &label, &summary);
     let sections = builder::SectionSummaries::new(check, &schema, &summary);
     let mode = check.draft.mode;
     let steps_per_run = check.draft.warmup.saturating_add(check.draft.steps);
@@ -658,7 +660,7 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
 
     header_panel(ui, |ui| {
         let header = BuilderHeader {
-            model_name: entry.name(),
+            model_name: &label,
             notification: status.as_deref(),
             gpu_refused: cfg!(target_arch = "wasm32") && entry.metadata().backend == Backend::Gpu,
             cli_command: cli_command.as_deref(),
@@ -915,6 +917,7 @@ fn start(app: &mut AppState) {
     let entry = &entry;
     let schema = entry.schema();
     let wake = app.repaint_waker();
+    let label = model_label(app, entry.id(), entry.name());
     app.sweep.learn_stat_columns(entry, &wake);
     app.sweep.clear_check();
     let check = app.sweep.cached_check(&schema, &app.param_values);
@@ -926,7 +929,7 @@ fn start(app: &mut AppState) {
         entry: entry.clone(),
         draft: check.draft.clone(),
         panel_values: check.panel_values.clone(),
-        plan: PlanSummary::for_draft(check, &schema, entry.name(), &summary),
+        plan: PlanSummary::for_draft(check, &schema, &label, &summary),
     };
     let spec = planned.spec.clone();
     let title = check.draft.mode.title();
@@ -1396,10 +1399,13 @@ mod tests {
         assert!(app.sweep.last_check.is_none());
 
         app.install_models(&set_of(edited_sir()));
-        assert!(
-            !app.sweep.drafts.contains_key("sir"),
-            "a draft of other declarations is dropped"
-        );
+        let draft = app
+            .sweep
+            .drafts
+            .get("sir")
+            .expect("a draft of other declarations is carried");
+        assert_eq!(draft.replicates, 7);
+        assert_eq!(draft.factors.len(), edited_sir().param_descriptors().len());
         assert_eq!(app.sweep.drafts.get("boids").map(|draft| draft.replicates), Some(7));
     }
 

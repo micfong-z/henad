@@ -239,7 +239,8 @@ fn run_to_row(ui: &mut egui::Ui, app: &mut AppState, build_disabled_reason: Opti
 /// Returns the reason Run cannot run the loaded model to the tick in the Run to tick field, or `None` when it can.
 ///
 /// Run drives the preview of the Editor's sheet while Build replays it, and a tick behind the current one replays its
-/// start first.
+/// start first. Behind a graph's preview, Build would build the selection in the preview's place. The reason is then
+/// the preview line's hover text, as [`preview_hover`] returns it.
 pub(crate) fn run_refusal(app: &AppState, build_disabled_reason: Option<&str>, current: u64) -> Option<String> {
     // While the sim plays, the loop runs ahead of `current` and might be past the tick already.
     if app.sim_running {
@@ -249,6 +250,10 @@ pub(crate) fn run_refusal(app: &AppState, build_disabled_reason: Option<&str>, c
         return Some(format!("Model code changed. Press {MDI_RESTART}\u{a0}Build first."));
     }
     if app.loaded_entry().is_some() && !app.selection_is_loaded() && !app.build_replays_preview() {
+        // Build would build the model selected before the preview loaded, and end the preview.
+        if app.params_drive_preview() {
+            return Some(preview_hover(app).to_owned());
+        }
         return Some(format!(
             "Selected model not loaded. Press {MDI_RESTART}\u{a0}Build first."
         ));

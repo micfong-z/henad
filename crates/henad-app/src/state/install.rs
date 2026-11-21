@@ -56,7 +56,8 @@ impl AppState {
     /// - keeps the values, seed and scheduled actions of a selected model whose parameters, stats and actions are
     ///   unchanged. A selected model whose declarations changed gets its values carried by parameter id and its actions
     ///   by action id, as [`remap_values`] and [`remap_schedule`] carry them.
-    /// - forgets the model's stat columns in the Sweep tab, and its draft when its declarations changed.
+    /// - forgets the model's stat columns in the Sweep tab, and carries its draft by parameter and action id when its
+    ///   declarations changed.
     /// - compares the results of the model with the replacement, so a replay of a run of other code warns.
     ///
     /// When the loaded model is replaced by other code, a run still at tick 0, neither playing nor running to a tick,
@@ -94,7 +95,8 @@ impl AppState {
             if self.selected_model.as_deref() == Some(id.as_str()) && declarations_changed {
                 self.remap_selection(&previous, &current);
             }
-            self.sweep.forget_model(&id, declarations_changed);
+            self.sweep
+                .forget_model(&previous.schema(), &current.schema(), declarations_changed);
             let model = self.lookup(&id).cloned();
             self.results.model_replaced(&id, model.as_ref());
             loaded_replaced |= self.loaded_id() == Some(id.as_str());
@@ -246,8 +248,9 @@ pub fn same_code(held: &ModelEntry, current: &ModelEntry) -> bool {
 /// Returns `values`, one per parameter of `previous` in its order, carried to the parameters of `current` by
 /// parameter id.
 ///
-/// A choice is carried by the name of its option. A parameter of `current` that `previous` lacks, or whose carried
-/// value it rejects, takes its default value.
+/// A value at the default of `previous` takes the default of `current`, as after an edit of the value a sheet keeps.
+/// Any other value is carried, a choice by the name of its option. A parameter of `current` that `previous` lacks, or
+/// whose carried value it rejects, takes its default value and counts in [`RemappedValues::defaulted`].
 pub fn remap_values(
     previous: &[ParamDescriptor],
     values: &[ParamValue],
@@ -257,17 +260,21 @@ pub fn remap_values(
     let values = current
         .iter()
         .map(|descriptor| {
-            previous
+            let Some((previous_descriptor, value)) = previous
                 .iter()
                 .zip(values)
                 .find(|(previous_descriptor, _)| previous_descriptor.id() == descriptor.id())
-                .and_then(|(previous_descriptor, value)| {
-                    carry_value(previous_descriptor.kind(), value, descriptor.kind())
-                })
-                .unwrap_or_else(|| {
-                    defaulted += 1;
-                    descriptor.kind().default_value()
-                })
+            else {
+                defaulted += 1;
+                return descriptor.kind().default_value();
+            };
+            if *value == previous_descriptor.kind().default_value() {
+                return descriptor.kind().default_value();
+            }
+            carry_value(previous_descriptor.kind(), value, descriptor.kind()).unwrap_or_else(|| {
+                defaulted += 1;
+                descriptor.kind().default_value()
+            })
         })
         .collect();
     RemappedValues { values, defaulted }

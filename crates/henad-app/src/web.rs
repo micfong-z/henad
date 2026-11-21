@@ -1,6 +1,10 @@
-//! The app in a browser: the worker pool, the canvas and the console logger.
+//! The app in a browser: the worker pool, the canvas, the prompt before a page with unsaved edits closes, and the
+//! console logger.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::wasm_bindgen::JsCast as _;
+use eframe::wasm_bindgen::closure::Closure;
 
 use crate::HenadApp;
 use crate::init::wgpu_configuration;
@@ -21,8 +25,36 @@ const THREAD_POOL_NOTE: &str = "Models run on one thread. The page might lack th
 #[cfg(not(target_feature = "atomics"))]
 const THREAD_POOL_NOTE: &str = "Models run on one thread. This build has no thread support.";
 
+/// Whether a model the Editor holds had unsaved edits at the last frame.
+static UNSAVED_EDITS: AtomicBool = AtomicBool::new(false);
+
+/// Records whether a model the Editor holds has unsaved edits. The browser asks before the page closes or reloads
+/// while it does.
+pub(crate) fn set_unsaved_edits(unsaved: bool) {
+    UNSAVED_EDITS.store(unsaved, Ordering::Relaxed);
+}
+
+/// Adds a `beforeunload` listener to `window` that has the browser ask before the page closes or reloads while
+/// [`set_unsaved_edits`] last recorded unsaved edits. The listener lives as long as the page.
+fn ask_before_unload(window: &web_sys::Window) {
+    let listener = Closure::<dyn Fn(web_sys::BeforeUnloadEvent)>::new(|event: web_sys::BeforeUnloadEvent| {
+        if UNSAVED_EDITS.load(Ordering::Relaxed) {
+            event.prevent_default();
+            // Older browsers ask only once the return value is set. None of them shows the text.
+            event.set_return_value(henad_graph::sheet::sentence::UNSAVED_HEADING);
+        }
+    });
+    if let Err(error) = window.add_event_listener_with_callback("beforeunload", listener.as_ref().unchecked_ref()) {
+        log::warn!("the page will close without asking about unsaved edits: {error:?}");
+    }
+    listener.forget();
+}
+
 /// Starts the worker pool at the width that `?threads=` requests, then builds the options and starts the app on the
 /// `the_canvas_id` canvas, removing the `loading_text` element.
+///
+/// Once the app has started, the browser asks before the page closes or reloads while a model the Editor holds has
+/// unsaved edits.
 ///
 /// A pool that fails to start is logged, and the models then run on one thread, with a note in the Performance tab.
 /// A build without atomics has no pool, and runs the models on one thread with its own note.
@@ -84,6 +116,7 @@ pub async fn start_web(options: impl FnOnce() -> AppOptions) -> Result<(), WebSt
             if let Some(element) = &loading_text {
                 element.remove();
             }
+            ask_before_unload(&window);
             Ok(())
         }
         Err(error) => refuse(WebStartError::eframe(&error)),

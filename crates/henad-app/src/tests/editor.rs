@@ -840,6 +840,56 @@ fn an_apply_while_the_seed_is_no_integer_builds_nothing() {
     assert!(!app.has_simulation(), "Build built at a seed the field does not show");
 }
 
+/// An Apply whose Rebuild or Build is disabled names the reason in the Editor instead of asking for the button: over a
+/// run at tick 0, over a run past it and with nothing loaded. The old run keeps its code.
+#[test]
+fn an_apply_that_build_refuses_names_the_reason() {
+    let Some(mut app) = app_with_starter() else {
+        return;
+    };
+    apply(&mut app);
+    app.wait_for_build();
+    let life = app.loaded_entry().expect("the rule runs").source().clone();
+    let starter = app.editor.model.file_text();
+    app.seed_text = "12a".to_owned();
+    let reasons = |app: &AppState| match &app.editor.outcome {
+        Some(ApplyOutcome::Faulted(problems)) => problems
+            .iter()
+            .map(|problem| problem.message.clone())
+            .collect::<Vec<_>>(),
+        other => panic!("the refusal is not named: {other:?}"),
+    };
+
+    app.editor.model = EditorModel::Rule(edited(&starter, BIRTH_LINE, HIGHLIFE_LINE));
+    apply(&mut app);
+    assert_eq!(reasons(&app), [INVALID_SEED], "a run at tick 0");
+    assert_eq!(app.loaded_entry().map(ModelEntry::source), Some(&life));
+
+    // Cancel in the Rebuild model dialog, then an edit over the run past tick 0.
+    app.pending_rebuild = None;
+    step_past(&mut app, 0);
+    app.editor.model = EditorModel::Rule(edited(&starter, BIRTH_LINE, "    if (alive == 3u) {"));
+    apply(&mut app);
+    assert_eq!(reasons(&app), [INVALID_SEED], "a run past tick 0");
+    assert_eq!(app.loaded_entry().map(ModelEntry::source), Some(&life));
+
+    app.pending_rebuild = None;
+    app.offload_simulation();
+    apply(&mut app);
+    assert_eq!(reasons(&app), [INVALID_SEED], "nothing loaded");
+    assert!(!app.has_simulation());
+
+    // Once the seed is fixed, Build runs the applied rule, and the line reads as applied.
+    app.seed_text = String::new();
+    press_build(&mut app);
+    let loaded = app.loaded_entry().map(|entry| entry.source().clone());
+    let next_build = selected_source(&app);
+    app.editor
+        .settle_outcome(loaded.as_ref(), next_build.as_ref(), app.pending_rebuild.is_some());
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
+    app.wait_for_build();
+}
+
 /// Runs one frame of the Editor tab over `app` with `events`.
 fn editor_frame(ctx: &egui::Context, app: &mut AppState, events: Vec<egui::Event>) {
     let input = egui::RawInput {

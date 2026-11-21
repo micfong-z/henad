@@ -21,6 +21,12 @@ const NO_MODEL_RUNS: &str = "No model in this build runs on this device. GPU mod
 /// Text the Model panel shows for a set without models.
 const NO_MODELS: &str = "This build has no models.";
 
+/// Hover text of the Exact replay row for a model that replays exactly.
+const REPLAYS_EXACTLY: &str = "Two runs with the same seed match.";
+
+/// Hover text of the Exact replay row for a model that does not replay exactly.
+const DOES_NOT_REPLAY: &str = "Two runs with the same seed can differ.";
+
 /// Draws the opening that the app rejected and the reason, then `next_step`.
 fn opening_refusal(ui: &mut egui::Ui, refusal: &OpeningRefusal, next_step: &str) {
     ui.colored_label(ui.visuals().warn_fg_color, refusal.lead);
@@ -28,26 +34,46 @@ fn opening_refusal(ui: &mut egui::Ui, refusal: &OpeningRefusal, next_step: &str)
     ui.label(next_step);
 }
 
-/// Returns the label of each model in the model list, for `offered` as `(id, name)` pairs: the model's name, followed by
-/// its id in parentheses when another offered model has the same name.
+/// Returns the label of each model in the model list, for `offered` as `(id, name)` pairs, as [`label_among`] words
+/// it.
 fn list_labels(offered: &[(String, String)]) -> Vec<String> {
     offered
         .iter()
-        .map(|(id, name)| {
-            if offered.iter().filter(|(_, other)| other == name).count() > 1 {
-                format!("{name} ({id})")
-            } else {
-                name.clone()
-            }
-        })
+        .map(|(id, name)| label_among(offered, id, name))
         .collect()
 }
 
-pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    let offered: Vec<(String, String)> = app
-        .offered_models()
+/// Returns the label of model `id` named `name` beside `offered`, the offered models as `(id, name)` pairs: the name,
+/// followed by the id in parentheses when another offered model has the same name, letter case aside.
+fn label_among(offered: &[(String, String)], id: &str, name: &str) -> String {
+    let lower = name.to_lowercase();
+    if offered
+        .iter()
+        .any(|(other_id, other)| other_id != id && other.to_lowercase() == lower)
+    {
+        format!("{name} ({id})")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// Returns the id and name of each model of the set that runs on this machine.
+fn offered_names(app: &AppState) -> Vec<(String, String)> {
+    app.offered_models()
         .map(|entry| (entry.id().to_owned(), entry.name().to_owned()))
-        .collect();
+        .collect()
+}
+
+/// Returns the label of model `id` named `name` as the model list shows it: the name, with the id in parentheses when
+/// another model the app offers has the same name, letter case aside.
+///
+/// The Sweep tab and the Results tab name a model by this label, a model the set lacks included.
+pub fn model_label(app: &AppState, id: &str, name: &str) -> String {
+    label_among(&offered_names(app), id, name)
+}
+
+pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
+    let offered = offered_names(app);
     if offered.is_empty() {
         // The refusal of a hidden GPU model already mentions the GPU, and an empty set has no GPU to blame.
         match &app.opening_refusal {
@@ -120,6 +146,10 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
             rows.row(ui, "Id", entry.id());
             rows.row(ui, "Backend", entry.metadata().backend.label());
             rows.row(ui, "Topology", topology_label(entry.topology_hint()));
+            let (value, hover) = replay_cells(entry.metadata().replays_exactly);
+            ui.label("Exact replay").on_hover_text(hover);
+            ui.label(value).on_hover_text(hover);
+            rows.end_row(ui);
         });
 
         ui.add_space(8.0);
@@ -215,6 +245,16 @@ fn neighborhood_label(kind: NeighborhoodKind) -> &'static str {
 
 fn yes_no(present: bool) -> &'static str {
     if present { MDI_CHECK } else { MDI_CLOSE }
+}
+
+/// Returns the value and the hover text of the Exact replay row, for a model that replays exactly when
+/// `replays_exactly` holds.
+fn replay_cells(replays_exactly: bool) -> (&'static str, &'static str) {
+    if replays_exactly {
+        (MDI_CHECK, REPLAYS_EXACTLY)
+    } else {
+        (MDI_CLOSE, DOES_NOT_REPLAY)
+    }
 }
 
 /// Returns the count `count`, followed by the count `flagged` labelled `flag` unless `flagged` is zero, as in
@@ -406,7 +446,10 @@ fn swatches(ui: &mut egui::Ui, colors: impl Iterator<Item = [u8; 4]>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_of, list_labels, strip_id, topology_label};
+    use super::{
+        DOES_NOT_REPLAY, REPLAYS_EXACTLY, count_of, label_among, list_labels, replay_cells, strip_id, topology_label,
+    };
+    use crate::icons::material_design_icons::{MDI_CHECK, MDI_CLOSE};
     use henad_core::topology::TopologyHint;
 
     /// An applied sheet of Game of Life sits beside the example of that name, and the list tells the two apart.
@@ -414,19 +457,43 @@ mod tests {
     fn the_model_list_names_the_ids_of_models_that_share_a_name() {
         let offered: Vec<(String, String)> = [
             ("sir", "SIR Epidemic"),
+            ("boids", "Boids"),
             ("game_of_life", "Game of Life"),
             ("sheet_game_of_life", "Game of Life"),
+            ("sheet_sir", "SIR epidemic"),
         ]
         .map(|(id, name)| (id.to_owned(), name.to_owned()))
         .into();
         assert_eq!(
             list_labels(&offered),
             [
-                "SIR Epidemic",
+                "SIR Epidemic (sir)",
+                "Boids",
                 "Game of Life (game_of_life)",
-                "Game of Life (sheet_game_of_life)"
-            ]
+                "Game of Life (sheet_game_of_life)",
+                "SIR epidemic (sheet_sir)"
+            ],
+            "names that differ in case alone"
         );
+        assert_eq!(
+            label_among(&offered, "folder_sir", "SIR EPIDEMIC"),
+            "SIR EPIDEMIC (folder_sir)",
+            "a model the set lacks, as a results folder names it"
+        );
+        assert_eq!(label_among(&offered, "boids", "Boids"), "Boids");
+    }
+
+    /// The Exact replay row marks GPU Boids, whose agents add up floats over their neighbours, and no CPU model.
+    #[test]
+    fn the_replay_row_marks_a_model_that_does_not_replay_exactly() {
+        let models = henad_models::example_models();
+        let cells = |id: &str| {
+            let entry = models.get(id).expect("an example model");
+            replay_cells(entry.metadata().replays_exactly)
+        };
+        assert_eq!(cells("gpu_boids"), (MDI_CLOSE, DOES_NOT_REPLAY));
+        assert_eq!(cells("boids"), (MDI_CHECK, REPLAYS_EXACTLY));
+        assert_eq!(cells("gpu_game_of_life"), (MDI_CHECK, REPLAYS_EXACTLY));
     }
 
     #[test]

@@ -357,8 +357,8 @@ pub enum ApplyOutcome {
     Refused(Vec<CodeDiagnostic>),
     /// The opened file does not read as the kind its header names, with every problem found. Nothing was applied.
     Unread(Vec<CodeDiagnostic>),
-    /// The model was installed, and the device or the engine refused it when it was built, or Build refuses it, as
-    /// for a device that cannot hold it at the values of the next build.
+    /// The model was installed, and the device or the engine refused it when it was built, or Build or Rebuild refuses
+    /// it, as for a size the device cannot hold at the values of the next build or a Seed field that does not parse.
     Faulted(Vec<CodeDiagnostic>),
 }
 
@@ -517,13 +517,6 @@ impl EditorPanel {
     }
 
     /// Returns the names of the models that hold unsaved edits: the model shown, then the model held beside it.
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(
-            dead_code,
-            reason = "only a close request of the native window asks about every model"
-        )
-    )]
     pub fn unsaved_names(&self) -> Vec<String> {
         self.names_of(&self.unsaved_targets(None))
     }
@@ -612,8 +605,9 @@ impl EditorPanel {
     /// Brings an outcome that waited up to date. `loaded` is the source of the loaded model, `next_build` the source of
     /// the model Playback's Build builds now, and `rebuild_pending` whether the Rebuild model dialog is open.
     ///
-    /// An outcome that waited for Rebuild or Build reads as applied once the loaded model runs the applied code, from
-    /// the start of its build. One that waited for Rebuild waits for Build once the dialog closes without a rebuild.
+    /// An outcome that waited for Rebuild or Build, or that named the reason they were disabled, reads as applied once
+    /// the loaded model runs the applied code, from the start of its build. A fault of a build of the applied code
+    /// leaves nothing loaded. One that waited for Rebuild waits for Build once the dialog closes without a rebuild.
     /// An outcome that read as applied waits for Build once nothing is loaded, as after Cancel or Offload.
     ///
     /// An outcome that waits for Build is dropped once Build builds another model, as while it replays the preview of
@@ -641,7 +635,7 @@ impl EditorPanel {
         }
         let waiting = matches!(
             self.outcome,
-            Some(ApplyOutcome::AwaitingRebuild | ApplyOutcome::Installed)
+            Some(ApplyOutcome::AwaitingRebuild | ApplyOutcome::Installed | ApplyOutcome::Faulted(_))
         );
         if waiting && loaded.is_some() && loaded == self.applied.as_ref() {
             self.outcome = Some(ApplyOutcome::Applied);
@@ -1826,6 +1820,9 @@ pub fn receive_import(app: &mut AppState, result: OpenResult) {
 ///   the reason, such as the sizes the device lacks or a Seed field that holds no seed.
 /// - a run of another model past tick 0 keeps going, and the model waits for Build.
 ///
+/// A model that waits for a Rebuild or a Build that is disabled reads as [`ApplyOutcome::Faulted`] with the reason the
+/// button gives.
+///
 /// A build runs on the app's build thread on native, and the outcome reads as applied from its start. A fault of the
 /// build that the Editor claims replaces the outcome when the build returns it.
 pub fn apply(app: &mut AppState) {
@@ -1898,15 +1895,24 @@ pub fn apply(app: &mut AppState) {
         }
     }
     let awaits_rebuild = app.pending_rebuild.as_ref().is_some_and(|pending| pending.model == id);
-    app.editor.outcome = Some(if unchanged {
+    let outcome = if unchanged {
         ApplyOutcome::Unchanged
     } else if runs_source(app) {
         ApplyOutcome::Applied
-    } else if awaits_rebuild {
-        ApplyOutcome::AwaitingRebuild
     } else {
-        ApplyOutcome::Installed
-    });
+        // The line never asks for a press of a disabled Rebuild or Build, and names the reason instead.
+        let refusal = if awaits_rebuild {
+            app.rebuild_refusal()
+        } else {
+            app.build_refusal()
+        };
+        match refusal {
+            Some(reason) => ApplyOutcome::Faulted(vec![CodeDiagnostic::error(reason)]),
+            None if awaits_rebuild => ApplyOutcome::AwaitingRebuild,
+            None => ApplyOutcome::Installed,
+        }
+    };
+    app.editor.outcome = Some(outcome);
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@
 //! closes.
 
 use egui::accesskit::Role;
+use egui::{Key, Modifiers, ViewportCommand, ViewportEvent, ViewportId};
 use henad_graph::document::World;
 use henad_graph::edit::EditCommand;
 use henad_graph::sheet::edit::SheetEdit;
@@ -10,6 +11,7 @@ use henad_graph::sheet::sentence::{
     CANCEL, CONVERT, CONVERT_HEADING, DISCARD_CHANGES, MODEL_ACTIONS, SAVE_MODEL, unsaved_changes,
 };
 
+use crate::native::guard_close;
 use crate::tests::panes::{apply_sheet_edit, sheet_mut};
 use crate::tests::support::{Harness, Node, starter_text};
 use crate::ui::editor::expert::{convert_sheet, swap_counterpart};
@@ -219,6 +221,78 @@ fn a_close_request_closes_at_once_without_edits_and_after_discard_with_them() {
     click_in(&mut harness, &sentence, DISCARD_CHANGES);
     assert!(harness.app.closing, "Discard changes kept the window open");
     assert!(!harness.app.hold_close());
+}
+
+/// Runs one frame of [`guard_close`] alone, and returns the commands the frame sent to the window.
+///
+/// `key` is a key pressed and released in the frame with its modifiers, and the frame requests the window's close
+/// when `close_requested` holds.
+fn guard_frame(harness: &mut Harness, key: Option<(Key, Modifiers)>, close_requested: bool) -> Vec<ViewportCommand> {
+    let mut input = egui::RawInput::default();
+    if let Some((key, modifiers)) = key {
+        input.events = [true, false]
+            .map(|pressed| egui::Event::Key {
+                key,
+                physical_key: Some(key),
+                pressed,
+                repeat: false,
+                modifiers,
+            })
+            .to_vec();
+    }
+    if close_requested {
+        input
+            .viewports
+            .entry(ViewportId::ROOT)
+            .or_default()
+            .events
+            .push(ViewportEvent::Close);
+    }
+    let app = &mut harness.app;
+    let output = harness.context.run_ui(input, |ui| guard_close(ui.ctx(), app));
+    output
+        .viewport_output
+        .get(&ViewportId::ROOT)
+        .map(|viewport| viewport.commands.clone())
+        .unwrap_or_default()
+}
+
+/// Cmd+Q on macOS, and Ctrl+Q elsewhere, requests the window's close, which waits while the Editor holds unsaved
+/// edits, as a press of the window's close button does. A plain Q and Ctrl+Q on macOS request nothing.
+#[test]
+fn the_quit_shortcut_requests_a_close_that_unsaved_edits_hold() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    edit_purpose(&mut harness, "A purpose nobody saves.");
+
+    // egui-winit sets `command` with Cmd on macOS and with Ctrl elsewhere, and `mac_cmd` only with Cmd on macOS.
+    for modifiers in [Modifiers::NONE, Modifiers::CTRL] {
+        let commands = guard_frame(&mut harness, Some((Key::Q, modifiers)), false);
+        assert!(commands.is_empty(), "Q with {modifiers:?} sent {commands:?}");
+    }
+    for modifiers in [
+        Modifiers::MAC_CMD | Modifiers::COMMAND,
+        Modifiers::CTRL | Modifiers::COMMAND,
+    ] {
+        assert_eq!(
+            guard_frame(&mut harness, Some((Key::Q, modifiers)), false),
+            [ViewportCommand::Close],
+            "Q with {modifiers:?}"
+        );
+    }
+    assert_eq!(asking(&mut harness), None);
+
+    assert_eq!(
+        guard_frame(&mut harness, None, true),
+        [ViewportCommand::CancelClose],
+        "the close request went through over unsaved edits"
+    );
+    assert_eq!(
+        asking(&mut harness).as_deref(),
+        Some(sentence_of("Game of Life").as_str())
+    );
 }
 
 /// Returns the sentence of the dialog for the one model `name`.

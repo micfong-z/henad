@@ -15,16 +15,23 @@ use crate::ui::files::SaveTarget;
 use crate::ui::time_axis::RunTime;
 
 /// Recording of the stats the sim publishes, from the tick Record is pressed at until it stops.
+///
+/// A recording keeps the id of the model it recorded. Its file is named after that model even once another model is
+/// loaded.
 pub enum Recording {
     Off,
     Running {
         writer: StatsWriter<Vec<u8>>,
+        /// Id of the recorded model.
+        model: String,
         from_tick: u64,
         /// Newest row with its tick, held back until a later tick arrives or the recording stops.
         held: Option<(u64, Vec<StatEntry>)>,
     },
     Done {
         csv: Vec<u8>,
+        /// Id of the recorded model.
+        model: String,
         rows: u64,
         from_tick: u64,
         to_tick: u64,
@@ -32,11 +39,12 @@ pub enum Recording {
 }
 
 impl Recording {
-    /// Starts a recording at `from_tick`. A run with a time scale, `time`, adds a `time` column after `tick`, as
-    /// `--export-stats` writes it.
-    pub fn start(from_tick: u64, time: Option<RunTime>) -> Self {
+    /// Starts a recording of model `model` at `from_tick`. A run with a time scale, `time`, adds a `time` column after
+    /// `tick`, as `--export-stats` writes it.
+    pub fn start(model: String, from_tick: u64, time: Option<RunTime>) -> Self {
         Self::Running {
             writer: stats_writer(time),
+            model,
             from_tick,
             held: None,
         }
@@ -80,6 +88,7 @@ impl Recording {
         match self {
             Self::Running {
                 mut writer,
+                model,
                 from_tick,
                 held,
             } => {
@@ -89,6 +98,7 @@ impl Recording {
                 let (csv, rows) = writer.into_inner()?;
                 Ok(Self::Done {
                     csv,
+                    model,
                     rows,
                     from_tick,
                     to_tick,
@@ -174,6 +184,7 @@ fn recording_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
             writer,
             from_tick,
             held,
+            ..
         } => {
             // The held row counts, since stopping writes it.
             let rows = writer.rows() + u64::from(held.is_some());
@@ -257,11 +268,20 @@ fn details_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
     }
 }
 
-/// Returns the file name `henad-<model>-<export_type>-<tick>.<extension>`, so that files from several runs sort
-/// together.
+/// Returns the file name `henad-<model>-<export_type>-<tick>.<extension>` of the loaded model at the current tick, so
+/// that files from several runs sort together.
 fn file_name(app: &AppState, export_type: &str, extension: &str) -> String {
-    let model = app.loaded_entry().map_or("model", |entry| entry.id());
-    format!("henad-{model}-{export_type}-{}.{extension}", app.current_tick())
+    export_name(loaded_model(app), export_type, app.current_tick(), extension)
+}
+
+/// Returns the file name `henad-<model>-<export_type>-<tick>.<extension>`.
+fn export_name(model: &str, export_type: &str, tick: u64, extension: &str) -> String {
+    format!("henad-{model}-{export_type}-{tick}.{extension}")
+}
+
+/// Id of the loaded model, or `model` with nothing loaded.
+fn loaded_model(app: &AppState) -> &str {
+    app.loaded_entry().map_or("model", |entry| entry.id())
 }
 
 /// Returns a writer of a stat series into memory, with a `time` column for a run with a time scale, `time`.
@@ -273,9 +293,9 @@ fn stats_writer(time: Option<RunTime>) -> StatsWriter<Vec<u8>> {
     }
 }
 
-/// Starts a recording at the current tick of the loaded run, with its time scale.
+/// Starts a recording at the current tick of the loaded run, with its model's id and time scale.
 pub fn start_recording(app: &mut AppState) {
-    app.recording = Recording::start(app.current_tick(), app.loaded_time());
+    app.recording = Recording::start(loaded_model(app).to_owned(), app.current_tick(), app.loaded_time());
     app.export_status = None;
 }
 
@@ -307,12 +327,17 @@ fn export_history(app: &mut AppState) {
     }
 }
 
+/// Saves a finished recording, named after the model it recorded and the tick it stopped at.
 fn save_recording(app: &mut AppState) {
-    let Recording::Done { csv, .. } = &app.recording else {
+    let Recording::Done {
+        csv, model, to_tick, ..
+    } = &app.recording
+    else {
         return;
     };
+    let name = export_name(model, "recording", *to_tick, "csv");
     let bytes = csv.clone();
-    app.save_as(SaveTarget::Export, &file_name(app, "recording", "csv"), bytes);
+    app.save_as(SaveTarget::Export, &name, bytes);
 }
 
 fn export_state(app: &mut AppState) {
@@ -355,7 +380,10 @@ fn write_state(out: &mut Vec<u8>, layers: &CpuLayers) -> std::io::Result<()> {
 mod tests {
     use henad_core::view::{StatEntry, StatValue};
 
-    use super::Recording;
+    use super::{Recording, save_recording, start_recording};
+    use crate::state::AppState;
+    use crate::tests::support::{set_grid_side, step_past};
+    use crate::ui::files::SaveTarget;
 
     fn row(value: f64) -> Vec<StatEntry> {
         vec![StatEntry::new("a", StatValue::Scalar(value), [0, 0, 0, 255])]
@@ -365,7 +393,7 @@ mod tests {
     /// tick, holding the action's stats, and stopping writes the last row out.
     #[test]
     fn a_publish_at_the_same_tick_replaces_the_held_row() {
-        let mut recording = Recording::start(5, None);
+        let mut recording = Recording::start("sir".to_owned(), 5, None);
         for (tick, value) in [(5, 1.0), (5, 2.0), (6, 3.0), (6, 3.0), (7, 4.0), (7, 5.0)] {
             recording.push(tick, &row(value)).expect("one series throughout");
         }
@@ -374,11 +402,43 @@ mod tests {
             rows,
             from_tick,
             to_tick,
+            ..
         }) = recording.stop(7)
         else {
             panic!("a running recording did not stop cleanly");
         };
         assert_eq!(String::from_utf8(csv).expect("CSV is UTF-8"), "tick,a\n5,2\n6,3\n7,5\n");
         assert_eq!((rows, from_tick, to_tick), (3, 5, 7));
+    }
+
+    /// A recording saved after a build of another model, or after Offload, is named after the model it recorded and
+    /// the tick it stopped at.
+    #[test]
+    fn a_recording_is_named_after_the_run_it_recorded() {
+        let Some(mut app) = AppState::headless(henad_models::example_models(), false) else {
+            return;
+        };
+        app.select_model("sir");
+        set_grid_side(&mut app, 64);
+        app.reset_simulation();
+        step_past(&mut app, 0);
+        start_recording(&mut app);
+        step_past(&mut app, 1);
+        app.stop_recording();
+        let Recording::Done { to_tick, .. } = &app.recording else {
+            panic!("the recording did not stop");
+        };
+        let name = format!("henad-sir-recording-{to_tick}.csv");
+
+        app.select_model("boids");
+        app.reset_simulation();
+        app.wait_for_build();
+        save_recording(&mut app);
+        app.offload_simulation();
+        save_recording(&mut app);
+        assert_eq!(
+            app.saves_requested,
+            Some(vec![(SaveTarget::Export, name.clone()), (SaveTarget::Export, name)])
+        );
     }
 }

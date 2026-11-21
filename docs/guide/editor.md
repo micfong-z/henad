@@ -45,7 +45,10 @@ Press <span class="ui">Save model</span> to save it and then replace it, <span c
 
 ![The Unsaved changes dialog reading Forest fire has unsaved changes, with Cancel, Discard changes and Save model](../assets/app/editor-unsaved.png){ width="446" }
 
-Closing the window of the desktop app asks the same, and the app closes once the model is saved or its changes discarded.
+Closing the window of the desktop app asks the same, and so does <kbd>Cmd</kbd>+<kbd>Q</kbd> (<kbd>Ctrl</kbd>+<kbd>Q</kbd> outside macOS).
+The app closes once the model is saved or its changes discarded.
+On macOS the app menu has no Quit item, and Quit in the Dock closes the app without asking.
+In a browser, closing or reloading the tab with unsaved changes makes the browser ask whether to leave the page.
 Apply does not save the model, and a save you cancel keeps it in the Editor.
 If you change the model while the open or save dialog is open, the Editor asks again before it replaces the model.
 A sheet converted to a node graph is held beside its copy, and the dialog names it too while it holds unsaved changes.
@@ -538,6 +541,8 @@ What happens to the run depends on what was running:
 - A run of another model past tick 0 keeps going.
   The Editor reads **Model applied. Press Build to run it.**, and <span class="ui" markdown>:material-restart: Build</span> runs the rule.
   Once you select another model in the Model tab, Build builds that model, and the Editor reads **Press Apply to check and install the model.**
+
+When <span class="ui" markdown>:material-restart: Build</span> or <span class="ui">Rebuild</span> is disabled, for example while the **Seed** field shows an error, the Editor reads **Model build failed. Fix the problem below.** and names the reason instead.
 
 Applying the code the run already runs changes nothing, and the Editor reads **Model unchanged.**
 Once you edit the model after Apply, the line goes, and the Editor reads **Press Apply to check and install the model.** again.

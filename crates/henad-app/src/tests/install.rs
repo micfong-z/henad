@@ -9,14 +9,17 @@ use henad_compute::fault::{Fault, STEPPING};
 use henad_core::action::{Schedule, Scheduled};
 use henad_core::explore::replay::Replay;
 use henad_core::explore::spec::SweepSpec;
-use henad_core::helpers::choice_param;
+use henad_core::helpers::{choice_param, f32_param};
 use henad_core::params::ParamValue;
 use henad_explore::output::details::{ChoiceForm, params_by_id_json};
 use henad_explore::output::manifest::{BuildRole, RecordedBuild};
 
 use crate::icons::material_design_icons::MDI_RESTART;
 use crate::state::{AppState, OpenAt, PendingRebuild, remap_schedule, remap_values, same_code};
-use crate::tests::support::{counter, edited_sir, headless_app, recoded, set_grid_side, set_of, step_past};
+use crate::tests::support::{
+    counter, edited_sir, headless_app, recoded, set_grid_side, set_of, settle_preview, starter_text, step_past,
+};
+use crate::ui::editor::{ApplyOutcome, EditorModel, apply, open_text};
 use crate::ui::export::metadata::run_details;
 use crate::ui::params::INVALID_SEED;
 use crate::ui::params::{ParamsNoticeTone, notice_content};
@@ -283,12 +286,89 @@ fn install_remaps_values_by_id_when_the_schema_changes() {
         }],
         "an action the code no longer declares is dropped"
     );
-    assert_eq!(value(&app, "infection_rate"), ParamValue::F32(0.2));
+    assert_eq!(
+        value(&app, "infection_rate"),
+        ParamValue::F32(0.3),
+        "a value at the edit's default takes SIR's"
+    );
     assert_eq!(
         value(&app, "recovery_rate"),
         ParamValue::F32(0.05),
         "back at its default"
     );
+}
+
+/// A value at the previous version's default takes the new version's default, and counts as carried. A value moved off
+/// the default is carried.
+#[test]
+fn a_value_at_the_previous_default_takes_the_new_default() {
+    let previous = [f32_param("rate", "Rate", 0.3, 0.0, 1.0, None)];
+    let current = [f32_param("rate", "Rate", 0.5, 0.0, 1.0, None)];
+    let carried = |value| remap_values(&previous, &[ParamValue::F32(value)], &current);
+    assert_eq!(carried(0.3).values, [ParamValue::F32(0.5)]);
+    assert_eq!(carried(0.3).defaulted, 0);
+    assert_eq!(carried(0.4).values, [ParamValue::F32(0.4)]);
+}
+
+/// Returns the value of parameter `id` that the loaded run was built with.
+fn loaded_value(app: &AppState, id: &str) -> ParamValue {
+    let index = app
+        .loaded_entry()
+        .and_then(|entry| entry.param_index(id))
+        .expect("the loaded model declares the parameter");
+    app.loaded_values[index].clone()
+}
+
+/// Makes `value` the value the Editor's sheet keeps for parameter `id`, as Keep in the Parameters tab does.
+fn keep_on_sheet(app: &mut AppState, id: &str, value: f64) {
+    let EditorModel::Sheet(sheet) = &mut app.editor.model else {
+        panic!("the Editor holds no sheet");
+    };
+    sheet.keep_value(id, value).expect("the sheet has the parameter");
+}
+
+/// A value the sheet keeps, changed after an Apply, is the value the next Apply runs, with or without a preview of the
+/// edit in between. A value moved in the Parameters tab stays.
+#[test]
+fn a_sheet_value_changed_after_apply_runs_at_the_next_apply() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    open_text(
+        &mut app.editor,
+        starter_text("sir.toml").to_owned(),
+        Some("sir.toml".to_owned()),
+    );
+    apply(&mut app);
+    app.wait_for_build();
+    assert_eq!(loaded_value(&app, "infection_rate"), ParamValue::F32(0.3));
+    set_value(&mut app, "recovery_rate", ParamValue::F32(0.2));
+
+    keep_on_sheet(&mut app, "infection_rate", 0.5);
+    apply(&mut app);
+    app.wait_for_build();
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
+    assert_eq!(
+        value(&app, "infection_rate"),
+        ParamValue::F32(0.5),
+        "the sheet's new value"
+    );
+    assert_eq!(
+        value(&app, "recovery_rate"),
+        ParamValue::F32(0.2),
+        "a value moved in the Parameters tab"
+    );
+    assert_eq!(loaded_value(&app, "infection_rate"), ParamValue::F32(0.5));
+    assert_eq!(loaded_value(&app, "recovery_rate"), ParamValue::F32(0.2));
+
+    keep_on_sheet(&mut app, "infection_rate", 0.7);
+    settle_preview(&mut app);
+    app.wait_for_build();
+    assert!(app.preview().is_some(), "the edit previews");
+    apply(&mut app);
+    app.wait_for_build();
+    assert_eq!(app.preview(), None);
+    assert_eq!(loaded_value(&app, "infection_rate"), ParamValue::F32(0.7));
 }
 
 #[test]

@@ -287,6 +287,7 @@ Every other sheet and node graph starter replays exactly.
 A sweep's manifest records `replays_exactly` as `false` for such a model.
 In the desktop app, [**Compare runs**](../guide/editor.md#converting-to-a-node-graph) names no tick of a difference for it, and reads "Bounded confidence does not replay exactly. Two runs with the same seed can differ, so compare Bounded confidence (expert) with Bounded confidence in the plot." for the bounded confidence sheet.
 The [Results tab](../guide/app.md#opening-a-run) shows "This model does not replay exactly. The opened run might differ from the recorded run." beside <span class="ui" markdown>:material-play-box-outline: Open</span>, and the Playback tab shows it under the opened run's name.
+The [Model tab](../guide/app.md#metadata) shows a cross in its **Exact replay** row for such a model.
 
 In a model that replays exactly, a computation over whole numbers alone gives the same result on every device, and the same as the host evaluator.
 Float results can differ in their last places between devices, and between two shapes of one computation on one device, such as a Repeat and the same body written out in copies.

@@ -19,7 +19,8 @@ const REBUILD_TEXT: &str = "The model will be rebuilt from tick 0. The current r
 /// rebuild.
 ///
 /// Rebuild is disabled while [`AppState::rebuild_refusal`] returns a reason, with the reason as its tooltip. Enter
-/// presses Rebuild. Cancel, Escape and a click beside the modal close it, and the run keeps going under its own code.
+/// presses Rebuild. Cancel, Escape and a click beside the modal close it, and the run goes on under its own code. A
+/// playing run waits while the modal is open, as [`AppState::hold_for_modal`] holds it.
 pub fn rebuild_modal(ctx: &Context, app: &mut AppState) {
     let Some(pending) = &app.pending_rebuild else {
         return;

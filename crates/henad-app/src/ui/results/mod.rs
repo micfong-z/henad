@@ -30,6 +30,7 @@ use crate::state::{AppState, OpenAt};
 use crate::ui::dock::Tab;
 use crate::ui::editor;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget};
+use crate::ui::model::model_label;
 use crate::ui::plural;
 use crate::ui::results::heatmap::HeatmapView;
 use crate::ui::results::response::ResponseView;
@@ -559,6 +560,11 @@ pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
     toolbar(ui, app, &mut request);
     let sweep_running = app.sweep.is_running();
     let cli_command = app.product.cli_command.clone();
+    let label = app
+        .results
+        .store()
+        .map(|store| model_label(app, &store.model_id, &store.model_name))
+        .unwrap_or_default();
     let ResultsPanel {
         store,
         view,
@@ -576,7 +582,7 @@ pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
         apply_request(ui.ctx(), app, request);
         return;
     };
-    summary_line(ui, store);
+    summary_line(ui, store, &label);
     ui.horizontal(|ui| {
         let views = [
             ResultsView::Search,
@@ -721,13 +727,13 @@ fn source_label(ui: &mut egui::Ui, source: &ResultsSource, mode: ExploreMode) {
     }
 }
 
-/// Draws the model and the count of runs, and whether the sweep is missing runs.
-fn summary_line(ui: &mut egui::Ui, store: &ResultsStore) {
+/// Draws the model, labelled `label` as the model list labels it, the count of runs, and whether the sweep is missing
+/// runs.
+fn summary_line(ui: &mut egui::Ui, store: &ResultsStore, label: &str) {
     ui.horizontal_wrapped(|ui| {
         let runs = store.runs().len() as u64;
         ui.label(format!(
-            "{}: {runs} {}, {} failed",
-            store.model_name,
+            "{label}: {runs} {}, {} failed",
             plural(runs, "run"),
             store.failed_count()
         ));

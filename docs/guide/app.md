@@ -94,6 +94,8 @@ Picking a model also loads its default parameters, discarding parameters set in 
 
 The GPU model entries only appear when a suitable device is detected.
 When two models in the list share a name, such as the example Game of Life and a model applied from the Game of Life starter in the Editor, each shows its id after the name.
+Names that differ only in letter case count as the same name, as the example SIR Epidemic and the SIR epidemic starter do.
+The <span class="ui" markdown>:material-flask-outline: Sweep</span> and <span class="ui" markdown>:material-chart-box-outline: Results</span> tabs name such a model the same way.
 
 See the [models reference](../reference/models.md) for more details on each model.
 
@@ -111,6 +113,7 @@ Below the description, the panel displays auto-computed metadata about the model
 Identity
 : The model id the [CLI](../reference/cli.md) takes, its backend (CPU or GPU), and which display layers it publishes.
   A network model's topology reads Network.
+  **Exact replay** shows a cross for a model whose runs with the same seed can differ, such as GPU Boids.
 
 Structure
 : Underlying data structure of the model, which is different for each [authoring trait](../authoring/index.md).
@@ -233,6 +236,8 @@ Picking the running model again brings back the parameters, seed and scheduled a
 
 <span class="ui" markdown>:material-play:</span> / <span class="ui" markdown>:material-pause:</span>
 : Start or pause the simulation.
+  While a dialog such as **New model** or **Rebuild model?** is open, a playing simulation pauses, and it plays on once the dialog closes.
+  A run to a tick waits the same way.
 
 <span class="ui" markdown>:material-skip-next:</span>
 : Advance one tick while paused.
@@ -276,6 +281,7 @@ When the run stops, the <span class="ui" markdown>:material-table: Statistics</s
 - No model is built yet.
 - The simulation is playing, until you pause it.
 - The <span class="ui" markdown>:material-cog-outline: Model</span> tab has a model selected other than the one loaded, until you press <span class="ui" markdown>:material-restart: Build</span>.
+  Behind the preview of a node graph, the tooltip says to press Apply in the Editor instead.
 - The tick is behind the current one and <span class="ui" markdown>:material-restart: Build</span> is disabled, for example while the **Seed** field shows an error.
 
 ### Building a model
@@ -430,6 +436,7 @@ Turn on **Unlimited history** in the <span class="ui" markdown>:material-chart-l
 <span class="ui" markdown>:material-record-circle-outline: Record</span> captures every snapshot from the moment it starts, independent of the history length setting in the <span class="ui" markdown>:material-chart-line: Charts</span> tab.
 
 <span class="ui" markdown>:material-stop: Stop</span> will stop recording, and <span class="ui" markdown>:material-tray-arrow-down: Save recording</span> will write the captured snapshots to CSV, with the columns of Save stats.
+The file is named after the recorded model and the tick the recording stopped at, as in `henad-sir-recording-120.csv`, even once another model is built.
 
 ### Current state
 
@@ -1103,12 +1110,14 @@ The new code replaces the model of the same id, and the panels describe it at on
 The running simulation keeps the code it was built with.
 A run still at tick 0, neither playing nor running to a tick, is rebuilt under the new code straight away.
 For any other run, a **Rebuild model?** dialog appears first, reading **The model will be rebuilt from tick 0. The current run will be lost.**
+A playing run pauses while the dialog is open.
 
 <span class="ui">Rebuild</span>
 : Ends the run and builds the model again from tick 0, under the new code.
   For the selected model this is the same as pressing <span class="ui" markdown>:material-restart: Build</span>.
   The button is disabled when the new code cannot be built, for example when it is too large for this device, and its tooltip gives the reason.
   The run then keeps going, and a run at tick 0 shows the dialog as well.
+  The [Editor](#editor-tab) then names the reason instead of asking you to press Rebuild.
 
 <span class="ui">Cancel</span>
 : Keeps the run going under the code it was built with.
@@ -1117,11 +1126,14 @@ For any other run, a **Rebuild model?** dialog appears first, reading **The mode
 
 When the new code declares other parameters, each value is carried over by the parameter's id.
 A parameter new to the code, or a value outside its new bounds, takes its default.
+A value still at the old default takes the new default, so a value changed on a sheet runs at the next Apply.
 The dialog counts the running values that the new code does not take, as in **2 parameters will use their defaults.**
 A scheduled action that the new code no longer declares is removed, and the dialog counts the run's removed actions as well.
 The seed stays as it is.
 
-The <span class="ui" markdown>:material-flask-outline: Sweep</span> tab reads the model's outputs again, and starts a new draft when the parameters, stats or actions changed.
+The <span class="ui" markdown>:material-flask-outline: Sweep</span> tab reads the model's outputs again and keeps the sweep's settings.
+Each parameter and scheduled action keeps its row by its id, and a row of a parameter or action that the new code no longer declares is removed.
+A parameter new to the code, or one whose type changed, starts unvaried.
 A sweep that is running keeps the code it started with.
 In the <span class="ui" markdown>:material-chart-box-outline: Results</span> tab, runs of other code carry the warning under [Opening a run](#opening-a-run), and a folder of other runtime code cannot be [resumed](#opening-results).
 

@@ -15,6 +15,7 @@ use henad_explore::search_run::{SearchPlan, SearchUpdate};
 use henad_explore::sweep::{Provenance, SweepEnd, SweepOutline, SweepReport};
 
 use crate::state::{AppState, lookup_message};
+use crate::ui::model::model_label;
 use crate::ui::results::ResultsPanel;
 use crate::ui::sweep::builder::budget_text;
 use crate::ui::sweep::draft::{ExploreMode, SweepDraft};
@@ -138,7 +139,7 @@ impl SweepSession {
         output_dir: Option<PathBuf>,
     ) -> Result<Self, String> {
         let entry = app.lookup(&spec.model).map_err(|error| lookup_message(&error))?.clone();
-        let model_name = entry.name().to_owned();
+        let model_name = model_label(app, entry.id(), entry.name());
         let output = match &output_dir {
             None => SweepOutput::Memory,
             #[cfg(not(target_arch = "wasm32"))]
@@ -170,7 +171,7 @@ impl SweepSession {
         execution: SessionExecution,
     ) -> Result<Self, String> {
         let entry = app.lookup(model_id).map_err(|error| lookup_message(&error))?.clone();
-        let model_name = entry.name().to_owned();
+        let model_name = model_label(app, entry.id(), entry.name());
         let options = run_options(app, execution);
         let run = SweepRun::resume_directory(entry, None, &folder, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();

@@ -9,6 +9,7 @@ mod messages;
 mod spec;
 
 use std::borrow::Cow;
+use std::mem::discriminant;
 
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{Factor, FactorDomain, FactorLevel, FactorSpec};
@@ -1107,6 +1108,47 @@ impl SweepDraft {
     pub fn output_folder(&self) -> Option<&str> {
         Some(self.output_dir_text.trim()).filter(|folder| !self.holds_results_in_memory() && !folder.is_empty())
     }
+
+    /// Carries the draft from `previous` to `current`, two versions of the draft's model whose declarations differ.
+    ///
+    /// Each parameter's row is carried by parameter id. A parameter new to `current`, or one that changed between a
+    /// number, a whole number, a checkbox and a list, starts unvaried at its default values. Each action is carried
+    /// by action id, and an action that `current` does not declare is removed. Every other setting is kept, and the
+    /// stat columns are unknown until a build of `current` samples them.
+    pub fn carry_to(&mut self, previous: &ModelSchema<'_>, current: &ModelSchema<'_>) {
+        let factors = current
+            .params
+            .iter()
+            .map(|descriptor| {
+                previous
+                    .params
+                    .iter()
+                    .zip(&self.factors)
+                    .find(|(held, _)| held.id() == descriptor.id())
+                    .filter(|(held, _)| discriminant(held.kind()) == discriminant(descriptor.kind()))
+                    .map_or_else(
+                        || FactorDraft {
+                            vary: false,
+                            levels_text: default_levels_text(descriptor.kind()),
+                        },
+                        |(_, factor)| factor.clone(),
+                    )
+            })
+            .collect();
+        self.factors = factors;
+        self.actions.retain_mut(|action| {
+            let index = previous
+                .actions
+                .get(action.action_index)
+                .and_then(|declared| current.actions.iter().position(|held| held.id() == declared.id()));
+            if let Some(index) = index {
+                action.action_index = index;
+            }
+            index.is_some()
+        });
+        current.id.clone_into(&mut self.model_id);
+        self.stat_columns = None;
+    }
 }
 
 /// Returns the output column `reducer` writes among the stat columns `columns`, as in `Velocity.magnitude:max` for a
@@ -1155,18 +1197,56 @@ mod tests {
 
     use super::levels::estimated_configs;
     use super::{
-        COLUMNS_PENDING, DesignTableDraft, DraftAlgorithm, DraftDesign, DraftIssue, DraftSite, ExploreMode, GridAxis,
-        INITIAL_SAMPLES_KEY, IssueKind, LevelCount, LevelPreview, MAX_DRAFT_LEVELS, NOT_FINITE_THRESHOLD, PlanCounts,
-        SPEC_TABLE_NAME, StopDraft, SweepDraft, TickSource, batch_estimate, comparator_words, generation_estimate,
-        parse_levels, written_name,
+        COLUMNS_PENDING, DesignTableDraft, DraftAlgorithm, DraftDesign, DraftIssue, DraftSite, ExploreMode,
+        FactorDraft, GridAxis, INITIAL_SAMPLES_KEY, IssueKind, LevelCount, LevelPreview, MAX_DRAFT_LEVELS,
+        NOT_FINITE_THRESHOLD, PlanCounts, SPEC_TABLE_NAME, StopDraft, SweepDraft, TickSource, batch_estimate,
+        comparator_words, generation_estimate, parse_levels, written_name,
     };
     use crate::state::default_values;
-    use crate::tests::support::sir;
+    use crate::tests::support::{edited_sir, sir};
     use crate::ui::sweep::parameters::{EditorSegment, segment_text};
 
     // Indices of SIR's parameters.
     const INFECTION_RATE: usize = 2;
     const RECOVERY_RATE: usize = 3;
+
+    /// A draft of SIR carried to an edit of its declarations keeps its settings, and the rows of the parameters and
+    /// actions the edit keeps, by id.
+    #[test]
+    fn a_draft_is_carried_to_other_declarations_by_id() {
+        let sir = sir();
+        let edited = edited_sir();
+        let mut draft = varied_draft(&sir, DraftDesign::EveryCombination);
+        let initial = sir.param_index("initial_infected_pct").expect("SIR declares it");
+        draft.factors[initial].vary = true;
+        draft.factors[initial].levels_text = "0.01, 0.02".to_owned();
+        let kept = draft.clone();
+
+        draft.carry_to(&sir.schema(), &edited.schema());
+        let factor = |id: &str| draft.factors[edited.param_index(id).expect("the edit declares it")].clone();
+        assert_eq!(draft.factors.len(), edited.param_descriptors().len());
+        assert_eq!(factor("infection_rate"), kept.factors[INFECTION_RATE]);
+        assert_eq!(factor("initial_infected_pct"), kept.factors[initial]);
+        assert_eq!(factor("vaccination_rate"), FactorDraft::default(), "a new parameter");
+        assert_eq!(draft.actions.len(), 1);
+        assert_eq!(
+            draft.actions[0].action_index, 1,
+            "the outbreak moved behind the new action"
+        );
+        assert_eq!(draft.actions[0].ticks_text, kept.actions[0].ticks_text);
+        assert_eq!(
+            (draft.replicates, draft.steps, &draft.stop, &draft.reducers),
+            (kept.replicates, kept.steps, &kept.stop, &kept.reducers)
+        );
+
+        draft.carry_to(&edited.schema(), &sir.schema());
+        assert!(draft.actions.len() == 1 && draft.actions[0].action_index == 0);
+        assert_eq!(
+            draft.factors[RECOVERY_RATE],
+            FactorDraft::default(),
+            "a parameter the edit removed starts unvaried"
+        );
+    }
 
     fn boids() -> ModelEntry {
         example_models().get("boids").cloned().expect("boids is registered")

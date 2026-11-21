@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use crate::HenadApp;
 use crate::init::wgpu_configuration;
 use crate::options::{AppError, AppOptions};
+use crate::state::AppState;
 
 /// Opens the app window and returns when it closes.
 ///
@@ -40,9 +41,60 @@ pub fn run_native(options: AppOptions) -> Result<(), AppError> {
     eframe::run_native(
         &name,
         native_options,
-        Box::new(|cc| Ok(Box::new(HenadApp::new(cc, options)))),
+        Box::new(|cc| {
+            // winit has installed its menu by the time eframe creates the app.
+            #[cfg(target_os = "macos")]
+            remove_menu_quit();
+            Ok(Box::new(HenadApp::new(cc, options)))
+        }),
     )
     .map_err(AppError::eframe)
+}
+
+/// Holds a close request of the window while [`AppState::hold_close`] holds.
+///
+/// A held request leaves the window open, and the unsaved changes dialog asks about the edits. egui requests the close
+/// on Cmd+Q, Ctrl+Q off macOS, through [`egui::Options::quit_shortcuts`].
+pub(crate) fn guard_close(ctx: &egui::Context, state: &mut AppState) {
+    if ctx.input(|input| input.viewport().close_requested()) && state.hold_close() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+    }
+}
+
+/// Removes the Quit item from the app menu that winit installs on macOS, with the separator before it.
+///
+/// The item terminates the app at once, past the unsaved changes dialog. Without the item, Cmd+Q reaches egui as a key
+/// press, and egui requests the close that [`guard_close`] holds. Logs a warning when the menu holds no Quit item.
+#[cfg(target_os = "macos")]
+fn remove_menu_quit() {
+    use objc2::{MainThreadMarker, sel};
+    use objc2_app_kit::NSApplication;
+
+    // `run_native` runs on the main thread, and a menu bar is missing only where winit installed none.
+    let Some(menu_bar) =
+        MainThreadMarker::new().and_then(|main_thread| NSApplication::sharedApplication(main_thread).mainMenu())
+    else {
+        return;
+    };
+    for menu in (0..menu_bar.numberOfItems()).filter_map(|index| menu_bar.itemAtIndex(index)?.submenu()) {
+        let quit = (0..menu.numberOfItems()).find(|&index| {
+            menu.itemAtIndex(index)
+                .is_some_and(|item| item.action() == Some(sel!(terminate:)))
+        });
+        let Some(quit) = quit else {
+            continue;
+        };
+        menu.removeItemAtIndex(quit);
+        // Otherwise the separator before the item ends the menu with a line.
+        if quit > 0
+            && quit == menu.numberOfItems()
+            && menu.itemAtIndex(quit - 1).is_some_and(|item| item.isSeparatorItem())
+        {
+            menu.removeItemAtIndex(quit - 1);
+        }
+        return;
+    }
+    log::warn!("the app menu holds no Quit item to remove");
 }
 
 /// Folder name for eframe's stored state when the product name is empty after [`storage_id`] cleans it.

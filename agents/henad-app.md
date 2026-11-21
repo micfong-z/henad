@@ -44,7 +44,9 @@ tab's `mod.rs` draws the tab and writes the stat series and final state, `image.
 viewport and `metadata.rs` builds the run details. Save stats (`history_csv`) and Record
 (`start_recording`, `Recording::start`) give the `StatsWriter` the tick length of `loaded_time`,
 which adds the `time` column `--export-stats` writes
-(`tests/time_axis.rs`, `the_export_tab_writes_the_time_of_a_timed_model`). `files/` holds the file
+(`tests/time_axis.rs`, `the_export_tab_writes_the_time_of_a_timed_model`). A `Recording` keeps
+the id of the model it recorded, and Save recording names the file after that id and `to_tick`,
+whatever is loaded then (`a_recording_is_named_after_the_run_it_recorded`). `files/` holds the file
 dialogs: `save.rs` hands
 bytes to a save dialog (several files go into one picked folder on native and download one by one in
 a browser), and `open.rs` reads picked files, or takes a picked folder on native. Each outcome
@@ -105,13 +107,26 @@ unless a model was edited since, when `Replacement::OpenFile` (an `OpenedFile`, 
 (`edits_made_while_a_file_dialog_is_open_ask_before_they_are_replaced`). A file dialog leaves the
 app's window usable on Windows and Linux. In a test build `save_as` records each save in
 `saves_requested`, and `finish_save` reports it (`src/tests/unsaved.rs`). On native a close request
-of the window waits the same way: `HenadApp::logic` sends `ViewportCommand::CancelClose` while
-`AppState::hold_close` holds, which asks through `replace_model(app, Replacement::CloseWindow)`.
-Discard changes, or a
-Save model that saved both models, runs `AppState::close_window`: `closing` set, which holds no
-later request, then `ViewportCommand::Close`. A browser tab has no close request to hold
-(`a_close_request_with_unsaved_edits_asks_and_saves_before_closing`,
-`a_close_request_closes_at_once_without_edits_and_after_discard_with_them`).
+of the window waits the same way: `HenadApp::logic` calls `native::guard_close`, which sends
+`ViewportCommand::CancelClose` while `AppState::hold_close` holds, which asks through
+`replace_model(app, Replacement::CloseWindow)`. Discard changes, or a Save model that saved both
+models, runs `AppState::close_window`: `closing` set, which holds no later request, then
+`ViewportCommand::Close` (`a_close_request_with_unsaved_edits_asks_and_saves_before_closing`,
+`a_close_request_closes_at_once_without_edits_and_after_discard_with_them`). egui's default
+`Options::quit_shortcuts` turns Cmd+Q, Ctrl+Q off macOS, into the same close request
+(`the_quit_shortcut_requests_a_close_that_unsaved_edits_hold`). On macOS winit's default menu binds
+Cmd+Q to a Quit item that sends `terminate:`, which ends the app at once, since winit's delegate
+has no `applicationShouldTerminate:`. `run_native`'s app creator therefore runs
+`remove_menu_quit` first, which removes the item whose action is `terminate:` and the separator
+before it through objc2-app-kit's safe calls (`objc2` and `objc2-app-kit` are macOS-only
+dependencies, versions already in the tree). Cmd+Q then reaches egui as a key press. No test can
+run it: it needs `NSApplication` on the main thread. Quit in the Dock, a logout and an Apple Event
+quit still send `terminate:` and end the app without the dialog. Vetoing them needs a declared
+Objective-C method, which `unsafe_code = "deny"` rules out. A browser tab cannot
+hold a close. `HenadApp::logic` mirrors whether `unsaved_names` is empty into `web.rs`'s
+`UNSAVED_EDITS` each frame, and the `beforeunload` listener `start_web` adds once the app started
+calls `preventDefault` and sets `returnValue` while it holds, so the browser asks before the page
+closes or reloads. Only the wasm32 typecheck compiles it, and no test runs it.
 `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer drawn over the grid layer,
 and `painted.rs` carries a paint callback's wgpu handles past `CallbackTrait`'s `Send + Sync`
 bound. `edge_layer.rs` (with `edges.wgsl`) draws a network's
@@ -131,8 +146,13 @@ code. `offered_models` hides a GPU model
 where the adapter has no compute, through `ModelSet::runnable`, and the app opens on the first
 offered model, or with none selected and `NO_MODEL_RUNS` in the Model panel. The Model panel's list
 (`model.rs`) shows each offered model's name, and its id in parentheses after the name when another
-offered model has the same name (`list_labels`), as an applied sheet starter has beside the example
-model it ports (`the_model_list_names_the_ids_of_models_that_share_a_name`). A missing id reads as
+offered model has the same name, letter case aside (`list_labels`, `label_among`), as an applied
+sheet starter has beside the example model it ports
+(`the_model_list_names_the_ids_of_models_that_share_a_name`). The Identity section's Exact replay
+row reads `ModelMetadata::replays_exactly` (`replay_cells`,
+`the_replay_row_marks_a_model_that_does_not_replay_exactly`). `model::model_label` returns that
+label for any id and name, and the Sweep tab's header, its Plan's Model row, a session's
+`model_name` (taken at its start) and the Results tab's summary line show it. A missing id reads as
 `lookup_message` words it, "This build does not include model 'x'" or "Model 'x' needs a GPU with
 compute support, unavailable on this device", with no full stop. `select_model` loads the defaults
 and clears the schedule, or, for the loaded model, restores `loaded_values` (its built values with
@@ -276,7 +296,17 @@ replay of the Editor's sheet preview while `build_replays_preview` holds), then 
 `SimCommand::RunTo` and sets `run_to_target`. Run (`run_refusal`) is disabled while another model
 is selected than the one loaded, unless Build replays the sheet's preview, which Run then drives
 (`run_to_tick_drives_the_sheet_preview`), while the sim plays, and for a tick behind the current one
-while Build is disabled.
+while Build is disabled. Behind a graph's preview with the selection it loaded under
+(`params_drive_preview`), its reason is `preview_hover`, which names Apply, since Build would build
+that selection (`run_to_tick_behind_a_graph_preview_names_apply`).
+`AppState::hold_for_modal`, which `HenadApp::logic` calls each frame with `ui::modal_shown`,
+whether egui's `top_modal_layer` (the last frame's) is set
+(`a_dialog_drawn_in_a_frame_holds_the_run_from_the_next`), pauses a run that plays or runs to a
+tick while a modal dialog is open and records it in `held_by_modal` (`HeldRun`), then plays or
+runs to the tick again once no dialog is open, asking for a repaint each frame while it holds a
+run, since a key that closes a dialog asks for no later frame. Play, Step, Pause, Run (`run_to`)
+and `clear_run` end the hold, so a sweep's start, which pauses the run, and a build leave the run
+as they set it. Sweeps are never held (`a_modal_dialog_holds_the_run_until_it_closes`).
 A playing loop runs ahead of the snapshot's tick, and a target between the two would pause past
 it. The progress line reads the target, Cancel sends `Pause`, and `AppState::receive_snapshot`
 (each frame's snapshot, through `poll_snapshot` from `HenadApp::logic`) clears the target once a
@@ -304,11 +334,14 @@ device." when none runs here, and brings the Model tab to the front.
 place of the set's entry with its id through `ModelSet::replace`, or appends it, so a runtime entry
 can shadow a built-in id. A replacement of the same code (`same_code`: an equal `ModelSource` and
 `schema_hash`) changes nothing else. For each other replaced id it carries a selected model whose
-`schema_hash` changed to the replacement by id: `param_values` through `remap_values` (a choice
-by its option's name, and a new parameter or a value the new descriptor rejects at its default), the
+`schema_hash` changed to the replacement by id: `param_values` through `remap_values` (a value
+at the previous default at the new default, as after an edit of a sheet's value, any other value
+carried, a choice by its option's name, and a new parameter or a value the new descriptor rejects
+at its default, which alone count in `defaulted`), the
 `pending_reload` marks, and the schedule through `remap_schedule`, which drops an entry whose
 action is gone. A selected model whose hash matches keeps everything. `SweepPanel::forget_model`
-drops the id's `ColumnsBuild`, its draft when the hash changed, and the last check, and
+drops the id's `ColumnsBuild` and the last check, carries its draft by id when the hash changed
+(`SweepDraft::carry_to`, `henad-app-sweep.md`), and
 `ResultsPanel::model_replaced` has the store recompute `schema_matches`, `changed_builds`,
 `replays_exactly` and `code_matches` against the replacement (`ResultsStore::model_changed`). A
 store of files (`RecordedSpec`) plans its recorded spec again against a replacement whose
@@ -339,7 +372,9 @@ the app.
 `install_works_for_every_model_type`, `a_loaded_run_past_tick_zero_asks_before_rebuilding`,
 `cancel_keeps_the_old_run_and_flags_the_code_change`, `an_install_during_a_run_to_asks_first`,
 `a_rebuild_the_new_code_refuses_leaves_the_old_run_alone` and
-`equal_sources_with_other_declarations_are_other_code`, the Sweep tab's test
+`equal_sources_with_other_declarations_are_other_code`,
+`a_value_at_the_previous_default_takes_the_new_default` and
+`a_sheet_value_changed_after_apply_runs_at_the_next_apply`, the Sweep tab's test
 `install_forgets_the_sweep_tab_columns_of_the_model`, and the store's
 `a_folder_store_compares_its_runs_with_a_replaced_entry`. Keep them.
 `export/metadata.rs` writes `loaded_values` as `params`, the loaded `seed` (null for the default),

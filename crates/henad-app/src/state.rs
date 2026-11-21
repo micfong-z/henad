@@ -124,6 +124,8 @@ pub struct AppState {
     pub pending_rebuild: Option<PendingRebuild>,
     /// Tick a pending [`SimCommand::RunTo`] stops at.
     pub run_to_target: Option<u64>,
+    /// Run that a modal dialog holds, to go on once the dialog closes, as [`Self::hold_for_modal`] sets it.
+    pub held_by_modal: Option<HeldRun>,
     pub run_to_input: u64,
     /// Tab brought to the front once the dock has drawn.
     pub focus_request: Option<Tab>,
@@ -216,6 +218,15 @@ pub struct AppState {
     pub closing: bool,
 }
 
+/// Run that a modal dialog holds, as the run was going when the dialog opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeldRun {
+    /// The run played.
+    Playing,
+    /// The run ran to this tick.
+    RunningTo(u64),
+}
+
 /// Draw style for an agent population in the viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PointRenderMode {
@@ -271,6 +282,7 @@ impl AppState {
             opened_run: None,
             pending_rebuild: None,
             run_to_target: None,
+            held_by_modal: None,
             run_to_input: 0,
             focus_request: None,
             layout: Layout::default(),
@@ -406,6 +418,7 @@ impl AppState {
     /// model is the loaded one only while [`Self::selection_is_loaded`] holds. A rebuild that Build refuses, as for a
     /// Seed field that holds no seed, leaves the run where it is.
     pub fn run_to(&mut self, tick: u64) {
+        self.held_by_modal = None;
         if tick < self.current_tick() {
             crate::ui::playback::press_build(self);
             // A build clears the snapshot. Otherwise the runner, still past the tick, would publish again at once, and
@@ -450,6 +463,7 @@ impl AppState {
 
     /// Plays the live simulation, and ends a run to a tick.
     pub fn play(&mut self) {
+        self.held_by_modal = None;
         if !self.has_simulation() {
             return;
         }
@@ -460,11 +474,45 @@ impl AppState {
 
     /// Steps the live simulation once, and ends a run to a tick.
     pub fn step_once(&mut self) {
+        self.held_by_modal = None;
         if !self.has_simulation() {
             return;
         }
         self.send_command(SimCommand::StepOnce);
         self.run_to_target = None;
+    }
+
+    /// Holds the live run while a modal dialog is open, and lets it go on once the dialog closes. `modal_open` is
+    /// whether a modal dialog showed in the last frame.
+    ///
+    /// A run that plays, or runs to a tick, pauses as a dialog opens, and plays or runs to its tick again once no
+    /// dialog is open. A press of Play, Step, Pause or Run, a build and a teardown in the meantime end the hold, and
+    /// the run then stays as they leave it. Frames keep coming while a run is held.
+    pub fn hold_for_modal(&mut self, modal_open: bool) {
+        if modal_open {
+            if self.held_by_modal.is_none() && self.has_simulation() {
+                let held = match self.run_to_target {
+                    Some(target) => Some(HeldRun::RunningTo(target)),
+                    None if self.sim_running => Some(HeldRun::Playing),
+                    None => None,
+                };
+                if let Some(held) = held {
+                    self.pause_simulation();
+                    self.held_by_modal = Some(held);
+                }
+            }
+            // The run goes on in the frame after the dialog closes. A key that closes it asks for no later frame.
+            if self.held_by_modal.is_some() {
+                self.egui_ctx.request_repaint();
+            }
+            return;
+        }
+        match self.held_by_modal.take() {
+            Some(HeldRun::Playing) => self.play(),
+            // A run that reached its tick before the pause has nothing left to run.
+            Some(HeldRun::RunningTo(target)) if target > self.current_tick() => self.run_to(target),
+            Some(HeldRun::RunningTo(_)) | None => {}
+        }
     }
 
     /// Returns whether a close request of the window waits. It waits while a model the Editor holds has unsaved edits,
@@ -487,8 +535,10 @@ impl AppState {
         self.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
-    /// Pauses the live simulation, a run to a tick included.
+    /// Pauses the live simulation, a run to a tick included. A run that a modal dialog holds stays paused once the
+    /// dialog closes.
     pub fn pause_simulation(&mut self) {
+        self.held_by_modal = None;
         if !self.has_simulation() {
             return;
         }
@@ -528,6 +578,7 @@ impl AppState {
         self.preview = None;
         self.pending_rebuild = None;
         self.run_to_target = None;
+        self.held_by_modal = None;
         // The next model may have no agents at all.
         if let Some(layer) = &mut self.agent_layer {
             layer.clear();
@@ -885,9 +936,10 @@ mod tests {
     use henad_core::params::ParamValue;
     use henad_explore::output::details::{ChoiceForm, params_by_id_json};
 
-    use super::{AppState, OpenAt};
-    use crate::tests::support::gpu_only_app;
+    use super::{AppState, HeldRun, OpenAt};
+    use crate::tests::support::{gpu_only_app, set_grid_side};
     use crate::ui::export::metadata::run_details;
+    use crate::ui::modal_shown;
 
     /// Picking the loaded model again restores its values. Otherwise the run details would record values the model
     /// was not built with.
@@ -948,6 +1000,86 @@ mod tests {
             "the live edit came back with the model"
         );
         assert_eq!(app.loaded_values[index], edited);
+    }
+
+    /// A modal dialog holds a playing run or a run to a tick, and the run goes on once the dialog closes. A pause or a
+    /// build while the dialog is open ends the hold.
+    #[test]
+    fn a_modal_dialog_holds_the_run_until_it_closes() {
+        let Some(mut app) = AppState::headless(henad_models::example_models(), false) else {
+            return;
+        };
+        app.select_model("sir");
+        set_grid_side(&mut app, 64);
+        app.reset_simulation();
+        app.wait_for_build();
+
+        app.play();
+        app.hold_for_modal(true);
+        assert!(!app.sim_running, "the dialog holds the run");
+        assert_eq!(app.held_by_modal, Some(HeldRun::Playing));
+        app.hold_for_modal(true);
+        assert_eq!(
+            app.held_by_modal,
+            Some(HeldRun::Playing),
+            "a second frame changes nothing"
+        );
+        app.hold_for_modal(false);
+        assert!(app.sim_running, "the run plays on");
+        assert_eq!(app.held_by_modal, None);
+
+        app.pause_simulation();
+        app.run_to(1_000_000);
+        app.hold_for_modal(true);
+        assert_eq!(app.run_to_target, None);
+        app.hold_for_modal(false);
+        assert_eq!(app.run_to_target, Some(1_000_000), "the run to the tick goes on");
+
+        app.hold_for_modal(true);
+        app.pause_simulation();
+        app.hold_for_modal(false);
+        assert!(!app.sim_running && app.run_to_target.is_none(), "Pause ends the hold");
+
+        app.play();
+        app.hold_for_modal(true);
+        app.reset_simulation();
+        app.hold_for_modal(false);
+        assert!(!app.sim_running, "a build ends the hold");
+
+        app.hold_for_modal(true);
+        app.hold_for_modal(false);
+        assert!(!app.sim_running, "a paused run stays paused");
+    }
+
+    /// A modal dialog drawn in one frame holds the run from the next frame, as `HenadApp::logic` reads it, and the run
+    /// goes on in the frame after the first frame that draws no dialog.
+    #[test]
+    fn a_dialog_drawn_in_a_frame_holds_the_run_from_the_next() {
+        let Some(mut app) = AppState::headless(henad_models::example_models(), false) else {
+            return;
+        };
+        app.select_model("sir");
+        set_grid_side(&mut app, 64);
+        app.reset_simulation();
+        app.wait_for_build();
+        app.play();
+        let ctx = egui::Context::default();
+        let frame = |app: &mut AppState, dialog: bool| {
+            app.hold_for_modal(modal_shown(&ctx));
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                if dialog {
+                    egui::Modal::new(egui::Id::new("henad_test_modal")).show(ui.ctx(), |ui| ui.label("A dialog"));
+                }
+            });
+            output.textures_delta.clear();
+        };
+
+        frame(&mut app, true);
+        assert!(app.sim_running, "the frame that draws the dialog");
+        frame(&mut app, false);
+        assert!(!app.sim_running, "the next frame holds the run");
+        frame(&mut app, false);
+        assert!(app.sim_running, "the run goes on once a frame drew no dialog");
     }
 
     #[test]

@@ -16,6 +16,12 @@ factor, since a spec cannot fix a parameter that any block varies. `from_spec` r
 shape and refuses other multi-block specs. `SweepDraft::check` collects every issue its pre-pass
 finds before it plans, each a `DraftIssue` with the `DraftSite` of its row and an `IssueKind`:
 `Missing` for input not given yet, `Invalid` for input the plan refuses. Both block Start.
+`SweepDraft::carry_to` carries a draft to a replacement of other declarations, which
+`SweepPanel::forget_model` calls on an install: each parameter's row by id (a new parameter, or
+one whose `ParamKind` variant changed, unvaried), each action by id (one the replacement lacks
+removed), every other setting kept and `stat_columns` unknown until the next `ColumnsBuild`. The
+check then names an output or a level the replacement rejects
+(`a_draft_is_carried_to_other_declarations_by_id`).
 `draft/mod.rs` holds the draft's types, `check.rs` the check and the placing of plan errors on
 rows, `spec.rs` the conversion to and from a spec, `levels.rs` the levels, previews and estimates,
 and `messages.rs` the wording of errors.

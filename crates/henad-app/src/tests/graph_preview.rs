@@ -23,7 +23,7 @@ use crate::tests::support::{
 use crate::ui::editor::graph::{GraphEdit, GraphEditor, GraphRequest};
 use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState, poll_at, preview_values};
 use crate::ui::editor::{ApplyOutcome, apply, new_graph_model, new_grid_rule};
-use crate::ui::playback::{PREVIEW_APPLY, PREVIEW_ORPHANED, preview_hover};
+use crate::ui::playback::{PREVIEW_APPLY, PREVIEW_ORPHANED, preview_hover, run_refusal};
 
 /// Returns an app over the example models on a headless device that runs compute shaders, with the SIR starter in the
 /// Editor, or `None` to skip on a machine without a device.
@@ -199,6 +199,30 @@ fn a_preview_that_outlived_its_graph_reports_to_the_fault_dialog() {
     assert!(app.fault.is_some(), "the fault reached nothing the Editor draws");
     assert_eq!(app.editor.preview.state, PreviewState::Idle);
     assert_eq!(app.preview(), None, "the faulted preview is offloaded");
+}
+
+/// Run to tick behind a paused graph preview names Apply, since Build would build the selected model in the preview's
+/// place. Once another model is selected, Run asks for Build, which builds that model.
+#[test]
+fn run_to_tick_behind_a_graph_preview_names_apply() {
+    let Some(mut app) = app_with_sir() else {
+        return;
+    };
+    settle_preview(&mut app);
+    app.wait_for_build();
+    app.pause_simulation();
+    let current = app.current_tick();
+    let refusal = app.build_refusal();
+    assert_eq!(
+        run_refusal(&app, refusal.as_deref(), current).as_deref(),
+        Some(PREVIEW_APPLY)
+    );
+
+    app.select_model("boids");
+    assert!(
+        run_refusal(&app, None, current).is_some_and(|reason| reason.starts_with("Selected model not loaded")),
+        "another selection builds at Build"
+    );
 }
 
 #[test]

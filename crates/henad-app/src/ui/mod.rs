@@ -53,6 +53,13 @@ pub(crate) fn plural(count: u64, noun: &str) -> String {
     }
 }
 
+/// Returns whether a modal dialog showed in the last frame of `ctx`.
+///
+/// egui records the top modal layer as a frame ends. A dialog drawn in a frame shows here from the next frame on.
+pub fn modal_shown(ctx: &egui::Context) -> bool {
+    ctx.memory(|memory| memory.top_modal_layer()).is_some()
+}
+
 const KV_GRID_SPACING: [f32; 2] = [16.0, 4.0];
 
 /// Width in points that a stripe of a [`KvGrid`] reaches past each side of the grid, as egui's own stripes do.

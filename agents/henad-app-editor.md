@@ -85,12 +85,16 @@ from a detached run or from rendering. Apply returns before `poll_build`'s frame
 only when the Editor claims a fault during the call, as it can for a browser's inline build. In a
 browser `catching_on` pushes no scopes, and the device reports a refused rule through the
 `FaultSink` a frame or more after the build. Without compute, Apply is disabled and the tab reads
-`NO_COMPUTE`. Apply builds no model that `build_refusal` refuses, such as one the device cannot hold
-at the next build's values, and reports the reason as `ApplyOutcome::Faulted`. `reset_simulation`,
-`open_run` and `open_setup` refuse the sizes too, since the engine's own assert would end a
-browser's page, and `reset_simulation` refuses a Seed field that holds no seed, which would build at
-the last valid seed (`an_apply_while_the_seed_is_no_integer_builds_nothing`). `src/tests/editor.rs`
-holds
+`NO_COMPUTE`. Apply builds no model that Build refuses (`build_refusal`: the sizes the device
+lacks at the next build's values, a Seed field that does not parse, values the setup rejects), and
+reports the reason as `ApplyOutcome::Faulted`. An outcome that would ask for a Rebuild or a Build
+that is disabled (`rebuild_refusal`, `build_refusal`) reads `Faulted` with the reason as well, the
+Rebuild model modal still open, and `settle_outcome` turns it `Applied` once the loaded model runs
+the applied source, as after Build with the seed fixed. A build fault of the applied code leaves
+nothing loaded (`an_apply_that_build_refuses_names_the_reason`). `reset_simulation`, `open_run` and
+`open_setup` refuse the sizes too, since the engine's own assert would end a browser's page, and
+`reset_simulation` refuses a Seed field that holds no seed, which would build at the last valid
+seed (`an_apply_while_the_seed_is_no_integer_builds_nothing`). `src/tests/editor.rs` holds
 `new_grid_rule_starts_from_the_life_starter`,
 `applying_an_edit_installs_and_rebuilds_from_tick_zero`,
 `an_edit_after_apply_drops_the_applied_line`,
