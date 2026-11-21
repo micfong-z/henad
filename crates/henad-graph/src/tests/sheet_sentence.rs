@@ -441,6 +441,15 @@ fn every_wording_table_entry_equals_the_final_words() {
             sentence::unit_mismatch("Infection rate", TimeUnit::Day, TimeUnit::Week),
         ),
         (
+            "Up to 5000000 ants can each leave 1 on one cell, 5000000 in all. A cell of To home adds up at most 65536 \
+             in a tick and starts again from 0 past it.",
+            sentence::add_up_limit_note(5_000_000, "ant", "1", "5000000", "To home", "65536"),
+        ),
+        (
+            "Each time round of line 1 steers from my Level at the start of the tick, and the steers add up.",
+            sentence::steer_in_repeat_note(1, "Level"),
+        ),
+        (
             "Infected neighbours is a count, not a rate. Did you mean a rate for each infected neighbour?",
             sentence::count_used_as_draw("Infected neighbours", DrawKind::Rate, "infected neighbour"),
         ),
@@ -556,6 +565,17 @@ fn every_wording_table_entry_equals_the_final_words() {
              one applies, the line nearest the top of the card wins. Between lines in one Repeat, the first time round \
              that one applies decides.",
             sentence::otherwise_notice("Line 6", &[2, 3], "Status", Some("S"), "agent", OtherwiseRepeat::Higher),
+        ),
+        (
+            "Line 3 also changes Position. When both apply, line 3 wins. An ant stays where it is when the cell of \
+             line 3 is not open.",
+            sentence::move_to_otherwise_tooltip(&[3], "Position", "ant"),
+        ),
+        (
+            "Line 6 now starts with otherwise. Lines 3 and 4 also change Position. When more than one applies, the \
+             line nearest the top of the card wins. An ant stays where it is when the cell of the line that wins is \
+             not open.",
+            sentence::move_to_otherwise_notice("Line 6", &[3, 4], "Position", "ant"),
         ),
         // Rates and chances.
         (
@@ -887,6 +907,10 @@ fn every_wording_table_entry_equals_the_final_words() {
 }
 
 /// Returns the entries of the rate and chance notes, each template called with the table's example numbers.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one entry per row of the wording table reads best as one table"
+)]
 fn rate_note_entries() -> Vec<(&'static str, String)> {
     let susceptible = sentence::become_subject("cell", Some("Susceptible"), Some("Infected"));
     vec![
@@ -977,6 +1001,19 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
             "On average a cell stays Infected 10.5 days at this tick length. It approaches 1/0.1 = 10 days as the \
              tick shrinks.",
             sentence::mean_stay_note("Infected", "10.5 days", "0.1", "10 days", "cell"),
+        ),
+        (
+            "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. The rate is converted to a \
+             chance by 1 − e^(−0.1 × 1 day). This chance holds only when line 3 does not apply.",
+            sentence::otherwise_rate_note(
+                &sentence::rate_note(
+                    "1 day",
+                    &sentence::become_subject("cell", Some("Infected"), Some("Recovered")),
+                    "0.0952",
+                    "0.1",
+                ),
+                &[3],
+            ),
         ),
     ]
 }

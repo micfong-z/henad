@@ -267,6 +267,36 @@ fn a_ground_property_that_adds_up_lowers_to_a_sum_and_runs() {
     henad_compute::gpu::stepping::run_steps(&mut *state, &ctx, 100).expect("100 ticks run");
 }
 
+/// A Leave of a fixed amount on a ground property that adds up its marks warns at its line when the most agents of the
+/// kind, all on one cell, can leave more than a cell adds up in a tick, and not when they cannot. A worked-out amount
+/// has no bound to warn about.
+#[test]
+fn a_fixed_mark_that_can_pass_what_a_cell_adds_up_warns_at_its_line() {
+    let adding = sheet_text("ants.toml").replace("marks = \"largest\"", "marks = \"add_up\"");
+    let text = edited(
+        &adding,
+        "[card.line.l3.amount]\nkind = \"calculate\"\nformula = \"trail_falloff * l2.amount + my.reward_held\"\n",
+        "",
+    );
+    let text = edited(
+        &text,
+        "ground_property = \"to_home\"\n",
+        "ground_property = \"to_home\"\namount = 1\n",
+    );
+    let file = lowered(&text);
+    let warnings: Vec<_> = file.warnings().iter().collect();
+    assert_eq!(warnings.len(), 1, "{warnings:#?}");
+    assert_eq!(
+        warnings[0].message,
+        "Up to 5000000 ants can each leave 1 on one cell, 5000000 in all. A cell of To home adds up at most 65536 in a \
+         tick and starts again from 0 past it."
+    );
+    assert!(placed_at(warnings[0], &text).starts_with("[card.line.l3]"));
+    let few = edited(&text, "max_count = 5000000", "max_count = 60000");
+    assert!(lowered(&few).warnings().is_empty());
+    assert!(lowered(&adding).warnings().is_empty());
+}
+
 /// Ants with a Repeat of 2 holding a Become: the Become's condition is an `or` accumulator of the Repeat, and the
 /// change reads its total. A Set inside the Repeat whose value reads a line inside it is refused.
 #[test]
@@ -566,9 +596,29 @@ fn positions_after_one_tick(text: &str) -> Vec<[f32; 2]> {
 
 /// The first Move to whose condition holds decides. Ants with no heading at the first tick find the cell ahead not
 /// open, so the higher Move to keeps every ant on the nest, and a lower Move to a random open cell around moves none
-/// of them. Without the higher line, every ant moves.
+/// of them. Without the higher line, every ant moves. The lower line reads "otherwise", and two Move by lines, which
+/// add up, do not.
 #[test]
 fn the_first_move_to_whose_condition_holds_decides() {
+    let document = crate::sheet::ParsedSheet::parse(MOVE_TO_FIRST)
+        .expect("the sheet reads")
+        .into_document();
+    let relations = crate::sheet::relations::CardRelations::new(&document, &document.cards[0]);
+    assert_eq!(relations.otherwise_of("l4"), ["l3"]);
+    assert_eq!(
+        crate::sheet::sentence::Sentences::new(&document).line("l4", &relations.otherwise_numbers("l4")),
+        "otherwise (when line 3 does not apply) move to Somewhere, always"
+    );
+    let boids = crate::sheet::ParsedSheet::parse(&boids_with(
+        "[card.line.l9]\nkind = \"move\"\nmode = \"by\"\nvalue = { my = \"velocity\" }",
+    ))
+    .expect("the sheet reads")
+    .into_document();
+    assert!(
+        crate::sheet::relations::CardRelations::new(&boids, &boids.cards[0])
+            .otherwise_of("l9")
+            .is_empty()
+    );
     assert!(
         positions_after_one_tick(MOVE_TO_FIRST)
             .iter()

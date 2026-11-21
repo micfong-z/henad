@@ -59,7 +59,9 @@ grid and is 0 below about 3e-8, and draws by `rng.threshold` and `rand.below` at
 and every chance line keeps `rand.chance`, resolved to 2^-24. A "for each" over a grid count
 (`count_bound`) with a rate the same for every element is `1 - powi(e^(-h), n)` with `max_exponent`
 8, 4 or 9. Any other count, agents included, is `1 - select(n <= 0, 1, exp(-h * n))` in `f32`, P's
-guard, since `exp(0)` is not exactly 1 on every device. A competing group is
+guard, since `exp(0)` is not exactly 1 on every device. A rate that differs per element with no "for
+each" takes the same guard, `1 - select(h <= 0, 1, exp(-h))`
+(`a_rate_worked_out_per_cell_with_no_count_keeps_a_cell_with_no_hazard`). A competing group is
 `CardRelations::competing_groups` less its skipped lines, two or more left (`CardLowering::groups`,
 set before the lines lower). Each Become of a group lowers at its turn through `group_line`: its
 condition with the rate read as yes (`gate`, the rate found as the condition or in an all of, and
@@ -70,7 +72,12 @@ writes at the highest line's rate site the running sums of the hazards,
 `t = 1 - select(S <= 0, 1, e^(-S * tick_length))` (the guard of a rate for each, so a cell with no
 exposure never leaves), `max(S, 1e-30)` and one `rand.float` up to 1 keyed by the highest line, and
 at each line's rate site its threshold, `t * sum_j / max(S, 1e-30)` and `t` for the last line,
-`cmp.lt(u, threshold)` joined with its gate, which replaces the placeholder. The transition takes
+`cmp.lt(u, threshold)` joined with its gate, which replaces the placeholder. A uniform group
+(`GroupLine::uniform` on every line: a rate `is_uniform`, no "for each" and a gate of constant yes)
+takes `t` from `exact_chance_of`, each threshold through `rng.threshold`, and one `rand.bits` keyed
+as the `rand.float` was, so the host computes every threshold and a share of a hazard as small as
+1e-8 per tick keeps its value
+(`a_competing_group_of_small_rates_keeps_each_share_in_its_threshold`). The transition takes
 the first row that holds, so each line takes its share whatever the row order, and a line between
 the group's lines keeps its "otherwise" as the card shows it. The other lines' keys stay unused
 while they are grouped. A line inside a Repeat joins no group (`CardRelations::group_key`) and draws
@@ -146,7 +153,12 @@ input `v1`, `v2` in first-use order (`vec2f` for an arrow, `f32` otherwise) reso
 formula over my properties and the parameters), the formula's type an arrow when an arrow meets it,
 numbers written by `f32`'s `Debug` (always a point or an exponent, so the expression reads `f32`,
 and a number past `f32` an error), `^` as `pow`, `smaller` and `larger` as `min` and `max`, `length`
-as `length`, `direction` as `(v / max(length(v), 0.000001))`, and either an error on a number.
+as `length`, `direction` as `(v / max(length(v), 0.000001))`, and either an error on a number. A
+`/` whose divisor is not a number other than 0 binds the divisor to an output `d<k>` written before
+`out` (and an arrow numerator over an arrow to `n<k>`) and is `if(d == 0.0, 0.0, l / if(d == 0.0,
+1.0, d))`, per component for an arrow over an arrow, so a division by 0 gives 0 and the expression
+never divides by 0 (`a_division_by_0_gives_0` in `sheet_values.rs`,
+`an_arrow_divided_by_a_value_that_can_be_0_lowers_and_compiles` in `sheet_agents.rs`).
 Choose: a `logic.select` chain from the last row up over the `otherwise` value, a row whose
 condition is the constant yes ending the chain and a constant no left out, its paths
 `row.<index>.value`, `row.<index>.condition`, `row.<index>` for the row's select, and `otherwise`.

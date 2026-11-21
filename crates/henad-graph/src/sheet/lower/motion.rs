@@ -2,18 +2,20 @@
 //!
 //! The Steers of a property add up onto its value at the start of the tick, each a term of the value times the
 //! strength, or for "towards" the difference from my value times the strength. A Steer towards a part of a Look around
-//! that found no one adds nothing. A Keep between holds the value inside its limits after the property's Sets, above or
-//! below it, and the Steers above it: a number through a clamp, and an arrow through the clamp of its length, an arrow
-//! of length 0 turning into one of the lower length along the x axis. The Move by lines add up, and the position moves
-//! by their sum and wraps at the world's edges. Heading holds the last move that was not 0, and none before the first.
-//! "my new X" is the value before its write. A random direction is an arrow of the given length at an angle drawn
-//! between 0 and 2 pi.
+//! that found no one adds nothing, and so does a Steer towards a value that Calculate lines work out from such a part.
+//! A Keep between holds the value inside its limits after the property's Sets, above or below it, and the Steers above
+//! it: a number through a clamp, and an arrow through the clamp of its length, an arrow of length 0 turning into one of
+//! the lower length along the x axis. The Move by lines add up, and the position moves by their sum and wraps at the
+//! world's edges. Heading holds the last move that was not 0, and none before the first. "my new X" is the value before
+//! its write. A random direction is an arrow of the given length at an angle drawn between 0 and 2 pi.
 
-use super::Site;
+use std::collections::HashSet;
+
 use super::card::{CardLowering, Change, ChangeKind};
 use super::look::guard_by_count;
 use super::value::{Operand, number, output};
-use crate::sheet::document::{LineMode, SheetChip, SheetLine, SheetProperty, SheetValue};
+use super::{Site, visit_chips};
+use crate::sheet::document::{LineKind, LineMode, SheetChip, SheetLine, SheetProperty, SheetValue};
 use crate::types::ValueType;
 use crate::value::Literal;
 
@@ -73,9 +75,11 @@ impl<'a> CardLowering<'_, 'a> {
             value
         };
         let mut term = self.scaled(site, &pushed, &strength, &value_type)?;
-        if towards && let Some(count) = self.empty_count(line.value.value()) {
+        if towards {
             // A Steer towards a value of no one adds nothing.
-            term = guard_by_count(self.builder, site, &count, &term, &value_type)?;
+            for count in self.empty_counts(line.value.value()) {
+                term = guard_by_count(self.builder, site, &count, &term, &value_type)?;
+            }
         }
         let condition = self.change_condition(site, id, line)?;
         self.fires_when(id, &condition);
@@ -93,17 +97,55 @@ impl<'a> CardLowering<'_, 'a> {
         )
     }
 
-    /// Returns the count of the Look around part that `value` reads, when that part is empty for no one.
-    fn empty_count(&self, value: Option<&SheetValue>) -> Option<Operand> {
-        let SheetValue::Chip(SheetChip::Result {
-            line,
-            part: Some(part),
-            property: None,
-        }) = value?
-        else {
-            return None;
+    /// Returns the count of each Look around whose part `value` reads when that part is empty for no one, directly or
+    /// through the Calculate lines whose results it reads at any depth. Each look's count comes once, in the order
+    /// first read.
+    ///
+    /// A formula reads every value it names, so a value worked out from an empty part is empty too. A Choose or a
+    /// Depending on gives one of its values, and its rows can test the look's count themselves.
+    fn empty_counts(&self, value: Option<&'a SheetValue>) -> Vec<Operand> {
+        let mut looks: Vec<String> = Vec::new();
+        let mut counts = Vec::new();
+        let mut visited: HashSet<&str> = HashSet::new();
+        let mut note = |chip: &SheetChip, lines: &mut Vec<&'a SheetLine>| {
+            let SheetChip::Result {
+                line,
+                part,
+                property: None,
+            } = chip
+            else {
+                return;
+            };
+            match part {
+                Some(part) => {
+                    if let Some(count) = self.empty.get(&(line.as_str(), part.as_str()))
+                        && !looks.contains(line)
+                    {
+                        looks.push(line.clone());
+                        counts.push(count.clone());
+                    }
+                }
+                None => {
+                    if let Some((id, read)) = self.card.line_tables.get_key_value(line.as_str())
+                        && read.kind == LineKind::Calculate
+                        && visited.insert(id.as_str())
+                    {
+                        lines.push(read);
+                    }
+                }
+            }
         };
-        self.empty.get(&(line.as_str(), part.as_str())).cloned()
+        let mut lines = Vec::new();
+        match value {
+            Some(SheetValue::Chip(chip)) => note(chip, &mut lines),
+            Some(SheetValue::Phrase(phrase)) if phrase.kind == LineKind::Calculate => lines.push(phrase),
+            _ => {}
+        }
+        let document = self.builder.document;
+        while let Some(line) = lines.pop() {
+            visit_chips(document, line, &mut |chip| note(chip, &mut lines));
+        }
+        counts
     }
 
     /// Lowers the Keep between line `id`, a change that holds its property inside the line's limits.

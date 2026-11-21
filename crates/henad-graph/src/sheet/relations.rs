@@ -23,13 +23,13 @@
 use std::collections::HashMap;
 
 use super::document::{
-    Around, CompareTest, LineKind, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine, SheetProperty,
-    SheetValue, Slot, SummaryKind,
+    Around, CompareTest, LineKind, LineMode, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine,
+    SheetProperty, SheetValue, Slot, SummaryKind,
 };
 use super::edit::automatic_name;
 use super::sentence::{
-    ANY_STATE_ID, NOTHING_INSIDE, Sentences, coverage_note, gap_note, only_one_inside_note, only_when_note, order_note,
-    when_repeats_note, worked_out_everywhere_note,
+    ANY_STATE_ID, BLANK_TEXT, NOTHING_INSIDE, Sentences, coverage_note, gap_note, only_one_inside_note, only_when_note,
+    order_note, steer_in_repeat_note, when_repeats_note, worked_out_everywhere_note,
 };
 
 /// Allowance of the comparisons of the "otherwise" rule, so that two tests of one listed number agree on it.
@@ -440,6 +440,9 @@ pub enum RelationNoteKind {
     Inside,
     /// A When that holds no line.
     NothingInside,
+    /// A Steer towards a value inside a Repeat. Each time round steers from the value at the start of the tick, and
+    /// the steers add up.
+    SteerInRepeat,
 }
 
 impl<'a> CardRelations<'a> {
@@ -749,6 +752,21 @@ impl<'a> CardRelations<'a> {
                     kind: RelationNoteKind::NothingInside,
                 });
             }
+            if line.kind == LineKind::Steer
+                && line.mode == Some(LineMode::Towards)
+                && let Some(number) = self.repeat_of(id).and_then(|repeat| self.number(repeat))
+            {
+                let property = line
+                    .property
+                    .as_deref()
+                    .and_then(|property| self.property(property))
+                    .map_or(BLANK_TEXT, |property| property.name.as_str());
+                notes.push(RelationNote {
+                    line: id.to_owned(),
+                    text: steer_in_repeat_note(number, property),
+                    kind: RelationNoteKind::SteerInRepeat,
+                });
+            }
         }
         notes
     }
@@ -884,11 +902,14 @@ pub(super) fn most_counted(count: &SheetLine) -> Option<u32> {
 /// Returns what a change line changes, as its kind and property, `None` for a line that is no change or that cannot
 /// collide.
 ///
-/// A Become collides only when it names the state it changes from, `any_state` included.
+/// A Become collides only when it names the state it changes from, `any_state` included. A Move to collides with every
+/// other Move to, since the first whose condition holds decides where the agent goes. Move by lines add up and never
+/// collide.
 fn change_key(line: &SheetLine) -> Option<(LineKind, &str)> {
     match line.kind {
         LineKind::Become if line.start_state.is_some() => Some((line.kind, line.property.as_deref()?)),
         LineKind::Set => Some((line.kind, line.property.as_deref()?)),
+        LineKind::Move if line.mode == Some(LineMode::To) => Some((line.kind, "")),
         _ => None,
     }
 }

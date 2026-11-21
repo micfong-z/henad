@@ -175,6 +175,33 @@ fn rate_alone(relations: &CardRelations<'_>, line_id: &str, line: &SheetLine) ->
         && matches!(line.condition.value(), Some(SheetValue::Phrase(phrase)) if phrase.kind == LineKind::Rate)
 }
 
+/// Returns whether a Become of the card other than the lines `lines` takes the property of `line` out of the state
+/// that `line` leaves, from that state or from any state.
+///
+/// A mean stay holds only where no such line does. Otherwise the cells that it takes out leave sooner.
+fn leaves_by_another_line(relations: &CardRelations<'_>, lines: &[&str], line: &SheetLine) -> bool {
+    relations.card().line_tables.iter().any(|(id, other)| {
+        !lines.contains(&id.as_str())
+            && other.kind == LineKind::Become
+            && other.property.is_some()
+            && other.property == line.property
+            && other
+                .start_state
+                .as_deref()
+                .is_some_and(|state| state == ANY_STATE_ID || Some(state) == line.start_state.as_deref())
+    })
+}
+
+/// Returns `note` with the words that its chance holds only where the higher lines of `line_id` do not apply, when
+/// the line reads "otherwise".
+fn with_otherwise(relations: &CardRelations<'_>, line_id: &str, mut note: RateNote) -> RateNote {
+    let higher = relations.otherwise_numbers(line_id);
+    if !higher.is_empty() {
+        note.text = sentence::otherwise_rate_note(&note.text, &higher);
+    }
+    note
+}
+
 /// Returns the number a value stands for when it is a typed number or a parameter, read from `values`.
 fn fixed_number(value: Option<&SheetValue>, values: &BTreeMap<String, f64>) -> Option<f64> {
     match value? {
@@ -342,7 +369,7 @@ pub fn rate_note(document: &SheetDocument, line_id: &str, values: &BTreeMap<Stri
         .find(|group| group.contains(&line_id))
     {
         return if group.first() == Some(&line_id) {
-            group_note(document, &relations, time, &group, values)
+            group_note(document, &relations, time, &group, values).map(|note| with_otherwise(&relations, line_id, note))
         } else {
             None
         };
@@ -366,8 +393,12 @@ pub fn rate_note(document: &SheetDocument, line_id: &str, values: &BTreeMap<Stri
         let (text, mean_stay) = match &count {
             None => {
                 let text = sentence::rate_note(&tick, &subject, &at(rate, 1.0), &rate_words);
-                let stay = old_state(document, line)
-                    .filter(|_| line.kind == LineKind::Become && rate > 0.0 && rate_alone(&relations, line_id, line));
+                let stay = old_state(document, line).filter(|_| {
+                    line.kind == LineKind::Become
+                        && rate > 0.0
+                        && rate_alone(&relations, line_id, line)
+                        && !leaves_by_another_line(&relations, &[line_id], line)
+                });
                 let stay = stay.map(|state| {
                     sentence::mean_stay_note(
                         &state,
@@ -384,11 +415,15 @@ pub fn rate_note(document: &SheetDocument, line_id: &str, values: &BTreeMap<Stri
                 None,
             ),
         };
-        return Some(RateNote {
-            text,
-            mean_stay,
-            long_tick,
-        });
+        return Some(with_otherwise(
+            &relations,
+            line_id,
+            RateNote {
+                text,
+                mean_stay,
+                long_tick,
+            },
+        ));
     }
     let calculated = calculation(document, phrase.rate.value());
     let rate_words = calculated.map_or_else(
@@ -412,11 +447,15 @@ pub fn rate_note(document: &SheetDocument, line_id: &str, values: &BTreeMap<Stri
         }
         None => sentence::growing_rate_note(&tick, &subject, &rate_words, count.as_deref()),
     };
-    Some(RateNote {
-        text,
-        mean_stay: None,
-        long_tick,
-    })
+    Some(with_otherwise(
+        &relations,
+        line_id,
+        RateNote {
+            text,
+            mean_stay: None,
+            long_tick,
+        },
+    ))
 }
 
 /// Returns the chance phrase of `line`: the line itself or its condition.
@@ -549,7 +588,7 @@ fn group_note(
         &rate_refs,
         &thing,
     );
-    let mean_stay = (total > 0.0).then(|| {
+    let mean_stay = (total > 0.0 && !leaves_by_another_line(relations, group, first)).then(|| {
         sentence::mean_stay_note(
             &state,
             &time_words(mean_stay(total, dt), unit),

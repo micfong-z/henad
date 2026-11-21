@@ -161,8 +161,8 @@ fn the_competing_thresholds_are_the_known_shares() {
         .collect();
     assert_eq!(
         draws,
-        ["rand.chance", "rand.float"],
-        "line 2 draws a chance, the group one number"
+        ["rand.chance", "rand.bits"],
+        "line 2 draws a chance, the group one word of 32 bits"
     );
     let params = [
         ParamValue::F32(7.0),
@@ -172,13 +172,38 @@ fn the_competing_thresholds_are_the_known_shares() {
         ParamValue::F32(0.01),
     ];
     let values = tick_uniforms(&file, &params);
-    let t4 = (1.0 - (-0.7f64).exp()) as f32;
+    let t4 = 1.0 - (-0.7f64).exp();
     for threshold in [t4, t4 / 2.0] {
+        assert!(
+            values.iter().any(|value| holds_threshold(*value, threshold)),
+            "{values:?} holds no threshold of {threshold}"
+        );
+    }
+}
+
+#[test]
+fn a_competing_group_of_small_rates_keeps_each_share_in_its_threshold() {
+    // Two rates of 2e-8 per day: 1 - e^(-4e-8) in f32 is 2^-24, and half of it is below one step of a float draw.
+    let file = lowered(sheet_text("sird.toml"));
+    let params = [
+        ParamValue::F32(1.0),
+        ParamValue::F32(0.3),
+        ParamValue::F32(2e-8),
+        ParamValue::F32(2e-8),
+        ParamValue::F32(0.01),
+    ];
+    assert_eq!(
+        1.0 - (-4e-8f32).exp(),
+        2f32.powi(-24),
+        "the direct form rounds the chance"
+    );
+    let values = tick_uniforms(&file, &params);
+    for threshold in [4e-8, 2e-8] {
         assert!(
             values
                 .iter()
-                .any(|value| (value - threshold).abs() <= 2.0 * f32::EPSILON),
-            "{values:?} holds no {threshold}"
+                .any(|value| (f64::from(value.to_bits()) - threshold * 4_294_967_295.0).abs() <= 2.0),
+            "{values:?} holds no threshold of {threshold}"
         );
     }
 }
@@ -507,6 +532,29 @@ fn every_form_of_rate_lowers_checks_and_compiles() {
 }
 
 #[test]
+fn a_rate_worked_out_per_cell_with_no_count_keeps_a_cell_with_no_hazard() {
+    // Line 2's rate is the count of infected neighbours, which differs per cell, and it has no "for each".
+    let text = edited_once(
+        sheet_text("sir.toml"),
+        "rate = { param = \"infection_rate\" }\nrate_unit = \"day\"\ntries = { result = \"l1\" }\n",
+        "rate = { result = \"l1\" }\nrate_unit = \"day\"\n",
+    );
+    let file = lowered(&text);
+    let ops: Vec<&str> = file
+        .lowered()
+        .document()
+        .passes
+        .iter()
+        .flat_map(|pass| &pass.body.nodes)
+        .filter(|node| file.line_map().line_of(node.id) == Some("l2"))
+        .map(|node| node.op.as_str())
+        .collect();
+    // The chance is 1 - select(h <= 0, 1, e^(-h)), since e^0 is not exactly 1 on every device.
+    assert!(ops.contains(&"cmp.le") && ops.contains(&"logic.select"), "{ops:?}");
+    assert!(GridProgram::compile(file.lowered()).is_ok(), "{text}");
+}
+
+#[test]
 fn a_rate_in_an_any_of_keeps_otherwise_and_draws_alone() {
     let sird = sheet_text("sird.toml");
     let text = edited_once(
@@ -672,6 +720,58 @@ fn a_rate_with_more_to_its_condition_has_no_mean_stay() {
     let when_note = note(&inside_when, "l3").expect("line 3 has a note");
     assert_eq!(when_note.text, recovery.text);
     assert_eq!(when_note.mean_stay, None);
+}
+
+#[test]
+fn a_rate_beside_another_exit_from_its_state_has_no_mean_stay() {
+    let sir = sheet_text("sir.toml");
+    let recovery = note(sir, "l3").expect("line 3 has a note");
+    // A chance of going back to Susceptible from Infected, as line 3 above or below the recovery line.
+    let with_chance = |lines: &str| {
+        let text = edited_once(sir, "next_line = 5", "next_line = 6");
+        let text = edited_once(&text, "lines = [\"l1\", \"l2\", \"l3\"]", lines);
+        edited_once(
+            &text,
+            "# Become Recovered from Infected",
+            "[card.line.l5]\nkind = \"become\"\nkey = 5\nproperty = \"health\"\nnew_state = \"susceptible\"\n\
+             start_state = \"infected\"\n\n[card.line.l5.condition]\nkind = \"chance\"\nchance = 0.5\n\n\
+             # Become Recovered from Infected",
+        )
+    };
+    let above = with_chance("lines = [\"l1\", \"l2\", \"l5\", \"l3\"]");
+    let document = read(&above);
+    assert_eq!(
+        CardRelations::new(&document, &document.cards[0]).otherwise_of("l3"),
+        ["l5"]
+    );
+    let below_otherwise = note(&above, "l3").expect("line 4 has a note");
+    assert_eq!(below_otherwise.mean_stay, None);
+    assert_eq!(
+        below_otherwise.text,
+        format!("{} This chance holds only when line 3 does not apply.", recovery.text)
+    );
+    let below = with_chance("lines = [\"l1\", \"l2\", \"l3\", \"l5\"]");
+    let first = note(&below, "l3").expect("line 3 has a note");
+    assert_eq!(first.text, recovery.text);
+    assert_eq!(first.mean_stay, None);
+    // A competing group beside a chance from its state keeps its shares and loses its mean stay.
+    let sird = sheet_text("sird.toml");
+    let group = note(sird, "l3").expect("the group has a note");
+    let text = edited_once(sird, "next_line = 6", "next_line = 7");
+    let text = edited_once(
+        &text,
+        "lines = [\"l1\", \"l2\", \"l3\", \"l4\"]",
+        "lines = [\"l1\", \"l2\", \"l3\", \"l4\", \"l6\"]",
+    );
+    let text = edited_once(
+        &text,
+        "# Lines of New outbreak",
+        "[card.line.l6]\nkind = \"become\"\nkey = 6\nproperty = \"health\"\nnew_state = \"susceptible\"\n\
+         start_state = \"infected\"\n\n[card.line.l6.condition]\nkind = \"chance\"\nchance = 0.5\n\n# Lines of New outbreak",
+    );
+    let beside = note(&text, "l3").expect("the group has a note");
+    assert_eq!(beside.text, group.text);
+    assert_eq!(beside.mean_stay, None);
 }
 
 #[test]

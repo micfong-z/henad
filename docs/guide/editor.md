@@ -110,6 +110,7 @@ The add buttons under the lines add a line at the end of the card, each from a m
 - **+ Chance** adds a change made by chance or at a rate, or a yes or no result drawn that way that several lines can share.
 - **+ Yes or no** compares two values, or joins yes or no results with all of or any of.
 - **+ Calculate** works out a number from two numbers.
+  A division by 0 gives 0.
 - **+ Change** adds a Become, which changes a state, or a Set, which changes a number.
 - **+ When, for several lines** adds a When line, whose condition the lines inside it share.
 
@@ -186,6 +187,8 @@ A grey note under a rate line states the chance per tick it gives with the param
 
 The note reads the values the world tries while a run of the sheet is loaded, and the values the sheet keeps otherwise.
 Hover over it to read how long a cell stays in its state on average at this tick length.
+The average stay is left out when another line can also take the cell out of that state.
+Under an "otherwise" line the note ends with the higher lines whose turn comes first, such as "This chance holds only when line 3 does not apply."
 A rate for each infected neighbour gives the chances for 1 and 2 of them, and adds a second note when the chance at the largest count passes one half, such as "Up to 0.909 with 8.", or "Almost 1 with 8." when it rounds to 1, since a shorter tick then follows the rate more closely.
 Other notes ask about a rate that looks wrong:
 
@@ -234,8 +237,11 @@ A world of agents runs a card over its kind of agent, such as "Each tick, every 
 - **+ Chance** adds a change made by chance, a yes or no drawn by chance, a random number between two values, or a random direction of a length.
 - **+ Calculate** works out a number, chooses the first of several values whose condition holds, or gives one value for each state of a property.
 - **+ Change** adds a Become, a Set, a Steer of a number or an arrow by a value or towards it, a Keep between that holds a number or an arrow's length inside two bounds, a Move by an arrow or to a cell, a Leave that marks the ground, and a Record that counts an event.
+  A ground property whose marks add up takes at most 65536 on one cell in a tick, and a Leave of a fixed amount that the most agents on one cell can take past that shows a warning under its line.
 - **+ Repeat...** adds a Repeat line, whose lines run that many times each tick.
   Its number of times takes an integer parameter, and **New parameter...** there makes one.
+  Each time round reads the world as it was at the start of the tick, and the moves and steers inside it add up.
+  "Steer Level towards 10, strength 0.5" repeated 4 times from 0 adds 4 × 0.5 × 10 = 20, and a note under the Steer says that its steers add up.
   Each time, the changes of one property inside it are tried from the top, and the first time a change applies decides.
   With "Become A from S, with chance 0.1" above "otherwise become B from S, with chance 0.5", repeated 4 times, 0.174 of the agents in S become A and 0.785 become B.
 
@@ -244,12 +250,17 @@ The select before each summary changes it to a total, the largest, the smallest 
 A summary names itself after what it sums up, such as "average velocity" for the average of their Velocity, "centre" for the average offset to them and "push" for the total offset away from them.
 A summary's picker lists each agent's properties as "their Velocity" and the relations "offset to them", "offset away from them" and "distance to them".
 The line menu's **Include me in line 1** counts the agent itself among those it looks at, and **Exclude me from line 1** undoes it.
+An average, a largest and a smallest of no one are 0, so "smallest of distance to them" is 0 for an agent with no one around.
+A Steer towards a value that reads such a summary adds nothing while the look finds no one, whether it reads the summary itself or a Calculate worked out from it.
+To steer towards another value while the look finds no one, test the look's count in a row of a Choose.
 
 A value on a card over agents also takes the summaries of the looks above, as "Flockmates' centre", the cells picked above, and new values: a random number between two values, or a random direction of a length.
 A number also takes the length of an arrow property, as "length of my Velocity".
 Below the last line that changes a property, a value can take "my new Velocity", the value the changes above give it this tick.
 Above that line it is not offered.
 Move to takes a cell picked or looked at above.
+A Move to below another Move to that can apply to the same agent reads "otherwise", since the first whose condition holds decides.
+An agent whose cell from that line is not open stays where it is.
 
 Boids, built from a blank model of agents:
 

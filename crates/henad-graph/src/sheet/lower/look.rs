@@ -31,6 +31,9 @@ pub(super) struct Fold {
     pub(super) reads: HashMap<String, Operand>,
     /// Things the fold walks over.
     pub(super) kind: FoldKind,
+    /// Offset to the agent the fold visits and its squared length, without wrapping at the edges, in a world of agents
+    /// with walls. The fold's own `delta` and `dist_sq` wrap.
+    pub(super) walled: Option<(Operand, Operand)>,
 }
 
 /// Things a fold walks over. They decide how `their` reads the neighbour.

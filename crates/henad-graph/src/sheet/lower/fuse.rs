@@ -133,6 +133,7 @@ impl CardLowering<'_, '_> {
         };
         self.folds.push(Fold {
             node,
+            walled: None,
             reads: std::collections::HashMap::new(),
             kind: if self.builder.is_agents() {
                 FoldKind::Ground

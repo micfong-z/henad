@@ -36,6 +36,12 @@ pub const MAX_NODES_PER_LINE: usize = 999;
 /// These nodes own the ids `n1` to `n999`.
 pub const MAX_SHEET_NODES: usize = 999;
 
+/// Exponent `k` of the resolution 2^-`k` to which a ground property that adds up its marks rounds each mark.
+///
+/// A cell adds the marks of one tick up in a 32-bit word, so it holds at most 2^(32 - `k`), 65536, in one tick and
+/// starts again from 0 past that.
+pub const ADD_UP_RESOLUTION_SHIFT: u8 = 16;
+
 /// Length in bytes of the longest id a sheet gives an item.
 ///
 /// The lowering builds ids such as `tick_<card>` and `button_<button>` from sheet ids, and an id of the lowered graph

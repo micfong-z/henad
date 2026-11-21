@@ -1,12 +1,12 @@
 //! Chances, looks, calculations and choices of grid sheets on the host: the kinds and values test sheets against a
 //! Rust reference, the chance SIR conserving its cells, the power rule of a chance once for each, the order and keys
-//! of chances, the refusal of a formula of arrows and the range of a Random number line.
+//! of chances, the refusal of a formula of arrows, a division by 0 and the range of a Random number line.
 
 use henad_core::explore::fingerprint::fnv1a64;
 
 use super::sheet_support::{
-    EXTRA_PROPERTIES, KINDS, VALUES, edited, epidemic, host_of, levels, life, life_with_line, lowered, placed_at,
-    refusals, sheet_text, sized,
+    EXTRA_PROPERTIES, KINDS, VALUES, alive, edited, epidemic, host_of, levels, life, life_with_line, lowered,
+    placed_at, refusals, sheet_text, sized,
 };
 use super::support::torus;
 use crate::host::{HostLanes, HostValue, RunContext};
@@ -491,6 +491,77 @@ fn a_formula_of_arrows_or_past_the_depth_limit_is_refused_at_its_line() {
         let errors = refusals(&text);
         assert_eq!(errors.len(), 1, "{formula}: {errors:?}");
         assert!(placed_at(&errors[0], &text).starts_with("[card.line.l5]"), "{formula}");
+    }
+}
+
+#[test]
+fn a_division_by_0_gives_0() {
+    // Level is set to 1 / Alive neighbours, which is 0 for a cell with no live neighbour.
+    let text = life_with_line("[card.line.l5]\nkind = \"calculate\"\nname = \"Inverse\"\nformula = \"1 / l1\"");
+    let text = edited(&text, "[[parameter]]", &format!("{EXTRA_PROPERTIES}[[parameter]]"));
+    let text = edited(
+        &text,
+        "[card.line.l5]",
+        "[card.line.l6]\nkind = \"set\"\nproperty = \"level\"\nvalue = { result = \"l5\" }\n\n\
+         [card.line.l6.condition]\nkind = \"always\"\n\n[card.line.l5]",
+    );
+    let text = edited(
+        &text,
+        "lines = [\"l1\", \"l2\", \"l3\", \"l5\"]",
+        "lines = [\"l1\", \"l2\", \"l3\", \"l5\", \"l6\"]",
+    );
+    let text = edited(&text, "next_line = 6", "next_line = 7");
+    let file = lowered(&text);
+    assert!(GridProgram::compile(file.lowered()).is_ok(), "{text}");
+    let evaluator = host_of(&file);
+    let world = torus(32, 32);
+    let mut lanes = evaluator.init(world, &[], Some(5)).expect("the start runs");
+    let before = alive(&lanes, 32);
+    let mut stream = 0;
+    evaluator
+        .run_pass(
+            "tick_cell_tick",
+            &mut lanes,
+            &[],
+            &RunContext::tick(Some(5), 0),
+            &mut stream,
+        )
+        .expect("a tick runs");
+    let mut lonely = 0;
+    for (cell, level) in levels(&lanes).into_iter().enumerate() {
+        let (x, y) = ((cell % 32) as i64, (cell / 32) as i64);
+        let around = (-1..=1i64)
+            .flat_map(|dy| (-1..=1i64).map(move |dx| (dx, dy)))
+            .filter(|&(dx, dy)| (dx, dy) != (0, 0))
+            .filter(|&(dx, dy)| before.contains(&((x + dx).rem_euclid(32) as u32, (y + dy).rem_euclid(32) as u32)))
+            .count();
+        let known = if around == 0 { 0.0 } else { 1.0 / around as f32 };
+        lonely += usize::from(around == 0);
+        assert!(
+            (level - known).abs() < 1e-6,
+            "cell {cell}: {level} for {around} live neighbours"
+        );
+    }
+    assert!(lonely > 0, "no cell has 0 live neighbours");
+}
+
+/// A chain of divisions at the deepest formula a sheet allows lowers and passes the graph check, each divisor bound
+/// apart from the quotient.
+#[test]
+fn a_chain_of_divisions_at_the_depth_limit_lowers() {
+    // A reference is one level deep, and each division adds one.
+    let divisions = crate::sheet::limits::MAX_FORMULA_DEPTH - 1;
+    for formula in [
+        vec!["l1"; divisions + 1].join(" / "),
+        format!("{}l1{}", "l1 / (".repeat(divisions), ")".repeat(divisions)),
+    ] {
+        let text = life_with_line(&format!(
+            "[card.line.l5]\nkind = \"calculate\"\nname = \"Worked out\"\nformula = \"{formula}\""
+        ));
+        let file = lowered(&text);
+        let report = file.lowered().check();
+        assert!(!report.has_errors(), "{formula}: {:#?}", report.diagnostics);
+        assert!(GridProgram::compile(file.lowered()).is_ok(), "{formula}");
     }
 }
 

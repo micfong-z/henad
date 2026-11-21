@@ -339,6 +339,8 @@ A rate worked out for each cell, or for each of a count of agents, takes one exp
 Two or more Become lines that leave one state of one property at a rate each, the rate standing as the condition or as an item of an all of, compete.
 A cell leaves with the chance of the sum of their rates, and each line takes the share its rate gives it, whatever the order of the lines.
 The share of the cells each line takes then follows the ratio of the rates at any tick length.
+A group whose rates read only parameters and typed numbers, with no count and nothing else in their conditions, keeps each share to 2^-32, as a lone rate with no count does.
+Any other group is resolved to 2^-24, and below a sum of about 1e-6 per tick its shares run measurably off the ratio of the rates.
 The group draws one number with the key of its highest line, and the other lines keep their keys for when they leave it.
 A rate beside a chance from the same state keeps "otherwise", and the higher line wins.
 A cell with a sum of rates of 0, such as one with no infected neighbour when every rate is for each infected neighbour, never leaves.
@@ -355,6 +357,8 @@ Its infection line reads "Become Infected from Susceptible, at rate Infection ra
 A sheet whose `[world]` is `made_of = "agents"` holds one kind of agent, its `count` at the start and its `max_count`, the most a run can hold.
 Its Position starts anywhere at random, an Arrow as a random direction, and its Heading follows the direction of its last move.
 Its card can look at the agents within a distance, count them or sum up what it sees, then steer a property, keep a value between two limits, and move by an arrow, and a Repeat adds up its moves and steers.
+An average, a largest and a smallest of no one are 0, and a Steer towards a value that reads one, directly or through a Calculate, adds nothing while its look finds no one.
+A Steer towards a Choose or a Depending on follows the value it gives, so a Choose whose row tests the look's count can give another value while the look finds no one.
 A Become or Set inside a Repeat applies when its condition holds at any time round.
 Among the changes of one property inside one Repeat, each time round tries them from the top, and the first whose condition holds decides for that time round.
 The first time round with a decision is final, so a lower line that held at an earlier time round wins over a higher line that held later.
@@ -365,11 +369,14 @@ Between a change inside a Repeat and a change of the same property outside it, o
 
 The agents can walk on a ground of cells, one per unit of the world.
 A ground property holds states painted at the start, or a number that agents mark with Leave, keeping the largest mark or adding the marks up, and that fades by its share kept per tick.
+A property that adds up its marks rounds each mark to a multiple of 2^-16, so a mark below 2^-17 adds nothing, and one cell adds up at most 65536 in a tick and starts again from 0 past it.
+A Leave of a number or a parameter on such a property warns at its line when the kind's `max_count` agents, all on one cell, can leave more than that in a tick.
 A card can pick the open cell around an agent with the most or least of a ground property, or one at random, look at the cell here or ahead, read a property of a place, move to a place, leave a mark and record an event that a measure counts.
 Cells in a blocked state of the ground are not open.
 The first Move to whose condition holds decides, and an agent whose place there is not open stays where it is.
 The looks and picks of a card over one neighbourhood share one walk of the cells around.
 Agents that move to places can live in a world with walls, and other worlds wrap at their edges.
+In a world with walls a look at agents sees no one across an edge, and its offset and distance to them do not wrap.
 
 `crates/henad-graph/sheets/random_walk.toml` is a random walk as a sheet.
 `boids.toml` and `bounded_confidence.toml` beside it are flocking and opinion dynamics, and `ants.toml` is ant foraging over a painted ground with two trails.

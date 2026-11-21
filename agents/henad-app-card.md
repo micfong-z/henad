@@ -57,7 +57,10 @@ a line below it, or of a line whose direct When does not hold this line), `swatc
 `otherwise_notice` (`otherwise_notice`, beside the tooltip from `otherwise_words_of`, both saying
 "at the same time" when a higher line sits in the line's own
 Repeat, as `CardRelations::repeat_of` finds it, and that the first time round decides when two
-higher lines share another Repeat, through `sentence::OtherwiseRepeat`), `notes` (the report's
+higher lines share another Repeat, through `sentence::OtherwiseRepeat`, and below a Move to
+naming the kind's Position and saying the agent stays where it is when the cell of the line that
+wins is not open, through `move_to_otherwise_tooltip` and `move_to_otherwise_notice`, tested by
+`a_move_to_below_another_says_the_higher_line_wins`), `notes` (the report's
 diagnostics at that card and
 line, the skip notes first, red for an error or a skip note that names a red chip, amber otherwise)
 and `skips`, the number of skip notes. `sheet_outcome_ui` in `editor/mod.rs` lists every problem

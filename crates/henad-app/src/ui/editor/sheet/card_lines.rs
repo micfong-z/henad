@@ -4,15 +4,15 @@
 use egui::Color32;
 use henad_core::diagnostic::DiagnosticSeverity;
 use henad_graph::sheet::check::{SheetDiagnostic, SheetReport};
-use henad_graph::sheet::document::{CardRuns, SheetCard, SheetDocument};
+use henad_graph::sheet::document::{CardRuns, LineKind, PropertyType, SheetCard, SheetDocument};
 use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
     ALWAYS, ANY_STATE_ID, BLANK_TEXT, ChipKind, FOR_EACH_BLANK_WORDS, FOR_EACH_WORDS, LineSelect, OtherwiseRepeat,
     PartPlace, SentenceChip, SentencePart, Sentences, UNIT_PLACEHOLDER, USES_OWN_RESULT, always_name,
-    for_each_change_name, for_each_optional_name, line_name, line_prefix, line_word, otherwise_notice,
-    otherwise_tooltip, otherwise_words, result_below_tooltip, result_inside_tooltip, result_own_tooltip, sentence_text,
-    uses_result_below, uses_result_inside,
+    for_each_change_name, for_each_optional_name, line_name, line_prefix, line_word, move_to_otherwise_notice,
+    move_to_otherwise_tooltip, otherwise_notice, otherwise_tooltip, otherwise_words, result_below_tooltip,
+    result_inside_tooltip, result_own_tooltip, sentence_text, uses_result_below, uses_result_inside,
 };
 use henad_graph::sheet::sentence::{COMPETING_WORD, competing_parts, competing_tooltip};
 
@@ -360,7 +360,8 @@ pub fn draws_diagnostic(document: &SheetDocument, diagnostic: &SheetDiagnostic) 
 ///
 /// Both name the property the lines change, and the old state a cell must be in for both to apply. When a higher line
 /// sits in the Repeat that holds line `line_id`, both say the higher line wins only at the same time. Otherwise, when
-/// two higher lines share a Repeat, both say the first time round decides between them.
+/// two higher lines share a Repeat, both say the first time round decides between them. Below a Move to, both name the
+/// Position and say that the agent stays where it is when the cell of the line that wins is not open.
 fn otherwise_words_of(
     document: &SheetDocument,
     relations: &CardRelations<'_>,
@@ -369,6 +370,24 @@ fn otherwise_words_of(
     numbers: &[usize],
 ) -> (String, String) {
     let line = relations.line(line_id);
+    if line.is_some_and(|line| line.kind == LineKind::Move) {
+        let every = &relations.card().every;
+        let position = document
+            .agents
+            .iter()
+            .find(|kind| kind.id == *every)
+            .and_then(|kind| {
+                kind.properties
+                    .iter()
+                    .find(|property| property.property_type == PropertyType::Position)
+            })
+            .map_or(BLANK_TEXT, |property| property.name.as_str());
+        let thing = Sentences::new(document).thing_word(every);
+        return (
+            move_to_otherwise_tooltip(numbers, position, &thing),
+            move_to_otherwise_notice(prefix, numbers, position, &thing),
+        );
+    }
     let property = line
         .and_then(|line| line.property.as_deref())
         .and_then(|id| find_property(document, id));

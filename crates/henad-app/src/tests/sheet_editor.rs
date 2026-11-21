@@ -1006,6 +1006,32 @@ fn otherwise_inside_a_repeat_says_the_higher_line_wins_at_the_same_time() {
     );
 }
 
+/// A Move to below another Move to reads "otherwise", and its tooltip says that the agent stays where it is when the
+/// cell of the higher line is not open.
+#[test]
+fn a_move_to_below_another_says_the_higher_line_wins() {
+    let text = edited(starter_text("ants.toml"), "next_line = 17", "next_line = 18");
+    let text = edited(&text, "\"l7\", \"l8\"", "\"l7\", \"l17\", \"l8\"");
+    let text = edited(
+        &text,
+        "# Move to Next cell",
+        "[card.line.l17]\nkind = \"move\"\nmode = \"to\"\nvalue = { result = \"l6\" }\n\n# Move to Next cell",
+    );
+    let lines = lines_of(&text, 0);
+    assert_eq!(lines[8].id, "l8");
+    assert_eq!(lines[8].otherwise, ["l17"]);
+    assert_eq!(
+        lines[8].otherwise_tooltip,
+        "Line 8 also changes Position. When both apply, line 8 wins. An ant stays where it is when the cell of line 8 \
+         is not open."
+    );
+    assert_eq!(
+        lines[8].otherwise_notice,
+        "Line 9 now starts with otherwise. Line 8 also changes Position. When both apply, line 8 wins. An ant stays \
+         where it is when the cell of line 8 is not open."
+    );
+}
+
 #[test]
 fn otherwise_carries_its_partner_as_a_description() {
     let lines = lines_of(starter_text("forest_fire.toml"), 0);

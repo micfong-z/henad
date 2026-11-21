@@ -1,6 +1,7 @@
 //! The lowering of agent sheets: every agent starter checked and compiled, the folds of the looks at agents and their
 //! index, the power rule of a chance once for each agent on the host and the device, the refusals of the lines this
-//! version does not lower and of a property changed two ways, the names of the folds and the cost in the model's words.
+//! version does not lower and of a property changed two ways, the names of the folds, the cost in the model's words, a
+//! look that reads another, the types a Steer and a summary take, and an arrow divided by a value that can be 0.
 
 use henad_compute::gpu::wgpu;
 use henad_core::params::ParamValue;
@@ -15,6 +16,317 @@ use crate::host::{HostLanes, HostValue, HostWorld, RunContext};
 use crate::sheet::{NodeOwner, SheetFile, sentence, starters};
 use crate::value::{ConfigValue, InputValue};
 use crate::wgsl::AgentProgram;
+
+/// An arrow divided by a number or by an arrow, each of which can be 0, lowers, checks and compiles.
+#[test]
+fn an_arrow_divided_by_a_value_that_can_be_0_lowers_and_compiles() {
+    for formula in [
+        "my.velocity / 0",
+        "my.velocity / length(my.velocity)",
+        "my.velocity / my.velocity",
+    ] {
+        let text = boids_with(&format!(
+            "[card.line.l9]\nkind = \"calculate\"\nname = \"Ratio\"\nformula = \"{formula}\""
+        ));
+        let file = lowered(&text);
+        let report = file.lowered().check();
+        assert!(!report.has_errors(), "{formula}: {:#?}", report.diagnostics);
+        agent_program_of(&file);
+    }
+}
+
+/// A count of agents with no test counts everyone within its distance.
+#[test]
+fn a_count_of_agents_with_no_test_lowers_and_compiles() {
+    let text = boids_with(
+        "[card.line.l9]\nkind = \"count\"\nname = \"Nearby\"\naround = \"agents_within\"\nagent_kind = \"bird\"\n\
+         distance = { param = \"visual_range\" }\ninclude_me = false",
+    );
+    let file = lowered(&text);
+    let report = file.lowered().check();
+    assert!(!report.has_errors(), "{:#?}", report.diagnostics);
+    agent_program_of(&file);
+}
+
+/// A Steer whose value has another type than its property, and a largest or smallest of an arrow, are refused by the
+/// checker at their line in the sheet's words.
+#[test]
+fn a_value_of_the_wrong_type_in_a_steer_or_a_summary_is_refused_at_its_line() {
+    let boids = sheet_text("boids.toml");
+    let cases = [
+        (
+            edited(boids, "value = { result = \"l2\", part = \"push\" }", "value = 3"),
+            "[card.line.l3]",
+        ),
+        (
+            edited(
+                boids,
+                "value = { result = \"l1\", part = \"average_velocity\" }",
+                "value = { result = \"l1\", part = \"count\" }",
+            ),
+            "[card.line.l4]",
+        ),
+        (
+            edited(
+                boids,
+                "summary = \"average\", value = { their = \"velocity\" }",
+                "summary = \"largest\", value = { their = \"velocity\" }",
+            ),
+            "[card.line.l1]",
+        ),
+    ];
+    for (text, table) in cases {
+        let errors = refusals(&text);
+        assert_eq!(errors.len(), 1, "{errors:#?}");
+        let message = &errors[0].message;
+        for word in ["vec2f", "f32", "u32", "line l"] {
+            assert!(!message.contains(word), "{message}");
+        }
+        assert!(placed_at(&errors[0], &text).starts_with(table), "{message}");
+    }
+}
+
+/// A look at agents that reads an earlier look at agents takes a fold of its own, whichever of the two has the lower
+/// line id or when it reads the look through the condition of a When, and the sheet checks and runs a tick on the host.
+#[test]
+fn a_look_at_agents_that_reads_an_earlier_look_opens_its_own_fold() {
+    let bounded = sheet_text("bounded_confidence.toml");
+    let text = edited(bounded, "next_line = 4", "next_line = 5");
+    // Line 2 counts the people whose Opinion is above the average that line 1 found.
+    let above = edited(
+        &text,
+        "lines = [\"l1\", \"l2\", \"l3\"]",
+        "lines = [\"l1\", \"l4\", \"l2\", \"l3\"]",
+    );
+    let above = edited(
+        &above,
+        "# Steer Opinion towards",
+        "[card.line.l4]\nkind = \"count\"\nname = \"Above average\"\naround = \"agents_within\"\n\
+         agent_kind = \"person\"\ndistance = { param = \"hearing_range\" }\ninclude_me = true\n\n\
+         [card.line.l4.whose]\nkind = \"compare\"\ntest = \"more_than\"\nleft = { their = \"opinion\" }\n\
+         right = { result = \"l1\", part = \"average_opinion\" }\n\n# Steer Opinion towards",
+    );
+    // Line 1 counts everyone in range, and line 2, whose id is lower, reads that count as its tolerance.
+    let heard = edited(
+        &text,
+        "lines = [\"l1\", \"l2\", \"l3\"]",
+        "lines = [\"l4\", \"l1\", \"l2\", \"l3\"]",
+    );
+    let heard = edited(
+        &heard,
+        "tolerance = { param = \"confidence\" }",
+        "tolerance = { result = \"l4\" }",
+    );
+    let heard = edited(
+        &heard,
+        "# Steer Opinion towards",
+        "[card.line.l4]\nkind = \"count\"\nname = \"Heard\"\naround = \"agents_within\"\n\
+         agent_kind = \"person\"\ndistance = { param = \"hearing_range\" }\ninclude_me = true\n\n\
+         # Steer Opinion towards",
+    );
+    // Line 3 counts the people whose Opinion is above my new Flag, which line 2 sets inside a When on line 1's count.
+    let flagged = edited(bounded, "next_line = 4", "next_line = 7");
+    let flagged = edited(
+        &flagged,
+        "[[agents.property]]\nid = \"opinion\"",
+        "[[agents.property]]\nid = \"flag\"\nname = \"Flag\"\ntype = \"number\"\n\n[agents.property.starts_as]\n\
+         rule = \"value\"\nvalue = 0\n\n[[agents.property]]\nid = \"opinion\"",
+    );
+    let flagged = edited(
+        &flagged,
+        "lines = [\"l1\", \"l2\", \"l3\"]",
+        "lines = [\"l1\", \"l5\", \"l4\", \"l2\", \"l3\"]",
+    );
+    let flagged = edited(
+        &flagged,
+        "# Steer Opinion towards",
+        "[card.line.l5]\nkind = \"when\"\nlines = [\"l6\"]\n\n[card.line.l5.condition]\nkind = \"compare\"\n\
+         test = \"more_than\"\nleft = { result = \"l1\", part = \"count\" }\nright = 1\n\n[card.line.l6]\n\
+         kind = \"set\"\nproperty = \"flag\"\nvalue = 1\n\n[card.line.l6.condition]\nkind = \"always\"\n\n\
+         [card.line.l4]\nkind = \"count\"\nname = \"Above flag\"\naround = \"agents_within\"\n\
+         agent_kind = \"person\"\ndistance = { param = \"hearing_range\" }\ninclude_me = true\n\n\
+         [card.line.l4.whose]\nkind = \"compare\"\ntest = \"more_than\"\nleft = { their = \"opinion\" }\n\
+         right = { my_new = \"flag\" }\n\n# Steer Opinion towards",
+    );
+    for text in [above, heard, flagged] {
+        let file = lowered(&text);
+        let report = file.lowered().check();
+        assert!(!report.has_errors(), "{:#?}\n{text}", report.diagnostics);
+        assert_eq!(nodes_of_kind(&file, "agent.radius_fold").count(), 2, "{text}");
+        agent_program_of(&file);
+        let evaluator = host_of(&file);
+        let world = HostWorld::Agents {
+            count: 200,
+            width: 20.0,
+            height: 20.0,
+        };
+        let mut lanes = evaluator.init(world, &[], Some(7)).expect("the init runs");
+        let mut stream = 0;
+        evaluator
+            .run_pass(
+                "tick_person_tick",
+                &mut lanes,
+                &[],
+                &RunContext::tick(Some(7), 0),
+                &mut stream,
+            )
+            .expect("a tick runs");
+    }
+}
+
+/// Returns the count and the total distance that each of two people at `places` sees within a distance of 5, in a
+/// world 20 wide whose edges are `edges`, after one tick on the host.
+fn seen_from(edges: &str, places: [[f32; 2]; 2]) -> Vec<(f32, f32)> {
+    let text = edited(
+        MOBILE,
+        "width = 1\nheight = 1\nedges = \"wrap\"",
+        &format!("width = 20\nheight = 20\nedges = \"{edges}\""),
+    );
+    let text = edited(
+        &text,
+        "[[agents.property]]\nid = \"hit\"\nname = \"Hit\"\ntype = \"yes_no\"\n\n[agents.property.starts_as]\nrule = \
+         \"value\"\nvalue = false",
+        "[[agents.property]]\nid = \"seen\"\nname = \"Seen\"\ntype = \"number\"\n\n[agents.property.starts_as]\nrule = \
+         \"value\"\nvalue = 0\n\n[[agents.property]]\nid = \"far\"\nname = \"Far\"\ntype = \"number\"\n\n\
+         [agents.property.starts_as]\nrule = \"value\"\nvalue = 0",
+    );
+    let text = edited(&text, "lines = [\"l1\", \"l2\"]", "lines = [\"l1\", \"l2\", \"l3\"]");
+    let text = edited(&text, "next_line = 3", "next_line = 4");
+    let card = text.find("# Infected nearby").expect("the card's first line");
+    let text = format!(
+        "{}[card.line.l1]\nkind = \"look_around\"\nname = \"Near\"\naround = \"agents_within\"\nagent_kind = \
+         \"person\"\ndistance = 5\ninclude_me = false\nsummaries = [\n  {{ id = \"far\", name = \"far\", summary = \
+         \"total\", value = {{ relation = \"distance_to_them\" }} }},\n]\n\n[card.line.l2]\nkind = \"set\"\nproperty = \
+         \"seen\"\nvalue = {{ result = \"l1\", part = \"count\" }}\n\n[card.line.l2.condition]\nkind = \"always\"\n\n\
+         [card.line.l3]\nkind = \"set\"\nproperty = \"far\"\nvalue = {{ result = \"l1\", part = \"far\" }}\n\n\
+         [card.line.l3.condition]\nkind = \"always\"\n",
+        &text[..card]
+    );
+    let file = lowered(&text);
+    let report = file.lowered().check();
+    assert!(!report.has_errors(), "{:#?}", report.diagnostics);
+    agent_program_of(&file);
+    let evaluator = host_of(&file);
+    let world = HostWorld::Agents {
+        count: 2,
+        width: 20.0,
+        height: 20.0,
+    };
+    let mut lanes = evaluator.init(world, &[], Some(7)).expect("the init runs");
+    let column = lanes.column_mut("position").expect("the position lane");
+    assert!(column.set(0, HostValue::Vec2F(places[0])));
+    assert!(column.set(1, HostValue::Vec2F(places[1])));
+    let mut stream = 0;
+    evaluator
+        .run_pass(
+            "tick_person_tick",
+            &mut lanes,
+            &[],
+            &RunContext::tick(Some(7), 0),
+            &mut stream,
+        )
+        .expect("a tick runs");
+    let number = |lane: &str, index: usize| match lanes.column(lane).and_then(|column| column.get(index)) {
+        Some(HostValue::F32(value)) => value,
+        other => panic!("{lane} of {index} is {other:?}"),
+    };
+    (0..2)
+        .map(|index| (number("seen", index), number("far", index)))
+        .collect()
+}
+
+/// A look at agents in a world with walls sees no one across an edge, and in a world that wraps it sees through it.
+/// Away from the edges, both see each other at the same distance.
+#[test]
+fn a_look_at_agents_sees_no_one_across_a_wall() {
+    let across = [[0.5, 10.0], [19.5, 10.0]];
+    let inside = [[10.0, 10.0], [11.0, 10.0]];
+    for (edges, places) in [("wrap", across), ("wrap", inside), ("walls", inside)] {
+        let seen = seen_from(edges, places);
+        for (count, far) in &seen {
+            assert_eq!(*count, 1.0, "{edges}: {seen:?}");
+            assert!((far - 1.0).abs() < 1e-4, "{edges}: {seen:?}");
+        }
+    }
+    assert_eq!(seen_from("walls", across), [(0.0, 0.0), (0.0, 0.0)]);
+}
+
+/// Returns the opinions of two people far apart before and after one tick of the bounded confidence sheet, whose look
+/// leaves me out and whose Steer reads its value `value` with line `l4` as `table`.
+fn opinions_after_a_tick_alone(value: &str, table: &str) -> (Vec<f32>, Vec<f32>) {
+    let text = edited(
+        sheet_text("bounded_confidence.toml"),
+        "include_me = true",
+        "include_me = false",
+    );
+    let text = edited(&text, "next_line = 4", "next_line = 5");
+    let text = edited(
+        &text,
+        "lines = [\"l1\", \"l2\", \"l3\"]",
+        "lines = [\"l1\", \"l4\", \"l2\", \"l3\"]",
+    );
+    let text = edited(&text, "value = { result = \"l1\", part = \"average_opinion\" }", value);
+    let text = edited(
+        &text,
+        "# Steer Opinion towards",
+        &format!("{table}\n\n# Steer Opinion towards"),
+    );
+    let file = lowered(&text);
+    let evaluator = host_of(&file);
+    let world = HostWorld::Agents {
+        count: 2,
+        width: 1000.0,
+        height: 1000.0,
+    };
+    let mut lanes = evaluator.init(world, &[], Some(7)).expect("the init runs");
+    let column = lanes.column_mut("position").expect("the position lane");
+    assert!(column.set(0, HostValue::Vec2F([100.0, 100.0])));
+    assert!(column.set(1, HostValue::Vec2F([600.0, 600.0])));
+    let opinions = |lanes: &HostLanes| -> Vec<f32> {
+        (0..2)
+            .map(
+                |index| match lanes.column("opinion").and_then(|column| column.get(index)) {
+                    Some(HostValue::F32(value)) => value,
+                    other => panic!("opinion of {index} is {other:?}"),
+                },
+            )
+            .collect()
+    };
+    let before = opinions(&lanes);
+    let mut stream = 0;
+    evaluator
+        .run_pass(
+            "tick_person_tick",
+            &mut lanes,
+            &[],
+            &RunContext::tick(Some(7), 0),
+            &mut stream,
+        )
+        .expect("a tick runs");
+    (before, opinions(&lanes))
+}
+
+/// A Steer towards a value worked out from the average of no one adds nothing, as a Steer towards the average itself
+/// does. A Steer towards a Choose whose row tests the look's count steers towards the Choose's "otherwise" value.
+#[test]
+fn a_steer_towards_a_value_worked_out_from_an_empty_look_adds_nothing() {
+    let calculate = "[card.line.l4]\nkind = \"calculate\"\nname = \"Target\"\nformula = \"l1.average_opinion * 1\"";
+    for (value, table) in [
+        ("value = { result = \"l1\", part = \"average_opinion\" }", calculate),
+        ("value = { result = \"l4\" }", calculate),
+    ] {
+        let (before, after) = opinions_after_a_tick_alone(value, table);
+        assert!(before.iter().all(|opinion| *opinion > 0.0), "{before:?}");
+        assert_eq!(before, after, "{value}");
+    }
+    let choose = "[card.line.l4]\nkind = \"choose\"\nname = \"Target\"\notherwise = 0.5\n\n[[card.line.l4.row]]\n\
+                  value = { result = \"l1\", part = \"average_opinion\" }\n\n[card.line.l4.row.condition]\n\
+                  kind = \"compare\"\ntest = \"more_than\"\nleft = { result = \"l1\", part = \"count\" }\nright = 0";
+    let (before, after) = opinions_after_a_tick_alone("value = { result = \"l4\" }", choose);
+    for (before, after) in before.iter().zip(&after) {
+        assert!((after - 0.5).abs() < (before - 0.5).abs(), "{before} to {after}");
+    }
+}
 
 /// Returns the agent starters with their file names.
 fn agent_sheets() -> Vec<(&'static str, &'static str)> {

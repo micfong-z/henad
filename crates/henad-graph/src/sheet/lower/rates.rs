@@ -5,7 +5,9 @@
 //! unit differs (a rate per week in a model of days is multiplied by 1/7). A value that reads only parameters and
 //! literals is the same for every element. The host computes it once per build, and the device reads it. Such a rate
 //! with no count takes its chance from the series `h (1 - h (1/2 - h/6))` below a hazard of 2^-10, since `1 - e^(-h)`
-//! in `f32` rounds to a multiple of 2^-24, and draws through `rng.threshold` and `rand.below` at 2^-32.
+//! in `f32` rounds to a multiple of 2^-24, and draws through `rng.threshold` and `rand.below` at 2^-32. A rate that
+//! differs per element and has no count is `1 - e^(-h)` behind a `logic.select` that takes 1 for `e^(-h)` at a hazard
+//! of 0 or below.
 //!
 //! A rate for each of a count `n` holds with `1 - e^(-r dt n)`. When `n` counts the cells around and `r` is the same
 //! for every element, that is `1 - q^n` with `q = e^(-r dt)`, through a `math.powi` whose `max_exponent` is the number
@@ -19,6 +21,10 @@
 //! keyed by the group's highest line. The transition takes the first row that holds, so each line takes the share of
 //! `t` its hazard gives it. A sum of 0 or below gives `t = 0` through a `logic.select`, the guard of a rate for each
 //! of a count.
+//!
+//! A *uniform* group, each of whose lines has a rate the same for every element, no count and no other condition, takes
+//! `t` from the series below a hazard of 2^-10 as a lone rate does. The host turns each share into a `u32` threshold
+//! with `rng.threshold`, and line `j` holds when one `rand.bits` draw is below its threshold, at 2^-32.
 //!
 //! [`CardRelations::competing_groups`]: crate::sheet::relations::CardRelations::competing_groups
 
@@ -50,6 +56,9 @@ pub(super) struct GroupLine<'a> {
     hazard: InputValue,
     /// Rest of the line's condition, the conditions of the When lines around it joined in.
     gate: Operand,
+    /// Whether the hazard is the same for every element: a rate of parameters and numbers, no count and no other
+    /// condition.
+    uniform: bool,
 }
 
 /// A competing group of a card: its lines in display order, and those lowered so far.
@@ -167,7 +176,10 @@ impl<'a> CardLowering<'_, 'a> {
             return Ok(Operand::Link(PortRef { node, port: None }, ValueType::Bool));
         }
         let probability = if line.tries.is_blank() {
-            self.chance_of(site, hazard)
+            let stays = self.stays(site, hazard.clone());
+            // A hazard of 0 keeps the element, as a rate for each of a count of 0 does.
+            let guarded = self.one_where_none(site, hazard, stays);
+            self.float(site, "math.sub", vec![("a", number(1.0)), ("b", guarded)])
         } else {
             match self.count_bound(line.tries.value()) {
                 Some(bound) if uniform => {
@@ -222,6 +234,8 @@ impl<'a> CardLowering<'_, 'a> {
         let gate = self.inherit(site, id, own)?;
         let (rate_site, phrase) = found.ok_or_else(|| "a competing line holds no rate".to_owned())?;
         let rate = self.slot(&rate_site.at("rate"), &phrase.rate)?;
+        let uniform =
+            rate.is_uniform() && phrase.tries.is_blank() && matches!(gate, Operand::Constant(Literal::Bool(true)));
         let mut hazard = self.rate_in_tick_unit(&rate_site, phrase, &rate)?;
         if let Some(tries) = self.tries(&rate_site, phrase)? {
             hazard = self.float(&rate_site, "math.mul", vec![("a", hazard), ("b", tries)]);
@@ -232,6 +246,7 @@ impl<'a> CardLowering<'_, 'a> {
             site: rate_site,
             hazard,
             gate,
+            uniform,
         });
         Ok(Operand::Constant(Literal::Bool(false)))
     }
@@ -290,15 +305,25 @@ impl<'a> CardLowering<'_, 'a> {
             "math.mul",
             vec![("a", total.clone()), ("b", InputValue::Param(TICK_LENGTH.to_owned()))],
         );
-        let exp = self.stays(&site, hazard);
-        // A total hazard of 0 keeps the cell, as a lone rate at a count of 0 does.
-        let stays = self.one_where_none(&site, total.clone(), exp);
-        let leaves = self.float(&site, "math.sub", vec![("a", number(1.0)), ("b", stays)]);
+        let uniform = lines.iter().all(|line| line.uniform);
+        let leaves = if uniform {
+            // The series is 0 at a hazard of 0, and below 0 at a negative hazard, whose threshold is 0.
+            self.exact_chance_of(&site, hazard)
+        } else {
+            let exp = self.stays(&site, hazard);
+            // A total hazard of 0 keeps the cell, as a lone rate at a count of 0 does.
+            let stays = self.one_where_none(&site, total.clone(), exp);
+            self.float(&site, "math.sub", vec![("a", number(1.0)), ("b", stays)])
+        };
         let divisor = self.float(&site, "math.max", vec![("a", total), ("b", number(SMALLEST_TOTAL))]);
-        let drawn = self.draw(&site, "rand.float", vec![("max", number(1.0))])?;
+        let drawn = if uniform {
+            self.draw(&site, "rand.bits", Vec::new())?
+        } else {
+            self.draw(&site, "rand.float", vec![("max", number(1.0))])?
+        };
         let last = lines.len() - 1;
         for (index, line) in lines.iter().enumerate() {
-            let threshold = if index == last {
+            let mut threshold = if index == last {
                 leaves.clone()
             } else {
                 let share = self.float(
@@ -308,6 +333,11 @@ impl<'a> CardLowering<'_, 'a> {
                 );
                 self.float(&line.site, "math.mul", vec![("a", leaves.clone()), ("b", share)])
             };
+            if uniform {
+                threshold = self
+                    .builder
+                    .node_input(&line.site, "rng.threshold", vec![("p", threshold)]);
+            }
             let below = self.builder.node_value(
                 &line.site,
                 "cmp.lt",

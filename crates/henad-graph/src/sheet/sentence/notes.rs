@@ -72,6 +72,30 @@ pub fn unit_mismatch(parameter: &str, sheet_unit: TimeUnit, line_unit: TimeUnit)
     )
 }
 
+/// Returns the note under a Steer towards a value of the property `property` inside the Repeat line `number`.
+///
+/// For example "Each time round of line 1 steers from my Level at the start of the tick, and the steers add up."
+pub fn steer_in_repeat_note(number: usize, property: &str) -> String {
+    format!(
+        "Each time round of line {number} steers from my {property} at the start of the tick, and the steers add up."
+    )
+}
+
+/// Returns the warning under a Leave of the fixed amount `amount` on a ground property that adds up its marks.
+///
+/// `count` agents of the kind `thing` can all stand on one cell and leave `total` in all, and a cell of `property` adds
+/// up at most `limit` in a tick.
+///
+/// For example "Up to 5000000 ants can each leave 1 on one cell, 5000000 in all. A cell of To home adds up at most
+/// 65536 in a tick and starts again from 0 past it."
+pub fn add_up_limit_note(count: u32, thing: &str, amount: &str, total: &str, property: &str, limit: &str) -> String {
+    format!(
+        "Up to {count} {} can each leave {amount} on one cell, {total} in all. A cell of {property} adds up at most \
+         {limit} in a tick and starts again from 0 past it.",
+        plural(thing)
+    )
+}
+
 /// Returns the note under a draw whose value is the count `count`, where `each` is the count's words after "for each".
 ///
 /// For example "Infected neighbours is a count, not a rate. Did you mean a rate for each infected neighbour?"
@@ -281,6 +305,33 @@ pub fn otherwise_tooltip(
         format!("When more than one applies{when}, the line nearest the top of the card wins.")
     };
     format!("{who} {property}{for_whom}. {wins}")
+}
+
+/// Returns the tooltip of the "otherwise" words before a Move to, where `lines` holds the higher Move to lines.
+///
+/// `position` is the name of the Position property, and `thing` names one of what the card runs on. For example "Line
+/// 3 also changes Position. When both apply, line 3 wins. An ant stays where it is when the cell of line 3 is not
+/// open."
+pub fn move_to_otherwise_tooltip(lines: &[usize], position: &str, thing: &str) -> String {
+    let cell = if lines.len() == 1 {
+        format!("the cell of line {}", number_list(lines))
+    } else {
+        "the cell of the line that wins".to_owned()
+    };
+    format!(
+        "{} {} stays where it is when {cell} is not open.",
+        otherwise_tooltip(lines, position, None, thing, OtherwiseRepeat::Apart),
+        upper_first(&with_article(thing))
+    )
+}
+
+/// Returns the notice shown the first time in a session that a Move to starts with "otherwise", with `prefix` and the
+/// tooltip of [`move_to_otherwise_tooltip`].
+pub fn move_to_otherwise_notice(prefix: &str, lines: &[usize], position: &str, thing: &str) -> String {
+    format!(
+        "{prefix} now starts with otherwise. {}",
+        move_to_otherwise_tooltip(lines, position, thing)
+    )
 }
 
 /// Returns the notice shown the first time in a session that a line starts with "otherwise".

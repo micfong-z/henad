@@ -5,6 +5,10 @@
 //! number is written with a point, so every step works in `f32`. `^` is a call of `pow`, `smaller` of `min`, `larger`
 //! of `max` and `length` of `length`. `direction` is an arrow divided by its length, an arrow of length 0 staying 0.
 //! The cells hold no arrows, so `length` and `direction` do not lower on a grid.
+//!
+//! A division by 0 gives 0. A divisor that is not a number other than 0 is bound to an output `d1`, `d2` and so on,
+//! written before `out`, and the quotient is `if(d == 0.0, 0.0, left / if(d == 0.0, 1.0, d))`, per component for an
+//! arrow divided by an arrow. The expression never divides by 0, whose result a shader leaves indeterminate.
 
 use std::collections::BTreeMap;
 
@@ -79,16 +83,25 @@ pub(super) fn calculate(scope: &mut dyn Scope<'_>, site: &Site, line: &SheetLine
     let formula_site = site.at("formula");
     let mut inputs: Vec<(String, InputValue, ValueType)> = Vec::new();
     let mut names: BTreeMap<String, (String, ValueType)> = BTreeMap::new();
-    let (expression, value_type) = formula_text(scope, &formula_site, &tree, &mut inputs, &mut names)?;
-    let node = expression_node(scope.builder(), site, &expression, inputs);
+    let mut bindings = Vec::new();
+    let mut text = FormulaText {
+        inputs: &mut inputs,
+        names: &mut names,
+        bindings: &mut bindings,
+    };
+    let (expression, value_type) = formula_text(scope, &formula_site, &tree, &mut text)?;
+    let node = expression_node(scope.builder(), site, &bindings, &expression, inputs);
     Ok(port_of(node, OUTPUT, value_type))
 }
 
 /// Writes the `math.expr` node `out = <expression>` over `inputs` at `site`, each input a name, its value and its
 /// type, and returns its id.
+///
+/// `bindings` are assignments `name = expression` written before `out`, each name an output of the node too.
 pub(super) fn expression_node(
     builder: &mut Builder<'_>,
     site: &Site,
+    bindings: &[(String, String)],
     expression: &str,
     inputs: Vec<(String, InputValue, ValueType)>,
 ) -> NodeId {
@@ -101,28 +114,100 @@ pub(super) fn expression_node(
             ]))
         })
         .collect();
+    let mut assignments: Vec<String> = bindings
+        .iter()
+        .map(|(name, bound)| format!("{name} = {bound}"))
+        .collect();
+    assignments.push(format!("{OUTPUT} = {expression}"));
+    let mut outputs: Vec<ConfigValue> = bindings.iter().map(|(name, _)| text(name)).collect();
+    outputs.push(text(OUTPUT));
     builder.emit(
         site,
         "math.expr",
         vec![
-            ("text", text(&format!("{OUTPUT} = {expression}"))),
+            ("text", text(&assignments.join("; "))),
             ("inputs", ConfigValue::Array(declared)),
-            ("outputs", ConfigValue::Array(vec![text(OUTPUT)])),
+            ("outputs", ConfigValue::Array(outputs)),
         ],
         inputs.into_iter().map(|(name, input, _)| (name, input)).collect(),
     )
 }
 
-/// Returns the expression text of `tree` and its type, adding an input to `inputs` for each reference that `names`
-/// does not hold yet.
+/// Inputs, references and bindings of a formula's expression, gathered while its text is written.
+struct FormulaText<'t> {
+    /// Each input: its name, its value and its type.
+    inputs: &'t mut Vec<(String, InputValue, ValueType)>,
+    /// Name and type of the input of each reference, by the reference.
+    names: &'t mut BTreeMap<String, (String, ValueType)>,
+    /// Assignments written before `out`, each its name and its expression.
+    bindings: &'t mut Vec<(String, String)>,
+}
+
+impl FormulaText<'_> {
+    /// Binds `expression` to a new name written before `out`, `prefix` and the number of bindings, and returns the
+    /// name.
+    fn bind(&mut self, prefix: char, expression: String) -> String {
+        let name = format!("{prefix}{}", self.bindings.len() + 1);
+        self.bindings.push((name.clone(), expression));
+        name
+    }
+}
+
+/// Returns whether `tree` is a number other than 0, or its negation.
+fn is_nonzero_number(tree: &FormulaTree<'_>) -> bool {
+    match tree {
+        FormulaTree::Number(written) => written.parse::<f64>().is_ok_and(|number| number != 0.0),
+        FormulaTree::Negate(value) => is_nonzero_number(value),
+        _ => false,
+    }
+}
+
+/// Returns the expression text of `left / right`, 0 where the divisor is 0, binding the divisor in `text`.
+///
+/// An arrow divided by an arrow is divided per component. A number divided by an arrow is left as it is, since the
+/// expression refuses it.
+fn quotient(
+    text: &mut FormulaText<'_>,
+    left: String,
+    left_type: &ValueType,
+    right: String,
+    right_type: &ValueType,
+) -> String {
+    let guarded = |numerator: &str, divisor: &str| {
+        format!("if({divisor} == 0.0, 0.0, {numerator} / if({divisor} == 0.0, 1.0, {divisor}))")
+    };
+    match (left_type, right_type) {
+        (_, ValueType::F32) => {
+            let divisor = text.bind('d', right);
+            let zero = if *left_type == ValueType::Vec2F {
+                "vec(0.0, 0.0)"
+            } else {
+                "0.0"
+            };
+            format!("if({divisor} == 0.0, {zero}, {left} / if({divisor} == 0.0, 1.0, {divisor}))")
+        }
+        (ValueType::Vec2F, ValueType::Vec2F) => {
+            let numerator = text.bind('n', left);
+            let divisor = text.bind('d', right);
+            format!(
+                "vec({}, {})",
+                guarded(&format!("{numerator}.x"), &format!("{divisor}.x")),
+                guarded(&format!("{numerator}.y"), &format!("{divisor}.y"))
+            )
+        }
+        _ => format!("({left} / {right})"),
+    }
+}
+
+/// Returns the expression text of `tree` and its type, adding an input to `text` for each reference it does not hold
+/// yet, and a binding for each divisor that can be 0.
 ///
 /// `names` maps each reference to the name and type of its input.
 fn formula_text(
     scope: &mut dyn Scope<'_>,
     site: &Site,
     tree: &FormulaTree<'_>,
-    inputs: &mut Vec<(String, InputValue, ValueType)>,
-    names: &mut BTreeMap<String, (String, ValueType)>,
+    text: &mut FormulaText<'_>,
 ) -> Result<(String, ValueType), String> {
     Ok(match tree {
         FormulaTree::Number(written) => {
@@ -138,7 +223,7 @@ fn formula_text(
             (format!("{narrowed:?}"), ValueType::F32)
         }
         FormulaTree::Reference(reference) => {
-            if let Some((name, value_type)) = names.get(*reference) {
+            if let Some((name, value_type)) = text.names.get(*reference) {
                 return Ok((name.clone(), value_type.clone()));
             }
             let chip = formula_chip(reference, scope.builder().document);
@@ -149,18 +234,19 @@ fn formula_text(
                 ValueType::F32
             };
             let input = scope.builder().input_as(site, &operand, &value_type)?;
-            let name = format!("v{}", inputs.len() + 1);
-            inputs.push((name.clone(), input, value_type.clone()));
-            names.insert((*reference).to_owned(), (name.clone(), value_type.clone()));
+            let name = format!("v{}", text.inputs.len() + 1);
+            text.inputs.push((name.clone(), input, value_type.clone()));
+            text.names
+                .insert((*reference).to_owned(), (name.clone(), value_type.clone()));
             (name, value_type)
         }
         FormulaTree::Negate(value) => {
-            let (text, value_type) = formula_text(scope, site, value, inputs, names)?;
-            (format!("-({text})"), value_type)
+            let (written, value_type) = formula_text(scope, site, value, text)?;
+            (format!("-({written})"), value_type)
         }
-        FormulaTree::Binary(symbol, left, right) => {
-            let (left, left_type) = formula_text(scope, site, left, inputs, names)?;
-            let (right, right_type) = formula_text(scope, site, right, inputs, names)?;
+        FormulaTree::Binary(symbol, left_tree, right_tree) => {
+            let (left, left_type) = formula_text(scope, site, left_tree, text)?;
+            let (right, right_type) = formula_text(scope, site, right_tree, text)?;
             let value_type = if left_type == ValueType::Vec2F || right_type == ValueType::Vec2F {
                 ValueType::Vec2F
             } else {
@@ -168,6 +254,8 @@ fn formula_text(
             };
             if *symbol == '^' {
                 (format!("pow({left}, {right})"), value_type)
+            } else if *symbol == '/' && !is_nonzero_number(right_tree) {
+                (quotient(text, left, &left_type, right, &right_type), value_type)
             } else {
                 (format!("({left} {symbol} {right})"), value_type)
             }
@@ -176,9 +264,9 @@ fn formula_text(
             let mut written = Vec::with_capacity(values.len());
             let mut arrow = false;
             for value in values {
-                let (text, value_type) = formula_text(scope, site, value, inputs, names)?;
+                let (value_text, value_type) = formula_text(scope, site, value, text)?;
                 arrow |= value_type == ValueType::Vec2F;
-                written.push(text);
+                written.push(value_text);
             }
             let reads_arrow = |what: &str| {
                 if arrow {

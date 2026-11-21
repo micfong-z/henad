@@ -62,7 +62,11 @@ or rate can change into (none with no `[time]`, and no rate on a card that runs 
 line a Become takes whole) that counts its new state (`GrowCount`), and `parameter_rate_unit` the
 unit a parameter's Unit names. The
 mean stay is a Become from a named state at a fixed rate with no "for each", its rate the whole
-condition and no block around it (`rate_alone`). A worked-out note names an unnamed Count by
+condition and no block around it (`rate_alone`), with no other Become of the property from that
+state or from any state anywhere on the card (`leaves_by_another_line`), and so is a group's, past
+its own lines. A note of a line that reads "otherwise" ends with `otherwise_rate_note`'s "This
+chance holds only when line 3 does not apply." (`with_otherwise`, a group's note by its highest
+line). A worked-out note names an unnamed Count by
 `edit::automatic_name`. `pub(super) shortest_f32` is the conversion commands' number.
 
 **The document.** Tables follow the sheet's order: `sheet` (`SheetHeader`: version, id, name,
@@ -168,17 +172,17 @@ differs. The graph starters stay graph files in `starters/`.
 after the block line, an id listed twice or inside its own block taken once at its first place, an
 id with no table left out), each line's block (`parent`, `is_within`) and number (`number`, from 1).
 Two changes collide when both are Become or both Set, on one property, and for Become both name a
-start state (`any_state` counts, a blank does not). `can_both_apply(a, b)` is false when a test of
-`a` and a test of `b` read one value and no value passes both. A line's tests: its own condition,
-the condition of each When around it, and a Become's named start state as "my X is S" (a state reads
-as its index). An all of gives each item, nested all of included, and any of, none of, a result
-chip, a draw and a `within` give nothing. A test reads `my` or a result chip
-(with its part or property) against fixed numbers, percents or states, `outside` included, and a
-result of a line inside a Repeat gives none (`repeat_of`), as each time round works it out
-again. Two tests exclude each other when no tried value passes both: each listed number, its
-neighbours (+-1 for whole values, +-0.5 otherwise), the midpoints, and the ends +-2, with a 1e-9
-allowance. Whole means a States property, a Count result, or a Look around's `count` part or Count
-summary.
+start state (`any_state` counts, a blank does not), or when both are Move to, since the first whose
+condition holds decides (Move by lines add up and never collide). `can_both_apply(a, b)` is false
+when a test of `a` and a test of `b` read one value and no value passes both. A line's tests: its
+own condition, the condition of each When around it, and a Become's named start state as "my X is S"
+(a state reads as its index). An all of gives each item, nested all of included, and any of, none
+of, a result chip, a draw and a `within` give nothing. A test reads `my` or a result chip (with its
+part or property) against fixed numbers, percents or states, `outside` included, and a result of a
+line inside a Repeat gives none (`repeat_of`), as each time round works it out again. Two tests
+exclude each other when no tried value passes both: each listed number, its neighbours (+-1 for
+whole values, +-0.5 otherwise), the midpoints, and the ends +-2, with a 1e-9 allowance. Whole means
+a States property, a Count result, or a Look around's `count` part or Count summary.
 `otherwise_of(line)` returns the higher colliding lines in display order, `otherwise_numbers` their
 numbers. `competing_groups()` returns two or more Become lines of one property from one named start
 state (not `any_state`), each condition holding exactly one rate and no chance. The rate stands as
@@ -200,7 +204,11 @@ S" whose lines are all Become lines of X from S; `OnlyOneInside` under a When ar
 holds always (with its id and number, for `MoveConditionInto`), neither for a When holding a When;
 `Inside` under a change or When inside a When (`only_when_note` with the When's condition words, or
 none while it is blank) and under a result line inside one (`worked_out_everywhere_note`);
-`NothingInside` under an empty When. `check::holds_draw` is public for the card's Draw new numbers.
+`NothingInside` under an empty When; `SteerInRepeat` under a Steer towards inside a Repeat
+(`steer_in_repeat_note` with the Repeat's number and the property's name), since each time round
+steers from the value at the start of the tick and the steers add up
+(`a_steer_towards_inside_a_repeat_notes_that_its_steers_add_up` in `sheet_check.rs`).
+`check::holds_draw` is public for the card's Draw new numbers.
 
 **The checker** and the sheet's limits have their own file, `agents/henad-graph-sheet-check.md`.
 
@@ -276,7 +284,9 @@ days, the competing 0.5034 and its half, the number rule), the uniform block of 
 a group with a worked-out rate splitting on the host, the rates SIR conserving its cells at half a
 day, `a_tick_length_override_keeps_the_code_and_the_keys`, the factor of a rate per week, every
 other form of rate, a rate in an any of drawing alone, the notes of the wording table
-(`rate_notes_match_the_spec_examples`, `worked_out_rate_notes_match_the_spec_examples`), the two
+(`rate_notes_match_the_spec_examples`, `worked_out_rate_notes_match_the_spec_examples`), the mean
+stay and the "otherwise" words beside a chance from the same state
+(`a_rate_beside_another_exit_from_its_state_has_no_mean_stay`), the two
 conversion commands and their refusals (a chance on a card that runs once and one inside a Repeat
 among them, where the card offers no rate), the unit mismatch warning, and
 `a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named`. Reader tests sit in

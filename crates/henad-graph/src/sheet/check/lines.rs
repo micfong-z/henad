@@ -11,15 +11,16 @@ use henad_core::metadata::TimeUnit;
 use super::{Checker, Place};
 use super::{declarations, formula};
 use crate::sheet::document::{
-    Around, CELLS_ID, CardRuns, CellWhich, ChipRelation, CompareTest, GROUND_ID, LineKind, LineMode, MadeOf, PickRule,
-    PropertyType, SheetChip, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, SummaryKind,
+    Around, CELLS_ID, CardRuns, CellWhich, ChipRelation, CompareTest, GROUND_ID, LineKind, LineMode, MadeOf, Marks,
+    PickRule, PropertyType, SheetChip, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, SummaryKind,
 };
 use crate::sheet::edit::unit_in_text;
-use crate::sheet::limits::MAX_NESTING;
+use crate::sheet::limits::{ADD_UP_RESOLUTION_SHIFT, MAX_NESTING};
 use crate::sheet::sentence::{
     self, ANY_STATE_ID, ARROW_COMPARED_WITH_NUMBER, Blank, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, LineSelect,
     NOT_RUN_TICK, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD, RATE_IN_REPEAT,
 };
+use crate::sheet::writer::format_number;
 
 /// Kind of value a blank wants. Its words fill the skip note.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -765,6 +766,7 @@ impl<'a> Checker<'a> {
             }
             LineKind::Steer => {
                 let property = self.changed_property(line, context, state, Want::Blank(Blank::Property));
+                let steered = property.map(|property| property.property_type);
                 if let Some(property) = property
                     && !matches!(property.property_type, PropertyType::Number | PropertyType::Arrow)
                 {
@@ -776,7 +778,11 @@ impl<'a> Checker<'a> {
                 if line.mode.is_none_or(|mode| mode == LineMode::To) {
                     self.error("Steer needs a mode: by or towards", place);
                 }
-                self.slot(&line.value, &inner, Blank::Value, None, None, state);
+                // The value takes the type of the property it steers.
+                let expect = steered
+                    .filter(|steered| matches!(steered, PropertyType::Number | PropertyType::Arrow))
+                    .map(ValueType::of_property);
+                self.slot(&line.value, &inner, Blank::Value, expect, None, state);
                 self.number_slot(&line.strength, &inner, Blank::Number, state);
                 self.condition(line, context, state, false);
             }
@@ -817,7 +823,9 @@ impl<'a> Checker<'a> {
                         let fits = self
                             .property_of(id, GROUND_ID)
                             .is_some_and(|property| property.property_type == PropertyType::Number);
-                        if !fits {
+                        if fits {
+                            self.add_up_limit(line, id, context);
+                        } else {
                             self.error(
                                 format!("Leave needs a Number property of the ground, got '{id}'"),
                                 place,
@@ -953,9 +961,12 @@ impl<'a> Checker<'a> {
             match summary.summary {
                 None => self.blank(context, state, Want::Select(LineSelect::TotalOrAverage)),
                 Some(SummaryKind::Count) => {}
-                Some(_) => {
+                Some(kind) => {
                     let want = if grid { Blank::NumberProperty } else { Blank::Value };
-                    self.slot(&summary.value, &looking, want, None, None, state);
+                    // The largest and the smallest compare numbers.
+                    let expect =
+                        matches!(kind, SummaryKind::Largest | SummaryKind::Smallest).then_some(ValueType::Number);
+                    self.slot(&summary.value, &looking, want, expect, None, state);
                 }
             }
         }
@@ -1385,6 +1396,47 @@ impl<'a> Checker<'a> {
 }
 
 impl Checker<'_> {
+    /// Warns when the Leave `line` on the ground property `id`, which adds up its marks, leaves a fixed amount that the
+    /// most agents of the card's kind, all on one cell, can take past what a cell adds up in a tick.
+    ///
+    /// A number or a parameter's largest value is a fixed amount. A worked-out amount has no bound to compare.
+    fn add_up_limit(&mut self, line: &SheetLine, id: &str, context: &Context<'_>) {
+        let Some(property) = self.property_of(id, GROUND_ID) else {
+            return;
+        };
+        if property.marks != Some(Marks::AddUp) {
+            return;
+        }
+        let amount = match line.amount.value() {
+            Some(SheetValue::Literal(literal)) => literal.number(),
+            Some(SheetValue::Chip(SheetChip::Param(parameter))) => {
+                self.parameters.get(parameter.as_str()).map(|parameter| parameter.max)
+            }
+            _ => None,
+        };
+        let Some(amount) = amount.map(f64::abs) else {
+            return;
+        };
+        let Some(kind) = self.document.agents.iter().find(|kind| kind.id == context.thing) else {
+            return;
+        };
+        let limit = 2f64.powi(32 - i32::from(ADD_UP_RESOLUTION_SHIFT));
+        let total = f64::from(kind.max_count) * amount;
+        if total < limit {
+            return;
+        }
+        let words = |number: f64| format_number(number).unwrap_or_else(|| number.to_string());
+        let message = sentence::add_up_limit_note(
+            kind.max_count,
+            &sentence::thing_word(self.document, &kind.id),
+            &words(amount),
+            &words(total),
+            &property.name,
+            &words(limit),
+        );
+        self.warning(message, &context.place);
+    }
+
     /// Warns when the rate in `slot` is a parameter whose Unit names another unit of time than `unit`, the line's
     /// unit. The line's unit governs the run.
     fn rate_unit(&mut self, slot: &Slot, unit: TimeUnit, context: &Context<'_>) {

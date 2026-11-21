@@ -203,6 +203,15 @@ pub fn competing_note(
     )
 }
 
+/// Returns the rate note `note` of a line that applies only where the higher lines `lines` do not, such as "… This
+/// chance holds only when line 3 does not apply."
+pub fn otherwise_rate_note(note: &str, lines: &[usize]) -> String {
+    format!(
+        "{note} This chance holds only {}.",
+        super::card::otherwise_description(lines)
+    )
+}
+
 /// Returns the largest chance of a rate counted for each, on a tick that is long for it, such as "up to 0.91 with 8".
 pub fn long_tick_chance(chance: &str, count: u32) -> String {
     format!("up to {chance} with {count}")

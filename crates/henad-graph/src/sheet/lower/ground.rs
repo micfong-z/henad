@@ -26,11 +26,9 @@ use crate::sheet::check::Place;
 use crate::sheet::document::{
     ButtonStepRule, LineKind, Marks, PropertyType, SheetChip, SheetProperty, SheetValue, Slot,
 };
+use crate::sheet::limits::ADD_UP_RESOLUTION_SHIFT;
 use crate::types::ValueType;
 use crate::value::{InputValue, Literal, PortRef};
-
-/// Exponent `k` of the resolution 2^-`k` of a ground property that adds up its marks.
-const ADD_UP_RESOLUTION_SHIFT: u8 = 16;
 
 /// Returns whether a line of a card of `document` leaves marks on the ground property `id`.
 fn is_left(document: &crate::sheet::document::SheetDocument, id: &str) -> bool {

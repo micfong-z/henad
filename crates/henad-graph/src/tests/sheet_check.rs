@@ -708,6 +708,42 @@ fn notes_of(notes: &[RelationNote], keep: impl Fn(&RelationNoteKind) -> bool) ->
         .collect()
 }
 
+/// A Steer towards a value inside a Repeat notes that each time round steers from the value at the start of the tick
+/// and that the steers add up. A Steer by a value inside a Repeat, and a Steer towards one outside it, have no note.
+#[test]
+fn a_steer_towards_inside_a_repeat_notes_that_its_steers_add_up() {
+    let level = "[[agents.property]]\nid = \"level\"\nname = \"Level\"\ntype = \"number\"\n\n\
+                 [agents.property.starts_as]\nrule = \"value\"\nvalue = 0\n\n[[parameter]]";
+    let steer = |mode: &str, inside: bool| {
+        let text = sheet_text("random_walk.toml").replacen("[[parameter]]", level, 1);
+        let text = text.replacen("next_line = 3", "next_line = 4", 1);
+        let text = if inside {
+            text.replacen("lines = [\"l2\"]", "lines = [\"l2\", \"l3\"]", 1)
+        } else {
+            text.replacen("lines = [\"l1\"]", "lines = [\"l1\", \"l3\"]", 1)
+        };
+        format!(
+            "{text}\n[card.line.l3]\nkind = \"steer\"\nproperty = \"level\"\nmode = \"{mode}\"\nvalue = 10\nstrength = 0.5\n"
+        )
+    };
+    let notes = |text: &str| {
+        notes_of(&relation_notes(text, 0), |kind| {
+            *kind == RelationNoteKind::SteerInRepeat
+        })
+    };
+    assert!(!report(&steer("towards", true)).has_errors());
+    assert_eq!(
+        notes(&steer("towards", true)),
+        [(
+            "l3".to_owned(),
+            "Each time round of line 1 steers from my Level at the start of the tick, and the steers add up."
+                .to_owned()
+        )]
+    );
+    assert!(notes(&steer("by", true)).is_empty());
+    assert!(notes(&steer("towards", false)).is_empty());
+}
+
 #[test]
 fn the_order_note_shows_on_game_of_life_and_sir_and_not_on_the_vote_or_the_forest_fire() {
     let order = |file_name: &str| {

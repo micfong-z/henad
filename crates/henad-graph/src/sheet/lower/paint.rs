@@ -48,7 +48,7 @@ pub(super) fn expression(
         .into_iter()
         .map(|(name, input)| (name.to_owned(), input, ValueType::F32))
         .collect();
-    let node = expression_node(builder, site, expression, inputs);
+    let node = expression_node(builder, site, &[], expression, inputs);
     port(node, "out")
 }
 

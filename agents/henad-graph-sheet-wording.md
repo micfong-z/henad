@@ -35,7 +35,8 @@ tried-value words, `PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion.
 table marks "Not built" are left out. The rate notes are templates taking numbers already formatted
 (`rate_note`,
 `rate_for_each_note`, `worked_out_rate_note`, `growing_rate_note`, `chance_for_each_note`,
-`growing_chance_note`, `competing_note`, `mean_stay_note`), which `sheet::rates` fills. The end of
+`growing_chance_note`, `competing_note`, `mean_stay_note`, and `otherwise_rate_note` after any of
+them), which `sheet::rates` fills. The end of
 `rates.rs` holds the words of competing rates, the long tick (`long_tick_note`) and rate conversion
 (`chances_per_tick_note`), and `errors.rs` the remaining errors (`RATE_IN_BUTTON_CARD`,
 `RATE_IN_REPEAT`, `ONE_AGENT_KIND`), with the interim refusals (`NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHANGE`,
