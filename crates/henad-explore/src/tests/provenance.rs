@@ -989,6 +989,37 @@ mod sheet_text {
     }
 
     #[test]
+    fn a_resume_from_the_lowered_graph_keeps_the_sheet_text() {
+        let Some(gpu) = headless_device() else {
+            return;
+        };
+        let sheet = entry_of(&life_sheet());
+        let lowered = ModelFile::parse(&life_sheet())
+            .expect("the sheet reads")
+            .lowered_graph()
+            .expect("a sheet lowers to a graph")
+            .to_toml();
+        let graph = entry_of(&lowered);
+        assert_eq!(graph.source(), sheet.source(), "the graph has the sheet's code");
+        assert_eq!(graph.source().author(), None);
+        let (result, scratch, _) = resume_with(&gpu, &sheet, &graph);
+        assert_eq!(result.expect("the same code resumes"), []);
+        assert_eq!(run_count(scratch.path()), 4);
+        assert_eq!(
+            manifest(scratch.path()).model.author.map(|author| author.text),
+            Some(canonical(&life_sheet())),
+            "a resume with no sheet keeps the sheet the folder recorded"
+        );
+        let (result, scratch, _) = resume_with(&gpu, &graph, &sheet);
+        assert_eq!(result.expect("the same code resumes"), []);
+        assert_eq!(
+            manifest(scratch.path()).model.author.map(|author| author.text),
+            Some(canonical(&life_sheet())),
+            "a resume with the sheet records it"
+        );
+    }
+
+    #[test]
     fn a_lowered_ir_change_refuses_to_resume() {
         let Some(gpu) = headless_device() else {
             return;
@@ -1034,6 +1065,40 @@ mod sheet_text {
         assert_eq!(
             recorded.author.map(|author| author.text),
             Some(canonical(&life_sheet()))
+        );
+    }
+
+    #[test]
+    fn a_merge_takes_the_sheet_text_of_a_later_shard() {
+        let Some(gpu) = headless_device() else {
+            return;
+        };
+        let lowered = ModelFile::parse(&life_sheet())
+            .expect("the sheet reads")
+            .lowered_graph()
+            .expect("a sheet lowers to a graph")
+            .to_toml();
+        let scratch = ScratchDir::new("sheet-merge-later");
+        let dirs = [scratch.path().join("shard-0"), scratch.path().join("shard-1")];
+        for (index, (dir, text)) in dirs.iter().zip([lowered, life_sheet()]).enumerate() {
+            let options = shard_options(index as u64, 2);
+            sweep_with(
+                &entry_of(&text),
+                Some(&gpu),
+                &sheet_spec(2),
+                dir,
+                &options,
+                &mut Recorder::default(),
+            )
+            .expect("the shard runs");
+        }
+        assert_eq!(manifest(&dirs[0]).model.author, None, "the graph carries no sheet");
+        let merged = scratch.path().join("merged");
+        merge(&dirs, &merged, &mut Recorder::default()).expect("shards of one code merge");
+        assert_eq!(
+            manifest(&merged).model.author.map(|author| author.text),
+            Some(canonical(&life_sheet())),
+            "the merge keeps the sheet of the shard that records one"
         );
     }
 

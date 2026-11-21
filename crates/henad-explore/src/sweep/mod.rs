@@ -29,6 +29,7 @@ use crate::output::manifest::{
     BuildRole, Manifest, ManifestDesignTable, ManifestSpecSource, RecordedBuild, ResultCounts, hex, parse_hex,
 };
 use crate::output::memory::SweepFiles;
+use crate::probe::ShortfallWords;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::progress::{Progress, ProgressEvent};
 use crate::search_run::{SearchOutline, SearchPlan};
@@ -180,6 +181,11 @@ pub struct SweepOptions {
     pub spec_source: SpecSource,
     /// Build of the host and its command line, for the manifest.
     pub provenance: Provenance,
+    /// Wording of the reasons the device cannot build a config, `None` for [`ModelEntry::shortfalls`].
+    ///
+    /// The capacity check before any run and the check before each GPU build both use it. A config that a search
+    /// draws past the device is recorded as `refused` with these reasons in its note, and is never built.
+    pub shortfall_words: Option<ShortfallWords>,
     /// Thread pool the probes and the runs of a GPU model are built in, `None` for rayon's global pool.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) build_pool: Option<Arc<rayon::ThreadPool>>,
@@ -199,6 +205,7 @@ impl SweepOptions {
             active_runs: None,
             spec_source: SpecSource::default(),
             provenance,
+            shortfall_words: None,
             #[cfg(not(target_arch = "wasm32"))]
             build_pool: None,
         }

@@ -53,6 +53,31 @@ pub(crate) fn with_model_files<'a>(
     Ok((Cow::Owned(loaded), files))
 }
 
+/// Checks that `output`, the path that `flag` writes, is none of the model files at `model_files`.
+///
+/// Two paths name the same file when both resolve to one canonical path, so `./sir.toml` and `sir.toml` match. An
+/// output that does not exist yet names no model file.
+///
+/// # Errors
+///
+/// Returns an error naming both paths when `output` is a model file.
+pub(crate) fn check_output_path(flag: &str, output: &Path, model_files: &[PathBuf]) -> Result<()> {
+    let Ok(resolved) = output.canonicalize() else {
+        return Ok(());
+    };
+    if let Some(model_file) = model_files
+        .iter()
+        .find(|model_file| model_file.canonicalize().is_ok_and(|path| path == resolved))
+    {
+        bail!(
+            "{flag} '{}' is the model file '{}'. Write the output to another path",
+            output.display(),
+            model_file.display()
+        );
+    }
+    Ok(())
+}
+
 /// Prints the canonical text of the graph that the model file at `path` builds as on stdout, and returns exit status
 /// 0.
 ///

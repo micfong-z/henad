@@ -790,8 +790,9 @@ pub struct ManifestModel {
     /// Canonical text of the author document the model was built from, such as a sheet, as
     /// [`ModelSource::author`] records it. Left out for a model built from its code alone.
     ///
-    /// The author text stays outside the code identity. A resume records the author text of the model it runs, and a
-    /// merge keeps the lowest shard's.
+    /// The author text stays outside the code identity. A resume records the author text of the model it runs, or
+    /// keeps the recorded text when that model has none and runs the recorded code. A merge keeps the text of the
+    /// lowest shard that records one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<ManifestModelCode>,
 }

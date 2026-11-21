@@ -7,7 +7,7 @@
 //!
 //! A sheet opens through the sheet reader alone, so a sheet with checker errors still opens here. Its preview builds
 //! only while the sheet reads, checks and lowers and holds a property, and the preview waits paused at tick 0 until
-//! Play. Every edit of the Sheet pane and the Card pane runs [`SheetEdit`](henad_graph::sheet::edit::SheetEdit)
+//! Play. Every edit of the Sheet pane and the Card pane runs [`SheetEdit`]
 //! commands. Until the preview passes tick 0 or a button is pressed, an edit draws the start again at tick 0. After
 //! that, a changed Starts as waits for Start again, and any other edit starts the world again from tick 0 with a
 //! notice.

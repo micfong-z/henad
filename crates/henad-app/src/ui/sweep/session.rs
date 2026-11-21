@@ -11,6 +11,7 @@ use henad_core::provenance::BuildInfo;
 use henad_explore::exec::Concurrency;
 use henad_explore::handle::{SweepEvent, SweepOutput, SweepPhase, SweepProgress, SweepRun, SweepRunOptions};
 use henad_explore::output::manifest::ManifestExecution;
+use henad_explore::probe::ShortfallWords;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
 use henad_explore::sweep::{Provenance, SweepEnd, SweepOutline, SweepReport};
 
@@ -151,7 +152,7 @@ impl SweepSession {
         if let Some(refusal) = sheet_capacity_refusal(app, &entry, &spec) {
             return Err(refusal);
         }
-        let options = run_options(app, execution);
+        let options = run_options(app, &entry, execution);
         let run = SweepRun::start(entry, None, spec, output, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();
         Ok(Self::new(run, model_name, output_dir, execution))
@@ -172,7 +173,7 @@ impl SweepSession {
     ) -> Result<Self, String> {
         let entry = app.lookup(model_id).map_err(|error| lookup_message(&error))?.clone();
         let model_name = model_label(app, entry.id(), entry.name());
-        let options = run_options(app, execution);
+        let options = run_options(app, &entry, execution);
         let run = SweepRun::resume_directory(entry, None, &folder, options).map_err(|error| describe_error(&error))?;
         app.pause_simulation();
         Ok(Self::new(run, model_name, Some(folder), execution))
@@ -337,16 +338,21 @@ fn sheet_capacity_refusal(app: &AppState, entry: &ModelEntry, spec: &SweepSpec) 
     (error.count > 0).then(|| describe_error(&ExploreError::Capacity(error)))
 }
 
-/// Returns the options of a sweep that `app` starts with the concurrency and budgets of `execution`.
+/// Returns the options of a sweep of `entry` that `app` starts with the concurrency and budgets of `execution`.
 ///
 /// The sweep wakes the UI on each event, and builds its probes and the runs of a GPU model in the app's
-/// [`ModelPool`](crate::state::ModelPool) on native.
-fn run_options(app: &AppState, execution: SessionExecution) -> SweepRunOptions {
+/// [`ModelPool`](crate::state::ModelPool) on native. When the Editor's sheet builds `entry`, a config past the device
+/// is refused in the sheet's lines, and so is a candidate a search draws past it.
+fn run_options(app: &AppState, entry: &ModelEntry, execution: SessionExecution) -> SweepRunOptions {
     let mut options = SweepRunOptions::new(provenance(app.product.host));
     options.concurrency = execution.concurrency;
     options.memory_budget = execution.memory_budget;
     options.gpu_memory_budget = execution.gpu_memory_budget;
     options.wake = Some(app.repaint_waker());
+    options.shortfall_words = app
+        .editor_sheet_of(entry)
+        .cloned()
+        .map(|sheet| ShortfallWords::new(move |entry, params, limits| sheet.shortfalls(entry, params, limits)));
     #[cfg(not(target_arch = "wasm32"))]
     {
         options.build_pool = app.model_pool().current().1;

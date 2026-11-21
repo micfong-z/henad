@@ -245,7 +245,7 @@ A submission of many such ticks can then trip the operating system's GPU watchdo
 ## Fields of a graph model
 
 A file of kind `graph` holds a graph model, which the Editor writes in its canonical form.
-The types of [`henad-graph`](https://docs.rs/henad-graph) document its tables.
+The types of [`henad-graph`](https://docs.rs/henad-graph) document its tables, and [Limits of a graph model](#limits-of-a-graph-model) lists the limits a graph model is held to.
 A graph model of agents can hold `[[field]]` tables, layers of values that tile the world.
 A tick pass reads a field with `field.get` and deposits into it with `field.deposit`.
 
@@ -273,6 +273,61 @@ Any other deposit is not checked against it, so a model whose cells can take tha
 
 A resolution that is not a power of two, such as 0.001, is refused at its line, with the nearest allowed value in the message.
 A power of two keeps the products of the deposit and the merge exact on every device, including one that compiles with fast math.
+
+## Limits of a graph model
+
+A graph model is checked against these limits when the file is loaded, and a file past one is refused.
+Each limit belongs to the node library version.
+[`henad_graph::limits`](https://docs.rs/henad-graph/latest/henad_graph/limits/) lists every one.
+
+| Limit | Value |
+|---|---|
+| Size of the file | 1 MiB |
+| Nodes of one pass or function | 4096 |
+| Nodes of the file | 16384 as written, 65536 once its function calls are inlined |
+| Passes | 64 |
+| Functions | 128, calling one another at most 8 deep |
+| Parameters and stats | 64 of each |
+| Actions | 32 |
+| Fields | 8, each of at most 16 layers |
+| Side of a grid | 16384 cells |
+| Agents of a population | 10,000,000 |
+| Side of a world of agents | 10,000 world units |
+| `max` of a Repeat | 65536 |
+| Repeats and neighbourhood folds inside one another | 3 deep |
+| Cost of one pass | 65536 units for each cell or agent |
+
+### Cost of a pass
+
+Each node costs a number of units for each cell or agent its pass runs on, set by its kind and its configuration, and a pass costs the sum of its nodes.
+A function call costs one unit plus the function's cost, counted again at each call.
+A `region.repeat` costs `1 + max × (body + 1)`, where `max` is its bound and `body` the cost of its body, so a Repeat of at most 100 around a body of 20 units costs 2101.
+A `grid.fold` costs `1 + positions × (body + 1)`, with one position for each neighbouring cell it reads, the centre included when `include_center` holds.
+An `agent.radius_fold` costs 8 units plus its body, counted once, since the number of agents it visits is known only as it runs.
+A pass that costs more than 65536 units is refused, and the message names its heaviest node.
+
+### Work of a run
+
+The cost of a pass bounds the work of one cell or agent.
+The work of a pass is its cost times the cells or agents it runs on.
+An `agent.radius_fold` adds the work of its walk: the cells of the neighbour index within its radius, plus, for each agent those cells hold, the cost of its body and 8 units.
+The walk assumes the agents spread evenly over the world, and counts at most every agent and at most 65536 visits.
+
+Henad checks two budgets of work before it builds a model, at the model's parameter values.
+
+| Budget | Work units |
+|---|---|
+| One submission to the GPU: 64 ticks of steps, with the display and stat passes, or the passes of one press | 600,000,000,000 |
+| One run on the host: the init passes at a build, or their rerun on a press | 4,000,000,000 |
+
+A model past either budget is refused before anything is built.
+A single run stops with an error, a sweep stops before its first run, and a search records each candidate past a budget as `refused`.
+A sheet's refusal names its lines, and a graph's names the heaviest pass.
+
+### Faults while a model runs
+
+An `agent.radius_fold` that would walk more than 65536 cells of the neighbour index, or that visits more than 65536 agents, ends its run with a fault.
+Agents that gather in a few cells visit more of each other than the even spread of the budget assumes, and these caps then bound each walk.
 
 ## Results across devices
 
@@ -446,7 +501,8 @@ A sweep of a sheet also records the sheet's canonical text in its manifest, as `
 
 The sheet's text stays outside the code, so a note or a comment edited between two sessions of one sweep keeps the folder resumable.
 The manifest then holds the sheet as the latest session ran it.
-A merge keeps the sheet text of the lowest shard.
+A session that runs the same code with no sheet, such as the graph that `--print-lowered` prints, keeps the recorded sheet.
+A merge keeps the sheet text of the lowest shard that records one.
 A replay runs the graph that `model.code` records and never reads the sheet, so a folder still replays when a later Henad reads the sheet differently.
 In the desktop app, <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> in the [Results tab](../guide/app.md#opening-results) opens the recorded sheet, and opens the recorded graph when the folder records no sheet.
 A program reads the text with `ResultSet::author`.

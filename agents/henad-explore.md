@@ -51,9 +51,15 @@ run on the calling thread.
 A panic on a lane's thread or in the sink aborts the `SweepControl` (`AbortOnPanic`). The other
 lanes then stop within a slice instead of stepping runs nobody commits. `exec/gpu.rs`
 (`run_on_tracks`) is the counterpart of `exec/cpu.rs` for a GPU model. Error scopes are
-thread-local, and every `GpuTrack` lives on the calling thread. The `Interleaver` builds a queued
-run once a track is free and the summed `entry.demand()` bytes of the live runs and its own fit
-the budget (`--gpu-memory`, else the device's `max_buffer_size`). A run that fits beside none runs
+thread-local, and every `GpuTrack` lives on the calling thread. The `Interleaver` first checks a
+queued run's values against the device (`probe::shortfalls`, worded by the executor's
+`ShortfallWords` when the host set `SweepOptions::shortfall_words`, else
+`ModelEntry::shortfalls`). A run the device cannot hold ends `refused` before any build, with the
+reasons in its note. A sweep never meets one, since `check_capacity` refused its plan, but a
+search's candidates reach the device here alone
+(`a_search_refuses_each_candidate_past_the_device_without_building_it`). It builds a queued run
+once a track is free and the summed `entry.demand()` bytes of the live runs and its own fit the
+budget (`--gpu-memory`, else the device's `max_buffer_size`). A run that fits beside none runs
 alone. An out-of-memory build beside live runs goes back to the head of the queue, drops the track
 cap by one and holds admission until a live run ends. Each round reads the `SweepControl` once and
 visits every track once. A visit takes a landed sample through `poll_stats_readback(false)`,
@@ -156,7 +162,11 @@ text in henad-graph's `SHEET_CODE_FORMAT` (`henad-sheet/1`), filled beside `code
 `sweep/manifest.rs`. It stays outside the code identity, so no resume, merge or build comparison
 reads it.
 The model block is rebuilt from the current entry each session, so a resume after a note edit
-records the new text, and a merge keeps the lowest shard's block.
+records the new text, and a merge keeps the lowest shard's block. An entry with no author text
+that runs the recorded code keeps the recorded author (`running_manifest`), and a merge whose
+lowest shard has none takes the next shard's (`merged_manifest`,
+`a_resume_from_the_lowered_graph_keeps_the_sheet_text`,
+`a_merge_takes_the_sheet_text_of_a_later_shard`).
 `ManifestModelCode::to_code` rebuilds a `ModelCode` (the hash recomputed), and
 `ResultSet::author` returns the recorded author text. A replay runs the recorded IR, which
 `ModelFile::parse` reads as a graph with no sheet reader. The `sheet_text` module of

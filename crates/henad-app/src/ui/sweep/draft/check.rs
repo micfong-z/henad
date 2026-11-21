@@ -137,7 +137,7 @@ impl SweepDraft {
 
     /// Returns the time limit of each run, `None` for no limit.
     ///
-    /// A limit under [`MIN_TIMEOUT_SECONDS`] is accepted, 0 included, as in `henad-cli`.
+    /// A limit under [`MIN_TIMEOUT_SECONDS`](super::MIN_TIMEOUT_SECONDS) is accepted, 0 included, as in `henad-cli`.
     ///
     /// # Errors
     ///

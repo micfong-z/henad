@@ -96,7 +96,7 @@ impl<'a> PreparedStart<'a> {
             check_directory_code(output_dir, mode, plan.model(), entry.source())?;
         }
         if let Some(ctx) = gpu {
-            check_capacity(entry, plan, &ctx.device.limits())?;
+            check_capacity(entry, plan, &ctx.device.limits(), options.shortfall_words.as_ref())?;
         }
         let probe = match probe {
             Some(probe) => probe,
@@ -468,6 +468,7 @@ pub(crate) fn executor<'a>(
         .with_timeout(plan.run_settings().timeout)
         .with_active_runs(options.active_runs.clone())
         .with_gpu_memory_budget(options.gpu_memory_budget)
+        .with_shortfall_words(options.shortfall_words.clone())
         .with_build_pool(options.build_pool.clone()))
 }
 

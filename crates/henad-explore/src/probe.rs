@@ -1,6 +1,7 @@
 //! Probe builds of a model, made before a sweep to fix its stat columns and measure the footprint of a run.
 
 use std::fmt;
+use std::sync::Arc;
 
 use web_time::Instant;
 
@@ -303,8 +304,53 @@ impl std::error::Error for ProbeError {
 pub struct RefusedConfig {
     /// Id of the config in its plan.
     pub config_id: u64,
-    /// Reasons the device rejects the config, from [`ModelEntry::shortfalls`].
+    /// Reasons the device rejects the config, from [`ModelEntry::shortfalls`] or the sweep's [`ShortfallWords`].
     pub reasons: Vec<String>,
+}
+
+/// Function that returns the reasons a device cannot build a model at some values, used in place of
+/// [`ModelEntry::shortfalls`].
+///
+/// The function receives the entry, its values and the device's limits, and returns an empty list when the device
+/// can build it. A host sets one in [`SweepOptions::shortfall_words`] to state the reasons in the terms of the file
+/// the model came from, as a sheet names its lines.
+///
+/// [`SweepOptions::shortfall_words`]: crate::sweep::SweepOptions::shortfall_words
+#[derive(Clone)]
+pub struct ShortfallWords(Arc<ShortfallFn>);
+
+/// Signature of the function a [`ShortfallWords`] holds.
+type ShortfallFn = dyn Fn(&ModelEntry, &[ParamValue], &wgpu::Limits) -> Vec<String> + Send + Sync;
+
+impl ShortfallWords {
+    /// Returns the wording of `reasons`, a function of the entry, its values and the device's limits.
+    pub fn new(
+        reasons: impl Fn(&ModelEntry, &[ParamValue], &wgpu::Limits) -> Vec<String> + Send + Sync + 'static,
+    ) -> Self {
+        Self(Arc::new(reasons))
+    }
+}
+
+/// Prints the type alone, instead of the function.
+impl fmt::Debug for ShortfallWords {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShortfallWords").finish_non_exhaustive()
+    }
+}
+
+/// Returns the reasons a device with `limits` cannot build `entry` at `params`, empty when it can.
+///
+/// The reasons come from `words` when given, and from [`ModelEntry::shortfalls`] otherwise.
+pub(crate) fn shortfalls(
+    entry: &ModelEntry,
+    params: &[ParamValue],
+    limits: &wgpu::Limits,
+    words: Option<&ShortfallWords>,
+) -> Vec<String> {
+    match words {
+        Some(words) => (words.0)(entry, params, limits),
+        None => entry.shortfalls(params, limits),
+    }
 }
 
 /// Configs of a plan the device cannot host, found before any run.
@@ -334,12 +380,18 @@ impl fmt::Display for CapacityError {
 
 impl std::error::Error for CapacityError {}
 
-/// Checks every config of `plan` against `limits` before any run. A CPU model always passes.
+/// Checks every config of `plan` against `limits` before any run, with the reasons worded by `words` when given. A CPU
+/// model always passes.
 ///
 /// # Errors
 ///
 /// Returns [`CapacityError`] when some config needs more than the device allows.
-pub(crate) fn check_capacity(entry: &ModelEntry, plan: &Plan, limits: &wgpu::Limits) -> Result<(), CapacityError> {
+pub(crate) fn check_capacity(
+    entry: &ModelEntry,
+    plan: &Plan,
+    limits: &wgpu::Limits,
+    words: Option<&ShortfallWords>,
+) -> Result<(), CapacityError> {
     if entry.gpu_needs().is_none() {
         return Ok(());
     }
@@ -348,7 +400,7 @@ pub(crate) fn check_capacity(entry: &ModelEntry, plan: &Plan, limits: &wgpu::Lim
         count: 0,
     };
     for (config_id, config) in (0_u64..).zip(plan.configs()) {
-        let reasons = entry.shortfalls(&config.params, limits);
+        let reasons = shortfalls(entry, &config.params, limits, words);
         if reasons.is_empty() {
             continue;
         }
@@ -427,7 +479,7 @@ mod tests {
             max_storage_buffer_binding_size: largest,
             ..wgpu::Limits::default()
         };
-        let error = check_capacity(&gpu_sir, &plan, &limits).expect_err("the larger grids pass the binding size");
+        let error = check_capacity(&gpu_sir, &plan, &limits, None).expect_err("the larger grids pass the binding size");
         assert_eq!(error.count, 6);
         let listed: Vec<u64> = error.refused.iter().map(|config| config.config_id).collect();
         assert_eq!(listed, (1..=MAX_LISTED_CONFIGS as u64).collect::<Vec<_>>());
@@ -438,7 +490,7 @@ mod tests {
             .plan(&game_of_life.schema())
             .expect("a valid spec");
         assert!(
-            check_capacity(&game_of_life, &plan, &limits).is_ok(),
+            check_capacity(&game_of_life, &plan, &limits, None).is_ok(),
             "a CPU model passes limits that refuse a GPU model"
         );
     }

@@ -25,8 +25,8 @@ There the Editor takes most of the window, and the <span class="ui" markdown>:ma
 Untick **Open models in the Editor layout** in the View menu to open the Editor in the layout that shows instead, in a panel of its own to the right of the Viewport in the default layout.
 
 - Press <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> in the <span class="ui" markdown>:material-cog-outline: Model</span> tab to open the Editor on the Life starter, Conway's Game of Life written as a grid rule.
-- Press <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab to open the Editor on the model file of the selected grid rule.
-  The button appears only for a model applied from the Editor.
+- Press <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab to open the Editor on the sheet, node graph or grid rule the selected model was built from.
+  The button appears only for a model built from one of these, such as a model applied from the Editor.
 - Press <span class="ui" markdown>:material-file-document-plus-outline: New model</span> in the Editor or the Model tab to start a [sheet](#sheets), from Blank or from a starter such as Game of Life or Forest fire.
 - Press <span class="ui" markdown>:material-graph-outline: New node graph</span> in the Editor and pick an example to open it as a node graph: Game of Life, Vote or SIR Epidemic on a grid, or Boids Flocking, Ant Foraging or Random Walk of agents.
 - In the menu bar, <span class="ui" markdown>:material-file-outline: File</span> holds New model, New grid rule, New node graph, Open model and Save model, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> toggles the Editor like any other tab and switches between the default layout and the Editor layout.
@@ -435,6 +435,7 @@ A pass with problems shows their number beside its name.
 
 Apply runs the graph at its own size, as for a grid rule, and replaces a preview at any tick.
 A model too heavy for the device at its own size is not built, and the Editor reads **Model build failed. Fix the problem below.** over the work it would need.
+[Limits of a graph model](../reference/model-files.md#limits-of-a-graph-model) gives the budgets of work.
 The preview of the same model can still run, since it is smaller.
 
 ### Regions and Repeat

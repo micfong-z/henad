@@ -30,7 +30,7 @@ use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
 
 use crate::cursor::{CursorState, RunCursor};
-use crate::probe::ProbeReport;
+use crate::probe::{ProbeReport, ShortfallWords};
 
 /// Number of jobs of one step for each thread of a lane.
 pub const JOBS_PER_THREAD: usize = 4;
@@ -533,6 +533,9 @@ pub struct Executor<'a> {
     gpu_memory_budget: Option<u64>,
     #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
     track_depth: GpuTrackDepth,
+    /// Wording of the reasons the device cannot build a run of a GPU model, `None` for [`ModelEntry::shortfalls`].
+    #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
+    shortfall_words: Option<ShortfallWords>,
     /// Thread pool each run of a GPU model is built in, `None` for rayon's global pool.
     #[cfg(not(target_arch = "wasm32"))]
     build_pool: Option<Arc<rayon::ThreadPool>>,
@@ -590,6 +593,7 @@ impl<'a> Executor<'a> {
             pools,
             gpu_memory_budget: None,
             track_depth: GpuTrackDepth::default(),
+            shortfall_words: None,
             #[cfg(not(target_arch = "wasm32"))]
             build_pool: None,
         })
@@ -611,6 +615,19 @@ impl<'a> Executor<'a> {
     pub(crate) fn with_build_pool(self, pool: Option<Arc<rayon::ThreadPool>>) -> Self {
         Self {
             build_pool: pool,
+            ..self
+        }
+    }
+
+    /// Returns the executor with each run of a GPU model checked against the device before its build.
+    ///
+    /// A run the device cannot build ends as [`RunStatus::Refused`], with the reasons from `words`, or from
+    /// [`ModelEntry::shortfalls`] for `None`, in its note. The run is never built.
+    ///
+    /// [`RunStatus::Refused`]: henad_core::explore::outcome::RunStatus::Refused
+    pub fn with_shortfall_words(self, words: Option<ShortfallWords>) -> Self {
+        Self {
+            shortfall_words: words,
             ..self
         }
     }

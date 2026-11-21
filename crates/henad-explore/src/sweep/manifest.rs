@@ -68,7 +68,8 @@ pub(crate) struct ManifestParts<'a> {
 
 /// Returns the manifest, with status `running`, of the sweep or search that `inputs` and `parts` describe.
 ///
-/// A resume keeps the start time, sessions and merged shards the directory recorded.
+/// A resume keeps the start time, sessions and merged shards the directory recorded. It records the author text of
+/// the model it runs, or keeps the recorded author text when the model has none and runs the recorded code.
 ///
 /// # Errors
 ///
@@ -96,6 +97,15 @@ pub(crate) fn running_manifest(inputs: &SweepInputs<'_>, parts: &ManifestParts<'
         host: Some(provenance.host().clone()),
         model_source: Some(RecordedBuild::from(entry.source())),
     };
+    let code = entry.source().code().map(ManifestModelCode::from);
+    // A graph with a sheet's code, such as the graph the sheet lowers to, carries no sheet. The folder still holds
+    // runs of that sheet.
+    let author = entry.source().author().map(ManifestModelCode::from).or_else(|| {
+        let recorded = parts.recorded?;
+        (code.is_some() && recorded.model.code == code)
+            .then(|| recorded.model.author.clone())
+            .flatten()
+    });
     let (started_unix_ms, sessions, merged_shards) = match parts.recorded {
         Some(recorded) => {
             let mut sessions = recorded.clone().into_credited_sessions(outline.skipped);
@@ -121,8 +131,8 @@ pub(crate) fn running_manifest(inputs: &SweepInputs<'_>, parts: &ManifestParts<'
             schema_hash: hex(parts.plan.schema_hash()),
             schema: schema_json(entry, Some(parts.probe)),
             replays_exactly: entry.metadata().replays_exactly,
-            code: entry.source().code().map(ManifestModelCode::from),
-            author: entry.source().author().map(ManifestModelCode::from),
+            code,
+            author,
         },
         spec,
         spec_source: (&options.spec_source).into(),

@@ -23,6 +23,7 @@ use henad_core::metadata::Backend;
 use crate::exec::{ActiveRun, ActiveRuns, Concurrency, SweepControl};
 use crate::output::OutputError;
 use crate::output::manifest::ManifestError;
+use crate::probe::ShortfallWords;
 use crate::progress::{Progress, ProgressEvent};
 #[cfg(target_arch = "wasm32")]
 use crate::pumped::{PumpedSweep, SweepCommand};
@@ -80,6 +81,10 @@ pub struct SweepRunOptions {
     pub provenance: Provenance,
     /// Called after each event, so that an idle host wakes up to collect it. It must not block.
     pub wake: Option<WakeFn>,
+    /// Wording of the reasons the device cannot build a config of a GPU model, `None` for
+    /// [`ModelEntry::shortfalls`](henad_compute::entry::ModelEntry::shortfalls). A browser runs no GPU sweep and
+    /// never reads it.
+    pub shortfall_words: Option<ShortfallWords>,
     /// Thread pool the sweep's probes and the runs of a GPU model are built in, `None` for rayon's global pool.
     ///
     /// The runs of a CPU model are built and stepped in pools of their own either way.
@@ -99,7 +104,8 @@ impl std::fmt::Debug for SweepRunOptions {
             .field("series_budget", &self.series_budget)
             .field("spec_source", &self.spec_source)
             .field("provenance", &self.provenance)
-            .field("wake", &self.wake.is_some());
+            .field("wake", &self.wake.is_some())
+            .field("shortfall_words", &self.shortfall_words);
         #[cfg(not(target_arch = "wasm32"))]
         debug.field("build_pool", &self.build_pool);
         debug.finish_non_exhaustive()
@@ -118,6 +124,7 @@ impl SweepRunOptions {
             spec_source: SpecSource::default(),
             provenance,
             wake: None,
+            shortfall_words: None,
             #[cfg(not(target_arch = "wasm32"))]
             build_pool: None,
         }
@@ -525,6 +532,7 @@ impl SweepRun {
         sweep_options.retry_failed = launch.options.retry_failed;
         sweep_options.active_runs = Some(active_runs.clone());
         sweep_options.spec_source = launch.options.spec_source.clone();
+        sweep_options.shortfall_words = launch.options.shortfall_words.clone();
         sweep_options.build_pool = launch.options.build_pool.clone();
         let thread = std::thread::Builder::new()
             .name("henad-sweep".to_owned())

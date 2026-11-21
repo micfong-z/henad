@@ -26,6 +26,7 @@ use crate::output::{
     ARCHIVE_FILE, BATCHES_FILE, BEST_FILE, EVALUATIONS_FILE, GENERATIONS_FILE, MANIFEST_FILE, OutputError, RUNS_FILE,
     SERIES_FILE,
 };
+use crate::probe::ShortfallWords;
 use crate::progress::{NoProgress, Progress, ProgressEvent};
 use crate::pumped::PumpedSweep;
 use crate::result_set::{ResultSet, ResultSetError};
@@ -33,9 +34,9 @@ use crate::search_run::{EvaluationReading, SearchPlan, SearchPlanError};
 use crate::spec_file::SpecFile;
 use crate::sweep::{ExploreError, SpecPlan, SweepEnd, SweepOptions, SweepWarning};
 use crate::tests::support::{
-    OutputTables, Recorder, ScratchDir, SecondResume, UntimedFiles, directory_files, drain, dry_run, entry, fixed,
-    headless_device, interrupted_after, lane_count, other_engine, planned, provenance, pump_until_idle, range,
-    rewrite_manifest, sweep, sweep_options, sweep_with, unbuildable,
+    OutputTables, Recorder, ScratchDir, SecondResume, UntimedFiles, baseline_device, directory_files, drain, dry_run,
+    entry, fixed, headless_device, interrupted_after, lane_count, other_engine, planned, provenance, pump_until_idle,
+    range, rewrite_manifest, sweep, sweep_options, sweep_with, unbuildable, values,
 };
 
 /// Maximum time a test waits for a search to end.
@@ -637,6 +638,8 @@ fn a_search_resume_refuses_changed_code() {
         matches!(error, ExploreError::Resume(ResumeError::CodeChanged { .. })),
         "{error:?}"
     );
+    // The message calls the folder neither a sweep nor a search.
+    assert_eq!(error.to_string(), "cannot resume the runs in the directory");
     assert_eq!(
         std::fs::read(scratch.path().join(RUNS_FILE)).expect("runs.csv reads"),
         runs_before,
@@ -944,6 +947,65 @@ fn a_gpu_search_writes_the_same_tables_on_any_track_count() {
         .collect();
     assert_eq!(tables[0].table(BEST_FILE).len(), 1 + 12, "every candidate is ranked");
     assert_eq!(tables[1], tables[0], "3 tracks against 1");
+}
+
+#[test]
+fn a_search_refuses_each_candidate_past_the_device_without_building_it() {
+    let Some(ctx) = baseline_device() else {
+        return;
+    };
+    let gpu_sir = entry("gpu_sir", Some(&ctx));
+    // The fixed values fit the baseline. A width of 6000 passes its binding size, as the space alone can draw.
+    let mut spec = SweepSpec::new("gpu_sir");
+    spec.fixed = fixed(&[("grid_height", "6000")]);
+    spec.run.steps = 4;
+    spec.seeds.root = 3;
+    spec.measure.default_reducers = false;
+    spec.measure.reducers = vec!["Infected:max".parse().expect("a valid reducer")];
+    spec.search = Some(SearchSpec {
+        algorithm: SearchAlgorithm::Random,
+        max_evaluations: 8,
+        batch_size: 4,
+        objective: Some(Objective {
+            column: "Infected:max".to_owned(),
+            goal: Goal::Minimize,
+            aggregate: Aggregate::Median,
+        }),
+        space: vec![FactorSpec::param("grid_width", values(&["32", "6000"]))],
+    });
+    let mut worded = sweep_options(false);
+    worded.shortfall_words = Some(ShortfallWords::new(|entry, params, limits| {
+        let reasons = entry.shortfalls(params, limits).into_iter();
+        reasons.map(|reason| format!("worded: {reason}")).collect()
+    }));
+    let scratch = ScratchDir::new("search-past-the-device");
+    for (name, options) in [("entry", sweep_options(false)), ("worded", worded)] {
+        let output_dir = scratch.path().join(name);
+        let report = sweep_with(&gpu_sir, Some(&ctx), &spec, &output_dir, &options, &mut NoProgress)
+            .expect("the search runs to its end");
+        let tables = OutputTables::read(&output_dir);
+        let widths = tables.run_column("grid_width");
+        assert!(widths.contains(&"32") && widths.contains(&"6000"), "{widths:?}");
+        let fitting = widths.iter().filter(|&&width| width == "32").count() as u64;
+        assert_eq!(report.counts.ok, fitting, "{name}");
+        let runs = widths
+            .iter()
+            .zip(tables.run_column("status"))
+            .zip(tables.run_column("note"));
+        for ((&width, status), note) in runs {
+            if width == "32" {
+                assert_eq!((status, note), ("ok", ""), "{name}");
+                continue;
+            }
+            assert_eq!(status, "refused", "{name}: {note}");
+            assert!(
+                note.starts_with("while building the model, the config does not fit this GPU: "),
+                "{name}: {note}"
+            );
+            assert_eq!(note.contains("worded: "), name == "worded", "{note}");
+            assert!(!note.contains(".rs:"), "no source location: {note}");
+        }
+    }
 }
 
 /// Progress that keeps the course of a search from its batches.

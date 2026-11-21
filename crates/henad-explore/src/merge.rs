@@ -367,13 +367,17 @@ fn build_warnings(shards: &[ShardInput]) -> Vec<SweepWarning> {
 /// execution and runtime of the lowest shard. A shard's session that records no engine build receives the build
 /// that its shard's manifest implies. The last session of a shard left `running` or `failed` is credited with the rows
 /// the shard holds beyond those it found, as a resume credits it. The engine block records the build that performs
-/// the merge, and `replays_exactly` is true only when it is true in every shard.
+/// the merge, and `replays_exactly` is true only when it is true in every shard. The author text is the lowest shard's,
+/// or that of the lowest shard that records one.
 fn merged_manifest(shards: &[ShardInput], shard_dirs: &[PathBuf]) -> Manifest {
     let mut manifest = shards[0].manifest.clone();
     manifest.status = ManifestStatus::Running;
     manifest.shard = Shard::WHOLE.into();
     manifest.engine = RecordedBuild::engine();
     manifest.model.replays_exactly = shards.iter().all(|input| input.manifest.model.replays_exactly);
+    if manifest.model.author.is_none() {
+        manifest.model.author = shards.iter().find_map(|input| input.manifest.model.author.clone());
+    }
     manifest.sessions = shards
         .iter()
         .flat_map(|input| {

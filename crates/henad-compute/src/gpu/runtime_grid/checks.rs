@@ -42,7 +42,7 @@ const PARAMS_BUFFER: &str = "params";
 pub(crate) struct Declared {
     /// Constant name of each state, in state order.
     pub(crate) constants: Vec<String>,
-    /// Name and type of each field of `Params` after [`PARAMS_HEAD`](super::template::PARAMS_HEAD), one per parameter
+    /// Name and type of each field of `Params` after [`PARAMS_HEAD`], one per parameter
     /// of the rule.
     pub(crate) fields: Vec<(String, FieldType)>,
     /// For each state with an initial share, the state and the position of its parameter among the rule's own

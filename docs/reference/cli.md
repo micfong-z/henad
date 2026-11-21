@@ -171,7 +171,8 @@ Each sample also pays for the preparation, and `--stats-every` spaces the sample
 `--model-file` loads a [model file](model-files.md), a GPU model written as one TOML file, and adds its model to the models the build offers.
 A file of kind `graph`, a graph model on a grid or of agents, is read, checked and compiled to WGSL, and its warnings and errors print at their lines.
 A file of kind `sheet` is read, checked and lowered to a graph model, which then builds as a graph does, as [Sheets](#sheets) describes.
-Every mode takes it but `--merge`: a benchmark, the two exports, `--list`, `--params`, and a sweep or search from flags or from `--spec`, `--dry-run` and `--resume` included.
+Every mode takes it but `--merge`: a benchmark, `--export-stats`, `--list`, `--params`, and a sweep or search from flags or from `--spec`, `--dry-run` and `--resume` included.
+Every model file builds a GPU model, and `--export` refuses it, as it refuses every GPU model.
 
 ```bash
 cargo run --release -p henad-cli -- life_rule \
@@ -180,6 +181,8 @@ cargo run --release -p henad-cli -- life_rule \
 
 The flag is repeatable, and two files cannot declare the same id.
 A file whose id names a model of the build replaces that model for the rest of the command line, and in text mode a note on stderr says so.
+A file whose model the command does not run, such as a sheet `sheet_sir` loaded beside the model id `sir`, gets a note on stderr in text mode as well.
+An `--export` or `--export-stats` path that names one of the model files is refused before anything runs, and the file is left as it was.
 `--list` then shows the file's model under that id, and `--params --json` adds the `origin` and `code_hash` of [its code](#parameters-as-json).
 
 The files and the spec are read before the GPU device is acquired, and the device is sized to the files' models as well as the build's.
@@ -376,6 +379,9 @@ Each of these rejects it, with an error that states the cause:
 - a `--stats-every` of 0, or a `--series-every` that is not a multiple of `--stats-every`
 - a stop condition or reducer over a column the model does not report, or a reducer of an unknown kind
 - on a GPU model, a config that the device cannot hold, with the first few such configs and their limits listed in the error
+
+A search checks only its fixed values here.
+A candidate it draws that the device cannot hold is recorded as `refused`, with the limits in its note, and is never built.
 
 An action due after the last tick runs nothing, and the plan warns about it without rejecting the sweep.
 
@@ -581,7 +587,7 @@ Once the last run is in, `summary.csv` is written from `runs.csv` and the manife
 | `non_finite` | The run reached its last tick or its stop condition, and some sample was NaN or infinite |
 | `panicked` | The model panicked while building or stepping |
 | `gpu_error` | The GPU reported an error |
-| `refused` | The host rejected the model build |
+| `refused` | The host rejected the model build, such as a search candidate that the device cannot hold |
 | `shape_error` | A sample no longer fit the sweep's stat columns, such as a histogram whose bucket count changed |
 | `timed_out` | The run passed its timeout |
 

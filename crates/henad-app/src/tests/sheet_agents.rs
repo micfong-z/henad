@@ -28,15 +28,20 @@ use crate::tests::panes::{
     assert_no_forbidden_word, center_of, choose, click, click_control, enter_into, field_value, named,
     new_blank_agents, sheet, sheet_mut, shows_or_notice, starter_document, text, type_into,
 };
-use crate::tests::support::{Harness, Node, align_with_starter, set_of, without_card_lines};
+use crate::tests::support::{
+    Harness, Node, ScratchFolder, align_with_starter, set_of, wait_within, without_card_lines,
+};
 use crate::ui::editor::EditorModel;
 use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::new_model::create_blank_agent_model;
 use crate::ui::params::notice_content;
+use crate::ui::results::ResultsPanel;
 use crate::ui::sweep::session::{SessionExecution, SweepSession};
 use henad_core::explore::design::DesignKind;
 use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::search::{Aggregate, Goal, Objective, SearchAlgorithm, SearchSpec};
 use henad_core::explore::spec::{BlockSpec, SweepSpec};
+use std::time::Duration;
 
 /// Returns a harness whose Editor holds a blank model of agents on a tall screen, or `None` to skip on a machine
 /// without a device.
@@ -733,4 +738,66 @@ fn a_sweep_past_the_work_budget_on_a_sheet_names_its_lines_and_no_pass() {
     for word in ["pass", "units of work"] {
         assert!(!refusal.contains(word), "{refusal}");
     }
+}
+
+/// A search of the boids sheet in the Editor records each candidate past the work budget as refused, in the sheet's
+/// lines, and never builds it. The candidates that fit run.
+#[test]
+fn a_search_past_the_work_budget_on_a_sheet_refuses_its_candidates_at_its_lines() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let entry = boids_sheet_entry(&mut harness);
+    harness.app.install_models(&set_of(entry.clone()));
+    let mut spec = SweepSpec::new(entry.id());
+    spec.fixed = [("world_width", "200"), ("world_height", "200"), ("visual_range", "30")]
+        .map(|(id, value)| (id.to_owned(), value.to_owned()))
+        .to_vec();
+    spec.run.steps = 2;
+    spec.measure.default_reducers = false;
+    spec.measure.reducers = vec!["Average speed:final".parse().expect("a valid reducer")];
+    spec.search = Some(SearchSpec {
+        algorithm: SearchAlgorithm::Random,
+        max_evaluations: 6,
+        batch_size: 6,
+        objective: Some(Objective {
+            column: "Average speed:final".to_owned(),
+            goal: Goal::Maximize,
+            aggregate: Aggregate::Median,
+        }),
+        space: vec![FactorSpec::param(
+            "num_agents",
+            LevelSpec::Values(vec!["100".to_owned(), "70000".to_owned()]),
+        )],
+    });
+    let folder = ScratchFolder::new("sheet-search-past-budget");
+    let output_dir = folder.0.join("search");
+    let mut session = SweepSession::start(
+        &mut harness.app,
+        spec,
+        SessionExecution::default(),
+        Some(output_dir.clone()),
+    )
+    .expect("the search starts");
+    let mut results = ResultsPanel::default();
+    wait_within("the search's end", Duration::from_secs(60), || {
+        session.update(0.0, &mut results);
+        !session.is_running()
+    });
+    let text = std::fs::read_to_string(output_dir.join("runs.csv")).expect("runs.csv is written");
+    let refused: Vec<&str> = text.lines().filter(|line| line.contains(",refused,")).collect();
+    assert!(
+        !refused.is_empty() && refused.len() < 6,
+        "both values are drawn: {text}"
+    );
+    for line in refused {
+        assert!(
+            line.contains("Lines 1 and 2, Flockmates and Too close: looks at too many birds at 70,000 birds."),
+            "{line}"
+        );
+        for word in ["pass", "units of work", ".rs:"] {
+            assert!(!line.contains(word), "{line}");
+        }
+    }
+    assert!(!text.contains(",panicked,"), "{text}");
 }

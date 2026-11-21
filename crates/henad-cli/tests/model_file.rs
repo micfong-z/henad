@@ -169,6 +169,37 @@ fn a_merge_of_shards_with_different_model_files_is_refused() {
     assert!(!refused_dir.exists(), "the refused merge writes nothing");
 }
 
+/// A model file whose model the command line does not run gets a note naming the file, the model that runs and the
+/// file's own model, in text mode alone.
+#[test]
+fn a_model_file_the_command_does_not_run_gets_a_note() {
+    let sheet = sir_sheet();
+    let output = run_ok(&["sir", "--model-file", &sheet, "--params"]);
+    let note = stderr(&output);
+    assert!(
+        note.contains(&format!(
+            "note: model file '{sheet}' is unused. This command runs 'sir', and the file holds 'sheet_sir'"
+        )),
+        "{note}"
+    );
+    let output = run_ok(&["sir", "--model-file", &sheet, "--params", "--json"]);
+    assert!(
+        !stderr(&output).contains("is unused"),
+        "no note under --json: {}",
+        stderr(&output)
+    );
+    // The file's own model is a GPU model. A machine without a device refuses it.
+    if !has_device() {
+        return;
+    }
+    let output = run_ok(&["--model-file", &sheet, "--params"]);
+    assert!(
+        !stderr(&output).contains("is unused"),
+        "the file's model runs: {}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn a_model_file_can_shadow_an_example_model() {
     if !has_device() {
@@ -747,6 +778,94 @@ fn a_sweep_of_a_sheet_past_the_work_budget_is_refused_at_its_lines() {
     let words = message.replace(&sheet, "");
     for word in ["node", "pass", "units of work"] {
         assert!(!words.contains(word), "{message}");
+    }
+}
+
+/// A search of the boids sheet records each candidate past the work budget as refused, in the sheet's lines, and never
+/// builds it. The candidates that fit run.
+#[test]
+fn a_search_of_a_sheet_refuses_candidates_past_the_work_budget_at_its_lines() {
+    if !has_device() {
+        return;
+    }
+    let sheet = argument(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../henad-graph/sheets/boids.toml"));
+    let scratch = Scratch::new("search-past-budget");
+    let spec = scratch.write(
+        "search.toml",
+        r#"model = "sheet_boids"
+
+[set]
+world_width = 200
+world_height = 200
+visual_range = 30
+
+[run]
+steps = 2
+
+[measure]
+default_reducers = false
+reducers = [{ column = "Average speed", kinds = ["final"] }]
+
+[search]
+algorithm = "random"
+max_evaluations = 6
+batch_size = 6
+objective = { column = "Average speed:final", goal = "maximize", aggregate = "median" }
+space = [{ param = "num_agents", values = [100, 70000] }]
+"#,
+    );
+    let dir = scratch.path("search");
+    let output = run(&["--model-file", &sheet, "--spec", &spec, "--out", &argument(&dir)]);
+    let message = stderr(&output);
+    assert_eq!(output.status.code(), Some(3), "some runs are refused: {message}");
+    assert!(!message.contains("panicked"), "{message}");
+    let text = std::fs::read_to_string(dir.join("runs.csv")).expect("runs.csv is written");
+    let header: Vec<&str> = text.lines().next().expect("a header").split(',').collect();
+    let column = |name: &str| {
+        header
+            .iter()
+            .position(|field| *field == name)
+            .unwrap_or_else(|| panic!("runs.csv has no column '{name}'"))
+    };
+    let (agents, status) = (column("num_agents"), column("status"));
+    let mut refused = 0;
+    for line in text.lines().skip(1) {
+        let fields: Vec<&str> = line.splitn(header.len(), ',').collect();
+        if fields[agents] == "100" {
+            assert_eq!(fields[status], "ok", "{line}");
+            continue;
+        }
+        refused += 1;
+        assert_eq!(fields[status], "refused", "{line}");
+        assert!(
+            line.contains("Lines 1 and 2, Flockmates and Too close: looks at too many birds at 70,000 birds."),
+            "{line}"
+        );
+        for word in ["node", "pass", "units of work", ".rs:"] {
+            assert!(!line.contains(word), "{line}");
+        }
+    }
+    assert!(refused > 0 && refused < 6, "both values are drawn: {text}");
+}
+
+/// An export whose path is a model file of the command line is refused before anything runs, and the model file is
+/// left as it was, whichever way the path is spelled.
+#[test]
+fn an_export_onto_a_model_file_is_refused() {
+    let scratch = Scratch::new("export-onto-model-file");
+    let text = std::fs::read_to_string(life_sheet()).expect("the sheet starter is in the repository");
+    let sheet = scratch.write("life.toml", &text);
+    let spelled_again = argument(&scratch.path(".").join("life.toml"));
+    for (flag, output) in [("--export-stats", &sheet), ("--export", &spelled_again)] {
+        let refused = run(&["--model-file", &sheet, "--steps", "2", flag, output]);
+        assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+        let message = stderr(&refused);
+        assert!(
+            message.contains(&format!("{flag} '{output}' is the model file '{sheet}'")),
+            "{message}"
+        );
+        let kept = std::fs::read_to_string(scratch.path("life.toml")).expect("the sheet is still there");
+        assert_eq!(kept, text, "{flag} leaves the sheet alone");
     }
 }
 

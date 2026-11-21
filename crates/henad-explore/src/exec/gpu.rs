@@ -30,6 +30,7 @@ use super::{
     run_in_build_pool,
 };
 use crate::cursor::{OutcomeParts, RunEnd, RunFailure, failed_build_outcome, milliseconds, refusal_note, run_outcome};
+use crate::probe::shortfalls;
 
 /// Runs `requests` on the GPU tracks of `executor`, and commits the outcomes to `sink` in request order.
 ///
@@ -155,19 +156,40 @@ impl<'x> Interleaver<'x> {
     /// Builds queued runs while a track is free and the next run fits the memory budget, and returns whether any
     /// build was tried.
     ///
-    /// Nothing is built while admission is held after an out-of-memory build.
+    /// A run the device cannot build is refused and never built. Nothing is built while admission is held after an
+    /// out-of-memory build.
     fn admit(&mut self) -> bool {
         let mut tried = false;
+        let limits = self.ctx.device.limits();
         while !self.admission_held && self.tracks.len() < self.track_cap {
             let Some(&request_index) = self.unbuilt_requests.front() else {
                 break;
             };
             let request = &self.requests[request_index];
-            let demand_bytes = self
-                .executor
-                .entry
-                .demand(request.params, &self.ctx.device.limits())
-                .map_or(0, |demand| demand.bytes());
+            let entry = self.executor.entry;
+            let reasons = shortfalls(entry, request.params, &limits, self.executor.shortfall_words.as_ref());
+            if !reasons.is_empty() {
+                self.unbuilt_requests.pop_front();
+                tried = true;
+                let fault = Fault::refused(
+                    BUILDING,
+                    format!("the config does not fit this GPU: {}", reasons.join("; ")),
+                );
+                let outcome = failed_build_outcome(
+                    request.run,
+                    request.run_key,
+                    &self.executor.measure,
+                    0.0,
+                    RunFailure::from(fault),
+                );
+                self.failed_builds.push(EndedRun {
+                    request_index,
+                    outcome,
+                    watch: None,
+                });
+                continue;
+            }
+            let demand_bytes = entry.demand(request.params, &limits).map_or(0, |demand| demand.bytes());
             let live_bytes: u64 = self.tracks.iter().map(|track| track.demand_bytes).sum();
             if !self.tracks.is_empty() && live_bytes.saturating_add(demand_bytes) > self.gpu_memory_budget {
                 break;

@@ -206,6 +206,9 @@ A run that times out ends wherever the clock caught it, and every candidate the 
 
 A search of a GPU model steps its runs on [GPU tracks](sweeps.md#gpu-tracks), as a sweep does, in the CLI and the desktop app.
 The web app searches CPU models only.
+Before the first batch, only the fixed values are checked against the GPU.
+A candidate that the GPU cannot hold, such as a population past the work one run may take, is never built.
+Its runs are recorded as `refused`, with the reason in the note, and a sheet's reason names its lines.
 
 ## Random search
 

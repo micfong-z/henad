@@ -626,7 +626,7 @@ impl LineContext<'_> {
     /// Returns the result lines above the line that it can use, of the kind `kind`, as items that put the result in
     /// the place, each named by its result's name with "line N: [its sentence]" under it.
     ///
-    /// `condition` is whether the items read "when [name]", as in "Choose when".
+    /// `condition` is whether the items read "when \[name\]", as in "Choose when".
     fn results_above(&self, kind: ResultKind, condition: bool) -> Vec<PickerItem> {
         self.results_above_of(&[kind], condition)
     }
@@ -1143,7 +1143,7 @@ fn property_items(context: &LineContext<'_>, keep: impl Fn(&SheetProperty) -> bo
 }
 
 /// Returns "Choose when" for the line of `context`: inside a When the lead that names it, then its yes or no results
-/// above as "when [name]", then the forms of a condition.
+/// above as "when \[name\]", then the forms of a condition.
 ///
 /// `otherwise` holds the numbers of the higher lines that would override the line were its condition always. While it
 /// is not empty, "otherwise" stands in place of "always". On a When line the items start with "When", and "always"

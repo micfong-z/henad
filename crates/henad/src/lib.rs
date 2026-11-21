@@ -137,7 +137,9 @@ pub mod explore {
     pub use henad_explore::output::resume::ResumeError;
     pub use henad_explore::output::search_tables::{BatchStanding, SearchHistory};
     pub use henad_explore::output::summary_csv::SummaryError;
-    pub use henad_explore::probe::{CapacityError, ConfigFault, ProbeError, ProbeReport, RefusedConfig};
+    pub use henad_explore::probe::{
+        CapacityError, ConfigFault, ProbeError, ProbeReport, RefusedConfig, ShortfallWords,
+    };
     pub use henad_explore::progress::{NoProgress, Progress, ProgressEvent, ProgressUpdate};
     pub use henad_explore::result_set::{ResultReplayError, ResultSet, ResultSetError, RunRow};
     pub use henad_explore::schema::schema_json;

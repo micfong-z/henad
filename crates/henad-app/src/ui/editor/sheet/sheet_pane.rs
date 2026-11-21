@@ -1,5 +1,5 @@
 //! The Sheet pane: what a sheet model holds, one section per heading of
-//! [`SheetSection`](henad_graph::sheet::sentence::SheetSection), each heading with its "?" help.
+//! [`SheetSection`], each heading with its "?" help.
 //!
 //! Purpose, World (with the length of one tick), Cells (each property with its kind, its start and the lines that
 //! change it), Parameters, Measures, Colours and Buttons. A world of agents shows Agents, Ground and Events in place of
@@ -691,7 +691,7 @@ fn side_field(
     });
 }
 
-/// Draws the Time line of `form`, "One tick is [number] [unit]", with the number hidden while the tick has no unit.
+/// Draws the Time line of `form`, "One tick is \[number\] \[unit\]", with the number hidden while the tick has no unit.
 fn time_line(ui: &mut Ui, document: &SheetDocument, form: &Form, widgets: Id, pending: &mut Vec<Pending>) {
     let length_id = widgets.with("henad_sheet_tick_length");
     let time = document.time;

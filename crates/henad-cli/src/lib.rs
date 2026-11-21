@@ -84,7 +84,7 @@ use henad_explore::spec_file::{LoadedSpec, SpecFileError};
 use henad_explore::sweep::Provenance;
 
 use crate::explore::ExploreArgs;
-use crate::model_file::{print_lowered, with_model_files};
+use crate::model_file::{check_output_path, print_lowered, with_model_files};
 use crate::single::{SingleRun, run_single};
 
 mod explore;
@@ -381,6 +381,12 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
         return print_lowered(path);
     }
 
+    match mode {
+        Mode::Single(SingleRun::ExportStats(path)) => check_output_path("--export-stats", path, &args.model_file)?,
+        Mode::Single(SingleRun::ExportFinal(path)) => check_output_path("--export", path, &args.model_file)?,
+        _ => {}
+    }
+
     // The model files and the spec are read before the device is acquired, so the device is sized to every model the
     // command line can name.
     let (models, files) = with_model_files(models, &args.model_file, !args.json)?;
@@ -421,6 +427,18 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
     })?;
 
     let file = files.iter().find(|file| file.id() == entry.id());
+    // A file whose model does not run could be the one the user meant to run, under a familiar id such as `sir`.
+    if !args.json {
+        let paths = args.model_file.iter().zip(&files);
+        for (path, unused_file) in paths.filter(|(_, loaded)| loaded.id() != entry.id()) {
+            eprintln!(
+                "note: model file '{}' is unused. This command runs '{}', and the file holds '{}'",
+                path.display(),
+                entry.id(),
+                unused_file.id()
+            );
+        }
+    }
     match mode {
         Mode::Params if args.json => json_report::emit(&json_report::params(entry, gpu_ctx.as_ref())),
         Mode::Params => print!("{}", params_text(entry)),

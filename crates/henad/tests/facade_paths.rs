@@ -159,6 +159,7 @@ mod named_only {
         henad::explore::EvaluationReading,
         henad::explore::ConfigFault,
         henad::explore::RefusedConfig,
+        henad::explore::ShortfallWords,
         henad::explore::ProgressUpdate,
         henad::explore::SummaryError,
         henad::explore::SearchPlan,

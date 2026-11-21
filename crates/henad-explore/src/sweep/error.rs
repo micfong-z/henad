@@ -25,7 +25,7 @@ pub enum ExploreError {
     Probe(ProbeError),
     /// Reducers that do not bind to the columns of the probe build.
     Measure(MeasureError),
-    /// A directory the sweep cannot resume into.
+    /// A directory the sweep or search cannot resume into.
     Resume(ResumeError),
     /// Results that cannot be written.
     Output(OutputError),
@@ -45,7 +45,7 @@ impl fmt::Display for ExploreError {
             Self::Capacity(_) => f.write_str("the sweep does not fit this GPU"),
             Self::Probe(_) => f.write_str("cannot probe the model"),
             Self::Measure(_) => f.write_str("cannot bind the reducers to the model's stat columns"),
-            Self::Resume(_) => f.write_str("cannot resume the sweep"),
+            Self::Resume(_) => f.write_str("cannot resume the runs in the directory"),
             Self::Output(_) => f.write_str("cannot write the results"),
             Self::Execution(_) => f.write_str("cannot run the sweep"),
             Self::Search(_) => f.write_str("cannot plan the search"),

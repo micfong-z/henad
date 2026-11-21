@@ -40,6 +40,9 @@ refuses an id outside the set ("this build does not include model 'x' (try --lis
 a GPU model on a machine without a device. `--list` prints only the models this machine can run.
 The CLI never publishes and never lays out a network.
 `--model-file PATH` is repeatable, sits in `Args` outside `ExploreArgs`, and selects no mode.
+`check_output_path` runs first for `--export` and `--export-stats`, and refuses an output path
+whose canonical path is that of a model file (`an_export_onto_a_model_file_is_refused`). An output
+that does not exist yet names no model file.
 `with_model_files` runs after the pool is sized and `--merge` has returned, and before `--spec` is
 read and the device acquired. It reads each file through `ModelFile::parse` and `entry` and
 `ModelSet::replace`s its entry into a clone of the options' set, and the set is cloned only when a
@@ -53,9 +56,11 @@ the pass and node, so `located` prints the author line and no note. `with_model_
 each `ModelFile` beside the set, and `run_single` takes the file of its entry: the device check
 runs a sheet's `SheetFile::shortfalls`, so work past a budget names the sheet's lines and no pass
 (`a_sheet_past_the_work_budget_is_refused_at_its_lines`). `explore::run` takes the file too, and
-`in_sheet_words` rewords each config a sweep's capacity check refused (`ExploreError::Capacity`) by
-`SheetFile::shortfalls` over the config of the plan, or of a search's fixed values, on the device it
-passed the sweep (`a_sweep_of_a_sheet_past_the_work_budget_is_refused_at_its_lines`).
+sets a sheet's `SheetFile::shortfalls` as `SweepOptions::shortfall_words`. The sweep's capacity
+check then words each refused config in the sheet's lines
+(`a_sweep_of_a_sheet_past_the_work_budget_is_refused_at_its_lines`), and so does the note of each
+search candidate refused before its build
+(`a_search_of_a_sheet_refuses_candidates_past_the_work_budget_at_its_lines`).
 `--print-lowered` (`Mode::PrintLowered`, checked first) takes exactly one `--model-file`
 (`parse_args` refuses another count with exit 2), requires it, conflicts with a model id, `--list`,
 `--params`, `--info`, `--json`, the exports, `--stats-every`, `--merge`, every sweep flag and every
@@ -66,7 +71,8 @@ on stdout (a graph file's own, a sheet's lowered graph), the warnings on stderr,
 rule with exit 1. `existing_invocations_keep_their_mode` expects `Mode::PrintLowered` of a
 documented line holding the flag. A file whose id the set holds
 prints a note on stderr in text mode and nothing under `--json`, and two files of one id are
-refused. A file that does not load is an
+refused. `run_args` prints a note in text mode for each file whose model is not the one the
+command runs (`a_model_file_the_command_does_not_run_gets_a_note`). A file that does not load is an
 error whose cause lists each `CodeDiagnostic` with the path as its file, `path:line:column: error:
 message`, and exits 1 before any device. With one file and neither a positional id nor a spec, the
 file's id is the model, under `--info` too (`Mode::of`). Two files or more without either are a

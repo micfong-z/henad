@@ -108,7 +108,8 @@ const GUIDE_OFFSET: f32 = 5.0;
 /// Padding in points above and below the contents of a row.
 const ROW_PADDING: f32 = 4.0;
 
-/// Height in points of one row of a sentence. A chip is [`CHIP_HEIGHT`] high. Two rows of chips never touch.
+/// Height in points of one row of a sentence. A chip is [`CHIP_HEIGHT`](super::widgets::CHIP_HEIGHT) high. Two rows
+/// of chips never touch.
 const SENTENCE_ROW: f32 = 24.0;
 
 /// Start and length in points of the dash in the indent of an alternative of a Choose or a Depending on, level with its

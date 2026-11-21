@@ -68,7 +68,9 @@ configs whose `SheetFile::shortfalls` differ from the entry's words, as a `Capac
 sweep's own message, so the Start line names the sheet's lines and no pass. A config refused for
 another reason is left to the sweep's check on its own device
 (`a_sweep_past_the_work_budget_on_a_sheet_names_its_lines_and_no_pass`,
-`src/tests/sheet_agents.rs`).
+`src/tests/sheet_agents.rs`). `run_options` sets the same sheet's `SheetFile::shortfalls` as
+`SweepRunOptions::shortfall_words`, so the sweep's own check, and the note of a search candidate
+refused before its build, name the sheet's lines too.
 `session.rs` wraps `henad_explore::handle::SweepRun`
 (a thread on native, pumped from `HenadApp::logic` through `ui::sweep::update` in a browser, where
 the frame keeps repainting while it steps), pauses the live sim on start, and keeps the

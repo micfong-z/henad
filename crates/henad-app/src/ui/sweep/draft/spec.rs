@@ -27,7 +27,8 @@ impl SweepDraft {
     /// # Errors
     ///
     /// Returns every [`DraftIssue`] of text that does not parse, a design table that is missing, an action the model
-    /// does not declare, or a timeout that is not a [`Duration`]. Everything else is checked by [`Self::check`].
+    /// does not declare, or a timeout that is not a [`Duration`](std::time::Duration). Everything else is checked by
+    /// [`Self::check`].
     pub fn to_spec(&self, schema: &ModelSchema<'_>, panel_values: &[ParamValue]) -> Result<SweepSpec, Vec<DraftIssue>> {
         let mut issues = Vec::new();
         let mut spec = SweepSpec::new(self.model_id.clone());

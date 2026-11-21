@@ -393,7 +393,9 @@ impl DraftDesign {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FactorDraft {
     pub vary: bool,
-    /// Values as `--vary` accepts them, read by [`LevelSpec::parse`]: `v1, v2`, `min:max:step`, `min:max` or `all`.
+    /// Values as `--vary` accepts them, read by
+    /// [`LevelSpec::parse`](henad_core::explore::factor::LevelSpec::parse): `v1, v2`, `min:max:step`, `min:max` or
+    /// `all`.
     pub levels_text: String,
 }
 
