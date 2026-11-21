@@ -17,8 +17,9 @@ use crate::sheet::document::{
 use crate::sheet::edit::unit_in_text;
 use crate::sheet::limits::{ADD_UP_RESOLUTION_SHIFT, MAX_NESTING};
 use crate::sheet::sentence::{
-    self, ANY_STATE_ID, ARROW_COMPARED_WITH_NUMBER, Blank, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, LineSelect,
-    NOT_RUN_TICK, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD, RATE_IN_REPEAT,
+    self, ANY_STATE_ID, ARROW_COMPARED_WITH_NUMBER, Blank, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE,
+    KEPT_OUT_OF_RANGE, LineSelect, NOT_RUN_TICK, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD, RATE_IN_REPEAT,
+    SHARE_LIMITS_OUTSIDE,
 };
 use crate::sheet::writer::format_number;
 
@@ -1388,6 +1389,28 @@ impl<'a> Checker<'a> {
                     }
                     Draw::Rate if parameter.min < 0.0 => self.error(RATE_BELOW_ZERO, &context.place),
                     _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Checks the range of the share of a mark kept each tick in `slot`: a literal share from 0 to 1, and a parameter
+    /// whose range stays from 0 to 1.
+    pub(super) fn kept_range(&mut self, slot: &Slot, context: &Context<'a>) {
+        match slot.value() {
+            Some(SheetValue::Literal(literal)) => {
+                if literal.number().is_some_and(|number| !(0.0..=1.0).contains(&number)) {
+                    self.error(KEPT_OUT_OF_RANGE, &context.place);
+                }
+            }
+            Some(SheetValue::Chip(SheetChip::Param(id))) => {
+                let outside = self
+                    .parameters
+                    .get(id.as_str())
+                    .is_some_and(|parameter| parameter.min < 0.0 || parameter.max > 1.0);
+                if outside {
+                    self.error(SHARE_LIMITS_OUTSIDE, &context.place);
                 }
             }
             _ => {}

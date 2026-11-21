@@ -329,6 +329,7 @@ fn check_property<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, th
             Some(ValueType::Number),
             None,
         );
+        checker.kept_range(&property.kept_per_tick, &context);
     }
     check_start(checker, property, thing, place);
 }

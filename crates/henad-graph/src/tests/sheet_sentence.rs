@@ -257,6 +257,10 @@ fn every_wording_table_entry_equals_the_final_words() {
             "Type a chance such as 0.3 or 30%, then press Enter.",
             fixed(sentence::CHANCE_BOX_HINT),
         ),
+        (
+            "Type a share such as 0.99 or 99%, then press Enter.",
+            fixed(sentence::SHARE_BOX_HINT),
+        ),
         ("Use", fixed(sentence::USE_BUTTON)),
         ("This cell's properties", fixed(sentence::THIS_CELLS_PROPERTIES)),
         ("my Food", sentence::my_property_item("Food")),
@@ -1385,6 +1389,10 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
         ("Such as Infection rate", fixed(sentence::RATE_PARAMETER_PLACEHOLDER)),
         ("Such as Initial density", fixed(sentence::CHANCE_PARAMETER_PLACEHOLDER)),
         ("Such as Step size", fixed(sentence::NUMBER_PARAMETER_PLACEHOLDER)),
+        (
+            "Such as Trail kept per tick",
+            fixed(sentence::SHARE_PARAMETER_PLACEHOLDER),
+        ),
         ("Default", fixed(sentence::DEFAULT_LABEL)),
         ("Default value", fixed(sentence::DEFAULT_NAME)),
         ("Min", fixed(sentence::MIN_LABEL)),
@@ -1404,6 +1412,10 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
         (
             "For a chance, Min and Max must be between 0 and 1.",
             fixed(sentence::CHANCE_LIMITS_OUTSIDE),
+        ),
+        (
+            "For a share, Min and Max must be between 0 and 1.",
+            fixed(sentence::SHARE_LIMITS_OUTSIDE),
         ),
         ("Create parameter", fixed(sentence::CREATE_PARAMETER)),
         // The top bar.
@@ -1767,6 +1779,8 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
         sentence::STATE_NAMES_REPEATED,
         sentence::NEW_PARAMETER_LEAD,
         sentence::CHANCE_LIMITS_OUTSIDE,
+        sentence::SHARE_LIMITS_OUTSIDE,
+        sentence::SHARE_BOX_HINT,
         sentence::KEEP_TOOLTIP,
         sentence::PLOT_EMPTY,
         sentence::WORLD_EMPTY,

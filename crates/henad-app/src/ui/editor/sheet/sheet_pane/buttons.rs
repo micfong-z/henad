@@ -86,7 +86,7 @@ pub(super) fn buttons(
     document: &SheetDocument,
     report: &SheetReport,
     pane: &mut PaneState,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let sentences = Sentences::new(document);
     if !document.buttons.is_empty() {
@@ -121,7 +121,7 @@ pub(super) fn buttons(
                         });
                     });
                     if row.delete_cell(3, &delete_button_name(&button.name)) {
-                        *pending = Some(Pending::one(SheetEdit::Delete {
+                        pending.push(Pending::one(SheetEdit::Delete {
                             item: SheetItem::Button(button.id.clone()),
                         }));
                     }
@@ -205,7 +205,7 @@ fn button_form(
     document: &SheetDocument,
     form: &mut ButtonForm,
     close: &mut bool,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let thing = measured_thing(document);
     // Agents' buttons start the ground's properties again too.
@@ -276,7 +276,7 @@ fn button_form(
     if done {
         match check_button_form(document, form) {
             Ok(()) => {
-                *pending = Some(Pending::from_form(
+                pending.push(Pending::from_form(
                     FormKind::Button,
                     button_edit(form.clone(), thing.to_owned()),
                 ));

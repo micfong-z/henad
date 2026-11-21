@@ -47,7 +47,9 @@ Press <span class="ui">Save model</span> to save it and then replace it, <span c
 
 Closing the window of the desktop app asks the same, and the app closes once the model is saved or its changes discarded.
 Apply does not save the model, and a save you cancel keeps it in the Editor.
+If you change the model while the open or save dialog is open, the Editor asks again before it replaces the model.
 A sheet converted to a node graph is held beside its copy, and the dialog names it too while it holds unsaved changes.
+Converting the sheet again replaces the copy held beside it, so the dialog asks first while that copy holds unsaved changes, and the sheet keeps its own.
 
 ## Sheets
 
@@ -73,6 +75,8 @@ A click on the name renames the model.
 
 The pane holds one framed section for each part of the model, its title in small capitals and its help button at the right end.
 A section that lists several things, such as the properties under **Cells** or the **Parameters**, lists them in a table under a row of column headings, and a button at its end adds one more, such as **+ Add parameter**.
+A field applies what you type when you press <kbd>Enter</kbd> or move away from it, and <kbd>Escape</kbd> puts back what the sheet holds.
+In the purpose, <kbd>Enter</kbd> starts a new line, and <kbd>Escape</kbd> applies what you typed.
 
 **World** sets the size of the grid in cells, its edges, and how much time one tick stands for.
 With **Wrap around**, the left edge joins the right edge and the top edge joins the bottom.
@@ -372,6 +376,7 @@ The inputs of the node that changes a state read by line, such as "Line 2 when".
 A banner above the canvas says which sheet the copy came from and when, and whether the copy was edited since.
 Press the banner's button named after the sheet, such as **Open Game of Life**, to return to the sheet, whose name row then shows "Converted to node graph:" and the copy's name, a link back to the copy.
 The banner says when the sheet's model has changed since the conversion, or when the sheet is not beside the copy's file.
+A sheet saved beside the copy with an error counts as changed, and the banner's button still opens it.
 An edit of the sheet that leaves its code alone, such as a note, a comment, the purpose or what a parameter means, does not count as a change.
 The panel beside the canvas ends with **From the author model**, naming the sheet, its file and the date of the conversion, then the sheet's purpose and what each parameter means, which the node graph has no place for.
 

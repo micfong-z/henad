@@ -608,7 +608,7 @@ pub fn picker_labels(
     draw: DrawKind,
 ) -> Vec<(String, String)> {
     labels_of(&line_picker(document, line_id, |context| {
-        picker_for(context, want, None, filled, "", draw)
+        picker_for(context, want, None, true, filled, "", draw)
     }))
 }
 

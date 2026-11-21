@@ -472,3 +472,33 @@ fn a_parameter_put_into_a_rate_takes_its_unit_and_one_undo_restores_both() {
     assert_eq!(sheet.document(), &before, "one Undo restores the rate and the unit");
     assert_eq!(plain_unit(sheet.document()), None);
 }
+
+/// A new name typed for a result and left by a click on a note's button in one frame is kept, and so is the button's
+/// edit.
+#[test]
+fn a_new_result_name_and_a_note_button_in_one_frame_both_commit() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    let text = edited(starter_text("sir.toml"), "tries = { result = \"l1\" }\n", "");
+    harness.open_sheet(&text);
+    assert!(shows(&mut harness, &rate_grow_prompt("Infected neighbours")));
+    click(&mut harness, "Line 1 actions");
+    click(&mut harness, "Rename line 1");
+    harness.replace_text("Sick nearby");
+    click(&mut harness, "Line 2: add for each infected neighbour");
+    // The field reports losing the focus again on the next frame. Only the frame of the click shows a dropped name.
+    let (_, count) = sheet(&harness).document().line("l1").expect("line 1");
+    assert_eq!(
+        count.name.as_deref(),
+        Some("Sick nearby"),
+        "the typed name is kept in the frame of the click"
+    );
+    harness.settle();
+    let document = sheet(&harness).document();
+    let (_, become_line) = document.line("l2").expect("line 2");
+    let Some(SheetValue::Phrase(rate)) = become_line.condition.value() else {
+        panic!("line 2 grows at a rate");
+    };
+    assert!(matches!(rate.tries, Slot::Filled(_)), "the button's edit is kept");
+}

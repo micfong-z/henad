@@ -123,7 +123,7 @@ fn measure_words(document: &SheetDocument, measure: &SheetMeasure) -> String {
 
 /// Draws the Measures section: a Plot box beside each state, the table of measures plotted with each measure's colour
 /// and delete button, and the measure form or "+ Add measure".
-pub(super) fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, pending: &mut Option<Pending>) {
+pub(super) fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, pending: &mut Vec<Pending>) {
     let states: Vec<&SheetProperty> = properties_of(document, measured_thing(document))
         .iter()
         .filter(|property| property.property_type == PropertyType::States)
@@ -151,7 +151,7 @@ pub(super) fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneSta
                     let response = ui.checkbox(&mut on, PLOT);
                     set_name(ui, response.id, &plot_state(&state_label(document, property, state)));
                     if response.changed() {
-                        *pending = Some(if on {
+                        pending.push(if on {
                             Pending::one(add_count(document, property, state))
                         } else {
                             let items: Vec<SheetItem> = plotted
@@ -188,7 +188,7 @@ pub(super) fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneSta
                         line(ui, |ui| {
                             let name = measure_color_name(&measure.name, color_name(measure.color));
                             if let Some(color) = color_button(ui, &name, measure.color) {
-                                *pending = Some(Pending::one(SheetEdit::Recolor {
+                                pending.push(Pending::one(SheetEdit::Recolor {
                                     item: SheetItem::Measure(measure.id.clone()),
                                     color,
                                 }));
@@ -199,7 +199,7 @@ pub(super) fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneSta
                         text_cell(ui, Label::new(measure_words(document, measure)));
                     });
                     if row.delete_cell(2, &remove_measure_name(&measure.name)) {
-                        *pending = Some(Pending::one(SheetEdit::Delete {
+                        pending.push(Pending::one(SheetEdit::Delete {
                             item: SheetItem::Measure(measure.id.clone()),
                         }));
                     }
@@ -251,7 +251,7 @@ fn measure_form(
     document: &SheetDocument,
     form: &mut MeasureForm,
     close: &mut bool,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let properties = properties_of(document, measured_thing(document));
     let agents = measured_thing(document) != CELLS_ID;
@@ -340,7 +340,7 @@ fn measure_form(
     if done {
         match measure_edit(document, form) {
             Ok(edit) => {
-                *pending = Some(Pending::from_form(
+                pending.push(Pending::from_form(
                     FormKind::Measure,
                     Box::new(move |builder| builder.apply(edit).map(drop)),
                 ));

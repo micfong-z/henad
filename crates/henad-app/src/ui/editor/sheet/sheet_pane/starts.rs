@@ -42,7 +42,7 @@ pub(super) fn cells(
     document: &SheetDocument,
     pane: &mut PaneState,
     stale: &[String],
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let properties = properties_of(document, CELLS_ID);
     if properties.is_empty() {
@@ -78,7 +78,7 @@ pub(super) fn property_table(
     thing: &str,
     pane: &mut PaneState,
     stale: &[String],
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let properties = properties_of(document, thing);
     let widest = |width: &dyn Fn(&SheetProperty) -> f32| properties.iter().map(width).fold(0.0, f32::max);
@@ -252,7 +252,7 @@ pub(super) fn property_form_or_add(
     add_name: &str,
     primary: bool,
     pane: &mut PaneState,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     if let Some(form) = pane.property_form.as_mut().filter(|form| form.thing == thing) {
         let mut close = false;
@@ -471,7 +471,7 @@ fn starts_ui(
     thing: &str,
     property: &SheetProperty,
     pane: &mut PaneState,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let selected = starts_text(document, property);
     match property.property_type {
@@ -530,7 +530,7 @@ fn starts_ui(
 }
 
 /// Sets the start of `property` to `choice`, unless `selected`, the words of its start, already reads as it.
-fn choose_start(property: &SheetProperty, selected: &str, choice: StartChoice, pending: &mut Option<Pending>) {
+fn choose_start(property: &SheetProperty, selected: &str, choice: StartChoice, pending: &mut Vec<Pending>) {
     let number = |value: f64| Slot::Filled(SheetValue::Literal(SheetLiteral::Number(value)));
     let start = match choice {
         StartChoice::All(state) => {
@@ -577,7 +577,7 @@ fn choose_start(property: &SheetProperty, selected: &str, choice: StartChoice, p
         }
         _ => return,
     };
-    *pending = Some(Pending::one(SheetEdit::SetStartsAs {
+    pending.push(Pending::one(SheetEdit::SetStartsAs {
         property: property.id.clone(),
         starts_as: Some(Box::new(start)),
     }));
@@ -591,7 +591,7 @@ fn chance_rows(
     property: &SheetProperty,
     start: &StartsAs,
     pane: &mut PaneState,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     for (index, row) in start.rows.iter().enumerate() {
         let place = starts_row_place(&property.name, index + 1);
@@ -603,7 +603,7 @@ fn chance_rows(
                 ("henad_sheet_start_row", &property.id, index),
                 &starts_field_name(&place, StartsField::State),
             ) {
-                *pending = Some(start_edit(property.id.clone(), move |start| {
+                pending.push(start_edit(property.id.clone(), move |start| {
                     if let Some(row) = start.rows.get_mut(index) {
                         row.state = Some(state);
                     }
@@ -618,7 +618,7 @@ fn chance_rows(
                 for later in index..start.rows.len() {
                     forget_field(ui, start_field_id(pane.widgets, &property.id, StartSlot::Row(later)));
                 }
-                *pending = Some(start_edit(property.id.clone(), move |start| {
+                pending.push(start_edit(property.id.clone(), move |start| {
                     if index < start.rows.len() {
                         start.rows.remove(index);
                     }
@@ -639,7 +639,7 @@ fn chance_rows(
             .find(|state| !drawn.contains(&Some(state.id.as_str())))
             .or(property.states.first())
             .map(|state| state.id.clone());
-        *pending = Some(start_edit(property.id.clone(), move |start| {
+        pending.push(start_edit(property.id.clone(), move |start| {
             let mut row = StartsAsRow::default();
             row.state = state;
             start.rows.push(row);
@@ -654,7 +654,7 @@ fn chance_rows(
             ("henad_sheet_start_otherwise", &property.id, 0),
             &starts_otherwise_name(&property.name),
         ) {
-            *pending = Some(start_edit(property.id.clone(), move |start| {
+            pending.push(start_edit(property.id.clone(), move |start| {
                 start.otherwise = Some(state);
             }));
         }
@@ -775,7 +775,7 @@ fn start_number(
     start: &StartsAs,
     slot: StartSlot,
     pane: &mut PaneState,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let chance = matches!(slot, StartSlot::Row(_));
     let place = match slot {
@@ -810,7 +810,7 @@ pub(super) fn number_field(
     document: &SheetDocument,
     field: NumberField<'_>,
     pane: &mut PaneState,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let NumberField {
         place,
@@ -877,7 +877,7 @@ pub(super) fn number_field(
                         Err(message) => return Some(message.to_owned()),
                     }
                 };
-                *pending = Some(target.edit(value));
+                pending.push(target.edit(value));
                 None
             });
             let button = text_control(
@@ -906,7 +906,7 @@ fn pick_number(
     number_use: NumberUse,
     choice: Option<Choice>,
     pane: &mut PaneState,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let value = match choice {
         Some(Choice::Value(value)) => Slot::Filled(value),
@@ -920,7 +920,7 @@ fn pick_number(
         }
         _ => return,
     };
-    *pending = Some(target.edit(value));
+    pending.push(target.edit(value));
 }
 
 /// Draws the New parameter dialog while it is open. Create adds the parameter and puts it in the number it was opened
@@ -928,7 +928,7 @@ fn pick_number(
 ///
 /// An edit that fills a start counts as a changed start, since only the start uses the new parameter. Past the start
 /// it therefore waits for Start again, as a parameter chosen from the picker does.
-pub(super) fn new_parameter(ui: &Ui, document: &SheetDocument, pane: &mut PaneState, pending: &mut Option<Pending>) {
+pub(super) fn new_parameter(ui: &Ui, document: &SheetDocument, pane: &mut PaneState, pending: &mut Vec<Pending>) {
     let Some((target, dialog)) = &mut pane.new_parameter else {
         return;
     };
@@ -938,7 +938,7 @@ pub(super) fn new_parameter(ui: &Ui, document: &SheetDocument, pane: &mut PaneSt
         DialogOutcome::Created(parameter) => {
             let target = target.clone();
             pane.new_parameter = None;
-            *pending = Some(Pending {
+            pending.push(Pending {
                 starts_only: matches!(target, Some(NumberTarget::Start { .. })),
                 form: None,
                 run: Box::new(move |builder| {

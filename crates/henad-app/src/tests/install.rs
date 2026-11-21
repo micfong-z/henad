@@ -562,6 +562,24 @@ fn a_rebuild_the_new_code_refuses_leaves_the_old_run_alone() {
     assert_eq!(app.pending_rebuild, None);
 }
 
+/// A run to a tick behind the current one that Build refuses, as for a Seed field that holds no seed, leaves the run
+/// where it is and asks the runner for no tick.
+#[test]
+fn a_run_to_a_tick_behind_that_build_refuses_leaves_the_run_alone() {
+    let Some(mut app) = app_with_small_sir() else {
+        return;
+    };
+    app.reset_simulation();
+    app.wait_for_build();
+    step_past(&mut app, 0);
+    let tick = app.current_tick();
+    app.seed_text = "12a".to_owned();
+    app.run_to(0);
+    assert_eq!(app.run_to_target, None, "no run to a tick the run is past");
+    assert_eq!(app.current_tick(), tick, "the run is left alone");
+    assert!(app.sim_thread.is_some());
+}
+
 #[test]
 fn equal_sources_with_other_declarations_are_other_code() {
     let Some(mut app) = app_with_small_sir() else {

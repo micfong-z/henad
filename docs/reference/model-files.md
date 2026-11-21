@@ -368,7 +368,7 @@ A Become from a state never decides for an agent in another state.
 Between a change inside a Repeat and a change of the same property outside it, or inside another Repeat, the higher line wins.
 
 The agents can walk on a ground of cells, one per unit of the world.
-A ground property holds states painted at the start, or a number that agents mark with Leave, keeping the largest mark or adding the marks up, and that fades by its share kept per tick.
+A ground property holds states painted at the start, or a number that agents mark with Leave, keeping the largest mark or adding the marks up, and that fades by its share kept per tick, from 0 to 1.
 A property that adds up its marks rounds each mark to a multiple of 2^-16, so a mark below 2^-17 adds nothing, and one cell adds up at most 65536 in a tick and starts again from 0 past it.
 A Leave of a number or a parameter on such a property warns at its line when the kind's `max_count` agents, all on one cell, can leave more than that in a tick.
 A card can pick the open cell around an agent with the most or least of a ground property, or one at random, look at the cell here or ahead, read a property of a place, move to a place, leave a mark and record an event that a measure counts.

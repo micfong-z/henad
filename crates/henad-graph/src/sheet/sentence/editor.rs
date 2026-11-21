@@ -101,6 +101,9 @@ pub const NUMBER_PARAMETER_PLACEHOLDER: &str = "Such as Step size";
 /// Placeholder of the New parameter dialog's Name field for a number of times.
 pub const TIMES_PARAMETER_PLACEHOLDER: &str = "Such as Steps per tick";
 
+/// Placeholder of the New parameter dialog's Name field for the share of a mark kept each tick.
+pub const SHARE_PARAMETER_PLACEHOLDER: &str = "Such as Trail kept per tick";
+
 /// Label of the parameter's default.
 pub const DEFAULT_LABEL: &str = "Default";
 
@@ -137,6 +140,9 @@ pub const DEFAULT_OUTSIDE_LIMITS: &str = "Default must be between Min and Max.";
 
 /// Message on a parameter for a chance whose minimum or maximum lies outside 0 to 1.
 pub const CHANCE_LIMITS_OUTSIDE: &str = "For a chance, Min and Max must be between 0 and 1.";
+
+/// Message on a parameter for the share of a mark kept each tick whose minimum or maximum lies outside 0 to 1.
+pub const SHARE_LIMITS_OUTSIDE: &str = "For a share, Min and Max must be between 0 and 1.";
 
 /// Primary action of the New parameter dialog.
 pub const CREATE_PARAMETER: &str = "Create parameter";

@@ -76,8 +76,8 @@ use super::help::{Help, help_button};
 use super::picker::{
     CalcDraft, CardPicker, Choice, DraftUpdate, LineContext, SelectOption, apply_choice, around_options,
     calculate_edit, choose_when, comparison_options, list_len, look_summary_options, looked_at_picker, mode_options,
-    operation_options, phrase_of, pick_options, picker_for, read_property, summary_options, summary_picker, typed_text,
-    unit_options, value_at, which_options,
+    operation_options, phrase_of, pick_options, picker_for, read_property, summary_options, summary_picker,
+    takes_ground_states, typed_text, unit_options, value_at, which_options,
 };
 use super::sheet_pane::SheetTrial;
 use super::widgets::{
@@ -319,7 +319,7 @@ impl CardEdit {
     }
 }
 
-/// Draws every card of `sheet` and runs the edit made on it. `past_start` is whether the preview has passed tick 0 or
+/// Draws every card of `sheet` and runs each edit made on it. `past_start` is whether the preview has passed tick 0 or
 /// a button was pressed in it, and `trials` holds the values the world tries for the sheet's parameters.
 ///
 /// The notes under rate and chance lines read the parameters' defaults, with the values the world tries in their
@@ -331,7 +331,7 @@ pub fn card_pane(
     trials: &[SheetTrial],
     fires: Option<&LineFires>,
 ) {
-    let mut pending = None;
+    let mut pending = Vec::new();
     {
         let document = sheet.builder.document();
         let state = &mut sheet.card;
@@ -362,7 +362,9 @@ pub fn card_pane(
         }
         new_parameter_dialog(ui, document, state, &mut pending);
     }
-    if let Some(edit) = pending {
+    // A field that loses the focus to a click commits in the frame of the click, and each edit runs on the sheet as
+    // the edit before it left it.
+    for edit in pending {
         run_card_edit(sheet, past_start, edit);
     }
 }
@@ -512,7 +514,7 @@ fn cards_ui(
     document: &SheetDocument,
     shown: &CardsShown<'_>,
     state: &mut CardState,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     let report = shown.report;
     let values = shown.values;
@@ -634,7 +636,7 @@ fn card_ui(
     lines: &[CardLine],
     state: &mut CardState,
     hovered: &mut Vec<String>,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     let card = drawing.card;
     let each_tick = card.runs == CardRuns::EachTick;
@@ -883,7 +885,7 @@ fn add_inside_ui(
     drawing: &CardDrawing<'_>,
     block: &ClosingBlock,
     state: &CardState,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     let states = pattern_states(drawing.document, &drawing.card.every);
     let states = states.as_ref().map(|(new, old)| (new.as_str(), old.as_str()));
@@ -953,7 +955,7 @@ fn add_inside_ui(
         focus_mark(ui, rect);
     }
     if let Some(item) = chosen {
-        *pending = Some(add_line_edit(
+        pending.push(add_line_edit(
             Some(drawing.card.id.clone()),
             Some(block.id.clone()),
             item,
@@ -1091,7 +1093,7 @@ fn add_buttons_ui(
     state: &CardState,
     card: Option<&SheetCard>,
     every: &str,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     let once = card.is_some_and(|card| card.runs == CardRuns::Once);
     let agents = over_agents(every);
@@ -1125,7 +1127,7 @@ fn add_buttons_ui(
                 })
                 .and_then(|popup| popup.inner);
             if let Some(item) = chosen {
-                *pending = Some(add_line_edit(card_id.clone(), None, item, every));
+                pending.push(add_line_edit(card_id.clone(), None, item, every));
             }
         }
     });
@@ -1505,7 +1507,7 @@ fn line_ui(
     place: &RowPlace,
     state: &mut CardState,
     hovered: &mut Vec<String>,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) -> Rect {
     let Some(line_data) = relations.line(&line.id) else {
         return Rect::NOTHING;
@@ -1637,7 +1639,7 @@ fn sentence_ui(
     line: &CardLine,
     state: &mut CardState,
     gathered: &mut LineDrawing<'_>,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     let line_data = context.line;
     let mut segments: Vec<(usize, usize)> = Vec::new();
@@ -1779,7 +1781,7 @@ fn notes_ui(
     line: &CardLine,
     line_data: &SheetLine,
     notes: Vec<LineNote>,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) -> bool {
     let mut focused = false;
     for note in notes {
@@ -1812,7 +1814,7 @@ fn notes_ui(
                         }
                         _ => After::Stay,
                     };
-                    *pending = Some(CardEdit::commands(vec![action.edit], after));
+                    pending.push(CardEdit::commands(vec![action.edit], after));
                 }
             }
         });
@@ -1872,7 +1874,7 @@ fn part_ui(
     part: &SentencePart,
     state: &mut CardState,
     gathered: &mut LineDrawing<'_>,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     let line = drawing.line;
     let name = line.control(part).map(|control| control.name).unwrap_or_default();
@@ -2168,7 +2170,7 @@ fn control_picker(
     id: Id,
     state: &mut CardState,
     gathered: &mut LineDrawing<'_>,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     if state.focus_next == Some(id) {
         response.request_focus();
@@ -2187,7 +2189,7 @@ fn control_picker(
         let chosen = select_popup(ui, drawing, place, response, popup_id, words);
         gathered.picker_open |= Popup::is_id_open(ui.ctx(), popup_id);
         if let Some(option) = chosen {
-            *pending = select_edit(drawing, state, place, option);
+            pending.extend(select_edit(drawing, state, place, option));
         }
         return;
     }
@@ -2200,7 +2202,7 @@ fn control_picker(
     gathered.picker_open |= open;
     gathered.closed_empty |= was_open && !open && choice.is_none();
     if let Some(choice) = choice {
-        *pending = choice_edit(drawing, state, place, &choice);
+        pending.extend(choice_edit(drawing, state, place, &choice));
     }
 }
 
@@ -2242,7 +2244,7 @@ fn add_value_ui(
     drawing: &PartDrawing<'_>,
     state: &mut CardState,
     gathered: &mut LineDrawing<'_>,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     let Some(place) = drawing.place.as_ref() else {
         return;
@@ -2262,7 +2264,7 @@ fn add_row_ui(
     drawing: &PartDrawing<'_>,
     state: &mut CardState,
     gathered: &mut LineDrawing<'_>,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     let Some(place) = drawing.place.as_ref() else {
         return;
@@ -2297,7 +2299,7 @@ fn add_summary_ui(
     drawing: &PartDrawing<'_>,
     state: &CardState,
     gathered: &mut LineDrawing<'_>,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     let line = drawing.line;
     let target = PlaceTarget::Slot("summaries".to_owned());
@@ -2323,7 +2325,7 @@ fn add_summary_ui(
                 target: PlaceTarget::Slot(format!("summaries.{index}.value")),
             }
         };
-        *pending = Some(CardEdit::commands(
+        pending.push(CardEdit::commands(
             vec![SheetEdit::AddSummary {
                 line: line.id.clone(),
                 summary,
@@ -2347,7 +2349,7 @@ fn condition_arrow_ui(
     drawing: &PartDrawing<'_>,
     state: &mut CardState,
     gathered: &mut LineDrawing<'_>,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     let line = drawing.line;
     let target = PlaceTarget::Slot("condition".to_owned());
@@ -2369,7 +2371,7 @@ fn condition_arrow_ui(
     let choice = picker.show(ui, &response, popup_id, &mut open);
     gathered.picker_open |= open;
     if let Some(choice) = choice {
-        *pending = choice_edit(drawing, state, &place, &choice);
+        pending.extend(choice_edit(drawing, state, &place, &choice));
     }
 }
 
@@ -2381,7 +2383,7 @@ fn condition_word_ui(
     words: &str,
     state: &mut CardState,
     gathered: &mut LineDrawing<'_>,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) {
     let look = Words {
         whole: true,
@@ -2457,7 +2459,8 @@ fn place_picker(drawing: &PartDrawing<'_>, place: &PartPlace, part: &SentencePar
         _ => DrawKind::Chance,
     };
     let filled = matches!(part, SentencePart::Chip(_) | SentencePart::ForEach(_));
-    let mut picker = picker_for(context, want, property, filled, &typed_text(value), draw);
+    let ground = takes_ground_states(line, &place.target);
+    let mut picker = picker_for(context, want, property, ground, filled, &typed_text(value), draw);
     // "+" after a list offers what the list takes, with nothing to remove.
     if matches!(&place.target, PlaceTarget::ListItem { index, slot } if list_len(line, slot) == *index) {
         picker.remove = None;
@@ -2746,7 +2749,7 @@ fn line_menu_ui(
     line: &CardLine,
     line_data: &SheetLine,
     state: &mut CardState,
-    pending: &mut Option<CardEdit>,
+    pending: &mut Vec<CardEdit>,
 ) -> Response {
     let id = state.widgets.with((&line.id, "menu"));
     let popup_id = id.with("popup");
@@ -2757,7 +2760,7 @@ fn line_menu_ui(
         .frame(Frame::NONE)
         .show(|ui| overlay(ui, |ui| line_tools_ui(ui, document, relations, line, line_data)))
         .and_then(|popup| popup.inner);
-    let edit = |edit: SheetEdit| Some(CardEdit::commands(vec![edit], After::Stay));
+    let edit = |edit: SheetEdit| CardEdit::commands(vec![edit], After::Stay);
     let line_id = line.id.clone();
     match chosen {
         Some(LineTool::Rename) => {
@@ -2769,28 +2772,28 @@ fn line_menu_ui(
             });
         }
         Some(LineTool::IncludeMe) => {
-            *pending = edit(SheetEdit::SetField {
+            pending.push(edit(SheetEdit::SetField {
                 line: line_id,
                 phrase: String::new(),
                 field: LineField::IncludeMe(Some(!includes_me)),
-            });
+            }));
         }
         Some(LineTool::MoveUp) => {
-            *pending = edit(SheetEdit::MoveLine {
+            pending.push(edit(SheetEdit::MoveLine {
                 line: line_id,
                 direction: MoveDirection::Up,
-            });
+            }));
         }
         Some(LineTool::MoveDown) => {
-            *pending = edit(SheetEdit::MoveLine {
+            pending.push(edit(SheetEdit::MoveLine {
                 line: line_id,
                 direction: MoveDirection::Down,
-            });
+            }));
         }
-        Some(LineTool::DrawNewNumbers) => *pending = edit(SheetEdit::DrawNewNumbers { line: line_id }),
-        Some(LineTool::ChangeToRate) => *pending = edit(SheetEdit::ChangeToRate { line: line_id }),
-        Some(LineTool::ChangeToChance) => *pending = edit(SheetEdit::ChangeToChance { line: line_id }),
-        Some(LineTool::Delete) => *pending = edit(SheetEdit::DeleteLine { line: line_id }),
+        Some(LineTool::DrawNewNumbers) => pending.push(edit(SheetEdit::DrawNewNumbers { line: line_id })),
+        Some(LineTool::ChangeToRate) => pending.push(edit(SheetEdit::ChangeToRate { line: line_id })),
+        Some(LineTool::ChangeToChance) => pending.push(edit(SheetEdit::ChangeToChance { line: line_id })),
+        Some(LineTool::Delete) => pending.push(edit(SheetEdit::DeleteLine { line: line_id })),
         None => {}
     }
     response
@@ -2887,7 +2890,7 @@ fn can_move(relations: &CardRelations<'_>, line_id: &str) -> (bool, bool) {
 
 /// Draws the field that renames `line`, under it, and returns whether the field holds the keyboard focus. Enter or
 /// leaving the field keeps the name, and Escape cancels.
-fn rename_ui(ui: &mut Ui, line: &CardLine, state: &mut CardState, pending: &mut Option<CardEdit>) -> bool {
+fn rename_ui(ui: &mut Ui, line: &CardLine, state: &mut CardState, pending: &mut Vec<CardEdit>) -> bool {
     let Some(renaming) = &mut state.renaming else {
         return false;
     };
@@ -2934,7 +2937,7 @@ fn rename_ui(ui: &mut Ui, line: &CardLine, state: &mut CardState, pending: &mut 
         After::Stay,
     );
     edit.rename = true;
-    *pending = Some(edit);
+    pending.push(edit);
     focused
 }
 
@@ -2942,7 +2945,7 @@ fn rename_ui(ui: &mut Ui, line: &CardLine, state: &mut CardState, pending: &mut 
 
 /// Draws the New parameter dialog while it is open. Create adds the parameter and puts it in the place it was opened
 /// from, as one edit.
-fn new_parameter_dialog(ui: &Ui, document: &SheetDocument, state: &mut CardState, pending: &mut Option<CardEdit>) {
+fn new_parameter_dialog(ui: &Ui, document: &SheetDocument, state: &mut CardState, pending: &mut Vec<CardEdit>) {
     let Some((target, dialog, drawn)) = &mut state.new_parameter else {
         return;
     };
@@ -2963,7 +2966,7 @@ fn new_parameter_dialog(ui: &Ui, document: &SheetDocument, state: &mut CardState
                 target: target.place.target.clone(),
                 want: target.place.want,
             };
-            *pending = Some(CardEdit {
+            pending.push(CardEdit {
                 run: Box::new(move |builder| {
                     let made = builder.apply(parameter.add_edit())?;
                     let id = made.first().cloned().unwrap_or_default();

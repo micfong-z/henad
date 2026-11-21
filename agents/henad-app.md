@@ -82,19 +82,32 @@ beside the fault and Rebuild model modals.
 **Unsaved edits** of the Editor (`ui/editor/mod.rs`). Every load sets `saved_mark` to the model's
 `edit_mark`, a save that reports sets it to the mark `saving` took at its start, and Apply leaves
 it. `is_unsaved` holds for a non-empty model whose mark differs, and `Counterpart` keeps its own
-marks, swapped with the model. New model, New grid rule, New node graph and Open model (header, File
+marks, swapped with the model. `saving` is a `PendingSave` tagged with the `SaveTarget` it started
+under, which moves with its model in a swap and goes with a replaced model. `save_finished` gives
+the file name to the model, shown or beside, whose save carries the reporting target, and to no
+model once that model is gone (`a_late_save_names_the_model_it_saved`). Two saves pending under one
+target, of a model and of the model that replaced it, are not told apart. New model, New grid rule,
+New node graph and Open model (header, File
 menu, Model tab), Edit model of code the Editor did not apply, and Open in Editor go through
-`replace_model(app, Replacement)`, which runs the action at once when `unsaved_names` is empty and
-otherwise sets `EditorPanel::ask`. `unsaved_modal` (drawn from `lib.rs`) is a `Dialog` named by
-`sentence::unsaved_changes(names)`, titled `UNSAVED_HEADING`, with Cancel, `DISCARD_CHANGES` and
-`SAVE_MODEL` (the primary, which Enter presses). Save model saves the model shown
+`replace_model(app, Replacement)`, which runs the action at once when `unsaved_targets` of the
+replacement is empty and otherwise sets `EditorPanel::ask`. Convert in the conversion dialog is
+`Replacement::Convert`, which keeps the sheet shown and drops the copy beside it, so its dialog
+names and saves the counterpart alone (`a_second_conversion_asks_before_it_drops_an_edited_copy`).
+`unsaved_modal` (drawn from `lib.rs`) is a `Dialog` named by `sentence::unsaved_changes(names)`,
+titled `UNSAVED_HEADING`, with Cancel, `DISCARD_CHANGES` and `SAVE_MODEL` (the primary, which Enter
+presses). Save model saves the model shown
 (`SaveTarget::Model`) and then the counterpart (`SaveTarget::Counterpart`) in turn (`AfterSave`):
 `poll_saves` passes each outcome to `save_finished` and `continue_replacement`, which runs the
-action once both saved and drops it on a
-save that saved nothing. In a test build `save_as` records each save in `saves_requested`, and
-`finish_save` reports it (`src/tests/unsaved.rs`). On native a close request of the window waits
-the same way: `HenadApp::logic` sends `ViewportCommand::CancelClose` while `AppState::hold_close`
-holds, which asks through `replace_model(app, Replacement::CloseWindow)`. Discard changes, or a
+action through `replace_model` once both saved, so an edit made while a save dialog was open asks
+again, and drops it on a save that saved nothing. `open_model` records the models' edit marks
+(`note_open_started`, `EditorPanel::open_marks`), and `receive_open` opens the picked file at once
+unless a model was edited since, when `Replacement::OpenFile` (an `OpenedFile`, decoded first) asks
+(`edits_made_while_a_file_dialog_is_open_ask_before_they_are_replaced`). A file dialog leaves the
+app's window usable on Windows and Linux. In a test build `save_as` records each save in
+`saves_requested`, and `finish_save` reports it (`src/tests/unsaved.rs`). On native a close request
+of the window waits the same way: `HenadApp::logic` sends `ViewportCommand::CancelClose` while
+`AppState::hold_close` holds, which asks through `replace_model(app, Replacement::CloseWindow)`.
+Discard changes, or a
 Save model that saved both models, runs `AppState::close_window`: `closing` set, which holds no
 later request, then `ViewportCommand::Close`. A browser tab has no close request to hold
 (`a_close_request_with_unsaved_edits_asks_and_saves_before_closing`,
@@ -134,7 +147,8 @@ returns Build's disabled reason, which Playback shows. It shows a `SetupError` t
 shortfall goes through `AppState::entry_shortfalls`, which takes `SheetFile::shortfalls` when the
 Editor's sheet has the entry's code (`editor_sheet_of`), so a sheet's work past a budget names its
 lines and no pass (`work_past_the_budget_on_a_sheet_names_its_lines_and_no_pass`).
-`reset_simulation` builds nothing while the check fails, and `open_run` refuses a replay
+`reset_simulation` builds nothing while the check fails or the Seed field holds no seed, and
+`open_run` refuses a replay
 `RunSetup::from_replay` refuses. `reset_simulation` builds the checked setup through the private
 `load`, which tears the old run down, pins the setup's entry, records `loaded_values`,
 `loaded_seed` and `loaded_schedule`, starts the build and sends `SimCommand::SetSchedule` when the
@@ -267,7 +281,9 @@ A playing loop runs ahead of the snapshot's tick, and a target between the two w
 it. The progress line reads the target, Cancel sends `Pause`, and `AppState::receive_snapshot`
 (each frame's snapshot, through `poll_snapshot` from `HenadApp::logic`) clears the target once a
 snapshot reaches it. A snapshot past the target makes it call `run_to` again, and the second call
-rebuilds, for the selection or the replayed preview. Where the frame drives the sim
+rebuilds, for the selection or the replayed preview. A rebuild that Build refuses, as for a Seed
+field that holds no seed, leaves the snapshot, and `run_to` then sends nothing
+(`a_run_to_a_tick_behind_that_build_refuses_leaves_the_run_alone`). Where the frame drives the sim
 (`!CAN_SPAWN_THREADS`), `logic` keeps repainting while a run-to is pending.
 `AppState::open_run(Replay, OpenAt)` builds one sweep run from a
 `henad_core::explore::replay::Replay`. It selects the model, sets the params, seed

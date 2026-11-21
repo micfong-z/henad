@@ -85,9 +85,12 @@ from a detached run or from rendering. Apply returns before `poll_build`'s frame
 only when the Editor claims a fault during the call, as it can for a browser's inline build. In a
 browser `catching_on` pushes no scopes, and the device reports a refused rule through the
 `FaultSink` a frame or more after the build. Without compute, Apply is disabled and the tab reads
-`NO_COMPUTE`. Apply builds no model the device cannot hold at the next build's values, and reports
-the sizes as `ApplyOutcome::Faulted`. `reset_simulation`, `open_run` and `open_setup` refuse it too,
-since the engine's own assert would end a browser's page. `src/tests/editor.rs` holds
+`NO_COMPUTE`. Apply builds no model that `build_refusal` refuses, such as one the device cannot hold
+at the next build's values, and reports the reason as `ApplyOutcome::Faulted`. `reset_simulation`,
+`open_run` and `open_setup` refuse the sizes too, since the engine's own assert would end a
+browser's page, and `reset_simulation` refuses a Seed field that holds no seed, which would build at
+the last valid seed (`an_apply_while_the_seed_is_no_integer_builds_nothing`). `src/tests/editor.rs`
+holds
 `new_grid_rule_starts_from_the_life_starter`,
 `applying_an_edit_installs_and_rebuilds_from_tick_zero`,
 `an_edit_after_apply_drops_the_applied_line`,
@@ -136,7 +139,9 @@ Model actions menu and Edit as node graph beside the Diagram send `EditorRequest
 `convert_refusal` (`ConvertRefusal::of` the report, or `Errors` for a sheet that does not lower)
 holds. Both controls are disabled then, with `ConvertRefusal::tooltip`. `convert_modal` is a dialog
 named `CONVERT_HEADING`, the two paragraphs of `convert_text` one label per line, Cancel and Convert
-(the primary, which Enter presses), and Convert sends `ConfirmConvert`. `convert_sheet` takes
+(the primary, which Enter presses), and Convert sends `ConfirmConvert`, which goes through
+`replace_model(app, Replacement::Convert)`: a copy beside the sheet with unsaved edits, which the
+new copy replaces, asks first (`henad-app.md`, unsaved edits). `convert_sheet` takes
 `ConvertOptions::new` with `today()` (UTC, Hinnant's `civil_date`) and a `taken` closure over the
 app's model ids and names and the files beside the sheet, and the sheet's own file name for
 `origin.file`. On native, a sheet with `EditorPanel::file_path` (set by `receive_open` from
@@ -154,15 +159,19 @@ the banner and the dialog (`clear_expert`) and the outcome, the line to scroll t
 `settle_swap` names, `clear_outcome` among them.
 
 The *original* of a copy is the counterpart when it is a sheet with `origin.model`'s id, else
-`EditorPanel::beside`, the sheet `find_original` read from `origin.file` beside the copy's path.
+`EditorPanel::beside`, the `expert::Beside` that `find_original` read from `origin.file` beside the
+copy's path (`ParsedSheet` for the document and the id, and `SheetFile::parse` for the lowered
+file, `None` while errors stop it lowering).
 `copy_banner` returns a `CopyBanner` (cached by load, code revision and a hash of the original's
 text) in four states (`CopyState`): `Unedited`, `Edited(node_edits)` when `GraphEditor::code_hash`
 differs from `origin.copy_code` (counts from `changes_since_conversion`), `OriginalChanged` (the
-code's hash differs from `origin.code`, or the counterpart no longer lowers) and `NotFound`.
+code's hash differs from `origin.code`, or the counterpart or the sheet beside no longer lowers) and
+`NotFound`.
 `header_ui` draws it in a
 `Panel::top` under the header as an information notice with small buttons after its text, Open <name>
-(`EditorRequest::OpenOriginal`, `open_original_of`: a swap, or the sheet read from beside, which
-takes the copy as its counterpart) in every state but `NotFound`. The sheet's link line
+(`EditorRequest::OpenOriginal`, `open_original_of`: a swap, or the sheet read from beside, errors
+included, which takes the copy as its counterpart) in every state but `NotFound`. The sheet's link
+line
 (`counterpart_copy`) sends `OpenCopy`. The graph side panel ends with `origin_ui` under
 `FROM_AUTHOR_MODEL` (model, file, converted date, then each `[[editor.note]]` title and text, the
 sheet's purpose and each parameter's meaning) when the file records a `ModelOrigin`. Nodes
@@ -227,6 +236,7 @@ from one another, at their drawn sizes),
 `open_original_returns_to_the_sheet_and_its_line_opens_the_copy` (and `OriginalChanged` after a
 sheet edit), `a_sheet_with_a_file_has_its_copy_written_beside_it_and_found_again` (a taken file
 numbers the copy, `NotFound` once the sheet is gone),
+`a_copy_finds_a_sheet_beside_it_that_no_longer_lowers_and_opens_it`,
 `show_changes_lists_a_highlife_edit_under_the_frame_of_line_2_and_marks_it_on_the_canvas` (the
 HighLife edit of henad-graph's `a_highlife_edit_is_found_by_changes_since_conversion`, rebuilt in
 the app test, one changed node under line 2's frame, two added in no frame, badges on the canvas, a

@@ -9,7 +9,8 @@
 //! sections of a world of agents are drawn by [`agents`].
 //!
 //! Every edit runs commands through [`SheetEditor::edit`]. A number field commits on Enter or on losing focus, and
-//! text it cannot read stays in the field with a red message under its row. A property is added or changed through
+//! text it cannot read stays in the field with a red message under its row. Escape puts back the value the sheet
+//! holds. A property is added or changed through
 //! the *property form* under the table of its kind of thing, a measure through the *measure form* and a button through
 //! the *button form*. A Starts as number is a plain field with "Use a parameter" beside it, and a chosen parameter
 //! shows as its chip. A parameter's slider commits once, when it is let go.
@@ -442,7 +443,8 @@ enum FormKind {
     Event,
 }
 
-/// An edit made during the frame, run once the pane is drawn.
+/// An edit made during the frame. Every edit of a frame runs once the pane is drawn, in the order the pane drew their
+/// controls, each as one step of Undo.
 struct Pending {
     /// Whether the edit leaves the running world alone apart from how properties start, as a new start, a new name
     /// or a new purpose does.
@@ -478,7 +480,10 @@ impl Pending {
 }
 
 /// Draws every section of `sheet`, in the order of [`SheetSection::shown`] for its world, each heading with its help,
-/// and runs the edits made in it.
+/// and runs every edit made in it.
+///
+/// A field that loses the focus to a click commits in the frame of the click, so one frame can hold two edits. Each
+/// runs on the sheet as the edit before it left it.
 ///
 /// `past_start` is whether the preview has passed tick 0 or a button was pressed in it. A changed Starts as then says
 /// "Press Start again to see the change." `trials` holds the values the world tries, each shown under its parameter.
@@ -487,7 +492,7 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
         .filter(|property| past_start && sheet.start_changed(&property.id))
         .map(|property| property.id.clone())
         .collect();
-    let mut pending = None;
+    let mut pending = Vec::new();
     {
         let SheetEditor {
             builder, pane, report, ..
@@ -520,45 +525,58 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
             new_parameter(ui, document, pane, &mut pending);
         });
     }
-    let Some(Pending { starts_only, form, run }) = pending else {
+    if pending.is_empty() {
         return;
-    };
+    }
     let time = sheet.document().time;
-    let outcome = sheet.edit(past_start, starts_only, run);
+    let mut kept = false;
+    let mut restart_notice = None;
+    sheet.pane.refusal = None;
+    for Pending { starts_only, form, run } in pending {
+        let outcome = sheet.edit(past_start, starts_only, run);
+        restart_notice = restart_notice.or(sheet.notice);
+        let pane = &mut sheet.pane;
+        match outcome {
+            Ok(()) => {
+                kept = true;
+                match form {
+                    Some(FormKind::Property) => pane.property_form = None,
+                    Some(FormKind::Measure) => pane.measure_form = None,
+                    Some(FormKind::Button) => pane.button_form = None,
+                    Some(FormKind::Event) => pane.event_form = None,
+                    None => {}
+                }
+            }
+            Err(error) => {
+                let message = Some(refusal_text(&error));
+                match form {
+                    Some(FormKind::Property) if let Some(open) = &mut pane.property_form => open.message = message,
+                    Some(FormKind::Measure) if let Some(open) = &mut pane.measure_form => open.message = message,
+                    Some(FormKind::Button) if let Some(open) = &mut pane.button_form => open.message = message,
+                    Some(FormKind::Event) if let Some(open) = &mut pane.event_form => open.message = message,
+                    _ => pane.refusal = message,
+                }
+            }
+        }
+    }
+    // An edit of starts alone, made after an edit that restarted the world in the same frame, leaves no notice of its
+    // own. The world still starts again from tick 0.
+    if sheet.notice.is_none() && !sheet.has_errors() && !sheet.shows_nothing() {
+        sheet.notice = restart_notice;
+    }
     let time_changed = sheet.document().time.is_some() && sheet.document().time != time;
     if time_changed {
         // The notice of a time a rate's unit set no longer states the length of one tick.
         sheet.card.drop_tick_notice();
     }
-    let pane = &mut sheet.pane;
-    match outcome {
-        Ok(()) => {
-            pane.refusal = None;
-            pane.time_changed = time_changed;
-            match form {
-                Some(FormKind::Property) => pane.property_form = None,
-                Some(FormKind::Measure) => pane.measure_form = None,
-                Some(FormKind::Button) => pane.button_form = None,
-                Some(FormKind::Event) => pane.event_form = None,
-                None => {}
-            }
-        }
-        Err(error) => {
-            let message = Some(refusal_text(&error));
-            match form {
-                Some(FormKind::Property) if let Some(open) = &mut pane.property_form => open.message = message,
-                Some(FormKind::Measure) if let Some(open) = &mut pane.measure_form => open.message = message,
-                Some(FormKind::Button) if let Some(open) = &mut pane.button_form => open.message = message,
-                Some(FormKind::Event) if let Some(open) = &mut pane.event_form => open.message = message,
-                _ => pane.refusal = message,
-            }
-        }
+    if kept {
+        sheet.pane.time_changed = time_changed;
     }
 }
 
 /// Draws what the model is for as a field of several lines that commits on losing focus. `widgets` is the id the
 /// pane's widgets are keyed under.
-fn purpose(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Option<Pending>) {
+fn purpose(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Vec<Pending>) {
     let current = document.sheet.purpose.as_deref().unwrap_or_default();
     commit_area(
         ui,
@@ -568,7 +586,7 @@ fn purpose(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Opt
         PURPOSE_PLACEHOLDER,
         |text| {
             let purpose = text.trim();
-            *pending = Some(Pending::one(SheetEdit::SetPurpose {
+            pending.push(Pending::one(SheetEdit::SetPurpose {
                 purpose: (!purpose.is_empty()).then(|| purpose.to_owned()),
             }));
             None
@@ -578,7 +596,7 @@ fn purpose(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Opt
 
 /// Draws the world's kind, then its size, its edges and the length of one tick as form rows, and the notice of `pane`
 /// under them.
-fn world(ui: &mut Ui, document: &SheetDocument, pane: &PaneState, pending: &mut Option<Pending>) {
+fn world(ui: &mut Ui, document: &SheetDocument, pane: &PaneState, pending: &mut Vec<Pending>) {
     let widgets = pane.widgets;
     let world = document.world;
     let form = Form::new(ui, &[SIZE_LABEL, EDGES_LABEL, ONE_TICK_IS]);
@@ -630,7 +648,7 @@ fn world(ui: &mut Ui, document: &SheetDocument, pane: &PaneState, pending: &mut 
         if let Some((edges, _)) = chosen.and_then(|index| options.get(index))
             && *edges != world.edges
         {
-            *pending = Some(Pending::one(SheetEdit::SetWorld {
+            pending.push(Pending::one(SheetEdit::SetWorld {
                 width: world.width,
                 height: world.height,
                 edges: *edges,
@@ -656,7 +674,7 @@ fn side_field(
     id: Id,
     name: &str,
     side: u32,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
     edit: impl FnOnce(u32) -> SheetEdit,
 ) {
     commit_number(ui, id, name, &side.to_string(), FIELD_WIDTH, |text| {
@@ -668,13 +686,13 @@ fn side_field(
         }
         // The checks above hold the side to a whole number within `u32`.
         let side = number as u32;
-        *pending = Some(Pending::one(edit(side)));
+        pending.push(Pending::one(edit(side)));
         None
     });
 }
 
 /// Draws the Time line of `form`, "One tick is [number] [unit]", with the number hidden while the tick has no unit.
-fn time_line(ui: &mut Ui, document: &SheetDocument, form: &Form, widgets: Id, pending: &mut Option<Pending>) {
+fn time_line(ui: &mut Ui, document: &SheetDocument, form: &Form, widgets: Id, pending: &mut Vec<Pending>) {
     let length_id = widgets.with("henad_sheet_tick_length");
     let time = document.time;
     form.row(ui, ONE_TICK_IS, |ui| {
@@ -686,7 +704,7 @@ fn time_line(ui: &mut Ui, document: &SheetDocument, form: &Form, widgets: Id, pe
                 };
                 // A length of 0 or less becomes 1, as the page has it.
                 let length = if length > 0.0 { length } else { 1.0 };
-                *pending = Some(Pending::one(SheetEdit::SetTime {
+                pending.push(Pending::one(SheetEdit::SetTime {
                     time: Some(SheetTime::new(length, time.tick_unit)),
                 }));
                 None
@@ -710,7 +728,7 @@ fn time_line(ui: &mut Ui, document: &SheetDocument, form: &Form, widgets: Id, pe
             && unit != current
         {
             let length = time.map_or(1.0, |time| time.tick_length);
-            *pending = Some(Pending::one(SheetEdit::SetTime {
+            pending.push(Pending::one(SheetEdit::SetTime {
                 time: unit.map(|unit| SheetTime::new(length, unit)),
             }));
         }

@@ -18,13 +18,15 @@ use std::path::PathBuf;
 use egui::{Id, Modal, RichText};
 use henad_graph::GraphFile;
 use henad_graph::editor::{ModelOrigin, NoteLayout};
+use henad_graph::sheet::document::SheetDocument;
 use henad_graph::sheet::sentence::{
     CANCEL, COMPARE_NEEDS_NATIVE, COMPARE_RUNS, CONVERT, CONVERT_HEADING, FROM_AUTHOR_MODEL, SHOW_CHANGES,
     convert_text, converted_banner, converted_date, edited_banner, node_edits, open_original, original_changed_banner,
     original_not_beside,
 };
 use henad_graph::sheet::{
-    ChangeGroup, ChangesError, ConvertOptions, ConvertRefusal, KIND_SHEET, SheetFile, changes_since_conversion, convert,
+    ChangeGroup, ChangesError, ConvertOptions, ConvertRefusal, KIND_SHEET, ParsedSheet, SheetFile,
+    changes_since_conversion, convert,
 };
 use web_time::{SystemTime, UNIX_EPOCH};
 
@@ -34,7 +36,7 @@ use super::sheet::SheetEditor;
 use super::sheet::widgets::{
     DialogButton, DialogButtonKind, Notice, NoticeKind, dialog_buttons, dialog_frame, dialog_title,
 };
-use super::{BannerKey, EditorModel, EditorPanel, EditorRequest, FileStatus};
+use super::{BannerKey, EditorModel, EditorPanel, EditorRequest, FileStatus, PendingSave};
 use crate::state::AppState;
 use crate::ui::dock::Tab;
 
@@ -53,8 +55,8 @@ pub struct Counterpart {
     pub file_path: Option<PathBuf>,
     /// Edit mark of the model when it was opened, made or last saved, as [`EditorPanel`] keeps it for the model shown.
     pub saved_mark: u64,
-    /// Edit mark of the model when its save started, until the save reports.
-    pub saving: Option<u64>,
+    /// Save of the model, from its start until it reports.
+    pub saving: Option<PendingSave>,
 }
 
 impl Counterpart {
@@ -74,6 +76,17 @@ impl Counterpart {
     pub fn is_unsaved(&self) -> bool {
         self.model.is_edited_since(self.saved_mark)
     }
+}
+
+/// Sheet a copy was converted from, read from the file its origin record names beside the copy's file.
+#[derive(Debug)]
+pub struct Beside {
+    /// Path of the sheet's file.
+    pub path: PathBuf,
+    /// The sheet as its file reads, errors included.
+    pub document: SheetDocument,
+    /// The sheet checked and lowered, `None` for a sheet whose errors stop it lowering.
+    pub file: Option<SheetFile>,
 }
 
 /// State of a copy against its original, which the banner shows.
@@ -289,6 +302,9 @@ fn save_beside(
 
 /// Reads the original of the graph in the Editor from beside its file into [`EditorPanel::beside`], or clears it for
 /// a graph with no origin, no file or no original beside it.
+///
+/// A sheet beside the copy that reads and holds the id the record names is the original, even while errors stop it
+/// lowering.
 pub fn find_original(panel: &mut EditorPanel) {
     panel.beside = None;
     let Some(origin) = panel
@@ -302,13 +318,16 @@ pub fn find_original(panel: &mut EditorPanel) {
         return;
     };
     let path = folder.join(&origin.file);
-    let file = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| SheetFile::parse(&text).ok());
-    if let Some(file) = file
-        && file.document().sheet.id == origin.model
-    {
-        panel.beside = Some((path, Box::new(file)));
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(parsed) = ParsedSheet::parse(&text) else {
+        return;
+    };
+    let document = parsed.into_document();
+    if document.sheet.id == origin.model {
+        let file = SheetFile::parse(&text).ok();
+        panel.beside = Some(Box::new(Beside { path, document, file }));
     }
 }
 
@@ -347,7 +366,7 @@ fn original<'a>(panel: &'a EditorPanel, origin: &ModelOrigin) -> Original<'a> {
         return file.map_or(Original::Broken, Original::Sheet);
     }
     match &panel.beside {
-        Some((_, file)) => Original::Sheet(file),
+        Some(beside) => beside.file.as_ref().map_or(Original::Broken, Original::Sheet),
         None => Original::Missing,
     }
 }
@@ -492,8 +511,8 @@ pub fn swap_counterpart(panel: &mut EditorPanel) {
     panel.settle_swap();
 }
 
-/// Opens the original of the graph in the Editor: the counterpart, or the sheet read from beside the copy, which then
-/// takes the copy as its counterpart.
+/// Opens the original of the graph in the Editor: the counterpart, or the sheet read from beside the copy, errors
+/// included, which then takes the copy as its counterpart.
 pub fn open_original_of(panel: &mut EditorPanel) {
     let Some(origin) = panel
         .model
@@ -506,19 +525,17 @@ pub fn open_original_of(panel: &mut EditorPanel) {
         swap_counterpart(panel);
         return;
     }
-    match original(panel, &origin) {
-        Original::Sheet(file) => {
-            let document = file.document().clone();
-            let Some((path, _)) = panel.beside.take() else {
-                return;
-            };
-            let counterpart = Counterpart::take_from(panel);
-            panel.load_sheet(SheetEditor::new(document), Some(origin.file.clone()));
-            panel.file_path = Some(path);
-            panel.counterpart = Some(Box::new(counterpart));
-        }
-        Original::Broken | Original::Missing => {}
+    if matches!(original(panel, &origin), Original::Missing) {
+        return;
     }
+    let Some(beside) = panel.beside.take() else {
+        return;
+    };
+    let Beside { path, document, .. } = *beside;
+    let counterpart = Counterpart::take_from(panel);
+    panel.load_sheet(SheetEditor::new(document), Some(origin.file.clone()));
+    panel.file_path = Some(path);
+    panel.counterpart = Some(Box::new(counterpart));
 }
 
 /// Draws the side panel's section about the source of a copy recorded in `origin`, then each of `notes`, the prose of

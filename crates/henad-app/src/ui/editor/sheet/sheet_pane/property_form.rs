@@ -39,7 +39,7 @@ pub(super) fn property_form(
     document: &SheetDocument,
     form: &mut PropertyForm,
     close: &mut bool,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let heading = match &form.editing {
         Some(_) => edit_property_heading(&form.original),
@@ -88,14 +88,14 @@ pub(super) fn property_form(
     });
     if done {
         match check_form(document, form) {
-            Ok(()) => *pending = Some(Pending::from_form(FormKind::Property, form_edit(form.clone()))),
+            Ok(()) => pending.push(Pending::from_form(FormKind::Property, form_edit(form.clone()))),
             Err(message) => form.message = Some(message),
         }
     }
     *close |= cancel;
     if let Some(id) = form.editing.as_ref().filter(|_| delete) {
         let item = SheetItem::Property(id.clone());
-        *pending = Some(Pending::from_form(
+        pending.push(Pending::from_form(
             FormKind::Property,
             Box::new(move |builder| builder.apply(SheetEdit::Delete { item }).map(drop)),
         ));
@@ -334,6 +334,10 @@ fn form_edit(form: PropertyForm) -> EditRun {
 
 /// Changes the states of `property` to the rows `states` of the property form: removed states go, the others take
 /// their new names and colours, and new rows become new states.
+///
+/// A rename onto a name another state still holds, as in a swap of two names, waits for that state to give the name up.
+/// Every renamed state then takes a spare name first and its new name after. New states come last, once every name a
+/// rename frees is free.
 fn change_states(
     builder: &mut SheetBuilder,
     property: &SheetProperty,
@@ -350,34 +354,78 @@ fn change_states(
             })?;
         }
     }
-    for row in states {
-        let name = row.name.trim().to_owned();
-        let Some(id) = &row.id else {
-            builder.apply(SheetEdit::AddState {
-                property: property.id.clone(),
-                name,
-                color: Some(row.color),
+    let item = |id: &str| SheetItem::State {
+        property: property.id.clone(),
+        state: id.to_owned(),
+    };
+    let renamed: Vec<(&str, String)> = states
+        .iter()
+        .filter_map(|row| {
+            let id = row.id.as_deref()?;
+            let state = property.states.iter().find(|state| state.id == id)?;
+            let name = row.name.trim().to_owned();
+            (state.name != name).then_some((id, name))
+        })
+        .collect();
+    let held: Vec<(String, String)> = find_property(builder.document(), &property.id)
+        .map(|current| {
+            current
+                .states
+                .iter()
+                .map(|state| (state.id.clone(), state.name.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let clash = renamed.iter().any(|(id, name)| {
+        held.iter()
+            .any(|(other, known)| other != id && known.to_lowercase() == name.to_lowercase())
+    });
+    if clash {
+        let mut taken: Vec<String> = held.into_iter().map(|(_, name)| name).collect();
+        taken.extend(states.iter().map(|row| row.name.trim().to_owned()));
+        for (id, _) in &renamed {
+            let spare = spare_name(id, &taken);
+            taken.push(spare.clone());
+            builder.apply(SheetEdit::Rename {
+                item: item(id),
+                name: spare,
             })?;
-            continue;
-        };
-        let Some(state) = property.states.iter().find(|state| state.id == *id) else {
-            continue;
-        };
-        let item = || SheetItem::State {
-            property: property.id.clone(),
-            state: id.clone(),
-        };
-        if state.name != name {
-            builder.apply(SheetEdit::Rename { item: item(), name })?;
         }
+    }
+    for (id, name) in renamed {
+        builder.apply(SheetEdit::Rename { item: item(id), name })?;
+    }
+    for row in states {
+        let Some(state) = row
+            .id
+            .as_ref()
+            .and_then(|id| property.states.iter().find(|state| state.id == *id))
+        else {
+            continue;
+        };
         if state.color != row.color {
             builder.apply(SheetEdit::Recolor {
-                item: item(),
+                item: item(&state.id),
                 color: row.color,
             })?;
         }
     }
+    for row in states.iter().filter(|row| row.id.is_none()) {
+        builder.apply(SheetEdit::AddState {
+            property: property.id.clone(),
+            name: row.name.trim().to_owned(),
+            color: Some(row.color),
+        })?;
+    }
     Ok(())
+}
+
+/// Returns a name for the state `id` that none of `taken` holds, case aside, such as "alive 1".
+fn spare_name(id: &str, taken: &[String]) -> String {
+    (1..)
+        .map(|number| format!("{id} {number}"))
+        .find(|candidate| !name_taken(candidate, taken.iter().map(String::as_str)))
+        .unwrap_or_default()
 }
 
 /// Returns the numbers of the lines that change property `property_id` on the cards that run each tick: a Become, a

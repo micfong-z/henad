@@ -18,7 +18,8 @@ use henad_graph::sheet::sentence::{
     NEW_MEASURE, NEW_PARAMETER, NEW_PARAMETER_HEADING, NUMBER_KIND, PARAMETER_NAME_MISSING, PLOT, PLOT_EMPTY, PLOTTED,
     PROPERTY_NAME_MISSING, REDO, RESTART_NOTICE, SHADE, SHADE_ENDS_EQUAL, SHEET_EMPTY, START_AGAIN_FOR,
     START_AGAIN_TO_SEE, STATES_KIND, TYPE_A_CHANCE, TYPE_ONE_NUMBER, UNDO, USE_A_PARAMETER, WALLS_SENTENCE,
-    WORLD_EMPTY, WORLD_QUESTION, name_reserved, run_once, start_again_for, world_side_out_of_range,
+    WORLD_EMPTY, WORLD_QUESTION, add_row_name, name_reserved, parameter_max_name, run_once, start_again_for,
+    value_slider_name, world_side_out_of_range,
 };
 use henad_graph::sheet::starters;
 
@@ -1275,4 +1276,140 @@ fn keep_on_the_parameters_tab_is_one_step_of_undo() {
     assert_eq!(sheet(&harness).document().parameters[0].default, 0.6);
     click(&mut harness, UNDO);
     assert_eq!(text(&harness), before);
+}
+
+/// A field whose typed text is left by a click on another control commits in the same frame as that control. Both
+/// edits are kept, each as one step of Undo.
+#[test]
+fn a_typed_number_and_a_click_in_one_frame_both_commit() {
+    let Some(mut harness) = blank() else {
+        return;
+    };
+    add_status(&mut harness);
+    choose(&mut harness, "Status starts as", "By chance");
+    type_into(&mut harness, "Status starts as, row 1: chance", "0.3");
+    click(&mut harness, &add_row_name("Status"));
+    let start = sheet(&harness).document().cells.as_ref().expect("cells")[0]
+        .starts_as
+        .clone()
+        .expect("a start");
+    assert_eq!(start.rows.len(), 2, "+ Add row added a row");
+    assert_eq!(
+        start.rows[0].chance,
+        Slot::Filled(SheetValue::Literal(SheetLiteral::Number(0.3))),
+        "the chance typed before the click is kept"
+    );
+    click(&mut harness, UNDO);
+    let rows = |harness: &Harness| {
+        sheet(harness).document().cells.as_ref().expect("cells")[0]
+            .starts_as
+            .as_ref()
+            .expect("a start")
+            .rows
+            .clone()
+    };
+    assert_eq!(rows(&harness).len(), 1, "Undo takes the new row back first");
+    assert_eq!(
+        rows(&harness)[0].chance,
+        Slot::Filled(SheetValue::Literal(SheetLiteral::Number(0.3)))
+    );
+
+    // A slider let go in the frame a range field commits keeps the new range.
+    click(&mut harness, ADD_PARAMETER);
+    type_into(&mut harness, "Parameter name", "Growth");
+    click(&mut harness, CREATE_PARAMETER);
+    harness.settle();
+    type_into(&mut harness, &parameter_max_name("Growth"), "20");
+    click(&mut harness, &value_slider_name("Growth"));
+    let parameter = sheet(&harness).document().parameters[0].clone();
+    assert_eq!(parameter.max, 20.0, "the Max typed before the click is kept");
+    assert_ne!(parameter.default, 1.0, "the slider's click is kept");
+}
+
+/// Escape in a field of one line puts back what the sheet holds, a refused text and its message included, and edits
+/// nothing. Escape in Purpose keeps what is typed.
+#[test]
+fn escape_cancels_a_typed_number_and_keeps_a_typed_purpose() {
+    let Some(mut harness) = blank() else {
+        return;
+    };
+    let before = text(&harness);
+    type_into(&mut harness, "Width in cells", "2000");
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.settle();
+    assert_eq!(text(&harness), before, "Escape edits nothing");
+    assert_eq!(field_value(&mut harness, "Width in cells"), "100");
+
+    enter_into(&mut harness, "Width in cells", "abc");
+    assert!(shows_or_notice(&mut harness, TYPE_ONE_NUMBER));
+    click(&mut harness, "Width in cells");
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.settle();
+    assert_eq!(field_value(&mut harness, "Width in cells"), "100");
+    assert!(
+        !shows_or_notice(&mut harness, TYPE_ONE_NUMBER),
+        "the message goes with the text"
+    );
+
+    type_into(&mut harness, "Purpose", "Cells live and die.");
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.settle();
+    assert_eq!(
+        sheet(&harness).document().sheet.purpose.as_deref(),
+        Some("Cells live and die.")
+    );
+}
+
+/// Two states that swap names in the property form keep their ids and colours, and so do the states of a chain of
+/// renames in which each name frees the next.
+#[test]
+fn the_property_form_swaps_the_names_of_two_states() {
+    let Some(mut harness) = blank() else {
+        return;
+    };
+    add_status(&mut harness);
+    let states = |harness: &Harness| {
+        sheet(harness).document().cells.as_ref().expect("cells")[0]
+            .states
+            .iter()
+            .map(|state| (state.id.clone(), state.name.clone(), state.color))
+            .collect::<Vec<_>>()
+    };
+    let before = states(&harness);
+    click(&mut harness, "Edit property Status");
+    type_into(&mut harness, "State 1 name", "Alive");
+    type_into(&mut harness, "State 2 name", "Dead");
+    click(&mut harness, DONE);
+    harness.settle();
+    let after = states(&harness);
+    assert_eq!(
+        after,
+        [
+            (before[0].0.clone(), "Alive".to_owned(), before[0].2),
+            (before[1].0.clone(), "Dead".to_owned(), before[1].2),
+        ],
+        "the ids and colours stay, and the names swap"
+    );
+
+    // A chain: Alive takes Dead's name, Dead takes a new one, and a new state takes Alive's.
+    click(&mut harness, "Edit property Status");
+    type_into(&mut harness, "State 1 name", "Dead");
+    type_into(&mut harness, "State 2 name", "Zombie");
+    click(&mut harness, ADD_STATE);
+    type_into(&mut harness, "State 3 name", "Alive");
+    click(&mut harness, DONE);
+    harness.settle();
+    let names: Vec<String> = states(&harness).into_iter().map(|(_, name, _)| name).collect();
+    assert_eq!(names, ["Dead", "Zombie", "Alive"]);
+
+    // On Game of Life, the count that follows its state's name follows the swap, as it follows a rename.
+    harness.open_sheet(starters()[0].text);
+    click(&mut harness, "Edit property Status");
+    type_into(&mut harness, "State 1 name", "Alive");
+    type_into(&mut harness, "State 2 name", "Dead");
+    click(&mut harness, DONE);
+    harness.settle();
+    let (_, count) = sheet(&harness).document().line("l1").expect("line 1");
+    assert_eq!(count.name.as_deref(), Some("Dead neighbours"));
+    assert!(!sheet(&harness).has_errors());
 }

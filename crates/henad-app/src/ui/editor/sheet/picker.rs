@@ -43,7 +43,7 @@ use super::widgets::{
     NumberUse, OVERLAY_PADDING, OverlayItem, PICKER_WIDTH, color32, message_ui, overlay, overlay_group, overlay_item,
     overlay_title, set_name,
 };
-use super::{accessible_group, over_agents, properties_of};
+use super::{accessible_group, find_property, over_agents, properties_of};
 
 /// Tallest a picker grows in points before it scrolls.
 const PICKER_HEIGHT: f32 = 420.0;
@@ -409,7 +409,7 @@ fn parameter_items(document: &SheetDocument, number_use: NumberUse) -> Vec<Picke
         .filter(|parameter| match number_use {
             NumberUse::Chance => parameter_rate_unit(parameter).is_none(),
             NumberUse::Rate => parameter.unit.is_none() || parameter_rate_unit(parameter).is_some(),
-            NumberUse::Number => true,
+            NumberUse::Number | NumberUse::Share => true,
             NumberUse::Times => parameter.parameter_type == ParameterType::WholeNumber,
         })
         .map(|parameter| {
@@ -832,12 +832,12 @@ impl LineContext<'_> {
     }
 
     /// Returns the states of `property`, or of every States property when `property` is `None`, as items named as chips
-    /// name them. A state of the ground is offered too on a card over agents.
-    fn states(&self, property: Option<&str>) -> Vec<PickerItem> {
+    /// name them. A state of the ground is offered too on a card over agents when `ground` holds.
+    fn states(&self, property: Option<&str>, ground: bool) -> Vec<PickerItem> {
         let states_properties: Vec<&SheetProperty> = self
             .properties()
             .iter()
-            .chain(self.ground_properties().iter().filter(|_| self.agents()))
+            .chain(self.ground_properties().iter().filter(|_| ground && self.agents()))
             .filter(|candidate| candidate.property_type == PropertyType::States)
             .collect();
         states_properties
@@ -901,15 +901,37 @@ pub fn typed_text(value: Option<&SheetValue>) -> String {
     }
 }
 
+/// Returns whether the place `target` of `line` on a card over agents takes a state of the ground: any place but a
+/// Become's new or old state and the state a count or look at agents compares in its `whose` or `only`, which are
+/// states of the agent's own properties.
+///
+/// A count or look over the cells around compares their ground, and takes its states.
+pub fn takes_ground_states(line: &SheetLine, target: &PlaceTarget) -> bool {
+    match target {
+        PlaceTarget::Field { field, .. } => !matches!(field, FieldPlace::NewState | FieldPlace::StartState),
+        PlaceTarget::Slot(path) | PlaceTarget::ListItem { slot: path, .. } => {
+            let compare = path
+                .strip_suffix(".right")
+                .filter(|compare| matches!(compare.rsplit('.').next(), Some("whose" | "only")));
+            !compare
+                .and_then(|compare| phrase_of(line, compare))
+                .is_some_and(|owner| owner.around == Some(Around::AgentsWithin))
+        }
+        _ => true,
+    }
+}
+
 /// Returns the picker of a place that wants `want` on the line of `context`.
 ///
-/// `property` is the property whose states the place offers, `None` for every States property. `filled` is whether
+/// `property` is the property whose states the place offers, `None` for every States property, and `ground` whether
+/// the place takes a state of the ground on a card over agents, as [`takes_ground_states`] says. `filled` is whether
 /// the place holds a value, a filled item of a list offering "Remove from list". `typed` is the text the Number box
 /// shows, and `draw` the kind of draw a "for each" grows.
 pub fn picker_for(
     context: &LineContext<'_>,
     want: Blank,
     property: Option<&str>,
+    ground: bool,
     filled: bool,
     typed: &str,
     draw: DrawKind,
@@ -927,14 +949,14 @@ pub fn picker_for(
     let agents = context.agents();
     let kind = context.line.kind;
     match want {
-        Blank::State => one_group(NO_STATES, STATES, context.states(property)),
+        Blank::State => one_group(NO_STATES, STATES, context.states(property, ground)),
         Blank::OldState => {
             let mut items = vec![PickerItem::new(ANY_STATE, Choice::AnyState)];
-            items.extend(context.states(property));
+            items.extend(context.states(property, ground));
             one_group(NO_STATES, STATES, items)
         }
         Blank::StateList => {
-            let mut picker = one_group(NO_STATES, STATES, context.states(property));
+            let mut picker = one_group(NO_STATES, STATES, context.states(property, ground));
             picker.remove = filled.then_some(REMOVE_FROM_LIST);
             picker
         }
@@ -1462,12 +1484,9 @@ fn slot_choice(
             )];
             if let Some(outer) = path.strip_suffix(".left") {
                 let right = format!("{outer}.right");
+                // The property is looked up among the properties of every kind of thing. An agent has no cells.
                 let owns = |state: &str| {
-                    document
-                        .cells
-                        .iter()
-                        .flatten()
-                        .find(|known| known.id == *property)
+                    find_property(document, property)
                         .is_some_and(|owner| owner.states.iter().any(|known| known.id == state))
                 };
                 if let Some(SheetValue::Chip(SheetChip::State(state))) = slot_value(line, &right)

@@ -11,19 +11,20 @@ use henad_graph::sheet::document::{
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit};
 use henad_graph::sheet::sentence::{
     ADD_BUTTON, ARROW_KIND, AddButton, BUTTON_NAME_FIELD, Blank, CHOOSE_WHEN, CREATE_PARAMETER, DONE, DrawKind,
-    LOOK_IN_REPEAT, NEW_PARAMETER, NUMBER_BOX_HINT, OR_A_NEW_VALUE, Sentences, add_property_name, add_summary_name,
-    moved_by_already, run_once, steered_already, value_field_name,
+    LOOK_IN_REPEAT, NEW_PARAMETER, NUMBER_BOX_HINT, OR_A_NEW_VALUE, PlaceTarget, Sentences, add_property_name,
+    add_summary_name, moved_by_already, run_once, sheet_parameter_name_field, steered_already, value_field_name,
+    value_slider_name,
 };
 
 use crate::tests::panes::{
     Seen, add_average_measure, add_property, agent_sheet, assert_controls_hold_their_words, assert_no_forbidden_word,
-    click, click_in, click_last, click_on_line, field_value, is_open, labels_of, line_picker, line_text, named,
-    new_blank_agents, open_starter, pick, picker_labels, sheet, shows, starter_document, text_and_code, type_and_enter,
-    type_into,
+    click, click_in, click_last, click_on_line, document_of, field_value, is_open, labels_of, line_picker, line_text,
+    named, new_blank_agents, open_starter, pick, picker_labels, picker_offers, sheet, shows, starter_document,
+    text_and_code, type_and_enter, type_into,
 };
-use crate::tests::support::{Harness, align_with_starter};
+use crate::tests::support::{Harness, align_with_starter, edited, starter_text};
 use crate::ui::editor::sheet::card_pane::{NoteColor, card_lines};
-use crate::ui::editor::sheet::picker::{looked_at_picker, picker_for};
+use crate::ui::editor::sheet::picker::{looked_at_picker, picker_for, takes_ground_states};
 
 /// Opens the menu of the add button `button` of a card over agents, the first such button when `first` holds and the
 /// last otherwise, records what it shows, and chooses `item`.
@@ -557,6 +558,160 @@ fn opening_boids_leaves_a_default_off_its_slider_steps_as_it_is() {
     );
 }
 
+/// The slider of a default off its steps takes the keyboard focus without an edit, and an Undo while it holds the
+/// focus stays undone. An arrow key edits the default.
+#[test]
+fn a_slider_that_takes_the_focus_keeps_a_default_off_its_steps() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "boids.toml");
+    let starter = starter_document("boids.toml");
+    click(&mut harness, &sheet_parameter_name_field("Protected range"));
+    harness.press(Key::Tab, Modifiers::NONE);
+    harness.settle();
+    assert_eq!(
+        harness.focused,
+        value_slider_name("Protected range"),
+        "Tab moves to the slider"
+    );
+    assert_eq!(sheet(&harness).document(), &starter, "the focus alone edits nothing");
+    assert!(!sheet(&harness).can_undo());
+
+    harness.press(Key::ArrowRight, Modifiers::NONE);
+    harness.settle();
+    let default = |harness: &Harness| {
+        let parameters = &sheet(harness).document().parameters;
+        parameters
+            .iter()
+            .find(|parameter| parameter.name == "Protected range")
+            .expect("Protected range")
+            .default
+    };
+    assert!(default(&harness) > 8.0, "an arrow key edits the default");
+    harness.press(Key::Z, Modifiers::COMMAND);
+    harness.settle();
+    assert_eq!(
+        harness.focused,
+        value_slider_name("Protected range"),
+        "the slider keeps the focus"
+    );
+    assert_eq!(sheet(&harness).document(), &starter, "Undo restores the default");
+    assert!(sheet(&harness).can_redo(), "nothing edited the default again");
+}
+
+/// Keys of a count of the ants near me.
+const AGENTS_NEAR: &str = "around = \"agents_within\"\nagent_kind = \"ant\"\ndistance = 3\ninclude_me = false\n";
+
+/// Keys of a count of the 8 cells around me.
+const CELLS_AROUND: &str = "around = \"cells_8\"\n";
+
+/// Returns the ants starter with a line 17 that counts what the keys `around` name, whose property and state `whose`
+/// names, written as the table of a `whose` compare, such as `left = { their = "cargo" }`.
+fn ants_with_a_count(around: &str, whose: &str) -> String {
+    let text = edited(starter_text("ants.toml"), "next_line = 17", "next_line = 18");
+    let text = edited(&text, "\"l12\", \"l16\"]", "\"l12\", \"l16\", \"l17\"]");
+    format!(
+        "{text}\n[card.line.l17]\nkind = \"count\"\nname = \"Count near\"\n{around}\n[card.line.l17.whose]\n\
+         kind = \"compare\"\ntest = \"is\"\n{whose}"
+    )
+}
+
+/// Returns the ants starter with a line 17 that counts the ants near me whose Cargo `whose` names, as
+/// [`ants_with_a_count`] writes it.
+fn ants_with_a_count_of_agents(whose: &str) -> String {
+    ants_with_a_count(AGENTS_NEAR, whose)
+}
+
+/// The state of a Become and of a count of agents on a card over agents offers the agent's own states, and a compare
+/// of a cell's Ground offers the ground's.
+#[test]
+fn a_state_picker_offers_the_ground_only_where_a_cell_is_compared() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "ants.toml");
+    click_on_line(&mut harness, "Line 10", "Carrying food");
+    assert!(is_open(&mut harness, "Choose a state"));
+    assert!(picker_offers(&mut harness, "Choose a state", "Searching"));
+    for ground in ["Open", "Obstacle", "Food", "Nest"] {
+        assert!(
+            !picker_offers(&mut harness, "Choose a state", ground),
+            "a Become of an ant offers {ground}"
+        );
+    }
+    harness.press(Key::Escape, Modifiers::NONE);
+    click_on_line(&mut harness, "Line 9", "Food");
+    assert!(is_open(&mut harness, "Choose a state"));
+    assert!(picker_offers(&mut harness, "Choose a state", "Food"));
+    assert!(picker_offers(&mut harness, "Choose a state", "Nest"));
+    harness.press(Key::Escape, Modifiers::NONE);
+
+    // The state of a count of agents whose property is still blank.
+    assert_eq!(blank_count_states(AGENTS_NEAR), ["Searching", "Carrying food"]);
+}
+
+/// Choosing again the property a count of agents already compares keeps the state it is compared with.
+#[test]
+fn choosing_the_same_property_of_a_count_of_agents_keeps_its_state() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    harness.open_sheet(&ants_with_a_count_of_agents(
+        "left = { their = \"cargo\" }\nright = { state = \"carrying_food\" }\n",
+    ));
+    let whose = |harness: &Harness| {
+        let (_, line) = sheet(harness).document().line("l17").expect("line 17");
+        let Some(SheetValue::Phrase(whose)) = line.whose.value() else {
+            panic!("the count compares");
+        };
+        whose.right.clone()
+    };
+    assert!(matches!(whose(&harness), Slot::Filled(_)));
+    click_on_line(&mut harness, "Line 17", "Cargo");
+    click_in(&mut harness, "Choose a property", "Cargo");
+    harness.settle();
+    assert!(matches!(whose(&harness), Slot::Filled(_)), "the state stays");
+}
+
+/// Returns the states the picker of the state of the count on line 17 offers while its property is blank, for a count
+/// over what the keys `around` name.
+fn blank_count_states(around: &str) -> Vec<String> {
+    let document = document_of(&ants_with_a_count(around, ""));
+    let whose = PlaceTarget::Slot("whose.right".to_owned());
+    let picker = line_picker(&document, "l17", |context| {
+        let ground = takes_ground_states(context.line, &whose);
+        picker_for(context, Blank::State, None, ground, false, "", DrawKind::Chance)
+    });
+    labels_of(&picker).into_iter().map(|(_, label)| label).collect()
+}
+
+/// A count of the cells around an ant compares their Ground, and its state picker offers the ground's states.
+#[test]
+fn a_count_of_the_cells_around_an_agent_offers_the_ground_states() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    harness.open_sheet(&ants_with_a_count(
+        CELLS_AROUND,
+        "left = { their = \"ground\" }\nright = { state = \"food\" }\n",
+    ));
+    assert!(!sheet(&harness).has_errors());
+    click_on_line(&mut harness, "Line 17", "Food");
+    assert!(is_open(&mut harness, "Choose a state"));
+    for ground in ["Open", "Obstacle", "Food", "Nest"] {
+        assert!(
+            picker_offers(&mut harness, "Choose a state", ground),
+            "a count of the cells around offers {ground}"
+        );
+    }
+    harness.press(Key::Escape, Modifiers::NONE);
+    let states = blank_count_states(CELLS_AROUND);
+    for ground in ["Open", "Obstacle", "Food", "Nest"] {
+        assert!(states.iter().any(|state| state == ground), "{states:?} lacks {ground}");
+    }
+}
+
 /// Returns the labels of the items the picker of a `want` place on line `line_id` of `document` offers, every group
 /// in order.
 fn picker_items(document: &SheetDocument, line_id: &str, want: Blank) -> Vec<String> {
@@ -564,7 +719,7 @@ fn picker_items(document: &SheetDocument, line_id: &str, want: Blank) -> Vec<Str
         if want == Blank::Value && context.line.kind == LineKind::LookAround {
             looked_at_picker(context)
         } else {
-            picker_for(context, want, None, false, "", DrawKind::Chance)
+            picker_for(context, want, None, true, false, "", DrawKind::Chance)
         }
     });
     labels_of(&picker).into_iter().map(|(_, label)| label).collect()

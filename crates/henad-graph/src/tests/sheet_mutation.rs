@@ -12,8 +12,8 @@ use crate::sheet::check::SheetDiagnostic;
 use crate::sheet::limits::MAX_FORMULA_DEPTH;
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{
-    ARROW_COMPARED_WITH_NUMBER, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, NOT_RUN_TICK, RATE_BELOW_ZERO,
-    RATE_IN_BUTTON_CARD,
+    ARROW_COMPARED_WITH_NUMBER, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, KEPT_OUT_OF_RANGE, NOT_RUN_TICK,
+    RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD, SHARE_LIMITS_OUTSIDE,
 };
 use crate::sheet::{ParsedSheet, SheetFile, check};
 
@@ -520,6 +520,26 @@ fn a_chance_parameter_ranging_past_1_is_an_error() {
         )],
     );
     assert_reported(&text, Expected::Error, RATE_BELOW_ZERO, "[card.line.l3]");
+}
+
+/// The trail kept each tick on the ants' To food, as the starter writes it.
+const TO_FOOD_KEPT: &str = "id = \"to_food\"\nname = \"To food\"\ntype = \"number\"\nmarks = \"largest\"\nkept_per_tick = { param = \"trail_kept_per_tick\" }";
+
+#[test]
+fn a_share_kept_outside_0_to_1_is_an_error() {
+    let kept = |share: &str| {
+        let edited = TO_FOOD_KEPT.replace("{ param = \"trail_kept_per_tick\" }", share);
+        edited_sheet("ants.toml", &[(TO_FOOD_KEPT, &edited)])
+    };
+    for share in ["5", "-0.1", "{ percent = 150 }"] {
+        assert_reported(&kept(share), Expected::Error, KEPT_OUT_OF_RANGE, "[[ground.property]]");
+    }
+    for share in ["1", "0", "{ percent = 99 }"] {
+        let report = ParsedSheet::parse(&kept(share)).expect("the sheet reads").check();
+        assert!(report.diagnostics.is_empty(), "{share}: {:?}", report.diagnostics);
+    }
+    let text = edited_sheet("ants.toml", &[("max = 1\ndefault = 0.999", "max = 2\ndefault = 0.999")]);
+    assert_reported(&text, Expected::Error, SHARE_LIMITS_OUTSIDE, "[[ground.property]]");
 }
 
 /// Reads `text`, checks it and walks the report and the relations of every card. A panic fails the test with the text.

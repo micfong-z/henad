@@ -246,12 +246,15 @@ pub struct EditorPanel {
     applied_mark: Option<u64>,
     /// Edit mark of the model when it was opened, made or last saved. Apply leaves it alone.
     saved_mark: u64,
-    /// Edit mark of the model when Save model started, until the save reports.
-    saving: Option<u64>,
+    /// Save model of the model shown, from its start until it reports.
+    saving: Option<PendingSave>,
     /// Action that replaces the models, waiting on the unsaved changes dialog, `None` while the dialog is closed.
     pub ask: Option<Replacement>,
     /// Action that replaces the models, waiting for the saves that the dialog's Save model started.
     after_save: Option<AfterSave>,
+    /// Edit marks of the model shown and of the model held beside it when the Open model dialog started, `None` while
+    /// no such dialog is open.
+    open_marks: Option<EditMarks>,
     /// Character of the text the code view scrolls to on its next frame, after a press on a diagnostic.
     scroll_to: Option<usize>,
     /// Whether the code field's undo history is cleared on its next frame, after the text was replaced from outside
@@ -272,7 +275,7 @@ pub struct EditorPanel {
     /// from it.
     pub counterpart: Option<Box<expert::Counterpart>>,
     /// Sheet a copy was converted from, read from beside the copy's file, with its path.
-    pub beside: Option<(std::path::PathBuf, Box<henad_graph::sheet::SheetFile>)>,
+    pub beside: Option<Box<expert::Beside>>,
     /// Banner of the copy in the Editor, with the load, code revision and hash of the original's text it was worked
     /// out for.
     banner: Option<(BannerKey, Option<expert::CopyBanner>)>,
@@ -323,6 +326,21 @@ impl FileStatus {
 /// Load, code revision and hash of the original's text that a copy's banner and comparison were worked out for.
 pub type BannerKey = (u64, u64, Option<u64>);
 
+/// Edit marks of the model the Editor shows and of the model it holds beside it, `None` for no model beside it.
+type EditMarks = (u64, Option<u64>);
+
+/// A save of a model the Editor holds, from its start until it reports.
+///
+/// The save stays with its model when the model and the counterpart change places, and goes with a model that is
+/// replaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingSave {
+    /// Target the save reports to: the model shown or the model held beside it, when the save started.
+    pub target: SaveTarget,
+    /// Edit mark of the model when the save started.
+    pub mark: u64,
+}
+
 /// Outcome of a press on Apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyOutcome {
@@ -339,8 +357,8 @@ pub enum ApplyOutcome {
     Refused(Vec<CodeDiagnostic>),
     /// The opened file does not read as the kind its header names, with every problem found. Nothing was applied.
     Unread(Vec<CodeDiagnostic>),
-    /// The model was installed, and the device or the engine refused it when it was built, or the device cannot hold
-    /// it at the values of the next build.
+    /// The model was installed, and the device or the engine refused it when it was built, or Build refuses it, as
+    /// for a device that cannot hold it at the values of the next build.
     Faulted(Vec<CodeDiagnostic>),
 }
 
@@ -478,49 +496,109 @@ impl EditorPanel {
         self.show_changes = false;
     }
 
+    /// Returns the edit marks of the model shown and of the model held beside it.
+    fn edit_marks(&self) -> EditMarks {
+        let beside = self
+            .counterpart
+            .as_ref()
+            .map(|counterpart| counterpart.model.edit_mark());
+        (self.model.edit_mark(), beside)
+    }
+
+    /// Records the edit marks of the models as the Open model dialog starts. A model edited while the dialog is open
+    /// then asks before the file picked in it replaces the model, as [`replace_model`] does.
+    pub fn note_open_started(&mut self) {
+        self.open_marks = Some(self.edit_marks());
+    }
+
     /// Returns whether the model shown holds edits since it was opened, made or last saved. An empty model holds none.
     pub fn is_unsaved(&self) -> bool {
         self.model.is_edited_since(self.saved_mark)
     }
 
     /// Returns the names of the models that hold unsaved edits: the model shown, then the model held beside it.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "only a close request of the native window asks about every model"
+        )
+    )]
     pub fn unsaved_names(&self) -> Vec<String> {
-        let mut names = Vec::new();
-        if self.is_unsaved() {
-            names.push(model_name(&self.model, self.file_name.as_deref()));
-        }
-        if let Some(counterpart) = self.counterpart.as_ref().filter(|counterpart| counterpart.is_unsaved()) {
-            names.push(model_name(&counterpart.model, counterpart.file_name.as_deref()));
-        }
-        names
+        self.names_of(&self.unsaved_targets(None))
     }
 
-    /// Takes the outcome of the save of the model shown or of the counterpart, by `target`, with the file name it
-    /// saved under or `None` for a save that saved nothing.
+    /// Returns the saves of the models with unsaved edits that `replacement` drops, or that any replacement drops for
+    /// `None`: the model shown, then the model held beside it.
     ///
-    /// A saved model takes the file name and reads as saved at the edit mark it had when the save started.
+    /// A conversion keeps the sheet shown, and drops the model held beside it alone.
+    fn unsaved_targets(&self, replacement: Option<&Replacement>) -> Vec<SaveTarget> {
+        let mut targets = Vec::new();
+        if self.is_unsaved() && !matches!(replacement, Some(Replacement::Convert)) {
+            targets.push(SaveTarget::Model);
+        }
+        if self
+            .counterpart
+            .as_ref()
+            .is_some_and(|counterpart| counterpart.is_unsaved())
+        {
+            targets.push(SaveTarget::Counterpart);
+        }
+        targets
+    }
+
+    /// Returns the names of the models that `targets` save, in their order.
+    fn names_of(&self, targets: &[SaveTarget]) -> Vec<String> {
+        targets
+            .iter()
+            .filter_map(|target| match target {
+                SaveTarget::Model => Some(model_name(&self.model, self.file_name.as_deref())),
+                SaveTarget::Counterpart => self
+                    .counterpart
+                    .as_ref()
+                    .map(|counterpart| model_name(&counterpart.model, counterpart.file_name.as_deref())),
+                SaveTarget::Export | SaveTarget::SweepSpec | SaveTarget::SweepResults(_) => None,
+            })
+            .collect()
+    }
+
+    /// Takes the outcome of a save started for `target`, with the file name it saved under or `None` for a save that
+    /// saved nothing.
+    ///
+    /// The model the save started for, shown or held beside, takes the file name and reads as saved at the edit mark it
+    /// had when the save started. A save of a model the Editor no longer holds names no model.
+    ///
+    /// Note that two saves pending under one target, as of a model and of the model that replaced it, are told apart
+    /// by nothing. The one that reports first names the model the Editor holds.
     pub fn save_finished(&mut self, target: SaveTarget, saved: Option<String>) {
-        match target {
-            SaveTarget::Model => {
-                let mark = self.saving.take();
-                if let Some(name) = saved {
-                    self.file_name = Some(name);
-                    // The file was saved where the dialog chose, which can be another folder.
-                    self.file_path = None;
-                    self.saved_mark = mark.unwrap_or(self.saved_mark);
-                }
-            }
-            SaveTarget::Counterpart => {
-                if let Some(counterpart) = self.counterpart.as_mut() {
-                    let mark = counterpart.saving.take();
-                    if let Some(name) = saved {
-                        counterpart.file_name = Some(name);
-                        counterpart.file_path = None;
-                        counterpart.saved_mark = mark.unwrap_or(counterpart.saved_mark);
-                    }
-                }
-            }
-            SaveTarget::Export | SaveTarget::SweepSpec | SaveTarget::SweepResults(_) => {}
+        let started = |saving: Option<PendingSave>| saving.is_some_and(|save| save.target == target);
+        let (file_name, file_path, saved_mark, saving) = if started(self.saving) {
+            (
+                &mut self.file_name,
+                &mut self.file_path,
+                &mut self.saved_mark,
+                &mut self.saving,
+            )
+        } else if let Some(counterpart) = self
+            .counterpart
+            .as_mut()
+            .filter(|counterpart| started(counterpart.saving))
+        {
+            (
+                &mut counterpart.file_name,
+                &mut counterpart.file_path,
+                &mut counterpart.saved_mark,
+                &mut counterpart.saving,
+            )
+        } else {
+            return;
+        };
+        let mark = saving.take().map_or(*saved_mark, |save| save.mark);
+        if let Some(name) = saved {
+            *file_name = Some(name);
+            // The file was saved where the dialog chose, which can be another folder.
+            *file_path = None;
+            *saved_mark = mark;
         }
     }
 
@@ -592,9 +670,25 @@ pub enum Replacement {
     OpenModel,
     /// Opens a model read from a model's recorded code, as Open in Editor and Edit model do.
     Open(EditableModel),
+    /// Converts the sheet shown to a new node graph copy, after Convert in the conversion dialog. The copy held beside
+    /// the sheet is dropped, and the sheet is kept.
+    Convert,
+    /// Opens the file picked in the Open model dialog, after a model was edited while the dialog was open.
+    OpenFile(Box<OpenedFile>),
     /// Closes the app's window, after a close request of the window.
     #[cfg(not(target_arch = "wasm32"))]
     CloseWindow,
+}
+
+/// A model file picked in the Open model dialog, read as text.
+#[derive(Debug)]
+pub struct OpenedFile {
+    /// Name of the file.
+    pub name: String,
+    /// Text of the file.
+    pub text: String,
+    /// Path of the file on native, `None` in a browser.
+    pub path: Option<std::path::PathBuf>,
 }
 
 /// Replacement waiting for the saves that the unsaved changes dialog's Save model started.
@@ -1278,7 +1372,7 @@ fn apply_request(ctx: &egui::Context, app: &mut AppState, request: EditorRequest
         EditorRequest::SaveModel => save_model(app),
         EditorRequest::Apply => apply(app),
         EditorRequest::Convert => expert::open_convert(&mut app.editor),
-        EditorRequest::ConfirmConvert => expert::convert_sheet(app),
+        EditorRequest::ConfirmConvert => replace_model(app, Replacement::Convert),
         EditorRequest::OpenOriginal => expert::open_original_of(&mut app.editor),
         EditorRequest::OpenCopy => expert::swap_counterpart(&mut app.editor),
         EditorRequest::ShowChanges => app.editor.show_changes = !app.editor.show_changes,
@@ -1435,8 +1529,9 @@ pub fn open_editable(app: &mut AppState, model: EditableModel) {
     app.focus_request = Some(Tab::Editor);
 }
 
-/// Opens a dialog that picks a model file for the Editor.
-pub fn open_model(app: &AppState) {
+/// Opens a dialog that picks a model file for the Editor, and records the edit marks of the models as it starts.
+pub fn open_model(app: &mut AppState) {
+    app.editor.note_open_started();
     app.open_file(OpenTarget::Model);
 }
 
@@ -1448,7 +1543,10 @@ pub fn save_model(app: &mut AppState) {
     }
     let name = save_name(&app.editor);
     let bytes = app.editor.model.file_text().into_bytes();
-    app.editor.saving = Some(app.editor.model.edit_mark());
+    app.editor.saving = Some(PendingSave {
+        target: SaveTarget::Model,
+        mark: app.editor.model.edit_mark(),
+    });
     app.save_as(SaveTarget::Model, &name, bytes);
 }
 
@@ -1464,7 +1562,10 @@ fn save_counterpart(app: &mut AppState) {
     };
     let name = save_name_of(&counterpart.model, counterpart.file_name.as_deref());
     let bytes = counterpart.model.file_text().into_bytes();
-    counterpart.saving = Some(counterpart.model.edit_mark());
+    counterpart.saving = Some(PendingSave {
+        target: SaveTarget::Counterpart,
+        mark: counterpart.model.edit_mark(),
+    });
     app.save_as(SaveTarget::Counterpart, &name, bytes);
 }
 
@@ -1498,10 +1599,10 @@ fn model_name(model: &EditorModel, file_name: Option<&str>) -> String {
     }
 }
 
-/// Runs `replacement` at once while no model the Editor holds has unsaved edits, and otherwise opens the unsaved
-/// changes dialog, which runs it once the edits are saved or discarded.
+/// Runs `replacement` at once while no model it drops has unsaved edits, and otherwise opens the unsaved changes
+/// dialog, which runs it once the edits are saved or discarded.
 pub fn replace_model(app: &mut AppState, replacement: Replacement) {
-    if app.editor.unsaved_names().is_empty() {
+    if app.editor.unsaved_targets(Some(&replacement)).is_empty() {
         run_replacement(app, replacement);
     } else {
         app.editor.ask = Some(replacement);
@@ -1516,6 +1617,8 @@ fn run_replacement(app: &mut AppState, replacement: Replacement) {
         Replacement::NewGraphModel(file_name) => new_graph_model(app, file_name),
         Replacement::OpenModel => open_model(app),
         Replacement::Open(model) => open_editable(app, model),
+        Replacement::Convert => expert::convert_sheet(app),
+        Replacement::OpenFile(file) => open_file_text(app, *file),
         #[cfg(not(target_arch = "wasm32"))]
         Replacement::CloseWindow => app.close_window(),
     }
@@ -1534,7 +1637,8 @@ fn save_target(app: &mut AppState, target: SaveTarget) {
 /// `target` reports whether it `saved`.
 ///
 /// The next save starts, or the replacement runs once each model is saved. A save that saved nothing, as a canceled
-/// dialog, drops the replacement, and the models stay.
+/// dialog, drops the replacement, and the models stay. A model edited after its save started asks again, as
+/// [`replace_model`] does.
 pub fn continue_replacement(app: &mut AppState, target: SaveTarget, saved: bool) {
     let Some(after) = app.editor.after_save.as_mut() else {
         return;
@@ -1551,23 +1655,24 @@ pub fn continue_replacement(app: &mut AppState, target: SaveTarget, saved: bool)
         Some(next) => save_target(app, next),
         None => {
             if let Some(after) = app.editor.after_save.take() {
-                run_replacement(app, after.replacement);
+                replace_model(app, after.replacement);
             }
         }
     }
 }
 
 /// Draws the unsaved changes dialog while a replacement waits on it: its title, a sentence naming each model with
-/// unsaved edits, then Cancel, Discard changes and Save model.
+/// unsaved edits that the replacement drops, then Cancel, Discard changes and Save model.
 ///
 /// Save model saves each such model, the one shown first, and runs the replacement once both are saved. Discard
 /// changes runs it at once, and Enter presses Save model. Cancel, Escape and a click outside close the dialog and keep
 /// the models.
 pub fn unsaved_modal(ctx: &egui::Context, app: &mut AppState) {
-    if app.editor.ask.is_none() {
+    let Some(asked) = &app.editor.ask else {
         return;
-    }
-    let names = app.editor.unsaved_names();
+    };
+    let targets = app.editor.unsaved_targets(Some(asked));
+    let names = app.editor.names_of(&targets);
     if names.is_empty() {
         // The edits went, as after Undo back to the saved text, and nothing is left to lose.
         if let Some(replacement) = app.editor.ask.take() {
@@ -1606,18 +1711,7 @@ pub fn unsaved_modal(ctx: &egui::Context, app: &mut AppState) {
         UnsavedChoice::Cancel => {}
         UnsavedChoice::Discard => run_replacement(app, replacement),
         UnsavedChoice::Save => {
-            let mut remaining = Vec::new();
-            if app.editor.is_unsaved() {
-                remaining.push(SaveTarget::Model);
-            }
-            if app
-                .editor
-                .counterpart
-                .as_ref()
-                .is_some_and(|counterpart| counterpart.is_unsaved())
-            {
-                remaining.push(SaveTarget::Counterpart);
-            }
+            let remaining = targets;
             let first = remaining.first().copied();
             app.editor.after_save = Some(AfterSave { replacement, remaining });
             if let Some(first) = first {
@@ -1640,21 +1734,34 @@ fn undo_redo_keys(input: &mut egui::InputState) -> (bool, bool) {
 /// Handles the result of an Open model dialog. The picked file replaces the Editor's model, and is applied only on
 /// Apply.
 ///
-/// The `kind` in the file's header decides where it opens, as [`open_text`] says.
+/// The `kind` in the file's header decides where it opens, as [`open_text`] says. A model edited while the dialog was
+/// open asks first, as [`replace_model`] does. The decision taken when the dialog opened covers the edits made before.
 pub fn receive_open(app: &mut AppState, result: OpenResult) {
+    let marks = app.editor.open_marks.take();
     let Some(DialogFile { name, bytes, path }) = opened_file(&mut app.editor, result) else {
         return;
     };
-    match String::from_utf8(bytes) {
-        Ok(text) => {
-            app.editor.file_status = Some(FileStatus::note(format!("Opened {name}")));
-            open_text(&mut app.editor, text, Some(name));
-            app.editor.file_path = path;
-            expert::find_original(&mut app.editor);
-            app.focus_request = Some(Tab::Editor);
-        }
-        Err(_) => app.editor.file_status = Some(FileStatus::not_text(&name)),
+    let Ok(text) = String::from_utf8(bytes) else {
+        app.editor.file_status = Some(FileStatus::not_text(&name));
+        return;
+    };
+    let file = OpenedFile { name, text, path };
+    if marks.is_some_and(|marks| marks != app.editor.edit_marks()) {
+        replace_model(app, Replacement::OpenFile(Box::new(file)));
+    } else {
+        open_file_text(app, file);
     }
+}
+
+/// Replaces the Editor's model with the model of `file`, picked in the Open model dialog, and brings the Editor to the
+/// front.
+fn open_file_text(app: &mut AppState, file: OpenedFile) {
+    let OpenedFile { name, text, path } = file;
+    app.editor.file_status = Some(FileStatus::note(format!("Opened {name}")));
+    open_text(&mut app.editor, text, Some(name));
+    app.editor.file_path = path;
+    expert::find_original(&mut app.editor);
+    app.focus_request = Some(Tab::Editor);
 }
 
 /// Returns the first file of `result`, the outcome of an open dialog, `None` for a folder or a cancel. A failed open
@@ -1715,8 +1822,8 @@ pub fn receive_import(app: &mut AppState, result: OpenResult) {
 ///   again for a run whose code differs from the set's entry, as after a canceled dialog.
 /// - the Editor's preview is replaced by a build of the model at its own size, at any tick.
 /// - with no run, a run of another model still at tick 0, or a build of another model that no run to a tick waits
-///   for, the model is built as Build builds it. A model the device cannot hold at the values of the next build is
-///   not built, and the Editor names the sizes the device lacks.
+///   for, the model is built as Build builds it. A model that Build would refuse is not built, and the Editor names
+///   the reason, such as the sizes the device lacks or a Seed field that holds no seed.
 /// - a run of another model past tick 0 keeps going, and the model waits for Build.
 ///
 /// A build runs on the app's build thread on native, and the outcome reads as applied from its start. A fault of the
@@ -1778,8 +1885,9 @@ pub fn apply(app: &mut AppState) {
         return;
     }
     if !runs_source(app) && app.pending_rebuild.is_none() && (app.run_at_start() || app.preview().is_some()) {
-        // Build is disabled for the same reason. In a browser the engine's own check would end the page.
-        if let Some(message) = app.selection_too_large() {
+        // Build is disabled for the same reason, a seed the Seed field does not show included. In a browser the
+        // engine's own check of the sizes would end the page.
+        if let Some(message) = app.build_refusal() {
             let problem = CodeDiagnostic::error(message);
             app.editor.outcome = Some(ApplyOutcome::Faulted(vec![problem]));
             return;

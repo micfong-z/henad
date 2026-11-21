@@ -6,14 +6,19 @@ use egui::accesskit::Role;
 use henad_graph::document::World;
 use henad_graph::edit::EditCommand;
 use henad_graph::sheet::edit::SheetEdit;
-use henad_graph::sheet::sentence::{CANCEL, DISCARD_CHANGES, SAVE_MODEL, unsaved_changes};
+use henad_graph::sheet::sentence::{
+    CANCEL, CONVERT, CONVERT_HEADING, DISCARD_CHANGES, MODEL_ACTIONS, SAVE_MODEL, unsaved_changes,
+};
 
 use crate::tests::panes::{apply_sheet_edit, sheet_mut};
 use crate::tests::support::{Harness, Node, starter_text};
 use crate::ui::editor::expert::{convert_sheet, swap_counterpart};
 use crate::ui::editor::graph::{GraphEdit, GraphRequest};
-use crate::ui::editor::{EditorModel, Replacement, apply, edit_model, life_starter, new_graph_model, replace_model};
-use crate::ui::files::{SaveResult, SaveTarget};
+use crate::ui::editor::{
+    EditorModel, Replacement, apply, edit_model, life_starter, new_graph_model, receive_open, replace_model,
+    save_model, save_name,
+};
+use crate::ui::files::{DialogFile, OpenResult, SaveResult, SaveTarget};
 
 /// Sets the purpose of the sheet the Editor shows, an edit that leaves its code alone.
 fn edit_purpose(harness: &mut Harness, purpose: &str) {
@@ -283,5 +288,181 @@ fn the_sheet_beside_its_copy_keeps_its_unsaved_edits_and_saves_in_turn() {
     assert!(
         harness.app.editor.model.rule_text().is_some(),
         "both saved, the rule replaced them"
+    );
+}
+
+/// Converts the sheet the Editor shows through the model menu and the conversion dialog.
+fn convert_through_the_dialog(harness: &mut Harness) {
+    harness.click(MODEL_ACTIONS);
+    harness.click(CONVERT_HEADING);
+    harness.click(CONVERT);
+    harness.settle();
+}
+
+/// A second conversion of a sheet whose copy beside it holds unsaved edits asks about the copy alone, which the new
+/// copy replaces. Cancel keeps the copy, and Save model saves it before the conversion runs. The sheet's own edits stay
+/// with the sheet.
+#[test]
+fn a_second_conversion_asks_before_it_drops_an_edited_copy() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    convert_through_the_dialog(&mut harness);
+    let copy = harness
+        .app
+        .editor
+        .model
+        .graph()
+        .expect("the copy shows")
+        .document()
+        .name
+        .clone();
+    let graph = harness.app.editor.model.graph_mut().expect("the copy shows");
+    let mut world = graph.document().world;
+    let World::Grid(grid) = &mut world else {
+        panic!("Game of Life is a grid");
+    };
+    grid.width += 1;
+    graph.request(GraphRequest::Edit(GraphEdit {
+        commands: vec![EditCommand::SetWorld(world)],
+        coalesce: None,
+    }));
+    harness.settle();
+    swap_counterpart(&mut harness.app.editor);
+    edit_purpose(&mut harness, "A purpose the conversion keeps.");
+    assert_eq!(
+        harness.app.editor.unsaved_names(),
+        ["Game of Life".to_owned(), copy.clone()]
+    );
+
+    convert_through_the_dialog(&mut harness);
+    let sentence = sentence_of(&copy);
+    assert_eq!(
+        asking(&mut harness).as_deref(),
+        Some(sentence.as_str()),
+        "the copy alone is named"
+    );
+    click_in(&mut harness, &sentence, CANCEL);
+    assert!(
+        harness.app.editor.model.sheet().is_some(),
+        "Cancel keeps the sheet shown"
+    );
+    assert_eq!(
+        harness.app.editor.unsaved_names(),
+        ["Game of Life".to_owned(), copy.clone()],
+        "Cancel keeps the edited copy"
+    );
+
+    convert_through_the_dialog(&mut harness);
+    click_in(&mut harness, &sentence, SAVE_MODEL);
+    let requested = harness.app.saves_requested.clone().unwrap_or_default();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(
+        requested[0].0,
+        SaveTarget::Counterpart,
+        "the copy is saved, and the sheet is not"
+    );
+    assert!(
+        harness.app.editor.model.sheet().is_some(),
+        "the conversion waits for the save"
+    );
+    harness.app.finish_save(SaveResult::Saved("copy.toml".to_owned()));
+    harness.settle();
+    assert!(harness.app.editor.model.graph().is_some(), "the new copy shows");
+    assert_eq!(
+        harness.app.editor.unsaved_names(),
+        ["Game of Life".to_owned()],
+        "the sheet beside the new copy keeps its edits"
+    );
+}
+
+/// Returns the result of an Open model dialog that picked the Life starter as `life.toml`.
+fn picked_life() -> OpenResult {
+    OpenResult::Files(vec![DialogFile {
+        name: "life.toml".to_owned(),
+        bytes: life_starter().into_bytes(),
+        path: None,
+    }])
+}
+
+/// A model edited while the Open model dialog is open asks before the picked file replaces it, and Discard changes
+/// opens the file. A model whose edits were discarded as the dialog opened is replaced at once. A model edited while
+/// the save of the unsaved changes dialog is open asks again once the save reports.
+#[test]
+fn edits_made_while_a_file_dialog_is_open_ask_before_they_are_replaced() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    harness.app.editor.note_open_started();
+    edit_purpose(&mut harness, "An edit made while the dialog is open.");
+    receive_open(&mut harness.app, picked_life());
+    let sentence = sentence_of("Game of Life");
+    assert_eq!(asking(&mut harness).as_deref(), Some(sentence.as_str()));
+    assert!(harness.app.editor.model.sheet().is_some(), "the edited sheet waits");
+    click_in(&mut harness, &sentence, DISCARD_CHANGES);
+    assert_eq!(harness.app.editor.model.rule_text(), Some(life_starter().as_str()));
+    assert_eq!(harness.app.editor.file_name.as_deref(), Some("life.toml"));
+
+    // Edits discarded as the dialog opened are not asked about again.
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    edit_purpose(&mut harness, "An edit discarded before the dialog opens.");
+    harness.app.editor.note_open_started();
+    receive_open(&mut harness.app, picked_life());
+    assert_eq!(asking(&mut harness), None);
+    assert!(
+        harness.app.editor.model.rule_text().is_some(),
+        "the file replaced the sheet at once"
+    );
+
+    // An edit made while the save of the unsaved changes dialog is open asks again.
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    edit_purpose(&mut harness, "A first edit.");
+    replace_model(&mut harness.app, Replacement::NewGridRule);
+    click_in(&mut harness, &sentence, SAVE_MODEL);
+    edit_purpose(&mut harness, "A second edit made while the save is open.");
+    harness.app.finish_save(SaveResult::Saved("life_sheet.toml".to_owned()));
+    assert_eq!(asking(&mut harness).as_deref(), Some(sentence.as_str()));
+    assert!(harness.app.editor.model.sheet().is_some(), "the second edit is kept");
+}
+
+/// A save that reports after the model it saved was replaced names no model. One that reports after the model moved
+/// beside the model shown names the model it saved.
+#[test]
+fn a_late_save_names_the_model_it_saved() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    save_model(&mut harness.app);
+    replace_model(&mut harness.app, Replacement::NewGridRule);
+    assert!(
+        harness.app.editor.model.rule_text().is_some(),
+        "the rule replaced the clean sheet"
+    );
+    harness.app.finish_save(SaveResult::Saved("my_sheet.toml".to_owned()));
+    assert_eq!(
+        harness.app.editor.file_name, None,
+        "the rule takes no name of the sheet's save"
+    );
+    assert_ne!(save_name(&harness.app.editor), "my_sheet.toml");
+
+    // The copy is saved, and the sheet is shown again before the save reports.
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    convert_sheet(&mut harness.app);
+    save_model(&mut harness.app);
+    swap_counterpart(&mut harness.app.editor);
+    harness.app.finish_save(SaveResult::Saved("copy.toml".to_owned()));
+    assert_eq!(
+        harness.app.editor.file_name.as_deref(),
+        Some("opened.toml"),
+        "the sheet keeps its name"
+    );
+    let copy = harness.app.editor.counterpart.as_ref().expect("the copy beside");
+    assert_eq!(
+        copy.file_name.as_deref(),
+        Some("copy.toml"),
+        "the copy takes the name it was saved under"
     );
 }

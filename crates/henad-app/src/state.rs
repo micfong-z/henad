@@ -328,8 +328,8 @@ impl AppState {
 
     /// Tears down the live simulation and builds the selected model from the fields the next build reads.
     ///
-    /// Does nothing when [`Self::build_setup`] rejects the fields, or the device cannot hold the selection at them.
-    /// Build is disabled then, with the reason [`Self::build_refusal`] returns.
+    /// Does nothing when [`Self::build_setup`] rejects the fields, the device cannot hold the selection at them, or the
+    /// Seed field holds text that is no seed. Build is disabled then, with the reason [`Self::build_refusal`] returns.
     pub fn reset_simulation(&mut self) {
         let setup = match self.build_setup() {
             Some(Ok(setup)) => Some(setup),
@@ -342,6 +342,11 @@ impl AppState {
         // The engine asserts the same check, and in a browser its panic ends the page.
         if let Some(message) = self.selection_too_large() {
             log::warn!("Build refused: {message}");
+            return;
+        }
+        // The seed the last valid text set is not the one the Seed field shows.
+        if parse_seed(&self.seed_text).is_err() {
+            log::warn!("Build refused: {INVALID_SEED}");
             return;
         }
         self.load(setup);
@@ -398,10 +403,16 @@ impl AppState {
     ///
     /// A tick behind the current one rebuilds first, as Build does: the preview of the Editor's sheet replays its start
     /// while [`Self::build_replays_preview`] holds, and otherwise the selected model is built. Note that the selected
-    /// model is the loaded one only while [`Self::selection_is_loaded`] holds.
+    /// model is the loaded one only while [`Self::selection_is_loaded`] holds. A rebuild that Build refuses, as for a
+    /// Seed field that holds no seed, leaves the run where it is.
     pub fn run_to(&mut self, tick: u64) {
         if tick < self.current_tick() {
             crate::ui::playback::press_build(self);
+            // A build clears the snapshot. Otherwise the runner, still past the tick, would publish again at once, and
+            // the next snapshot would run to the tick again.
+            if tick < self.current_tick() {
+                return;
+            }
         }
         if !self.has_simulation() {
             return;

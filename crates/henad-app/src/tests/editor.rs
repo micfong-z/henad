@@ -24,6 +24,7 @@ use crate::ui::editor::{
     life_starter, move_cursor_to, new_graph_model, new_grid_rule, open_text, receive_open,
 };
 use crate::ui::files::{DialogFile, OpenResult};
+use crate::ui::params::INVALID_SEED;
 use crate::ui::playback::press_build;
 
 /// Line of the Life starter's step that a rule edit extends.
@@ -809,6 +810,34 @@ fn an_apply_the_device_cannot_hold_builds_nothing() {
 
     app.reset_simulation();
     assert!(!app.has_simulation(), "Build built a model the device cannot hold");
+}
+
+/// Apply builds nothing while the Seed field holds text that is no seed, as Build does, and names the seed, and Build
+/// builds nothing either.
+#[test]
+fn an_apply_while_the_seed_is_no_integer_builds_nothing() {
+    let Some(mut app) = app_with_starter() else {
+        return;
+    };
+    app.set_seed(Some(12));
+    app.seed_text = "12a".to_owned();
+    assert_eq!(app.build_refusal().as_deref(), Some(INVALID_SEED));
+    apply(&mut app);
+    match &app.editor.outcome {
+        Some(ApplyOutcome::Faulted(problems)) => {
+            assert_eq!(problems.len(), 1, "{problems:?}");
+            assert_eq!(problems[0].message, INVALID_SEED);
+        }
+        other => panic!("the seed refusal is not shown: {other:?}"),
+    }
+    assert!(app.models.get("life_rule").is_some(), "the rule was installed");
+    assert!(
+        !app.has_simulation(),
+        "a build started at a seed the field does not show"
+    );
+
+    app.reset_simulation();
+    assert!(!app.has_simulation(), "Build built at a seed the field does not show");
 }
 
 /// Runs one frame of the Editor tab over `app` with `events`.

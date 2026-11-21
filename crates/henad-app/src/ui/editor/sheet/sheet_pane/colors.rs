@@ -64,7 +64,7 @@ fn color_rule_edit(thing: &str, property: &SheetProperty, previous: Option<&Colo
 
 /// Draws the Colours section: the property that colours the cells, or in a world of agents the property that colours
 /// the agents and the one that colours the ground. `widgets` is the id the pane's widgets are keyed under.
-pub(super) fn colors(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Option<Pending>) {
+pub(super) fn colors(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Vec<Pending>) {
     let form = Form::new(ui, &[COLOR_CELLS_BY, COLOR_AGENTS_BY, COLOR_GROUND_BY, SHADE]);
     if document.world.made_of != MadeOf::Agents {
         colors_of(ui, document, CELLS_ID, COLOR_CELLS_BY, &form, widgets, pending);
@@ -97,7 +97,7 @@ fn colors_of(
     label: &str,
     form: &Form,
     widgets: Id,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let properties: Vec<&SheetProperty> = properties_of(document, thing)
         .iter()
@@ -140,7 +140,7 @@ fn colors_of(
         if let Some(picked) = picked
             && let Some(property) = properties.iter().find(|property| property.id == picked)
         {
-            *pending = Some(Pending::one(color_rule_edit(thing, property, rule)));
+            pending.push(Pending::one(color_rule_edit(thing, property, rule)));
         }
     });
     match chosen.property_type {
@@ -178,7 +178,7 @@ fn colors_of(
 
 /// Draws the hue and the range of `shading`, the rule that shades `thing` by a Number property, as rows of `form`. A
 /// new hue or end commits the rule with it. `widgets` is the id the pane's widgets are keyed under.
-fn shading_ui(ui: &mut Ui, thing: &str, shading: &ColorRule, form: &Form, widgets: Id, pending: &mut Option<Pending>) {
+fn shading_ui(ui: &mut Ui, thing: &str, shading: &ColorRule, form: &Form, widgets: Id, pending: &mut Vec<Pending>) {
     let hue = shading.hue.unwrap_or(ShadeHue::Blue);
     let hue_words = |hue: ShadeHue| {
         let index = ShadeHue::ALL.iter().position(|known| *known == hue).unwrap_or_default();
@@ -199,7 +199,7 @@ fn shading_ui(ui: &mut Ui, thing: &str, shading: &ColorRule, form: &Form, widget
         {
             let mut rule = shading.clone();
             rule.hue = Some(picked);
-            *pending = Some(Pending::one(SheetEdit::SetColorRule {
+            pending.push(Pending::one(SheetEdit::SetColorRule {
                 thing: thing.to_owned(),
                 rule: Some(rule),
             }));
@@ -243,7 +243,7 @@ fn shading_ui(ui: &mut Ui, thing: &str, shading: &ColorRule, form: &Form, widget
                             } else {
                                 rule.lightest = Some(value);
                             }
-                            *pending = Some(Pending::one(SheetEdit::SetColorRule {
+                            pending.push(Pending::one(SheetEdit::SetColorRule {
                                 thing: thing.to_owned(),
                                 rule: Some(rule),
                             }));

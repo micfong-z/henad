@@ -63,8 +63,13 @@ an id per sheet opened (`PaneState::new` takes the load number from `SheetEditor
 preview key, which changes on every edit). The field ids (`widgets.with(...)`,
 `start_field_id(widgets, property, slot)`) and the picker's Number box derive from it, so a refused
 draft never shows in another sheet, and removing a by-chance row forgets the drafts of that row and
-every row after it. The pane collects at most one `Pending` edit per frame (a boxed closure,
-`starts_only`, `from_form`), run through `SheetEditor::edit` after drawing. A refusal shows as the
+every row after it. The pane collects every `Pending` edit of a frame in draw order (a boxed
+closure, `starts_only`, `from_form`), and runs each through `SheetEditor::edit` after drawing, one
+undo step each. A field that loses the focus to a click (egui's `SurrenderFocusOn::Clicks`) commits
+in the frame the clicked control acts, so a frame can hold two edits, and the second runs on the
+sheet the first left. An edit that would write back a field another control of the row edits reads
+the sheet when it runs (`start_edit`, `ParameterFields::set`). A `RESTART_NOTICE` of an earlier
+edit of the frame stays when a later `starts_only` edit leaves none. A refusal shows as the
 form's message or as `PaneState::refusal` under the Cells or Agents section, through
 `widgets::refusal_text`, which the card shares and which reads `Reserved` as `NAME_RESERVED` without
 its id. The property, button and event forms and the New parameter dialog refuse a new name
@@ -113,8 +118,10 @@ moves to the next row or adds one. While a row's colour is not picked by hand, i
 Done checks in the page's order (`check_form`) and runs `form_edit`: a new property is
 `AddProperty`, `AddState` per row and a start in the first state (or at 0 for a number). A changed
 kind runs `SetPropertyType` and starts afresh the same way, and otherwise removed states are
-`Delete`, kept ones `Rename` and `Recolor`, new rows `AddState`. "Delete property" (edit only) runs
-`Delete`. The form closes once its edit is kept.
+`Delete`, kept ones `Rename` and `Recolor`, then new rows `AddState` (`change_states`). A rename
+onto a name another state still holds, as in a swap or a chain, first gives every renamed state a
+`spare_name` such as "alive 1" (`the_property_form_swaps_the_names_of_two_states`). "Delete
+property" (edit only) runs `Delete`. The form closes once its edit is kept.
 
 The other sections. Purpose is a `commit_area` named "Purpose" with `PURPOSE_PLACEHOLDER`,
 committing `SetPurpose` on focus loss. Parameters: a table (`PARAMETER_COLUMNS`) of the name,
@@ -123,14 +130,19 @@ the value, Min, Max, Unit and ×, on one line or two by the section's width. The
 with `PARAMETER_NAME_MISSING` or `parameter_name_taken` in `PaneState::parameter_message`),
 `value_slider` (an egui `Slider` named `value_slider_name`, step `slider_step`: about a 200th of the
 range rounded down to 1, 2 or 5 times a power of ten. A drag holds its value in temp data and
-commits once when let go, a click or a key at once. egui rounds a default off the steps as it draws
-and reports it as `changed`. Only a focused, clicked or released slider commits, and an untouched
-slider returns the stored default to the value field, so boids' Protected range keeps and shows 8 in
-0.5 to 50), the value field named `value_field_name` (a typed value outside the range widens it) and
-× named `delete_parameter_name`, Min and Max fields (`with_range_end`: Min above Max
+commits once when let go, a click, an arrow key or an AccessKit increment, decrement or set value at
+once. egui rounds a default off the steps as it draws and reports it as `changed`. Only a clicked
+or released slider, an arrow key on the focused slider or an AccessKit request commits, and an
+untouched slider returns the stored default to the value field, so boids' Protected range keeps and
+shows 8 in 0.5 to 50, after Tab moves the focus onto it and after an Undo with the focus on it,
+`a_slider_that_takes_the_focus_keeps_a_default_off_its_steps`), the value field named
+`value_field_name` (a typed value outside the range widens it) and × named `delete_parameter_name`,
+Min and Max fields (`with_range_end`: Min above Max
 swaps, equal ends make Max one more, the value moves into the range) and Unit as a
 `suggestion_field` named `parameter_unit_name` with `UNIT_FIELD_PLACEHOLDER` and `unit_suggestions`
-(free text). Each edit is one `set_parameter_edit`, keeping `step` and `means`. Every number field
+(free text). Each edit is one `set_parameter_edit` of the parameter as the sheet holds it when the
+edit runs, keeping `step` and `means`, and the slider's value moves into a range an earlier edit of
+the frame changed (`a_typed_number_and_a_click_in_one_frame_both_commit`). Every number field
 reads a percent. The trying line of the Parameters tab's preview mode sits under its parameter. "+
 Add parameter" opens the New parameter dialog with no `StartTarget` (1 in 0 to 10), and Create runs
 `AddParameter` alone. Measures: per States property its weak name and a form row per state (egui
@@ -217,17 +229,24 @@ painted, anywhere or on-ground start, which no grid sheet holds, reads as an emp
 `blank_shapes` (moved from the card pane), `set_name` (the accessible name of a `TextEdit` or a
 `ComboBox`, set after the widget), `color32`, `commit_field` and the right-aligned `commit_number`
 (a text field that commits on Enter or focus loss through a closure that returns the refusal
-message; a `FieldDraft` in egui temp data keeps typed or refused text while memory focus holds, read
-through `Memory::has_focus` since `Response::has_focus` also needs the window's system focus, which
+message, and on Escape puts the value back and drops the draft and its message, `EscapeCancels`,
+while `commit_area`'s Escape commits as a click elsewhere does,
+`escape_cancels_a_typed_number_and_keeps_a_typed_purpose`; a `FieldDraft` in egui temp data keeps
+typed or refused text while memory focus holds, read through `Memory::has_focus` since
+`Response::has_focus` also needs the window's system focus, which
 an app driven through its inspection port lacks, `field_message` returns the message drawn by
-`message_ui` under the row, and `forget_field` drops a draft), `NumberUse` (`Chance` or `Number`,
-`read` with the range messages, `box_hint` naming a Number box), `color_button` (a swatch opening
+`message_ui` under the row, and `forget_field` drops a draft), `NumberUse` (`Chance`, `Rate`,
+`Number`, `Times` or `Share`, the share of a mark kept each tick from 0 to 1 with
+`KEPT_OUT_OF_RANGE`, `SHARE_BOX_HINT` and `SHARE_LIMITS_OUTSIDE`, `read` with the range messages,
+`box_hint` naming a
+Number box), `color_button` (a swatch opening
 `CHOOSE_A_COLOR`, an
 overlay of the twelve `PALETTE_COLORS` named by `COLOR_NAMES`), `color_name` (the nearest palette
 name, for a starter's own colours), and the New parameter dialog:
 `NewParameterDialog::new(number_use, typed, unit)` starts from 0.1 in 0 to 1 for a chance, 1 in 0 to
-10 otherwise, or from the typed number with Min at twice a negative one and Max at `default_max` (1,
-2 or 5 times a power of ten about ten times it, at most 1 below 1 or for a chance). Max and a
+1 for a share, 1 in 0 to 10 otherwise, or from the typed number with Min at twice a negative one and
+Max at `default_max` (1, 2 or 5 times a power of ten about ten times it, at most 1 below 1 or for a
+chance or a share). Max and a
 negative Min follow Default until typed. `parameter(taken)` runs the checks of the wording table in
 order, reading every field with a percent. The modal (`henad_new_parameter_modal`, a dialog of the
 `widgets.rs` kind below, where Enter creates) is a `Dialog`

@@ -17,9 +17,10 @@ use henad_graph::sheet::format_number;
 use henad_graph::sheet::sentence::{
     AddButton, CANCEL, CHANCE_BOX_HINT, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, CHANCE_PARAMETER_PLACEHOLDER,
     CHOOSE_A_COLOR, COLOR_NAMES, CREATE_PARAMETER, ChipKind, DEFAULT_LABEL, DEFAULT_NAME, DEFAULT_OUTSIDE_LIMITS,
-    DIALOG_NAME_MISSING, DIALOG_UNIT_PLACEHOLDER, LIMITS_NOT_NUMBERS, MAX_LABEL, MIN_LABEL, MIN_NOT_BELOW_MAX,
-    NAME_LABEL, NEW_PARAMETER_HEADING, NEW_PARAMETER_LEAD, NUMBER_BOX_HINT, NUMBER_PARAMETER_PLACEHOLDER,
-    PARAMETER_NAME_FIELD, RATE_BELOW_ZERO, RATE_PARAMETER_PLACEHOLDER, SentenceChip, TIMES_LIMITS_NOT_INTEGERS,
+    DIALOG_NAME_MISSING, DIALOG_UNIT_PLACEHOLDER, KEPT_OUT_OF_RANGE, LIMITS_NOT_NUMBERS, MAX_LABEL, MIN_LABEL,
+    MIN_NOT_BELOW_MAX, NAME_LABEL, NEW_PARAMETER_HEADING, NEW_PARAMETER_LEAD, NUMBER_BOX_HINT,
+    NUMBER_PARAMETER_PLACEHOLDER, PARAMETER_NAME_FIELD, RATE_BELOW_ZERO, RATE_PARAMETER_PLACEHOLDER, SHARE_BOX_HINT,
+    SHARE_LIMITS_OUTSIDE, SHARE_PARAMETER_PLACEHOLDER, SentenceChip, TIMES_LIMITS_NOT_INTEGERS,
     TIMES_PARAMETER_PLACEHOLDER, TYPE_ONE_NUMBER, TYPE_TIMES, UNIT_LABEL, UNSAVED_MARK, UNSAVED_MARK_TOOLTIP,
     parameter_name_taken, read_typed_number,
 };
@@ -1308,7 +1309,8 @@ fn draft_id(id: Id) -> Id {
 ///
 /// `commit` reads the typed text and returns the message to show under the field, or `None` once the text is kept.
 /// Text equal to `current` commits nothing while no message shows. A refused text stays in the field with its message,
-/// which [`field_message`] returns. Typing alone changes nothing.
+/// which [`field_message`] returns. Typing alone changes nothing, and Escape puts `current` back and drops the
+/// message.
 pub fn commit_field(
     ui: &mut Ui,
     id: Id,
@@ -1323,6 +1325,7 @@ pub fn commit_field(
         name,
         current,
         |text| TextEdit::singleline(text).desired_width(width),
+        EscapeCancels(true),
         commit,
     )
 }
@@ -1346,6 +1349,7 @@ pub fn commit_number(
                 .desired_width(width)
                 .horizontal_align(egui::Align::RIGHT)
         },
+        EscapeCancels(true),
         commit,
     )
 }
@@ -1353,7 +1357,8 @@ pub fn commit_number(
 /// Adds a field of several lines named `name` that shows `current`, with the grey `hint` while it is empty, and commits
 /// what is typed on losing focus.
 ///
-/// Enter starts a new line. `commit` takes the typed text as [`commit_field`] does.
+/// Enter starts a new line, and Escape commits as a click elsewhere does. `commit` takes the typed text as
+/// [`commit_field`] does.
 pub fn commit_area(
     ui: &mut Ui,
     id: Id,
@@ -1373,6 +1378,7 @@ pub fn commit_area(
                 .desired_rows(2)
                 .desired_width(f32::INFINITY)
         },
+        EscapeCancels(false),
         commit,
     )
 }
@@ -1401,6 +1407,7 @@ pub fn suggestion_field(
         name,
         current,
         |text| TextEdit::singleline(text).hint_text(hint).desired_width(width),
+        EscapeCancels(true),
         &mut commit,
     );
     let popup_id = id.with("henad_suggestions");
@@ -1465,14 +1472,19 @@ pub fn suggestion_field(
     response
 }
 
+/// Whether Escape in a field puts back what the sheet holds. Otherwise Escape commits the typed text.
+#[derive(Debug, Clone, Copy)]
+struct EscapeCancels(bool);
+
 /// Adds the text field that `edit` makes over the text, named `name`, showing `current`, and commits what is typed on
-/// losing focus through `commit`, as [`commit_field`] does.
+/// losing focus through `commit`, as [`commit_field`] does. Escape cancels when `escape` holds.
 fn commit_edit(
     ui: &mut Ui,
     id: Id,
     name: &str,
     current: &str,
     edit: impl for<'t> FnOnce(&'t mut String) -> TextEdit<'t>,
+    escape: EscapeCancels,
     commit: impl FnOnce(&str) -> Option<String>,
 ) -> Response {
     let draft: Option<FieldDraft> = ui.data(|data| data.get_temp(draft_id(id)));
@@ -1482,7 +1494,10 @@ fn commit_edit(
     let response = ui.add(edit(&mut text).id(id));
     set_name(ui, response.id, name);
     let message = draft.and_then(|draft| draft.message);
-    if response.lost_focus() {
+    let canceled = escape.0 && response.lost_focus() && ui.input(|input| input.key_pressed(Key::Escape));
+    if canceled {
+        forget_field(ui, id);
+    } else if response.lost_focus() {
         let refused = if message.is_none() && text.trim() == current.trim() {
             None
         } else {
@@ -1534,8 +1549,8 @@ pub fn message_ui(ui: &mut Ui, message: &str) {
 
 // The Number box
 
-/// Range a typed number is read in: a chance, a rate or any number. A picker's Number box and the New parameter dialog
-/// accept numbers in it.
+/// Range a typed number is read in: a chance, a rate, a share kept or any number. A picker's Number box and the New
+/// parameter dialog accept numbers in it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumberUse {
     /// A chance, from 0 to 1.
@@ -1546,6 +1561,8 @@ pub enum NumberUse {
     Number,
     /// A number of times, an integer from 0.
     Times,
+    /// The share of a mark kept each tick, from 0 to 1.
+    Share,
 }
 
 impl NumberUse {
@@ -1553,12 +1570,13 @@ impl NumberUse {
     ///
     /// # Errors
     ///
-    /// Returns the message for text that is not one number, a chance outside 0 to 1, or a rate below 0.
+    /// Returns the message for text that is not one number, a chance or a share outside 0 to 1, or a rate below 0.
     pub fn read(self, text: &str) -> Result<SheetLiteral, &'static str> {
         let literal = read_typed_number(text).ok_or(TYPE_ONE_NUMBER)?;
         let number = literal.number().unwrap_or_default();
         match self {
             Self::Chance if !(0.0..=1.0).contains(&number) => Err(CHANCE_OUT_OF_RANGE),
+            Self::Share if !(0.0..=1.0).contains(&number) => Err(KEPT_OUT_OF_RANGE),
             Self::Rate if number < 0.0 => Err(RATE_BELOW_ZERO),
             Self::Times if number < 0.0 || number.fract() != 0.0 => Err(TYPE_TIMES),
             _ => Ok(literal),
@@ -1569,6 +1587,7 @@ impl NumberUse {
     pub fn box_hint(self) -> &'static str {
         match self {
             Self::Chance => CHANCE_BOX_HINT,
+            Self::Share => SHARE_BOX_HINT,
             Self::Rate | Self::Number | Self::Times => NUMBER_BOX_HINT,
         }
     }
@@ -1752,11 +1771,12 @@ impl NewParameterDialog {
     /// Returns the dialog for a parameter that stands for `number_use`, from the number `typed` in the field or blank
     /// it is for, with the unit `unit`.
     ///
-    /// A chance or a rate starts from 0.1 in 0 to 1, any other number from 1 in 0 to 10, and a typed number from itself
-    /// with a Max about ten times it.
+    /// A chance or a rate starts from 0.1 in 0 to 1, a share kept from 1 in 0 to 1, any other number from 1 in 0 to 10,
+    /// and a typed number from itself with a Max about ten times it.
     pub fn new(number_use: NumberUse, typed: Option<f64>, unit: Option<String>) -> Self {
         let (mut default, mut min, mut max) = match number_use {
             NumberUse::Chance | NumberUse::Rate => (0.1, 0.0, 1.0),
+            NumberUse::Share => (1.0, 0.0, 1.0),
             NumberUse::Number | NumberUse::Times => (1.0, 0.0, 10.0),
         };
         if let Some(value) = typed.filter(|value| value.is_finite()) {
@@ -1801,7 +1821,7 @@ impl NewParameterDialog {
     /// # Errors
     ///
     /// Returns the message on an empty or taken name, a field that does not read as a number, Min not below Max, a
-    /// default outside Min and Max, or a chance's range outside 0 to 1.
+    /// default outside Min and Max, or a chance's or a share's range outside 0 to 1.
     pub fn parameter(&self, taken: &[&str]) -> Result<NewParameter, String> {
         let name = self.name.trim();
         if name.is_empty() {
@@ -1825,6 +1845,9 @@ impl NewParameterDialog {
         }
         if self.number_use == NumberUse::Chance && (min < 0.0 || max > 1.0) {
             return Err(CHANCE_LIMITS_OUTSIDE.to_owned());
+        }
+        if self.number_use == NumberUse::Share && (min < 0.0 || max > 1.0) {
+            return Err(SHARE_LIMITS_OUTSIDE.to_owned());
         }
         let times = self.number_use == NumberUse::Times;
         if times
@@ -1851,7 +1874,7 @@ impl NewParameterDialog {
 }
 
 /// Returns the default top of a parameter's range for `value`: a round number about ten times it, at most 1 for a
-/// value below 1 or a chance.
+/// value below 1, a chance or a share.
 ///
 /// The round numbers are 1, 2 and 5 times a power of ten. A value of 0 takes 10 for a number and 1 otherwise.
 pub fn default_max(value: f64, number_use: NumberUse) -> f64 {
@@ -1872,7 +1895,7 @@ pub fn default_max(value: f64, number_use: NumberUse) -> f64 {
         .unwrap_or(10.0 * power);
     // Three significant figures drop the float noise of the power of ten.
     let top = format!("{round:.2e}").parse().unwrap_or(round);
-    if size < 1.0 || number_use == NumberUse::Chance {
+    if size < 1.0 || matches!(number_use, NumberUse::Chance | NumberUse::Share) {
         top.min(1.0)
     } else {
         top
@@ -1894,6 +1917,7 @@ pub fn new_parameter_modal(ctx: &egui::Context, dialog: &mut NewParameterDialog,
             NumberUse::Rate => RATE_PARAMETER_PLACEHOLDER,
             NumberUse::Number => NUMBER_PARAMETER_PLACEHOLDER,
             NumberUse::Times => TIMES_PARAMETER_PLACEHOLDER,
+            NumberUse::Share => SHARE_PARAMETER_PLACEHOLDER,
         };
         egui::Grid::new("henad_new_parameter_fields")
             .num_columns(2)

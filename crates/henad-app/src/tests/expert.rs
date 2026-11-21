@@ -512,6 +512,48 @@ fn a_sheet_with_a_file_has_its_copy_written_beside_it_and_found_again() {
     assert!(!banner.opens_original());
 }
 
+/// A copy whose sheet beside it holds an error that stops it lowering reads as changed since the conversion, and Open
+/// opens that sheet with its error.
+#[test]
+fn a_copy_finds_a_sheet_beside_it_that_no_longer_lowers_and_opens_it() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let folder = ScratchFolder::new("convert-beside-broken");
+    let sheet_path = folder.0.join("life.toml");
+    let text = starter_text("game_of_life.toml");
+    std::fs::write(&sheet_path, text).expect("the sheet is written");
+    open_text(&mut harness.app.editor, text.to_owned(), Some("life.toml".to_owned()));
+    harness.app.editor.file_path = Some(sheet_path.clone());
+    harness.settle();
+    convert_open_sheet(&mut harness);
+    let copy_path = harness
+        .app
+        .editor
+        .file_path
+        .clone()
+        .expect("the copy is written beside the sheet");
+    let copy_text = std::fs::read_to_string(&copy_path).expect("the copy is written");
+
+    // The sheet is saved with an error, and the copy is opened from its file.
+    std::fs::write(&sheet_path, life_with_an_error()).expect("the sheet is written again");
+    open_text(&mut harness.app.editor, copy_text, None);
+    harness.app.editor.file_path = Some(copy_path);
+    find_original(&mut harness.app.editor);
+    let banner = copy_banner(&mut harness.app.editor).expect("a banner");
+    assert_eq!(banner.state, CopyState::OriginalChanged);
+    assert!(banner.opens_original());
+    open_original_of(&mut harness.app.editor);
+    let sheet = harness
+        .app
+        .editor
+        .model
+        .sheet()
+        .expect("the sheet opens from beside the copy");
+    assert!(sheet.has_errors(), "the sheet opens with its error");
+    assert_eq!(harness.app.editor.file_path.as_ref(), Some(&sheet_path));
+}
+
 #[test]
 fn every_catalogue_kind_has_a_display_name() {
     use std::collections::BTreeSet;

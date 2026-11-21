@@ -14,6 +14,9 @@ pub const NUMBER_BOX_HINT: &str = "Type a number, then press Enter.";
 /// Number box of a picker of a chance.
 pub const CHANCE_BOX_HINT: &str = "Type a chance such as 0.3 or 30%, then press Enter.";
 
+/// Number box of a picker of the share of a mark kept each tick.
+pub const SHARE_BOX_HINT: &str = "Type a share such as 0.99 or 99%, then press Enter.";
+
 /// Button beside the Number box.
 pub const USE_BUTTON: &str = "Use";
 

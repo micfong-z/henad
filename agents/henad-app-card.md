@@ -6,7 +6,9 @@ sheet editor, the Sheet pane, the toolbar and the New model dialog are in
 `agents/henad-app-sheet.md`. The card writes the lines of a card over `cells`, rates included,
 and of a card over agents (**Agent lines** below).
 
-**Drawing.** `card_pane(ui, sheet, past_start, trials)` draws the notices (`notice_ui`) and every
+**Drawing.** `card_pane(ui, sheet, past_start, trials)` collects every `CardEdit` of a frame in
+draw order and runs each through `run_card_edit`, as the Sheet pane does, so a rename field that
+loses the focus to a note's button keeps its name. It draws the notices (`notice_ui`) and every
 card in file order with the body text at `SENTENCE_SIZE` 13, `REGION_GAP` 12 apart, each in
 `widgets::region` (gray 900 inside a gray 800 hairline): `title_bar_ui`
 (`Sentences::card_heading` in the semibold face in gray 100, the Lines help on a card that runs
@@ -127,8 +129,9 @@ click of its anchor and stays open on a second one, closes on a choice, on Escap
 the anchor) or on a click outside both the picker and the anchor, and scrolls past `LONG_PICKER`
 items (a short picker takes its own height, which a scroll area lags behind). Each item is a
 frameless button named by its label alone, or by `name` when that differs (the "otherwise" item),
-with grey `detail` under it. `picker_for(context, want, property, filled, typed, draw)` builds the
-picker of a place from its `Blank`: states (`shared_state_name` when two properties share a name),
+with grey `detail` under it. `picker_for(context, want, property, ground, filled, typed, draw)`
+builds the picker of a place from its `Blank`: states (`shared_state_name` when two properties share
+a name, with the ground's states on a card over agents only where `ground` holds),
 "any state" first for an old state, the States or Number properties, or a number's groups
 (`number_picker`: "From lines above" with "line N: [sentence]" under each result, "This cell's
 properties" as "my Food" with "this cell's Food", "Parameters" with value and unit, "New
@@ -156,7 +159,8 @@ writing `LineField::RateUnit`).
 drawn through `SheetEditor::edit`, one undo step, with `After` for the focus. The closure returns
 the ids made and the draft it leaves, which `CardState::keep_draft` stores once the edit is kept.
 `apply_choice` (`picker.rs`) maps a `Choice` at a place to commands: `SetSlot` for a slot (a
-Count's state also sets `whose.left`, a new property clears a state of another one, and a state in a
+Count's state also sets `whose.left`, a new property clears a state of another one, the property
+looked up among every kind of thing's (`find_property`), and a state in a
 slot that wants `Blank::StateList` starts a list), the whole list for a list item (an emptied list
 turns blank), `ChooseCondition` for a form, and `SetField` for a field (an old state of another
 property also sets the line's property). A Calculate line of one operation keeps the values chosen
@@ -338,6 +342,10 @@ Pickers on agents (`LineContext`): `every`, `agents`, `properties` (the card's k
 Depending on fits a number, an arrow or a place, and a look at agents none, `result_kinds`).
 `parts_above` offers each summary of a look above ("Flockmates' centre"), a pick's `amount` and each
 ground property of a cell picked or looked at above, named as `Sentences::value` writes the chip.
+`takes_ground_states(line, target)` keeps the ground's states out of a Become's new and old state
+and out of the `whose.right` and `only.right` of a count or look at agents (`around` is
+`AgentsWithin` on the phrase that owns the compare), which take the agent's own states. It offers
+them in a compare such as "Next cell's Ground is Food" and in a count or look over the cells around.
 `my_properties` adds "my new X" (`my_new_property_item`, detail `my_new_detail` with the number of
 the last change) for each property `check::changes_property` finds changed for the last time above
 the line (`last_change_above`), the same rule as the checker's skip. `lengths` offers
@@ -372,5 +380,9 @@ measures), `my_new_velocity_is_offered_below_the_last_change_to_velocity_and_now
 `a_property_changed_two_ways_and_a_look_inside_a_repeat_show_their_refusals_on_the_line`,
 `opening_boids_leaves_a_default_off_its_slider_steps_as_it_is`,
 `each_agent_slot_offers_what_fits_it` (the picker table, a test per slot kind),
+`a_state_picker_offers_the_ground_only_where_a_cell_is_compared`,
+`a_count_of_the_cells_around_an_agent_offers_the_ground_states`,
+`choosing_the_same_property_of_a_count_of_agents_keeps_its_state`,
+`a_slider_that_takes_the_focus_keeps_a_default_off_its_steps`,
 `the_agent_menus_and_pickers_show_no_forbidden_word_and_name_each_control_by_its_words` and
 `the_ants_note_on_slower_trail_formation_stays_under_its_line_after_an_edit`.

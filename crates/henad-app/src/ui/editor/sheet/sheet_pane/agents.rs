@@ -52,7 +52,7 @@ pub(super) fn agents(
     document: &SheetDocument,
     pane: &mut PaneState,
     stale: &[String],
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let Some(kind) = document.agents.first() else {
         return;
@@ -74,7 +74,7 @@ pub(super) fn agents(
                 if name.is_empty() {
                     return Some(AGENT_NAME_MISSING.to_owned());
                 }
-                *pending = Some(rename_kind(kind, name));
+                pending.push(rename_kind(kind, name));
                 None
             },
         );
@@ -91,7 +91,7 @@ pub(super) fn agents(
             COUNT_WIDTH,
             |text| match whole_number(text, kind.max_count) {
                 Ok(count) => {
-                    *pending = Some(set_kind(kind, count, kind.max_count));
+                    pending.push(set_kind(kind, count, kind.max_count));
                     None
                 }
                 Err(message) => Some(message),
@@ -118,7 +118,7 @@ pub(super) fn agents(
                     match whole_number(text, MAX_AGENTS) {
                         Ok(max_count) => {
                             // A smaller world holds fewer agents at the start too.
-                            *pending = Some(set_kind(kind, kind.count.min(max_count), max_count));
+                            pending.push(set_kind(kind, kind.count.min(max_count), max_count));
                             None
                         }
                         Err(message) => Some(message),
@@ -218,7 +218,7 @@ pub(super) fn ground(
     document: &SheetDocument,
     pane: &mut PaneState,
     stale: &[String],
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let properties = properties_of(document, GROUND_ID);
     if properties.is_empty() {
@@ -245,7 +245,7 @@ fn marks_row(
     document: &SheetDocument,
     property: &SheetProperty,
     pane: &mut PaneState,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let kept_id = pane.widgets.with(("henad_sheet_kept", property.id.as_str()));
     let marks_words = |marks: Option<Marks>| match marks {
@@ -279,7 +279,7 @@ fn marks_row(
                 Slot::Blank => Slot::Filled(SheetValue::Literal(SheetLiteral::Number(1.0))),
                 kept => kept.clone(),
             };
-            *pending = Some(Pending::one(SheetEdit::SetMarks {
+            pending.push(Pending::one(SheetEdit::SetMarks {
                 property: property.id.clone(),
                 marks,
                 kept_per_tick,
@@ -294,7 +294,7 @@ fn marks_row(
                 target: NumberTarget::Kept {
                     property: property.id.clone(),
                 },
-                number_use: NumberUse::Number,
+                number_use: NumberUse::Share,
                 limit: Some((0.0, 1.0, KEPT_OUT_OF_RANGE)),
                 after: 0.0,
             };
@@ -311,7 +311,7 @@ fn marks_row(
 
 /// Draws the states of the States property `property` of the ground, each with a box that keeps agents out of its
 /// cells.
-fn blocked_row(ui: &mut Ui, document: &SheetDocument, property: &SheetProperty, pending: &mut Option<Pending>) {
+fn blocked_row(ui: &mut Ui, document: &SheetDocument, property: &SheetProperty, pending: &mut Vec<Pending>) {
     let blocked = |state: &str| {
         document.ground.as_ref().is_some_and(|ground| {
             ground
@@ -327,7 +327,7 @@ fn blocked_row(ui: &mut Ui, document: &SheetDocument, property: &SheetProperty, 
             let response = ui.checkbox(&mut kept_out, &state.name);
             set_name(ui, response.id, &blocked_state_name(&state.name));
             if response.changed() {
-                *pending = Some(Pending::one(SheetEdit::SetBlocked {
+                pending.push(Pending::one(SheetEdit::SetBlocked {
                     property: property.id.clone(),
                     state: state.id.clone(),
                     blocked: kept_out,
@@ -339,7 +339,7 @@ fn blocked_row(ui: &mut Ui, document: &SheetDocument, property: &SheetProperty, 
 
 /// Draws the Events section: each event's name as a field with its delete button, then the event form or "+ Add
 /// event". A sheet with no event says what one is for.
-pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, pending: &mut Option<Pending>) {
+pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, pending: &mut Vec<Pending>) {
     if document.events.is_empty() {
         text_cell(ui, Label::new(RichText::new(EVENTS_EMPTY).weak()));
     } else {
@@ -368,7 +368,7 @@ pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState
                                     if event_taken(document, name, Some(&event.id)) {
                                         return Some(event_name_taken(name));
                                     }
-                                    *pending = Some(Pending::one(SheetEdit::Rename {
+                                    pending.push(Pending::one(SheetEdit::Rename {
                                         item: SheetItem::Event(event.id.clone()),
                                         name: name.to_owned(),
                                     }));
@@ -378,7 +378,7 @@ pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState
                         });
                     });
                     if row.delete_cell(1, &delete_event_name(&event.name)) {
-                        *pending = Some(Pending::one(SheetEdit::Delete {
+                        pending.push(Pending::one(SheetEdit::Delete {
                             item: SheetItem::Event(event.id.clone()),
                         }));
                     }
@@ -423,7 +423,7 @@ fn event_form(
     document: &SheetDocument,
     form: &mut EventForm,
     close: &mut bool,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     form_heading(ui, NEW_EVENT);
     let rows = Form::new(ui, &[NAME_LABEL]);
@@ -452,7 +452,7 @@ fn event_form(
         } else if is_reserved_name(&name, IdSpace::Item) {
             form.message = Some(name_reserved(&name));
         } else {
-            *pending = Some(Pending::from_form(
+            pending.push(Pending::from_form(
                 FormKind::Event,
                 Box::new(move |builder| builder.apply(SheetEdit::AddEvent { name }).map(drop)),
             ));

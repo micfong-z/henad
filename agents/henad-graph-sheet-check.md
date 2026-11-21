@@ -50,7 +50,9 @@ both types are known, and only what the lowering refuses too), formulas, keys he
 Count, Look around and Pick a cell inside a Repeat (`LOOK_IN_REPEAT`) or a run-once card,
 `RATE_IN_BUTTON_CARD`, a rate inside a Repeat (`RATE_IN_REPEAT`), and the ranges from the wording table
 (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on literals, a percent divided by 100,
-`CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters). Agent-only fields with no editor words
+`CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters, and for a ground property's share kept
+each tick `KEPT_OUT_OF_RANGE` on a literal and `SHARE_LIMITS_OUTSIDE` on a parameter, through
+`Checker::kept_range`). Agent-only fields with no editor words
 yet (a Steer or Move mode, a pick rule, `which`, an event, `agent_kind`, `include_me`) are errors
 when absent. Warnings that keep the line running: a draw with no key, two result lines with one
 name, `SHEET_EMPTY` at `[world]` for a grid sheet with no cells property, and `add_up_limit_note` at

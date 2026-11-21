@@ -16,17 +16,17 @@ use henad_graph::sheet::sentence::{
     ADD_BUTTON, ADD_EVENT, ADD_GROUND_PROPERTY_NAME, ADD_MEASURE, ADD_PARAMETER, AGENT_COUNT_NAME, AGENT_MAX_NAME,
     AGENT_NAME_FIELD, AGENT_NAME_MISSING, AGENTS_IN_OPEN_SPACE, ANYWHERE_AT_RANDOM, ARROW_KIND, BUTTON_NAME_FIELD,
     BY_HEADING_NOTE, CANCEL, COLOR_AGENTS_BY, COLOR_GROUND_BY, COUNT_AGENTS_MEASURE, CREATE_PARAMETER, DONE,
-    EVENT_NAME_FIELD, EVENT_NAME_MISSING, EVENTS_EMPTY, GROUND_EMPTY, HEADING_START, KEPT_OUT_OF_RANGE, NUMBER_KIND,
-    PAINTED, START_AGAIN_FOR, STATES_KIND, YES_NO_KIND, add_property_name, blocked_state_name, count_agents_measure,
-    event_name_taken, integer_up_to, marks_name, run_once,
+    EVENT_NAME_FIELD, EVENT_NAME_MISSING, EVENTS_EMPTY, GROUND_EMPTY, HEADING_START, KEPT_OUT_OF_RANGE, NEW_PARAMETER,
+    NUMBER_KIND, PAINTED, SHARE_LIMITS_OUTSIDE, START_AGAIN_FOR, STATES_KIND, YES_NO_KIND, add_property_name,
+    blocked_state_name, count_agents_measure, event_name_taken, integer_up_to, marks_name, run_once, value_field_name,
 };
 use henad_graph::sheet::sentence::{MARKS_ADD_UP, MARKS_LARGEST, MARKS_NONE};
 
 use crate::state::default_values;
 use crate::tests::panes::{
     Seen, add_average_measure, add_property, add_states_property, agent_sheet, apply_sheet_edit, assert_control_holds,
-    assert_no_forbidden_word, center_of, choose, click, click_control, enter_into, field_value, new_blank_agents,
-    sheet, sheet_mut, shows_or_notice, starter_document, text, type_into,
+    assert_no_forbidden_word, center_of, choose, click, click_control, enter_into, field_value, named,
+    new_blank_agents, sheet, sheet_mut, shows_or_notice, starter_document, text, type_into,
 };
 use crate::tests::support::{Harness, Node, align_with_starter, set_of, without_card_lines};
 use crate::ui::editor::EditorModel;
@@ -324,6 +324,87 @@ fn a_ground_property_adds_up_its_marks_fades_and_blocks_agents() {
     }
     assert_eq!(sheet(&harness).document().ground, None);
     assert!(shows_or_notice(&mut harness, GROUND_EMPTY));
+}
+
+/// Clicks the Number box of the open picker titled `dialog`, the field named by its hint, types `text` and presses
+/// Enter.
+fn enter_in_picker(harness: &mut Harness, dialog: &str, text: &str) {
+    let nodes = harness.settle();
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node.role == Role::Dialog && node.label == dialog),
+        "{dialog} is open"
+    );
+    let field = nodes
+        .iter()
+        .find(|node| node.role == Role::TextInput && node.label.ends_with(", then press Enter."))
+        .and_then(|node| node.bounds)
+        .expect("the Number box");
+    harness.click_at(field.center());
+    harness.replace_text(text);
+    harness.press(Key::Enter, Modifiers::NONE);
+    harness.settle();
+}
+
+/// The share kept each tick refuses a number outside 0 to 1 typed in the picker of its parameter chip, and a new
+/// parameter made there starts in 0 to 1 and refuses a range outside it.
+#[test]
+fn a_share_kept_through_its_parameter_chip_stays_from_0_to_1() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    harness.open_sheet(&starter_document("ants.toml").to_text().expect("the starter writes"));
+    let before = sheet(&harness).document().clone();
+    let chip = named(&mut harness, "Trail kept per tick")
+        .into_iter()
+        .find(|node| node.role == Role::Button)
+        .and_then(|node| node.bounds)
+        .expect("the chip of the share kept");
+    harness.click_at(chip.center());
+    enter_in_picker(&mut harness, "Choose a number", "5");
+    assert_eq!(sheet(&harness).document(), &before, "5 is no share");
+    assert!(shows_or_notice(&mut harness, KEPT_OUT_OF_RANGE));
+    enter_in_picker(&mut harness, "Choose a number", "0.5");
+    let kept = |harness: &Harness| {
+        sheet(harness).document().ground.clone().expect("a ground").properties[1]
+            .kept_per_tick
+            .clone()
+    };
+    assert_eq!(
+        kept(&harness),
+        Slot::Filled(SheetValue::Literal(SheetLiteral::Number(0.5)))
+    );
+
+    // The field holds 0.5 now. Its "Use a parameter" offers New parameter, which starts from it in 0 to 1.
+    click(&mut harness, "To food, share kept each tick: use a parameter");
+    click(&mut harness, NEW_PARAMETER);
+    assert_eq!(field_value(&mut harness, "Default value"), "0.5");
+    assert_eq!(field_value(&mut harness, "Max"), "1");
+    type_into(&mut harness, "Parameter name", "Fade");
+    type_into(&mut harness, "Max", "2");
+    click(&mut harness, CREATE_PARAMETER);
+    assert!(shows_or_notice(&mut harness, SHARE_LIMITS_OUTSIDE));
+}
+
+/// A value typed for the parameter of the share kept each tick widens the parameter's range past 1, and the sheet
+/// names the error.
+#[test]
+fn a_share_kept_parameter_widened_past_1_is_an_error() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    harness.open_sheet(&starter_document("ants.toml").to_text().expect("the starter writes"));
+    assert!(!sheet(&harness).has_errors());
+    enter_into(&mut harness, &value_field_name("Trail kept per tick"), "5");
+    let parameters = &sheet(&harness).document().parameters;
+    let kept = parameters
+        .iter()
+        .find(|parameter| parameter.name == "Trail kept per tick")
+        .expect("the parameter");
+    assert_eq!(kept.max, 5.0, "the typed value widens the range");
+    assert!(sheet(&harness).has_errors());
+    assert!(shows_or_notice(&mut harness, SHARE_LIMITS_OUTSIDE));
 }
 
 #[test]

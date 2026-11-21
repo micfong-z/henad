@@ -1,7 +1,8 @@
 //! The Parameters section of the Sheet pane: a row per parameter with its name, value slider, range and unit, and the
 //! slider step and range rules the fields follow.
 
-use egui::{Id, Label, RichText, Slider, Ui};
+use egui::accesskit::Action;
+use egui::{Id, Key, Label, RichText, Slider, Ui};
 use henad_graph::sheet::document::{SheetDocument, SheetLiteral, SheetParameter};
 use henad_graph::sheet::edit::{SheetEdit, SheetItem};
 use henad_graph::sheet::format_number;
@@ -88,7 +89,7 @@ pub(super) fn parameters(
     document: &SheetDocument,
     pane: &mut PaneState,
     trials: &[SheetTrial],
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     if !document.parameters.is_empty() {
         let names = document
@@ -162,13 +163,33 @@ impl ParameterFields<'_> {
             .with(("henad_sheet_parameter", self.parameter.id.as_str(), part))
     }
 
-    /// Returns the edit that gives the parameter the range `min` to `max`, the value `default` and the unit `unit`.
-    fn set(&self, min: f64, max: f64, default: f64, unit: Option<String>) -> Pending {
-        Pending::one(set_parameter_edit(self.parameter, min, max, default, unit))
+    /// Returns the edit that changes the parameter's range, value and unit by `change`, applied to the parameter as the
+    /// sheet holds it when the edit runs. An earlier edit of the same frame, such as a new Max, then stays.
+    fn set(&self, change: impl FnOnce(&mut SheetParameter) + 'static) -> Pending {
+        let drawn = self.parameter.clone();
+        Pending {
+            starts_only: false,
+            form: None,
+            run: Box::new(move |builder| {
+                let mut parameter = builder
+                    .document()
+                    .parameters
+                    .iter()
+                    .find(|known| known.id == drawn.id)
+                    .cloned()
+                    .unwrap_or(drawn);
+                change(&mut parameter);
+                let (min, max, default, unit) =
+                    (parameter.min, parameter.max, parameter.default, parameter.unit.clone());
+                builder
+                    .apply(set_parameter_edit(&parameter, min, max, default, unit))
+                    .map(drop)
+            }),
+        }
     }
 
     /// Adds the name field, as wide as `ui`. An empty or taken name puts the old name back and sets `message`.
-    fn name(&self, ui: &mut Ui, message: &mut Option<(String, String)>, pending: &mut Option<Pending>) {
+    fn name(&self, ui: &mut Ui, message: &mut Option<(String, String)>, pending: &mut Vec<Pending>) {
         let parameter = self.parameter;
         commit_field(
             ui,
@@ -186,7 +207,7 @@ impl ParameterFields<'_> {
                 } else if taken {
                     Some((parameter.id.clone(), parameter_name_taken(name)))
                 } else {
-                    *pending = Some(Pending::one(SheetEdit::Rename {
+                    pending.push(Pending::one(SheetEdit::Rename {
                         item: SheetItem::Parameter(parameter.id.clone()),
                         name: name.to_owned(),
                     }));
@@ -198,11 +219,13 @@ impl ParameterFields<'_> {
     }
 
     /// Adds the value as a slider and a field, together as wide as `ui`.
-    fn value(&self, ui: &mut Ui, pending: &mut Option<Pending>) {
+    fn value(&self, ui: &mut Ui, pending: &mut Vec<Pending>) {
         let parameter = self.parameter;
         let field = FIELD_WIDTH.min(ui.available_width() - 36.0 - ITEM_GAP).max(36.0);
         let slider = ui.available_width() - field - ITEM_GAP;
-        let set = |min, max, default, unit| self.set(min, max, default, unit);
+        // A range changed earlier in the frame can leave the slider's value outside it.
+        let set =
+            |released: f64| self.set(move |parameter| parameter.default = released.clamp(parameter.min, parameter.max));
         let shown = value_slider(ui, parameter, self.id("slider"), slider, pending, &set);
         commit_number(
             ui,
@@ -213,12 +236,11 @@ impl ParameterFields<'_> {
             |text| match typed_number(text) {
                 Ok(value) => {
                     // A typed value outside the range widens it.
-                    *pending = Some(self.set(
-                        parameter.min.min(value),
-                        parameter.max.max(value),
-                        value,
-                        parameter.unit.clone(),
-                    ));
+                    pending.push(self.set(move |parameter| {
+                        parameter.min = parameter.min.min(value);
+                        parameter.max = parameter.max.max(value);
+                        parameter.default = value;
+                    }));
                     None
                 }
                 Err(message) => Some(message),
@@ -227,7 +249,7 @@ impl ParameterFields<'_> {
     }
 
     /// Adds the field of the end `end` of the range, `width` points wide.
-    fn range(&self, ui: &mut Ui, end: RangeEnd, width: f32, pending: &mut Option<Pending>) {
+    fn range(&self, ui: &mut Ui, end: RangeEnd, width: f32, pending: &mut Vec<Pending>) {
         let parameter = self.parameter;
         let (label, name, current) = match end {
             RangeEnd::Min => (MIN_LABEL, parameter_min_name(&parameter.name), parameter.min),
@@ -241,8 +263,9 @@ impl ParameterFields<'_> {
             width,
             |text| match typed_number(text) {
                 Ok(typed) => {
-                    let (min, max, default) = with_range_end(parameter, end, typed);
-                    *pending = Some(self.set(min, max, default, parameter.unit.clone()));
+                    pending.push(self.set(move |parameter| {
+                        (parameter.min, parameter.max, parameter.default) = with_range_end(parameter, end, typed);
+                    }));
                     None
                 }
                 Err(message) => Some(message),
@@ -251,7 +274,7 @@ impl ParameterFields<'_> {
     }
 
     /// Adds the unit field, `width` points wide.
-    fn unit(&self, ui: &mut Ui, width: f32, pending: &mut Option<Pending>) {
+    fn unit(&self, ui: &mut Ui, width: f32, pending: &mut Vec<Pending>) {
         let parameter = self.parameter;
         suggestion_field(
             ui,
@@ -263,19 +286,15 @@ impl ParameterFields<'_> {
             &unit_suggestions(),
             |text| {
                 let unit = text.trim();
-                *pending = Some(self.set(
-                    parameter.min,
-                    parameter.max,
-                    parameter.default,
-                    (!unit.is_empty()).then(|| unit.to_owned()),
-                ));
+                let unit = (!unit.is_empty()).then(|| unit.to_owned());
+                pending.push(self.set(move |parameter| parameter.unit = unit));
                 None
             },
         );
     }
 
     /// Adds Min, Max and Unit on wrapping lines, each field after its small label. A label stays on its field's line.
-    fn range_line(&self, ui: &mut Ui, pending: &mut Option<Pending>) {
+    fn range_line(&self, ui: &mut Ui, pending: &mut Vec<Pending>) {
         wrapped_line(ui, |ui| {
             let mut first = true;
             for (header, end) in [
@@ -310,7 +329,7 @@ fn parameter_row(
     parameter: &SheetParameter,
     wide: bool,
     pane: &mut PaneState,
-    pending: &mut Option<Pending>,
+    pending: &mut Vec<Pending>,
 ) {
     let fields = ParameterFields {
         document,
@@ -331,7 +350,7 @@ fn parameter_row(
         row.cell(4, |ui| line(ui, |ui| fields.unit(ui, ui.available_width(), pending)));
     }
     if row.delete_cell(last, &delete_parameter_name(&parameter.name)) {
-        *pending = Some(Pending::one(SheetEdit::Delete {
+        pending.push(Pending::one(SheetEdit::Delete {
             item: SheetItem::Parameter(parameter.id.clone()),
         }));
     }
@@ -358,15 +377,15 @@ fn parameter_row(
 /// Adds the slider of the value of `parameter`, `width` points long, named by its value slider name and keyed by `id`,
 /// and returns the value it shows.
 ///
-/// A drag holds its value until the slider is let go, and then commits it as one edit, the command `set` returns. A
-/// click or a key commits at once. A parameter with no range to slide over shows no slider.
+/// A drag holds its value until the slider is let go, and then commits it as one edit, the edit `set` returns for the
+/// new value. A click or a key commits at once. A parameter with no range to slide over shows no slider.
 fn value_slider(
     ui: &mut Ui,
     parameter: &SheetParameter,
     id: Id,
     width: f32,
-    pending: &mut Option<Pending>,
-    set: &impl Fn(f64, f64, f64, Option<String>) -> Pending,
+    pending: &mut Vec<Pending>,
+    set: &impl Fn(f64) -> Pending,
 ) -> f64 {
     let held: Option<f64> = ui.data(|data| data.get_temp(id));
     let mut value = held.unwrap_or(parameter.default);
@@ -392,8 +411,17 @@ fn value_slider(
     }
     ui.data_mut(|data| data.remove::<f64>(id));
     // The slider rounds a default off its steps as it draws. egui reports that as a change. Only the author's click,
-    // drag or key edits the default, and otherwise the slider shows the stored default.
-    let touched = response.has_focus() || response.clicked() || response.drag_stopped();
+    // drag, arrow key or assistive request edits the default, and otherwise the slider shows the stored default. The
+    // keyboard focus alone edits nothing.
+    let focused = response.has_focus();
+    let keyed = ui.input(|input| {
+        let arrow = input.key_pressed(Key::ArrowLeft) || input.key_pressed(Key::ArrowRight);
+        let assisted = [Action::Increment, Action::Decrement, Action::SetValue]
+            .into_iter()
+            .any(|action| input.num_accesskit_action_requests(response.id, action) > 0);
+        (focused && arrow) || assisted
+    });
+    let touched = keyed || response.clicked() || response.drag_stopped();
     let released = if response.changed() && touched {
         Some(value)
     } else {
@@ -402,7 +430,7 @@ fn value_slider(
     if let Some(released) = released
         && released != parameter.default
     {
-        *pending = Some(set(parameter.min, parameter.max, released, parameter.unit.clone()));
+        pending.push(set(released));
     }
     released.unwrap_or(parameter.default)
 }
