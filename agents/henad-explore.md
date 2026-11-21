@@ -142,9 +142,14 @@ build. `check_code` (`output/resume.rs`) applies it after the model id and befor
 for a sweep resume (`ResumeScan::read` takes the `ModelSource`) and a search resume, against
 every session that wrote runs (`Manifest::run_model_builds`), a session with no model build
 counting as other code, and returns `ResumeError::CodeChanged`. Both resumes also call
-`check_directory_code` before their probe build, which then never builds changed code. A merge
+`check_directory_code` before their probe build, which then never builds changed code. It then
+compares the model's time scale with the manifest's `schema.time` (`check_time_scale`). The schema
+hash leaves the time scale out, and a changed unit or tick-length parameter returns
+`ResumeError::TimeScaleChanged` (`a_resume_refuses_a_changed_time_scale`). A merge
 compares every shard's builds with those of each lower shard, after the model id and before the
-plan checks (`MergeError::CodeChanged`). Compiled against compiled keeps `BuildChanged`.
+plan checks (`MergeError::CodeChanged`). Compiled against compiled keeps `BuildChanged`. The plan
+checks compare each shard's `schema.time` with the first shard's as well, and a difference
+returns `MergeError::PlanDiffers` (`shards_on_different_time_scales_are_refused`).
 `schema_json` writes `time` (`unit` and `tick_length`) only for a model with a time scale, and
 `param_json` writes `"hidden": true` only for a hidden parameter
 (`param_json_marks_only_hidden_parameters`), so the golden `--params --json` files hold.

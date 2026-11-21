@@ -1,19 +1,22 @@
 //! The fire-count channel of both GPU engines: the last step of each batch counts into the spec's fire range through
-//! its counting block, and the counts read back with the stats, with the tick of the step they counted.
+//! its counting block, and the counts read back with the stats, with the tick of the step they counted. A runner
+//! publishes both with the tick of its snapshot.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use henad_core::authoring::model::field::Extent;
 use henad_core::authoring::model::gpu_agent_model::{Geometry, PassCtx, PassId};
 use henad_core::params::ParamValue;
 use henad_core::view::StatValue;
 
+use crate::cpu::sim_thread::SimCommand;
 use crate::gpu::agent_engine::GpuAgentEngine;
 use crate::gpu::agent_spec::{AgentHooks, AgentPassId, AgentRun, GpuAgentSpec};
 use crate::gpu::grid_engine::GpuGridEngine;
 use crate::gpu::grid_spec::{GpuGridSpec, GridHooks, GridPassCtx, GridPassId};
 use crate::gpu::shader_spec::ShaderSpec;
-use crate::gpu::sim_thread::GpuSimState;
+use crate::gpu::sim_thread::{GpuBatchSettings, GpuSimState, GpuSimThread};
 use crate::gpu::tests::support::{count_agent_spec, count_grid_spec, scalar_stat, steps_then_stats, storage, uniform};
 use crate::gpu::{GpuContext, headless_context};
 use crate::snapshot::FireCounts;
@@ -251,4 +254,63 @@ fn a_spec_with_no_fire_range_has_empty_counts() {
     steps_then_stats(&ctx, &mut grid, 3);
     assert!(grid.fire_counts().is_empty());
     assert_eq!(scalar_stat(&grid, 0), f64::from(SEED_TOTAL + 3 * ELEMENTS));
+}
+
+/// Takes the snapshots `thread` publishes for `duration`, and appends each one's tick, first stat and fire counts to
+/// `seen`.
+fn take_snapshots_for(thread: &mut GpuSimThread, duration: Duration, seen: &mut Vec<(u64, f64, FireCounts)>) {
+    let until = Instant::now() + duration;
+    while Instant::now() < until {
+        if let Some(snap) = thread.take_snapshot() {
+            let total = match snap.stats[0].value() {
+                StatValue::Scalar(value) => *value,
+                other => panic!("not a scalar: {other:?}"),
+            };
+            seen.push((snap.tick, total, snap.fire_counts));
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// A playing runner publishes each snapshot with the stats and the fire counts of its own tick, capped at the rate the
+/// editor starts at and uncapped.
+#[test]
+fn a_playing_runner_publishes_the_stats_of_each_snapshots_own_tick() {
+    let Some(ctx) = headless_context("fire_count_runner_test") else {
+        return;
+    };
+    let grid = GpuGridEngine::new(&ctx, grid_spec(), &[], None);
+    let faults = ctx.faults.clone();
+    let mut thread = GpuSimThread::new(ctx, Box::new(grid), GpuBatchSettings::default(), None, faults.clone());
+    let mut seen = Vec::new();
+    thread.send(SimCommand::SetUncapped(false));
+    thread.send(SimCommand::SetTargetTps(30.0));
+    thread.play();
+    take_snapshots_for(&mut thread, Duration::from_millis(500), &mut seen);
+    let capped = seen.len();
+    thread.send(SimCommand::SetUncapped(true));
+    take_snapshots_for(&mut thread, Duration::from_millis(200), &mut seen);
+    thread.pause();
+    take_snapshots_for(&mut thread, Duration::from_millis(100), &mut seen);
+
+    assert!(capped >= 5, "half a second at 30 TPS published {capped} snapshots");
+    assert!(seen.len() > capped + 1, "the uncapped run published nothing");
+    for (tick, total, counts) in &seen {
+        let tick = *tick;
+        assert_eq!(
+            *total,
+            f64::from(SEED_TOTAL + tick as u32 * ELEMENTS),
+            "the snapshot at tick {tick} holds the stats of another tick"
+        );
+        let counted = if tick == 0 {
+            FireCounts::new(0, vec![0])
+        } else {
+            FireCounts::new(tick, vec![count_of_step(tick)])
+        };
+        assert_eq!(
+            *counts, counted,
+            "the snapshot at tick {tick} holds the counts of another step"
+        );
+    }
+    assert!(faults.take().is_none(), "no fault reached the sink");
 }

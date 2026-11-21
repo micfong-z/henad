@@ -62,17 +62,37 @@ target (`RunToStride`), and each publish carries those since the last in `Snapsh
 `runner::publish` moves the samples of a publish the host never took into the next, and the app
 pushes each into the history before the snapshot's own row. Otherwise a run that ends inside one
 publish interval leaves the Charts tab only its first and last tick. The CPU loop samples after
-the step that reaches a sample tick. The GPU loop cuts a batch at each sample tick and reads the
-stats back blocking, publishing from there once `RUN_TO_PUBLISH_INTERVAL` has passed. In a browser
-the readback cannot block, so a GPU run-to samples nothing and publishes as before.
+the step that reaches a sample tick, and calls `prepare_view` first as a publish does. A model
+such as `team_assembly` computes stats there. The GPU loop cuts a batch at each sample tick and
+reads the stats back blocking, publishing from there once `RUN_TO_PUBLISH_INTERVAL` has passed. In
+a browser the readback cannot block, so a GPU run-to samples nothing and publishes as before.
 `a_run_to_a_tick_samples_its_stats_on_the_way` and `a_gpu_run_to_a_tick_samples_its_stats_on_the_way`
-pin both.
+pin both, and `a_run_to_a_tick_prepares_the_view_of_each_sample` the CPU loop's prepare.
 
 The GPU loop starts uncapped and keeps to `SetTargetTps` once `SetUncapped(false)` arrives, as the
 CPU loop does. A capped batch holds the steps of one 16 ms snapshot interval at the rate, at least
-one and at most `batch_size`, and the next falls due that many ticks' time after the last. The app
-sends both commands after every GPU build, so the Pacing tab's Unlimited TPS and Target TPS apply
-to a sheet as to a CPU model. `a_capped_gpu_run_keeps_to_its_rate` pins it.
+one and at most `batch_size`, and the next falls due that many ticks' time after the last. A batch
+that holds the whole interval always ends in the snapshot passes, whatever the clock says, and a
+1 to 60 TPS run publishes every tick. One that `batch_size` cut short waits for the interval. The
+pump after a capped batch waits for it and publishes before the loop sleeps to the next deadline.
+The adaptive batch size then times the batch's work alone. Timed to the next pump, it would count
+the sleep and fall to 1. The app sends both commands after every GPU build, so the Pacing tab's
+Unlimited TPS and Target TPS apply to a sheet as to a CPU model.
+`a_capped_gpu_run_keeps_to_its_rate`, `a_capped_run_times_its_batches_without_the_wait` and
+`a_capped_batch_of_a_whole_snapshot_interval_ends_in_a_snapshot` pin it.
+
+A GPU batch that ends in the snapshot passes starts its stats readback, and the next pump, once the
+batch has finished, publishes the snapshot when the readback lands and before anything steps on.
+The snapshot's tick, stats, fire counts and display then agree, capped or not. On native the wait
+for the batch lands the map too. In a browser the map can land a pump later, and the loop holds
+the next batch until it does. Otherwise the next snapshot's copy would be skipped. A one-shot
+snapshot (`snapshot_blocking`) drains a readback still in flight before it encodes its own. That
+drain cannot wait in a browser. There a Step, action or schedule that arrives before a playing
+batch's map lands still skips its copy, and its late publish holds the batch's stats. A Pause steps
+nothing, so its late publish holds the stats of its own tick.
+`a_playing_runner_publishes_the_stats_of_each_snapshots_own_tick` (`gpu/tests/fire_counts.rs`)
+pins it on a real grid engine, `a_snapshot_whose_readback_lands_late_holds_the_next_batch` the
+hold, and `a_step_after_a_snapshot_batch_publishes_its_own_ticks_stats` the native drain.
 `a_replay_of_a_planned_run_matches_its_sweep_row` and `a_gpu_schedule_matches_export_stats`
 (henad-explore) pin the live loop's rule to a sweep's and to `--export-stats`. Keep them.
 
@@ -104,9 +124,9 @@ never sends an edit, so its runs are unchanged.
 A GPU engine with a fire range counts the last step of each `encode_steps` call, and the runner
 needs no change for it. The runner cuts a batch into chunks of at most `MAX_STEPS_PER_SUBMISSION`
 and at each tick an action is due, so each chunk's last step counts, and a snapshot's passes follow
-the batch's last chunk. `Snapshot.fire_counts` then reads the step before the snapshot, with the
-tick it reached, a few milliseconds stale as the stats are. Flat out that is one counting step in
-64. At the editor's 1 to 60 ticks per second every step counts.
+the batch's last chunk. `Snapshot.fire_counts` then reads the step that reached the snapshot's
+tick. Flat out that is one counting step in 64. At the editor's 1 to 60 ticks per second every
+step counts and every tick publishes.
 
 The UI thread only ever reads the latest snapshot (`snapshot.rs`) and never touches the live
 `SimState` directly. Publishing goes through a `SnapshotSlot`, holding the `fresh` snapshot plus a

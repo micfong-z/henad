@@ -103,7 +103,8 @@ The files here are the GPU counterparts of the data structures in `henad-core`.
 :   Async readback of a handful of `u32` counters.
     Blocking on `map_async` right after submission would stall the sim thread at the display cadence and cap throughput at roughly one in-flight batch per frame.
     The map instead starts right after submission and completes on some later loop iteration.
-    A reported stat is then a few milliseconds stale, the same staleness the display already accepts.
+    The runner publishes a snapshot once its map has landed and before the next batch steps on, so the snapshot's stats and fire counts belong to its own tick.
+    On native the map lands while the runner waits for the batch, a wait it makes anyway.
     The float sums of `reduce.rs` travel through the same readback, reinterpreted as `f32` bits.
     The staging path moves only 4-byte words, and one path serves both element types.
 
@@ -119,8 +120,10 @@ The files here are the GPU counterparts of the data structures in `henad-core`.
 Steps go out `batch_size` at a time, split across submissions of at most 64 steps each.
 Every step is still its own compute pass, because wgpu only synchronises between passes and the ping-pong needs exactly that synchronisation.
 
-Display and reduce run once `SNAPSHOT_INTERVAL` has elapsed, and nothing else gates them.
+Display and reduce run once `SNAPSHOT_INTERVAL` has elapsed.
 The number of steps per snapshot is therefore emergent, and stays independent of batch size.
+In a capped run a batch holds the steps of one interval at the target rate, at most `batch_size` of them.
+A batch that holds the whole interval always ends in display and reduce, and a run at 1 to 60 ticks per second then publishes every tick.
 
 One batch is outstanding at a time.
 Left unbounded, egui's own submissions queue up behind a dozen batches of sim work, and then every frame pays for all of them.
@@ -128,6 +131,7 @@ Left unbounded, egui's own submissions queue up behind a dozen batches of sim wo
 `batch_size` is either fixed by the UI or chosen by adaptive control.
 Adaptive mode keeps an EMA of `time_per_step` and picks a size so that `batch_size * time_per_step` tracks a user-set target, 8 ms by default, half a 60fps frame.
 It runs off wall-clock time rather than GPU timestamps, and `TimestampQuery` stays diagnostic-only.
+A capped batch is timed up to the end of its work, and the wait for the next deadline stays out of the EMA.
 `MAX_BATCH_SIZE` bounds the output, because by the time a slowdown needs reacting to, an oversized batch is already committed.
 
 Submissions go on the same queue that egui renders on, using handles cloned from egui's render state.
@@ -135,7 +139,7 @@ wgpu serialises submissions to a queue and treats each submission as atomic from
 A torn frame cannot occur.
 The cost is up to one frame of staleness, which a sim stepping far faster than the refresh rate never shows.
 
-`GpuSimThread` takes the same `SimCommand` stream as `SimThread`, and accepts the commands that have no GPU analogue, such as a target rate, without acting on them.
+`GpuSimThread` takes the same `SimCommand` stream as `SimThread`, and accepts the commands that have no GPU analogue, such as a layout budget, without acting on them.
 A host can then hold one enum over the two runners instead of special-casing the GPU.
 The numbers with no CPU counterpart, the GPU time per step and the batch size, travel apart from the snapshot in `GpuStats`.
 

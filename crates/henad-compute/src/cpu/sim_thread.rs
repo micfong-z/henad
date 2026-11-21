@@ -324,6 +324,8 @@ impl Loop {
             self.timed_step();
             let tick = self.state.tick();
             if self.run_to_stride.as_mut().is_some_and(|stride| stride.take_due(tick)) {
+                // A model can compute its stats in `prepare_view`, so the sample prepares the view as a publish does.
+                self.state.prepare_view();
                 self.run_to_samples.push(StatSample::new(tick, self.state.stats()));
             }
         }

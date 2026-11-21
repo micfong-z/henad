@@ -249,8 +249,8 @@ fn read_input(dir: &Path) -> Result<ShardInput, MergeError> {
     })
 }
 
-/// Checks that `shards`, sorted by shard index, are distinct shards of one model, one model code, one plan and one
-/// replicate count.
+/// Checks that `shards`, sorted by shard index, are distinct shards of one model, one model code, one time scale, one
+/// plan and one replicate count.
 ///
 /// The model and its code are compared before the plan, as a resume compares them. A runtime model's edit can change
 /// its declarations as well, and the changed code is then the error reported. A shard of another model differs in its
@@ -280,8 +280,10 @@ fn check_shards(shards: &[ShardInput]) -> Result<(), MergeError> {
     check_code(shards)?;
     for input in shards {
         let (plan, expected) = (&input.manifest.plan, &first.manifest.plan);
+        // The schema hash leaves the time scale out, and a compiled model's changed code only warns.
         if plan.plan_hash != expected.plan_hash
             || input.manifest.model.schema_hash != first.manifest.model.schema_hash
+            || input.manifest.model.schema.get("time") != first.manifest.model.schema.get("time")
             || plan.replicates != expected.replicates
             || plan.runs != expected.runs
         {

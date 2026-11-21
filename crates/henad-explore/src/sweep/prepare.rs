@@ -93,7 +93,13 @@ impl<'a> PreparedStart<'a> {
             _ => None,
         };
         if let Some(output_dir) = resume_dir {
-            check_directory_code(output_dir, mode, plan.model(), entry.source())?;
+            check_directory_code(
+                output_dir,
+                mode,
+                plan.model(),
+                entry.source(),
+                entry.metadata().time.as_ref(),
+            )?;
         }
         if let Some(ctx) = gpu {
             check_capacity(entry, plan, &ctx.device.limits(), options.shortfall_words.as_ref())?;

@@ -73,13 +73,15 @@ is about not undoing them.
   batch over a near-zero window as a plausible-looking TPS. Go through `reset_tps_window`.
 - **A stats sample encoded while the previous readback is pending is dropped.** `CounterReadback`
   skips its copy while a map is in flight, and the stats repeat the older values with no error.
-  `stepping::submit_slice` debug-asserts against it, and `stepping::sample_stats` collects a
-  readback still in flight before it encodes its own. A poll that gives up a map unmaps the staging
-  buffer. A buffer left mapped or pending makes the next copy into it a validation error and fails
-  every later map. A host that pipelines its samples learns from the `StatsPoll` that
-  `poll_stats_readback` returns whether the latest one landed or failed. The
-  GPU tracks in `henad-explore/src/exec/gpu.rs` record no sample while one reads back, and assert
-  it outside their error scopes, where a panic would pass for a failed run.
+  `stepping::submit_slice` debug-asserts against it, and `stepping::sample_stats` and
+  `sim_thread::snapshot_blocking` collect a readback still in flight before they encode their own.
+  The runner publishes a batch's snapshot once its readback lands and before the next batch. A
+  snapshot published earlier carries the previous readback's stats under its own tick. A poll that
+  gives up a map unmaps the staging buffer. A buffer left mapped or pending makes the next copy
+  into it a validation error and fails every later map. A host that pipelines its samples learns
+  from the `StatsPoll` that `poll_stats_readback` returns whether the latest one landed or failed.
+  The GPU tracks in `henad-explore/src/exec/gpu.rs` record no sample while one reads back, and
+  assert it outside their error scopes, where a panic would pass for a failed run.
 - **A lost device fails quietly first.** After `Device::destroy` or a driver loss, polls and waits
   still succeed, and builds and readbacks fail as ordinary validation errors. wgpu reports the loss
   only through the device-lost callback, and for a destroyed device only once a poll finds its

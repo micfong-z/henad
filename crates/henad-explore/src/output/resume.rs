@@ -12,7 +12,9 @@ use std::path::Path;
 
 use henad_core::explore::outcome::RunStatus;
 use henad_core::explore::plan::{Plan, Shard};
+use henad_core::metadata::TimeScale;
 use henad_core::provenance::ModelSource;
+use serde_json::Value;
 
 use crate::output::manifest::{
     Manifest, ManifestError, ManifestMode, ManifestShard, RecordedBuild, ResultCounts, code_text, codes_differ, hex,
@@ -20,6 +22,7 @@ use crate::output::manifest::{
 use crate::output::read::{ReadError, RunRecord, RunsCsv, SeriesScan, SeriesSegment, merge_series};
 use crate::output::runs_csv::header_line;
 use crate::output::{MANIFEST_FILE, OutputDir, OutputError, RUNS_FILE, SERIES_FILE, table_paths};
+use crate::schema::time_json;
 
 /// Runs a directory holds for a resume, and the repair its tables need.
 #[derive(Debug)]
@@ -283,7 +286,7 @@ fn check_model(recorded: &Manifest, model: &str) -> Result<(), ResumeError> {
 }
 
 /// Reads the manifest of the directory at `path`, and checks the mode, the model and the model code it records, as
-/// [`ResumeScan::read`] and a search resume check them.
+/// [`ResumeScan::read`] and a search resume check them, then the time scale `time`.
 ///
 /// A resume of `mode` calls this before its probe build and its measure plan. The probe then never builds changed
 /// code. Note that the spec is planned before this check, and a spec that names a parameter or a stat that the edit
@@ -291,15 +294,50 @@ fn check_model(recorded: &Manifest, model: &str) -> Result<(), ResumeError> {
 ///
 /// # Errors
 ///
-/// Returns [`ResumeError`] when the manifest cannot be read, or records another mode, model or model code.
+/// Returns [`ResumeError`] when the manifest cannot be read, or records another mode, model, model code or time
+/// scale.
 pub(crate) fn check_directory_code(
     path: &Path,
     mode: ManifestMode,
     model: &str,
     source: &ModelSource,
+    time: Option<&TimeScale>,
 ) -> Result<(), ResumeError> {
     let recorded = Manifest::read(&path.join(MANIFEST_FILE)).map_err(ResumeError::Manifest)?;
-    check_identity(&recorded, mode, model, source)
+    check_identity(&recorded, mode, model, source)?;
+    check_time_scale(&recorded, time)
+}
+
+/// Checks that `recorded`, the manifest of a directory to resume, records the time scale `time`: the same unit and
+/// the same tick-length parameter, or no time scale for `None`.
+///
+/// The schema hash leaves the time scale out, and a compiled model's changed code only warns. A resume that changed
+/// the unit would relabel the `time` column of every run the directory holds.
+pub(crate) fn check_time_scale(recorded: &Manifest, time: Option<&TimeScale>) -> Result<(), ResumeError> {
+    let current = time.map(time_json);
+    let recorded_time = recorded.model.schema.get("time");
+    if recorded_time == current.as_ref() {
+        Ok(())
+    } else {
+        Err(ResumeError::TimeScaleChanged {
+            recorded: time_scale_text(recorded_time),
+            current: time_scale_text(current.as_ref()),
+        })
+    }
+}
+
+/// Returns the `time` object of a model schema as text naming its unit and tick-length parameter.
+fn time_scale_text(time: Option<&Value>) -> String {
+    let Some(time) = time else {
+        return "no time scale".to_owned();
+    };
+    match (
+        time.get("unit").and_then(Value::as_str),
+        time.get("tick_length").and_then(Value::as_str),
+    ) {
+        (Some(unit), Some(tick_length)) => format!("unit {unit} and tick-length parameter '{tick_length}'"),
+        _ => time.to_string(),
+    }
 }
 
 /// Checks that every session of `recorded` that wrote runs ran the code of `source`, the model that resumes, when
@@ -383,6 +421,14 @@ pub enum ResumeError {
         /// Schema hash the directory's manifest records, as 16 hexadecimal digits.
         recorded: String,
         /// Schema hash of the model passed to the resume, as 16 hexadecimal digits.
+        current: String,
+    },
+    /// A directory holding runs timed on another time scale, a unit or a tick-length parameter that the schema hash
+    /// leaves out.
+    TimeScaleChanged {
+        /// Time scale the directory's manifest records, as text naming its unit and tick-length parameter.
+        recorded: String,
+        /// Time scale of the model passed to the resume, in the same form.
         current: String,
     },
     /// A directory holding shard `recorded` of the plan, resumed as shard `current`.
@@ -471,6 +517,10 @@ impl fmt::Display for ResumeError {
                 "the directory holds runs of a different model version (schema hash {recorded}, expected \
                  {current})"
             ),
+            Self::TimeScaleChanged { recorded, current } => write!(
+                f,
+                "the directory holds runs on a different time scale ({recorded}, expected {current})"
+            ),
             Self::ShardChanged { recorded, current } => write!(
                 f,
                 "the directory holds shard {}/{}, expected shard {current}",
@@ -517,6 +567,7 @@ impl std::error::Error for ResumeError {
             | Self::ModelChanged { .. }
             | Self::CodeChanged { .. }
             | Self::SchemaChanged { .. }
+            | Self::TimeScaleChanged { .. }
             | Self::ShardChanged { .. }
             | Self::ColumnsChanged { .. }
             | Self::UnknownRun { .. }

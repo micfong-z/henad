@@ -392,6 +392,67 @@ fn a_run_to_a_tick_samples_its_stats_on_the_way() {
     }
 }
 
+/// Counts its steps as its tick, and reports the tick that [`SimState::prepare_view`] last saw as its one stat.
+#[derive(Default)]
+struct PreparedTick {
+    tick: u64,
+    prepared: u64,
+}
+
+impl SimState for PreparedTick {
+    fn step(&mut self) {
+        self.tick += 1;
+    }
+    fn tick(&self) -> u64 {
+        self.tick
+    }
+    fn prepare_view(&mut self) {
+        self.prepared = self.tick;
+    }
+    fn stats(&self) -> Vec<StatEntry> {
+        vec![StatEntry::new(
+            "Prepared tick",
+            henad_core::view::StatValue::Scalar(self.prepared as f64),
+            [0; 4],
+        )]
+    }
+    fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+        false
+    }
+    fn population(&self) -> u64 {
+        0
+    }
+    fn heap_bytes(&self) -> usize {
+        0
+    }
+}
+
+/// A run to a tick prepares the view before each sample, as a publish does, so stats computed there are those of the
+/// sample's tick.
+#[test]
+fn a_run_to_a_tick_prepares_the_view_of_each_sample() {
+    let mut thread = SimThread::new(Box::new(PreparedTick::default()), 1.0, None, FaultSink::new());
+    thread.run_to(1000);
+    let mut samples = Vec::new();
+    let reached = wait_until(|| match thread.take_snapshot() {
+        Some(snap) => {
+            samples.extend(snap.run_to_samples);
+            snap.tick == 1000
+        }
+        None => false,
+    });
+    assert!(reached, "the run never published its target");
+    assert!(!samples.is_empty(), "the run sampled nothing");
+    for sample in &samples {
+        assert_eq!(
+            sample.entries()[0].value().scalar(),
+            sample.tick() as f64,
+            "the sample at tick {} holds stats prepared at another tick",
+            sample.tick()
+        );
+    }
+}
+
 #[test]
 fn a_schedule_fires_once_per_tick_after_the_step_reaching_it() {
     let (mut thread, ticks, fired) = counter(1000.0, None);

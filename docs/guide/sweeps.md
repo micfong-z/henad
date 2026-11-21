@@ -634,6 +634,7 @@ The plan counts the runs that the directory holds and the runs left:
 
 A resume first checks that the directory holds the same sweep.
 The model and its declarations, the configs, the steps, the sampling, the stop condition and reducers, the actions, the seeds and the shard all have to match, and a resume of anything else is rejected.
+A model's time unit and tick-length parameter count among its declarations.
 Only the replicate count and the timeout can change.
 The manifest's `sessions` lists every process that wrote runs, with three builds each: Henad's build, the binary's build and the build of the crate that registered the model.
 A build records its commit, whether the sources differed from the commit, and a hash of the sources.
@@ -692,6 +693,7 @@ cargo run --release --locked -p henad-cli -- --merge shard-0 shard-1 shard-2 sha
 ```
 
 `--merge` checks that the directories hold different shards of one plan, all at one replicate count.
+The shards' models also have to share one time unit and tick-length parameter.
 It interleaves `runs.csv` and `series.csv` back into run order, rebuilds `summary.csv`, and lists the merged directories in the manifest under `merged_shards`.
 The merged CSV files are the same as those of the sweep run in one piece, apart from the timing columns.
 A merge warns when the shards ran different builds of Henad or of the model.

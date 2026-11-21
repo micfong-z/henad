@@ -11,8 +11,8 @@ use crate::output::OutputDir;
 use crate::output::manifest::ManifestStatus;
 use crate::sweep::SweepWarning;
 use crate::tests::support::{
-    OutputTables, Recorder, ScratchDir, entry, factorial, fixed, manifest, shard_options, sweep, sweep_options,
-    sweep_with, values,
+    OutputTables, Recorder, ScratchDir, entry, factorial, fixed, manifest, rewrite_manifest, shard_options, sweep,
+    sweep_options, sweep_with, values,
 };
 
 /// Returns 3 configs of SIR on a 16 by 16 grid with 3 replicates each, 9 runs.
@@ -143,4 +143,29 @@ fn a_merge_missing_a_shard_is_filled_in_by_a_resume() {
     sweep(&sir, None, &spec, &whole_dir, Concurrency::Auto);
     assert_eq!(OutputTables::read(&merged_dir), OutputTables::read(&whole_dir));
     assert_eq!(manifest(&merged_dir).status, ManifestStatus::Complete);
+}
+
+/// A merge refuses shards whose runs were timed on different time scales. The schema hash leaves the time scale out,
+/// and a compiled model's changed code only warns.
+#[test]
+fn shards_on_different_time_scales_are_refused() {
+    let sir = entry("sir", None);
+    let spec = sir_spec();
+    let scratch = ScratchDir::new("time-scale-shards");
+    let shard_dirs: Vec<PathBuf> = (0..2)
+        .map(|index| {
+            let shard_dir = scratch.path().join(format!("shard-{index}"));
+            let options = shard_options(index, 3);
+            sweep_with(&sir, None, &spec, &shard_dir, &options, &mut Recorder::default()).expect("the shard runs");
+            shard_dir
+        })
+        .collect();
+    // A build whose model counted its ticks in days wrote the second shard.
+    rewrite_manifest(&shard_dirs[1], |recorded| {
+        recorded.model.schema["time"] = serde_json::json!({ "unit": "day", "tick_length": "infection_rate" });
+    });
+    let merged_dir = scratch.path().join("merged");
+    let error = merge(&shard_dirs, &merged_dir, &mut Recorder::default()).expect_err("another time scale");
+    assert!(matches!(error, MergeError::PlanDiffers { .. }), "{error:?}");
+    assert!(!merged_dir.exists(), "a refused merge writes nothing");
 }

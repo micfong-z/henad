@@ -4,13 +4,19 @@ use serde_json::{Map, Value, json};
 
 use henad_compute::entry::ModelEntry;
 use henad_core::explore::fingerprint::schema_hash;
-use henad_core::metadata::Backend;
+use henad_core::metadata::{Backend, TimeScale};
 use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind};
 use henad_core::provenance::CodeOrigin;
 
 use crate::output::manifest::hex;
 use crate::output::series_csv::stat_column_names;
 use crate::probe::ProbeReport;
+
+/// Returns the time scale `time` as the `time` object of [`schema_json`]: its unit and the id of its tick-length
+/// parameter.
+pub(crate) fn time_json(time: &TimeScale) -> Value {
+    json!({ "unit": time.unit.as_str(), "tick_length": time.tick_length })
+}
 
 /// Version of the object [`schema_json`] returns.
 pub const SCHEMA_VERSION: u64 = 1;
@@ -54,7 +60,7 @@ pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
         schema["stat_columns"] = json!(stat_column_names(&probe.columns));
     }
     if let Some(time) = &entry.metadata().time {
-        schema["time"] = json!({ "unit": time.unit.as_str(), "tick_length": time.tick_length });
+        schema["time"] = time_json(time);
     }
     let source = entry.source();
     if source.origin() != CodeOrigin::Compiled {

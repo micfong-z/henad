@@ -8,10 +8,12 @@ use henad_compute::entry::register_grid_model;
 use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::plan::Shard;
 use henad_core::explore::spec::SweepSpec;
+use henad_core::metadata::{TimeScale, TimeUnit};
+use serde_json::json;
 
 use crate::exec::Concurrency;
 use crate::output::manifest::{BuildRole, ManifestStatus, RecordedBuild};
-use crate::output::resume::ResumeError;
+use crate::output::resume::{ResumeError, check_time_scale};
 use crate::output::{MANIFEST_FILE, OutputError, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::sweep::{ExploreError, SweepOptions, SweepWarning};
 use crate::tests::broken::DividesByParam;
@@ -155,6 +157,59 @@ fn a_resume_names_a_changed_model() {
     assert!(
         matches!(error, ExploreError::Resume(ResumeError::SchemaChanged { .. })),
         "{error:?}"
+    );
+}
+
+/// A resume refuses a directory whose runs were timed on another time scale. The schema hash leaves the time scale
+/// out, and a compiled model's changed code only warns.
+#[test]
+fn a_resume_refuses_a_changed_time_scale() {
+    let sir = entry("sir", None);
+    let spec = sir_spec(2);
+    let scratch = ScratchDir::new("resume-time-scale");
+    sweep(&sir, None, &spec, scratch.path(), Concurrency::Auto);
+
+    let timed = |unit: TimeUnit, tick_length: &str| {
+        let mut recorded = manifest(scratch.path());
+        recorded.model.schema["time"] = json!({ "unit": unit.as_str(), "tick_length": tick_length });
+        recorded
+    };
+    let days = TimeScale::new(TimeUnit::Day, "infection_rate");
+    assert!(check_time_scale(&timed(TimeUnit::Day, "infection_rate"), Some(&days)).is_ok());
+    for (recorded, what) in [
+        (timed(TimeUnit::Hour, "infection_rate"), "another unit"),
+        (timed(TimeUnit::Day, "recovery_rate"), "another tick length"),
+        (manifest(scratch.path()), "no time scale"),
+    ] {
+        assert!(
+            matches!(
+                check_time_scale(&recorded, Some(&days)),
+                Err(ResumeError::TimeScaleChanged { .. })
+            ),
+            "a directory with {what} passed"
+        );
+    }
+
+    // A build whose model counted its ticks in days wrote the directory.
+    rewrite_manifest(scratch.path(), |recorded| {
+        recorded.model.schema["time"] = json!({ "unit": "day", "tick_length": "infection_rate" });
+    });
+    let error = sweep_with(
+        &sir,
+        None,
+        &spec,
+        scratch.path(),
+        &sweep_options(true),
+        &mut Recorder::default(),
+    )
+    .expect_err("another time scale");
+    let ExploreError::Resume(error @ ResumeError::TimeScaleChanged { .. }) = error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(
+        error.to_string(),
+        "the directory holds runs on a different time scale (unit day and tick-length parameter 'infection_rate', \
+         expected no time scale)"
     );
 }
 
