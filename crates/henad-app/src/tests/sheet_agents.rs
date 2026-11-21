@@ -1,6 +1,7 @@
 //! Tests of the Sheet pane in a world of agents: the random walk's sheet built from a blank model of agents by
 //! accessible names, the number and the name of the agents, the kinds and starts of agents' properties, the ground with
-//! its marks, fading and blocked states, events, colours and buttons, and the words rule over every new section.
+//! its marks, fading and blocked states, the parameters the share kept each tick offers, events, colours and buttons,
+//! and the words rule over every new section.
 
 use egui::accesskit::Role;
 use egui::{Key, Modifiers};
@@ -390,6 +391,64 @@ fn a_share_kept_through_its_parameter_chip_stays_from_0_to_1() {
     type_into(&mut harness, "Max", "2");
     click(&mut harness, CREATE_PARAMETER);
     assert!(shows_or_notice(&mut harness, SHARE_LIMITS_OUTSIDE));
+}
+
+/// The picker of the share kept each tick leaves out a parameter whose range leaves 0 to 1, the parameter it holds
+/// included once widened past 1, and still takes a number in its place.
+#[test]
+fn a_share_kept_picker_offers_only_parameters_from_0_to_1() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    harness.open_sheet(&starter_document("ants.toml").to_text().expect("the starter writes"));
+    for (name, max) in [("Wide share", 2.0), ("Small share", 1.0)] {
+        apply_sheet_edit(
+            sheet_mut(&mut harness),
+            SheetEdit::AddParameter {
+                name: name.to_owned(),
+                parameter_type: ParameterType::Number,
+                min: 0.0,
+                max,
+                default: 0.5,
+                unit: None,
+            },
+        );
+    }
+    // Opens the picker of the chip of the share kept, and returns the names of the parameters it offers.
+    let offered = |harness: &mut Harness| -> Vec<String> {
+        let chip = named(harness, "Trail kept per tick")
+            .into_iter()
+            .find(|node| node.role == Role::Button)
+            .and_then(|node| node.bounds)
+            .expect("the chip of the share kept");
+        harness.click_at(chip.center());
+        harness
+            .settle()
+            .into_iter()
+            .filter(|node| node.dialog == "Choose a number" && node.role == Role::Button)
+            .map(|node| node.label)
+            .collect()
+    };
+    let items = offered(&mut harness);
+    assert!(items.iter().any(|item| item == "Small share"), "{items:?}");
+    assert!(items.iter().any(|item| item == "Trail kept per tick"), "{items:?}");
+    assert!(
+        !items.iter().any(|item| item == "Wide share"),
+        "a share leaves out a parameter whose Max is past 1: {items:?}"
+    );
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.settle();
+
+    // The parameter the field holds, widened past 1, leaves the picker too, which still takes a number.
+    enter_into(&mut harness, &value_field_name("Trail kept per tick"), "5");
+    assert!(sheet(&harness).has_errors());
+    let items = offered(&mut harness);
+    assert!(!items.iter().any(|item| item == "Trail kept per tick"), "{items:?}");
+    enter_in_picker(&mut harness, "Choose a number", "0.5");
+    let kept = sheet(&harness).document().ground.clone().expect("a ground").properties[1]
+        .kept_per_tick
+        .clone();
+    assert_eq!(kept, Slot::Filled(SheetValue::Literal(SheetLiteral::Number(0.5))));
 }
 
 /// A value typed for the parameter of the share kept each tick widens the parameter's range past 1, and the sheet

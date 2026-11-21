@@ -383,18 +383,20 @@ fn a_rate_picker_leaves_out_a_parameter_of_another_unit_and_a_chance_picker_ever
         "[[parameter]]",
         "[[parameter]]\nid = \"patch_size\"\nname = \"Patch size\"\ntype = \"number\"\nmin = 0\nmax = 10\n\
              default = 3\nstep = 1\nunit = \"cells\"\n\n[[parameter]]\nid = \"scale\"\nname = \"Scale\"\n\
-             type = \"number\"\nmin = 0\nmax = 1\ndefault = 0.5\nstep = 0.1\n\n[[parameter]]",
+             type = \"number\"\nmin = 0\nmax = 1\ndefault = 0.5\nstep = 0.1\n\n[[parameter]]\nid = \"drift\"\n\
+             name = \"Drift\"\ntype = \"number\"\nmin = -1\nmax = 1\ndefault = 0\nstep = 0.1\n\n[[parameter]]",
     );
     let document = document_of(&text);
     assert_eq!(
         parameters_offered(&document, Blank::Rate),
         ["Scale", "Infection rate", "Recovery rate", "Initial infected"],
-        "a rate's picker keeps the parameters per unit of time and those with no Unit"
+        "a rate's picker keeps the parameters per unit of time and those with no Unit, and leaves out Drift, whose Min \
+         is below 0"
     );
     assert_eq!(
         parameters_offered(&document, Blank::Chance),
-        ["Patch size", "Scale", "Initial infected"],
-        "a chance's picker leaves out the parameters per unit of time"
+        ["Scale", "Initial infected"],
+        "a chance's picker leaves out the parameters per unit of time, and Patch size, whose range leaves 0 to 1"
     );
 }
 

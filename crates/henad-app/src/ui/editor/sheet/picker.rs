@@ -25,12 +25,13 @@ use henad_graph::sheet::rates::parameter_rate_unit;
 use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
     ANY_STATE, ANY_STATE_ID, Blank, CHOOSE_WHEN, COMPARISONS, CONDITIONS, ConditionItem, DrawKind, FROM_LINES_ABOVE,
-    FieldPlace, LIST_GROUP, LIST_HINT, LIST_IN_ONE_NUMBER, NEW_PARAMETER, NO_NUMBER_PROPERTY_ON_SHEET,
-    NO_NUMBER_RESULT, NO_STATES, NO_STATES_PROPERTY, NO_YES_OR_NO_RESULT, OR_A_NEW_CONDITION, OTHERWISE, PARAMETERS,
-    PROPERTIES, PartPlace, PlaceTarget, REMOVE_FOR_EACH, REMOVE_FROM_LIST, STATES, Sentences, THIS_CELLS_PROPERTIES,
-    TYPE_ONE_NUMBER, USE_BUTTON, around_words, binary_formula, comparison_words, for_each_lead, literal_words,
-    my_property_item, operation_words, otherwise_description, otherwise_item_name, rate_unit_word, read_typed_number,
-    result_condition_item, result_description, shared_state_name, this_cells_property, when_lead,
+    FieldPlace, LIST_GROUP, LIST_HINT, LIST_IN_ONE_NUMBER, NEW_PARAMETER, NO_AGENT_OR_GROUND_STATES, NO_AGENT_STATES,
+    NO_NUMBER_PROPERTY_ON_SHEET, NO_NUMBER_RESULT, NO_STATES, NO_STATES_PROPERTY, NO_YES_OR_NO_RESULT,
+    OR_A_NEW_CONDITION, OTHERWISE, PARAMETERS, PROPERTIES, PartPlace, PlaceTarget, REMOVE_FOR_EACH, REMOVE_FROM_LIST,
+    STATES, Sentences, THIS_CELLS_PROPERTIES, TYPE_ONE_NUMBER, USE_BUTTON, around_words, binary_formula,
+    comparison_words, for_each_lead, literal_words, my_property_item, operation_words, otherwise_description,
+    otherwise_item_name, rate_unit_word, read_typed_number, result_condition_item, result_description,
+    shared_state_name, this_cells_property, when_lead,
 };
 use henad_graph::sheet::sentence::{
     AddItem, CHOOSE_A_SUMMARY, EVENTS, GROUND_PROPERTIES, LOOK_AT_AHEAD, LOOK_AT_HERE, LOOK_AT_PLACE, NO_EVENT,
@@ -305,8 +306,11 @@ pub struct ParameterPicker<'a> {
     pub title: &'a str,
     /// Sheet whose parameters the picker offers.
     pub document: &'a SheetDocument,
-    /// Range the Number box reads, `None` for a picker with no Number box.
-    pub number_box: Option<NumberUse>,
+    /// Use of the number the picker fills. The picker offers the parameters that fit it, as the Card pane's picker
+    /// of that number does.
+    pub number_use: NumberUse,
+    /// Whether the picker shows a Number box, which reads a number for [`Self::number_use`].
+    pub number_box: bool,
 }
 
 impl ParameterPicker<'_> {
@@ -334,7 +338,7 @@ impl ParameterPicker<'_> {
         overlay_title(ui, self.title);
         let parameters = PickerGroup {
             heading: PARAMETERS.to_owned(),
-            items: parameter_items(self.document, NumberUse::Number),
+            items: parameter_items(self.document, self.number_use),
         };
         let mut choice = groups_ui(ui, &[parameters], None);
         ui.add_space(4.0);
@@ -345,10 +349,10 @@ impl ParameterPicker<'_> {
         if overlay_item(ui, &row).clicked() {
             choice = Some(Choice::NewParameter);
         }
-        if let Some(number_use) = self.number_box {
+        if self.number_box {
             ui.add_space(6.0);
             ui.spacing_mut().item_spacing.y = 4.0;
-            if let Some(literal) = parameter_number_box(ui, number_use) {
+            if let Some(literal) = parameter_number_box(ui, self.number_use) {
                 choice = Some(Choice::Value(SheetValue::Literal(literal)));
             }
         }
@@ -400,17 +404,25 @@ fn groups_ui(ui: &mut Ui, groups: &[PickerGroup], current: Option<&str>) -> Opti
 /// Returns the parameters of `document` that a number read as `number_use` takes, each with its value and unit beside
 /// it.
 ///
-/// A rate's picker leaves out a parameter whose Unit is set and names no unit of time, and a chance's picker leaves out
-/// a rate parameter, one whose Unit names a unit of time, as "per day" does. Any other number offers every parameter.
+/// The picker offers only a parameter whose range the sheet's check accepts in that use. A chance's or a share's picker
+/// leaves out a parameter whose Min or Max lies outside 0 to 1, and a rate's picker one whose Min is below 0. A rate's
+/// picker also leaves out a parameter whose Unit is set and names no unit of time, and a chance's picker leaves out a
+/// rate parameter, one whose Unit names a unit of time, as "per day" does. A number offers every parameter.
 fn parameter_items(document: &SheetDocument, number_use: NumberUse) -> Vec<PickerItem> {
     document
         .parameters
         .iter()
-        .filter(|parameter| match number_use {
-            NumberUse::Chance => parameter_rate_unit(parameter).is_none(),
-            NumberUse::Rate => parameter.unit.is_none() || parameter_rate_unit(parameter).is_some(),
-            NumberUse::Number | NumberUse::Share => true,
-            NumberUse::Times => parameter.parameter_type == ParameterType::WholeNumber,
+        .filter(|parameter| {
+            let within_one = parameter.min >= 0.0 && parameter.max <= 1.0;
+            match number_use {
+                NumberUse::Chance => within_one && parameter_rate_unit(parameter).is_none(),
+                NumberUse::Share => within_one,
+                NumberUse::Rate => {
+                    parameter.min >= 0.0 && (parameter.unit.is_none() || parameter_rate_unit(parameter).is_some())
+                }
+                NumberUse::Number => true,
+                NumberUse::Times => parameter.parameter_type == ParameterType::WholeNumber,
+            }
         })
         .map(|parameter| {
             let value = format_number(parameter.default).unwrap_or_default();
@@ -948,15 +960,22 @@ pub fn picker_for(
     let numbers = |first: bool, number_use: NumberUse| number_picker(context, title.clone(), first, number_use, typed);
     let agents = context.agents();
     let kind = context.line.kind;
+    // The section that would hold the missing States property: the agents', or theirs and the ground's when the place
+    // takes a state of the ground too.
+    let no_states = match (agents, ground) {
+        (false, _) => NO_STATES,
+        (true, false) => NO_AGENT_STATES,
+        (true, true) => NO_AGENT_OR_GROUND_STATES,
+    };
     match want {
-        Blank::State => one_group(NO_STATES, STATES, context.states(property, ground)),
+        Blank::State => one_group(no_states, STATES, context.states(property, ground)),
         Blank::OldState => {
             let mut items = vec![PickerItem::new(ANY_STATE, Choice::AnyState)];
             items.extend(context.states(property, ground));
-            one_group(NO_STATES, STATES, items)
+            one_group(no_states, STATES, items)
         }
         Blank::StateList => {
-            let mut picker = one_group(NO_STATES, STATES, context.states(property, ground));
+            let mut picker = one_group(no_states, STATES, context.states(property, ground));
             picker.remove = filled.then_some(REMOVE_FROM_LIST);
             picker
         }

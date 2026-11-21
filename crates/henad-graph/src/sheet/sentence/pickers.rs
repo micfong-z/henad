@@ -194,6 +194,10 @@ pub const NO_YES_OR_NO_RESULT: &str = "No yes or no result above this line yet. 
                                        line.";
 /// No state for a picker of a state.
 pub const NO_STATES: &str = "No states yet. Add a States property under Cells on the sheet.";
+/// No state for a picker of a state of an agent, on a card over agents.
+pub const NO_AGENT_STATES: &str = "No states yet. Add a States property under Agents on the sheet.";
+/// No state for a picker of a state of an agent or of the ground under it, on a card over agents.
+pub const NO_AGENT_OR_GROUND_STATES: &str = "No states yet. Add a States property under Agents or Ground on the sheet.";
 
 // Messages for a typed number
 

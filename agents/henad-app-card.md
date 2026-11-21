@@ -27,7 +27,9 @@ block line's hue. Its `Popup::menu` is an `overlay`, a group of role `Dialog` na
 `add_inside_name`, with that title and, for each group of `add_inside_groups`
 (`AddButton::ADD_INSIDE_ORDER`, or the Change group alone on a card that runs once, which only a
 written file can give a When), the `AddButton::group` label and `add_items_ui`'s items, and an item
-runs `AddLine` with `inside` set to the When.
+runs `AddLine` with `inside` set to the When. The groups, and the items of each add button's menu,
+sit in `widgets::overlay_items`, a scroll area as tall as the window leaves under the title, so the
+24 items of a card over agents stay in reach of the wheel in a short window.
 
 **Rows.** `line_ui` lays a row out as columns, each a child `Ui`: the kind bar (`KIND_BAR_WIDTH` 3,
 `kind_bar_ui` over `widgets::kind_bar`, the group's word as the hover text of the bar
@@ -131,29 +133,29 @@ items (a short picker takes its own height, which a scroll area lags behind). Ea
 frameless button named by its label alone, or by `name` when that differs (the "otherwise" item),
 with grey `detail` under it. `picker_for(context, want, property, ground, filled, typed, draw)`
 builds the picker of a place from its `Blank`: states (`shared_state_name` when two properties share
-a name, with the ground's states on a card over agents only where `ground` holds),
-"any state" first for an old state, the States or Number properties, or a number's groups
-(`number_picker`: "From lines above" with "line N: [sentence]" under each result, "This cell's
-properties" as "my Food" with "this cell's Food", "Parameters" with value and unit, "New
+a name, with the ground's states on a card over agents only where `ground` holds, and with no state
+`NO_STATES` naming Cells, `NO_AGENT_STATES` Agents, or `NO_AGENT_OR_GROUND_STATES` both where
+`ground` holds), "any state" first for an old state, the States or Number properties, or a number's
+groups (`number_picker`: "From lines above" with "line N: [sentence]" under each result, "This
+cell's properties" as "my Food" with "this cell's Food", "Parameters" with value and unit, "New
 parameter...", and the Number box first and focused, or last for the value left of a comparison and
 a "for each" count). A chance reads in `NumberUse::Chance` and a rate in `NumberUse::Rate`, which
-refuse a chance outside 0 to 1 and a negative rate in the box. A typed list in a box of one
-number adds `LIST_IN_ONE_NUMBER`. A list blank offers the list box (`LIST_GROUP`, `LIST_HINT`, "2,
-3" in one go, `read_numbers`), a filled item `REMOVE_FROM_LIST`, a "for each" `for_each_lead` and
-`REMOVE_FOR_EACH`. The Number box opens on a typed number as typed (`typed_text`), and a
-refused text keeps the box focused. The boxes start afresh each time the picker opens.
+refuse a chance outside 0 to 1 and a negative rate in the box. A typed list in a box of one number
+adds `LIST_IN_ONE_NUMBER`. A list blank offers the list box (`LIST_GROUP`, `LIST_HINT`, "2, 3" in
+one go, `read_numbers`), a filled item `REMOVE_FROM_LIST`, a "for each" `for_each_lead` and
+`REMOVE_FOR_EACH`. The Number box opens on a typed number as typed (`typed_text`), and a refused
+text keeps the box focused. The boxes start afresh each time the picker opens.
 `LineContext::results_above` offers the results of lines above, a result inside a When only to the
-lines after it inside that When. `choose_when(context, otherwise)` lists the yes or no results
-as "when [name]", then "Conditions" or "Or a new condition" with `ConditionItem`s and their grey
-lines, "otherwise" in place of "always" when `otherwise_if_always` finds a higher line (the line's
+lines after it inside that When. `choose_when(context, otherwise)` lists the yes or no results as
+"when [name]", then "Conditions" or "Or a new condition" with `ConditionItem`s and their grey lines,
+"otherwise" in place of "always" when `otherwise_if_always` finds a higher line (the line's
 condition set to always on a copy of the sheet), and "at rate" only on a card that runs each tick
 (`offers_condition`), since a button's card has no duration and takes chances only. On a When line
 the items read "When ..." (`ConditionItem::label(true)`, and a result item
 `result_condition_item(name, true)`), and "always" is left out. A line inside a When takes the lead
-`when_lead` with the When's number.
-Selects list `comparison_options` (the list words of a States property), `around_options`,
-`summary_options`, `operation_options` and `unit_options` ("second" to "year", `SelectOption::Unit`
-writing `LineField::RateUnit`).
+`when_lead` with the When's number. Selects list `comparison_options` (the list words of a States
+property), `around_options`, `summary_options`, `operation_options` and `unit_options` ("second" to
+"year", `SelectOption::Unit` writing `LineField::RateUnit`).
 
 **Edits.** A choice becomes a `CardEdit`, a boxed closure of `SheetEdit`s run after the card is
 drawn through `SheetEditor::edit`, one undo step, with `After` for the focus. The closure returns
@@ -198,8 +200,9 @@ label's hover text and AccessKit description, and its `long_tick` as a second gr
 amber `rate_grow_prompt` when `rates::grow_count` finds a count, with `add_for_each_label` named
 `add_for_each_name` running `SetSlot` of the count's result in `tries_path` (`tries` or
 `condition.tries`). The unit mismatch is the checker's warning among the report's notes. A picker of
-a rate leaves out a parameter whose Unit is set and names no unit of time, and a picker of a chance
-a rate parameter (`LineContext::parameters` with `rates::parameter_rate_unit`). `run_card_edit` sets
+a rate leaves out a parameter whose Unit is set and names no unit of time or whose Min is below 0, a
+picker of a chance a rate parameter or one whose range leaves 0 to 1, and a picker of a share one
+whose range leaves 0 to 1 (`parameter_items`, `rates::parameter_rate_unit`). `run_card_edit` sets
 `CardState::tick_notice` to `tick_set_notice` when the edit gave a sheet with no `[time]` one (a
 unit chosen or a rate parameter put in), drawn above the cards with the "otherwise" notice and
 cleared by the next card edit or by `CardState::drop_tick_notice`, which the Sheet pane calls when
@@ -366,10 +369,12 @@ Refusals: `SheetEditor::refresh` adds `SheetFile::lowering_problems` to the repo
 checks and does not lower, so a lowering refusal about a line (a Set and a Steer of one property,
 Move by and Move to, a change a Repeat cannot hold) draws in red under its line, and the list under
 the panes keeps those about no line. A Count, Look around or Pick a cell inside a Repeat is a check
-error in the author's words (`LOOK_IN_REPEAT`) and draws there too. A Repeat's add-inside menu still
-offers them, as it offers the changes a Repeat cannot hold. `add_summary_ui` opens the new summary's
-value, except for a count, which has none. The author's own `note` under a line draws last, in grey
-(`author_note`).
+error in the author's words (`LOOK_IN_REPEAT`) and draws there too. The add-inside menu of a
+Repeat, or of a block inside one (`ClosingBlock::in_repeat`), shows those items weak with
+`LOOK_IN_REPEAT` as the tooltip (`looks_in_place` over `new_line`'s kind). It still offers the
+changes a Repeat cannot hold, which only the lowering refuses. `add_summary_ui` opens the new
+summary's value, except for a count, which has none. The author's own `note` under a line draws
+last, in grey (`author_note`).
 
 `src/tests/sheet_agent_lines.rs` holds
 `a_blank_agent_model_builds_the_random_walk_with_its_lines_and_equals_the_starter` and

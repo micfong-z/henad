@@ -228,6 +228,9 @@ pub fn tick_unit_choice(unit: Option<TimeUnit>) -> &'static str {
 /// Accessible name of the length of one tick, hidden while the tick has no unit.
 pub const TICK_LENGTH_NAME: &str = "Length of one tick";
 
+/// Message under the length of one tick typed as 0 or less.
+pub const TICK_LENGTH_NOT_POSITIVE: &str = "The length of one tick must be greater than 0.";
+
 /// Accessible name of the unit of one tick.
 pub const TICK_UNIT_NAME: &str = "Unit of one tick";
 
@@ -252,6 +255,10 @@ pub const SHEET_EMPTY: &str = "Every cell has the properties listed here. Add th
 ///
 /// The Parameters tab shows it as the tooltip of a slider whose tried value rebuilds the preview at tick 0.
 pub const RESTART_NOTICE: &str = "Changes restart the world from tick 0.";
+
+/// Notice while the world runs the sheet as it was before an edit that stops the sheet building.
+pub const STALE_WORLD_NOTICE: &str =
+    "The world shows the model before the last change. Fix the problems in red to update it.";
 
 /// Text of a sheet's preview while it waits for the run of another model, which Offload in the Playback tab ends.
 pub const PREVIEW_WAITS: &str =
@@ -445,8 +452,9 @@ pub const USE_A_PARAMETER: &str = "Use a parameter";
 /// Title of the picker of parameters for a field of Starts as.
 pub const CHOOSE_A_PARAMETER: &str = "Choose a parameter";
 
-/// Note on Starts as once the world is past its first tick.
-pub const START_AGAIN_TO_SEE: &str = "Press Start again to see the change.";
+/// Note on Starts as once the world is past its first tick. Playback's Build then builds the world again from tick 0
+/// with the changed start.
+pub const START_AGAIN_TO_SEE: &str = "Press Build in the Playback tab to see the change.";
 
 // Parameters on the sheet
 

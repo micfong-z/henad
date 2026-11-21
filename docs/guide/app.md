@@ -463,6 +463,8 @@ The file records the value a live edit set but not the tick it was set at, and r
 
 The <span class="ui" markdown>:material-flask-outline: Sweep</span> tab runs a [parameter sweep](sweeps.md): many runs of the model selected in the <span class="ui" markdown>:material-cog-outline: Model</span> tab, over several parameter values and seeds.
 It sits behind the <span class="ui" markdown>:material-cube-outline: Viewport</span> tab, together with <span class="ui" markdown>:material-chart-box-outline: Results</span>.
+A model in the <span class="ui" markdown>:material-code-braces: Editor</span> tab is swept once <span class="ui" markdown>:material-check: Apply</span> installs it as it reads.
+Until then the line under the Sweep tab's header reads **Model in the Editor tab is not applied. Press Apply there to sweep it.**
 A sweep started here writes the same four files as `henad-cli --out`.
 The [parameter sweeps guide](sweeps.md) covers each setting in more depth.
 

@@ -63,9 +63,9 @@ use henad_graph::sheet::sentence::{
     use_for_each_name, use_instead_label, use_instead_name,
 };
 use henad_graph::sheet::sentence::{
-    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, RANDOM_VALUE_GROUP, add_choose_row_name, add_for_each_label,
-    add_for_each_name, add_summary_name, comparison_words, fire_count, fire_count_description, include_me_tool,
-    leave_me_out_tool, long_tick_note, rate_grow_prompt, tick_set_notice,
+    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, LOOK_IN_REPEAT, RANDOM_VALUE_GROUP, add_choose_row_name,
+    add_for_each_label, add_for_each_name, add_summary_name, comparison_words, fire_count, fire_count_description,
+    include_me_tool, leave_me_out_tool, long_tick_note, rate_grow_prompt, tick_set_notice,
 };
 
 #[cfg(test)]
@@ -83,8 +83,9 @@ use super::sheet_pane::SheetTrial;
 use super::widgets::{
     ARROW_WIDTH, DialogOutcome, KIND_BAR_WIDTH, NewParameterDialog, NumberUse, OverlayItem, REGION_GAP, add_row_button,
     arrow_control, blank_shapes, blank_ui, caption, chip_with_id, dashed_rect, hairline, kind_bar, menu_button,
-    message_ui, new_parameter_modal, note_button, notice_ui, overlay, overlay_group, overlay_item, overlay_title,
-    parameter_names, refusal_text, region, select_control, select_list, set_name, small_label, text_control,
+    message_ui, new_parameter_modal, note_button, notice_ui, overlay, overlay_group, overlay_item, overlay_items,
+    overlay_title, parameter_names, refusal_text, region, select_control, select_list, set_name, small_label,
+    text_control,
 };
 use super::{LineFires, SheetEditor, accessible_group, find_property, over_agents, properties_of};
 use crate::init::semibold_font;
@@ -841,6 +842,8 @@ struct ClosingBlock {
     number: usize,
     /// Number of blocks around the lines inside the block.
     depth: usize,
+    /// Whether a line added inside the block sits inside a Repeat: the block is a Repeat, or a block inside one.
+    in_repeat: bool,
 }
 
 /// Returns the When and Repeat blocks of `lines` that close after each line, by the line's index, inner blocks first.
@@ -868,6 +871,7 @@ fn closing_blocks(relations: &CardRelations<'_>, lines: &[CardLine]) -> BTreeMap
             kind,
             number: line.number,
             depth: line.depth + 1,
+            in_repeat: kind == LineKind::Repeat || relations.repeat_of(&line.id).is_some(),
         });
     }
     for blocks in closing.values_mut() {
@@ -917,13 +921,16 @@ fn add_inside_ui(
             let menu = overlay(ui, |ui| {
                 ui.scope(|ui| {
                     overlay_title(ui, &title);
-                    let mut chosen = None;
-                    for &button in groups {
-                        overlay_group(ui, button.group());
-                        if let Some(item) = add_items_ui(ui, button, agents, states) {
-                            chosen = Some(item);
+                    let chosen = overlay_items(ui, |ui| {
+                        let mut chosen = None;
+                        for &button in groups {
+                            overlay_group(ui, button.group());
+                            if let Some(item) = add_items_ui(ui, button, agents, states, block.in_repeat) {
+                                chosen = Some(item);
+                            }
                         }
-                    }
+                        chosen
+                    });
                     (chosen, ui.unique_id())
                 })
             });
@@ -1140,12 +1147,21 @@ fn add_buttons_ui(
 /// The pattern is painted, so it stays out of the accessibility tree and the item is named by its label alone.
 fn add_menu_ui(ui: &mut Ui, button: AddButton, agents: bool, states: Option<(&str, &str)>) -> Option<AddItem> {
     overlay_title(ui, button.heading_for(agents));
-    add_items_ui(ui, button, agents, states)
+    overlay_items(ui, |ui| add_items_ui(ui, button, agents, states, false))
 }
 
 /// Draws each item of the menu of the add button `button`, on a card over agents when `agents` holds, with its pattern
 /// in grey under it, and returns the item chosen.
-fn add_items_ui(ui: &mut Ui, button: AddButton, agents: bool, states: Option<(&str, &str)>) -> Option<AddItem> {
+///
+/// Inside a Repeat (`in_repeat`), an item whose line looks around, counts or picks a cell is weak, with
+/// [`LOOK_IN_REPEAT`] as its tooltip, and adds nothing.
+fn add_items_ui(
+    ui: &mut Ui,
+    button: AddButton,
+    agents: bool,
+    states: Option<(&str, &str)>,
+    in_repeat: bool,
+) -> Option<AddItem> {
     let mut chosen = None;
     for item in button.items_for(agents) {
         let group = match item {
@@ -1162,11 +1178,21 @@ fn add_items_ui(ui: &mut Ui, button: AddButton, agents: bool, states: Option<(&s
             detail: Some(&pattern),
             ..OverlayItem::default()
         };
-        if overlay_item(ui, &row).clicked() {
+        let refused = in_repeat && looks_in_place(new_line(*item, "").kind);
+        let response = ui.add_enabled_ui(!refused, |ui| overlay_item(ui, &row)).inner;
+        if refused {
+            response.on_disabled_hover_text(LOOK_IN_REPEAT);
+        } else if response.clicked() {
             chosen = Some(*item);
         }
     }
     chosen
+}
+
+/// Returns whether a line of `kind` looks at the cells or agents around its place, which a Repeat cannot hold: a Count,
+/// a Look around or a Pick a cell.
+fn looks_in_place(kind: LineKind) -> bool {
+    matches!(kind, LineKind::Count | LineKind::LookAround | LineKind::PickCell)
 }
 
 /// Returns the second and first states of the first States property with two or more states of the kind of thing

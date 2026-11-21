@@ -54,8 +54,10 @@ node menu holds Frame, Copy, Inputs (bind to a parameter, set a constant, clear)
 (configuration keys with a short list of values), Add statistic (a tick-rate output in a stats pass)
 and Delete. A node with an error takes a red 500 stroke and a red 900 badge, a warning alone orange,
 and the badge's press frames the node, as does a press on a problem in the list under the canvas. A
-framing holds over frames until the target's rectangle stops changing. A plain click selects through
-the modifier write of record #62 around `show`. Quick-add (`quick_add.rs`) opens on the background
+framing holds over frames until the target's rectangle stops changing, and `framing_transform` fits
+it at no less than `MIN_SCALE` (0.1), the canvas's zoom floor and egui-snarl's `min_scale`, which
+clamps any lower transform on the next frame. A plain click selects through the modifier write of
+record #62 around `show`. Quick-add (`quick_add.rs`) opens on the background
 and on a dropped wire, and adds the node where the pointer was when the menu opened (`menu_origin`),
 since egui-snarl passes the menu's top left: `offered_kinds(document, Option<&Pass>, ..)` keeps the
 kinds the pass's stage (`ContextSet::allows`), backend and domain take (`fn.input` and `fn.output`

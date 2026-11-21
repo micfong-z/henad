@@ -11,6 +11,7 @@ use henad_compute::snapshot::Snapshot;
 use henad_core::action::Schedule;
 use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
+use henad_core::provenance::ModelCode;
 use henad_core::view::StatsHistory;
 
 use crate::options::Product;
@@ -792,6 +793,25 @@ impl AppState {
             .sheet()
             .and_then(|sheet| sheet.file())
             .filter(|file| entry.source().code_hash() == Some(file.code().hash()))
+    }
+
+    /// Returns whether the Editor holds a model that `entry` does not run: a model that no Apply has installed as it
+    /// now reads ([`EditorPanel::holds_unapplied`](crate::ui::editor::EditorPanel::holds_unapplied)) and that is not
+    /// the model `entry` was built from. A graph is that model when its code is, and a sheet or a grid rule when its
+    /// text is.
+    ///
+    /// A sweep of `entry` then leaves the Editor's model out.
+    pub fn editor_differs_from(&self, entry: &ModelEntry) -> bool {
+        if !self.editor.holds_unapplied() {
+            return false;
+        }
+        let source = entry.source();
+        // A graph's text holds its `[editor]` region, which its code leaves out.
+        if let Some(graph) = self.editor.model.graph() {
+            return graph.code_hash().is_none() || graph.code_hash() != source.code_hash();
+        }
+        let built_from = source.author().or_else(|| source.code()).map(ModelCode::text);
+        built_from != Some(self.editor.model.file_text().as_str())
     }
 
     /// Returns the reason Build cannot build the selection, or `None` when it can.

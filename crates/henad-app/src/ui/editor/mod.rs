@@ -38,8 +38,8 @@ use henad_graph::model_text::read_header;
 use henad_graph::sheet::document::SheetDocument;
 use henad_graph::sheet::edit::{IdSpace, mint_id};
 use henad_graph::sheet::sentence::{
-    CANCEL, DISCARD_CHANGES, PREVIEW_WAITS as SHEET_PREVIEW_WAITS, SAVE_MODEL, SHEET_EMPTY, UNSAVED_HEADING,
-    WORLD_EMPTY, unsaved_changes,
+    CANCEL, DISCARD_CHANGES, PREVIEW_WAITS as SHEET_PREVIEW_WAITS, SAVE_MODEL, SHEET_EMPTY, STALE_WORLD_NOTICE,
+    UNSAVED_HEADING, WORLD_EMPTY, unsaved_changes,
 };
 use henad_graph::sheet::{KIND_SHEET, ParsedSheet, SHEET_CODE_FORMAT};
 use henad_graph::starters::{Starter, agent_starters, starters};
@@ -76,6 +76,9 @@ const FALLBACK_FILE_NAME: &str = "model.toml";
 
 /// Line the Editor shows while the model has not been applied since it was opened, made or last edited.
 const PRESS_APPLY: &str = "Press Apply to check and install the model.";
+
+/// Notice while the preview of a graph runs the graph as it was before an edit that stops it building.
+pub const STALE_PREVIEW: &str = "Preview shows the model before the last change. Fix the problems below to update it.";
 
 /// Default height in points of the diagnostics list.
 const DIAGNOSTICS_HEIGHT: f32 = 120.0;
@@ -389,6 +392,16 @@ impl EditorPanel {
     /// Returns whether `source` is the source of the entry the last Apply installed.
     pub fn is_applied(&self, source: &ModelSource) -> bool {
         self.applied.as_ref() == Some(source)
+    }
+
+    /// Returns whether the Editor holds a model that no Apply has installed as it now reads: one not applied since it
+    /// was opened or made, one edited since its last Apply, or one the last Apply refused.
+    ///
+    /// The Editor then reads "Press Apply to check and install the model." or lists the problems that refused it.
+    pub fn holds_unapplied(&self) -> bool {
+        !self.model.is_empty()
+            && (self.applied_mark != Some(self.model.edit_mark())
+                || matches!(self.outcome, Some(ApplyOutcome::Refused(_) | ApplyOutcome::Unread(_))))
     }
 
     /// Returns whether `fault`, a fault of a run built from an entry of `source`, belongs to the last edit applied
@@ -771,7 +784,7 @@ pub fn editor_ui(ui: &mut egui::Ui, app: &mut AppState) {
         copy: copy.as_deref(),
     };
     header_ui(ui, panel, &header, &mut request);
-    status_area_ui(ui, panel, compute, &mut request);
+    status_area_ui(ui, panel, compute, past_start, &mut request);
 
     let changes = expert::shown_changes(panel);
 
@@ -1099,7 +1112,15 @@ fn starter_name(starter: &Starter) -> String {
 
 /// Draws the status area under the panes, a resizable panel that scrolls: the status of the last open or save, then
 /// the notices of the model's kind. A press on a placed problem of a grid rule sets `request`.
-fn status_area_ui(ui: &mut egui::Ui, panel: &mut EditorPanel, compute: bool, request: &mut Option<EditorRequest>) {
+///
+/// `past_start` is whether the preview of a sheet has passed tick 0 or a button was pressed in it.
+fn status_area_ui(
+    ui: &mut egui::Ui,
+    panel: &mut EditorPanel,
+    compute: bool,
+    past_start: bool,
+    request: &mut Option<EditorRequest>,
+) {
     Panel::bottom("henad_editor_diagnostics")
         .resizable(true)
         .default_size(DIAGNOSTICS_HEIGHT)
@@ -1113,7 +1134,7 @@ fn status_area_ui(ui: &mut egui::Ui, panel: &mut EditorPanel, compute: bool, req
                     if panel.model.graph().is_some() {
                         graph_outcome_ui(ui, panel);
                     } else if panel.model.sheet().is_some() {
-                        sheet_outcome_ui(ui, panel);
+                        sheet_outcome_ui(ui, panel, past_start);
                     } else {
                         outcome_ui(ui, panel, request);
                     }
@@ -1128,7 +1149,12 @@ fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
         return;
     };
     let live: Vec<CodeDiagnostic> = graph.diagnostics().cloned().collect();
-    preview_ui(ui, &panel.preview.state, true);
+    let shown = PreviewShown {
+        plays: true,
+        past_start: false,
+        stale: graph.has_errors(),
+    };
+    preview_ui(ui, &panel.preview.state, shown);
     match &panel.outcome {
         Some(outcome) => {
             outcome_line(ui, outcome);
@@ -1193,14 +1219,21 @@ fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
 /// Draws the state of the preview, the outcome of the last Apply of a sheet, every problem of the sheet's check that is
 /// not drawn on the card, and the problems that stop it lowering. A problem about a line the card shows sits under
 /// that line on the card.
-fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel) {
+///
+/// `past_start` is whether the preview has passed tick 0 or a button was pressed in it.
+fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel, past_start: bool) {
     let Some(sheet) = panel.model.sheet() else {
         return;
     };
     if sheet.shows_nothing() {
         Notice::new(NoticeKind::Info, WORLD_EMPTY).show(ui);
     } else {
-        preview_ui(ui, &panel.preview.state, false);
+        let shown = PreviewShown {
+            plays: false,
+            past_start,
+            stale: sheet.has_errors(),
+        };
+        preview_ui(ui, &panel.preview.state, shown);
     }
     // An edit past the start restarts the world, and the notice warns of the run it took away.
     if let Some(notice) = sheet.notice() {
@@ -1244,12 +1277,25 @@ fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel) {
     }
 }
 
-/// Draws the state of the preview: its size while it runs, and the problems that stopped it. `plays` is whether the
-/// preview plays once built, as a graph's does, rather than waiting at tick 0 for Play as a sheet's does.
+/// State of the model a preview line describes, beside the state of the preview.
+#[derive(Debug, Clone, Copy)]
+struct PreviewShown {
+    /// Whether the preview plays once built, as a graph's does, rather than waiting at tick 0 for Play as a sheet's
+    /// does.
+    plays: bool,
+    /// Whether the preview of a sheet has passed tick 0 or a button was pressed in it.
+    past_start: bool,
+    /// Whether the model holds a problem that stops it building. A preview that runs then runs the model as it was
+    /// before the edit that brought the problem.
+    stale: bool,
+}
+
+/// Draws the state of the preview: its size while it runs, a warning while it runs the model as it was before an edit
+/// that stops the model building, and the problems that stopped it.
 ///
 /// A sheet's problems are listed without their line and column, which point into the sheet's text.
-fn preview_ui(ui: &mut egui::Ui, state: &PreviewState, plays: bool) {
-    let sheet = !plays;
+fn preview_ui(ui: &mut egui::Ui, state: &PreviewState, shown: PreviewShown) {
+    let sheet = !shown.plays;
     let (line, problems) = match state {
         PreviewState::Idle => return,
         PreviewState::Waiting => {
@@ -1257,8 +1303,14 @@ fn preview_ui(ui: &mut egui::Ui, state: &PreviewState, plays: bool) {
             Notice::new(NoticeKind::Info, waits).show(ui);
             return;
         }
+        PreviewState::Running(_) if shown.stale => {
+            let stale = if sheet { STALE_WORLD_NOTICE } else { STALE_PREVIEW };
+            Notice::new(NoticeKind::Warning, stale).show(ui);
+            return;
+        }
         PreviewState::Running(run) => {
-            Notice::new(NoticeKind::Info, &preview_running_text(*run, plays)).show(ui);
+            let text = preview_running_text(*run, shown.plays, shown.past_start);
+            Notice::new(NoticeKind::Info, &text).show(ui);
             return;
         }
         PreviewState::Refused(problems) => ("Preview not built. Fix the problems below.", problems.as_slice()),
@@ -1276,14 +1328,16 @@ fn preview_ui(ui: &mut egui::Ui, state: &PreviewState, plays: bool) {
 }
 
 /// Returns the line of a preview that runs or waits at the size of `run`. `plays` is whether the preview plays once
-/// built.
+/// built, and `past_start` whether the preview of a sheet has passed tick 0 or a button was pressed in it.
 ///
 /// A graph's preview reads "Preview runs at 256 × 256 cells from tick 0. Press Apply to run the model at its own
-/// size." A sheet's preview waits at tick 0, and its line names Play.
-pub fn preview_running_text(run: PreviewRun, plays: bool) -> String {
+/// size." A sheet's preview waits at tick 0, and its line names Play until the world has left its start.
+pub fn preview_running_text(run: PreviewRun, plays: bool, past_start: bool) -> String {
     let size = run.size_text();
     if plays {
         format!("Preview runs at {size} from tick 0. Press Apply to run the model at its own size.")
+    } else if past_start {
+        format!("Preview runs at {size}. Press Apply to run the model at its own size.")
     } else {
         format!("Preview at {size} starts at tick 0. Press Play to run it, or Apply to run the model at its own size.")
     }

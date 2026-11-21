@@ -1,8 +1,8 @@
 //! Tests of the sheet editor in the Editor tab: a sheet opens by the `kind` in its header, previews paused at tick 0,
 //! applies and saves its canonical text, and the New model dialog opens a sheet starter under a name. The Card pane
 //! reads each line as its sentence with its notes, red chips and "otherwise", the help popovers, the words rule and the
-//! label-in-name rule hold over every starter, a note edit installs nothing, and Open in Editor in the Results tab
-//! opens the sheet a sweep recorded.
+//! label-in-name rule hold over every starter, a note edit installs nothing, Open in Editor in the Results tab opens
+//! the sheet a sweep recorded, and the Sweep tab tells a sheet it sweeps from one the Editor holds unapplied.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -23,12 +23,14 @@ use henad_graph::sheet::document::{
     LineKind, MadeOf, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, StartRule,
     StartsAs,
 };
-use henad_graph::sheet::sentence::{A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE, STARTER_CHOICES};
+use henad_graph::sheet::sentence::{
+    A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE, STALE_WORLD_NOTICE, STARTER_CHOICES,
+};
 use henad_graph::sheet::{ParsedSheet, starters};
 
 use crate::state::{AppState, PreviewRun};
 use crate::tests::panes::{
-    Seen, assert_control_holds, assert_controls_hold_their_words, assert_no_forbidden_word, shows,
+    Seen, assert_control_holds, assert_controls_hold_their_words, assert_no_forbidden_word, shows, shows_or_notice,
 };
 use crate::tests::support::{
     Harness, Node, ScratchFolder, assert_built, edited, forbidden_words, headless_app, life_with_a_skipped_line,
@@ -300,12 +302,65 @@ fn the_sheet_preview_line_names_play_and_the_graph_line_is_unchanged() {
         height: 256,
     };
     assert_eq!(
-        preview_running_text(run, false),
+        preview_running_text(run, false, false),
         "Preview at 256 × 256 cells starts at tick 0. Press Play to run it, or Apply to run the model at its own size."
     );
     assert_eq!(
-        preview_running_text(run, true),
+        preview_running_text(run, false, true),
+        "Preview runs at 256 × 256 cells. Press Apply to run the model at its own size."
+    );
+    assert_eq!(
+        preview_running_text(run, true, false),
         "Preview runs at 256 × 256 cells from tick 0. Press Apply to run the model at its own size."
+    );
+}
+
+#[test]
+fn the_preview_line_follows_the_world_past_tick_zero_and_an_edit_that_stops_the_sheet_building() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("boids.toml"));
+    settle_preview(&mut harness.app);
+    harness.app.wait_for_build();
+    let run = harness.app.preview().expect("the preview runs");
+    let at_start = preview_running_text(run, false, false);
+    let past_start = preview_running_text(run, false, true);
+    assert!(shows_or_notice(&mut harness, &at_start));
+
+    step_past(&mut harness.app, 0);
+    assert!(
+        !shows_or_notice(&mut harness, &at_start),
+        "the line no longer says the world starts at tick 0"
+    );
+    assert!(shows_or_notice(&mut harness, &past_start));
+
+    // A Set of Velocity on the card that steers it stops the sheet building, and the world runs the card before.
+    let mut set = SheetLine::new(LineKind::Set);
+    set.property = Some("velocity".to_owned());
+    set.value = Slot::Filled(SheetValue::Chip(SheetChip::My("velocity".to_owned())));
+    set.condition = Slot::Filled(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::Always))));
+    crate::tests::panes::sheet_mut(&mut harness)
+        .edit(true, false, |builder| {
+            builder
+                .apply(henad_graph::sheet::edit::SheetEdit::AddLine {
+                    card: "bird_tick".to_owned(),
+                    inside: None,
+                    line: Box::new(set),
+                })
+                .map(drop)
+        })
+        .expect("the card takes the line");
+    settle_preview(&mut harness.app);
+    assert!(sheet(&harness.app).has_errors());
+    assert!(
+        harness.app.preview().is_some(),
+        "the world of the card before the edit runs on"
+    );
+    assert!(shows_or_notice(&mut harness, STALE_WORLD_NOTICE));
+    assert!(
+        !shows_or_notice(&mut harness, &past_start),
+        "the line names no Apply that is refused"
     );
 }
 
@@ -1423,4 +1478,117 @@ fn open_in_editor_opens_the_sheet_a_sweep_recorded_or_else_its_graph() {
     app.results.begin_sweep(plan, &sir, None);
     let store = app.results.store().expect("the sweep's results");
     assert!(!store.records_editable_code() && store.editable_model().is_none());
+}
+
+#[test]
+fn the_new_model_dialog_keeps_its_buttons_in_a_short_window() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    // The app's own fonts and styles, whose dialog is taller than egui's.
+    crate::init::setup_custom_fonts(&harness.context);
+    crate::init::setup_custom_styles(&harness.context);
+    harness.screen = egui::vec2(900.0, 520.0);
+    harness.click("New model");
+    let nodes = harness.settle();
+    for button in ["Cancel", "Create"] {
+        let bounds = nodes
+            .iter()
+            .find(|node| node.label == button && node.role == egui::accesskit::Role::Button)
+            .and_then(|node| node.bounds)
+            .unwrap_or_else(|| panic!("the dialog shows {button}"));
+        assert!(
+            bounds.bottom() <= harness.screen.y && bounds.top() >= 0.0,
+            "{button} sits inside the window: {bounds:?}"
+        );
+    }
+    // The wheel over the list brings the last choice into view, and a click chooses it.
+    let first = STARTER_CHOICES[0].0;
+    let list = nodes
+        .iter()
+        .find(|node| node.label == first && node.dialog == "New model")
+        .and_then(|node| node.bounds)
+        .unwrap_or_else(|| panic!("the dialog lists {first}"))
+        .center();
+    let last = STARTER_CHOICES.last().expect("a starter").0;
+    let mut reached = None;
+    for _ in 0..20 {
+        let nodes = harness.settle();
+        let shown = nodes
+            .iter()
+            .find(|node| node.label == last && node.dialog == "New model")
+            .and_then(|node| node.bounds)
+            .unwrap_or_else(|| panic!("the dialog lists {last}"));
+        let cancel = nodes
+            .iter()
+            .find(|node| node.label == "Cancel" && node.role == egui::accesskit::Role::Button)
+            .and_then(|node| node.bounds)
+            .expect("the dialog shows Cancel");
+        if shown.bottom() <= cancel.top() {
+            reached = Some(shown.center());
+            break;
+        }
+        harness.frame(vec![egui::Event::PointerMoved(list)]);
+        harness.frame(vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -200.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+    }
+    let position = reached.unwrap_or_else(|| panic!("the wheel brings {last} into view"));
+    harness.click_at(position);
+    harness.settle();
+    let dialog = harness.app.editor.new_model.as_ref().expect("the dialog is open");
+    assert_eq!(dialog.chosen, STARTER_CHOICES.len() - 1, "{last} is chosen");
+}
+
+#[test]
+fn the_sweep_tab_knows_when_the_editor_holds_a_model_it_does_not_run() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let swept = |app: &AppState| app.selected_entry().expect("a selection").clone();
+    // A sheet opened and never applied: the selection is the example the app started with.
+    open(&mut app, starter_text("sir.toml"));
+    assert_eq!(app.selected_model.as_deref(), Some("sir"));
+    assert!(app.editor_differs_from(&swept(&app)));
+
+    // Applied, the sheet is what the Sweep tab sweeps.
+    settle_preview(&mut app);
+    app.wait_for_build();
+    apply(&mut app);
+    app.wait_for_build();
+    assert_eq!(app.selected_model.as_deref(), Some("sheet_sir"));
+    assert!(!app.editor_differs_from(&swept(&app)));
+    // Another selection leaves the applied sheet alone.
+    app.select_model("sir");
+    assert!(!app.editor_differs_from(&swept(&app)));
+    app.select_model("sheet_sir");
+
+    // An edit since the Apply is not swept until Apply installs it.
+    let EditorModel::Sheet(editor) = &mut app.editor.model else {
+        panic!("a sheet");
+    };
+    editor
+        .edit(false, false, |builder| {
+            builder
+                .apply(henad_graph::sheet::edit::SheetEdit::SetSheetName {
+                    name: "SIR with a new name".to_owned(),
+                })
+                .map(drop)
+        })
+        .expect("the name changes");
+    assert!(app.editor_differs_from(&swept(&app)));
+    apply(&mut app);
+    app.wait_for_build();
+    assert!(!app.editor_differs_from(&swept(&app)));
+
+    // Opened again from the Model tab, the sheet reads as the swept model was built.
+    open(&mut app, starter_text("game_of_life.toml"));
+    assert!(app.editor_differs_from(&swept(&app)));
+    edit_model(&mut app);
+    assert_eq!(sheet(&app).document().sheet.name, "SIR with a new name");
+    assert!(app.editor.holds_unapplied(), "the Editor asks for Apply");
+    assert!(!app.editor_differs_from(&swept(&app)));
 }

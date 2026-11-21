@@ -26,7 +26,9 @@ use henad_graph::sheet::sentence::{
 };
 
 use super::SheetEditor;
-use super::widgets::{DialogButton, DialogButtonKind, caption, choice_row, dialog_buttons, dialog_frame, dialog_title};
+use super::widgets::{
+    DialogButton, DialogButtonKind, caption, choice_row, dialog_buttons, dialog_frame, dialog_list, dialog_title,
+};
 use crate::state::AppState;
 use crate::ui::dock::Tab;
 use crate::ui::editor::{FileStatus, new_model_id};
@@ -154,17 +156,22 @@ pub fn new_model_modal(ctx: &Context, app: &mut AppState) {
         dialog_title(ui, NEW_MODEL, NEW_MODEL, DIALOG_WIDTH);
         caption(ui, START_FROM);
         ui.add_space(4.0);
-        let mut chosen = dialog.chosen;
-        for (index, choice) in dialog.choices.iter().enumerate() {
-            if choice_row(ui, &choice.name, choice.description, dialog.chosen == index).clicked() {
-                chosen = index;
+        // The Name row and the buttons, each a row after 12 points of space.
+        let below = 2.0 * (12.0 + ui.spacing().interact_size.y + ui.spacing().item_spacing.y);
+        let chosen = dialog_list(ui, below, |ui| {
+            let mut chosen = dialog.chosen;
+            for (index, choice) in dialog.choices.iter().enumerate() {
+                if choice_row(ui, &choice.name, choice.description, dialog.chosen == index).clicked() {
+                    chosen = index;
+                }
+                if choice.file_name.is_none() && dialog.chosen == index {
+                    ui.indent(("henad_new_model_choice", index), |ui| {
+                        world_question(ui, &mut dialog.made_of);
+                    });
+                }
             }
-            if choice.file_name.is_none() && dialog.chosen == index {
-                ui.indent(("henad_new_model_choice", index), |ui| {
-                    world_question(ui, &mut dialog.made_of);
-                });
-            }
-        }
+            chosen
+        });
         if chosen != dialog.chosen {
             dialog.choose(chosen);
         }

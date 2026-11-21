@@ -71,7 +71,7 @@ const FRAMING_MARGIN: f32 = 80.0;
 const UNDRAWN_NODE_SIZE: egui::Vec2 = vec2(160.0, 80.0);
 
 /// Lowest zoom of the canvas.
-pub const MIN_SCALE: f32 = 0.2;
+pub const MIN_SCALE: f32 = 0.1;
 
 /// Highest zoom of the canvas.
 pub const MAX_SCALE: f32 = 2.0;

@@ -781,6 +781,7 @@ The sheet in the manifest is then the one the latest session read.
 Its code is the code of every earlier session.
 A resume from the graph the sheet lowers to, which has the same code and no sheet, keeps the sheet the folder recorded.
 In the desktop app, open the folder in the Results tab and press <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> to see the sheet again.
+The Sweep tab sweeps a sheet once Apply in the Editor tab installs it, and an edit made since then waits for the next Apply.
 
 ## Reading the results
 

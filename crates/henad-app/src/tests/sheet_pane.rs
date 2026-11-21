@@ -1,24 +1,26 @@
 //! Tests of the Sheet pane's editing: a blank model built into Game of Life's start by accessible names, the empty
 //! world, the restart rule after the first tick, the grid limit, the New parameter dialog's starting values, the
 //! parameters, measures, colours and buttons, the model name, Undo and Redo, the rebuild of the Game of Life starter,
-//! the pane's share of the Editor's width in each layout, and the words rule over every section.
+//! the pane's share of the Editor's width in each layout, the parameters a start's chance offers beside those of the
+//! card's chance, and the words rule over every section.
 
 use egui::{Key, Modifiers};
 use henad_graph::limits::MAX_GRID_SIDE;
 use henad_graph::sheet::document::{
-    ButtonStepRule, ColorRuleKind, Edges, MeasureRule, PropertyType, ShadeHue, SheetChip, SheetLiteral, SheetValue,
-    Slot, StartRule,
+    ButtonStepRule, ColorRuleKind, Edges, MeasureRule, ParameterType, PropertyType, ShadeHue, SheetChip, SheetLiteral,
+    SheetValue, Slot, StartRule,
 };
 use henad_graph::sheet::edit::{PALETTE_COLORS, SheetEdit};
 use henad_graph::sheet::sentence::{
     ADD_BUTTON, ADD_MEASURE, ADD_PARAMETER, ADD_PROPERTY, ADD_ROW, ADD_STATE, AVERAGE_MEASURE, BLANK_MODEL_CARD,
-    BUTTON_CARD_EMPTY, BUTTON_NAME_FIELD, BUTTON_NAME_MISSING, CANCEL, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE,
-    COLOR_CELLS_BY, CREATE_PARAMETER, DARKEST_NAME, DELETE_PROPERTY, DIALOG_NAME_MISSING, DONE, EDIT, EVERY_PROPERTY,
-    INTEGER_KIND, LIGHTEST_NAME, MEASURE_ALREADY_PLOTTED, MEASURE_NEEDS_NUMBER_PROPERTY, MEASURE_NEEDS_STATE,
-    NEW_MEASURE, NEW_PARAMETER, NEW_PARAMETER_HEADING, NUMBER_KIND, PARAMETER_NAME_MISSING, PLOT, PLOT_EMPTY, PLOTTED,
-    PROPERTY_NAME_MISSING, REDO, RESTART_NOTICE, SHADE, SHADE_ENDS_EQUAL, SHEET_EMPTY, START_AGAIN_FOR,
-    START_AGAIN_TO_SEE, STATES_KIND, TYPE_A_CHANCE, TYPE_ONE_NUMBER, UNDO, USE_A_PARAMETER, WALLS_SENTENCE,
-    WORLD_EMPTY, WORLD_QUESTION, add_row_name, name_reserved, parameter_max_name, run_once, start_again_for,
+    BUTTON_CARD_EMPTY, BUTTON_NAME_FIELD, BUTTON_NAME_MISSING, Blank, CANCEL, CHANCE_LIMITS_OUTSIDE,
+    CHANCE_OUT_OF_RANGE, COLOR_CELLS_BY, CREATE_PARAMETER, DARKEST_NAME, DELETE_PROPERTY, DIALOG_NAME_MISSING, DONE,
+    DrawKind, EDIT, EVERY_PROPERTY, INTEGER_KIND, LIGHTEST_NAME, MEASURE_ALREADY_PLOTTED,
+    MEASURE_NEEDS_NUMBER_PROPERTY, MEASURE_NEEDS_STATE, MODEL_ACTIONS, NEW_MEASURE, NEW_PARAMETER,
+    NEW_PARAMETER_HEADING, NUMBER_KIND, PARAMETER_NAME_MISSING, PLOT, PLOT_EMPTY, PLOTTED, PROPERTY_NAME_MISSING, REDO,
+    RESTART_NOTICE, SHADE, SHADE_ENDS_EQUAL, SHEET_EMPTY, START_AGAIN_FOR, START_AGAIN_TO_SEE, STATES_KIND,
+    TICK_LENGTH_NOT_POSITIVE, TYPE_A_CHANCE, TYPE_ONE_NUMBER, UNDO, USE_A_PARAMETER, WALLS_SENTENCE, WORLD_EMPTY,
+    WORLD_QUESTION, add_row_name, model_name_button, name_reserved, parameter_max_name, run_once, start_again_for,
     value_slider_name, world_side_out_of_range,
 };
 use henad_graph::sheet::starters;
@@ -26,8 +28,8 @@ use henad_graph::sheet::starters;
 use crate::state::PreviewRun;
 use crate::tests::panes::{
     Seen, add_property, add_states_property, apply_sheet_edit, assert_control_holds, assert_no_forbidden_word,
-    build_life_sections, center_of, choose, click, enter_into, field_value, sheet, sheet_mut, shows_or_notice,
-    starter_document, text, type_and_enter, type_into,
+    build_life_sections, center_of, choose, click, enter_into, field_value, open_starter, picker_labels, picker_offers,
+    sheet, sheet_mut, shows_or_notice, starter_document, text, type_and_enter, type_into,
 };
 use crate::tests::support::{
     Harness, TALL_SCREEN, align_with_starter, settle_preview, starter_text, tick_zero_stat, wait_for_snapshot,
@@ -288,8 +290,13 @@ fn the_world_takes_the_engine_grid_limit_and_refuses_past_it() {
         past,
         "the field keeps the refused text"
     );
+    // Text that is no number gets the message of a side, which names whole cells, as a fraction does.
     enter_into(&mut harness, "Width in cells", "abc");
-    assert!(shows_or_notice(&mut harness, TYPE_ONE_NUMBER));
+    assert!(shows_or_notice(&mut harness, &world_side_out_of_range(MAX_GRID_SIDE)));
+    assert!(
+        !shows_or_notice(&mut harness, TYPE_ONE_NUMBER),
+        "a side's message gives no fraction as an example"
+    );
     for part in ["2.5", "50%"] {
         enter_into(&mut harness, "Width in cells", part);
         assert_eq!(
@@ -313,8 +320,20 @@ fn the_world_takes_the_engine_grid_limit_and_refuses_past_it() {
     choose(&mut harness, "Unit of one tick", "days");
     let time = sheet(&harness).document().time.expect("a time scale");
     assert_eq!((time.tick_length, time.tick_unit.as_str()), (1.0, "day"));
-    enter_into(&mut harness, "Length of one tick", "0");
-    assert_eq!(sheet(&harness).document().time.map(|time| time.tick_length), Some(1.0));
+    for length in ["0", "-2"] {
+        enter_into(&mut harness, "Length of one tick", length);
+        assert_eq!(
+            sheet(&harness).document().time.map(|time| time.tick_length),
+            Some(1.0),
+            "a length of {length} is refused"
+        );
+        assert!(shows_or_notice(&mut harness, TICK_LENGTH_NOT_POSITIVE));
+        assert_eq!(
+            field_value(&mut harness, "Length of one tick"),
+            length,
+            "the field keeps the refused text"
+        );
+    }
     enter_into(&mut harness, "Length of one tick", "7");
     assert_eq!(sheet(&harness).document().time.map(|time| time.tick_length), Some(7.0));
     choose(&mut harness, "Unit of one tick", "one step (no unit)");
@@ -1154,6 +1173,45 @@ fn the_model_name_renames_from_the_toolbar() {
 }
 
 #[test]
+fn a_long_model_name_leaves_redo_and_the_model_actions_in_a_narrow_editor() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    // A sheet with a file name and unsaved edits, whose name row holds both.
+    open_starter(&mut harness, "sir.toml");
+    let name = "Spatial SIR epidemic with waning immunity and vaccination campaigns";
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::SetSheetName { name: name.to_owned() },
+    );
+    // The app's own fonts and styles, in an Editor 640 points wide.
+    crate::init::setup_custom_fonts(&harness.context);
+    crate::init::setup_custom_styles(&harness.context);
+    harness.screen = egui::vec2(640.0, 1000.0);
+    let nodes = harness.settle();
+    for control in [REDO, MODEL_ACTIONS] {
+        let bounds = nodes
+            .iter()
+            .find(|node| node.label == control && node.role == egui::accesskit::Role::Button)
+            .and_then(|node| node.bounds)
+            .unwrap_or_else(|| panic!("the name row shows {control}"));
+        assert!(
+            bounds.right() <= harness.screen.x,
+            "{control} sits inside the Editor: {bounds:?}"
+        );
+    }
+    let button = nodes
+        .iter()
+        .find(|node| node.label == model_name_button(name))
+        .and_then(|node| node.bounds)
+        .expect("the name button keeps its whole name as its accessible name");
+    assert!(
+        button.right() <= harness.screen.x,
+        "the name ends in an ellipsis: {button:?}"
+    );
+}
+
+#[test]
 fn the_charts_tab_says_how_to_plot_while_the_sheet_has_no_measure() {
     let Some(mut harness) = blank() else {
         return;
@@ -1340,14 +1398,15 @@ fn escape_cancels_a_typed_number_and_keeps_a_typed_purpose() {
     assert_eq!(text(&harness), before, "Escape edits nothing");
     assert_eq!(field_value(&mut harness, "Width in cells"), "100");
 
+    let refused = world_side_out_of_range(MAX_GRID_SIDE);
     enter_into(&mut harness, "Width in cells", "abc");
-    assert!(shows_or_notice(&mut harness, TYPE_ONE_NUMBER));
+    assert!(shows_or_notice(&mut harness, &refused));
     click(&mut harness, "Width in cells");
     harness.press(Key::Escape, Modifiers::NONE);
     harness.settle();
     assert_eq!(field_value(&mut harness, "Width in cells"), "100");
     assert!(
-        !shows_or_notice(&mut harness, TYPE_ONE_NUMBER),
+        !shows_or_notice(&mut harness, &refused),
         "the message goes with the text"
     );
 
@@ -1412,4 +1471,84 @@ fn the_property_form_swaps_the_names_of_two_states() {
     let (_, count) = sheet(&harness).document().line("l1").expect("line 1");
     assert_eq!(count.name.as_deref(), Some("Dead neighbours"));
     assert!(!sheet(&harness).has_errors());
+}
+
+#[test]
+fn a_starts_chance_offers_no_parameter_the_check_refuses_from_its_chip_or_use_a_parameter() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "sir.toml");
+    // A parameter with no unit whose range runs past 1, which the check refuses as a chance too.
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::AddParameter {
+            name: "Herd size".to_owned(),
+            parameter_type: ParameterType::Number,
+            min: 0.0,
+            max: 5.0,
+            default: 2.0,
+            unit: None,
+        },
+    );
+    let refused = ["Infection rate", "Recovery rate", "Herd size"];
+
+    // The card's pickers leave out the same parameters, and a number takes every parameter.
+    let document = sheet(&harness).document().clone();
+    let offered = |want: Blank| -> Vec<String> {
+        picker_labels(&document, "l2", want, false, DrawKind::Chance)
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect()
+    };
+    for name in refused {
+        assert!(
+            !offered(Blank::Chance).contains(&name.to_owned()),
+            "a chance leaves out {name}"
+        );
+        assert!(
+            offered(Blank::Number).contains(&name.to_owned()),
+            "a number offers {name}"
+        );
+    }
+
+    // The chip of row 1's parameter, the leftmost of its name: the card shows one too.
+    let chip = harness
+        .settle()
+        .into_iter()
+        .filter(|node| node.label == "Initial infected" && node.role == egui::accesskit::Role::Button)
+        .filter_map(|node| node.bounds)
+        .min_by(|first, second| first.left().total_cmp(&second.left()))
+        .expect("the chip of row 1");
+    harness.click_at(chip.center());
+    assert!(picker_offers(&mut harness, "Choose a chance", "Initial infected"));
+    for name in refused {
+        assert!(
+            !picker_offers(&mut harness, "Choose a chance", name),
+            "the chip's picker leaves out {name}"
+        );
+    }
+    harness.press(Key::Escape, Modifiers::NONE);
+
+    // A typed chance offers its parameters through "Use a parameter".
+    let mut starts = sheet(&harness).document().cells.as_ref().expect("cells")[0]
+        .starts_as
+        .clone()
+        .expect("a start");
+    starts.rows[0].chance = Slot::Filled(SheetValue::Literal(SheetLiteral::Number(0.01)));
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::SetStartsAs {
+            property: "health".to_owned(),
+            starts_as: Some(Box::new(starts)),
+        },
+    );
+    click(&mut harness, "Health starts as, row 1: use a parameter");
+    assert!(picker_offers(&mut harness, "Choose a parameter", "Initial infected"));
+    for name in refused {
+        assert!(
+            !picker_offers(&mut harness, "Choose a parameter", name),
+            "Use a parameter on a chance leaves out {name}"
+        );
+    }
 }

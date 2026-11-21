@@ -1,5 +1,6 @@
 //! Tests of the Editor tab: a grid rule's model file applied to the running app, the problems of a text that is
-//! refused, a fault of the applied code, and the line of an Apply beside another model's run.
+//! refused, a fault of the applied code, the line of an Apply beside another model's run, and a graph or rule reopened
+//! from the Model tab read as the model the Sweep tab sweeps.
 
 use henad_compute::entry::ModelEntry;
 use henad_compute::fault::{BUILDING, Fault, FaultKind};
@@ -927,4 +928,40 @@ fn typing_into_an_empty_editor_starts_a_grid_rule() {
 
     editor_frame(&ctx, &mut app, vec![egui::Event::Text(" more".to_owned())]);
     assert_eq!(app.editor.model.rule_text(), Some("# typed more"));
+}
+
+#[test]
+fn a_graph_or_a_rule_reopened_from_the_model_tab_reads_as_the_model_the_sweep_tab_sweeps() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    for (kind, make) in [
+        (
+            "node graph",
+            (|app: &mut AppState| new_graph_model(app, "sir.toml")) as fn(&mut AppState),
+        ),
+        ("grid rule", new_grid_rule as fn(&mut AppState)),
+    ] {
+        make(&mut app);
+        let swept = |app: &AppState| app.selected_entry().expect("a selection").clone();
+        assert!(app.editor_differs_from(&swept(&app)), "a {kind} never applied");
+        settle_preview(&mut app);
+        app.wait_for_build();
+        apply(&mut app);
+        app.wait_for_build();
+        assert!(!app.editor_differs_from(&swept(&app)), "the applied {kind}");
+
+        // Another model in the Editor, then the applied one again through the Model tab.
+        open_text(&mut app.editor, starter_text("game_of_life.toml").to_owned(), None);
+        assert!(
+            app.editor_differs_from(&swept(&app)),
+            "a sheet beside the applied {kind}"
+        );
+        edit_model(&mut app);
+        assert!(app.editor.holds_unapplied(), "the Editor asks for Apply");
+        assert!(
+            !app.editor_differs_from(&swept(&app)),
+            "the {kind} reopened from the Model tab reads as it was built"
+        );
+    }
 }

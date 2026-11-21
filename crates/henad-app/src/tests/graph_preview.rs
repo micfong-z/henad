@@ -1,6 +1,6 @@
 //! Tests of the graph editor's live preview, its generated WGSL view and View in viewport: the preview rebuilds from
-//! tick 0 after each valid edit at a small size, takes the Viewport only from a run at tick 0 or another preview, and
-//! gives way to Apply and Build.
+//! tick 0 after each valid edit at a small size, takes the Viewport only from a run at tick 0 or another preview, gives
+//! way to Apply and Build, and its line warns while it runs the graph as it was before an invalid edit.
 
 use std::sync::Arc;
 
@@ -17,12 +17,13 @@ use henad_graph::wgsl::ShaderRole;
 use web_time::Instant;
 
 use crate::state::{AppState, PreviewRun};
+use crate::tests::panes::shows_or_notice;
 use crate::tests::support::{
-    assert_built, bind_spread_rate, graph_editor_of, headless_app, n, settle_preview, step_past,
+    Harness, assert_built, bind_spread_rate, graph_editor_of, headless_app, n, settle_preview, step_past,
 };
 use crate::ui::editor::graph::{GraphEdit, GraphEditor, GraphRequest};
 use crate::ui::editor::preview::{DEBOUNCE, PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState, poll_at, preview_values};
-use crate::ui::editor::{ApplyOutcome, apply, new_graph_model, new_grid_rule};
+use crate::ui::editor::{ApplyOutcome, STALE_PREVIEW, apply, new_graph_model, new_grid_rule, preview_running_text};
 use crate::ui::playback::{PREVIEW_APPLY, PREVIEW_ORPHANED, preview_hover, run_refusal};
 
 /// Returns an app over the example models on a headless device that runs compute shaders, with the SIR starter in the
@@ -247,6 +248,37 @@ fn an_invalid_edit_leaves_the_preview_running() {
     assert_eq!(app.loaded_entry().map(|entry| entry.source()), Some(&running));
     assert!(app.sim_thread.is_some(), "the preview kept running");
     assert!(matches!(app.editor.preview.state, PreviewState::Running(_)));
+}
+
+#[test]
+fn the_preview_line_warns_while_the_preview_runs_the_graph_before_an_invalid_edit() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    new_graph_model(&mut harness.app, "sir.toml");
+    settle_preview(&mut harness.app);
+    harness.app.wait_for_build();
+    let run = harness.app.preview().expect("the preview runs");
+    let running = preview_running_text(run, true, false);
+    assert!(shows_or_notice(&mut harness, &running));
+    assert!(!shows_or_notice(&mut harness, STALE_PREVIEW));
+
+    let ran = graph(&mut harness.app).edit(
+        vec![EditCommand::Disconnect {
+            scope: Scope::pass("step"),
+            node: n(15),
+            port: "b".to_owned(),
+        }],
+        None,
+    );
+    assert!(ran && graph(&mut harness.app).has_errors());
+    settle_preview(&mut harness.app);
+    assert!(matches!(harness.app.editor.preview.state, PreviewState::Running(_)));
+    assert!(shows_or_notice(&mut harness, STALE_PREVIEW));
+    assert!(
+        !shows_or_notice(&mut harness, &running),
+        "the line names no Apply of the graph before the edit"
+    );
 }
 
 #[test]

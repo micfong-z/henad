@@ -161,6 +161,12 @@ pub const MODEL_NAME_FIELD: &str = "Model name";
 /// Tooltip of the button that shows the model's name.
 pub const RENAME_MODEL_TOOLTIP: &str = "Rename model";
 
+/// Returns the tooltip of the button that shows the model's name `name` cut short to fit its row, such as "Rename
+/// Spatial SIR epidemic with waning immunity".
+pub fn rename_model_named(name: &str) -> String {
+    format!("Rename {name}")
+}
+
 /// Button that undoes the last edit.
 pub const UNDO: &str = "Undo";
 

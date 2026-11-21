@@ -7,6 +7,11 @@ area holding the form or the progress. The header and footer keep their ids and 
 state, and the last slot of the footer holds Start, then Pause or Resume, then Show results. A
 press or a link sends a `SweepRequest`, applied once every panel has drawn. `dock.rs` turns off
 `egui_dock`'s scroll bars for the tab and titles it with the session's state, as in "Sweep 42%".
+The builder's header line reads `header::EDITOR_NOT_APPLIED` in the warning colour, unless a
+notification or a browser's GPU refusal takes the line, while `AppState::editor_differs_from` holds
+for the swept entry: the Editor holds a model `EditorPanel::holds_unapplied` (never applied, edited
+since Apply, or refused) that the entry was not built from: a graph whose `code_hash` differs, or a
+sheet or grid rule whose text is not the entry's author text, or else its code.
 `draft/` is pure and unit-tested: a `SweepDraft` per model holds the builder's fields as typed,
 level text read by `LevelSpec::parse`, and converts to a `SweepSpec` (the Parameters panel values
 fill every parameter it does not vary) and back, TOML through

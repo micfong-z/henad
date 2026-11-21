@@ -28,7 +28,9 @@ pub mod widgets;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 
-use egui::{Button, CentralPanel, Frame, Key, Margin, Panel, RichText, ScrollArea, TextEdit, UiBuilder};
+use egui::{
+    Button, CentralPanel, Color32, Frame, Key, Margin, Panel, RichText, ScrollArea, TextEdit, TextStyle, UiBuilder,
+};
 use henad_compute::entry::ModelEntry;
 use henad_compute::snapshot::Snapshot;
 use henad_core::diagnostic::CodeDiagnostic;
@@ -42,7 +44,7 @@ use henad_graph::sheet::document::{
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit, SheetEditError};
 use henad_graph::sheet::sentence::{
     CONVERT_HEADING, DIAGRAM, DIAGRAM_TOOLTIP, LINES_VIEW, MODEL_ACTIONS, MODEL_NAME_FIELD, REDO, REDO_TOOLTIP,
-    RENAME_MODEL_TOOLTIP, RESTART_NOTICE, UNDO, UNDO_TOOLTIP, converted_link, model_name_button,
+    RENAME_MODEL_TOOLTIP, RESTART_NOTICE, UNDO, UNDO_TOOLTIP, converted_link, model_name_button, rename_model_named,
 };
 use henad_graph::sheet::{ParsedSheet, SheetFile};
 
@@ -64,6 +66,9 @@ const SHEET_PANE_SHARE: f32 = 0.4;
 
 /// Narrowest width in points of each pane.
 const PANE_MIN_WIDTH: f32 = 160.0;
+
+/// Narrowest width in points of the model's name in the name row, before it ends in an ellipsis.
+const NAME_MIN_WIDTH: f32 = 80.0;
 
 /// Returns the id of the Sheet pane in `layout`, one per layout.
 ///
@@ -593,6 +598,7 @@ fn name_row_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &NameRow<'_>, 
     let past_start = shown.past_start;
     let refusal = shown.refusal;
     let name = sheet.document().sheet.name.clone();
+    let trailing_id = ui.id().with("henad_name_row_trailing");
     if let Some(text) = &mut sheet.renaming {
         let field = ui.add(TextEdit::singleline(text).desired_width(200.0));
         widgets::set_name(ui, field.id, MODEL_NAME_FIELD);
@@ -612,18 +618,13 @@ fn name_row_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &NameRow<'_>, 
             }
         }
     } else {
-        let words = RichText::new(&name).color(ui.visuals().text_color());
-        let button = add_button(
-            ui,
-            true,
-            Button::new(words).frame_when_inactive(false),
-            &model_name_button(&name),
-        )
-        .on_hover_text(RENAME_MODEL_TOOLTIP);
+        let trailing = ui.data(|data| data.get_temp::<f32>(trailing_id)).unwrap_or_default();
+        let button = name_button_ui(ui, &name, trailing);
         if button.clicked() {
             sheet.renaming = Some(name);
         }
     }
+    let after_name = ui.cursor().left();
     if shown.unsaved {
         widgets::unsaved_mark(ui);
     }
@@ -666,6 +667,43 @@ fn name_row_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &NameRow<'_>, 
         }
     });
     menu.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, MODEL_ACTIONS));
+    let trailing = ui.cursor().left() - after_name;
+    ui.data_mut(|data| data.insert_temp(trailing_id, trailing));
+}
+
+/// Adds the button that shows the model's name `name` and opens the field that renames it, and returns its response.
+///
+/// The name leaves `trailing` points of the row, the width the rest of the row took on the frame before, and ends in an
+/// ellipsis past them. Its tooltip then names it in full.
+fn name_button_ui(ui: &mut egui::Ui, name: &str, trailing: f32) -> egui::Response {
+    let room = (ui.available_width() - trailing).max(NAME_MIN_WIDTH);
+    let full = ui
+        .painter()
+        .layout_no_wrap(
+            name.to_owned(),
+            TextStyle::Button.resolve(ui.style()),
+            Color32::PLACEHOLDER,
+        )
+        .size()
+        .x
+        + 2.0 * ui.spacing().button_padding.x;
+    let tooltip = if full > room {
+        rename_model_named(name)
+    } else {
+        RENAME_MODEL_TOOLTIP.to_owned()
+    };
+    let words = RichText::new(name).color(ui.visuals().text_color());
+    ui.scope(|ui| {
+        ui.set_max_width(room);
+        add_button(
+            ui,
+            true,
+            Button::new(words).frame_when_inactive(false).truncate(),
+            &model_name_button(name),
+        )
+    })
+    .inner
+    .on_hover_text(tooltip)
 }
 
 /// Returns `document` with no name, no purpose and no property holding a start.

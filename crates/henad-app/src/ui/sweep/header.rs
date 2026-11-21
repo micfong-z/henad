@@ -17,6 +17,9 @@ use crate::ui::sweep::session::SessionState;
 /// Id of the header panel.
 pub const HEADER_ID: &str = "henad_sweep_header";
 
+/// Line under the header while the Editor holds a model that no Apply has installed as it now reads.
+pub const EDITOR_NOT_APPLIED: &str = "Model in the Editor tab is not applied. Press Apply there to sweep it.";
+
 /// Space above and below the header's two rows, in points.
 const HEADER_MARGIN_Y: i8 = 2;
 
@@ -44,6 +47,8 @@ pub struct BuilderHeader<'a> {
     pub notification: Option<&'a str>,
     /// Whether the model cannot be swept in a browser, as for a GPU model.
     pub gpu_refused: bool,
+    /// Whether the Editor holds a model the sweep leaves out, one that no Apply has installed as it now reads.
+    pub editor_not_applied: bool,
     /// Program that the advice refers to, `None` when the product has no command-line program.
     pub cli_command: Option<&'a str>,
     /// Whether the Plan panel fits beside the form, and its toggle shows.
@@ -97,6 +102,11 @@ pub fn builder_header(
                 cli_phrase(header.cli_command)
             ),
             color: Some(ui.visuals().error_fg_color),
+        }
+    } else if header.editor_not_applied {
+        Line {
+            text: EDITOR_NOT_APPLIED.to_owned(),
+            color: Some(ui.visuals().warn_fg_color),
         }
     } else {
         Line {
@@ -316,8 +326,39 @@ fn status_badge(ui: &mut egui::Ui, state: SessionState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{edit_label, header_height, is_failure};
+    use super::{BuilderHeader, EDITOR_NOT_APPLIED, builder_header, edit_label, header_height, is_failure};
+    use crate::tests::support::accessible_texts;
     use crate::ui::sweep::draft::ExploreMode;
+
+    #[test]
+    fn the_line_under_the_header_names_an_unapplied_editor_model_unless_a_notification_shows() {
+        let shows_warning = |editor_not_applied: bool, notification: Option<&str>| {
+            let header = BuilderHeader {
+                model_name: "SIR epidemic",
+                notification,
+                gpu_refused: false,
+                editor_not_applied,
+                cli_command: None,
+                plan_fits: true,
+            };
+            let texts = accessible_texts(
+                |ui| {
+                    let mut mode = ExploreMode::Sweep;
+                    let mut plan_open = false;
+                    let mut request = None;
+                    builder_header(ui, &header, &mut mode, &mut plan_open, &mut request);
+                },
+                |node| node.value().or_else(|| node.label()),
+            );
+            texts.iter().any(|text| text == EDITOR_NOT_APPLIED)
+        };
+        assert!(shows_warning(true, None));
+        assert!(!shows_warning(false, None));
+        assert!(
+            !shows_warning(true, Some("Loaded sir.toml")),
+            "a notification shows in its place"
+        );
+    }
 
     #[test]
     fn the_header_holds_two_rows_and_its_separator() {

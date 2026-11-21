@@ -1,5 +1,6 @@
 //! Tests of the graph canvas on a headless egui context with synthetic input: the canvas follows the document, every
-//! gesture reaches it as an edit command, and the egui-snarl traps of record #62 stay guarded.
+//! gesture reaches it as an edit command, the egui-snarl traps of record #62 stay guarded, and Frame all fits a wide
+//! converted sheet.
 
 use egui::epaint::ClippedShape;
 use egui::{Event, Key, Modifiers, Pos2, Rect, Shape, vec2};
@@ -544,4 +545,15 @@ fn every_starter_opens_with_no_node_over_another() {
             }
         }
     }
+}
+
+#[test]
+fn frame_all_fits_a_converted_sheet_wider_than_the_canvas() {
+    // The frames of the SIR sheet converted to a node graph, 2974 by 992 canvas points, in the 547 point wide canvas of
+    // a window 1280 by 800 points.
+    let target = Rect::from_min_size(Pos2::ZERO, vec2(2974.0, 992.0));
+    let canvas = Rect::from_min_size(Pos2::new(253.0, 120.0), vec2(547.0, 600.0));
+    let transform = crate::ui::editor::graph::canvas::framing_transform(target, canvas);
+    let shown = transform * target;
+    assert!(canvas.contains_rect(shown), "{shown:?} fits in {canvas:?}");
 }

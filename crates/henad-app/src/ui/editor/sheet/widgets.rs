@@ -56,6 +56,10 @@ pub const OVERLAY_PADDING: f32 = 6.0;
 /// Height in points of an item of an overlay with no grey words under it.
 const OVERLAY_ROW: f32 = 22.0;
 
+/// Space in points an overlay whose items scroll leaves between its frame and an edge of the window. The popup's area
+/// keeps the overlay inside the window, against its other edge.
+const OVERLAY_SCREEN_GAP: f32 = 8.0;
+
 /// Width in points of the column at the left of an overlay's items that holds the check of the current value.
 const MARK_COLUMN: f32 = 16.0;
 
@@ -164,6 +168,24 @@ pub fn overlay<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
             ui.spacing_mut().item_spacing.y = 0.0;
             add(ui)
         })
+        .inner
+}
+
+/// Draws `add`, the items of an overlay under its title, in a vertical scroll area as tall as the window leaves for
+/// them, and returns what `add` returns. A short list takes its own height and shows no scroll bar.
+///
+/// The overlay then fits in the window, and the wheel brings its last item into view.
+pub fn overlay_items<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    // The title above the cursor, and the overlay's padding and border at both ends, take the rest of the window.
+    let above = ui.cursor().top() - ui.max_rect().top() + OVERLAY_PADDING + 1.0;
+    let below = OVERLAY_PADDING + 1.0;
+    let room = (ui.ctx().content_rect().height() - OVERLAY_SCREEN_GAP - above - below).max(3.0 * OVERLAY_ROW);
+    // The popup's area holds the size of its first frame as the room it offers. The scroll area takes `room`
+    // whatever the area offers, and shrinks to a shorter list.
+    egui::ScrollArea::vertical()
+        .max_height(room)
+        .min_scrolled_height(room)
+        .show(ui, add)
         .inner
 }
 
@@ -848,10 +870,31 @@ impl<'a> Notice<'a> {
 /// Margin in points between a dialog's border and what it holds.
 const DIALOG_MARGIN: i8 = 12;
 
+/// Space in points a dialog whose list scrolls leaves between its frame and the window's top and bottom edges.
+const DIALOG_SCREEN_GAP: f32 = 8.0;
+
 /// Returns the frame of a dialog: the theme's window fill inside the overlay's 1 point gray 600 border, with no shadow
 /// and 12 points of margin.
 pub fn dialog_frame(ctx: &egui::Context) -> Frame {
     Frame::popup(&ctx.global_style()).inner_margin(Margin::same(DIALOG_MARGIN))
+}
+
+/// Draws `add`, the list of a dialog, in a vertical scroll area as tall as the window leaves for it, and returns what
+/// `add` returns. `below` is the height in points of what the dialog draws under the list. A short list takes its own
+/// height and shows no scroll bar.
+///
+/// The dialog then fits in the window, with its buttons in view.
+pub fn dialog_list<R>(ui: &mut Ui, below: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let above = ui.cursor().top() - ui.max_rect().top();
+    let frame = 2.0 * (f32::from(DIALOG_MARGIN) + 1.0);
+    let room =
+        (ui.ctx().content_rect().height() - 2.0 * DIALOG_SCREEN_GAP - frame - above - below).max(3.0 * OVERLAY_ROW);
+    // The modal's area holds the size of its first frame as the room it offers, as an overlay's popup does.
+    egui::ScrollArea::vertical()
+        .max_height(room)
+        .min_scrolled_height(room)
+        .show(ui, add)
+        .inner
 }
 
 /// Starts a dialog `width` points wide named `name` with the role of a dialog, and draws its title: `title` as a small

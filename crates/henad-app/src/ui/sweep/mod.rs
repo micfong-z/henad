@@ -624,6 +624,7 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
     let schema = entry.schema();
     let wake = app.repaint_waker();
     let label = model_label(app, entry.id(), entry.name());
+    let editor_not_applied = app.editor_differs_from(entry);
     app.sweep.learn_stat_columns(entry, &wake);
     // Every text the panels draw is built here. The form borrows the draft once they have drawn.
     let check = app.sweep.cached_check(&schema, &app.param_values);
@@ -663,6 +664,7 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
             model_name: &label,
             notification: status.as_deref(),
             gpu_refused: cfg!(target_arch = "wasm32") && entry.metadata().backend == Backend::Gpu,
+            editor_not_applied,
             cli_command: cli_command.as_deref(),
             plan_fits: form.plan_fits,
         };

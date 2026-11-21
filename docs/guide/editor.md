@@ -85,6 +85,7 @@ In the purpose, <kbd>Enter</kbd> starts a new line, and <kbd>Escape</kbd> applie
 With **Wrap around**, the left edge joins the right edge and the top edge joins the bottom.
 With **Walls**, cells on an edge have fewer cells around them.
 **One tick is** reads "one step (no unit)" until you give a tick a length, such as 1 day.
+The length must be greater than 0.
 
 **Cells** lists every property a cell has, with its kind, how it starts and the lines that change it.
 Press **+ Add property** for a property of a few named states, such as Dead and Alive, or of a number.
@@ -181,6 +182,7 @@ A new rate starts in the unit of one tick.
 A parameter put into a rate gives the line its unit, read from the first "per day" or the like in the parameter's Unit.
 A parameter with no Unit takes the line's unit instead, such as "per day", and one Undo takes back both.
 A rate's picker lists the parameters whose Unit names a unit of time or none, and a chance's picker leaves out those that name one.
+A picker also leaves out a parameter whose range the line cannot use: a Min below 0 for a rate, and a Min or Max outside 0 to 1 for a chance.
 The unit select on the line sets a unit by hand.
 If one tick has no length yet, choosing a unit sets one tick to 1 of it, and a notice says so: "One tick is now 1 day. Change it on the sheet."
 
@@ -284,6 +286,7 @@ Boids, built from a blank model of agents:
 A card changes a property one way: by Set or by Steer, and an agent's place by Move by or by Move to.
 A second way shows under its line in red, such as "Line 3 steers Velocity. This card cannot also set it.", and the model does not build until it is gone.
 A look around, a count or a pick of a cell inside a Repeat shows "A look around, a count or a pick of a cell cannot be used inside a Repeat." under its line.
+The **+ Add inside** menu of a Repeat shows Count, Look around and Pick a cell greyed out, with that message as their tooltip.
 
 ### The line menu
 
@@ -323,6 +326,9 @@ Press Play in the Playback tab to run it, or type a tick into **Run to tick** an
 A tick behind the current one starts the preview again from the same start first.
 Until the first tick, a change redraws the start.
 After it, a change that builds starts the world again from tick 0, and a notice says so.
+Once the world has left tick 0, the line under the panes reads **Preview runs at 256 × 256 cells. Press Apply to run the model at its own size.**
+A change that stops the sheet building leaves the world running the sheet as it was, and the line reads **The world shows the model before the last change. Fix the problems in red to update it.**
+After the first tick, a change of **Starts as** waits, and reads "Press Build in the Playback tab to see the change." under its property.
 Press <span class="ui" markdown>:material-check: Apply</span> to install the model at its own size, and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the sheet as a model file.
 A model made from a starter keeps the starter's id, and a blank model takes the id its name gives, such as `harbour_seals` for Harbour seals.
 Where a model built into the app already holds that id, such as the example model Game of Life holds `game_of_life`, the new model takes `sheet_` before it.

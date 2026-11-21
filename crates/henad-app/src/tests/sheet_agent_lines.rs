@@ -1,7 +1,8 @@
 //! Tests of writing the lines of a card over agents: the random walk and boids rebuilt from a blank model of agents by
 //! accessible names, "my new Velocity" offered only below the last change to Velocity, the refusals of a property
 //! changed two ways and of a look inside a Repeat shown on their lines, the words rule over every agent menu and
-//! picker opened on the way, and the Number box opening on a number typed in each kind of agent slot.
+//! picker opened on the way, the Number box opening on a number typed in each kind of agent slot, and a block's add
+//! menu that scrolls to its last item in a short window.
 
 use egui::{Key, Modifiers};
 use henad_graph::sheet::check::check;
@@ -11,16 +12,16 @@ use henad_graph::sheet::document::{
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit};
 use henad_graph::sheet::sentence::{
     ADD_BUTTON, ARROW_KIND, AddButton, BUTTON_NAME_FIELD, Blank, CHOOSE_WHEN, CREATE_PARAMETER, DONE, DrawKind,
-    LOOK_IN_REPEAT, NEW_PARAMETER, NUMBER_BOX_HINT, OR_A_NEW_VALUE, PlaceTarget, Sentences, add_property_name,
-    add_summary_name, moved_by_already, run_once, sheet_parameter_name_field, steered_already, value_field_name,
-    value_slider_name,
+    LOOK_IN_REPEAT, NEW_PARAMETER, NO_AGENT_OR_GROUND_STATES, NO_AGENT_STATES, NO_STATES, NUMBER_BOX_HINT,
+    OR_A_NEW_VALUE, PlaceTarget, Sentences, add_property_name, add_summary_name, moved_by_already, run_once,
+    sheet_parameter_name_field, steered_already, value_field_name, value_slider_name,
 };
 
 use crate::tests::panes::{
-    Seen, add_average_measure, add_property, agent_sheet, assert_controls_hold_their_words, assert_no_forbidden_word,
-    click, click_in, click_last, click_on_line, document_of, field_value, is_open, labels_of, line_picker, line_text,
-    named, new_blank_agents, open_starter, pick, picker_labels, picker_offers, sheet, shows, starter_document,
-    text_and_code, type_and_enter, type_into,
+    Seen, add_average_measure, add_property, agent_sheet, apply_sheet_edit, assert_controls_hold_their_words,
+    assert_no_forbidden_word, click, click_in, click_last, click_on_line, document_of, field_value, is_open, labels_of,
+    line_picker, line_text, named, new_blank_agents, open_starter, pick, picker_labels, picker_offers, sheet,
+    sheet_mut, shows, starter_document, text_and_code, type_and_enter, type_into,
 };
 use crate::tests::support::{Harness, align_with_starter, edited, starter_text};
 use crate::ui::editor::sheet::card_pane::{NoteColor, card_lines};
@@ -1017,4 +1018,155 @@ fn a_typed_number_inside_a_row_of_a_choose_opens_in_the_number_box() {
     // Line 7 compares Way's amount with 0 inside the condition of its first row, `row.0.condition.items.0.right`.
     open_starter(&mut harness, "ants.toml");
     assert_eq!(open_typed(&mut harness, "0", "Line 7"), "0");
+}
+
+/// Moves the pointer to `position` and turns the mouse wheel by `delta` points there.
+fn wheel_at(harness: &mut Harness, position: egui::Pos2, delta: f32) {
+    harness.frame(vec![egui::Event::PointerMoved(position)]);
+    harness.frame(vec![egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, delta),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    }]);
+}
+
+#[test]
+fn the_add_inside_menu_of_an_agent_card_fits_a_short_window_and_scrolls_to_its_last_item() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    // The Editor tab of a window 1500 by 950 points.
+    harness.screen = egui::vec2(938.0, 904.0);
+    open_starter(&mut harness, "random_walk.toml");
+    harness.settle();
+    let dialog = "Add a line inside line 1";
+    click(&mut harness, "+ Add inside line 1");
+    assert!(is_open(&mut harness, dialog));
+    let mut reached = None;
+    for _ in 0..30 {
+        let nodes = harness.settle();
+        let menu = nodes
+            .iter()
+            .find(|node| node.role == egui::accesskit::Role::Dialog && node.label == dialog)
+            .and_then(|node| node.bounds)
+            .expect("the menu is open");
+        assert!(
+            menu.bottom() <= harness.screen.y && menu.top() >= 0.0,
+            "the menu fits in the window: {menu:?}"
+        );
+        let item = nodes
+            .iter()
+            .find(|node| node.label == "Depending on" && node.dialog == dialog)
+            .and_then(|node| node.bounds)
+            .expect("the menu lists Depending on");
+        if item.bottom() <= menu.bottom() {
+            reached = Some(item.center());
+            break;
+        }
+        wheel_at(&mut harness, menu.center(), -200.0);
+    }
+    let position = reached.expect("the wheel brings the last item of the menu into view");
+    harness.click_at(position);
+    harness.settle();
+    let document = sheet(&harness).document();
+    let (_, repeat) = document.line("l1").expect("the Repeat");
+    assert!(
+        repeat.lines.iter().any(|id| document
+            .line(id)
+            .is_some_and(|(_, line)| line.kind == LineKind::DependingOn)),
+        "the Depending on line sits inside the Repeat: {:?}",
+        repeat.lines
+    );
+}
+
+#[test]
+fn a_repeats_add_menu_offers_its_looks_weak_with_the_reason() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "random_walk.toml");
+    let dialog = "Add a line inside line 1";
+    click(&mut harness, "+ Add inside line 1");
+    assert!(is_open(&mut harness, dialog));
+    let nodes = harness.settle();
+    let item = |label: &str| {
+        nodes
+            .iter()
+            .find(|node| node.label == label && node.dialog == dialog)
+            .unwrap_or_else(|| panic!("the menu lists {label}"))
+            .clone()
+    };
+    for label in ["Count", "Look around", "Pick a cell"] {
+        assert!(item(label).disabled, "{label} cannot sit inside a Repeat");
+    }
+    for label in ["The cell here or ahead", "Move by", "Calculate"] {
+        assert!(!item(label).disabled, "{label} can sit inside a Repeat");
+    }
+    let lines = sheet(&harness).document().cards[0].lines.clone();
+    let count = item("Count").bounds.expect("bounds").center();
+    harness.click_at(count);
+    harness.settle();
+    assert_eq!(
+        sheet(&harness).document().cards[0].lines,
+        lines,
+        "a weak item adds nothing"
+    );
+    assert_eq!(
+        sheet(&harness).document().line("l1").expect("the Repeat").1.lines,
+        ["l2"],
+        "a weak item adds nothing inside the Repeat"
+    );
+
+    // A When inside the Repeat holds its lines inside the Repeat too.
+    harness.press(Key::Escape, Modifiers::NONE);
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::AddLine {
+            card: "walker_tick".to_owned(),
+            inside: Some("l1".to_owned()),
+            line: Box::new(SheetLine::new(LineKind::When)),
+        },
+    );
+    let dialog = "Add a line inside line 3";
+    click(&mut harness, "+ Add inside line 3");
+    assert!(is_open(&mut harness, dialog));
+    let nodes = harness.settle();
+    let count = nodes
+        .iter()
+        .find(|node| node.label == "Count" && node.dialog == dialog)
+        .expect("the When's menu lists Count");
+    assert!(count.disabled, "Count cannot sit in a When inside a Repeat");
+}
+
+#[test]
+fn a_state_picker_on_an_agent_card_with_no_states_points_at_the_agents_section() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    let mut seen = Seen::default();
+    open_starter(&mut harness, "random_walk.toml");
+    add_agent_line(&mut harness, &mut seen, AddButton::Chance, "Become, with chance", false);
+    if !is_open(&mut harness, "Choose a state") {
+        click(&mut harness, "Line 3: choose a state");
+    }
+    assert!(is_open(&mut harness, "Choose a state"));
+    assert!(
+        shows(&mut harness, NO_AGENT_STATES),
+        "the picker names the Agents section"
+    );
+    assert!(!shows(&mut harness, NO_STATES), "the picker names no Cells section");
+
+    // A place that takes a state of the ground as well names both sections, and a card over cells names Cells.
+    let walk = starter_document("random_walk.toml");
+    let empty = |document: &SheetDocument, line: &str, ground: bool| {
+        line_picker(document, line, |context| {
+            picker_for(context, Blank::State, None, ground, false, "", DrawKind::Chance)
+        })
+        .empty
+    };
+    assert_eq!(empty(&walk, "l2", true), NO_AGENT_OR_GROUND_STATES);
+    assert_eq!(empty(&walk, "l2", false), NO_AGENT_STATES);
+    let life = starter_document("game_of_life.toml");
+    assert_eq!(empty(&life, "l1", false), NO_STATES);
 }

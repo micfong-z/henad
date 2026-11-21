@@ -30,9 +30,9 @@ use henad_graph::sheet::rates::chance_line_numbers;
 use henad_graph::sheet::sentence::{AGENT_WALLS_SENTENCE, AGENT_WRAP_TOOLTIP};
 use henad_graph::sheet::sentence::{
     AGENTS_IN_OPEN_SPACE, CANCEL, CELLS_ON_A_GRID, DONE, EDGES_LABEL, HEIGHT_NAME, ONE_TICK_IS, PURPOSE_PLACEHOLDER,
-    SIZE_BY, SIZE_LABEL, SheetSection, TICK_LENGTH_NAME, TICK_UNIT_NAME, TYPE_ONE_NUMBER, WALLS, WALLS_SENTENCE,
-    WIDTH_NAME, WRAP_AROUND, WRAP_SENTENCE, WRAP_TOOLTIP, chances_per_tick_note, read_typed_number, tick_unit_choice,
-    world_side_out_of_range,
+    SIZE_BY, SIZE_LABEL, SheetSection, TICK_LENGTH_NAME, TICK_LENGTH_NOT_POSITIVE, TICK_UNIT_NAME, TYPE_ONE_NUMBER,
+    WALLS, WALLS_SENTENCE, WIDTH_NAME, WRAP_AROUND, WRAP_SENTENCE, WRAP_TOOLTIP, chances_per_tick_note,
+    read_typed_number, tick_unit_choice, world_side_out_of_range,
 };
 use henad_graph::value::Color;
 
@@ -486,7 +486,8 @@ impl Pending {
 /// runs on the sheet as the edit before it left it.
 ///
 /// `past_start` is whether the preview has passed tick 0 or a button was pressed in it. A changed Starts as then says
-/// "Press Start again to see the change." `trials` holds the values the world tries, each shown under its parameter.
+/// "Press Build in the Playback tab to see the change." `trials` holds the values the world tries, each shown under
+/// its parameter.
 pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials: &[SheetTrial]) {
     let stale: Vec<String> = all_properties(sheet.document())
         .filter(|property| past_start && sheet.start_changed(&property.id))
@@ -668,7 +669,7 @@ fn world(ui: &mut Ui, document: &SheetDocument, pane: &PaneState, pending: &mut 
 }
 
 /// Adds the field of one side of the grid, named `name`, holding `side` cells. A whole number of cells from 1 to
-/// [`MAX_GRID_SIDE`] commits the command `edit` returns for it.
+/// [`MAX_GRID_SIDE`] commits the command `edit` returns for it, and any other text shows the message of a side.
 fn side_field(
     ui: &mut Ui,
     id: Id,
@@ -678,12 +679,12 @@ fn side_field(
     edit: impl FnOnce(u32) -> SheetEdit,
 ) {
     commit_number(ui, id, name, &side.to_string(), FIELD_WIDTH, |text| {
-        let Some(number) = read_typed_number(text).and_then(SheetLiteral::number) else {
-            return Some(TYPE_ONE_NUMBER.to_owned());
-        };
-        if number.fract() != 0.0 || !(1.0..=f64::from(MAX_GRID_SIDE)).contains(&number) {
+        let number = read_typed_number(text)
+            .and_then(SheetLiteral::number)
+            .filter(|number| number.fract() == 0.0 && (1.0..=f64::from(MAX_GRID_SIDE)).contains(number));
+        let Some(number) = number else {
             return Some(world_side_out_of_range(MAX_GRID_SIDE));
-        }
+        };
         // The checks above hold the side to a whole number within `u32`.
         let side = number as u32;
         pending.push(Pending::one(edit(side)));
@@ -702,8 +703,9 @@ fn time_line(ui: &mut Ui, document: &SheetDocument, form: &Form, widgets: Id, pe
                 let Some(length) = read_typed_number(text).and_then(SheetLiteral::number) else {
                     return Some(TYPE_ONE_NUMBER.to_owned());
                 };
-                // A length of 0 or less becomes 1, as the page has it.
-                let length = if length > 0.0 { length } else { 1.0 };
+                if length <= 0.0 {
+                    return Some(TICK_LENGTH_NOT_POSITIVE.to_owned());
+                }
                 pending.push(Pending::one(SheetEdit::SetTime {
                     time: Some(SheetTime::new(length, time.tick_unit)),
                 }));

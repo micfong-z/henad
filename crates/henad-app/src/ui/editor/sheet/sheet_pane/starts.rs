@@ -841,7 +841,8 @@ pub(super) fn number_field(
             ParameterPicker {
                 title: &title,
                 document,
-                number_box: Some(number_use),
+                number_use,
+                number_box: true,
             }
             .show(ui, &response)
         }
@@ -890,7 +891,8 @@ pub(super) fn number_field(
             ParameterPicker {
                 title: CHOOSE_A_PARAMETER,
                 document,
-                number_box: None,
+                number_use,
+                number_box: false,
             }
             .show(ui, &button)
         }

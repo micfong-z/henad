@@ -100,9 +100,11 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     opaque from its first frame, a small upper-case title and group labels with a hairline. An
     item is a full-width row, gray 800 under the pointer or the keyboard focus, blue 900 with a
     check and blue 200 words when current, weak with its reason as a tooltip when it cannot apply.
-    A state shows its swatch, a square of its own colour inside gray 700. A picker of either pane
-    is `widgets::PICKER_WIDTH` (300 points) wide at least, its words wrapping at that width, so
-    pickers open as wide as each other. A select's list and a menu take their content's width.
+    A state shows its swatch, a square of its own colour inside gray 700. An add menu's items scroll
+    under its title in a scroll area as tall as the window leaves (`overlay_items`). A picker of
+    either pane is `widgets::PICKER_WIDTH` (300 points) wide at least, its words wrapping at that
+    width, so pickers open as wide as each other. A select's list and a menu take their content's
+    width.
   - Dialog (`dialog_frame`, `dialog_title`, `dialog_buttons`, the New model, New parameter,
     Rebuild model, conversion and unsaved changes dialogs): the theme's window fill inside gray
     600 with 12 points of margin, a small upper-case mono title with a gray 800 hairline under it
@@ -111,7 +113,8 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     the key or the dialog opened on that frame, and Escape closes through `Modal`. A list of
     choices is `choice_row`s: full-width radio buttons with a weak description under the name,
     gray 800 under the pointer or the focus, blue 900 with a check and blue 200 words when chosen,
-    as an overlay's current item (`list_row_fill` and `paint_list_row_marks` paint both).
+    as an overlay's current item (`list_row_fill` and `paint_list_row_marks` paint both). A list
+    that can outgrow the window scrolls in `dialog_list`, which keeps the buttons in view.
   - Notice (`Notice`, `notice_ui` for information): a 2 point bar and an icon in the hue of its
     kind at step 500 before the text in the text colour, one label: blue and an information icon
     for information, orange and a triangle for a warning, red and an exclamation mark for an

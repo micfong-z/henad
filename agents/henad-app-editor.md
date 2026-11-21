@@ -277,12 +277,13 @@ is painted whole.
 `HenadApp::logic` calls every frame after `report_fault`. They read the model only through
 `EditorModel::preview_source` and `preview_program`. A new preview key with no errors sets
 `due` to now plus `DEBOUNCE` (250 ms) and records `AppState::builds`; one with errors drops `due`
-and leaves the running preview alone. Once due, a build counted since the edit (Build, Apply)
-drops the preview to `Idle`, `preview_can_load` false leaves it `Waiting` (`PREVIEW_WAITS`, "Preview
-waits for the running model."), and otherwise `build_preview` compiles `preview_program`, takes
-`preview_values` (defaults, `grid_width` and `grid_height` at most `PREVIEW_SIDE`, 256,
-`num_agents` at most `PREVIEW_AGENTS`, 16384, `PreviewRun::Grid` or `Agents`) with the Parameters
-tab's tried values in place (`with_tried`, `agents/henad-app.md`), refuses a
+and leaves the running preview alone, and the status area then reads `STALE_PREVIEW`, or a sheet's
+`STALE_WORLD_NOTICE`, as a warning in place of the running line. Once due, a build counted since the
+edit (Build, Apply) drops the preview to `Idle`, `preview_can_load` false leaves it `Waiting`
+(`PREVIEW_WAITS`, "Preview waits for the running model."), and otherwise `build_preview` compiles
+`preview_program`, takes `preview_values` (defaults, `grid_width` and `grid_height` at most
+`PREVIEW_SIDE`, 256, `num_agents` at most `PREVIEW_AGENTS`, 16384, `PreviewRun::Grid` or `Agents`)
+with the Parameters tab's tried values in place (`with_tried`, `agents/henad-app.md`), refuses a
 shortfall (`AppState::entry_shortfalls`) or a `SetupError` as `Refused`, and calls
 `AppState::load_preview` with `EditorModel::preview_plays`: a graph's preview plays, and a sheet's
 waits at tick 0 for Play.
