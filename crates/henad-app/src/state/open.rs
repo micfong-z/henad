@@ -229,7 +229,7 @@ mod tests {
 
         assert_eq!(
             app.open_run(replay("gpu_sir", Vec::new()), OpenAt::Start),
-            Err("Model 'gpu_sir' needs a GPU with compute support, and this device has none".to_owned())
+            Err("Model 'gpu_sir' needs a GPU with compute support, unavailable on this device".to_owned())
         );
         assert_eq!(
             app.open_run(replay("absent", Vec::new()), OpenAt::Start),
@@ -327,7 +327,7 @@ mod tests {
         let Some(mut app) = app_without_compute() else {
             return;
         };
-        let needs_gpu = "Model 'gpu_sir' needs a GPU with compute support, and this device has none";
+        let needs_gpu = "Model 'gpu_sir' needs a GPU with compute support, unavailable on this device";
         let gpu_sir = app
             .models
             .get("gpu_sir")

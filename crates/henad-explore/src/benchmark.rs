@@ -318,7 +318,7 @@ impl Refusals {
             None => Ok(()),
             Some((id, tick)) => Err(Fault::refused(
                 STEPPING,
-                format!("the model refused its own action '{id}' at tick {tick}"),
+                format!("the model rejected its own action '{id}' at tick {tick}"),
             )),
         }
     }

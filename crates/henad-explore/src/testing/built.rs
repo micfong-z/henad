@@ -12,7 +12,7 @@ use super::{SEED, fault_text};
 fn build(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&GpuContext>) -> Result<ModelState, String> {
     entry
         .build(values, Some(SEED), gpu)
-        .map_err(|fault| format!("The model did not build. {}", fault_text(&fault)))
+        .map_err(|fault| format!("The model failed to build. {}", fault_text(&fault)))
 }
 
 /// Returns the runner interface of either variant of `ModelState`.
@@ -66,7 +66,7 @@ pub(super) fn views(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&GpuC
         }
         _ => {
             return Err(format!(
-                "The entry declares {backend:?}, but its factory returns the other arm."
+                "The entry declares {backend:?}, but its factory returns a state of the other backend."
             ));
         }
     };
@@ -96,7 +96,7 @@ pub(super) fn parallel_jobs(entry: &ModelEntry, values: &[ParamValue], gpu: Opti
     let mut built = build(entry, values, gpu)?;
     let cpu = matches!(built, ModelState::Cpu(_));
     match sim_state(&mut built).parallel_jobs() {
-        Some(0) => Err("A step splits into no jobs.".to_owned()),
+        Some(0) => Err("A step splits into 0 jobs.".to_owned()),
         Some(jobs) if !cpu => Err(format!("A GPU state reports {jobs} parallel jobs.")),
         None if cpu => Err("A CPU state reports no parallel jobs.".to_owned()),
         _ => Ok(()),
@@ -116,11 +116,11 @@ pub(super) fn actions(entry: &ModelEntry, values: &[ParamValue], gpu: Option<&Gp
         .map(|(index, action)| format!("'{}' at index {index}", action.id()))
         .collect();
     if !refused.is_empty() {
-        return Err(format!("The state refuses declared action {}.", refused.join(" and ")));
+        return Err(format!("The state rejects declared action {}.", refused.join(" and ")));
     }
     if state.act(declared.len()) {
         return Err(format!(
-            "The state accepts an action at index {}, past the {} it declares.",
+            "The state accepts an action at index {}, outside the {} declared actions.",
             declared.len(),
             declared.len()
         ));
@@ -138,7 +138,7 @@ pub(super) fn stat_count(entry: &ModelEntry, values: &[ParamValue], gpu: Option<
         Ok(())
     } else {
         Err(format!(
-            "The entry declares {declared} stats, and the state returns {found} values."
+            "The entry declares {declared} stats, but the state returns {found} values."
         ))
     }
 }

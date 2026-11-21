@@ -125,7 +125,7 @@ impl<'a> CardLowering<'_, 'a> {
             "amount" => place
                 .amount
                 .clone()
-                .ok_or_else(|| format!("line {line} gives a place that no pick ranked, so it has no amount")),
+                .ok_or_else(|| format!("line {line} returns a place that no pick ranked, so it has no amount")),
             "open" => self.place_open(site, place),
             other => Err(format!("line {line} has no part '{other}' to read")),
         }
@@ -139,9 +139,9 @@ impl<'a> CardLowering<'_, 'a> {
             Some(CellWhich::Ahead) => self.ahead(site),
             Some(CellWhich::At) => match self.slot(&site.at("place"), &line.place)? {
                 place @ Operand::Place(_) => Ok(place),
-                _ => Err("the cell to look at is no place".to_owned()),
+                _ => Err("the cell to look at is not a place".to_owned()),
             },
-            None => Err("the line names no cell to look at".to_owned()),
+            None => Err("the line needs a cell to look at".to_owned()),
         }
     }
 
@@ -349,7 +349,7 @@ impl<'a> CardLowering<'_, 'a> {
         let property = line
             .ground_property
             .as_deref()
-            .ok_or_else(|| "the line names no property of the ground".to_owned())?;
+            .ok_or_else(|| "the line needs a property of the ground".to_owned())?;
         let field = self.builder.ground_field(property)?.to_owned();
         let amount = self.slot(&site.at("amount"), &line.amount)?;
         let condition = self.change_condition(site, id, line)?;
@@ -369,7 +369,7 @@ impl<'a> CardLowering<'_, 'a> {
         let event = line
             .event
             .as_deref()
-            .ok_or_else(|| "the line names no event".to_owned())?;
+            .ok_or_else(|| "the line needs an event".to_owned())?;
         let condition = self.change_condition(site, id, line)?;
         self.fires_when(id, &condition);
         let amount = match condition {

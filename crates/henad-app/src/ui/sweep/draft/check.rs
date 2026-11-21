@@ -293,7 +293,7 @@ impl SweepDraft {
             vec![DraftIssue::new(
                 DraftSite::Sweep,
                 format!(
-                    "{title} of {runs} runs is over the app's limit of {MAX_DRAFT_RUNS}. Run larger ones {}.",
+                    "{title} of {runs} runs is over the app's limit of {MAX_DRAFT_RUNS}. Run it {}.",
                     cli_phrase(self.cli_command.as_deref())
                 ),
             )]
@@ -399,7 +399,7 @@ impl SweepDraft {
                     .as_ref()
                     .and_then(|search| search.space.get(*factor_index))
                     .map_or(DraftSite::Search, |factor| self.target_site(&factor.target, schema));
-                DraftIssue::new(site, "No values")
+                DraftIssue::new(site, "Enter values")
             }
             SearchPlanError::Space(SearchSpaceError::Factor(source)) => self.factor_issue(source, schema),
             SearchPlanError::UnknownColumn { column, .. } => {

@@ -431,7 +431,7 @@ fn a_problem_of_the_compiler_is_placed_in_the_file() {
     let problems = GridProgram::compile(&file).expect_err("a rerun of a tick pass compiled");
     let problem = problems
         .iter()
-        .find(|problem| problem.message.contains("reruns the tick pass 'step'"))
+        .find(|problem| problem.message.contains("cannot rerun the tick pass 'step'"))
         .unwrap_or_else(|| panic!("{problems:#?}"));
     let line = text
         .lines()
@@ -560,7 +560,7 @@ fn a_shader_past_the_size_limit_is_placed_on_its_pass() {
         "{problem:#?}"
     );
     assert!(
-        problem.notes.iter().all(|note| !note.contains("fault of the compiler")),
+        problem.notes.iter().all(|note| !note.contains("compiler fault")),
         "{problem:#?}"
     );
     assert_eq!(problem.pass.as_deref(), Some("step"));

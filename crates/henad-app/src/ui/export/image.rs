@@ -55,7 +55,7 @@ fn agent_scale(long_side: u32, cap: u32) -> u32 {
 pub fn start(app: &AppState, name: String) -> Result<PendingCapture, String> {
     let ctx = &app.render_ctx;
     let device_max = ctx.device.limits().max_texture_dimension_2d;
-    let (width, height) = capture_dims(app, device_max).ok_or("model exposes no view to capture")?;
+    let (width, height) = capture_dims(app, device_max).ok_or("model has no view to capture")?;
     let format = ctx.target_format;
 
     let target = make_target(&ctx.device, format, width, height);

@@ -6,7 +6,7 @@ kind = "sheet"
 version = 1
 id = "random_walk"
 name = "Random walk"
-purpose = "Diffusion from individual random steps. Pattern to look for: walkers spread evenly, and the average position stays near the centre."
+purpose = "Diffusion from individual random steps. Look for walkers spreading evenly, and the average position staying near the centre."
 next_line = 3
 
 [world]

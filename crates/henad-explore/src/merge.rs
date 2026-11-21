@@ -508,7 +508,7 @@ impl fmt::Display for MergeError {
             } => write!(
                 f,
                 "'{}' ran different model code ({current}) from '{}' ({recorded}). Shards of a model composed at run \
-                 time merge only when they ran the same code",
+                 time cannot merge unless they ran the same code",
                 dir.display(),
                 lower_dir.display()
             ),

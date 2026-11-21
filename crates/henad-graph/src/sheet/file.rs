@@ -118,7 +118,7 @@ impl SheetFile {
         edit(&mut lowered.document);
         let graph = GraphFile::from_document(&lowered.document, None).map_err(|error| {
             invalid([CodeDiagnostic::error(format!(
-                "the sheet lowers to a graph that does not read: {}",
+                "the sheet lowers to an invalid graph: {}",
                 error.diagnostic().message
             ))])
         })?;
@@ -138,8 +138,8 @@ impl SheetFile {
     /// [`ParsedSheet::check`].
     ///
     /// The list is empty when the sheet lowers, and when `report` holds an error, since the lowering runs only on a
-    /// sheet that checks. A card editor draws each problem about a line under that line, as "Line 3 steers Velocity. A
-    /// card that steers a property cannot also set it." under a Set of Velocity.
+    /// sheet that checks. A card editor draws each problem about a line under that line, as "Line 3 steers Velocity.
+    /// This card cannot also set it." under a Set of Velocity.
     pub fn lowering_problems(parsed: &ParsedSheet, report: &SheetReport) -> Vec<SheetDiagnostic> {
         if report.has_errors() {
             return Vec::new();
@@ -507,7 +507,7 @@ fn invalid(errors: impl IntoIterator<Item = CodeDiagnostic>) -> SheetFileError {
     let mut errors = errors.into_iter();
     let first = errors
         .next()
-        .unwrap_or_else(|| CodeDiagnostic::error("the sheet does not lower, and its lowering names no problem"));
+        .unwrap_or_else(|| CodeDiagnostic::error("the sheet failed to lower for an unknown reason"));
     SheetFileError::Invalid(SheetErrors::new(first, errors))
 }
 

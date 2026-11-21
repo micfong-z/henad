@@ -59,7 +59,7 @@ fn check_header(checker: &mut Checker<'_>) {
     if !(1..=SHEET_VERSION).contains(&header.version) {
         checker.error(
             format!(
-                "the sheet is version {}, and this build reads versions 1 to {SHEET_VERSION}",
+                "the sheet is version {}, expected versions 1 to {SHEET_VERSION}",
                 header.version
             ),
             &Place::Sheet,
@@ -67,12 +67,12 @@ fn check_header(checker: &mut Checker<'_>) {
     }
     claim_grammar(checker, "sheet", &header.id, &Place::Sheet);
     if header.next_line < 1 {
-        checker.error("next_line counts from 1", &Place::Sheet);
+        checker.error("next_line must be at least 1", &Place::Sheet);
     }
     if let Some(time) = &checker.document.time
         && !(time.tick_length.is_finite() && time.tick_length > 0.0)
     {
-        checker.error("one tick lasts a number of units above 0", &Place::Time);
+        checker.error("one tick must last more than 0 units", &Place::Time);
     }
 }
 
@@ -81,12 +81,12 @@ fn check_world(checker: &mut Checker<'_>) {
     let document = checker.document;
     let world = &document.world;
     if world.width == 0 || world.height == 0 {
-        checker.error("the world is at least 1 cell wide and 1 cell high", &Place::World);
+        checker.error("the world must be at least 1 cell wide and 1 cell high", &Place::World);
     }
     match world.made_of {
         MadeOf::Cells => {
             if !document.agents.is_empty() || document.ground.is_some() {
-                checker.error("a world of cells has no agents and no ground", &Place::World);
+                checker.error("a world of cells cannot have agents or ground", &Place::World);
             }
             if document.cells.as_ref().is_none_or(Vec::is_empty) {
                 checker.warning(SHEET_EMPTY, &Place::World);
@@ -95,7 +95,7 @@ fn check_world(checker: &mut Checker<'_>) {
         MadeOf::Agents => {
             if document.cells.is_some() {
                 checker.error(
-                    "a world of agents has no [cells], and its cells are the ground",
+                    "a world of agents cannot have [cells], since its cells are the ground",
                     &Place::World,
                 );
             }
@@ -118,13 +118,13 @@ fn check_world(checker: &mut Checker<'_>) {
 /// Checks the grammar and the length of `id`, the id of a `what` placed at `place`, and returns whether both hold.
 fn claim_grammar(checker: &mut Checker<'_>, what: &str, id: &str, place: &Place) -> bool {
     if !is_id(id) {
-        checker.error(format!("the {what} id '{id}' does not follow the id grammar"), place);
+        checker.error(format!("invalid {what} id '{id}'"), place);
         return false;
     }
     if id.len() > MAX_SHEET_ID_BYTES {
         checker.error(
             format!(
-                "the {what} id '{id}' holds {} bytes, and a sheet id holds at most {MAX_SHEET_ID_BYTES}",
+                "the {what} id '{id}' holds {} bytes, expected at most {MAX_SHEET_ID_BYTES}",
                 id.len()
             ),
             place,
@@ -280,7 +280,7 @@ fn check_property<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, th
     let kind = property.property_type;
     if (kind == PropertyType::States) == property.states.is_empty() {
         checker.error(
-            format!("property '{id}': a States property, and only one, lists states"),
+            format!("property '{id}': a States property must list states, and other properties cannot"),
             place,
         );
     }
@@ -291,12 +291,12 @@ fn check_property<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, th
     if property.marks.is_some() || !property.kept_per_tick.is_blank() {
         if thing != GROUND_ID || kind != PropertyType::Number {
             checker.error(
-                format!("property '{id}': marks and fading belong to a Number property of the ground"),
+                format!("property '{id}': only a Number property of the ground can have marks and fading"),
                 place,
             );
         }
         if property.marks.is_none() {
-            checker.error(format!("property '{id}' fades and names no marks rule"), place);
+            checker.error(format!("property '{id}' fades but has no marks rule"), place);
         }
         checker.outside_slot(
             &property.kept_per_tick,
@@ -326,33 +326,30 @@ fn check_start<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, thing
             checker.outside_slot(&start.value, &context, Blank::Value, None, Some(id));
             draws = start.value.value().is_some_and(value_draws);
             if start.value.value().is_some_and(value_rates) {
-                checker.error(
-                    format!("property '{id}' starts with a rate, and a start takes chances"),
-                    place,
-                );
+                checker.error(format!("property '{id}' starts with a rate, expected a chance"), place);
             }
         }
         StartRule::ByChance => {
             draws = true;
             if kind != PropertyType::States {
-                checker.error(format!("property '{id}': by chance starts a States property"), place);
+                checker.error(
+                    format!("property '{id}': only a States property can start by chance"),
+                    place,
+                );
             }
             for row in &start.rows {
                 match row.state.as_deref() {
                     Some(state) if checker.has_state(id, state) => {}
                     state => checker.error(
                         format!(
-                            "property '{id}' starts by chance in '{}', which is no state of it",
+                            "property '{id}' starts by chance in '{}', which is not a state of it",
                             state.unwrap_or("")
                         ),
                         place,
                     ),
                 }
                 if row.chance.value().is_some_and(value_rates) {
-                    checker.error(
-                        format!("property '{id}' starts with a rate, and a start takes chances"),
-                        place,
-                    );
+                    checker.error(format!("property '{id}' starts with a rate, expected a chance"), place);
                 }
                 checker.outside_slot(&row.chance, &context, Blank::Chance, Some(ValueType::Number), None);
                 checker.draw_range(&row.chance, &context, Draw::Chance);
@@ -368,17 +365,20 @@ fn check_start<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, thing
         StartRule::Anywhere => {
             draws = true;
             if kind != PropertyType::Position {
-                checker.error(format!("property '{id}': anywhere starts a Position"), place);
+                checker.error(format!("property '{id}': only a Position can start anywhere"), place);
             }
         }
         StartRule::OnGround => {
             if kind != PropertyType::Position {
-                checker.error(format!("property '{id}': on the ground starts a Position"), place);
+                checker.error(
+                    format!("property '{id}': only a Position can start on the ground"),
+                    place,
+                );
             }
             let ground = start.property.as_deref().unwrap_or("");
             match checker.property_of(ground, GROUND_ID) {
                 None => checker.error(
-                    format!("property '{id}' starts on '{ground}', which is no ground property"),
+                    format!("property '{id}' starts on '{ground}', which is not a ground property"),
                     place,
                 ),
                 Some(property) => {
@@ -399,8 +399,8 @@ fn check_start<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, thing
 fn check_state_field(checker: &mut Checker<'_>, property: &str, state: Option<&str>, field: &str, place: &Place) {
     match state {
         Some(state) if checker.has_state(property, state) => {}
-        Some(state) => checker.error(format!("the {field} '{state}' is no state of '{property}'"), place),
-        None => checker.error(format!("the start of '{property}' names no {field} state"), place),
+        Some(state) => checker.error(format!("the {field} '{state}' is not a state of '{property}'"), place),
+        None => checker.error(format!("the start of '{property}' has no {field} state"), place),
     }
 }
 
@@ -447,7 +447,7 @@ fn check_measures(checker: &mut Checker<'_>) {
         let Some(over) = measure.over.as_deref().filter(|over| is_thing(document, over)) else {
             checker.error(
                 format!(
-                    "measure '{id}' is over '{}', which is no kind of thing",
+                    "measure '{id}' is over '{}', which is not a kind of thing",
                     measure.over.as_deref().unwrap_or("")
                 ),
                 &place,
@@ -458,7 +458,7 @@ fn check_measures(checker: &mut Checker<'_>) {
             let property = measure.property.as_deref().unwrap_or("");
             if checker.property_of(property, over).is_none() {
                 checker.error(
-                    format!("measure '{id}' counts '{property}', which is no property of '{over}'"),
+                    format!("measure '{id}' counts '{property}', which is not a property of '{over}'"),
                     &place,
                 );
             } else {
@@ -466,7 +466,7 @@ fn check_measures(checker: &mut Checker<'_>) {
                     Some(state) if checker.has_state(property, state) => {}
                     state => checker.error(
                         format!(
-                            "measure '{id}' counts the state '{}', which is no state of '{property}'",
+                            "measure '{id}' counts the state '{}', which is not a state of '{property}'",
                             state.unwrap_or("")
                         ),
                         &place,
@@ -486,7 +486,10 @@ fn check_colors(checker: &mut Checker<'_>) {
     for (thing, rule) in &document.colors {
         let place = Place::Color(thing.clone());
         if !is_thing(document, thing) {
-            checker.error(format!("the color rule of '{thing}' colors no kind of thing"), &place);
+            checker.error(
+                format!("the color rule is for '{thing}', which is not a kind of thing"),
+                &place,
+            );
             continue;
         }
         match rule.rule {
@@ -497,14 +500,14 @@ fn check_colors(checker: &mut Checker<'_>) {
                     .filter(|found| found.property_type == PropertyType::States);
                 if states.is_none() {
                     checker.error(
-                        format!("the color rule of '{thing}' reads '{property}', which is no States property of it"),
+                        format!("the color rule of '{thing}' reads '{property}', which is not a States property of it"),
                         &place,
                     );
                 } else if let Some(state) = rule.shade_state.as_deref()
                     && !checker.has_state(property, state)
                 {
                     checker.error(
-                        format!("the color rule of '{thing}' shades '{state}', which is no state"),
+                        format!("the color rule of '{thing}' shades '{state}', which is not a state"),
                         &place,
                     );
                 }
@@ -512,7 +515,7 @@ fn check_colors(checker: &mut Checker<'_>) {
                     if checker.property_of(&shade.property, thing).is_none() {
                         checker.error(
                             format!(
-                                "the color rule of '{thing}' shades '{}', which is no property of it",
+                                "the color rule of '{thing}' shades '{}', which is not a property of it",
                                 shade.property
                             ),
                             &place,
@@ -523,7 +526,7 @@ fn check_colors(checker: &mut Checker<'_>) {
             ColorRuleKind::ByHeading => {
                 if matches!(thing.as_str(), CELLS_ID | GROUND_ID) {
                     checker.error(
-                        format!("the color rule of '{thing}' reads a heading, which only agents have"),
+                        format!("the color rule of '{thing}' cannot read a heading: only agents have headings"),
                         &place,
                     );
                 }
@@ -533,7 +536,7 @@ fn check_colors(checker: &mut Checker<'_>) {
                     && checker.property_of(property, thing).is_none()
                 {
                     checker.error(
-                        format!("the color rule of '{thing}' shades '{property}', which is no property of it"),
+                        format!("the color rule of '{thing}' shades '{property}', which is not a property of it"),
                         &place,
                     );
                 }
@@ -555,14 +558,14 @@ fn check_buttons(checker: &mut Checker<'_>) {
                         && !is_thing(document, thing)
                     {
                         checker.error(
-                            format!("button '{id}' starts '{thing}' again, which is no kind of thing"),
+                            format!("button '{id}' starts '{thing}' again, which is not a kind of thing"),
                             &place,
                         );
                     }
                     for property in &step.properties {
                         if !checker.properties.contains_key(property.as_str()) {
                             checker.error(
-                                format!("button '{id}' starts '{property}' again, which is no property"),
+                                format!("button '{id}' starts '{property}' again, which is not a property"),
                                 &place,
                             );
                         }
@@ -571,7 +574,10 @@ fn check_buttons(checker: &mut Checker<'_>) {
                 ButtonStepRule::SetEverywhere => {
                     let property = step.property.as_deref().unwrap_or("");
                     match checker.properties.get(property).copied() {
-                        None => checker.error(format!("button '{id}' sets '{property}', which is no property"), &place),
+                        None => checker.error(
+                            format!("button '{id}' sets '{property}', which is not a property"),
+                            &place,
+                        ),
                         Some((_, owner)) => {
                             let context = Context::outside(place.clone(), owner);
                             checker.outside_slot(&step.value, &context, Blank::Value, None, Some(property));
@@ -586,7 +592,7 @@ fn check_buttons(checker: &mut Checker<'_>) {
                         .is_some_and(|found| found.runs == CardRuns::Once);
                     if !runs_once {
                         checker.error(
-                            format!("button '{id}' runs '{card}', which is no card that runs once"),
+                            format!("button '{id}' runs '{card}', which is not a card that runs once"),
                             &place,
                         );
                     }

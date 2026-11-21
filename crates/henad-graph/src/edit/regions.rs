@@ -111,7 +111,7 @@ impl GraphBuilder {
     /// Returns an error when the document's canonical text does not read back.
     pub(super) fn check_report(&self) -> Result<CheckReport, EditError> {
         let file = GraphFile::from_document(&self.document, None)
-            .map_err(|error| EditError::Invalid(format!("the file does not read back: {error}")))?;
+            .map_err(|error| EditError::Invalid(format!("failed to read back the file: {error}")))?;
         Ok(file.check())
     }
 
@@ -121,7 +121,7 @@ impl GraphBuilder {
         let region = self
             .body(scope)?
             .node(node)
-            .ok_or_else(|| EditError::Missing(format!("the {scope} holds no node {node}")))?;
+            .ok_or_else(|| EditError::Missing(format!("the {scope} has no node {node}")))?;
         region.accumulators().map_err(EditError::Invalid)
     }
 
@@ -143,12 +143,12 @@ impl GraphBuilder {
     ) -> Result<(), EditError> {
         if !is_port_segment(name) {
             return Err(EditError::Invalid(format!(
-                "'{name}' is no accumulator name, which starts with a letter and holds letters, digits and `_`"
+                "invalid accumulator name '{name}', expected letters, digits and `_`, starting with a letter"
             )));
         }
         if accumulators.iter().any(|known| known.name == name) {
             return Err(EditError::Invalid(format!(
-                "node {node} already holds the accumulator '{name}'"
+                "node {node} already has the accumulator '{name}'"
             )));
         }
         let op = self.body(scope)?.node(node).map(|region| region.op.clone());
@@ -169,7 +169,7 @@ impl GraphBuilder {
         self.check_accumulator_name(scope, node, &accumulators, &accumulator.name)?;
         if accumulators.len() >= MAX_ACCUMULATORS {
             return Err(EditError::Invalid(format!(
-                "node {node} holds {MAX_ACCUMULATORS} accumulators, the most a region holds"
+                "node {node} already has {MAX_ACCUMULATORS} accumulators, the maximum per region"
             )));
         }
         self.name_bare_links(scope, node);
@@ -183,7 +183,7 @@ impl GraphBuilder {
         let known = accumulators
             .iter_mut()
             .find(|known| known.name == accumulator.name)
-            .ok_or_else(|| EditError::Missing(format!("node {node} holds no accumulator '{}'", accumulator.name)))?;
+            .ok_or_else(|| EditError::Missing(format!("node {node} has no accumulator '{}'", accumulator.name)))?;
         *known = accumulator;
         self.set_accumulators(scope, node, &accumulators)
     }
@@ -195,7 +195,7 @@ impl GraphBuilder {
         let position = accumulators
             .iter()
             .position(|known| known.name == from)
-            .ok_or_else(|| EditError::Missing(format!("node {node} holds no accumulator '{from}'")))?;
+            .ok_or_else(|| EditError::Missing(format!("node {node} has no accumulator '{from}'")))?;
         if from == to {
             return Ok(());
         }
@@ -249,7 +249,7 @@ impl GraphBuilder {
         let position = accumulators
             .iter()
             .position(|known| known.name == name)
-            .ok_or_else(|| EditError::Missing(format!("node {node} holds no accumulator '{name}'")))?;
+            .ok_or_else(|| EditError::Missing(format!("node {node} has no accumulator '{name}'")))?;
         let only = accumulators.len() == 1;
         let prev = format!("prev.{name}");
         let body = self.body(scope)?;
@@ -298,9 +298,9 @@ impl GraphBuilder {
         let region = self
             .all_nodes()
             .find(|known| known.id == node)
-            .ok_or_else(|| EditError::Missing(format!("the file holds no node {node}")))?;
+            .ok_or_else(|| EditError::Missing(format!("the file has no node {node}")))?;
         if !lookup(&region.op, self.document.library).is_some_and(|def| def.is_region) {
-            return Err(EditError::Invalid(format!("node {node} is no region")));
+            return Err(EditError::Invalid(format!("node {node} is not a region")));
         }
         self.editor.set_output_pos(node, pos);
         Ok(())
@@ -335,7 +335,9 @@ impl GraphBuilder {
     /// Returns an error for no node, a node `scope` lacks, and top nodes in different regions.
     pub(super) fn selection(&self, scope: &Scope, nodes: &[NodeId], what: &str) -> Result<Selection, EditError> {
         if nodes.is_empty() {
-            return Err(EditError::Invalid(format!("{what} wraps at least one node")));
+            return Err(EditError::Invalid(format!(
+                "select at least one node to wrap in {what}"
+            )));
         }
         for node in nodes {
             self.require_node(scope, *node)?;
@@ -352,7 +354,7 @@ impl GraphBuilder {
             [parent] => *parent,
             _ => {
                 return Err(EditError::Invalid(
-                    "the selected nodes sit in different regions. Select nodes of one region".to_owned(),
+                    "the selected nodes are in different regions. Select nodes from one region".to_owned(),
                 ));
             }
         };
@@ -383,7 +385,7 @@ impl GraphBuilder {
         for node in body.nodes.iter().filter(|node| wrapped.contains(&node.id)) {
             if lookup(&node.op, self.document.library).is_some_and(|def| !def.contexts.region) {
                 return Err(EditError::Invalid(format!(
-                    "node {} does not belong in a region body. Leave it out of the selection",
+                    "node {} does not belong in a region body. Remove it from the selection",
                     node.id
                 )));
             }
@@ -655,7 +657,7 @@ fn check_wrap_nesting(
         && !nests(&outer.op)
     {
         return Err(EditError::Invalid(format!(
-            "a Repeat cannot sit in the region {}. A Repeat sits in a Repeat or a neighborhood fold",
+            "a Repeat cannot be in the region {}, only in a Repeat or a neighborhood fold",
             outer.id
         )));
     }
@@ -670,7 +672,7 @@ fn check_wrap_nesting(
         let joins_repeat = node.region.is_none_or(|region| !wrapped.contains(&region));
         if joins_repeat && !nests(&node.op) {
             return Err(EditError::Invalid(format!(
-                "node {} cannot sit in a Repeat. A Repeat holds Repeats and neighborhood folds",
+                "node {} cannot be in a Repeat. A Repeat can only contain Repeats and neighborhood folds as regions",
                 node.id
             )));
         }
@@ -678,7 +680,7 @@ fn check_wrap_nesting(
     }
     if deepest > MAX_REGION_DEPTH {
         return Err(EditError::Invalid(format!(
-            "the Repeat would nest regions {deepest} deep, and regions nest at most {MAX_REGION_DEPTH} deep"
+            "the Repeat nests regions {deepest} deep, expected at most {MAX_REGION_DEPTH}"
         )));
     }
     Ok(())

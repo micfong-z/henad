@@ -73,7 +73,7 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
 fn color_rule(builder: &mut Builder<'_>, rule: &ColorRule) -> Result<(), String> {
     if rule.scale == Some(ShadeScale::Log) || rule.decades.is_some() {
         return Err(format!(
-            "the colour rule of {} shades on a log scale, and shading lowers on a linear scale only",
+            "the colour rule of {} must shade on a linear scale, got a log scale",
             builder.thing_words()
         ));
     }
@@ -84,7 +84,7 @@ fn color_rule(builder: &mut Builder<'_>, rule: &ColorRule) -> Result<(), String>
         .property
         .as_deref()
         .and_then(|id| builder.property(id))
-        .ok_or_else(|| format!("the colour rule names no property of {}", builder.thing_words()))?;
+        .ok_or_else(|| format!("the colour rule needs a property of {}", builder.thing_words()))?;
     let first_states = builder
         .properties()
         .iter()
@@ -92,7 +92,7 @@ fn color_rule(builder: &mut Builder<'_>, rule: &ColorRule) -> Result<(), String>
     let shaded = match rule.rule {
         ColorRuleKind::ByState if rule.shade_state.is_some() || !rule.shades.is_empty() => {
             return Err(format!(
-                "the colour rule of {} shades a state, and only the ground of agents shades a state",
+                "the colour rule of {} cannot shade a state: only the ground of agents can",
                 builder.thing_words()
             ));
         }
@@ -142,7 +142,7 @@ fn by_heading(builder: &mut Builder<'_>) -> Result<(), String> {
     let (palette, colors) = HEADING_PALETTE;
     if builder.graph.categories.iter().any(|category| category.id == palette) {
         return Err(format!(
-            "the palette of the headings would take the id '{palette}' of a property"
+            "the heading palette id '{palette}' is already used by a property"
         ));
     }
     let heading = builder
@@ -181,14 +181,14 @@ pub(super) fn shade(
     let palette = format!("shaded_{property}");
     if builder.graph.categories.iter().any(|category| category.id == palette) {
         return Err(format!(
-            "the palette of the shading would take the id '{palette}' of a property"
+            "the shading palette id '{palette}' is already used by a property"
         ));
     }
     let darkest = rule.darkest.unwrap_or(0.0);
     let lightest = rule.lightest.unwrap_or(1.0);
     if darkest == lightest {
         return Err(format!(
-            "the shading is darkest and lightest at the same value {}, and its two ends need different values",
+            "the darkest and lightest values of the shading must be different, got {} for both",
             crate::sheet::format_number(darkest).unwrap_or_default()
         ));
     }

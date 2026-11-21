@@ -114,13 +114,11 @@ impl GraphBuilder {
     ) -> Result<(), EditError> {
         if !is_id(id) {
             return Err(EditError::Invalid(format!(
-                "'{id}' is no {kind} id, which starts with a lowercase letter and holds lowercase letters, digits and `_`"
+                "invalid {kind} id '{id}', expected lowercase letters, digits and `_`, starting with a lowercase letter"
             )));
         }
         if taken.any(|known| known == id) {
-            return Err(EditError::Invalid(format!(
-                "the file already declares the {kind} '{id}'"
-            )));
+            return Err(EditError::Invalid(format!("the file already has the {kind} '{id}'")));
         }
         Ok(())
     }
@@ -163,7 +161,7 @@ impl GraphBuilder {
                 for variant in &category.variants {
                     if !is_port_segment(&variant.name) || !names.insert(variant.name.as_str()) {
                         return Err(EditError::Invalid(format!(
-                            "the variant '{}' is no name, or comes twice",
+                            "invalid or duplicate variant name '{}'",
                             variant.name
                         )));
                     }
@@ -193,11 +191,11 @@ impl GraphBuilder {
                 self.name_bare_counter_links(&category);
                 let category = self.category_mut(&category)?;
                 if !is_port_segment(&variant.name) {
-                    return Err(EditError::Invalid(format!("'{}' is no variant name", variant.name)));
+                    return Err(EditError::Invalid(format!("'{}' is not a variant name", variant.name)));
                 }
                 if category.variants.iter().any(|known| known.name == variant.name) {
                     return Err(EditError::Invalid(format!(
-                        "the category '{}' already holds the variant '{}'",
+                        "the category '{}' already has the variant '{}'",
                         category.id, variant.name
                     )));
                 }
@@ -314,7 +312,7 @@ impl GraphBuilder {
                     .passes
                     .iter_mut()
                     .find(|pass| pass.id == id)
-                    .ok_or_else(|| EditError::Missing(format!("the file declares no pass '{id}'")))?;
+                    .ok_or_else(|| EditError::Missing(format!("the file has no pass '{id}'")))?;
                 pass.enabled = enabled;
                 Ok(())
             }
@@ -326,7 +324,7 @@ impl GraphBuilder {
             EditCommand::SetWorld(world) => {
                 if world.topology() != self.document.world.topology() {
                     return Err(EditError::Invalid(format!(
-                        "a {} graph keeps its topology, and the new world is {}",
+                        "the graph topology cannot change from {} to {}",
                         self.document.world.topology().as_str(),
                         world.topology().as_str()
                     )));
@@ -342,7 +340,7 @@ impl GraphBuilder {
     fn lane_position(&self, id: &str) -> Result<usize, EditError> {
         self.document
             .lane_position(id)
-            .ok_or_else(|| EditError::Missing(format!("the file declares no lane '{id}'")))
+            .ok_or_else(|| EditError::Missing(format!("the file has no lane '{id}'")))
     }
 
     /// Returns each place that names the lane `id`.
@@ -375,7 +373,7 @@ impl GraphBuilder {
             .categories
             .iter_mut()
             .find(|category| category.id == id)
-            .ok_or_else(|| EditError::Missing(format!("the file declares no category '{id}'")))
+            .ok_or_else(|| EditError::Missing(format!("the file has no category '{id}'")))
     }
 
     /// Returns the position of the variant `name` of `category`.
@@ -383,7 +381,7 @@ impl GraphBuilder {
         self.document
             .category(category)
             .and_then(|known| known.variant_position(name))
-            .ok_or_else(|| EditError::Missing(format!("the file declares no variant '{category}.{name}'")))
+            .ok_or_else(|| EditError::Missing(format!("the file has no variant '{category}.{name}'")))
     }
 
     /// Returns the ids of the `stat.count_by` nodes over `category` in each scope.
@@ -500,11 +498,11 @@ impl GraphBuilder {
     fn rename_variant(&mut self, category: &str, from: &str, to: &str) -> Result<(), EditError> {
         let position = self.variant_position(category, from)?;
         if !is_port_segment(to) {
-            return Err(EditError::Invalid(format!("'{to}' is no variant name")));
+            return Err(EditError::Invalid(format!("'{to}' is not a variant name")));
         }
         if self.variant_position(category, to).is_ok() {
             return Err(EditError::Invalid(format!(
-                "the category '{category}' already holds the variant '{to}'"
+                "the category '{category}' already has the variant '{to}'"
             )));
         }
         let counters = self.variant_counters(category);
@@ -589,7 +587,7 @@ impl GraphBuilder {
     fn param_position(&self, id: &str) -> Result<usize, EditError> {
         self.document
             .param_position(id)
-            .ok_or_else(|| EditError::Missing(format!("the file declares no parameter '{id}'")))
+            .ok_or_else(|| EditError::Missing(format!("the file has no parameter '{id}'")))
     }
 
     /// Returns each place that binds or names the parameter `id`.
@@ -652,11 +650,11 @@ impl GraphBuilder {
     /// Returns an error unless `label` is a label no statistic holds.
     fn check_new_label(&self, label: &str) -> Result<(), EditError> {
         if label.trim().is_empty() {
-            return Err(EditError::Invalid("a statistic needs a label".to_owned()));
+            return Err(EditError::Invalid("enter a label for the statistic".to_owned()));
         }
         if self.document.stats.iter().any(|stat| stat.label == label) {
             return Err(EditError::Invalid(format!(
-                "the file already declares the statistic '{label}'"
+                "the file already has the statistic '{label}'"
             )));
         }
         Ok(())
@@ -668,7 +666,7 @@ impl GraphBuilder {
             .stats
             .iter()
             .position(|stat| stat.label == label)
-            .ok_or_else(|| EditError::Missing(format!("the file declares no statistic '{label}'")))
+            .ok_or_else(|| EditError::Missing(format!("the file has no statistic '{label}'")))
     }
 
     /// Returns the position of the action `id`.
@@ -677,7 +675,7 @@ impl GraphBuilder {
             .actions
             .iter()
             .position(|action| action.id == id)
-            .ok_or_else(|| EditError::Missing(format!("the file declares no action '{id}'")))
+            .ok_or_else(|| EditError::Missing(format!("the file has no action '{id}'")))
     }
 
     /// Returns the position of the pass `id`.
@@ -686,7 +684,7 @@ impl GraphBuilder {
             .passes
             .iter()
             .position(|pass| pass.id == id)
-            .ok_or_else(|| EditError::Missing(format!("the file declares no pass '{id}'")))
+            .ok_or_else(|| EditError::Missing(format!("the file has no pass '{id}'")))
     }
 
     /// Renames the pass `from` to `to`, every rerun of it and its canvas.

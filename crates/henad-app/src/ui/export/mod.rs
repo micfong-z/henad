@@ -215,9 +215,9 @@ fn state_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
         egui::Button::new(format!("{MDI_TRAY_ARROW_DOWN} Save state")),
     );
     let button = if loaded && is_cpu {
-        button.on_hover_text("Write the current model state as text")
+        button.on_hover_text("Write current model state as text")
     } else {
-        button.on_disabled_hover_text("GPU model states are not exportable")
+        button.on_disabled_hover_text("GPU model states cannot be exported")
     };
     if button.clicked() {
         export_state(app);
@@ -228,7 +228,7 @@ fn state_section(ui: &mut egui::Ui, app: &mut AppState, loaded: bool) {
 
     let dims = image::capture_dims(app, app.render_ctx.device.limits().max_texture_dimension_2d);
     match dims {
-        Some((width, height)) => ui.label(format!("{width} x {height} pixels")),
+        Some((width, height)) => ui.label(format!("{width} × {height} pixels")),
         None => ui.label("Nothing to display"),
     };
 
@@ -325,7 +325,7 @@ fn export_state(app: &mut AppState) {
 
     let mut out = Vec::new();
     match write_state(&mut out, layers) {
-        Ok(()) if out.is_empty() => app.export_status = Some("Model exposes no view to export".to_owned()),
+        Ok(()) if out.is_empty() => app.export_status = Some("Model has no view to export".to_owned()),
         Ok(()) => app.save_as(SaveTarget::Export, &file_name(app, "state", "txt"), out),
         Err(error) => app.export_status = Some(format!("Export failed: {error}")),
     }

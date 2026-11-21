@@ -78,14 +78,14 @@ fn check_library(header: &ModelHeader) -> Result<(), Placed> {
     let number = *library.get_ref();
     if number < 1 {
         return Err(Placed(
-            format!("the file names node library {number}, but libraries count from 1"),
+            format!("the node library must be at least 1, got {number}"),
             library.span(),
         ));
     }
     if number > i64::from(crate::file::LIBRARY) {
         return Err(Placed(
             format!(
-                "the file uses node library {number}, and this build reads up to {}",
+                "the file uses node library {number}, expected at most {}",
                 crate::file::LIBRARY
             ),
             library.span(),
@@ -595,7 +595,7 @@ fn read_target(
     };
     if let Some(second) = tables.next() {
         return Err(Placed(
-            "the file holds a second `[[target]]` table, and a file holds one".to_owned(),
+            "the file holds a second `[[target]]` table, expected one".to_owned(),
             second.span(),
         ));
     }
@@ -604,7 +604,7 @@ fn read_target(
     if first.backend.get_ref() != "gpu" {
         return Err(Placed(
             format!(
-                "the target's backend is '{}', but graph models compile to WGSL, so it must be 'gpu'",
+                "the target's backend is '{}', expected 'gpu', since graph models compile to WGSL",
                 first.backend.get_ref()
             ),
             first.backend.span(),
@@ -676,7 +676,7 @@ fn read_color(bytes: &Spanned<Vec<u8>>) -> Result<Color, Placed> {
         [red, green, blue] => Ok([red, green, blue, 255]),
         [red, green, blue, alpha] => Ok([red, green, blue, alpha]),
         _ => Err(Placed(
-            format!("a colour has 3 or 4 bytes, and this one has {}", bytes.get_ref().len()),
+            format!("the colour has {} bytes, expected 3 or 4", bytes.get_ref().len()),
             bytes.span(),
         )),
     }
@@ -735,7 +735,7 @@ fn read_lane(table: LaneTable, categories: &[Category]) -> Result<Lane, Placed> 
         (_, Some(storage)) => {
             return Err(Placed(
                 format!(
-                    "lane '{}' of type '{value_type}' must not set `storage`, which belongs to `u32` and category lanes",
+                    "lane '{}' of type '{value_type}' cannot set `storage`: only `u32` and category lanes can",
                     table.id
                 ),
                 storage.span(),
@@ -784,7 +784,7 @@ fn read_field(table: FieldTable, span: Range<usize>, categories: &[Category]) ->
         (_, Some(resolution)) => {
             return Err(Placed(
                 format!(
-                    "the field '{}' has a `resolution`, and only a field with `combine = \"sum\"` takes one",
+                    "the field '{}' cannot have a `resolution` without `combine = \"sum\"`",
                     table.id
                 ),
                 resolution.span(),
@@ -821,7 +821,7 @@ fn read_params(
         if let Some(unit) = unit {
             if let Some(first) = &time {
                 let message = format!(
-                    "the parameters '{}' and '{}' both set `tick_unit`, and a file has one tick length",
+                    "only one parameter can set `tick_unit`, got '{}' and '{}'",
                     first.tick_length,
                     param.id()
                 );
@@ -923,7 +923,7 @@ fn read_pass(table: Spanned<PassTable>) -> Result<(Pass, BodyPlaces), Placed> {
 /// Returns the refusal of a pass's `enabled` key.
 fn not_enabled(span: Range<usize>) -> Placed {
     Placed(
-        "`enabled` is `true`, `false` or `{ param = \"<bool parameter>\" }`".to_owned(),
+        "`enabled` must be `true`, `false` or `{ param = \"<bool parameter>\" }`".to_owned(),
         span,
     )
 }
@@ -965,17 +965,14 @@ fn read_node(table: Spanned<NodeTable>) -> Result<(Node, NodePlaces), Placed> {
 /// Reads the `config` table of a node.
 fn read_config(config: &Spanned<RawValue>, node: &mut Node, places: &mut NodePlaces) -> Result<(), Placed> {
     let RawValue::Table(entries) = config.get_ref() else {
-        return Err(Placed("`config` is a table of keys".to_owned(), config.span()));
+        return Err(Placed("`config` must be a table of keys".to_owned(), config.span()));
     };
     for (key, value) in entries {
         check_segment(key)?;
         let read = read_config_value(value)?;
         if matches!(read, ConfigValue::Table(_)) {
             return Err(Placed(
-                format!(
-                    "`config.{}` is a table, but a configuration value is a scalar or an array",
-                    key.get_ref()
-                ),
+                format!("`config.{}` is a table, expected a scalar or an array", key.get_ref()),
                 value.span(),
             ));
         }
@@ -1014,10 +1011,7 @@ fn check_segment(key: &Spanned<String>) -> Result<(), Placed> {
         Ok(())
     } else {
         Err(Placed(
-            format!(
-                "'{}' is no key of a node, whose keys are letters, digits and `_`",
-                key.get_ref()
-            ),
+            format!("invalid node key '{}', expected letters, digits and `_`", key.get_ref()),
             key.span(),
         ))
     }
@@ -1042,7 +1036,7 @@ fn config_port_depth(prefix: &str) -> usize {
 /// interface ports are all bare, so a port of a call named `init` holds a value.
 fn read_inputs(inputs: &Spanned<RawValue>, node: &mut Node, places: &mut NodePlaces) -> Result<(), Placed> {
     let RawValue::Table(entries) = inputs.get_ref() else {
-        return Err(Placed("`in` is a table of ports".to_owned(), inputs.span()));
+        return Err(Placed("`in` must be a table of ports".to_owned(), inputs.span()));
     };
     let bare = node.op == OP_FUNCTION_CALL || node.op == crate::node::OP_EXPRESSION;
     for (key, value) in entries {
@@ -1082,7 +1076,8 @@ fn read_input_below(
 fn read_input_value(value: &Spanned<RawValue>) -> Result<InputValue, Placed> {
     let refused = || {
         Placed(
-            "an input is a link such as \"n3\", a literal such as `{ f32 = 1.0 }` or a binding such as `{ param = \"rate\" }`"
+            "an input must be a link such as \"n3\", a literal such as `{ f32 = 1.0 }` or a binding such as \
+             `{ param = \"rate\" }`"
                 .to_owned(),
             value.span(),
         )
@@ -1109,7 +1104,7 @@ fn read_number(value: &Spanned<RawValue>) -> Result<f64, Placed> {
     let number = match value.get_ref() {
         RawValue::Float(number) => *number,
         RawValue::Integer(number) => *number as f64,
-        _ => return Err(Placed("this value needs to be a number".to_owned(), value.span())),
+        _ => return Err(Placed("this value must be a number".to_owned(), value.span())),
     };
     if number.is_finite() {
         Ok(number)
@@ -1131,7 +1126,7 @@ fn read_f32(value: &Spanned<RawValue>) -> Result<f32, Placed> {
 fn read_integer<T: TryFrom<i64>>(value: &Spanned<RawValue>, type_name: &str) -> Result<T, Placed> {
     let RawValue::Integer(number) = value.get_ref() else {
         return Err(Placed(
-            format!("this value needs to be a whole `{type_name}`"),
+            format!("this value must be an integer of type `{type_name}`"),
             value.span(),
         ));
     };
@@ -1147,11 +1142,14 @@ fn read_pair<T>(
         RawValue::Array(items) => match items.as_slice() {
             [first, second] => Ok([component(first)?, component(second)?]),
             _ => Err(Placed(
-                format!("a vector has 2 components, and this one has {}", items.len()),
+                format!("this vector has {} components, expected 2", items.len()),
                 value.span(),
             )),
         },
-        _ => Err(Placed("a vector is an array of 2 components".to_owned(), value.span())),
+        _ => Err(Placed(
+            "a vector must be an array of 2 components".to_owned(),
+            value.span(),
+        )),
     }
 }
 
@@ -1189,14 +1187,17 @@ fn read_literal(table: &Spanned<RawValue>) -> Result<Literal, Placed> {
             });
         }
         Err(Placed(
-            format!("a `{tag}` literal is a string `<id>.<name>`"),
+            format!("a `{tag}` literal must be a string `<id>.<name>`"),
             value.span(),
         ))
     };
     match tag {
         "bool" => match value.get_ref() {
             RawValue::Boolean(flag) => Ok(Literal::Bool(*flag)),
-            _ => Err(Placed("a `bool` literal is `true` or `false`".to_owned(), value.span())),
+            _ => Err(Placed(
+                "a `bool` literal must be `true` or `false`".to_owned(),
+                value.span(),
+            )),
         },
         "u32" => read_integer(value, "u32").map(Literal::U32),
         "i32" => read_integer(value, "i32").map(Literal::I32),
@@ -1205,12 +1206,12 @@ fn read_literal(table: &Spanned<RawValue>) -> Result<Literal, Placed> {
         "u64" => match value.get_ref() {
             RawValue::String(text) => read_u64(text).map(Literal::U64).ok_or_else(|| {
                 Placed(
-                    format!("'{text}' is no `u64`, written in decimal or as `0x` hexadecimal"),
+                    format!("invalid `u64` '{text}', expected decimal or `0x` hexadecimal"),
                     value.span(),
                 )
             }),
             _ => Err(Placed(
-                "a `u64` literal is a string, since TOML integers are signed".to_owned(),
+                "a `u64` literal must be a string, since TOML integers are signed".to_owned(),
                 value.span(),
             )),
         },
@@ -1232,7 +1233,7 @@ fn not_finite(span: Range<usize>) -> Placed {
 /// Returns the refusal of a value that is no literal.
 fn not_literal(span: Range<usize>) -> Placed {
     Placed(
-        "a literal is a one-key table tagged by its type, such as `{ f32 = 1.0 }` or `{ cat = \"health.I\" }`"
+        "a literal must be a one-key table tagged by its type, such as `{ f32 = 1.0 }` or `{ cat = \"health.I\" }`"
             .to_owned(),
         span,
     )

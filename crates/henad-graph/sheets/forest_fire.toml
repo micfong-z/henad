@@ -6,7 +6,7 @@ kind = "sheet"
 version = 1
 id = "forest_fire"
 name = "Forest fire"
-purpose = "Self-organised criticality. Pattern to look for: fires of every size, and a tree density that settles near a steady value with a lightning-to-growth ratio far below 1."
+purpose = "Self-organised criticality. Look for fires of every size, and a tree density that settles near a steady value with a lightning-to-growth ratio far below 1."
 next_line = 6
 
 [world]

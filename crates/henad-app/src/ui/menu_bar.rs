@@ -49,7 +49,7 @@ pub(crate) fn file_menu(ui: &mut egui::Ui, app: &mut AppState) {
             }
         })
         .response
-        .on_hover_text("Start node graph from an example in Editor");
+        .on_hover_text("Start node graph from example in Editor");
         if ui
             .button(format!("{MDI_FOLDER_OPEN_OUTLINE}  Open model"))
             .on_hover_text("Open TOML model file in Editor")

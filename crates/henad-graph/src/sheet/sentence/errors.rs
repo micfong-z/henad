@@ -5,13 +5,13 @@ use super::grammar::{number_list, plural, upper_first, word_list};
 // Errors on a rate in a button's card or inside a Repeat, and on a second agent kind
 
 /// Error on a rate in the card of a button.
-pub const RATE_IN_BUTTON_CARD: &str = "A button's card has no duration, so it takes chances, not rates.";
+pub const RATE_IN_BUTTON_CARD: &str = "A button's card has no duration. Use a chance instead of a rate.";
 
 /// Error on a rate on a line inside a Repeat.
-pub const RATE_IN_REPEAT: &str = "a rate cannot stand inside a Repeat";
+pub const RATE_IN_REPEAT: &str = "a rate cannot be used inside a Repeat";
 
 /// Error on a second kind of agent.
-pub const ONE_AGENT_KIND: &str = "One kind of agent per model in this version.";
+pub const ONE_AGENT_KIND: &str = "Only one kind of agent per model is supported in this version.";
 
 // Errors on the lines and worlds a sheet can hold that this version cannot run yet
 
@@ -32,7 +32,7 @@ pub const NOT_YET_BLOCKED_MOVE_BY: &str = "Blocked ground under agents that move
 pub const LINE_TOO_LONG: &str = "This line is too long. Use shorter lists in it.";
 
 /// Error on a line whose number is past the largest a line can have.
-pub const LINE_NUMBER_TOO_LARGE: &str = "This line has too large a number.";
+pub const LINE_NUMBER_TOO_LARGE: &str = "This line's number is too large.";
 
 /// Error on a sheet too large for Henad to run outside its lines.
 pub const SHEET_TOO_LARGE: &str = "The sheet is too large. Use fewer properties, measures or buttons.";
@@ -46,7 +46,7 @@ pub const ON_GROUND_CELLS: &str = "Agents can start only on a state the ground p
 pub const AHEAD_NEEDS_CELLS: &str = "The cell ahead needs agents that move to cells.";
 
 /// Error on a Count, Look around or Pick a cell line inside a Repeat.
-pub const LOOK_IN_REPEAT: &str = "A look around, a count or a pick of a cell cannot sit inside a Repeat.";
+pub const LOOK_IN_REPEAT: &str = "A look around, a count or a pick of a cell cannot be used inside a Repeat.";
 
 /// Error on a Set inside a Repeat whose value reads a line inside that Repeat.
 pub const SET_IN_REPEAT: &str =
@@ -57,28 +57,28 @@ pub const ARROW_COMPARED_WITH_NUMBER: &str = "An arrow cannot be compared with a
 
 // Errors on a change of a property in a second way, and the words of a look at agents that costs too much
 
-/// Returns the error on a Steer of a property that line `line` sets: "Line 3 sets Velocity. A card that sets a
-/// property cannot also steer it."
+/// Returns the error on a Steer of a property that line `line` sets: "Line 3 sets Velocity. This card cannot also
+/// steer it."
 ///
 /// `line` is the line prefix, such as "Line 3".
 pub fn set_already(line: &str, property: &str) -> String {
-    format!("{line} sets {property}. A card that sets a property cannot also steer it.")
+    format!("{line} sets {property}. This card cannot also steer it.")
 }
 
-/// Returns the error on a Set of a property that line `line` steers: "Line 3 steers Velocity. A card that steers a
-/// property cannot also set it."
+/// Returns the error on a Set of a property that line `line` steers: "Line 3 steers Velocity. This card cannot also
+/// set it."
 pub fn steered_already(line: &str, property: &str) -> String {
-    format!("{line} steers {property}. A card that steers a property cannot also set it.")
+    format!("{line} steers {property}. This card cannot also set it.")
 }
 
 /// Returns the error on a Move to below line `line`, a line that moves by an arrow.
 pub fn moved_by_already(line: &str) -> String {
-    format!("{line} moves by an arrow. A card that moves by an arrow cannot also move to a place.")
+    format!("{line} moves by an arrow. This card cannot also move to a place.")
 }
 
 /// Returns the error on a Move by below line `line`, a line that moves to a place.
 pub fn moved_to_already(line: &str) -> String {
-    format!("{line} moves to a place. A card that moves to a place cannot also move by an arrow.")
+    format!("{line} moves to a place. This card cannot also move by an arrow.")
 }
 
 /// Returns the name of the looks at agents of the lines numbered in `lines`, each with its name when it has one: "line

@@ -358,9 +358,9 @@ fn a_shortfall_names_the_properties_a_buffer_holds() {
     assert_eq!(
         sheet.shortfalls(&entry, &params, &limits),
         [
-            "'Health A, Health B and Health C' and 1 more each need 768.0 MB, past the 128.0 MB this device allows for \
-             one storage binding",
-            "'Energy' needs 256.0 MB, past the 128.0 MB this device allows for one storage binding",
+            "'Health A, Health B and Health C' and 1 more each need 768.0 MB, exceeding the 128.0 MB this device \
+             allows for one storage binding",
+            "'Energy' needs 256.0 MB, exceeding the 128.0 MB this device allows for one storage binding",
         ]
     );
 }

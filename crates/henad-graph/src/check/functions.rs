@@ -16,7 +16,7 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, view: &BodyView<'_>) {
             view.error(
                 checker,
                 position,
-                format!("{} belongs in a function body", view.name(position)),
+                format!("{} can only be used in a function body", view.name(position)),
                 view.op_place(position),
             );
         }
@@ -91,7 +91,7 @@ fn check_body(checker: &mut Checker<'_>, view: &BodyView<'_>) {
                 checker,
                 position,
                 format!(
-                    "{} is {what}, and the function '{}' is pure, with no effect but its outputs",
+                    "{} is {what}, a side effect the function '{}' cannot have",
                     view.name(position),
                     function.id
                 ),
@@ -120,7 +120,7 @@ fn check_body(checker: &mut Checker<'_>, view: &BodyView<'_>) {
         if !outputs.contains_key(port.port.as_str()) {
             checker.error(
                 format!(
-                    "the function '{}' never sets its output '{}', which needs one `fn.output`",
+                    "the function '{}' has no `fn.output` for its output '{}'",
                     function.id, port.port
                 ),
                 view.places.table.clone().into(),

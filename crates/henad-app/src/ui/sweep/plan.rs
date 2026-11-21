@@ -174,7 +174,7 @@ impl PlanSummary {
         ];
         rows.extend(budgets.into_iter().filter_map(|(label, bytes)| {
             let mut row = PlanRow::new(label, fmt_bytes(bytes?), None);
-            row.tooltip = Some(format!("Recorded by the {}", session.mode().noun()));
+            row.tooltip = Some(format!("Recorded by {}", session.mode().noun()));
             Some(row)
         }));
         Self {

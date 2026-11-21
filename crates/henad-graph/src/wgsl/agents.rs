@@ -268,8 +268,8 @@ impl AgentProgram {
     ///
     /// A sheet passes the names of its looks at agents, so a fold past its visit cap names the author line in the
     /// words of [`look_met_too_many`], as "line 3, Flockmates: looked at more than 65536 agents around one
-    /// agent, and the run stops. A larger world or a shorter distance looks at fewer". The names change no shader and
-    /// leave the file's text and its code identity alone.
+    /// agent, and the run stops. Use a larger world or a shorter distance to look at fewer agents". The names change no
+    /// shader and leave the file's text and its code identity alone.
     ///
     /// # Errors
     ///
@@ -310,7 +310,7 @@ impl AgentProgram {
         HostEvaluator::from_document(document).map_err(|error| error.diagnostics())?;
         let World::Agents(world) = document.world else {
             return Err(vec![CodeDiagnostic::error(
-                "the graph models a grid, and the compiler of agents compiles graphs of agents alone",
+                "the agents compiler cannot compile a grid graph",
             )]);
         };
         let (evaluator, report, compiled) = compile_parts(file, probes)?;
@@ -420,8 +420,8 @@ impl AgentProgram {
                     ),
                     format!(
                         "the pass '{pass}', {located}{line}: Agents in radius would walk more than {} cells of the \
-                         neighbour index around one agent, and the run stops. A smaller radius or a larger cell size \
-                         walks fewer",
+                         neighbour index around one agent, and the run stops. Use a smaller radius or a larger cell \
+                         size to walk fewer cells",
                         crate::limits::MAX_WALK_CELLS
                     ),
                 ]
@@ -733,7 +733,7 @@ pub(crate) fn compile_agent_shaders(
             let wgsl = WgslType::of(&lane.value_type);
             if wgsl.is_none() {
                 problems.push(CodeDiagnostic::error(format!(
-                    "the lane '{}' holds a type only the host holds, and every lane of an agents world lives on the GPU",
+                    "the lane '{}' of an agents world has a type the GPU does not support",
                     lane.id
                 )));
             }
@@ -751,7 +751,7 @@ pub(crate) fn compile_agent_shaders(
         .position(|lane| lane.role == Some(crate::document::LaneRole::Position));
     if position_lane.is_none() {
         problems.push(CodeDiagnostic::error(
-            "the world of agents has no lane with `role = \"position\"`, which the GPU draws and indexes",
+            "the world of agents needs a lane with `role = \"position\"` to draw and index its agents on the GPU",
         ));
     }
     let mut fields = Vec::new();
@@ -958,8 +958,7 @@ pub(crate) fn compile_agent_shaders(
         if passes.len() > 1 {
             problems.push(
                 CodeDiagnostic::error(format!(
-                    "the action '{}' runs {} action passes, and the GPU runs one action pass per action in an agents \
-                     world",
+                    "the action '{}' runs {} action passes, expected at most 1 in an agents world on the GPU",
                     action.id,
                     passes.len()
                 ))
@@ -997,8 +996,8 @@ pub(crate) fn compile_agent_shaders(
         });
         if written_partially {
             problems.push(CodeDiagnostic::error(format!(
-                "an action reruns an init pass that writes some layers of the field '{}', and the GPU uploads a \
-                 field whole: write every layer of it in the rerun",
+                "an action reruns an init pass that writes only some layers of the field '{}'. Write every layer in \
+                 the rerun, because the GPU uploads the whole field",
                 field.id
             )));
         }

@@ -669,7 +669,7 @@ impl fmt::Display for PlanError {
                 write!(f, "unknown action '{id}', expected one of {}", known.join(", "))
             }
             Self::DuplicateActionName { name } => {
-                write!(f, "two actions are named '{name}', and a name must be unique")
+                write!(f, "duplicate action name '{name}'")
             }
             Self::Fixed(_) => write!(f, "fixed values"),
             Self::UnknownFixed { id, known } => {

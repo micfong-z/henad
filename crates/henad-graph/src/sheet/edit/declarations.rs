@@ -127,7 +127,7 @@ impl Draft {
         let property = self.property_mut(property)?;
         if property.property_type != PropertyType::States {
             return Err(SheetEditError::Invalid(format!(
-                "'{}' is no States property",
+                "'{}' is not a States property",
                 property.id
             )));
         }
@@ -209,7 +209,7 @@ impl Draft {
             }
             _ => {
                 return Err(SheetEditError::Invalid(
-                    "a new button starts again or runs once".to_owned(),
+                    "a new button must start again or run once".to_owned(),
                 ));
             }
         }
@@ -247,13 +247,13 @@ impl Draft {
     /// Adds the card `every` runs each tick, before every card that runs once.
     pub(super) fn add_card(&mut self, every: &str) -> Result<Vec<String>, SheetEditError> {
         if every == "ground" {
-            return Err(SheetEditError::Invalid("the ground has no card".to_owned()));
+            return Err(SheetEditError::Invalid("the ground cannot have a card".to_owned()));
         }
         self.require_thing(every)?;
         let id = Self::tick_card_id(every);
         if id.len() > MAX_SHEET_ID_BYTES {
             return Err(SheetEditError::Invalid(format!(
-                "the card id '{id}' holds more than {MAX_SHEET_ID_BYTES} bytes"
+                "the card id '{id}' exceeds {MAX_SHEET_ID_BYTES} bytes"
             )));
         }
         if self.document.cards.iter().any(|card| card.id == id) {
@@ -421,7 +421,7 @@ impl Draft {
             .and_then(|ground| ground.properties.iter_mut().find(|property| property.id == id))
             .ok_or_else(|| missing("ground property", id))?;
         if property.property_type != property_type {
-            return Err(SheetEditError::Invalid(format!("'{id}' is no {what} of the ground")));
+            return Err(SheetEditError::Invalid(format!("'{id}' is not a {what} of the ground")));
         }
         Ok(property)
     }
@@ -487,8 +487,8 @@ impl Draft {
     pub(super) fn change_id(&mut self, item: &SheetItem, id: &str) -> Result<(), SheetEditError> {
         if !is_id(id) || id.len() > MAX_SHEET_ID_BYTES {
             return Err(SheetEditError::Invalid(format!(
-                "'{id}' is no sheet id: lower case letters, digits and single '_', a letter first, at most \
-                 {MAX_SHEET_ID_BYTES} bytes"
+                "invalid sheet id '{id}', expected lower case letters, digits and single '_', starting with a \
+                 letter, at most {MAX_SHEET_ID_BYTES} bytes"
             )));
         }
         let space = match item {
@@ -506,7 +506,7 @@ impl Draft {
         self.require_item(item)?;
         let taken = |held: bool| {
             if held {
-                Err(SheetEditError::Taken(format!("the id '{id}' is already held")))
+                Err(SheetEditError::Taken(format!("the id '{id}' is already in use")))
             } else {
                 Ok(())
             }
@@ -741,7 +741,7 @@ impl Draft {
             SheetItem::Card(id) => self.delete_card(id)?,
             SheetItem::AgentKind(id) => {
                 return Err(SheetEditError::Invalid(format!(
-                    "the kind of agent '{id}' is the world's only one and stays"
+                    "the kind of agent '{id}' cannot be removed, as it is the world's only kind of agent"
                 )));
             }
         }

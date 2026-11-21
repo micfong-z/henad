@@ -537,7 +537,7 @@ fn a_code_of_another_format_is_refused() {
     assert!(matches!(error, GraphFileError::Format(_)));
     assert_eq!(
         error.diagnostic().message,
-        "Recorded under henad-graph/2, and this build runs henad-graph/1"
+        "Recorded in format henad-graph/2, but this build reads henad-graph/1"
     );
 }
 
@@ -798,7 +798,7 @@ fn a_lane_defaults_its_storage_by_type() {
 fn storage_on_another_lane_type_is_refused_in_place() {
     let text = minimal_with("[[lane]]\nid = \"x\"\ndomain = \"cells\"\ntype = \"f32\"\nstorage = \"u8\"\n");
     let diagnostic = graph_refusal(&text);
-    assert!(diagnostic.message.contains("must not set `storage`"), "{diagnostic}");
+    assert!(diagnostic.message.contains("cannot set `storage`"), "{diagnostic}");
     assert!(diagnostic.line.is_some(), "{diagnostic}");
 }
 
@@ -910,7 +910,10 @@ fn network_keys_and_sequence_passes_are_refused() {
         let lane = minimal_with(&format!(
             "[[lane]]\nid = \"x\"\ndomain = \"cells\"\ntype = \"{type_name}\"\n"
         ));
-        assert!(graph_refusal(&lane).message.contains("no value type"), "{type_name}");
+        assert!(
+            graph_refusal(&lane).message.contains("unknown value type"),
+            "{type_name}"
+        );
     }
 }
 
@@ -956,9 +959,9 @@ fn the_header_is_checked_before_the_rest() {
         (
             "library = 1",
             "library = 3",
-            "the file uses node library 3, and this build reads up to 1",
+            "the file uses node library 3, expected at most 1",
         ),
-        ("library = 1", "library = 0", "libraries count from 1"),
+        ("library = 1", "library = 0", "must be at least 1, got 0"),
     ] {
         let text = format!("{}{unknown}", MINIMAL.replace(old, new));
         let diagnostic = graph_refusal(&text);
@@ -1018,34 +1021,34 @@ fn deep_nesting_within_the_limit_is_an_error_and_no_crash() {
 #[test]
 fn input_forms_are_refused_in_place() {
     for (keys, message) in [
-        ("in.a = 3", "an input is a link"),
-        ("in.a = true", "an input is a link"),
-        ("in.a = [1, 2]", "an input is a link"),
-        ("in.a = { f32 = 1.0, u32 = 2 }", "an input is a link"),
-        ("in.a = {}", "an input is a link"),
-        ("in.a = { param = 3 }", "an input is a link"),
-        ("in.a = \"m3\"", "no node id"),
-        ("in.a = \"n0\"", "no node id"),
-        ("in.a = \"n03\"", "no node id"),
-        ("in.a = \"n3.\"", "names no port"),
-        ("in.a = \"n3.b c\"", "names no port"),
-        ("in.a = \"n99999999999\"", "no node id"),
-        ("in.a = { mystery = 1 }", "a literal is a one-key table"),
+        ("in.a = 3", "an input must be a link"),
+        ("in.a = true", "an input must be a link"),
+        ("in.a = [1, 2]", "an input must be a link"),
+        ("in.a = { f32 = 1.0, u32 = 2 }", "an input must be a link"),
+        ("in.a = {}", "an input must be a link"),
+        ("in.a = { param = 3 }", "an input must be a link"),
+        ("in.a = \"m3\"", "invalid node id"),
+        ("in.a = \"n0\"", "invalid node id"),
+        ("in.a = \"n03\"", "invalid node id"),
+        ("in.a = \"n3.\"", "invalid port reference"),
+        ("in.a = \"n3.b c\"", "invalid port reference"),
+        ("in.a = \"n99999999999\"", "invalid node id"),
+        ("in.a = { mystery = 1 }", "a literal must be a one-key table"),
         ("in.a = { u32 = -1 }", "out of range"),
         ("in.a = { u32 = 4294967296 }", "out of range"),
-        ("in.a = { u32 = 1.5 }", "whole `u32`"),
+        ("in.a = { u32 = 1.5 }", "integer of type `u32`"),
         ("in.a = { i32 = 2147483648 }", "out of range"),
         ("in.a = { f32 = nan }", "must be finite"),
         ("in.a = { f32 = inf }", "must be finite"),
         ("in.a = { f32 = 1e300 }", "too large"),
         ("in.a = { f64 = -inf }", "must be finite"),
-        ("in.a = { f32 = \"1\" }", "needs to be a number"),
-        ("in.a = { u64 = 16 }", "is a string"),
-        ("in.a = { u64 = \"+16\" }", "is no `u64`"),
-        ("in.a = { u64 = \"0x\" }", "is no `u64`"),
-        ("in.a = { u64 = \"18446744073709551616\" }", "is no `u64`"),
-        ("in.a = { u64 = \"\" }", "is no `u64`"),
-        ("in.a = { vec2f = [1.0] }", "2 components"),
+        ("in.a = { f32 = \"1\" }", "must be a number"),
+        ("in.a = { u64 = 16 }", "must be a string"),
+        ("in.a = { u64 = \"+16\" }", "invalid `u64`"),
+        ("in.a = { u64 = \"0x\" }", "invalid `u64`"),
+        ("in.a = { u64 = \"18446744073709551616\" }", "invalid `u64`"),
+        ("in.a = { u64 = \"\" }", "invalid `u64`"),
+        ("in.a = { vec2f = [1.0] }", "components, expected 2"),
         ("in.a = { vec2f = 1.0 }", "array of 2"),
         ("in.a = { vec2u = [1, -1] }", "out of range"),
         ("in.a = { bool = 1 }", "`true` or `false`"),
@@ -1055,15 +1058,15 @@ fn input_forms_are_refused_in_place() {
         ("in.a = 1979-05-27T07:32:00Z", "datetime"),
         ("in.init = \"n3\"", "needs a name after it"),
         ("in.rule.a = \"n3\"", "needs a name after it"),
-        ("in.\"a b\" = \"n3\"", "no key of a node"),
-        ("in = 3", "`in` is a table"),
-        ("config = 3", "`config` is a table"),
+        ("in.\"a b\" = \"n3\"", "invalid node key"),
+        ("in = 3", "`in` must be a table"),
+        ("config = 3", "`config` must be a table"),
         ("config.a.b = 3", "a scalar or an array"),
-        ("config.\"a b\" = 3", "no key of a node"),
+        ("config.\"a b\" = 3", "invalid node key"),
         ("config.a = nan", "must be finite"),
         ("config.a = [{ b = inf }]", "must be finite"),
-        ("config.a = [{ \"b c\" = 1 }]", "no key of a node"),
-        ("region = \"x\"", "no node id"),
+        ("config.a = [{ \"b c\" = 1 }]", "invalid node key"),
+        ("region = \"x\"", "invalid node id"),
     ] {
         let text = pass_with_node(keys);
         let diagnostic = graph_refusal(&text);
@@ -1079,48 +1082,51 @@ fn declaration_values_are_refused_in_place() {
     for (body, message) in [
         (
             "[[category]]\nid = \"c\"\nvariants = [{ name = \"a\", color = [1, 2] }]\n",
-            "3 or 4 bytes",
+            "expected 3 or 4",
         ),
-        ("[[palette]]\nid = \"p\"\ncolors = [[1, 2, 3, 4, 5]]\n", "3 or 4 bytes"),
+        (
+            "[[palette]]\nid = \"p\"\ncolors = [[1, 2, 3, 4, 5]]\n",
+            "expected 3 or 4",
+        ),
         (
             "[[lane]]\nid = \"l\"\ndomain = \"cells\"\ntype = \"mystery\"\n",
-            "no value type",
+            "unknown value type",
         ),
         (
             "[[lane]]\nid = \"l\"\ndomain = \"cells\"\ntype = \"cat:Bad__Id\"\n",
-            "no category id",
+            "not a category id",
         ),
         (
             "[[lane]]\nid = \"l\"\ndomain = \"cells\"\ntype = \"layer:\"\n",
-            "no field id",
+            "not a field id",
         ),
         (
             "[[lane]]\nid = \"l\"\ndomain = \"cells\"\ntype = \"f32\"\ninitial = 0.0\n",
-            "a literal is a one-key table",
+            "a literal must be a one-key table",
         ),
         (
             "[[stat]]\nlabel = \"s\"\nfrom = \"x\"\ncolor = [1, 2, 3]\n",
-            "no node id",
+            "invalid node id",
         ),
         (
             "[[stat]]\nlabel = \"s\"\nfrom = \"n1\"\ncolor = [1, 2]\n",
-            "3 or 4 bytes",
+            "expected 3 or 4",
         ),
         (
             "[[pass]]\nid = \"p\"\nstage = \"tick\"\nkind = \"map\"\nenabled = 1\n",
-            "`enabled` is",
+            "`enabled` must be",
         ),
         (
             "[[pass]]\nid = \"p\"\nstage = \"tick\"\nkind = \"map\"\nenabled = { param = 1 }\n",
-            "`enabled` is",
+            "`enabled` must be",
         ),
         (
             "[[pass]]\nid = \"p\"\nstage = \"tick\"\nkind = \"map\"\nenabled = { other = \"x\" }\n",
-            "`enabled` is",
+            "`enabled` must be",
         ),
         (
             "[[pass]]\nid = \"p\"\nstage = \"tick\"\nkind = \"map\"\ndraw_order = [\"y\"]\n",
-            "no node id",
+            "invalid node id",
         ),
         (
             "[[param]]\nid = \"p\"\nkind = \"f32\"\nmin = 0.0\nmax = nan\ndefault = 0.0\n",
@@ -1129,7 +1135,7 @@ fn declaration_values_are_refused_in_place() {
         ("[agents]\ncount = 1\n", "does not belong to the grid topology"),
         (
             "[[function]]\nid = \"f\"\nkind = \"pure\"\n\n[[function.input]]\nport = \"a\"\ntype = \"x\"\n",
-            "no value type",
+            "unknown value type",
         ),
     ] {
         let diagnostic = graph_refusal(&minimal_with(body));
@@ -1269,16 +1275,16 @@ fn the_id_grammars_hold() {
 #[test]
 fn accumulators_refuse_a_bad_list() {
     for (config, message) in [
-        ("config.acc = \"position\"", "no list"),
-        ("config.acc = [1]", "is a `{ name, type, combine }` table"),
+        ("config.acc = \"position\"", "not a list"),
+        ("config.acc = [1]", "must be a `{ name, type, combine }` table"),
         ("config.acc = [{ name = \"a\", type = \"f32\" }]", "`combine`"),
         (
             "config.acc = [{ name = \"a\", type = \"x\", combine = \"or\" }]",
-            "no value type",
+            "unknown value type",
         ),
         (
             "config.acc = [{ name = \"a\", type = \"f32\", combine = \"x\" }]",
-            "no combine rule",
+            "unknown combine rule",
         ),
     ] {
         let file = parse(&pass_with_node(config));

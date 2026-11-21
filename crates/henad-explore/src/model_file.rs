@@ -464,7 +464,7 @@ impl GridRuleFile {
         let file: FileTable = toml::from_str(&read).map_err(toml_error)?;
         let step = step_offset(&read, &file.step.wgsl).ok_or_else(|| {
             placed(
-                "write the step as a literal string between `'''`, which holds the WGSL as written".to_owned(),
+                "write the step as a literal string between `'''` to keep the WGSL as written".to_owned(),
                 file.step.wgsl.span(),
             )
         })?;
@@ -591,7 +591,7 @@ impl GridRuleFile {
 fn check_step(step: &str) -> Result<(), (String, Range<usize>)> {
     if let Some(at) = step.find("'''") {
         return Err((
-            "the step contains `'''`, which ends a literal string in a model file".to_owned(),
+            "the step cannot contain `'''`: it ends a literal string in a model file".to_owned(),
             at..at + 3,
         ));
     }
@@ -601,7 +601,7 @@ fn check_step(step: &str) -> Result<(), (String, Range<usize>)> {
     {
         Some((at, c)) => Err((
             format!(
-                "the step contains the control character U+{:04X}, which is not allowed in a model file",
+                "the step cannot contain the control character U+{:04X} in a model file",
                 u32::from(c)
             ),
             at..at + c.len_utf8(),
@@ -735,7 +735,7 @@ impl StateTable {
             [red, green, blue, alpha] => [red, green, blue, alpha],
             _ => {
                 return Err(format!(
-                    "state '{label}' has a colour of {} bytes, but a colour must have 3 or 4",
+                    "state '{label}' has a colour of {} bytes, expected 3 or 4",
                     color.len()
                 ));
             }

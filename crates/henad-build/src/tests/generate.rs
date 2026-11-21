@@ -341,7 +341,7 @@ fn a_composer_panic_is_an_error() {
     assert!(
         error
             .to_string()
-            .contains("state.wgsl: Cannot find import `gpu_vote::missing::LOST`"),
+            .contains("state.wgsl: cannot find import `gpu_vote::missing::LOST`"),
         "{error}"
     );
 

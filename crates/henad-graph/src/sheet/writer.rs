@@ -87,7 +87,7 @@ impl fmt::Display for SheetWriteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the value of `{}` is {}, and a sheet holds only finite numbers",
+            "the value of `{}` is {}, expected a finite number",
             self.key, self.value
         )
     }

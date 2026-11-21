@@ -91,10 +91,10 @@ pub fn check_choice_options<S: AsRef<str>>(options: &[S]) -> Result<(), String> 
     for (position, option) in options.iter().enumerate() {
         let option = option.as_ref();
         if option.is_empty() || option.trim() != option {
-            return Err(format!("option '{option}' is empty or has spaces at an end"));
+            return Err(format!("option '{option}' is empty or has leading or trailing spaces"));
         }
         if option.parse::<usize>().is_ok() {
-            return Err(format!("option '{option}' reads as an index"));
+            return Err(format!("option '{option}' parses as an index"));
         }
         if option.contains([',', ':']) || option == "all" {
             return Err(format!("option '{option}' cannot be listed in a sweep's levels"));
@@ -179,13 +179,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "choice 'level': option '2' reads as an index")]
+    #[should_panic(expected = "choice 'level': option '2' parses as an index")]
     fn choice_builder_refuses_an_option_named_as_an_index() {
         choice_param("level", "Level", &["low", "2"], 0);
     }
 
     #[test]
-    #[should_panic(expected = "choice 'network': option 'Random ' is empty or has spaces at an end")]
+    #[should_panic(expected = "choice 'network': option 'Random ' is empty or has leading or trailing spaces")]
     fn choice_builder_refuses_an_option_with_trailing_spaces() {
         choice_param("network", "Network", &["Random ", "Geometric"], 0);
     }

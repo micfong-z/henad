@@ -120,10 +120,10 @@ pub fn include_me_tool(word: &str) -> String {
     format!("Include me in {word}")
 }
 
-/// Returns the tool of a look at agents' menu that leaves the agent itself out of those it looks at, such as "Leave
-/// me out of line 1", where `word` is the line word.
+/// Returns the tool of a look at agents' menu that leaves the agent itself out of those it looks at, such as "Exclude
+/// me from line 1", where `word` is the line word.
 pub fn leave_me_out_tool(word: &str) -> String {
-    format!("Leave me out of {word}")
+    format!("Exclude me from {word}")
 }
 
 /// No ground property for a picker of a ground property.
@@ -136,7 +136,7 @@ pub const NO_EVENT: &str = "No event yet. Add one under Events on the sheet.";
 pub const NO_PLACE: &str = "No cell picked above this line yet. Make one with + Look around above this line.";
 
 /// A typed number of times that is no whole number from 0.
-pub const TYPE_TIMES: &str = "Type an integer from 0, such as 4.";
+pub const TYPE_TIMES: &str = "Type a non-negative integer, such as 4.";
 
 /// Heading of the group of parameters in a picker of a number.
 pub const PARAMETERS: &str = "Parameters";
@@ -166,10 +166,10 @@ pub const REMOVE_FROM_LIST: &str = "Remove from list";
 pub fn for_each_lead(draw: DrawKind) -> &'static str {
     match draw {
         DrawKind::Rate => {
-            "The rate grows with what you choose. With for each infected neighbour, a cell with 2 infected neighbours \
+            "The rate grows with the chosen count. With for each infected neighbour, a cell with 2 infected neighbours \
              gets twice the rate."
         }
-        DrawKind::Chance => "Each one counted is a separate try with this chance.",
+        DrawKind::Chance => "Each one counted is an independent trial with this chance.",
     }
 }
 
@@ -195,9 +195,9 @@ pub const NO_STATES: &str = "No states yet. Add a States property under Cells on
 // Messages for a typed number
 
 /// A typed chance outside 0 to 1.
-pub const CHANCE_OUT_OF_RANGE: &str = "A chance is from 0 to 1, or from 0% to 100%.";
+pub const CHANCE_OUT_OF_RANGE: &str = "The chance must be from 0 to 1, or from 0% to 100%.";
 /// A typed rate below 0.
-pub const RATE_BELOW_ZERO: &str = "A rate cannot be below 0.";
+pub const RATE_BELOW_ZERO: &str = "The rate must be at least 0.";
 /// Typed text that is not one number.
 pub const TYPE_ONE_NUMBER: &str = "Type one number, such as 3 or 0.25.";
 /// A list typed in a blank of one number.
@@ -241,13 +241,13 @@ pub fn read_typed_number(text: &str) -> Option<SheetLiteral> {
 
 /// Returns the reason an edit is refused that would keep `value`, a number that is not finite, on the sheet.
 ///
-/// It reads "that number is too large to keep" for an infinity and "that number cannot be worked out" for NaN. The
+/// It reads "that number is too large" for an infinity and "that number cannot be worked out" for NaN. The
 /// reason is a clause, which the editor starts with a capital and ends with a full stop.
 pub fn number_not_kept(value: f64) -> &'static str {
     if value.is_nan() {
         "that number cannot be worked out"
     } else {
-        "that number is too large to keep"
+        "that number is too large"
     }
 }
 

@@ -64,7 +64,7 @@ pub(super) fn painted(
     start: &StartsAs,
 ) -> Result<InputValue, String> {
     if property.property_type != PropertyType::States {
-        return Err("a painted start paints a States property".to_owned());
+        return Err("a painted start can only paint a States property".to_owned());
     }
     let state = |id: &str| InputValue::Literal(state_literal(&property.id, id));
     let base = start.base.as_deref().ok_or("a painted start needs a base state")?;

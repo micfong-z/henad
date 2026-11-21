@@ -95,7 +95,7 @@ An average keeps the name it was given, such as "Average of Food", in step with 
 ### The Card pane
 
 Each card is a frame with its heading, such as "Each tick, every cell", and its number of lines at the right end.
-Under the heading, a grey bar marks the rule every line follows: everyone reads the world as it was at the start of the tick, all changes land together at the end of it, and whatever no line changes stays as it was.
+Under the heading, a grey bar marks the rule every line follows: everyone reads the world as it was at the start of the tick, all changes are applied together at the end of the tick, and a property that no line changes is left unchanged.
 
 A line either works out a result, which lines below it can use, or changes one of the cell's properties.
 A bar at the left of each line shows its kind by colour, as the square on each add button does: blue for a look around, purple for a chance, yellow for a yes or no, grey for a calculation, green for a change, and white for a When or a Repeat.
@@ -180,8 +180,8 @@ A grey note under a rate line states the chance per tick it gives with the param
 
 ```text
 3  Become Recovered from Infected, at rate Recovery rate per day
-   Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. A rate is not a chance.
-   Henad turns it into one as 1 − e^(−0.1 × 1 day).
+   Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952.
+   The rate is converted to a chance by 1 − e^(−0.1 × 1 day).
 ```
 
 The note reads the values the world tries while a run of the sheet is loaded, and the values the sheet keeps otherwise.
@@ -200,7 +200,7 @@ A cell leaves at the sum of the rates, and each line takes the share its rate gi
 A button's card has no duration, so it takes chances and no rate.
 Removing the unit of one tick leaves every rate line with "Not run yet: set how long one tick is, under World on the sheet".
 When the length of one tick changes, a notice under the Time line names the lines that use chances per tick, which do not follow the time scale.
-**Change to a rate** in the line menu turns a typed chance into the rate that gives the same chance at the current tick, and **Change to a chance** turns a typed rate back.
+**Convert to a rate** in the line menu turns a typed chance into the rate that gives the same chance at the current tick, and **Convert to a chance** turns a typed rate back.
 
 ### When blocks
 
@@ -214,7 +214,7 @@ Once the card holds a When, a note above the add buttons says they add a line at
 
 A change added inside a When with no condition starts as "always".
 A Become there changes from the state named by the nearest When around it that tests "my [property] is [state]".
-A grey note under it says which condition it holds under, such as "Only when line 4 holds: my Status is Dead.", and **Choose when** reminds you that the When already gives a condition.
+A grey note under it says which condition it holds under, such as "Only when line 4 holds: my Status is Dead.", and **Choose when** reminds you that the When already has a condition.
 A result inside a When is still worked out for every cell, and only the lines after it inside that When can use it.
 An empty When says "Nothing inside yet."
 
@@ -243,7 +243,7 @@ A look at agents starts with one summary, an average.
 The select before each summary changes it to a total, the largest, the smallest or a count, or removes it, and **+** after the summaries adds another.
 A summary names itself after what it sums up, such as "average velocity" for the average of their Velocity, "centre" for the average offset to them and "push" for the total offset away from them.
 A summary's picker lists each agent's properties as "their Velocity" and the relations "offset to them", "offset away from them" and "distance to them".
-The line menu's **Include me in line 1** counts the agent itself among those it looks at, and **Leave me out of line 1** undoes it.
+The line menu's **Include me in line 1** counts the agent itself among those it looks at, and **Exclude me from line 1** undoes it.
 
 A value on a card over agents also takes the summaries of the looks above, as "Flockmates' centre", the cells picked above, and new values: a random number between two values, or a random direction of a length.
 A number also takes the length of an arrow property, as "length of my Velocity".
@@ -264,8 +264,8 @@ Boids, built from a blank model of agents:
 ```
 
 A card changes a property one way: by Set or by Steer, and an agent's place by Move by or by Move to.
-A second way shows under its line in red, such as "Line 3 steers Velocity. A card that steers a property cannot also set it.", and the model does not build until it is gone.
-A look around, a count or a pick of a cell inside a Repeat shows "A look around, a count or a pick of a cell cannot sit inside a Repeat." under its line.
+A second way shows under its line in red, such as "Line 3 steers Velocity. This card cannot also set it.", and the model does not build until it is gone.
+A look around, a count or a pick of a cell inside a Repeat shows "A look around, a count or a pick of a cell cannot be used inside a Repeat." under its line.
 
 ### The line menu
 
@@ -275,9 +275,9 @@ Each line has a menu, "Line 2 actions", always drawn at the end of the line:
 - **Move line 2 up** and **Move line 2 down**, which follow the outline.
   The first line inside a block moves up out of it, the last moves down out of it, a line beside a block moves into it, and a When moves with all its lines.
 - **Draw new numbers**, on a line that draws by chance, which gives the line new random numbers.
-- **Change to a rate** on a line with a typed chance outside a Repeat, and **Change to a chance** on a line with a typed rate, on a card that runs each tick.
+- **Convert to a rate** on a line with a typed chance outside a Repeat, and **Convert to a chance** on a line with a typed rate, on a card that runs each tick.
   Both keep the chance per tick.
-- **Include me in line 2** or **Leave me out of line 2**, on a look at agents.
+- **Include me in line 2** or **Exclude me from line 2**, on a look at agents.
 - **Delete line 2**.
   Deleting a When or a Repeat keeps its lines and moves them out one level.
 
@@ -313,7 +313,7 @@ Apply of a new model therefore never replaces a model built into the app, while 
 A sheet that holds a problem still opens, with the problem under its line, or listed under the panes when no line holds it.
 [Sheets](../reference/model-files.md#sheets) in the model file reference describes the file.
 
-While a run of another model is past tick 0, the preview waits, and the Editor reads **Preview waits for the running model. Press Offload in Playback to show this one.**
+While a run of another model is past tick 0, the preview waits, and the Editor reads **Preview waits for the running model. Press Offload in the Playback tab to preview this model.**
 Apply then installs the sheet and selects it, and the run keeps going.
 The Editor reads **Model applied. Press Build to run it.**, and <span class="ui" markdown>:material-restart: Build</span> replaces the run with the sheet at its own size.
 Press <span class="ui" markdown>:material-tray-remove: Offload</span> instead to end the run, and the preview takes the Viewport.
@@ -365,7 +365,7 @@ An edit of the sheet that leaves its code alone, such as a note, a comment, the 
 The panel beside the canvas ends with **From the author model**, naming the sheet, its file and the date of the conversion, then the sheet's purpose and what each parameter means, which the node graph has no place for.
 
 Once an edit of the copy adds, removes or changes a node, press **Show changes** in the banner to list every node added, removed or changed since the conversion, at the top of the panel beside the canvas.
-Each node is listed under the title of the frame it sits in, and nodes added after the conversion, which join no frame, under "In no frame".
+Each node is listed under the title of the frame it sits in, and nodes added after the conversion, which join no frame, under "Not in a frame".
 Press a listed node to open it on its canvas.
 On the canvas, an added node carries a green **Added** badge and a changed node a yellow **Changed** badge.
 Press **Show changes** again to hide the list and the badges.
@@ -410,7 +410,7 @@ A run past tick 0 keeps going, and the Editor reads **Preview waits for the runn
 Pressing <span class="ui" markdown>:material-restart: Build</span> after the edit keeps the Viewport for that run.
 
 An edit that leaves the graph invalid leaves the preview running.
-The node with the problem takes a red frame and a badge, and the list under the canvas names the problem with its pass and node, as in **step, n16: Greater n16: the input `b` is f32, and the node needs u32**.
+The node with the problem takes a red frame and a badge, and the list under the canvas names the problem with its pass and node, as in **step, n16: Greater n16: the input `b` is f32, expected u32**.
 Press the badge, or the problem in the list, to bring the node into view.
 A pass with problems shows their number beside its name.
 
@@ -514,7 +514,7 @@ What happens to the run depends on what was running:
 - With no run, a run still at tick 0, or a model still building, the rule is built at once and the run starts at tick 0.
   The desktop app builds it on a thread of its own, as [Building a model](app.md#building-a-model) describes, and the Editor reads **Model applied.** from the start of the build.
   Press <span class="ui">Cancel</span> in the Playback tab to stop the build, and the Editor reads **Model applied. Press Build to run it.**
-- A run of the same rule past tick 0 opens the **Rebuild model** dialog, which reads **The model will be rebuilt from tick 0. The current run will be lost.**
+- A run of the same rule past tick 0 opens the **Rebuild model?** dialog, which reads **The model will be rebuilt from tick 0. The current run will be lost.**
   The Editor reads **Model applied. Press Rebuild to run it from tick 0.**
   Press <span class="ui">Rebuild</span> to start the new rule from tick 0, or <span class="ui">Cancel</span> to keep the run going under the code it was built with.
   After Cancel, <span class="ui" markdown>:material-restart: Build</span> runs the new rule, and Apply opens the dialog again.
@@ -577,7 +577,7 @@ A heavy step on a large grid can still take long enough per tick to lose the GPU
 - A results folder of a grid rule cannot rebuild the rule in the app.
 - A GPU model runs many ticks per frame, so a small preview can reach the end of its run within a second.
 - A grid rule or a graph model needs a GPU with compute support.
-  On a device without it, the Editor reads **Grid rules and graph models cannot run on this device. They need a GPU with compute support.**
+  On a device without it, the Editor reads **Grid rules and graph models are unavailable on this device. They need a GPU with compute support.**
 
 *[GPU]: Graphics processing unit
 *[CPU]: Central processing unit

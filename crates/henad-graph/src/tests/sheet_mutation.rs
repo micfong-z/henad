@@ -101,7 +101,7 @@ fn a_result_of_a_change_line_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "l3 makes a change and gives no result",
+        "l3 makes a change and returns no result",
         "[card.line.l2]",
     );
 }
@@ -137,7 +137,7 @@ fn a_state_of_another_property_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "'food' is no state of 'cargo'",
+        "'food' is not a state of 'cargo'",
         "[card.line.l3]",
     );
 }
@@ -191,7 +191,7 @@ fn an_unlisted_line_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "line l3 is listed in no lines list",
+        "line l3 is not listed in any lines list",
         "[card.line.l3]",
     );
 }
@@ -202,7 +202,7 @@ fn a_line_past_next_line_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "line l4 is not below [sheet] next_line 4",
+        "the number of line l4 must be less than [sheet] next_line 4",
         "[card.line.l4]",
     );
 }
@@ -226,7 +226,7 @@ fn a_number_in_a_condition_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "a slot wants yes or no and holds a number",
+        "expected yes or no in a slot, got a number",
         "[card.line.l4]",
     );
 }
@@ -257,7 +257,7 @@ fn a_result_from_another_card_is_an_error() {
             "[card.line.l4.condition]\nkind = \"compare\"\ntest = \"is\"\nleft = { result = \"l1\" }\nright = 3",
         )],
     );
-    assert_reported(&text, Expected::Error, "l1 sits in another card", "[card.line.l4]");
+    assert_reported(&text, Expected::Error, "l1 is in another card", "[card.line.l4]");
 }
 
 #[test]
@@ -323,7 +323,7 @@ fn a_part_of_the_wrong_line_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "'centre' is no part of l2, a look_around line",
+        "'centre' is not a part of l2, a look_around line",
         "[card.line.l3]",
     );
 }
@@ -337,7 +337,7 @@ fn leave_on_an_agent_property_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "Leave needs a Number property of the ground, and 'reward_held' is not one",
+        "Leave needs a Number property of the ground, got 'reward_held'",
         "[card.line.l3]",
     );
 }
@@ -354,7 +354,7 @@ fn become_on_a_number_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "Become changes a States property, and 'reward_held' is not one",
+        "Become needs a States property, got 'reward_held'",
         "[card.line.l10]",
     );
 }
@@ -404,7 +404,7 @@ fn an_unknown_state_in_a_measure_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "measure 'alive' counts the state 'alight', which is no state of 'status'",
+        "measure 'alive' counts the state 'alight', which is not a state of 'status'",
         "[[measure]]\nid = \"alive\"",
     );
 }
@@ -415,7 +415,7 @@ fn a_button_running_a_tick_card_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "button 'clear' runs 'cell_tick', which is no card that runs once",
+        "button 'clear' runs 'cell_tick', which is not a card that runs once",
         "[[button]]\nid = \"clear\"",
     );
 }
@@ -429,7 +429,7 @@ fn a_count_inside_a_repeat_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "A look around, a count or a pick of a cell cannot sit inside a Repeat.",
+        "A look around, a count or a pick of a cell cannot be used inside a Repeat.",
         "[card.line.l2]",
     );
 }
@@ -490,12 +490,9 @@ fn a_summary_id_follows_the_id_rules() {
     for (id, message) in [
         (
             long.as_str(),
-            format!("the summary id '{long}' holds 49 bytes, and a sheet id holds at most 48"),
+            format!("the summary id '{long}' holds 49 bytes, expected at most 48"),
         ),
-        (
-            "Push!",
-            "the summary id 'Push!' does not follow the id grammar".to_owned(),
-        ),
+        ("Push!", "invalid summary id 'Push!'".to_owned()),
         ("count", "the summary id 'count' is reserved".to_owned()),
         ("l4", "the summary id 'l4' is reserved".to_owned()),
     ] {

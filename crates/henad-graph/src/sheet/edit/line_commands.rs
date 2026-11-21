@@ -101,7 +101,7 @@ impl Draft {
             let number = self.document.sheet.next_line.max(1);
             let next = number
                 .checked_add(1)
-                .ok_or_else(|| SheetEditError::Invalid("the sheet has minted every line number".to_owned()))?;
+                .ok_or_else(|| SheetEditError::Invalid("the sheet has run out of line numbers".to_owned()))?;
             self.document.sheet.next_line = next;
             let id = format!("l{number}");
             if self.document.line(&id).is_none() {
@@ -152,13 +152,13 @@ impl Draft {
                 .ok_or_else(|| SheetEditError::Missing(format!("card '{card_id}' has no line '{block}'")))?;
             if !holder.kind.is_block() {
                 return Err(SheetEditError::Invalid(format!(
-                    "line '{block}' holds no lines: it is no When or Repeat"
+                    "line '{block}' cannot contain lines: it is not a When or Repeat"
                 )));
             }
         }
         if self.document.cards[card].line_tables.len() >= MAX_LINES_PER_CARD {
             return Err(SheetEditError::Invalid(format!(
-                "card '{card_id}' holds {MAX_LINES_PER_CARD} lines, the most a card holds"
+                "card '{card_id}' already has the maximum of {MAX_LINES_PER_CARD} lines"
             )));
         }
         line.lines.clear();
@@ -397,7 +397,9 @@ impl Draft {
         let tick = self.document.time.map(|time| time.tick_unit);
         let line = self.line_mut(line_id)?;
         if line.kind != LineKind::Choose {
-            return Err(SheetEditError::Invalid(format!("line '{line_id}' is no Choose line")));
+            return Err(SheetEditError::Invalid(format!(
+                "line '{line_id}' is not a Choose line"
+            )));
         }
         let Some(target) = line.rows.get_mut(row) else {
             return Err(SheetEditError::Missing(format!(
@@ -446,7 +448,7 @@ impl Draft {
             .collect();
         let line = self.line_mut(line_id)?;
         let holder = draw_phrase_mut(line, |kind| matches!(kind, LineKind::Chance | LineKind::Rate))
-            .ok_or_else(|| SheetEditError::Invalid(format!("line '{line_id}' holds no chance or rate")))?;
+            .ok_or_else(|| SheetEditError::Invalid(format!("line '{line_id}' has no chance or rate")))?;
         let slot = if holder.kind == LineKind::Rate {
             &mut holder.rate
         } else {
@@ -462,7 +464,7 @@ impl Draft {
             ) if counts.contains(count_line) => chip.clone(),
             _ => {
                 return Err(SheetEditError::Invalid(format!(
-                    "the chance or rate of line '{line_id}' is no count"
+                    "the chance or rate of line '{line_id}' is not a count"
                 )));
             }
         };
@@ -480,7 +482,7 @@ impl Draft {
         let time = self
             .document
             .time
-            .ok_or_else(|| SheetEditError::Invalid("the sheet sets no length of one tick".to_owned()))?;
+            .ok_or_else(|| SheetEditError::Invalid("the sheet has no tick length".to_owned()))?;
         let from = if into == LineKind::Rate {
             LineKind::Chance
         } else {
@@ -491,19 +493,22 @@ impl Draft {
         let in_repeat = CardRelations::new(&self.document, card).repeat_of(line_id).is_some();
         let line = self.line_mut(line_id)?;
         let holder = draw_phrase_mut(line, |kind| kind == from)
-            .ok_or_else(|| SheetEditError::Invalid(format!("line '{line_id}' holds no {}", from.as_str())))?;
+            .ok_or_else(|| SheetEditError::Invalid(format!("line '{line_id}' has no {}", from.as_str())))?;
         let slot = if from == LineKind::Rate {
             &holder.rate
         } else {
             &holder.chance
         };
         let typed = typed_number(slot).ok_or_else(|| {
-            SheetEditError::Invalid(format!("the {} of line '{line_id}' is no typed number", from.as_str()))
+            SheetEditError::Invalid(format!(
+                "the {} of line '{line_id}' is not a typed number",
+                from.as_str()
+            ))
         })?;
         let converted = if into == LineKind::Rate {
             if !(0.0..1.0).contains(&typed) {
                 return Err(SheetEditError::Invalid(format!(
-                    "a chance of {typed} gives no rate, which needs a chance from 0 to below 1"
+                    "a chance of {typed} cannot be converted to a rate: it must be at least 0 and less than 1"
                 )));
             }
             if runs_once {
@@ -548,7 +553,7 @@ impl Draft {
         refuse_taken(&name, others, "result")?;
         let target = self.line_mut(line_id)?;
         if !target.kind.works_out_result() {
-            return Err(SheetEditError::Invalid(format!("line '{line_id}' works out no result")));
+            return Err(SheetEditError::Invalid(format!("line '{line_id}' has no result")));
         }
         target.name = Some(name);
         Ok(())
@@ -558,7 +563,9 @@ impl Draft {
     pub(super) fn add_summary(&mut self, line_id: &str, summary: SummaryKind) -> Result<(), SheetEditError> {
         let target = self.line_mut(line_id)?;
         if target.around != Some(Around::AgentsWithin) {
-            return Err(SheetEditError::Invalid(format!("line '{line_id}' looks at no agents")));
+            return Err(SheetEditError::Invalid(format!(
+                "line '{line_id}' does not look at agents"
+            )));
         }
         let mut added = LookSummary::new("", "");
         added.summary = Some(summary);
@@ -578,7 +585,7 @@ impl Draft {
         }
         if target.summaries.len() == 1 {
             return Err(SheetEditError::Invalid(format!(
-                "line '{line_id}' keeps one summary at least"
+                "line '{line_id}' must have at least one summary"
             )));
         }
         let removed = target.summaries.remove(index);
@@ -597,7 +604,7 @@ impl Draft {
     pub(super) fn move_condition_into(&mut self, when_id: &str) -> Result<(), SheetEditError> {
         let card = self.card_of_line(when_id)?;
         let when = self.line(when_id)?;
-        let refused = || SheetEditError::Invalid(format!("line '{when_id}' is no When around exactly one change"));
+        let refused = || SheetEditError::Invalid(format!("line '{when_id}' is not a When around exactly one change"));
         if when.kind != LineKind::When {
             return Err(refused());
         }
@@ -614,7 +621,7 @@ impl Draft {
             matches!(change.condition.value(), Some(SheetValue::Phrase(phrase)) if phrase.kind == LineKind::Always);
         if !(change.condition.is_blank() || always) {
             return Err(SheetEditError::Invalid(format!(
-                "line '{inner}' has a condition of its own, and the When's condition would replace it"
+                "cannot move the When's condition into line '{inner}': it already has a condition"
             )));
         }
         self.line_mut(&inner)?.condition = condition;

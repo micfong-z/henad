@@ -87,10 +87,7 @@ impl ModelHeader {
             && format.get_ref() != FORMAT
         {
             return Err(HeaderProblem {
-                message: format!(
-                    "the file's format is '{}', but a model file's format must be '{FORMAT}'",
-                    format.get_ref()
-                ),
+                message: format!("the file's format is '{}', expected '{FORMAT}'", format.get_ref()),
                 span: format.span(),
             });
         }
@@ -99,7 +96,7 @@ impl ModelHeader {
         {
             return Err(HeaderProblem {
                 message: format!(
-                    "the file is model file version {}, but this build only reads version {FORMAT_VERSION}",
+                    "the file is model file version {}, expected version {FORMAT_VERSION}",
                     version.get_ref()
                 ),
                 span: version.span(),
@@ -110,7 +107,7 @@ impl ModelHeader {
         {
             return Err(HeaderProblem {
                 message: format!(
-                    "the file contains a model of kind '{}', but this reader only reads {}",
+                    "the file contains a model of kind '{}', expected {}",
                     kind.get_ref(),
                     kind_list(kinds)
                 ),
@@ -386,7 +383,7 @@ impl ParamTable {
         ] {
             if present {
                 return Err(format!(
-                    "parameter '{}' must not set `{key}`, which only a graph file reads",
+                    "parameter '{}' cannot set `{key}` outside a graph file",
                     self.id
                 ));
             }
@@ -409,7 +406,7 @@ impl ParamTable {
             Some(name) => Some(TimeUnit::parse(&name).ok_or_else(|| {
                 let names: Vec<&str> = TimeUnit::ALL.iter().map(|unit| unit.as_str()).collect();
                 format!(
-                    "parameter '{}' sets `tick_unit` to '{name}', which is not one of {}",
+                    "parameter '{}' sets `tick_unit` to '{name}', expected {}",
                     self.id,
                     or_list(&names)
                 )
@@ -470,7 +467,7 @@ impl ParamTable {
                     match value {
                         Some(toml::Value::Integer(value)) => u32::try_from(*value)
                             .map_err(|error| format!("parameter '{id}' needs `{key}` from 0 to {}: {error}", u32::MAX)),
-                        Some(_) => Err(format!("parameter '{id}' needs a whole number for `{key}`")),
+                        Some(_) => Err(format!("parameter '{id}' needs an integer for `{key}`")),
                         None => Err(format!("parameter '{id}' needs `{key}`")),
                     }
                 };
@@ -504,7 +501,7 @@ impl ParamTable {
                 let default = options
                     .iter()
                     .position(|option| option == name)
-                    .ok_or_else(|| format!("parameter '{id}' has no option '{name}' to take as its default"))?;
+                    .ok_or_else(|| format!("parameter '{id}' has no option '{name}' for its default"))?;
                 ParamKind::Choice {
                     options: ChoiceOptions::new(options),
                     default,

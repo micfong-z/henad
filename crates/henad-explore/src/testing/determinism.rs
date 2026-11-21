@@ -40,9 +40,9 @@ fn simulation(
     gpu: Option<&GpuContext>,
 ) -> Result<Simulation, String> {
     RunSetup::from_parts(entry, values, Some(seed), Schedule::default())
-        .map_err(|error| format!("The check values were refused: {}.", error_text(&error)))?
+        .map_err(|error| format!("The check values were rejected: {}.", error_text(&error)))?
         .build(gpu)
-        .map_err(|fault| format!("The model did not build. {}", fault_text(&fault)))
+        .map_err(|fault| format!("The model failed to build. {}", fault_text(&fault)))
 }
 
 /// Returns the state of `simulation` as `--export` writes it, `None` for a GPU model.
@@ -51,7 +51,7 @@ fn exported(simulation: &mut Simulation) -> Result<Option<Vec<u8>>, String> {
     match simulation.write_state(&mut bytes) {
         Ok(()) => Ok(Some(bytes)),
         Err(ExportError::GpuState) => Ok(None),
-        Err(error) => Err(format!("The state was not exported: {}.", error_text(&error))),
+        Err(error) => Err(format!("Failed to export the state: {}.", error_text(&error))),
     }
 }
 
@@ -129,8 +129,8 @@ pub(super) fn seed_sensitivity(
     match first.difference(&second) {
         Some(_) => Ok(()),
         None => Err(format!(
-            "Seeds {SEED} and {other} give the same stats and state after {ticks} ticks. A model that draws no \
-             random number takes an exemption."
+            "Seeds {SEED} and {other} produce the same stats and state after {ticks} ticks. If the model draws no \
+             random numbers, exempt it from this check."
         )),
     }
 }
@@ -198,7 +198,7 @@ fn in_pool<T: Send>(threads: usize, task: impl FnOnce() -> Result<T, String> + S
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build()
-        .map_err(|error| format!("A pool of {threads} threads was not built: {error}."))?
+        .map_err(|error| format!("Failed to build a pool of {threads} threads: {error}."))?
         .install(task)
 }
 
@@ -206,7 +206,7 @@ fn in_pool<T: Send>(threads: usize, task: impl FnOnce() -> Result<T, String> + S
 fn jobs_at(entry: &ModelEntry, values: &[ParamValue]) -> Result<usize, String> {
     let mut built = entry
         .build(values, Some(SEED), None)
-        .map_err(|fault| format!("The model did not build. {}", fault_text(&fault)))?;
+        .map_err(|fault| format!("The model failed to build. {}", fault_text(&fault)))?;
     let jobs = match &mut built {
         ModelState::Cpu(state) => state.parallel_jobs(),
         ModelState::Gpu(_) => None,

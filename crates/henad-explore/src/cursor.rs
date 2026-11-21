@@ -25,7 +25,7 @@ const GPU_REFUSAL: &str = "a GPU model cannot run on a CPU lane";
 
 /// Reason a cursor rejects a GPU model without building it. A browser cannot block on the device.
 #[cfg(target_arch = "wasm32")]
-const GPU_REFUSAL: &str = "a GPU sweep needs a native build";
+const GPU_REFUSAL: &str = "GPU sweeps are unavailable in a browser";
 
 /// Result of one [`RunCursor::advance`].
 #[derive(Debug)]
@@ -207,7 +207,7 @@ pub(crate) fn failed_build_outcome(
 
 /// Returns the note for `action`, which the model rejected.
 pub(crate) fn refusal_note(action: &Scheduled) -> String {
-    format!("model refused action '{}' at tick {}", action.id, action.tick)
+    format!("model rejected action '{}' at tick {}", action.id, action.tick)
 }
 
 impl RunCursor {

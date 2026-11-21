@@ -299,7 +299,7 @@ pub fn create_model(app: &mut AppState, file_name: &str, name: &str) {
         .find(|starter| starter.file_name == file_name)
         .and_then(|starter| ParsedSheet::parse(starter.text).ok())
     else {
-        app.editor.file_status = Some(FileStatus::failure(format!("Starter {file_name} does not read")));
+        app.editor.file_status = Some(FileStatus::failure(format!("Starter {file_name} cannot be read")));
         return;
     };
     let name = if name.is_empty() { UNTITLED_MODEL } else { name };

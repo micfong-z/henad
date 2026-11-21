@@ -14,7 +14,7 @@ pub(super) fn model_id(entry: &ModelEntry) -> Result<(), String> {
     ModelSet::new(crate::ENGINE_BUILD)
         .insert(entry.clone())
         .map(|_| ())
-        .map_err(|error| format!("The set refuses the entry: {error}."))
+        .map_err(|error| format!("The set rejects the entry: {error}."))
 }
 
 /// Checks [`super::ModelCheck::ParamIds`].
@@ -46,11 +46,9 @@ fn repeated_param_ids(entry: &ModelEntry) -> Option<String> {
     let mut message = declared_twice("Parameter id", "Parameter ids", &repeated);
     match prepended.as_slice() {
         [] => {}
-        [id] => message.push_str(&format!(
-            " The engine prepends '{id}', and a model does not declare it itself."
-        )),
+        [id] => message.push_str(&format!(" The engine prepends '{id}', so the model cannot declare it.")),
         _ => message.push_str(&format!(
-            " The engine prepends {}, and a model declares none of them itself.",
+            " The engine prepends {}, so the model cannot declare them.",
             quoted(&prepended)
         )),
     }
@@ -101,9 +99,9 @@ fn unnameable<'a>(
             let reason = if id.is_empty() {
                 Some("is empty")
             } else if id.contains(char::is_whitespace) {
-                Some("holds whitespace")
+                Some("contains whitespace")
             } else if id.contains('=') {
-                Some("holds '='")
+                Some("contains '='")
             } else {
                 extra(id)
             };
@@ -121,8 +119,8 @@ fn named_ids(kind: &str, refused: &[(&str, &str)]) -> String {
         .map(|(id, reason)| format!("The {kind} id '{id}' {reason}. "))
         .collect();
     message.push_str(match refused {
-        [_] => "The command line and a design table cannot name it.",
-        _ => "The command line and a design table cannot name them.",
+        [_] => "It cannot be used on the command line or in a design table.",
+        _ => "They cannot be used on the command line or in a design table.",
     });
     message
 }
@@ -144,9 +142,9 @@ pub(super) fn metadata(entry: &ModelEntry) -> Result<(), String> {
     let mut problems = Vec::new();
 
     match entry.demand(&declared_defaults(entry), &wgpu::Limits::default()) {
-        Some(_) if !gpu => problems.push(format!("declares {backend:?}, but carries a device capacity")),
-        Some(demand) if demand.bytes() == 0 => problems.push("declares a device demand of no bytes".to_owned()),
-        None if gpu => problems.push(format!("declares {backend:?}, but carries no device capacity")),
+        Some(_) if !gpu => problems.push(format!("declares {backend:?}, but has a device capacity")),
+        Some(demand) if demand.bytes() == 0 => problems.push("declares a device demand of 0 bytes".to_owned()),
+        None if gpu => problems.push(format!("declares {backend:?}, but has no device capacity")),
         _ => {}
     }
     if gpu != entry.gpu_needs().is_some() {
@@ -169,7 +167,7 @@ pub(super) fn metadata(entry: &ModelEntry) -> Result<(), String> {
     match agrees {
         Some(true) => {}
         Some(false) => problems.push(format!(
-            "declares a structure that the topology hint {hint:?} disagrees with"
+            "declares a structure that does not match the topology hint {hint:?}"
         )),
         None => problems.push("declares a structure that the testing kit does not check".to_owned()),
     }
@@ -194,11 +192,11 @@ pub(super) fn default_setup(entry: &ModelEntry) -> Result<(), String> {
     let setup = entry.setup();
     let defaults = declared_defaults(entry);
     if setup.values() != defaults.as_slice() {
-        return Err("The setup at the defaults holds other values than the declared defaults.".to_owned());
+        return Err("The setup at the defaults holds different values from the declared defaults.".to_owned());
     }
     let checked = RunSetup::from_parts(entry, setup.values(), None, Schedule::default()).map_err(|error| {
         format!(
-            "RunSetup::from_parts refuses the declared defaults: {}.",
+            "RunSetup::from_parts rejects the declared defaults: {}.",
             error_text(&error)
         )
     })?;

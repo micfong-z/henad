@@ -39,9 +39,7 @@ const NOTE_HEAD_VALUES: usize = 3;
 pub fn levels_tooltip(integer: bool, draws_ranges: bool) -> &'static str {
     match (integer, draws_ranges) {
         (_, true) => "Enter comma-separated values, min:max:step with both ends included, or min:max to draw from",
-        (true, false) => {
-            "Enter comma-separated values or min:max:step, both ends included. Leave out the step to step by 1."
-        }
+        (true, false) => "Enter comma-separated values or min:max:step, both ends included. The step defaults to 1.",
         (false, false) => {
             "Enter comma-separated values or min:max:step, both ends included. Use min:max under Latin hypercube or \
              Uniform random."
@@ -166,8 +164,8 @@ pub fn legend(mode: ExploreMode, design: DraftDesign) -> &'static str {
             "Enter a range as 0.1:0.5 for the design to draw from, or values as 0.1, 0.2."
         }
         (ExploreMode::Sweep, DraftDesign::EveryCombination | DraftDesign::Zip | DraftDesign::VaryEachAlone) => {
-            "Enter values as 0.1, 0.2, or a range as 0.1:0.5:0.1 with both ends included. Leave out the step of an \
-             integer range to step by 1."
+            "Enter values as 0.1, 0.2, or a range as 0.1:0.5:0.1 with both ends included. The step of an integer \
+             range defaults to 1."
         }
     }
 }
@@ -361,7 +359,7 @@ fn values_cell(
         }
         if row.in_table.is_some() || !factor.vary {
             if layout.baseline_width.is_none() {
-                slot(ui, width, |ui| ui.weak(format!("at {baseline}")));
+                slot(ui, width, |ui| ui.weak(format!("At {baseline}")));
             }
             return;
         }
@@ -638,9 +636,7 @@ fn values_editor(ui: &mut egui::Ui, editor: &ValuesEditor<'_>, text: &mut String
         EditorSegment::Range | EditorSegment::Drawn => range_fields(ui, kind, segment, text),
     }
     ui.horizontal_wrapped(|ui| {
-        let whole = ui
-            .small_button("Whole range")
-            .on_hover_text("Step across the whole range");
+        let whole = ui.small_button("Whole range").on_hover_text("Step across whole range");
         if whole.clicked() {
             *text = whole_range_fill(kind, editor.draws_ranges);
         }

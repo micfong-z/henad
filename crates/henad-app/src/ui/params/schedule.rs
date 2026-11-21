@@ -13,7 +13,7 @@ pub(super) fn schedule_ui(ui: &mut egui::Ui, app: &mut AppState, actions: &[Acti
         heading = heading.color(ui.visuals().warn_fg_color);
         format!("Schedule changed. Press {MDI_RESTART}\u{a0}Build to apply.")
     } else {
-        "Actions at tick 0 run when the model is built. Later ones run after the step that reaches their tick."
+        "Actions at tick 0 run when the model is built. Later actions run after the step on the corresponding tick."
             .to_owned()
     };
 

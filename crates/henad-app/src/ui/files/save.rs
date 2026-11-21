@@ -125,7 +125,7 @@ fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     use eframe::wasm_bindgen::JsValue;
     use eframe::wasm_bindgen::closure::Closure;
 
-    let describe = |error: JsValue| format!("the browser refused the download of {name}: {error:?}");
+    let describe = |error: JsValue| format!("the browser rejected the download of {name}: {error:?}");
     let window = web_sys::window().ok_or_else(|| "the app runs outside a browser window".to_owned())?;
     let document = window.document().ok_or_else(|| "the page has no document".to_owned())?;
     let body = document.body().ok_or_else(|| "the page has no body".to_owned())?;

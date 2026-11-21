@@ -127,16 +127,16 @@ pub const LIMITS_NOT_NUMBERS: &str = "Default, Min and Max must be numbers.";
 
 /// Check of the New parameter dialog for a number of times whose Default, Min or Max is no integer from 0.
 pub const TIMES_LIMITS_NOT_INTEGERS: &str =
-    "A number of times is an integer. Make Default, Min and Max integers from 0.";
+    "For a number of times, Default, Min and Max must be non-negative integers.";
 
 /// Message on a minimum at or above the maximum.
-pub const MIN_NOT_BELOW_MAX: &str = "Min must be below Max.";
+pub const MIN_NOT_BELOW_MAX: &str = "Min must be less than Max.";
 
 /// Message on a default outside the minimum and the maximum.
 pub const DEFAULT_OUTSIDE_LIMITS: &str = "Default must be between Min and Max.";
 
 /// Message on a parameter for a chance whose minimum or maximum lies outside 0 to 1.
-pub const CHANCE_LIMITS_OUTSIDE: &str = "A chance stays between 0 and 1. Set Min and Max inside that range.";
+pub const CHANCE_LIMITS_OUTSIDE: &str = "For a chance, Min and Max must be between 0 and 1.";
 
 /// Primary action of the New parameter dialog.
 pub const CREATE_PARAMETER: &str = "Create parameter";
@@ -209,7 +209,7 @@ pub fn keep_name(tried: &str, parameter: &str) -> String {
 pub const KEEP_TOOLTIP: &str = "Make it the value the model keeps";
 
 /// Text of the plot while the sheet holds no measure.
-pub const PLOT_EMPTY: &str = "Tick Plot beside a state under Measures to plot the number of cells in it.";
+pub const PLOT_EMPTY: &str = "Turn on Plot beside a state under Measures to plot the number of cells in it.";
 
 /// Text of the world while the sheet holds no property.
 pub const WORLD_EMPTY: &str = "Add a property on the sheet to see the world.";

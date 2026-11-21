@@ -36,12 +36,12 @@ const SIRD: &str = include_str!("sheets/sird.toml");
 
 /// Note under line 2 of the rates SIR at its defaults and one tick of 1 day.
 const INFECTION_NOTE: &str = "Each tick (1 day), a Susceptible cell becomes Infected with chance 0.259 with 1 infected \
-                              neighbour, and 0.451 with 2. A rate is not a chance. Henad turns it into one as 1 − \
-                              e^(−0.3 × n × 1 day), where n is Infected neighbours.";
+                              neighbour, and 0.451 with 2. The rate is converted to a chance by 1 − e^(−0.3 × n × 1 \
+                              day), where n is Infected neighbours.";
 
 /// Note under line 3 of the rates SIR at its defaults and one tick of 1 day.
-const RECOVERY_NOTE: &str = "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. A rate is not a \
-                             chance. Henad turns it into one as 1 − e^(−0.1 × 1 day).";
+const RECOVERY_NOTE: &str = "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. The rate is \
+                             converted to a chance by 1 − e^(−0.1 × 1 day).";
 
 /// Returns the number of nodes of a settled frame whose label or value starts with `start`, leaving out the text run
 /// under each label.
@@ -289,8 +289,8 @@ fn change_to_a_rate_and_back_keeps_the_chance_per_tick() {
         shows(
             &mut harness,
             &format!(
-                "Each tick (1 day), an Infected cell becomes Recovered with chance 0.05. A rate is not a chance. Henad \
-                 turns it into one as 1 − e^(−{} × 1 day).",
+                "Each tick (1 day), an Infected cell becomes Recovered with chance 0.05. The rate is converted to a \
+                 chance by 1 − e^(−{} × 1 day).",
                 henad_graph::sheet::format_number(rate).expect("a number")
             )
         ),
@@ -328,8 +328,8 @@ fn the_long_tick_note_shows_at_one_day_and_leaves_at_a_quarter_day() {
     );
     assert!(shows(
         &mut harness,
-        "Each tick (0.25 days), an Infected cell becomes Recovered with chance 0.0247. A rate is not a chance. Henad \
-         turns it into one as 1 − e^(−0.1 × 0.25 days)."
+        "Each tick (0.25 days), an Infected cell becomes Recovered with chance 0.0247. The rate is converted to a \
+         chance by 1 − e^(−0.1 × 0.25 days)."
     ));
 }
 
@@ -421,9 +421,9 @@ fn the_rate_notes_read_a_tried_value_and_the_default_after_reset() {
         index,
         TrialChoice::Try(henad_core::params::ParamValue::F32(0.5)),
     );
-    let tried = "Each tick (1 day), a Susceptible cell becomes Infected with chance 0.393 with 1 infected neighbour, and \
-                 0.632 with 2. A rate is not a chance. Henad turns it into one as 1 − e^(−0.5 × n × 1 day), where n is \
-                 Infected neighbours.";
+    let tried = "Each tick (1 day), a Susceptible cell becomes Infected with chance 0.393 with 1 infected neighbour, \
+                 and 0.632 with 2. The rate is converted to a chance by 1 − e^(−0.5 × n × 1 day), where n is Infected \
+                 neighbours.";
     assert!(shows(&mut harness, tried), "line 2's note reads the tried value");
     assert!(!shows(&mut harness, INFECTION_NOTE));
 

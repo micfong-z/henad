@@ -317,8 +317,8 @@ fn an_edit_that_would_keep_a_number_that_is_not_finite_is_refused() {
     assert_eq!(
         reasons,
         [
-            "that number is too large to keep",
-            "that number is too large to keep",
+            "that number is too large",
+            "that number is too large",
             "that number cannot be worked out",
         ]
     );
@@ -333,7 +333,7 @@ fn an_edit_that_would_keep_a_number_that_is_not_finite_is_refused() {
         means: None,
     });
     assert!(
-        matches!(&parameter, Err(SheetEditError::Invalid(reason)) if reason == "that number is too large to keep"),
+        matches!(&parameter, Err(SheetEditError::Invalid(reason)) if reason == "that number is too large"),
         "{parameter:?}"
     );
     assert!(builder.document().to_text().is_ok());

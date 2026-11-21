@@ -41,7 +41,7 @@ pub(crate) enum RowSlot {
 ///
 /// Returns [`SheetEditError::Invalid`] for an empty path, an unknown key or an index that is not a number.
 pub(crate) fn parse_path(path: &str) -> Result<Vec<PathStep>, SheetEditError> {
-    let invalid = || SheetEditError::Invalid(format!("'{path}' is no slot path"));
+    let invalid = || SheetEditError::Invalid(format!("'{path}' is not a slot path"));
     let index = |text: Option<&str>| -> Option<usize> { text?.parse().ok() };
     let mut segments = path.split('.');
     let mut steps = Vec::new();
@@ -389,7 +389,7 @@ fn holds_lines(card: &SheetCard, line_id: &str) -> bool {
 /// already at the top or the bottom of the card.
 pub(super) fn move_line(card: &mut SheetCard, line_id: &str, direction: MoveDirection) -> Result<(), SheetEditError> {
     let card_id = card.id.clone();
-    let missing = || SheetEditError::Missing(format!("card '{card_id}' lists no line '{line_id}'"));
+    let missing = || SheetEditError::Missing(format!("card '{card_id}' has no line '{line_id}'"));
     let parent = parent_of(card, line_id);
     let siblings = list_mut(card, parent.as_deref()).ok_or_else(missing)?.clone();
     let index = siblings.iter().position(|id| id == line_id).ok_or_else(missing)?;
@@ -447,7 +447,7 @@ pub(super) fn move_line(card: &mut SheetCard, line_id: &str, direction: MoveDire
 /// Returns [`SheetEditError::Missing`] for a line the card does not list.
 pub(super) fn remove_line(card: &mut SheetCard, line_id: &str) -> Result<SheetLine, SheetEditError> {
     let card_id = card.id.clone();
-    let missing = || SheetEditError::Missing(format!("card '{card_id}' lists no line '{line_id}'"));
+    let missing = || SheetEditError::Missing(format!("card '{card_id}' has no line '{line_id}'"));
     let parent = parent_of(card, line_id);
     let line = card.line_tables.remove(line_id).ok_or_else(missing)?;
     let list = list_mut(card, parent.as_deref()).ok_or_else(missing)?;

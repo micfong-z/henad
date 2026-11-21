@@ -133,7 +133,7 @@ impl fmt::Display for ConvertError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Refused(refusal) => write!(f, "{}", refusal.tooltip()),
-            Self::Unreadable(error) => write!(f, "the copy does not read back: {error}"),
+            Self::Unreadable(error) => write!(f, "failed to read the converted copy: {error}"),
         }
     }
 }

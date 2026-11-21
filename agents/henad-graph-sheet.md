@@ -94,7 +94,7 @@ states.
 **The reader.** `ParsedSheet::parse` checks `MAX_SHEET_BYTES` before parsing, then the header
 through `model_text::ModelHeader` with the kinds `["sheet"]`, then `[sheet] version`, read with the
 header so a newer file is refused on its key before an unknown key is ("the file is sheet version 2,
-and this build reads sheet versions up to 1", and below 1 "sheet versions count from 1"). The reader
+expected at most 1", and below 1 "the file names sheet version 0, expected at least 1"). The reader
 has no migration hook. It then parses the text once into a span tree, refuses tables and lists
 nested past `MAX_NESTING` at the deepest one, reads the typed tables, and builds the places from the
 span tree. The depth check comes first because each nested phrase is a large frame of the typed
@@ -109,7 +109,7 @@ a finite number (`PercentNumber`, an integer or a float), and is refused on the 
 number. A phrase refuses a chip key and `percent`, a chip refuses a line key, and a chip names
 exactly one thing, `part` and `property` only beside `result`. A list holds literals and chips only,
 and a line table without `kind` is refused at its header. A datetime anywhere reads as "a sheet
-holds no dates or times", since the TOML crate passes it as a table under its own private key.
+cannot hold dates or times", since the TOML crate passes it as a table under its own private key.
 
 **The writer.** `SheetDocument::to_text` returns the canonical text, `Result<String,
 SheetWriteError>` (the key and value of the first NaN or infinity). It builds a `Record` tree of
@@ -262,7 +262,7 @@ Writer tests sit in `src/tests/sheet_writer.rs`: `every_sheet_is_a_fixed_point`,
 reference writer's text for the four author-format examples with comment lines removed, each line's
 note dropped first since the ants starter holds one the example lacks, and `sheet_` taken off each
 starter's id, since the examples hold the ids without it; `golden/README.md` holds the
-procedure, the script's SHA-256 and the rules in full),
+procedure, the script's SHA-256, the rules in full and the reworded strings put in by hand),
 `a_hand_edited_sheet_reads_back_to_its_canonical_text`,
 `unusual_values_read_back_to_the_same_document`, `a_number_that_is_not_finite_is_refused`,
 `numbers_follow_the_sheet_number_rule`, `every_line_sentence_equals_its_comment`, the three diffs of

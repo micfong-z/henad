@@ -194,7 +194,7 @@ impl<'a> CardLowering<'_, 'a> {
                 let number = literal.number().unwrap_or(-1.0);
                 if number.fract() != 0.0 || !(0.0..=f64::from(MAX_REPEAT_ITERATIONS)).contains(&number) {
                     return Err(format!(
-                        "a Repeat runs a whole number of times from 0 to {MAX_REPEAT_ITERATIONS}"
+                        "the Repeat count must be an integer from 0 to {MAX_REPEAT_ITERATIONS}"
                     ));
                 }
                 // The range check above makes the cast exact.
@@ -208,10 +208,10 @@ impl<'a> CardLowering<'_, 'a> {
                     .parameters
                     .iter()
                     .find(|parameter| parameter.id == *id)
-                    .ok_or_else(|| format!("'{id}' is no parameter"))?;
+                    .ok_or_else(|| format!("unknown parameter '{id}'"))?;
                 if self.builder.param(id)?.value_type() != Some(ValueType::U32) {
                     return Err(format!(
-                        "a Repeat runs a Whole number parameter from 0 of times, and '{}' is not one",
+                        "the Repeat count must be a non-negative integer parameter, got '{}'",
                         parameter.name
                     ));
                 }
@@ -219,11 +219,11 @@ impl<'a> CardLowering<'_, 'a> {
                 let max = parameter.max as u32;
                 (InputValue::Param(id.clone()), max, Some(parameter.name.as_str()))
             }
-            _ => return Err("a Repeat runs a whole number or a parameter of times".to_owned()),
+            _ => return Err("the Repeat count must be an integer or a parameter".to_owned()),
         };
         if max > MAX_REPEAT_ITERATIONS {
             return Err(format!(
-                "a Repeat runs at most {MAX_REPEAT_ITERATIONS} times, and the maximum of {} is {max}",
+                "the maximum of {} is {max}, expected at most {MAX_REPEAT_ITERATIONS} for the Repeat count",
                 parameter.unwrap_or("its parameter")
             ));
         }
@@ -287,7 +287,7 @@ impl<'a> CardLowering<'_, 'a> {
             .relations
             .line(id)
             .and_then(|line| line.property.as_deref())
-            .ok_or_else(|| "the line names no property".to_owned())?;
+            .ok_or_else(|| "the line needs a property".to_owned())?;
         let current = self.builder.read(self.pass, property)?;
         let outside = Site {
             region: None,

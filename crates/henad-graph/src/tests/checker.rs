@@ -255,7 +255,7 @@ in.if_true = { u32 = 1 }
 in.if_false = { u32 = 2 }
 "#,
         ),
-        "the input `cond` is u32, and the node needs bool",
+        "the input `cond` is u32, expected bool",
     );
     assert_error(
         &tick(
@@ -279,11 +279,11 @@ in.a = { cat = "health.Q" }
 in.b = { u32 = 1 }
 "#,
         ),
-        "'health' has no such variant",
+        "which is not a variant of 'health'",
     );
     assert_error(
         &tick("[[pass.node]]\nid = \"n1\"\nop = \"rng.threshold\"\nin.p = { param = \"missing\" }\n"),
-        "no such parameter",
+        "binds the parameter 'missing', which the file does not declare",
     );
 }
 
@@ -388,7 +388,7 @@ config.key = 7
 in.p = { f32 = 0.5 }
 "#,
         ),
-        "two draws with one key correlate",
+        "so their draws correlate",
     );
     let seed = r#"
 [[pass]]
@@ -412,12 +412,14 @@ in.value = "n1"
     assert!(
         found
             .iter()
-            .any(|message| message.contains("lists n2, which is no stream node")),
+            .any(|message| message.contains("lists n2, which is not a stream node")),
         "{found:#?}"
     );
     assert!(found.iter().any(|message| message.contains("lists n3")), "{found:#?}");
     assert!(
-        found.iter().any(|message| message.contains("lists no such node")),
+        found
+            .iter()
+            .any(|message| message.contains("is not listed in the `draw_order` of its pass")),
         "{found:#?}"
     );
 }
@@ -575,9 +577,9 @@ in.value = { u32 = 2 }
             "{KEEP_X}\n{}",
             KEEP_X.replace("\"step\"", "\"again\"").replace("n90", "n80")
         ),
-        "exactly one tick pass",
+        "expected exactly one for a grid model",
     );
-    assert_error("", "exactly one tick pass, and this file has 0");
+    assert_error("", "this file has 0 tick passes, expected exactly one");
 }
 
 #[test]
@@ -611,7 +613,7 @@ in.value = "n1"
     assert_error(pass, "`enabled` cannot bind the parameter 'running'");
     assert_error(
         &pass.replace("{ param = \"running\" }", "{ param = \"rate\" }"),
-        "is no `bool` parameter",
+        "is not a `bool` parameter",
     );
 }
 
@@ -701,7 +703,7 @@ in.value = "n1"
     assert!(
         found
             .iter()
-            .any(|message| message.contains("'empty' has no pass and reruns none")),
+            .any(|message| message.contains("'empty' has no pass and reruns no passes")),
         "{found:#?}"
     );
     assert!(
@@ -713,7 +715,7 @@ in.value = "n1"
     assert!(
         found
             .iter()
-            .any(|message| message.contains("which an action reruns on the host")),
+            .any(|message| message.contains("an action reruns this pass on the host")),
         "{found:#?}"
     );
 }
@@ -730,14 +732,14 @@ fn transitions_need_a_phase_and_a_target_and_switches_every_case() {
             r#"{ id = "infect", from = "S", to = "I" }"#,
             "in.rule.infect.when = { bool = true }",
         ),
-        "a `phase` that is no number",
+        "a `phase` that is not an integer",
     );
     assert_error(
         &transition(
             r#"{ id = "infect", from = "S", to = "I", phase = -1 }"#,
             "in.rule.infect.when = { bool = true }",
         ),
-        "a `phase` that is no number",
+        "a `phase` that is not an integer",
     );
     assert_error(
         &transition(
@@ -751,7 +753,7 @@ fn transitions_need_a_phase_and_a_target_and_switches_every_case() {
             r#"{ id = "infect", from = "Q", to = "I", phase = 0 }"#,
             "in.rule.infect.when = { bool = true }",
         ),
-        "the `from` variant 'Q'",
+        "a `from` of 'Q', which is not a variant of 'health'",
     );
     assert_error(
         &transition(r#"{ id = "infect", from = "S", to = "I", phase = 0 }"#, ""),
@@ -792,7 +794,10 @@ op = "view.color"
 config.palette = "life"
 in.index = "n1"
 "#;
-    assert_error(&format!("{KEEP_X}{view}"), "no such palette or category");
+    assert_error(
+        &format!("{KEEP_X}{view}"),
+        "which the file does not declare as a palette or category",
+    );
     let found = errors(&format!("{KEEP_X}{}", view.replace("\"life\"", "\"health\"")));
     assert!(found.is_empty(), "{found:#?}");
 }
@@ -807,7 +812,7 @@ fn duplicate_node_ids_open_the_repair_state() {
     assert!(
         report
             .errors()
-            .any(|error| error.message.contains("two nodes hold the id n900"))
+            .any(|error| error.message.contains("two nodes have the id n900"))
     );
 }
 
@@ -936,7 +941,7 @@ in.value = "n4"
     assert!(
         found
             .iter()
-            .any(|message| message.contains("only an accumulator output leaves a region")),
+            .any(|message| message.contains("expected an accumulator output of that region")),
         "{found:#?}"
     );
     // The leak reads as a hole, so the type of the write gives no second diagnostic.
@@ -947,7 +952,7 @@ in.value = "n4"
             "{ u32 = 3 }",
             "\n[[pass.node]]\nid = \"n4\"\nop = \"math.add\"\nin.a = \"n1.k\"\nin.b = { u32 = 1 }\n",
         ),
-        "only the body of n1 can read",
+        "outside the body of n1",
     );
     assert_error(&repeat("4", "\"n1.k\"", ""), "reads its own node");
     assert_error(
@@ -964,7 +969,7 @@ in.value = "n4"
             "{ u32 = 3 }",
             "\n[[pass.node]]\nid = \"n4\"\nop = \"region.put\"\nconfig.acc = \"sum\"\nin.value = { u32 = 1 }\nregion = \"n1\"\n",
         ),
-        "an accumulator takes one `region.put`",
+        "an accumulator takes only one `region.put`",
     );
     assert_error(
         &repeat(
@@ -980,7 +985,7 @@ in.value = "n4"
             "{ u32 = 3 }",
             "\n[[pass.node]]\nid = \"n4\"\nop = \"region.put\"\nconfig.acc = \"sum\"\nin.value = { u32 = 1 }\n",
         ),
-        "sits outside every region",
+        "must be inside a region",
     );
     assert_error(
         &repeat(
@@ -988,7 +993,7 @@ in.value = "n4"
             "{ u32 = 3 }",
             "\n[[pass.node]]\nid = \"n4\"\nop = \"math.add\"\nin.a = { u32 = 1 }\nin.b = { u32 = 1 }\nregion = \"n3\"\n",
         ),
-        "which is no region",
+        "which is not a region",
     );
 }
 
@@ -1008,7 +1013,7 @@ in.count = { u32 = 3 }
     assert!(
         found
             .iter()
-            .any(|message| message.contains("an inner output of the region holds")),
+            .any(|message| message.contains("which conflicts with an inner output of the region")),
         "{found:#?}"
     );
     let carry = carry.replace(", { name = \"k\", type = \"u32\", combine = \"sum\" }", "");
@@ -1161,7 +1166,7 @@ config.acc = [{ name = "wide", type = "u64", combine = "sum" }]
 in.count = { u32 = 3 }
 "#,
         ),
-        "is u64 per element, which only an init pass holds",
+        "cannot be u64 per element outside an init pass",
     );
 }
 

@@ -17,7 +17,7 @@ fn build(entry: &ModelEntry, values: &[ParamValue], ctx: &GpuContext) -> Result<
         Ok(ModelState::Cpu(_)) => {
             Err("The entry declares the GPU backend, but its factory returns a CPU state.".to_owned())
         }
-        Err(fault) => Err(format!("The model did not build. {}", fault_text(&fault))),
+        Err(fault) => Err(format!("The model failed to build. {}", fault_text(&fault))),
     }
 }
 
@@ -29,7 +29,7 @@ pub(super) fn baseline_build(entry: &ModelEntry, settings: &CheckSettings, ctx: 
     match (build(entry, &values, ctx), shortfalls.is_empty()) {
         (Ok(_), true) => Ok(()),
         (Ok(_), false) => Err(format!(
-            "The model builds on the device, but its declared demand says it does not fit: {}.",
+            "The model builds on the device, but its declared demand does not fit: {}.",
             shortfalls.join("; ")
         )),
         (Err(message), true) => Err(format!("The declared demand fits the device. {message}")),
@@ -76,7 +76,7 @@ pub(super) fn full_submission(entry: &ModelEntry, settings: &CheckSettings, ctx:
         ));
     }
     if !landed {
-        return Err("The stats readback after one full submission did not land.".to_owned());
+        return Err("The stats readback after one full submission did not complete.".to_owned());
     }
     if whole.tick() != u64::from(MAX_STEPS_PER_SUBMISSION) {
         return Err(format!(
@@ -89,8 +89,8 @@ pub(super) fn full_submission(entry: &ModelEntry, settings: &CheckSettings, ctx:
     let Some(sliced_stats) = sliced_stats else {
         if !stats.is_empty() && stats.iter().all(|stat| stat.value().scalar() == 0.0) {
             return Err(format!(
-                "Every stat read back zero after a submission of {MAX_STEPS_PER_SUBMISSION} steps, as a dropped \
-                 submission reads."
+                "Every stat read back zero after a submission of {MAX_STEPS_PER_SUBMISSION} steps. The submission \
+                 might have been dropped."
             ));
         }
         return Ok(());
@@ -113,17 +113,17 @@ pub(super) fn sampled_slice(entry: &ModelEntry, settings: &CheckSettings, ctx: &
         let tick = state.tick() + u64::from(count);
         let submission = stepping::submit_slice(&mut *state, ctx, count, true);
         if !state.stats_readback_pending() {
-            return Err(format!("A sampled slice of {count} steps began no readback."));
+            return Err(format!("A sampled slice of {count} steps did not start a readback."));
         }
         stepping::await_submission(ctx, submission).map_err(|fault| fault_text(&fault))?;
         if state.poll_stats_readback(&ctx.device, false) != StatsPoll::Landed {
             return Err(format!(
-                "The readback of a finished slice of {count} steps did not land on the next poll."
+                "The readback of a finished slice of {count} steps did not complete on the next poll."
             ));
         }
         if state.tick() != tick {
             return Err(format!(
-                "The tick after a slice of {count} steps reads {}, not {tick}.",
+                "The tick after a slice of {count} steps reads {}, expected {tick}.",
                 state.tick()
             ));
         }
@@ -135,7 +135,7 @@ pub(super) fn sampled_slice(entry: &ModelEntry, settings: &CheckSettings, ctx: &
         ctx.queue.submit(Some(encoder.finish()));
         state.begin_stats_readback();
         if state.poll_stats_readback(&ctx.device, true) != StatsPoll::Landed {
-            return Err(format!("The readback of a snapshot at tick {tick} did not land."));
+            return Err(format!("The snapshot readback at tick {tick} did not complete."));
         }
         let snapshot = state.stats();
         if let Some(difference) = first_stat_difference(&sliced, &snapshot) {

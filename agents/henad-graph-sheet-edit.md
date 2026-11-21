@@ -58,7 +58,7 @@ it, also for an id another kind holds and for the item's own id) and the namespa
 every reference; a card of the button's id that the button runs and an agent kind's tick card
 follow. A suffixed id that is reserved (`henad_2`) is refused like a
 reserved base. `is_reserved_name(name, space)` lets a form refuse such a name first, in the words of
-`sentence::name_reserved` ("Henad uses the name Count itself. Choose another name."). Lines take `l<next_line>`, and `next_line` grows past it, so a deleted number
+`sentence::name_reserved` ("Count is a reserved name. Choose another name."). Lines take `l<next_line>`, and `next_line` grows past it, so a deleted number
 never comes back. After a command, every line it touched that draws gets a key no other draw holds
 (a template's own key is kept when free), and every start it set that draws (by chance, anywhere, a
 value that draws, on the ground when its state is painted on two or more cells, `starts_draws`) or

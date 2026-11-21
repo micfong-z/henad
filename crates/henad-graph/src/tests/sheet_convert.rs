@@ -217,7 +217,7 @@ fn the_copy_keeps_the_purpose_and_each_meaning_as_notes() {
         [
             NoteLayout::about_model(
                 "Purpose",
-                "Conway's Game of Life. Pattern to look for: gliders and other shapes that persist and travel."
+                "Conway's Game of Life. Look for gliders and other shapes that persist and travel."
             ),
             NoteLayout::about_model("Initial density", "Share of cells alive at the start"),
         ]

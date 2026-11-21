@@ -203,7 +203,7 @@ fn tokenize(text: &str) -> Result<Vec<Token>, String> {
                 }
                 (Token::Name(chars[start..end].iter().collect()), end - start)
             }
-            other => return Err(format!("holds '{other}', which no expression uses")),
+            other => return Err(format!("contains the invalid character '{other}'")),
         };
         tokens.push(token);
         at += length;
@@ -262,7 +262,7 @@ impl Parser {
             self.at += 1;
             Ok(())
         } else {
-            Err(format!("needs {token:?} where it has {:?}", self.peek()))
+            Err(format!("needs {token:?}, got {:?}", self.peek()))
         }
     }
 
@@ -272,7 +272,7 @@ impl Parser {
                 self.at += 1;
                 Ok(name)
             }
-            other => Err(format!("needs an output name where it has {other:?}")),
+            other => Err(format!("needs an output name, got {other:?}")),
         }
     }
 
@@ -325,7 +325,7 @@ impl Parser {
         self.at += 1;
         let right = self.sum(depth)?;
         if self.peek().is_some_and(|token| token.comparison().is_some()) {
-            return Err("chains two comparisons, which need `and` between them".to_owned());
+            return Err("chains two comparisons without `and` between them".to_owned());
         }
         Ok(Tree::Binary(op, Box::new(left), Box::new(right)))
     }
@@ -369,9 +369,7 @@ impl Parser {
             depth = Self::deeper(depth)?;
             let component = self.name()?;
             if component != "x" && component != "y" {
-                return Err(format!(
-                    "names the component '{component}', and a vector has `x` and `y`"
-                ));
+                return Err(format!("names the component '{component}', expected `x` or `y`"));
             }
             tree = Tree::Component(Box::new(tree), component);
         }
@@ -395,7 +393,7 @@ impl Parser {
                 match name.as_str() {
                     "true" => return Ok(Tree::Bool(true)),
                     "false" => return Ok(Tree::Bool(false)),
-                    "and" | "or" | "not" => return Err(format!("has `{name}` where it needs a value")),
+                    "and" | "or" | "not" => return Err(format!("needs a value, got `{name}`")),
                     _ => {}
                 }
                 if self.peek() != Some(&Token::Open) {
@@ -416,7 +414,7 @@ impl Parser {
                 self.expect(&Token::Close)?;
                 Ok(Tree::Call(name, arguments))
             }
-            other => Err(format!("needs a value where it has {other:?}")),
+            other => Err(format!("needs a value, got {other:?}")),
         }
     }
 }
@@ -492,7 +490,7 @@ impl Builder<'_> {
             (Operand::Value(value, found), _) if found == value_type => return Ok((value.clone(), found.clone())),
             (Operand::Whole(number), _) => return Err(refused(number.to_string())),
             (Operand::Point(text), _) => return Err(refused(text.clone())),
-            (Operand::Value(_, found), _) => return Err(format!("needs {value_type} where it has {found}")),
+            (Operand::Value(_, found), _) => return Err(format!("needs {value_type}, got {found}")),
         };
         Ok((InputValue::Literal(literal), value_type.clone()))
     }
@@ -541,7 +539,7 @@ impl Builder<'_> {
                 .names
                 .get(name)
                 .cloned()
-                .ok_or_else(|| format!("reads '{name}', which is no input and no output set before"))?,
+                .ok_or_else(|| format!("reads '{name}', which is not an input or an earlier output"))?,
             Tree::Negate(inner) => match self.build(inner)? {
                 Operand::Whole(number) => Operand::Whole(-number),
                 Operand::Point(text) => Operand::Point(format!("-{text}")),
@@ -619,7 +617,7 @@ impl Builder<'_> {
                     ValueType::Vec2F,
                 ))
             }
-            _ => Err(format!("mixes {a_type} and {b_type}")),
+            _ => Err(format!("has mismatched types {a_type} and {b_type}")),
         }
     }
 
@@ -704,7 +702,7 @@ impl Builder<'_> {
                     ValueType::F32,
                 ))
             }
-            _ => Err(format!("calls `{name}`, which no expression knows")),
+            _ => Err(format!("calls the unknown function `{name}`")),
         }
     }
 }
@@ -716,5 +714,5 @@ impl Builder<'_> {
 /// Returns the message for a call with another number of arguments.
 fn fixed_operands<const N: usize>(name: &str, operands: Vec<Operand>) -> Result<[Operand; N], String> {
     <[Operand; N]>::try_from(operands)
-        .map_err(|operands| format!("calls `{name}` with {} arguments, and it takes {N}", operands.len()))
+        .map_err(|operands| format!("calls `{name}` with {} arguments, expected {N}", operands.len()))
 }

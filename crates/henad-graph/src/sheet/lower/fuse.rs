@@ -90,7 +90,7 @@ impl CardLowering<'_, '_> {
         let (moore, _) = stencil(around)?;
         if needed > MAX_ACCUMULATORS {
             return Err(format!(
-                "the line holds {needed} summaries with its count, and a look holds at most {MAX_ACCUMULATORS}"
+                "the line holds {needed} summaries with its count, expected at most {MAX_ACCUMULATORS}"
             ));
         }
         let (line_id, number) = match &site.owner {

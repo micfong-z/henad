@@ -280,7 +280,7 @@ fn refusal(refused: &RefusedActions<'_>, during: &'static str) -> Result<(), Fau
         Some(action) => Err(Fault::refused(
             during,
             format!(
-                "the model refused its own action '{}' at tick {}",
+                "the model rejected its own action '{}' at tick {}",
                 action.id, action.tick
             ),
         )),
@@ -292,7 +292,7 @@ fn refusal(refused: &RefusedActions<'_>, during: &'static str) -> Result<(), Fau
 fn gpu_in_browser(id: &str) -> Fault {
     Fault::refused(
         BUILDING,
-        format!("model '{id}' runs on the GPU, and a browser steps a GPU model through GpuSimThread alone"),
+        format!("GPU model '{id}' must run on GpuSimThread in a browser"),
     )
 }
 
@@ -361,14 +361,14 @@ impl fmt::Display for SetupError {
         match self {
             Self::Param(_) => f.write_str("cannot set the parameter"),
             Self::ParamCount { expected, found } => {
-                write!(f, "expected {expected} parameter values, found {found}")
+                write!(f, "expected {expected} parameter values, got {found}")
             }
-            Self::UnknownAction { id } => write!(f, "model has no action '{id}'"),
+            Self::UnknownAction { id } => write!(f, "unknown action '{id}'"),
             Self::ReloadOnly { id } => write!(f, "parameter '{id}' applies only when the model is built"),
             Self::WrongModel { expected, found } => {
-                write!(f, "the run is of model '{found}', not '{expected}'")
+                write!(f, "the run is for model '{found}', expected '{expected}'")
             }
-            Self::Fault(_) => f.write_str("the model faulted"),
+            Self::Fault(_) => f.write_str("the model failed"),
         }
     }
 }
@@ -667,7 +667,7 @@ impl Simulation {
     pub fn act(&mut self, action_id: &str) -> Result<(), SetupError> {
         let index = action_index(&self.setup.entry, action_id)?;
         self.check_earlier_fault()?;
-        let refused = || Fault::refused(STEPPING, format!("the model refused its own action '{action_id}'"));
+        let refused = || Fault::refused(STEPPING, format!("the model rejected its own action '{action_id}'"));
         let acted = match &mut self.engine {
             Engine::Cpu(state) => cpu_call(STEPPING, || if state.act(index) { Ok(()) } else { Err(refused()) }),
             #[cfg(not(target_arch = "wasm32"))]
@@ -810,7 +810,7 @@ impl Simulation {
         }
         Err(Fault::refused(
             STEPPING,
-            format!("an earlier call faulted and the simulation has to be rebuilt ({earlier})"),
+            format!("an earlier call failed and the simulation must be rebuilt ({earlier})"),
         ))
     }
 
@@ -959,9 +959,9 @@ pub enum ExportError {
 impl fmt::Display for ExportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::GpuState => f.write_str("a GPU model's state stays on the device and cannot be exported"),
+            Self::GpuState => f.write_str("a GPU model's state is stored on the device and cannot be exported"),
             Self::Io(_) => f.write_str("cannot write the state"),
-            Self::Fault(_) => f.write_str("the model faulted while preparing its views"),
+            Self::Fault(_) => f.write_str("the model failed while preparing its views"),
         }
     }
 }

@@ -62,7 +62,7 @@ impl GraphBuilder {
                     .iter()
                     .find(|pass| pass.id == *id)
                     .cloned()
-                    .ok_or_else(|| EditError::Missing(format!("the file declares no {scope}")))?;
+                    .ok_or_else(|| EditError::Missing(format!("the file has no {scope}")))?;
                 pass.body.nodes = selected(&pass.body);
                 pass.draw_order.retain(|node| nodes.contains(node));
                 document.passes = vec![pass];
@@ -74,7 +74,7 @@ impl GraphBuilder {
                     .iter()
                     .find(|function| function.id == *id)
                     .cloned()
-                    .ok_or_else(|| EditError::Missing(format!("the file declares no {scope}")))?;
+                    .ok_or_else(|| EditError::Missing(format!("the file has no {scope}")))?;
                 function.body.nodes = selected(&function.body);
                 document.functions = vec![function];
                 document.passes.clear();
@@ -101,7 +101,7 @@ impl GraphBuilder {
                     .first()
                     .map(|function| (&function.body, Vec::new()))
             })
-            .ok_or_else(|| EditError::Invalid("the pasted text holds no node".to_owned()))?;
+            .ok_or_else(|| EditError::Invalid("the pasted text has no node".to_owned()))?;
         self.body(scope)?;
         let mut renamed: BTreeMap<NodeId, NodeId> = BTreeMap::new();
         let mut sorted: Vec<&Node> = source.0.nodes.iter().collect();

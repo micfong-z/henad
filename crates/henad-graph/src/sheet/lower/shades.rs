@@ -37,11 +37,11 @@ pub(super) fn colors(builder: &mut Builder<'_>) {
                         .read(site.pass, &property.id)
                         .and_then(|read| colors::shade(builder, &site, &read, &property.id, rule))
                 }
-                _ => Err("the colour rule shades no Number property of the ground".to_owned()),
+                _ => Err("the colour rule must shade a Number property of the ground".to_owned()),
             }
         }
         ColorRuleKind::Shaded => {
-            Err("the colour rule of the ground shades on a log scale, and only shades of a state do".to_owned())
+            Err("the colour rule of the ground cannot shade on a log scale: only shades of a state can".to_owned())
         }
         ColorRuleKind::ByHeading => Err("the ground has no heading to colour it by".to_owned()),
     };
@@ -62,7 +62,7 @@ fn by_state(builder: &mut Builder<'_>, rule: &crate::sheet::document::ColorRule)
         .as_deref()
         .and_then(|id| builder.property(id))
         .filter(|(_, property)| property.property_type == PropertyType::States)
-        .ok_or("the colour rule names no States property of the ground")?;
+        .ok_or("the colour rule must name a States property of the ground")?;
     let site = colors::color_site(builder);
     let read = builder.read(site.pass, &property.id)?;
     let category = ValueType::Category(property.id.clone());
@@ -78,13 +78,13 @@ fn by_state(builder: &mut Builder<'_>, rule: &crate::sheet::document::ColorRule)
             return Ok(());
         }
         (Some(state), false) => state.as_str(),
-        _ => return Err("a colour rule shades one state by its shades".to_owned()),
+        _ => return Err("the colour rule needs both a shaded state and its shades, or neither".to_owned()),
     };
     let shaded_index = property
         .states
         .iter()
         .position(|state| state.id == shade_state)
-        .ok_or_else(|| format!("'{shade_state}' is no state of '{}'", property.id))?;
+        .ok_or_else(|| format!("'{shade_state}' is not a state of '{}'", property.id))?;
     let palette_id = format!("shades_{}", property.id);
     if builder
         .graph
@@ -93,7 +93,7 @@ fn by_state(builder: &mut Builder<'_>, rule: &crate::sheet::document::ColorRule)
         .any(|category| category.id == palette_id)
     {
         return Err(format!(
-            "the palette of the shades would take the id '{palette_id}' of a property"
+            "the shades palette id '{palette_id}' is already used by a property"
         ));
     }
     let colors = shade_palette(property, rule, shaded_index);
@@ -170,7 +170,7 @@ fn largest_shade(
             }
         });
     }
-    largest.ok_or_else(|| "a colour rule shades one state by its shades".to_owned())
+    largest.ok_or_else(|| "the colour rule needs both a shaded state and its shades, or neither".to_owned())
 }
 
 /// Returns the band from 0 to [`SHADE_BANDS`] that the value `best` falls in, written at `site`: 0 for a value at or

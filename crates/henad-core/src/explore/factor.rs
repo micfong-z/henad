@@ -444,11 +444,11 @@ impl fmt::Display for FactorError {
                 "range of parameter '{id}' needs a step, except in a random or Latin hypercube design"
             ),
             Self::NotWhole { target, value } => write!(f, "{target} takes integers, got {value}"),
-            Self::AllOverNumber { target } => write!(f, "{target} is a number, and 'all' needs a bool or choice"),
+            Self::AllOverNumber { target } => write!(f, "{target} is a number, expected a bool or choice for 'all'"),
             Self::RangeOverOptions { id } => {
                 write!(
                     f,
-                    "parameter '{id}' is a bool or choice, and takes values or 'all' but no range"
+                    "parameter '{id}' is a bool or choice and takes values or 'all', got a range"
                 )
             }
             Self::NoLevels { target } => write!(f, "{target} has no values to vary over"),

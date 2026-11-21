@@ -358,8 +358,8 @@ pub fn detail_strip(
                     egui::Button::new(format!("{MDI_CONTENT_COPY} Copy command")),
                 )
                 .on_hover_text(format!(
-                    "Copy {program} command to replay this run. Its stats might fall on other ticks than this run's \
-                     series."
+                    "Copy {program} command to replay this run. Its stats might be sampled on different ticks from \
+                     this run's series."
                 ))
                 .on_disabled_hover_text(command_refusal.unwrap_or_default());
             if copy.clicked() {

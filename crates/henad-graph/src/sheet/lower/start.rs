@@ -123,13 +123,13 @@ fn start_value(
                 let key = draws.record(builder, "starts_as.value");
                 random_direction(builder, site, key, length)
             }
-            _ => return Err("an arrow starts as a random direction".to_owned()),
+            _ => return Err("an arrow can only start as a random direction".to_owned()),
         },
         StartRule::Value => match start.value.value() {
             Some(SheetValue::Phrase(phrase)) if phrase.kind == LineKind::RandomNumber => {
                 if lane_type != ValueType::F32 {
                     // A draw truncated to a whole number would never reach the high end.
-                    return Err("a random number between two values starts a Number property only".to_owned());
+                    return Err("only a Number property can start as a random number between two values".to_owned());
                 }
                 let drawn = random_between(builder, site, phrase, draws, "starts_as.value")?;
                 builder.input_truncated(site, &drawn, &lane_type)?
@@ -146,7 +146,7 @@ fn start_value(
         }
         StartRule::Painted | StartRule::Anywhere | StartRule::OnGround => {
             return Err(format!(
-                "a start of rule {} places agents or paints the ground of agents",
+                "a start of rule {} can only place agents or paint the ground of agents",
                 start.rule.as_str()
             ));
         }
@@ -220,7 +220,7 @@ fn start_operand(builder: &Builder<'_>, value: Option<&SheetValue>) -> Result<Op
         }
         Some(SheetValue::Chip(SheetChip::State(state))) => Ok(Operand::State(state.clone())),
         Some(SheetValue::Chip(SheetChip::Param(id))) => builder.param(id),
-        _ => Err("a start holds a value it cannot start from".to_owned()),
+        _ => Err("a start holds an unsupported value".to_owned()),
     }
 }
 

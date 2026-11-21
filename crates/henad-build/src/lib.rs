@@ -249,8 +249,8 @@ impl ShaderBuild {
             let source = read(&path)?;
             if paths::defines_reserved_path(&source) {
                 warnings.push(format!(
-                    "{} declares an import path under `henad::`, a root reserved for the shared modules. An import \
-                     resolves by file path, and never reads this line.",
+                    "{} declares an import path under `henad::`, a root reserved for the shared modules. Imports \
+                     resolve by file path and ignore this declaration",
                     path.display()
                 ));
             }
@@ -418,7 +418,7 @@ impl fmt::Display for ShaderBuildError {
         match self {
             Self::InvalidName { path, component } => {
                 if component.is_empty() {
-                    write!(f, "{}: the path gives an empty Rust name. ", path.display())?;
+                    write!(f, "{}: the path maps to an empty Rust name. ", path.display())?;
                 } else {
                     write!(
                         f,
@@ -427,8 +427,8 @@ impl fmt::Display for ShaderBuildError {
                     )?;
                 }
                 f.write_str(
-                    "Each component of a shader's path below the shader root becomes part of a Rust name, and the \
-                     components joined in PascalCase name the shader's `ShaderEntry` variant",
+                    "Each component of a shader's path below the shader root must be a Rust identifier. The components \
+                     joined in PascalCase name the shader's `ShaderEntry` variant",
                 )
             }
             Self::NameCollision {
@@ -438,20 +438,19 @@ impl fmt::Display for ShaderBuildError {
                 name,
             } => write!(
                 f,
-                "{} and {} both give the {kind} `{name}`",
+                "{} and {} both map to the {kind} `{name}`",
                 first.display(),
                 second.display()
             ),
             Self::ReservedName { path, name } if name.eq_ignore_ascii_case("henad") => write!(
                 f,
-                "{}: the name `henad`, in any case, is reserved for the shared modules, and a shader file or \
-                 directory of that name would shadow them",
+                "{}: the name `henad`, in any case, is reserved for the shared modules and cannot be used for a shader \
+                 file or directory",
                 path.display()
             ),
             Self::ReservedName { path, name } => write!(
                 f,
-                "{}: the generated bindings use the name `{name}` at their root, and a shader path starting with it \
-                 would shadow it",
+                "{}: a shader path cannot start with `{name}`, the name the generated bindings use at their root",
                 path.display()
             ),
             Self::ReservedImport {
@@ -490,14 +489,14 @@ impl fmt::Display for ShaderBuildError {
                 reason,
             } => write!(
                 f,
-                "{}:{line}: `{text}` binds {reason}. Group 0 of an entry point holds storage buffers, uniforms and \
-                 storage textures. Move a render shader out of the shader root, or name the entry points with \
-                 `ShaderBuild::new`",
+                "{}:{line}: `{text}` binds {reason}. Group 0 of an entry point must hold only storage buffers, \
+                 uniforms and storage textures. Move a render shader out of the shader root, or name the entry points \
+                 with `ShaderBuild::new`",
                 path.display()
             ),
             Self::ModuleBinding { path, line, text } => write!(
                 f,
-                "{}:{line}: `{text}` declares a binding in a module another shader imports. Bindings belong in the \
+                "{}:{line}: `{text}` declares a binding in a module another shader imports. Move the binding to the \
                  entry shader",
                 path.display()
             ),

@@ -43,7 +43,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "conv.to_u32",
         label: "To u32",
-        semantics: "`a` as a `u32`. From a float it truncates toward zero and clamps to the values of the float's type that a `u32` holds exactly, as WGSL converts: 0 to 4294967040 (`0x4f7fffff`, the largest `f32` below 2^32) from an `f32`, and 0 to `u32::MAX` from an `f64`. A NaN gives 0 on the host and is indeterminate in a shader, since a shader may assume no NaN. From an `i32` it reinterprets the bits, from a `bool` it gives 0 or 1, from a `u64` it keeps the low 32 bits, and from a cell or agent reference it gives the index, `u32::MAX` for the reference to no cell.",
+        semantics: "`a` as a `u32`. From a float it truncates toward zero and clamps to the values of the float's type that a `u32` holds exactly, as WGSL converts: 0 to 4294967040 (`0x4f7fffff`, the largest `f32` below 2^32) from an `f32`, and 0 to `u32::MAX` from an `f64`. A NaN returns 0 on the host and is indeterminate in a shader, since a shader can assume no NaN. From an `i32` it reinterprets the bits, from a `bool` it returns 0 or 1, from a `u64` it keeps the low 32 bits, and from a cell or agent reference it returns the index, `u32::MAX` for the reference to no cell.",
         type_var: &[
             TypeClass::F32,
             TypeClass::I32,
@@ -86,7 +86,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "conv.to_i32",
         label: "To i32",
-        semantics: "`a` as an `i32`. From an `f32` it truncates toward zero and clamps to the `f32` values an `i32` holds exactly, as WGSL converts: `i32::MIN` to 2147483520 (`0x4effffff`, the largest `f32` below 2^31). A NaN gives 0 on the host and is indeterminate in a shader, since a shader may assume no NaN. From a `u32` it reinterprets the bits, and from a `bool` it gives 0 or 1.",
+        semantics: "`a` as an `i32`. From an `f32` it truncates toward zero and clamps to the `f32` values an `i32` holds exactly, as WGSL converts: `i32::MIN` to 2147483520 (`0x4effffff`, the largest `f32` below 2^31). A NaN returns 0 on the host and is indeterminate in a shader, since a shader can assume no NaN. From a `u32` it reinterprets the bits, and from a `bool` it returns 0 or 1.",
         type_var: &[TypeClass::F32, TypeClass::U32, TypeClass::Bool],
         outputs: &[output("out", SocketType::Fixed(TypeClass::I32))],
         cases: &[
@@ -106,7 +106,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "conv.u32_to_cat",
         label: "Number to category",
-        semantics: "The variant of `category` numbered `min(a, variants - 1)`. A number past the last variant gives the last variant.",
+        semantics: "The variant of `category` numbered `min(a, variants - 1)`. A number past the last variant returns the last variant.",
         config: &[config("category", ConfigType::CategoryId)],
         inputs: &[input("a", U32_TYPE)],
         outputs: &[output("out", SocketType::ConfigCategory)],
@@ -184,7 +184,7 @@ pub(super) static A2_KINDS: &[NodeDef] = &[
     NodeDef {
         id: "conv.to_vec2i",
         label: "To vec2i",
-        semantics: "`a` as a `vec2i`, per component as `conv.to_i32`: a float truncates toward zero and clamps to `i32::MIN` to 2147483520, and a `u32` reinterprets the bits. A NaN component gives 0 on the host and is indeterminate in a shader.",
+        semantics: "`a` as a `vec2i`, per component as `conv.to_i32`: a float truncates toward zero and clamps to `i32::MIN` to 2147483520, and a `u32` reinterprets the bits. A NaN component returns 0 on the host and is indeterminate in a shader.",
         type_var: &[TypeClass::Vec2F, TypeClass::Vec2U],
         outputs: &[output("out", SocketType::Fixed(TypeClass::Vec2I))],
         cases: &[
@@ -209,7 +209,7 @@ pub(super) static A2_KINDS: &[NodeDef] = &[
     NodeDef {
         id: "conv.to_vec2u",
         label: "To vec2u",
-        semantics: "`a` as a `vec2u`, per component as `conv.to_u32`: a float truncates toward zero and clamps to 0 to 4294967040, and an `i32` reinterprets the bits. A NaN component gives 0 on the host and is indeterminate in a shader.",
+        semantics: "`a` as a `vec2u`, per component as `conv.to_u32`: a float truncates toward zero and clamps to 0 to 4294967040, and an `i32` reinterprets the bits. A NaN component returns 0 on the host and is indeterminate in a shader.",
         type_var: &[TypeClass::Vec2F, TypeClass::Vec2I],
         outputs: &[output("out", SocketType::Fixed(TypeClass::Vec2U))],
         cases: &[

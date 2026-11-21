@@ -41,7 +41,7 @@ pub(super) fn factor_message(error: &FactorError) -> String {
         FactorError::RangeOverOptions { .. } => {
             "This parameter accepts listed values or 'all'. Ranges apply only to number parameters.".to_owned()
         }
-        FactorError::NoLevels { .. } => "No values".to_owned(),
+        FactorError::NoLevels { .. } => "Enter values".to_owned(),
         FactorError::UnknownParam { .. } | FactorError::UnknownAction { .. } => describe_error(error),
     }
 }
@@ -117,11 +117,11 @@ pub(super) fn value_message(error: &ValueError) -> String {
 /// Returns the words that the Sweep tab uses for `comparator`, as in "at most".
 pub fn comparator_words(comparator: Comparator) -> &'static str {
     match comparator {
-        Comparator::Less => "below",
+        Comparator::Less => "less than",
         Comparator::LessOrEqual => "at most",
         Comparator::Equal => "equal to",
         Comparator::NotEqual => "not equal to",
         Comparator::GreaterOrEqual => "at least",
-        Comparator::Greater => "above",
+        Comparator::Greater => "greater than",
     }
 }

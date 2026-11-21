@@ -422,7 +422,7 @@ fn each_agent_refusal_gives_one_located_error() {
     );
     let error = only_refusal(&look_in_repeat);
     assert!(
-        error.message.contains("cannot sit inside a Repeat"),
+        error.message.contains("cannot be used inside a Repeat"),
         "{}",
         error.message
     );

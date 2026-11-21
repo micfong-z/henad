@@ -134,11 +134,11 @@ impl<'a> BodyView<'a> {
             if self.defs[position].is_none() {
                 let message = match crate::catalogue::definitions().find(|def| def.id == node.op) {
                     Some(def) => format!(
-                        "node {} uses '{}' from node library {}, and the file is at library {}",
+                        "node {} uses '{}' from node library {}, but the file declares library {}",
                         node.id, node.op, def.since, self.document.library
                     ),
                     None => format!(
-                        "node {} uses '{}', which this build has no definition of",
+                        "node {} uses '{}', which is not defined in this build",
                         node.id, node.op
                     ),
                 };
@@ -157,16 +157,13 @@ impl<'a> BodyView<'a> {
                 None => self.region_error(
                     checker,
                     position,
-                    format!(
-                        "node {} names the region {region}, and this body holds no such node",
-                        node.id
-                    ),
+                    format!("node {} names the region {region}, which is not in this body", node.id),
                     place,
                 ),
                 Some(&parent) if self.defs[parent].is_some_and(|def| !def.is_region) => self.region_error(
                     checker,
                     position,
-                    format!("node {} names the region {region}, which is no region", node.id),
+                    format!("node {} names the region {region}, which is not a region", node.id),
                     place,
                 ),
                 // A region of an unknown kind still has a body, and a wrong kind has its own diagnostic.
@@ -214,7 +211,7 @@ impl<'a> BodyView<'a> {
                     checker,
                     position,
                     format!(
-                        "{} nests {} regions deep, and regions nest at most {MAX_REGION_DEPTH} deep",
+                        "{} nests {} regions deep, expected at most {MAX_REGION_DEPTH}",
                         self.name(position),
                         self.depths[position] + 1,
                     ),

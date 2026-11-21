@@ -289,7 +289,7 @@ impl BodyWalk<'_, '_, '_, '_> {
                     self.checker,
                     position,
                     format!(
-                        "{} reads the lane '{}' of type {lane_type}, which it cannot compare",
+                        "{} cannot compare the lane '{}' of type {lane_type}",
                         self.view.name(position),
                         node.config_str("lane").unwrap_or_default(),
                     ),
@@ -433,7 +433,7 @@ impl BodyWalk<'_, '_, '_, '_> {
                     self.checker,
                     position,
                     format!(
-                        "{}: the input `{}` is {read_type}, and the node needs {expected}",
+                        "{}: the input `{}` is {read_type}, expected {expected}",
                         view.name(position),
                         input.name
                     ),
@@ -488,7 +488,7 @@ impl BodyWalk<'_, '_, '_, '_> {
                 self.checker,
                 position,
                 format!(
-                    "{}: the input `{}` takes {wanted}, and this one changes faster",
+                    "{}: the input `{}` takes {wanted}, got a value that changes faster",
                     view.name(position),
                     input.name
                 ),
@@ -522,7 +522,7 @@ impl BodyWalk<'_, '_, '_, '_> {
                         self.checker,
                         position,
                         format!(
-                            "{}: the input `{port}` binds the parameter '{id}', and the file declares no such parameter",
+                            "{}: the input `{port}` binds the parameter '{id}', which the file does not declare",
                             view.name(position)
                         ),
                         view.input_place(position, port),
@@ -584,7 +584,7 @@ impl BodyWalk<'_, '_, '_, '_> {
             if !inside {
                 return problem(
                     self,
-                    format!("reads {source_id}.{name}, which only the body of {source_id} can read"),
+                    format!("cannot read {source_id}.{name} outside the body of {source_id}"),
                 );
             }
             return recorded(self.ports.inner_outputs.get(&source_id), &name);
@@ -592,13 +592,13 @@ impl BodyWalk<'_, '_, '_, '_> {
         if !outputs.iter().any(|output| output.name == name) {
             return problem(
                 self,
-                format!("reads {source_id}.{name}, and {source_id} has no such port"),
+                format!("reads {source_id}.{name}, which is not a port of {source_id}"),
             );
         }
         if inside {
             return problem(
                 self,
-                format!("reads {source_id}.{name}, the result of the region around it, which is a cycle"),
+                format!("reads {source_id}.{name}, the result of the region around it, forming a cycle"),
             );
         }
         if let Some(parent) = view.parents[source]
@@ -607,7 +607,7 @@ impl BodyWalk<'_, '_, '_, '_> {
             return problem(
                 self,
                 format!(
-                    "reads {link} from inside the region {}, and only an accumulator output leaves a region",
+                    "reads {link} from inside the region {}, expected an accumulator output of that region",
                     view.nodes[parent].id
                 ),
             );
@@ -637,7 +637,7 @@ impl BodyWalk<'_, '_, '_, '_> {
                     self.checker,
                     position,
                     format!(
-                        "{}: a number needs a palette, and '{palette}' is a category",
+                        "{}: a number needs a palette, got the category '{palette}'",
                         view.name(position)
                     ),
                     view.config_place(position, "palette"),
@@ -720,7 +720,7 @@ impl BodyWalk<'_, '_, '_, '_> {
                 self.checker,
                 position,
                 format!(
-                    "{}: the output `{port}` is {value_type} per element, which only an init pass holds",
+                    "{}: the output `{port}` cannot be {value_type} per element outside an init pass",
                     view.name(position)
                 ),
                 view.table_place(position),
@@ -751,7 +751,7 @@ fn check_accumulator_puts(checker: &mut Checker<'_>, view: &BodyView<'_>) {
                 view.error(
                     checker,
                     position,
-                    format!("{} sits outside every region", view.name(position)),
+                    format!("{} must be inside a region", view.name(position)),
                     view.table_place(position),
                 );
             }
@@ -766,7 +766,7 @@ fn check_accumulator_puts(checker: &mut Checker<'_>, view: &BodyView<'_>) {
                 checker,
                 position,
                 format!(
-                    "{} feeds the accumulator '{name}', and the region {} has no such accumulator",
+                    "{} feeds '{name}', which is not an accumulator of the region {}",
                     view.name(position),
                     view.nodes[region].id
                 ),
@@ -777,7 +777,7 @@ fn check_accumulator_puts(checker: &mut Checker<'_>, view: &BodyView<'_>) {
                 checker,
                 position,
                 format!(
-                    "{} feeds the accumulator '{name}', which {} feeds already, and an accumulator takes one `region.put`",
+                    "{} cannot feed the accumulator '{name}' that {} already feeds: an accumulator takes only one `region.put`",
                     view.name(position),
                     view.nodes[first].id
                 ),
@@ -824,7 +824,7 @@ fn warn_unreached(checker: &mut Checker<'_>, view: &BodyView<'_>) {
                 checker,
                 position,
                 format!(
-                    "{} reaches nothing the pass keeps, and will be dropped",
+                    "{} reaches nothing the pass keeps, and will be discarded",
                     view.name(position)
                 ),
                 view.table_place(position),

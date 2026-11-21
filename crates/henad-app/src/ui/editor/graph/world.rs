@@ -404,7 +404,7 @@ pub fn variant_color_name(variant: &Variant) -> String {
 /// the form that adds a category with its first variant.
 fn categories_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<GraphRequest>) {
     if document.categories.is_empty() {
-        ui.weak("No category.");
+        ui.weak("No categories.");
     }
     for category in &document.categories {
         ui.label(RichText::new(&category.id).strong());
@@ -503,7 +503,7 @@ fn add_category_ui(ui: &mut Ui, requests: &mut Vec<GraphRequest>) {
 /// Draws each statistic with the output it reads.
 fn stats_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<GraphRequest>) {
     if document.stats.is_empty() {
-        ui.weak("No statistic. Add one from a node's menu in a stats pass.");
+        ui.weak("No statistics. Add a statistic from a node's menu in a stats pass.");
     }
     for stat in &document.stats {
         ui.horizontal(|ui| {
@@ -554,7 +554,7 @@ fn actions_ui(ui: &mut Ui, document: &GraphDocument, requests: &mut Vec<GraphReq
                 .desired_width(FIELD_WIDTH),
         );
         if add_button(ui, !id.is_empty(), Button::new(MDI_PLUS).small(), "Add action")
-            .on_hover_text("Add action button")
+            .on_hover_text("Add action, shown as a button")
             .clicked()
         {
             push(requests, EditCommand::AddAction(Action::new(&id, &id)));

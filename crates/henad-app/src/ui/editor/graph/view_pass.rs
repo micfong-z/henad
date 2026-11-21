@@ -76,11 +76,11 @@ pub fn view_file(builder: &GraphBuilder, report: &CheckReport, target: &ViewTarg
         .passes
         .iter()
         .find(|pass| pass.id == target.pass)
-        .ok_or_else(|| format!("The file declares no pass {}.", target.pass))?;
+        .ok_or_else(|| format!("Model file has no pass {}.", target.pass))?;
     let node = pass
         .body
         .node(target.node)
-        .ok_or_else(|| format!("Pass {} holds no node {}.", pass.id, target.node))?;
+        .ok_or_else(|| format!("Pass {} has no node {}.", pass.id, target.node))?;
     if node.region.is_some() {
         return Err("A value inside a region cannot be shown in the viewport.".to_owned());
     }
@@ -93,7 +93,7 @@ pub fn view_file(builder: &GraphBuilder, report: &CheckReport, target: &ViewTarg
         .ok_or_else(|| format!("Node {} has no output {}.", target.node, target.port))?;
     let value_type = port_type.value_type.clone();
     if !can_view(value_type.as_ref(), port_type.rate) {
-        return Err("Only a number, a flag or a category per element can be shown in the viewport.".to_owned());
+        return Err("Only per-element numbers, flags and categories can be shown in the viewport.".to_owned());
     }
     let domain = pass.domain;
     let copied = upstream(&pass.body, target.node, document.library);

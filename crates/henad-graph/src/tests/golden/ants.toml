@@ -6,7 +6,7 @@ kind = "sheet"
 version = 1
 id = "ants"
 name = "Ant foraging"
-purpose = "Stigmergy: a colony finds a short path to food through trails alone. Pattern to look for: a trail forms between the nest and the food, around the rocks, and deliveries rise steadily."
+purpose = "Stigmergy: a colony finds a short path to food through trails alone. Look for a trail forming between the nest and the food, around the rocks, and deliveries rising steadily."
 next_line = 17
 
 [world]
@@ -147,7 +147,7 @@ min = 0.1
 max = 10
 default = 1
 step = 0.1
-means = "Trail strength an ant adds just after reaching the food or the nest"
+means = "Trail strength an ant adds immediately after reaching the food or the nest"
 
 [[parameter]]
 id = "momentum"

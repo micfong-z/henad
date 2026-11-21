@@ -137,7 +137,7 @@ impl GpuContext {
         let sink = send_wrapper::SendWrapper::new(sink);
         device.on_uncaptured_error(std::sync::Arc::new(move |error: wgpu::Error| {
             log::error!("unhandled GPU error: {error}");
-            sink.set_once(Fault::device("running on the GPU", error));
+            sink.set_once(Fault::device("running the simulation", error));
         }));
         let lost = Arc::new(AtomicBool::new(false));
         let callback_lost = Arc::clone(&lost);

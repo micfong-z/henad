@@ -47,11 +47,11 @@ pub fn result_below_tooltip(name: &str) -> String {
 
 /// Returns the tooltip of the red chip of the result `name` from inside a When that does not hold the line.
 pub fn result_inside_tooltip(name: &str) -> String {
-    format!("{name} belongs to the lines inside a When this line is not in. Choose another value.")
+    format!("The result {name} is only for lines inside its When. Choose another value.")
 }
 
 /// Note under an outside test with one side filled.
-pub const ONE_SIDED_RANGE: &str = "For one side only, a plain comparison reads better.";
+pub const ONE_SIDED_RANGE: &str = "Only one side is set. Use a plain comparison instead.";
 
 /// Returns the note under a rate line whose unit differs from the unit of its parameter, such as "Infection rate is
 /// per day on the sheet, but this line reads it per week."
@@ -175,7 +175,7 @@ pub fn remove_when_name(prefix: &str) -> String {
 
 /// Returns the note under a When around the one change on line `number`.
 pub fn only_one_inside_note(number: usize) -> String {
-    format!("Only line {number} is inside. Its own when can hold this condition.")
+    format!("Only line {number} is inside. Move this condition into that line's own when.")
 }
 
 /// Returns the label of the button that moves a When's condition into the change on line `number`.
@@ -202,7 +202,9 @@ pub fn only_when_note(number: usize, condition: Option<&str>) -> String {
 
 /// Returns the note under a result line inside When line `number` on a card of which `thing` names one.
 pub fn worked_out_everywhere_note(number: usize, thing: &str) -> String {
-    format!("Worked out for every {thing}, whatever line {number} says. Only lines inside line {number} can use it.")
+    format!(
+        "Worked out for every {thing}, whether or not line {number} holds. Only lines inside line {number} can use it."
+    )
 }
 
 /// Note under a When that holds no line.
@@ -263,11 +265,11 @@ pub fn otherwise_tooltip(
     let wins = if lines.len() == 1 {
         format!("When both apply{when}, line {} wins.", number_list(lines))
     } else if repeat == OtherwiseRepeat::Higher {
-        "When more than one applies, the highest line wins. Between lines in one Repeat, the first time round that \
-         one applies decides."
+        "When more than one applies, the line nearest the top of the card wins. Between lines in one Repeat, the \
+         first time round that one applies decides."
             .to_owned()
     } else {
-        format!("When more than one applies{when}, the highest line wins.")
+        format!("When more than one applies{when}, the line nearest the top of the card wins.")
     };
     format!("{who} {property}{for_whom}. {wins}")
 }

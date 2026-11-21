@@ -358,7 +358,7 @@ pub(crate) fn factor_text(factor: &FactorSpec) -> String {
             max,
             step: Some(step),
         } => format!("{target} from {min} to {max} in steps of {step}"),
-        LevelSpec::All => format!("{target}, every value"),
+        LevelSpec::All => format!("{target}, all values"),
     }
 }
 

@@ -149,7 +149,7 @@ fn another_document_clears_the_state_of_the_preview() {
     let Some(mut app) = app_with_sir() else {
         return;
     };
-    let fault = Fault::refused("running on the GPU", "the device refused the step");
+    let fault = Fault::refused("running the simulation", "the device refused the step");
     app.editor.show_preview_fault(&fault);
     assert!(matches!(app.editor.preview.state, PreviewState::Faulted(_)));
 
@@ -195,7 +195,7 @@ fn a_preview_that_outlived_its_graph_reports_to_the_fault_dialog() {
         PREVIEW_ORPHANED,
         "Apply now builds the grid rule, not the preview's graph"
     );
-    app.report_fault(Fault::refused("running on the GPU", "the device refused the step"));
+    app.report_fault(Fault::refused("running the simulation", "the device refused the step"));
     assert!(app.fault.is_some(), "the fault reached nothing the Editor draws");
     assert_eq!(app.editor.preview.state, PreviewState::Idle);
     assert_eq!(app.preview(), None, "the faulted preview is offloaded");
@@ -569,7 +569,7 @@ fn the_submission_budget_refuses_apply_at_full_size_and_lets_the_preview_run() {
     apply(&mut app);
     match &app.editor.outcome {
         Some(ApplyOutcome::Faulted(problems)) => {
-            assert!(problems[0].message.contains("one submission would run"), "{problems:?}");
+            assert!(problems[0].message.contains("one submission runs"), "{problems:?}");
         }
         other => panic!("the model was not refused: {other:?}"),
     }

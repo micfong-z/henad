@@ -104,7 +104,7 @@ impl PatternAxis {
         let lone_bound = |missing_key: &'static str, given_key: &str| SearchSpecError::Setting {
             key: missing_key,
             value: "none".to_owned(),
-            expected: format!("given with {given_key}, or both left out for an automatic range"),
+            expected: format!("given with {given_key}, or both omitted for an automatic range"),
         };
         match (self.min, self.max) {
             (None, None) => {}

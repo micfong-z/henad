@@ -784,7 +784,7 @@ impl Emitter<'_> {
             self.refuse(
                 &pass.id,
                 program.post.first().map(|instruction| instruction.node),
-                "computes a value from a reducer outside a stats pass, which the GPU cannot run",
+                "cannot compute a value from a reducer outside a stats pass on the GPU",
             );
         }
         let indent = "        ";
@@ -805,7 +805,7 @@ impl Emitter<'_> {
                     &pass.id,
                     None,
                     format!(
-                        "writes the lane '{}', whose type the GPU cannot hold",
+                        "writes the lane '{}', whose type the GPU does not support",
                         self.input.lanes[lane].id
                     ),
                 );
@@ -1014,7 +1014,7 @@ impl Emitter<'_> {
                 self.refuse(
                     &block.pass.id,
                     Some(node),
-                    "reads a constant only the host holds, such as a u64 or an f64, in a pass the GPU runs",
+                    "reads a constant the GPU does not support, such as a u64 or an f64, in a pass on the GPU",
                 );
                 "0u".to_owned()
             }
@@ -1061,7 +1061,7 @@ impl Emitter<'_> {
                     self.refuse(
                         &pass_id,
                         Some(node),
-                        "reads the tick, and the compiler planned no tick buffer",
+                        "cannot read the tick: the compiler planned no tick buffer",
                     );
                 }
                 self.reads_tick = true;
@@ -1069,13 +1069,17 @@ impl Emitter<'_> {
             }
             Operation::PressSeed | Operation::LaneSeed { .. } => {
                 // Both are prelude values the host evaluates, and a shader never computes them.
-                self.refuse(&pass_id, Some(node), "is a value the host computes, met in a shader");
+                self.refuse(
+                    &pass_id,
+                    Some(node),
+                    "is a value the host computes and cannot appear in a shader",
+                );
             }
             Operation::StreamBits { .. } | Operation::StreamFloat { .. } => {
                 self.refuse(
                     &pass_id,
                     Some(node),
-                    "draws from the serial stream, which only an init pass on the host can",
+                    "cannot draw from the serial stream: only an init pass on the host can",
                 );
             }
             Operation::LaneGet { lane } => {
@@ -1132,7 +1136,8 @@ impl Emitter<'_> {
                     self.refuse(
                         &pass_id,
                         Some(node),
-                        "raises a base the host cannot compute at build, and the shader reads a table of its powers",
+                        "raises a base the host cannot compute at build, so the shader cannot read a table of its \
+                         powers",
                     );
                 }
                 let exponent = self.slot(block, *exponent, node);
@@ -1209,7 +1214,7 @@ impl Emitter<'_> {
                         ));
                         let_out!(format!("{table}[min({index}, {}u)]", entries.len() - 1));
                     }
-                    _ => self.refuse(&pass_id, Some(node), "picks from values the GPU cannot hold"),
+                    _ => self.refuse(&pass_id, Some(node), "picks from values the GPU does not support"),
                 }
             }
             Operation::Switch { select, cases, default } => {
@@ -1295,7 +1300,7 @@ impl Emitter<'_> {
                     (Conversion::ToI32, Some(WgslType::F32 | WgslType::Bool)) => format!("i32({a})"),
                     (Conversion::ToI32, Some(WgslType::U32)) => format!("bitcast<i32>({a})"),
                     _ => {
-                        self.refuse(&pass_id, Some(node), "converts a value the GPU cannot hold");
+                        self.refuse(&pass_id, Some(node), "converts a value the GPU does not support");
                         "0u".to_owned()
                     }
                 };
@@ -1535,7 +1540,7 @@ impl Emitter<'_> {
                 zero,
             } => {
                 let Some((field, _)) = self.input.agents.and_then(|plan| plan.field_of(*first)) else {
-                    self.refuse(&pass_id, Some(node), "reads a field the GPU does not hold");
+                    self.refuse(&pass_id, Some(node), "reads a field that is not stored on the GPU");
                     return;
                 };
                 if self.role == Role::Merge(field) {
@@ -1544,7 +1549,7 @@ impl Emitter<'_> {
                         &pass_id,
                         Some(node),
                         "reads the field that its `finish` updates while the update writes that field in place. \
-                         The merged value arrives as the input `value`",
+                         Use the input `value` for the merged value",
                     );
                     return;
                 }
@@ -1572,7 +1577,7 @@ impl Emitter<'_> {
                 value,
             } => {
                 let Some((field, _)) = self.input.agents.and_then(|plan| plan.field_of(*first)) else {
-                    self.refuse(&pass_id, Some(node), "writes a field the GPU does not hold");
+                    self.refuse(&pass_id, Some(node), "writes a field that is not stored on the GPU");
                     return;
                 };
                 let layer = self.slot(block, *layer, node);
@@ -1595,7 +1600,11 @@ impl Emitter<'_> {
                 combine,
             } => {
                 let Some(field) = self.input.agents.and_then(|plan| plan.field_of_deposit(*first)) else {
-                    self.refuse(&pass_id, Some(node), "deposits into a field the GPU does not hold");
+                    self.refuse(
+                        &pass_id,
+                        Some(node),
+                        "deposits into a field that is not stored on the GPU",
+                    );
                     return;
                 };
                 let layer = self.slot(block, *layer, node);
@@ -1649,7 +1658,11 @@ impl Emitter<'_> {
             }
             Operation::CounterTotal { .. } | Operation::Midpoint { .. } => {
                 // Both read only values at the tick rate or slower, which the host computes.
-                self.refuse(&pass_id, Some(node), "is a value the host computes, met in a shader");
+                self.refuse(
+                    &pass_id,
+                    Some(node),
+                    "is a value the host computes and cannot appear in a shader",
+                );
             }
             Operation::Clamp { x, lo, hi } => {
                 let (x, lo, hi) = (
@@ -1663,7 +1676,7 @@ impl Emitter<'_> {
                 let (x, y) = (self.slot(block, *x, node), self.slot(block, *y, node));
                 match Self::type_of(block, out) {
                     Some(wgsl) if wgsl.is_vector() => let_out!(format!("{}({x}, {y})", wgsl.name())),
-                    _ => self.refuse(&pass_id, Some(node), "makes a vector the GPU cannot hold"),
+                    _ => self.refuse(&pass_id, Some(node), "makes a vector the GPU does not support"),
                 }
             }
             Operation::VecSplit { v, y_out } => {
@@ -1797,7 +1810,7 @@ impl Emitter<'_> {
                     self.refuse(
                         &pass_id,
                         Some(node),
-                        "sums floats, which the GPU reduces in a stats pass alone",
+                        "cannot sum floats outside a stats pass on the GPU",
                     );
                     return;
                 }
@@ -1904,7 +1917,11 @@ impl Emitter<'_> {
             let start = match accumulator.init {
                 Some(slot) => self.slot(block, slot, node),
                 None => literal(accumulator.identity).unwrap_or_else(|| {
-                    self.refuse(&block.pass.id, Some(node), "holds an accumulator the GPU cannot hold");
+                    self.refuse(
+                        &block.pass.id,
+                        Some(node),
+                        "holds an accumulator the GPU does not support",
+                    );
                     "0u".to_owned()
                 }),
             };

@@ -54,8 +54,8 @@ pub(super) fn stencil(around: Option<Around>) -> Result<(bool, bool), String> {
         Some(Around::Cells8) => Ok((true, false)),
         Some(Around::Cells4) => Ok((false, false)),
         Some(Around::Block3x3) => Ok((true, true)),
-        Some(Around::AgentsWithin) => Err("agents within a distance are no cells".to_owned()),
-        None => Err("the line names no cells to look at".to_owned()),
+        Some(Around::AgentsWithin) => Err("agents within a distance are not cells".to_owned()),
+        None => Err("the line needs cells to look at".to_owned()),
     }
 }
 
@@ -84,7 +84,7 @@ impl<'a> CardLowering<'_, 'a> {
         let fold = self
             .folds
             .last()
-            .ok_or_else(|| "their stands outside a look around".to_owned())?;
+            .ok_or_else(|| "their is used outside a look around".to_owned())?;
         if let Some(read) = fold.reads.get(property) {
             return Ok(read.clone());
         }
@@ -222,7 +222,7 @@ impl<'a> CardLowering<'_, 'a> {
         for summary in &line.summaries {
             let kind = summary
                 .summary
-                .ok_or_else(|| format!("summary '{}' says nothing of how to summarize", summary.id))?;
+                .ok_or_else(|| format!("summary '{}' does not say how to summarize", summary.id))?;
             if kind != SummaryKind::Count {
                 let (value_type, combine) = summary_accumulator_type(kind, false);
                 accumulators.push((summary.id.as_str(), value_type, combine));

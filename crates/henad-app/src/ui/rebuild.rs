@@ -7,7 +7,7 @@ use crate::ui::editor::sheet::widgets::{DialogButton, DialogButtonKind, dialog_b
 use crate::ui::plural;
 
 /// Title of the modal.
-const REBUILD_HEADING: &str = "Rebuild model";
+const REBUILD_HEADING: &str = "Rebuild model?";
 
 /// Width in points of the modal's content.
 const DIALOG_WIDTH: f32 = 420.0;

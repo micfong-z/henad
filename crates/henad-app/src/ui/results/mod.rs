@@ -661,7 +661,7 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
         if let Some(store) = panel.store.as_ref().filter(|store| store.records_editable_code()) {
             let open = ui
                 .button(format!("{MDI_PENCIL_OUTLINE} {OPEN_IN_EDITOR}"))
-                .on_hover_text(format!("Open model this {} ran in Editor", store.mode().noun()));
+                .on_hover_text(format!("Open this {}'s model in Editor", store.mode().noun()));
             if open.clicked() {
                 *request = Some(ResultsRequest::OpenInEditor);
             }
@@ -817,7 +817,7 @@ pub fn open_in_editor(app: &mut AppState) {
     };
     match store.editable_model() {
         Some(model) => editor::replace_model(app, editor::Replacement::Open(model)),
-        None => app.results.status = Some("Recorded model does not read".to_owned()),
+        None => app.results.status = Some("Recorded model cannot be read".to_owned()),
     }
 }
 

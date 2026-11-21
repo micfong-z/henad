@@ -481,7 +481,7 @@ impl Pending {
 /// and runs the edits made in it.
 ///
 /// `past_start` is whether the preview has passed tick 0 or a button was pressed in it. A changed Starts as then says
-/// "Start again to see it". `trials` holds the values the world tries, each shown under its parameter.
+/// "Press Start again to see the change." `trials` holds the values the world tries, each shown under its parameter.
 pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials: &[SheetTrial]) {
     let stale: Vec<String> = all_properties(sheet.document())
         .filter(|property| past_start && sheet.start_changed(&property.id))

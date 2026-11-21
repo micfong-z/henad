@@ -77,7 +77,10 @@ fn measure_source(
 ) -> Result<PortRef, String> {
     let thing = builder.thing_id();
     if measure.over.as_deref() != Some(thing) && measure.rule != MeasureRule::EventCount {
-        return Err(format!("a measure of this sheet is over {}", builder.thing_words()));
+        return Err(format!(
+            "a measure of this sheet must be over {}",
+            builder.thing_words()
+        ));
     }
     let site = Site::sheet(pass, GROUP_MEASURE, index as u32, format!("measure.{}", measure.id));
     match measure.rule {
@@ -85,8 +88,8 @@ fn measure_source(
             let property = measure
                 .property
                 .as_deref()
-                .ok_or("a count in a state names no property")?;
-            let state = measure.state.as_deref().ok_or("a count in a state names no state")?;
+                .ok_or("a count in a state needs a property")?;
+            let state = measure.state.as_deref().ok_or("a count in a state needs a state")?;
             let (property_index, _) = builder.required_property(property)?;
             let node = if let Some((_, node)) = counts.iter().find(|(id, _)| id == property) {
                 *node
@@ -142,7 +145,7 @@ fn measure_source(
             spread(builder, &site, &read)
         }
         MeasureRule::EventCount if builder.is_agents() => {
-            let event = measure.event.as_deref().ok_or("an event count names no event")?;
+            let event = measure.event.as_deref().ok_or("an event count needs an event")?;
             let node = builder.emit(&site, "stat.counter", vec![("counter", text(event))], Vec::new());
             Ok(PortRef {
                 node,
@@ -200,6 +203,6 @@ fn measure_value(
         Some(SheetValue::Literal(literal)) => {
             literal_operand(literal).ok_or_else(|| "the measure reads no number".to_owned())
         }
-        _ => Err("a measure reads a property, a parameter, a number or a Calculate of them".to_owned()),
+        _ => Err("a measure can only read a property, a parameter, a number or a Calculate of them".to_owned()),
     }
 }

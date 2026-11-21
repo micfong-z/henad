@@ -141,7 +141,7 @@ fn a_capped_fold_fault_names_the_author_line() {
     assert!(
         message.contains(
             "lines 1 and 2, Flockmates and Too close: looked at more than 65536 agents around one agent, and the run \
-             stops. A larger world or a shorter distance looks at fewer"
+             stops. Use a larger world or a shorter distance to look at fewer agents"
         ),
         "{message}"
     );

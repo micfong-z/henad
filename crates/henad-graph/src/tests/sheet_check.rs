@@ -583,7 +583,7 @@ fn the_outside_test_stands_only_in_a_condition_and_counts_for_otherwise() {
         .collect();
     assert_eq!(
         messages,
-        ["is less than ... or more than ... stands only in a condition"]
+        ["is less than ... or more than ... can only be used in a condition"]
     );
 }
 
@@ -632,8 +632,7 @@ fn a_when_that_is_always_and_the_reserved_ids_are_errors() {
         (
             "id = \"clear\"\nevery",
             "id = \"the_id_of_this_card_holds_forty_nine_bytes_in_all\"\nevery",
-            "the card id 'the_id_of_this_card_holds_forty_nine_bytes_in_all' holds 49 bytes, and a sheet id holds at \
-             most 48",
+            "the card id 'the_id_of_this_card_holds_forty_nine_bytes_in_all' holds 49 bytes, expected at most 48",
         ),
     ] {
         let text = sheet_text("game_of_life.toml").replacen(old, new, 1);
@@ -854,7 +853,7 @@ fn a_when_offers_to_fold_into_its_lines_and_notes_what_holds_inside_it() {
     assert_eq!(fold[0].line, "l5");
     assert_eq!(
         fold[0].text,
-        "Only line 3 is inside. Its own when can hold this condition."
+        "Only line 3 is inside. Move this condition into that line's own when."
     );
     assert_eq!(
         fold[0].kind,
@@ -870,7 +869,7 @@ fn a_when_offers_to_fold_into_its_lines_and_notes_what_holds_inside_it() {
         notes_of(&notes, |kind| *kind == RelationNoteKind::Inside),
         [(
             "l1".to_owned(),
-            "Worked out for every cell, whatever line 1 says. Only lines inside line 1 can use it.".to_owned()
+            "Worked out for every cell, whether or not line 1 holds. Only lines inside line 1 can use it.".to_owned()
         )]
     );
     let empty = life_with_when("lines = [\"l1\", \"l2\", \"l3\", \"l5\"]", three, "[]", "");

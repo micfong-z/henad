@@ -191,7 +191,7 @@ pub(super) fn row_levels(
     match level_estimate(&levels) {
         count if enumerated && count > MAX_DRAFT_LEVELS => Err((
             IssueKind::Invalid,
-            format!("Range gives {count} values, over the limit of {MAX_DRAFT_LEVELS}"),
+            format!("Range has {count} values, over the limit of {MAX_DRAFT_LEVELS}"),
         )),
         _ => Ok(levels),
     }
@@ -275,7 +275,7 @@ pub fn batch_estimate(max_evaluations: u64, batch_size: usize, genetic: Option<&
 pub fn parse_levels(text: &str) -> Result<LevelSpec, String> {
     let text = text.trim();
     if text.is_empty() {
-        return Err("No values".to_owned());
+        return Err("Enter values".to_owned());
     }
     match LevelSpec::parse(text).map_err(|error| level_spec_message(&error))? {
         LevelSpec::Values(values) => {
@@ -286,7 +286,7 @@ pub fn parse_levels(text: &str) -> Result<LevelSpec, String> {
                 .map(str::to_owned)
                 .collect();
             if values.is_empty() {
-                return Err("No values".to_owned());
+                return Err("Enter values".to_owned());
             }
             Ok(LevelSpec::Values(values))
         }

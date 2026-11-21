@@ -394,7 +394,7 @@ impl<'a> Builder<'a> {
     /// Returns the message for an id that names no property of the kind of thing.
     fn required_property(&self, id: &str) -> Result<(usize, &'a SheetProperty), String> {
         self.property(id)
-            .ok_or_else(|| format!("'{id}' is no property of {}", self.thing_words()))
+            .ok_or_else(|| format!("'{id}' is not a property of {}", self.thing_words()))
     }
 
     /// Returns the property `id` of the ground.
@@ -407,7 +407,7 @@ impl<'a> Builder<'a> {
             .ground
             .as_ref()
             .and_then(|ground| ground.properties.iter().find(|property| property.id == id))
-            .ok_or_else(|| format!("'{id}' is no property of the ground"))
+            .ok_or_else(|| format!("'{id}' is not a property of the ground"))
     }
 
     /// Returns the id of the field of the ground property `property`.
@@ -419,7 +419,7 @@ impl<'a> Builder<'a> {
         self.ground_fields
             .get(property)
             .map(String::as_str)
-            .ok_or_else(|| format!("'{property}' is no property of the ground"))
+            .ok_or_else(|| format!("'{property}' is not a property of the ground"))
     }
 
     /// Returns the first Position property of the sheet's kind of thing with its index.
@@ -587,7 +587,7 @@ impl<'a> Builder<'a> {
             .iter()
             .find(|parameter| parameter.id == id)
             .map(|parameter| Operand::Param(id.to_owned(), world::parameter_type(parameter)))
-            .ok_or_else(|| format!("'{id}' is no parameter"))
+            .ok_or_else(|| format!("unknown parameter '{id}'"))
     }
 
     /// Returns the read of my property `property` in pass `pass`, writing the shared `lane.get` the first time.

@@ -40,9 +40,9 @@ henad-models' `src/tests/graph_corpus.rs` holds every grid corpus file's init to
 
 **The header.** `ModelHeader::read` reads `format`, `format_version`, `kind`, `[graph] library`
 and `[sheet] version`, ignoring every other key, and `ModelHeader::check(kinds)` refuses another
-format, another version or a kind outside `kinds`, naming them as a list ending in "or" ("this
-reader only reads 'gpu_grid' or 'graph'"). The graph reader, the sheet reader and henad-explore's
-`ModelFile` and `GridRuleFile` all call it, and each reader checks its own version key after it.
+format, another version or a kind outside `kinds`, naming them as a list ending in "or" ("expected
+'gpu_grid' or 'graph'"). The graph reader, the sheet reader and henad-explore's `ModelFile` and
+`GridRuleFile` all call it, and each reader checks its own version key after it.
 `read_header(text)` returns the kind of any TOML text, a file its reader refuses included. It reads
 `kind` alone, so a header key of the wrong type cannot hide it.
 
@@ -214,7 +214,7 @@ information, and a coverage line, the kinds the corpus uses out of every kind.
 **Code identity.** `GraphFile::code` is `ModelCode::new(CODE_FORMAT, semantic_text)`, and
 `GraphFile::source` is `ModelSource::runtime(target id, code)`, which records
 `CodeOrigin::Runtime`. `from_code` refuses another format with the message
-`Recorded under X, and this build runs henad-graph/1`.
+`Recorded in format X, but this build reads henad-graph/1`.
 
 **The time scale**. A `[[param]]` table takes two optional keys, `hidden = true` and
 `tick_unit = "day"` (read through `TimeUnit::parse`). `ParamTable::into_graph_param` reads both,

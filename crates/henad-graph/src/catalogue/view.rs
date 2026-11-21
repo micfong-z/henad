@@ -255,7 +255,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         id: "view.ramp",
         group: "View",
         label: "Color ramp",
-        semantics: "Entry of `palette` a value falls on when `low..high` is cut into one equal band per entry: `floor((value - low) / (high - low) * len)`, clamped to `0..len - 1`. With `high <= low` the result is 0. A NaN `value` gives 0 on the host and is indeterminate in a shader, since a shader may assume no NaN. Parity is approximate, since the bands come from float division.",
+        semantics: "Entry of `palette` a value falls on when `low..high` is cut into one equal band per entry: `floor((value - low) / (high - low) * len)`, clamped to `0..len - 1`. With `high <= low` the result is 0. A NaN `value` returns 0 on the host and is indeterminate in a shader. A shader can assume no NaN. Parity is approximate, since the bands come from float division.",
         contexts: ContextSet {
             region: true,
             ..IN_VIEW

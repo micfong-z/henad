@@ -63,11 +63,8 @@ pub fn params_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     let mut param_changed = Vec::new();
 
-    let reload_hint = format!(
-        "This parameter is only read when the model is built. Press {MDI_RESTART}\u{a0}Build to apply after change."
-    );
-    let pending_hint =
-        format!("This parameter has been changed but not applied. Press {MDI_RESTART}\u{a0}Build to apply.");
+    let reload_hint = format!("Press {MDI_RESTART}\u{a0}Build to apply changes to this parameter.");
+    let pending_hint = format!("Parameter changed. Press {MDI_RESTART}\u{a0}Build to apply.");
 
     for (index, descriptor) in descriptors.iter().enumerate() {
         if descriptor.is_hidden() {
@@ -274,7 +271,8 @@ pub(crate) fn notice_content(app: &AppState, pending_count: usize, shortfalls: &
             ParamsNoticeTone::Warn,
             "Selected model not loaded",
             format!(
-                "The parameters above do not apply to {running}. Press {MDI_RESTART}\u{a0}Build to switch to the selected model."
+                "{running} is loaded, and the parameters above do not apply to it. Press {MDI_RESTART}\u{a0}Build to \
+                 switch to the selected model."
             ),
         );
     }

@@ -262,7 +262,7 @@ fn missing_import(text: &str) -> Option<String> {
     };
     let import = quoted("ImportPathNotFound { path: \"")?;
     let file = quoted("NamedSource { name: \"")?;
-    Some(format!("{file}: Cannot find import `{import}` in this scope"))
+    Some(format!("{file}: cannot find import `{import}` in this scope"))
 }
 
 /// Returns `path` with each `.` component dropped and each `..` component applied to the one before it, without

@@ -394,14 +394,8 @@ fn a_sheet_with_an_unknown_key_is_refused_on_the_key() {
 fn a_newer_sheet_version_is_refused_on_its_key() {
     let life = sheet_text("game_of_life.toml");
     for (version, message) in [
-        (
-            "version = 2",
-            "the file is sheet version 2, and this build reads sheet versions up to 1",
-        ),
-        (
-            "version = 0",
-            "the file names sheet version 0, but sheet versions count from 1",
-        ),
+        ("version = 2", "the file is sheet version 2, expected at most 1"),
+        ("version = 0", "the file names sheet version 0, expected at least 1"),
     ] {
         // The file also holds a key this build does not know, which would be refused after the header.
         let text = life.replacen("\nversion = 1", &format!("\n{version}"), 1).replacen(
@@ -430,7 +424,7 @@ fn the_header_check_names_three_kinds_with_or() {
         let problem = header.check(kinds).expect_err("the kind passed");
         assert_eq!(
             problem.message,
-            format!("the file contains a model of kind 'gpu_agents', but this reader only reads {list}")
+            format!("the file contains a model of kind 'gpu_agents', expected {list}")
         );
         assert_eq!(&text[problem.span], "\"gpu_agents\"");
     }
@@ -442,7 +436,7 @@ fn the_header_check_names_three_kinds_with_or() {
         (
             "kind = \"sheet\"",
             "kind = \"graph\"",
-            "of kind 'graph', but this reader only reads 'sheet'",
+            "of kind 'graph', expected 'sheet'",
         ),
         ("format_version = 1", "format_version = 2", "model file version 2"),
         (
@@ -755,25 +749,25 @@ fn malformed_values_are_refused_on_their_bytes() {
             "left = { their = \"status\" }",
             "left = { their = \"status\", my = \"status\" }",
             "\"status\"",
-            "a chip names one thing, and this one holds both `my` and `their`",
+            "a chip can name only one thing, got both `my` and `their`",
         ),
         (
             "left = { their = \"status\" }",
             "left = { their = \"status\", part = \"count\" }",
             "\"count\"",
-            "`part` belongs to a chip that names a `result`",
+            "`part` requires `result` in the same chip",
         ),
         (
             "left = { their = \"status\" }",
             "left = { test = \"is\" }",
             "\"is\"",
-            "`test` is a key of a line or phrase, and a phrase names its `kind`",
+            "`test` is a line or phrase key, but the table has no `kind`",
         ),
         (
             "left = { their = \"status\" }",
             "left = {}",
             "{}",
-            "a chip names one thing by",
+            "a chip must have one of",
         ),
         (
             "left = { their = \"status\" }",
@@ -785,7 +779,7 @@ fn malformed_values_are_refused_on_their_bytes() {
             "right = [2, 3]",
             "right = [2, { kind = \"always\" }]",
             "{ kind = \"always\" }",
-            "a list holds numbers, percents, true or false, and chips",
+            "a list item must be a number, a percent, true or false, or a chip",
         ),
         (
             "right = [2, 3]",
@@ -798,7 +792,7 @@ fn malformed_values_are_refused_on_their_bytes() {
             "color = \"#00E676\" }",
             "color = \"green\" }",
             "\"green\"",
-            "the colour 'green' is not written #RRGGBB or #RRGGBBAA",
+            "invalid colour 'green', expected #RRGGBB or #RRGGBBAA",
         ),
         (
             "around = \"cells_8\"",
@@ -816,19 +810,19 @@ fn malformed_values_are_refused_on_their_bytes() {
             "[card.line.l3]\nkind = \"become\"",
             "[card.line.l3]\nparam = \"x\"\nkind = \"become\"",
             "\"x\"",
-            "`param` is a key of a chip, and a line or phrase cannot hold it",
+            "a line or phrase cannot hold the chip key `param`",
         ),
         (
             "left = { their = \"status\" }",
             "left = 1979-05-27",
             "1979-05-27",
-            "a sheet holds no dates or times",
+            "a sheet cannot hold dates or times",
         ),
         (
             "[card.line.l3]\nkind = \"become\"\n",
             "[card.line.l3]\n",
             "[card.line.l3]",
-            "line l3 names no `kind`",
+            "line l3 has no `kind`",
         ),
     ] {
         assert_refused(life, old, new, at, message);
@@ -861,19 +855,19 @@ fn a_malformed_percent_is_refused_on_its_key() {
             "right = 3",
             "right = { percent = 30, my = \"status\" }",
             "\"status\"",
-            "a percent holds `percent` alone, and this one also holds `my`",
+            "a percent cannot hold `my` in addition to `percent`",
         ),
         (
             "right = 3",
             "right = { kind = \"always\", percent = 30 }",
             "\"always\"",
-            "a percent holds `percent` alone, and this one also holds `kind`",
+            "a percent cannot hold `kind` in addition to `percent`",
         ),
         (
             "[card.line.l3]\nkind = \"become\"",
             "[card.line.l3]\npercent = 30\nkind = \"become\"",
             "30",
-            "`percent` is the key of a percent, and a line or phrase cannot hold it",
+            "a line or phrase cannot hold the percent key `percent`",
         ),
     ] {
         assert_refused(life, old, new, at, message);
@@ -976,7 +970,7 @@ fn nesting_past_the_limit_is_refused_without_a_panic() {
                 error
                     .diagnostic()
                     .message
-                    .contains(&format!("at most {MAX_NESTING} deep")),
+                    .contains(&format!("expected at most {MAX_NESTING}")),
                 "{error}"
             );
         }

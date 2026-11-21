@@ -96,23 +96,24 @@ impl SheetSection {
         match self {
             Self::Purpose => "Say in a sentence what the model is for and what to look for when it runs.",
             Self::World => {
-                "The grid the cells live on: its size, what happens at its edges, and how much time one tick stands \
-                 for. A tick is one step of time, and every cell follows the card once per tick. Leave one tick as \
-                 one step (no unit) when time has no unit, as in Game of Life. With Wrap around, a cell on the left \
-                 edge has neighbours on the right edge."
+                "The grid the cells live on: its size, what happens at its edges, and the length of one tick. A tick \
+                 is one step of time, and every cell follows the card once per tick. Leave one tick as one step (no \
+                 unit) when time has no unit, as in Game of Life. With Wrap around, a cell on the left edge has \
+                 neighbours on the right edge."
             }
             Self::Cells => {
                 "A property is something every cell has. A States property is one of a few named states, such as Dead \
-                 or Alive. A Number property holds a number. Starts as says what every cell holds when the run starts."
+                 or Alive. A Number property holds a number. Under Starts as, set what every cell has when the run \
+                 starts."
             }
             Self::Agents => {
                 "The agents move in open space. Name them and say how many there are at the start. Every agent has \
-                 each property listed here. Starts as says what every agent holds when the run starts."
+                 each property listed here. Under Starts as, set what every agent has when the run starts."
             }
             Self::Ground => {
                 "The ground is the grid of cells under the agents. Agents read it and leave marks on its Number \
-                 properties. Marks says how the marks left on one cell in one tick combine, and a share of each mark \
-                 can fade every tick. Agents never enter a blocked cell."
+                 properties. Beside Marks, choose how the marks left on one cell in one tick combine. A share of each \
+                 mark can fade every tick. Agents never enter a blocked cell."
             }
             Self::Events => {
                 "An event is something that happens to an agent. A Record line counts it each time, and a measure \
@@ -120,11 +121,11 @@ impl SheetSection {
             }
             Self::Parameters => {
                 "A parameter is a named number with a slider. Lines can use it. The value here is the one the model \
-                 keeps. The slider beside the world tries other values in the run without changing the model."
+                 keeps. Move the slider beside the world to try other values in the run without changing the model."
             }
             Self::Measures => {
                 "A measure is a number worked out from all the cells every tick, drawn on the plot under the world. \
-                 Tick Plot beside a state to count the cells in it."
+                 Turn on Plot beside a state to count the cells in it."
             }
             Self::Colours => {
                 "Choose which property colours the cells in the world. A States property uses the colours of its \
@@ -207,11 +208,10 @@ pub const AGENT_WRAP_TOOLTIP: &str =
     "An agent that leaves by one edge comes back at the opposite edge, and agents near opposite edges are neighbours.";
 
 /// Help of the World section of a world of agents, in place of [`SheetSection::help`].
-pub const WORLD_HELP_AGENTS: &str = "The open space the agents live in: its size, what happens at its edges, and how \
-                                     much time one tick stands for. A tick is one step of time, and every agent \
-                                     follows its card once per tick. Leave one tick as one step (no unit) when time \
-                                     has no unit. With Wrap around, an agent that leaves by one edge comes back at the \
-                                     opposite edge.";
+pub const WORLD_HELP_AGENTS: &str = "The open space the agents live in: its size, what happens at its edges, and the \
+                                     length of one tick. A tick is one step of time, and every agent follows its card \
+                                     once per tick. Leave one tick as one step (no unit) when time has no unit. With \
+                                     Wrap around, an agent that leaves by one edge comes back at the opposite edge.";
 
 /// Tooltip of [`WRAP_AROUND`].
 pub const WRAP_TOOLTIP: &str =
@@ -254,7 +254,8 @@ pub const SHEET_EMPTY: &str = "Every cell has the properties listed here. Add th
 pub const RESTART_NOTICE: &str = "Changes restart the world from tick 0.";
 
 /// Text of a sheet's preview while it waits for the run of another model, which Offload in the Playback tab ends.
-pub const PREVIEW_WAITS: &str = "Preview waits for the running model. Press Offload in Playback to show this one.";
+pub const PREVIEW_WAITS: &str =
+    "Preview waits for the running model. Press Offload in the Playback tab to preview this model.";
 
 // The property form
 
@@ -277,16 +278,17 @@ pub const STATES_KIND: &str = "States";
 pub const NUMBER_KIND: &str = "Number";
 
 /// Description of [`STATES_KIND`].
-pub const STATES_KIND_DESCRIPTION: &str = "One of a few named states, such as Dead and Alive. Give it at least two.";
+pub const STATES_KIND_DESCRIPTION: &str =
+    "One of a few named states, such as Dead and Alive. Give it at least two states.";
 
 /// Description of [`NUMBER_KIND`].
-pub const NUMBER_KIND_DESCRIPTION: &str = "Holds a number, such as an age or an amount of food.";
+pub const NUMBER_KIND_DESCRIPTION: &str = "A number, such as an age or an amount of food.";
 
 /// Kind of a Number property that holds whole numbers only.
 pub const INTEGER_KIND: &str = "Integer";
 
 /// Tooltip of [`INTEGER_KIND`].
-pub const INTEGER_KIND_TOOLTIP: &str = "A number with no fraction, such as 3 or -2.";
+pub const INTEGER_KIND_TOOLTIP: &str = "A number with no fraction, such as 3 or −2.";
 
 /// Button that adds a state to the form.
 pub const ADD_STATE: &str = "+ Add state";
@@ -315,13 +317,13 @@ pub fn property_name_taken(name: &str) -> String {
 }
 
 /// Returns the message on a new property, parameter, event or button named `name`, a name Henad keeps for itself,
-/// such as "Henad uses the name Count itself. Choose another name."
+/// such as "Count is a reserved name. Choose another name."
 pub fn name_reserved(name: &str) -> String {
-    format!("Henad uses the name {name} itself. Choose another name.")
+    format!("{name} is a reserved name. Choose another name.")
 }
 
 /// Message on a refused edit whose name Henad keeps for itself, where the name is not at hand.
-pub const NAME_RESERVED: &str = "Henad uses that name itself. Choose another name.";
+pub const NAME_RESERVED: &str = "That name is reserved. Choose another name.";
 
 /// Message on a States property with fewer than two states.
 pub const TOO_FEW_STATES: &str = "Give the property at least two states.";
@@ -444,7 +446,7 @@ pub const USE_A_PARAMETER: &str = "Use a parameter";
 pub const CHOOSE_A_PARAMETER: &str = "Choose a parameter";
 
 /// Note on Starts as once the world is past its first tick.
-pub const START_AGAIN_TO_SEE: &str = "Start again to see it";
+pub const START_AGAIN_TO_SEE: &str = "Press Start again to see the change.";
 
 // Parameters on the sheet
 
@@ -495,7 +497,7 @@ pub fn unit_suggestion(unit: TimeUnit) -> String {
 }
 
 /// Message on a parameter of the sheet with no name.
-pub const PARAMETER_NAME_MISSING: &str = "A parameter needs a name.";
+pub const PARAMETER_NAME_MISSING: &str = "Type a name for the parameter.";
 
 /// Returns the message on a parameter named `name`, which another parameter holds.
 pub fn parameter_name_taken(name: &str) -> String {
@@ -595,7 +597,7 @@ pub fn remove_measure_name(measure: &str) -> String {
 pub const MEASURE_NEEDS_STATE: &str = "Choose a property and a state.";
 
 /// Message on an average measure with no property.
-pub const MEASURE_NEEDS_NUMBER_PROPERTY: &str = "Choose a number property.";
+pub const MEASURE_NEEDS_NUMBER_PROPERTY: &str = "Choose a Number property.";
 
 /// Message on a measure that is already on the plot.
 pub const MEASURE_ALREADY_PLOTTED: &str = "That measure is already plotted.";
@@ -702,10 +704,10 @@ pub const AGENT_COUNT_NAME: &str = "Number of agents at the start";
 pub const AGENT_MAX_LABEL: &str = "At most";
 
 /// Accessible name of the largest number of agents the world holds.
-pub const AGENT_MAX_NAME: &str = "Most agents the world holds";
+pub const AGENT_MAX_NAME: &str = "Maximum number of agents";
 
 /// Tooltip of the largest number of agents the world holds.
-pub const AGENT_MAX_TOOLTIP: &str = "The world keeps room for this many agents.";
+pub const AGENT_MAX_TOOLTIP: &str = "The world has room for this many agents.";
 
 /// Message on a kind of agent with no name.
 pub const AGENT_NAME_MISSING: &str = "Type a name for the agents.";
@@ -751,7 +753,7 @@ pub const POSITION_KIND_DESCRIPTION: &str = "Where the agent is in the world.";
 pub const HEADING_KIND_DESCRIPTION: &str = "The direction the agent last moved in.";
 
 /// Description of [`YES_NO_KIND`].
-pub const YES_NO_KIND_DESCRIPTION: &str = "Holds yes or no, such as whether an agent is hungry.";
+pub const YES_NO_KIND_DESCRIPTION: &str = "A yes or no value, such as whether an agent is hungry.";
 
 /// Value yes of a Yes or no property.
 pub const YES: &str = "Yes";
@@ -797,7 +799,7 @@ pub const GROUND_EMPTY: &str =
 pub const MARKS_LABEL: &str = "Marks";
 
 /// Tooltip of [`MARKS_LABEL`].
-pub const MARKS_TOOLTIP: &str = "What a cell keeps when several agents leave some on it in one tick.";
+pub const MARKS_TOOLTIP: &str = "What a cell keeps when several agents leave marks on it in one tick.";
 
 /// Choice of [`MARKS_LABEL`] for a property agents leave nothing on.
 pub const MARKS_NONE: &str = "Not marked";
@@ -839,7 +841,7 @@ pub fn blocked_state_name(state: &str) -> String {
 }
 
 /// Text of the Events section with no event.
-pub const EVENTS_EMPTY: &str = "No events yet. Add one for a Record line to count.";
+pub const EVENTS_EMPTY: &str = "No events yet. Add an event for a Record line to count.";
 
 /// Button that opens the event form.
 pub const ADD_EVENT: &str = "+ Add event";

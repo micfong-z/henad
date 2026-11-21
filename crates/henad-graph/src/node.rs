@@ -83,7 +83,7 @@ impl Node {
         };
         let items = list
             .as_array()
-            .ok_or_else(|| format!("`config.acc` of node {} is no list of accumulators", self.id))?;
+            .ok_or_else(|| format!("`config.acc` of node {} is not a list of accumulators", self.id))?;
         items
             .iter()
             .map(|item| Accumulator::from_config(item).map_err(|reason| format!("node {}: {reason}", self.id)))
@@ -129,7 +129,7 @@ impl Accumulator {
     fn from_config(item: &ConfigValue) -> Result<Self, String> {
         let table = item
             .as_table()
-            .ok_or_else(|| "an accumulator is a `{ name, type, combine }` table".to_owned())?;
+            .ok_or_else(|| "an accumulator must be a `{ name, type, combine }` table".to_owned())?;
         let text = |key: &str| {
             table
                 .get(key)
@@ -190,7 +190,7 @@ impl Combine {
             "or" => Ok(Self::Or),
             "and" => Ok(Self::And),
             "carry" => Ok(Self::Carry),
-            _ => Err(format!("'{name}' is no combine rule")),
+            _ => Err(format!("unknown combine rule '{name}'")),
         }
     }
 

@@ -177,7 +177,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "rng.threshold",
         label: "Probability threshold",
-        semantics: "`(p * u32::MAX as f32) as u32`, computed on the host when the model is built: truncated toward zero and saturating, so 1 gives `u32::MAX`, and a negative or NaN `p` gives 0.",
+        semantics: "`(p * u32::MAX as f32) as u32`, computed on the host when the model is built: truncated toward zero and saturating, so 1 returns `u32::MAX`, and a negative or NaN `p` returns 0.",
         inputs: &[input_up_to("p", F32_TYPE, Rate::Parameter)],
         outputs: &[output("out", U32_TYPE)],
         cases: &[

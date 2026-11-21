@@ -121,7 +121,7 @@ offered model, or with none selected and `NO_MODEL_RUNS` in the Model panel. The
 offered model has the same name (`list_labels`), as an applied sheet starter has beside the example
 model it ports (`the_model_list_names_the_ids_of_models_that_share_a_name`). A missing id reads as
 `lookup_message` words it, "This build does not include model 'x'" or "Model 'x' needs a GPU with
-compute support, and this device has none", with no full stop. `select_model` loads the defaults
+compute support, unavailable on this device", with no full stop. `select_model` loads the defaults
 and clears the schedule, or, for the loaded model, restores `loaded_values` (its built values with
 every live edit, kept by `send_live_param`), its seed and its schedule, carried by id to the set's
 entry (`remap_values`, `remap_schedule`), for the Model panel and the Sweep tab alike, and an id

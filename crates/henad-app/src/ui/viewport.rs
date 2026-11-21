@@ -99,7 +99,7 @@ pub fn viewport_ui(ui: &mut egui::Ui, app: &mut AppState) {
                 if app.show_edges {
                     ui.add_enabled(directed, egui::Checkbox::new(&mut app.edge_arrows, "Arrows"))
                         .on_hover_text("Show direction with arrowheads")
-                        .on_disabled_hover_text("Only directed edges have arrows");
+                        .on_disabled_hover_text("Edges are undirected");
                 }
             }
         }

@@ -20,7 +20,7 @@ use super::recorded::RecordedSpec;
 
 /// Reason no command line replays the runs of a model file.
 pub const MODEL_FILE_COMMAND: &str =
-    "Runs of a model file replay on the command line with --model-file PATH. Save the model file to replay them there.";
+    "To replay these runs on the command line, save the model file and use --model-file PATH.";
 
 /// Plan used to replay the runs of a store.
 #[derive(Debug, Clone)]
@@ -76,7 +76,7 @@ impl ResultsStore {
             ReplayPlan::Sweep(plan) => plan,
             ReplayPlan::Search(search_plan) => return self.search_replay(search_plan, outcome),
         };
-        let mismatch = || format!("Run {run_id} does not match the plan of its sweep");
+        let mismatch = || format!("Run {run_id} does not match the sweep plan");
         match plan.run(run_id) {
             Some(planned) if planned == outcome.run && self.key_matches(plan.run_key(&planned), outcome) => {
                 plan.replay(run_id).ok_or_else(mismatch)
@@ -213,7 +213,7 @@ pub(super) fn replay_plan(recorded: &RecordedSpec, model: Result<&ModelEntry, St
             .map(|search_plan| ReplayPlan::Search(Arc::new(search_plan)))
             .map_err(|error| {
                 format!(
-                    "{} refuses this search's spec: {}",
+                    "{} rejects this search's spec: {}",
                     entry.name(),
                     describe_error(&error)
                 )
@@ -229,7 +229,7 @@ pub(super) fn replay_plan(recorded: &RecordedSpec, model: Result<&ModelEntry, St
         .spec
         .plan(&entry.schema())
         .map(|plan| ReplayPlan::Sweep(Arc::new(plan)))
-        .map_err(|error| format!("{} refuses this sweep's spec: {}", entry.name(), describe_error(&error)))
+        .map_err(|error| format!("{} rejects this sweep's spec: {}", entry.name(), describe_error(&error)))
 }
 
 /// Returns the configs of `plan`, a sweep's plan through `entry`, to list beside the configs of `runs.csv`, or none

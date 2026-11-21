@@ -76,27 +76,27 @@ fn check_value(
     let word = |what: &str| {
         value
             .as_str()
-            .ok_or_else(|| format!("is no {what}, which is written as a string"))
+            .ok_or_else(|| format!("must be a string containing the {what}"))
     };
     match key.value {
         ConfigType::Bool => value
             .as_bool()
             .map(|_| ())
-            .ok_or_else(|| "is no `true` or `false`".to_owned()),
+            .ok_or_else(|| "is not `true` or `false`".to_owned()),
         ConfigType::Integer { min, max } => match value.as_integer() {
             Some(number) if (min..=max).contains(&number) => Ok(()),
-            Some(number) => Err(format!("is {number}, outside {min} to {max}")),
-            None => Err(format!("is no whole number from {min} to {max}")),
+            Some(number) => Err(format!("must be from {min} to {max}, got {number}")),
+            None => Err(format!("is not an integer from {min} to {max}")),
         },
         ConfigType::U64Text => read_u64(word("number")?)
             .map(|_| ())
-            .ok_or_else(|| "is no `u64`, in decimal or `0x` hexadecimal".to_owned()),
+            .ok_or_else(|| "is not a `u64` in decimal or `0x` hexadecimal".to_owned()),
         ConfigType::Word(words) => {
             let text = word("word")?;
             if words.contains(&text) {
                 Ok(())
             } else {
-                Err(format!("is '{text}', and takes one of {}", words.join(", ")))
+                Err(format!("is '{text}', expected one of {}", words.join(", ")))
             }
         }
         ConfigType::LaneId => {
@@ -114,7 +114,7 @@ fn check_value(
                 Ok(())
             } else {
                 Err(format!(
-                    "names the palette '{text}', and the file declares no such palette or category"
+                    "names '{text}', which the file does not declare as a palette or category"
                 ))
             }
         }
@@ -126,10 +126,7 @@ fn check_value(
                 // A broken `config.category` has its own diagnostic.
                 None => Ok(()),
                 Some(found) if found.variants.iter().any(|variant| variant.name == text) => Ok(()),
-                Some(found) => Err(format!(
-                    "names the variant '{text}', and '{}' has no such variant",
-                    found.id
-                )),
+                Some(found) => Err(format!("names '{text}', which is not a variant of '{}'", found.id)),
             }
         }
         ConfigType::CountList { max } => check_counts(value, max),
@@ -164,7 +161,7 @@ fn check_value(
                 Ok(())
             } else {
                 Err(format!(
-                    "names the port '{text}', and the function '{}' has no such {}",
+                    "names the port '{text}', which the function '{}' does not have as an {}",
                     function.id,
                     if node.op == crate::node::OP_FUNCTION_OUTPUT {
                         "output"
@@ -178,7 +175,7 @@ fn check_value(
             let text = word("expression")?;
             if text.len() > MAX_EXPRESSION_BYTES {
                 Err(format!(
-                    "holds {} bytes, and an expression holds at most {MAX_EXPRESSION_BYTES}",
+                    "holds {} bytes, expected at most {MAX_EXPRESSION_BYTES}",
                     text.len()
                 ))
             } else {
@@ -196,7 +193,7 @@ fn declared(what: &str, text: &str, known: bool) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "names the {what} '{text}', and the file declares no such {what}"
+            "names the {what} '{text}', which is not a {what} declared in the file"
         ))
     }
 }
@@ -205,10 +202,10 @@ fn declared(what: &str, text: &str, known: bool) -> Result<(), String> {
 fn check_expression_inputs(value: &ConfigValue) -> Result<(), String> {
     let items = value
         .as_array()
-        .ok_or_else(|| "is no list of `{ name, type }` inputs".to_owned())?;
+        .ok_or_else(|| "is not a list of `{ name, type }` inputs".to_owned())?;
     if items.len() > MAX_EXPRESSION_PORTS {
         return Err(format!(
-            "holds {} inputs, and an expression takes at most {MAX_EXPRESSION_PORTS}",
+            "holds {} inputs, expected at most {MAX_EXPRESSION_PORTS}",
             items.len()
         ));
     }
@@ -216,7 +213,7 @@ fn check_expression_inputs(value: &ConfigValue) -> Result<(), String> {
     for item in items {
         let table = item
             .as_table()
-            .ok_or_else(|| "holds an input that is no `{ name, type }` table".to_owned())?;
+            .ok_or_else(|| "holds an input that is not a `{ name, type }` table".to_owned())?;
         if table.keys().any(|key| key != "name" && key != "type") {
             return Err("holds an input with a key other than `name` and `type`".to_owned());
         }
@@ -225,7 +222,7 @@ fn check_expression_inputs(value: &ConfigValue) -> Result<(), String> {
             .and_then(ConfigValue::as_str)
             .ok_or_else(|| "holds an input with no `name`".to_owned())?;
         if !is_port_segment(name) {
-            return Err(format!("names the input '{name}', outside the grammar of a port name"));
+            return Err(format!("names the input '{name}', which is not a valid port name"));
         }
         if !names.insert(name) {
             return Err(format!("names the input '{name}' twice"));
@@ -233,12 +230,10 @@ fn check_expression_inputs(value: &ConfigValue) -> Result<(), String> {
         let value_type: ValueType = table
             .get("type")
             .and_then(ConfigValue::as_str)
-            .ok_or_else(|| format!("gives the input '{name}' no `type`"))?
+            .ok_or_else(|| format!("holds the input '{name}' with no `type`"))?
             .parse()?;
         if !crate::expr::takes_type(&value_type) {
-            return Err(format!(
-                "gives the input '{name}' the type {value_type}, which an expression does not take"
-            ));
+            return Err(format!("gives the input '{name}' the unsupported type {value_type}"));
         }
     }
     Ok(())
@@ -246,10 +241,10 @@ fn check_expression_inputs(value: &ConfigValue) -> Result<(), String> {
 
 /// Returns the clause saying how `value` breaks a list of distinct port names, or `Ok` when it fits.
 fn check_names(value: &ConfigValue) -> Result<(), String> {
-    let items = value.as_array().ok_or_else(|| "is no list of names".to_owned())?;
+    let items = value.as_array().ok_or_else(|| "is not a list of names".to_owned())?;
     if items.is_empty() || items.len() > MAX_EXPRESSION_PORTS {
         return Err(format!(
-            "holds {} names, and holds 1 to {MAX_EXPRESSION_PORTS}",
+            "holds {} names, expected 1 to {MAX_EXPRESSION_PORTS}",
             items.len()
         ));
     }
@@ -257,9 +252,9 @@ fn check_names(value: &ConfigValue) -> Result<(), String> {
     for item in items {
         let name = item
             .as_str()
-            .ok_or_else(|| "holds a name that is no string".to_owned())?;
+            .ok_or_else(|| "holds a name that is not a string".to_owned())?;
         if !is_port_segment(name) {
-            return Err(format!("holds '{name}', outside the grammar of a port name"));
+            return Err(format!("holds '{name}', which is not a valid port name"));
         }
         if !names.insert(name) {
             return Err(format!("holds '{name}' twice"));
@@ -272,29 +267,26 @@ fn check_names(value: &ConfigValue) -> Result<(), String> {
 fn check_counts(value: &ConfigValue, max: i64) -> Result<(), String> {
     let items = value
         .as_array()
-        .ok_or_else(|| format!("is no list of counts from 0 to {max}"))?;
+        .ok_or_else(|| format!("is not a list of counts from 0 to {max}"))?;
     if items
         .iter()
         .all(|item| item.as_integer().is_some_and(|number| (0..=max).contains(&number)))
     {
         Ok(())
     } else {
-        Err(format!("holds a value outside the counts from 0 to {max}"))
+        Err(format!("holds a value that is not a count from 0 to {max}"))
     }
 }
 
 /// Returns the clause saying how `value` breaks a list of literals of one type, or `Ok` when it fits.
 fn check_literals(view: &BodyView<'_>, value: &ConfigValue) -> Result<(), String> {
-    let items = value.as_array().ok_or_else(|| "is no list of literals".to_owned())?;
+    let items = value.as_array().ok_or_else(|| "is not a list of literals".to_owned())?;
     if items.is_empty() || items.len() > MAX_PICK_VALUES {
-        return Err(format!(
-            "holds {} values, and holds 1 to {MAX_PICK_VALUES}",
-            items.len()
-        ));
+        return Err(format!("holds {} values, expected 1 to {MAX_PICK_VALUES}", items.len()));
     }
     let mut first: Option<ValueType> = None;
     for item in items {
-        let literal = literal_of(item).ok_or_else(|| "holds a value that is no one-key literal table".to_owned())?;
+        let literal = literal_of(item).ok_or_else(|| "holds a value that is not a one-key literal table".to_owned())?;
         check_literal(view, &literal)?;
         let value_type = literal.value_type();
         match &first {
@@ -310,10 +302,10 @@ fn check_literals(view: &BodyView<'_>, value: &ConfigValue) -> Result<(), String
 ///
 /// `inner_outputs` are the region's inner outputs, whose names no accumulator takes.
 fn check_accumulators(node: &Node, inner_outputs: &[OutputSocket]) -> Result<(), String> {
-    let accumulators = node.accumulators().map_err(|reason| format!("is broken: {reason}"))?;
+    let accumulators = node.accumulators().map_err(|reason| format!("is invalid: {reason}"))?;
     if accumulators.len() > MAX_ACCUMULATORS {
         return Err(format!(
-            "holds {} accumulators, and a region holds at most {MAX_ACCUMULATORS}",
+            "holds {} accumulators, expected at most {MAX_ACCUMULATORS}",
             accumulators.len()
         ));
     }
@@ -322,12 +314,12 @@ fn check_accumulators(node: &Node, inner_outputs: &[OutputSocket]) -> Result<(),
         let name = accumulator.name.as_str();
         if !is_port_segment(name) {
             return Err(format!(
-                "names the accumulator '{name}', outside the grammar of a port name"
+                "names the accumulator '{name}', which is not a valid port name"
             ));
         }
         if inner_outputs.iter().any(|output| output.name == name) {
             return Err(format!(
-                "names an accumulator '{name}', which an inner output of the region holds"
+                "names the accumulator '{name}', which conflicts with an inner output of the region"
             ));
         }
         if !names.insert(name) {
@@ -346,10 +338,10 @@ fn check_accumulators(node: &Node, inner_outputs: &[OutputSocket]) -> Result<(),
 
 /// Returns the clause saying how the rules of `value` break the transition rules, or `Ok` when they fit.
 fn check_rules(view: &BodyView<'_>, node: &Node, value: &ConfigValue) -> Result<(), String> {
-    let rules = value.as_array().ok_or_else(|| "is no list of rules".to_owned())?;
+    let rules = value.as_array().ok_or_else(|| "is not a list of rules".to_owned())?;
     if rules.len() > MAX_TRANSITION_RULES {
         return Err(format!(
-            "holds {} rules, and a node holds at most {MAX_TRANSITION_RULES}",
+            "holds {} rules, expected at most {MAX_TRANSITION_RULES}",
             rules.len()
         ));
     }
@@ -359,7 +351,7 @@ fn check_rules(view: &BodyView<'_>, node: &Node, value: &ConfigValue) -> Result<
     for rule in rules {
         let table = rule
             .as_table()
-            .ok_or_else(|| "holds a rule that is no `{ id, from, to, phase }` table".to_owned())?;
+            .ok_or_else(|| "holds a rule that is not a `{ id, from, to, phase }` table".to_owned())?;
         for key in table.keys() {
             if !["id", "from", "to", "phase"].contains(&key.as_str()) {
                 return Err(format!("holds a rule with the unknown key `{key}`"));
@@ -370,7 +362,7 @@ fn check_rules(view: &BodyView<'_>, node: &Node, value: &ConfigValue) -> Result<
             .and_then(ConfigValue::as_str)
             .ok_or_else(|| "holds a rule with no string `id`".to_owned())?;
         if !is_port_segment(id) {
-            return Err(format!("names the rule '{id}', outside the grammar of a port name"));
+            return Err(format!("names the rule '{id}', which is not a valid port name"));
         }
         if !ids.insert(id) {
             return Err(format!("names the rule '{id}' twice"));
@@ -381,7 +373,7 @@ fn check_rules(view: &BodyView<'_>, node: &Node, value: &ConfigValue) -> Result<
             Some(phase) if u32::try_from(phase).is_ok() => {}
             _ => {
                 return Err(format!(
-                    "gives the rule '{id}' a `phase` that is no number from 0 to {}",
+                    "gives the rule '{id}' a `phase` that is not an integer from 0 to {}",
                     u32::MAX
                 ));
             }
@@ -389,7 +381,7 @@ fn check_rules(view: &BodyView<'_>, node: &Node, value: &ConfigValue) -> Result<
         let from = table
             .get("from")
             .and_then(ConfigValue::as_str)
-            .ok_or_else(|| format!("gives the rule '{id}' no string `from`"))?;
+            .ok_or_else(|| format!("holds the rule '{id}' with no string `from`"))?;
         for (key, variant) in [
             ("from", Some(from)),
             ("to", table.get("to").and_then(ConfigValue::as_str)),
@@ -398,13 +390,13 @@ fn check_rules(view: &BodyView<'_>, node: &Node, value: &ConfigValue) -> Result<
                 && !variants.variants.iter().any(|known| known.name == variant)
             {
                 return Err(format!(
-                    "gives the rule '{id}' the `{key}` variant '{variant}', and '{}' has no such variant",
+                    "gives the rule '{id}' a `{key}` of '{variant}', which is not a variant of '{}'",
                     variants.id
                 ));
             }
         }
         if table.contains_key("to") && table.get("to").and_then(ConfigValue::as_str).is_none() {
-            return Err(format!("gives the rule '{id}' a `to` that is no string"));
+            return Err(format!("gives the rule '{id}' a `to` that is not a string"));
         }
     }
     Ok(())
@@ -466,7 +458,7 @@ pub(super) fn check_literal(view: &BodyView<'_>, literal: &Literal) -> Result<()
         Literal::Category(name) => {
             let Some(category) = document.category(&name.owner) else {
                 return Err(format!(
-                    "names the category '{}', and the file declares no such category",
+                    "names the category '{}', which the file does not declare",
                     name.owner
                 ));
             };
@@ -474,7 +466,7 @@ pub(super) fn check_literal(view: &BodyView<'_>, literal: &Literal) -> Result<()
                 Ok(())
             } else {
                 Err(format!(
-                    "names the variant '{}', and '{}' has no such variant",
+                    "names '{}', which is not a variant of '{}'",
                     name.member, name.owner
                 ))
             }
@@ -482,7 +474,7 @@ pub(super) fn check_literal(view: &BodyView<'_>, literal: &Literal) -> Result<()
         Literal::Layer(name) => {
             let Some(field) = document.field(&name.owner) else {
                 return Err(format!(
-                    "names the field '{}', and the file declares no such field",
+                    "names the field '{}', which the file does not declare",
                     name.owner
                 ));
             };
@@ -490,7 +482,7 @@ pub(super) fn check_literal(view: &BodyView<'_>, literal: &Literal) -> Result<()
                 Ok(())
             } else {
                 Err(format!(
-                    "names the layer '{}', and '{}' has no such layer",
+                    "names '{}', which is not a layer of '{}'",
                     name.member, name.owner
                 ))
             }
@@ -498,13 +490,13 @@ pub(super) fn check_literal(view: &BodyView<'_>, literal: &Literal) -> Result<()
         Literal::ChoiceOption(name) => {
             let Some(param) = document.param(&name.owner) else {
                 return Err(format!(
-                    "names the parameter '{}', and the file declares no such parameter",
+                    "names the parameter '{}', which the file does not declare",
                     name.owner
                 ));
             };
             let ParamKind::Choice { options, .. } = param.kind() else {
                 return Err(format!(
-                    "names an option of '{}', which is no choice parameter",
+                    "names an option of '{}', which is not a choice parameter",
                     name.owner
                 ));
             };
@@ -512,7 +504,7 @@ pub(super) fn check_literal(view: &BodyView<'_>, literal: &Literal) -> Result<()
                 Ok(())
             } else {
                 Err(format!(
-                    "names the option '{}', and '{}' has no such option",
+                    "names '{}', which is not an option of '{}'",
                     name.member, name.owner
                 ))
             }

@@ -38,7 +38,8 @@ impl FromStr for NodeId {
     ///
     /// Returns the message for text of another form. `n0`, `n01` and a number past `u32::MAX` are refused.
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let refused = || format!("'{text}' is no node id, which is `n` and a number from 1, with no leading zero");
+        let refused =
+            || format!("invalid node id '{text}', expected `n` followed by a positive integer with no leading zero");
         let digits = text.strip_prefix('n').ok_or_else(refused)?;
         if digits.is_empty() || digits.starts_with('0') || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err(refused());

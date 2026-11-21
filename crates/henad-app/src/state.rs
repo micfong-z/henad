@@ -860,7 +860,7 @@ fn too_large_message(shortfalls: &[String]) -> String {
     format!("Too large for this device: {}", shortfalls.join("; "))
 }
 
-/// Returns `error` as Build's disabled reason, as in `Parameter 'infection_rate': 2 is outside 0..=1`.
+/// Returns `error` as Build's disabled reason, as in `Parameter 'infection_rate': 2 is outside the range 0 to 1`.
 pub fn setup_message(error: &SetupError) -> String {
     use crate::ui::text::describe_error;
     match error {

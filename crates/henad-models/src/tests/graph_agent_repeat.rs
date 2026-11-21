@@ -1001,7 +1001,7 @@ fn a_repeat_over_agents_is_refused_by_the_submission_budget_at_a_large_populatio
     let refused = entry.shortfalls(&at(1_000_000), &limits);
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert!(
-        refused[0].contains("past the budget") && refused[0].contains("'node_agent_repeat_answers'"),
+        refused[0].contains("exceeding the budget") && refused[0].contains("'node_agent_repeat_answers'"),
         "{refused:?}"
     );
     let Some(ctx) = baseline_device() else {
@@ -1009,6 +1009,6 @@ fn a_repeat_over_agents_is_refused_by_the_submission_budget_at_a_large_populatio
     };
     match entry.build(&at(1_000_000), None, Some(&ctx)) {
         Ok(_) => panic!("the build passed the budget"),
-        Err(fault) => assert!(fault.to_string().contains("past the budget"), "{fault}"),
+        Err(fault) => assert!(fault.to_string().contains("exceeding the budget"), "{fault}"),
     }
 }

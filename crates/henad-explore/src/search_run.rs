@@ -287,11 +287,11 @@ impl fmt::Display for SearchPlanError {
             Self::Settings(_) => f.write_str("search settings"),
             Self::Space(_) => f.write_str("search space"),
             Self::UnknownColumn { column, known } if known.is_empty() => {
-                write!(f, "search watches '{column}', and the runs have no reducer columns")
+                write!(f, "unknown reducer column '{column}' (runs have no reducer columns)")
             }
             Self::UnknownColumn { column, known } => write!(
                 f,
-                "no reducer writes '{column}', the column the search watches. The reducer columns are {}",
+                "unknown reducer column '{column}', expected one of {}",
                 known.join(", ")
             ),
             Self::BatchTooLarge { batch_size, replicates } => write!(
@@ -300,9 +300,7 @@ impl fmt::Display for SearchPlanError {
             ),
             Self::TooManyRuns => f.write_str("search budget has more runs than a 64-bit integer can hold"),
             Self::Sharded => f.write_str("a search cannot run as a shard"),
-            Self::RetryFailed => {
-                f.write_str("a resumed search replays its failed runs as they were, and cannot run them again")
-            }
+            Self::RetryFailed => f.write_str("a resumed search cannot rerun its failed runs"),
         }
     }
 }

@@ -526,7 +526,7 @@ impl GraphEditor {
     pub fn set_import_source(&mut self, name: String, text: String) {
         match GraphFile::parse(&text) {
             Ok(file) if file.document().functions.is_empty() => {
-                self.status = Some(GraphStatus::warning(format!("{name} holds no function.")));
+                self.status = Some(GraphStatus::warning(format!("{name} has no functions.")));
             }
             Ok(file) => {
                 let functions = file
@@ -539,7 +539,7 @@ impl GraphEditor {
                 self.import = Some(ImportSource { name, text, functions });
             }
             Err(error) => {
-                self.status = Some(GraphStatus::warning(format!("{name} is no graph model. {error}")));
+                self.status = Some(GraphStatus::warning(format!("{name} is not a graph model. {error}")));
             }
         }
     }
@@ -798,7 +798,7 @@ impl GraphEditor {
             .map(|id| Scope::Function(id.to_owned()));
         let Some(function) = function.filter(|function| self.body(function).is_some()) else {
             self.status = Some(GraphStatus::warning(format!(
-                "Node {node} calls no function the file declares."
+                "Node {node} does not call a function declared in the file."
             )));
             return;
         };
@@ -964,7 +964,7 @@ impl GraphEditor {
             && self.body(&scope).is_some_and(|body| !can_add(body, op, Some(region)))
         {
             self.status = Some(GraphStatus::warning(format!(
-                "Region {region} cannot hold a node of kind {op}."
+                "Region {region} cannot contain a node of kind {op}."
             )));
             return;
         }
@@ -1462,7 +1462,7 @@ pub fn graph_ui(ui: &mut egui::Ui, graph: &mut GraphEditor) {
     }
     CentralPanel::no_frame().show(ui, |ui| {
         if graph.body(&graph.scope).is_none() {
-            ui.weak("The model has no pass. Add a pass in the Passes panel.");
+            ui.weak("No passes. Add a pass in the Passes panel.");
             return;
         }
         let pointer_on_canvas = graph
@@ -1555,7 +1555,7 @@ fn breadcrumb_ui(ui: &mut egui::Ui, graph: &GraphEditor, requests: &mut Vec<Grap
             Scope::Pass(id) | Scope::Function(id) => id.as_str(),
             _ => "",
         };
-        if ui.link(name).on_hover_text("Open this body").clicked() {
+        if ui.link(name).on_hover_text("Open this pass or function").clicked() {
             requests.push(GraphRequest::OpenParent(index));
         }
         ui.weak(MDI_CHEVRON_RIGHT);
@@ -1671,7 +1671,7 @@ fn toolbar_ui(ui: &mut egui::Ui, graph: &GraphEditor, requests: &mut Vec<GraphRe
                 target.pass
             ));
             let stop = add_button(ui, true, Button::new(MDI_EYE_OFF_OUTLINE), "Stop viewing")
-                .on_hover_text("Show model's own view in viewport");
+                .on_hover_text("Show model's own view in the Viewport tab");
             if stop.clicked() {
                 requests.push(GraphRequest::StopViewing);
             }

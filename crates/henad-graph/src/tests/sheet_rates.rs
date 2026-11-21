@@ -551,8 +551,8 @@ fn rate_notes_match_the_spec_examples() {
     let recovery = note(sir, "l3").expect("line 3 has a note");
     assert_eq!(
         recovery.text,
-        "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. A rate is not a chance. Henad turns \
-         it into one as 1 − e^(−0.1 × 1 day)."
+        "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. The rate is converted to a chance \
+         by 1 − e^(−0.1 × 1 day)."
     );
     assert_eq!(
         recovery.mean_stay.as_deref(),
@@ -565,8 +565,7 @@ fn rate_notes_match_the_spec_examples() {
     assert_eq!(
         infection.text,
         "Each tick (1 day), a Susceptible cell becomes Infected with chance 0.259 with 1 infected neighbour, and 0.451 \
-         with 2. A rate is not a chance. Henad turns it into one as 1 − e^(−0.3 × n × 1 day), where n is Infected \
-         neighbours."
+         with 2. The rate is converted to a chance by 1 − e^(−0.3 × n × 1 day), where n is Infected neighbours."
     );
     assert_eq!(infection.mean_stay, None);
     // The long tick: 1 - e^(-0.3 x 8) is above one half at a tick of 1 day, and below it at a quarter day.
@@ -598,8 +597,8 @@ fn rate_notes_match_the_spec_examples() {
     );
     assert_eq!(
         note(&six_hours, "l3").expect("line 3 has a note").text,
-        "Each tick (0.25 days), an Infected cell becomes Recovered with chance 0.0247. A rate is not a chance. Henad \
-         turns it into one as 1 − e^(−0.1 × 0.25 days)."
+        "Each tick (0.25 days), an Infected cell becomes Recovered with chance 0.0247. The rate is converted to a \
+         chance by 1 − e^(−0.1 × 0.25 days)."
     );
 
     // A competing group: its highest line takes the group's note, and its other line none.
@@ -607,8 +606,8 @@ fn rate_notes_match_the_spec_examples() {
     let group = note(sird, "l3").expect("the group has a note");
     assert_eq!(
         group.text,
-        "Each tick (1 day), an Infected cell leaves Infected with chance 0.0952: Recovered 0.0476, Dead 0.0476. A rate \
-         is not a chance. Henad turns it into one as 1 − e^(−(0.05 + 0.05) × 1 day)."
+        "Each tick (1 day), an Infected cell leaves Infected with chance 0.0952: Recovered 0.0476, Dead 0.0476. The \
+         rate is converted to a chance by 1 − e^(−(0.05 + 0.05) × 1 day)."
     );
     assert_eq!(
         group.mean_stay.as_deref(),
@@ -708,8 +707,7 @@ fn worked_out_rate_notes_match_the_spec_examples() {
     assert_eq!(
         note(&worked("0.3 * l1"), "l2").expect("a note").text,
         "Each tick (1 day), a Susceptible cell becomes Infected with chance 0.259 with 1 infected neighbour, and 0.451 \
-         with 2. A rate is not a chance. Henad turns it into one as 1 − e^(−r × 1 day), where r is 0.3 times Infected \
-         neighbours."
+         with 2. The rate is converted to a chance by 1 − e^(−r × 1 day), where r is 0.3 times Infected neighbours."
     );
     let pressure = worked("infection_rate * l1");
     let parameter = note(&pressure, "l2").expect("a note");
@@ -724,7 +722,7 @@ fn worked_out_rate_notes_match_the_spec_examples() {
     assert_eq!(
         note(&worked("l1 + 0.3"), "l2").expect("a note").text,
         "Each tick (1 day), a Susceptible cell becomes Infected with a chance that grows with r, where r is Infected \
-         neighbours plus 0.3. A rate is not a chance. Henad turns it into one as 1 − e^(−r × 1 day)."
+         neighbours plus 0.3. The rate is converted to a chance by 1 − e^(−r × 1 day)."
     );
 
     // A Count with no name takes its automatic name in the note.
@@ -859,7 +857,7 @@ fn a_chance_with_no_tick_or_no_typed_number_does_not_change_to_a_rate() {
     let mut builder = SheetBuilder::new(chance_sheet);
     builder
         .apply(SheetEdit::ChangeToRate { line: "l3".to_owned() })
-        .expect_err("the sheet sets no length of one tick");
+        .expect_err("the sheet has no tick length");
     let mut builder = SheetBuilder::new(read(sheet_text("sir.toml")));
     builder
         .apply(SheetEdit::ChangeToRate { line: "l3".to_owned() })
@@ -914,8 +912,8 @@ fn a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named() {
     assert_eq!(
         chance_note(&document, "l2", &values).as_deref(),
         Some(
-            "Each tick, a Susceptible cell becomes Infected with chance 0.3 with 1 infected neighbour, and 0.51 with 2. \
-             Each one counted is a separate try: 1 − (1 − 0.3)^n, where n is Infected neighbours."
+            "Each tick, a Susceptible cell becomes Infected with chance 0.3 with 1 infected neighbour, and 0.51 with \
+             2. Each one counted is an independent trial: 1 − (1 − 0.3)^n, where n is Infected neighbours."
         )
     );
     assert_eq!(
@@ -941,7 +939,7 @@ fn a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named() {
         chance_note(edited, "l2", &values).as_deref(),
         Some(
             "Each tick, a Susceptible cell becomes Infected with a chance that grows with n, where p is Infected \
-             neighbours and n is Infected neighbours. Each one counted is a separate try: 1 − (1 − p)^n."
+             neighbours and n is Infected neighbours. Each one counted is an independent trial: 1 − (1 − p)^n."
         )
     );
     assert_eq!(
@@ -1058,11 +1056,11 @@ fn a_lower_line_of_a_competing_group_reads_or() {
     );
     assert_eq!(
         sentence::long_tick_note("up to 0.909 with 8"),
-        "Up to 0.909 with 8. This tick is long for this rate. A shorter tick follows the rate more closely."
+        "Up to 0.909 with 8. This tick is long for this rate. Use a shorter tick for a more accurate result."
     );
     assert_eq!(
         sentence::long_tick_note(&sentence::long_tick_almost_one(8)),
-        "Almost 1 with 8. This tick is long for this rate. A shorter tick follows the rate more closely."
+        "Almost 1 with 8. This tick is long for this rate. Use a shorter tick for a more accurate result."
     );
 }
 

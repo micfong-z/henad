@@ -854,7 +854,7 @@ fn tick_row(
     let (vary_label, vary_tooltip) = if context.search {
         ("Search tick", "Search over this action's tick")
     } else {
-        ("Vary tick", "Try the action at several ticks")
+        ("Vary tick", "Vary this action's tick")
     };
     let warning = input
         .summary
@@ -1042,7 +1042,7 @@ fn seeds_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft,
         SeedField {
             label: "Root seed",
             dice_name: "Generate random root seed",
-            tooltip: "Every run's seed derives from this one",
+            tooltip: "Seed for deriving each run's seed",
             hint: "",
             site: DraftSite::Seed,
         },
@@ -1130,7 +1130,7 @@ fn stop_rows(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft, inp
     let entry = input.entry;
     let mut enabled = draft.stop.is_some();
     let (stop_when, ()) = layout.checkbox_row(ui, &mut enabled, "Stop when", |_| {});
-    let stop_when = stop_when.on_hover_text("End a run at the first sample where this holds");
+    let stop_when = stop_when.on_hover_text("End a run at the first sample where the condition holds");
     if enabled {
         draft.add_stop(input.schema);
     } else {
@@ -1591,7 +1591,9 @@ fn concurrency_row(ui: &mut egui::Ui, layout: &FormLayout, draft: &mut SweepDraf
         Backend::Gpu => {
             "Runs on the GPU at the same time. Each needs its own device memory. A large model runs fastest alone."
         }
-        Backend::Cpu => "Runs stepped at the same time. Each needs its own memory. A large model runs fastest alone.",
+        Backend::Cpu => {
+            "Runs on the CPU at the same time. Each needs its own memory. A large model runs fastest alone."
+        }
     };
     let feedback = Note::Weak(concurrency_feedback(draft.concurrency, backend, threads, browser));
     let (label, count) = layout.row(ui, "Concurrent runs", |ui| {
@@ -1600,7 +1602,7 @@ fn concurrency_row(ui: &mut egui::Ui, layout: &FormLayout, draft: &mut SweepDraf
                 let mut fixed = matches!(draft.concurrency, Concurrency::Fixed(_));
                 let choices = [
                     (false, "Auto", "Set number of runs at start from model size"),
-                    (true, "Fixed", "Step this many runs at once"),
+                    (true, "Fixed", "Use this number of concurrent runs"),
                 ];
                 if segmented(ui, &mut fixed, &choices, |_| Ok(())) {
                     draft.concurrency = if fixed {
@@ -1646,7 +1648,7 @@ fn results_rows(
     let summary = input.summary;
     let in_folder = draft.results_in_folder && !browser;
     let results_fallback = if browser {
-        Note::Weak("A browser keeps results in memory. Save them once the sweep ends.".to_owned())
+        Note::Weak("In a browser, results will be kept in memory. Press Save results once the sweep ends.".to_owned())
     } else {
         Note::Empty
     };
@@ -2125,17 +2127,17 @@ mod tests {
             banner_line(&issue, draft, &schema)
         };
         assert_eq!(
-            line(&draft, DraftSite::Factor(infection), "No values"),
-            "Infection Rate: No values"
+            line(&draft, DraftSite::Factor(infection), "Enter values"),
+            "Infection Rate: Enter values"
         );
         assert_eq!(
-            line(&draft, DraftSite::Action(0), "No values"),
-            "Seed outbreak: No values"
+            line(&draft, DraftSite::Action(0), "Enter values"),
+            "Seed outbreak: Enter values"
         );
         draft.add_action(&schema, 0, 20);
         assert_eq!(
-            line(&draft, DraftSite::Action(1), "No values"),
-            "Seed outbreak 2: No values",
+            line(&draft, DraftSite::Action(1), "Enter values"),
+            "Seed outbreak 2: Enter values",
             "a repeat of an action goes by its number"
         );
         draft.reducers.push(ReducerSpec {
@@ -2143,8 +2145,8 @@ mod tests {
             kind: ReducerKind::ArgMax,
         });
         assert_eq!(
-            line(&draft, DraftSite::Output(0), "No values"),
-            "Susceptible, tick of maximum: No values",
+            line(&draft, DraftSite::Output(0), "Enter values"),
+            "Susceptible, tick of maximum: Enter values",
             "an output goes by its stat first"
         );
         assert_eq!(
@@ -2492,7 +2494,7 @@ mod tests {
         );
         assert_eq!(
             hover(&without_table, vary_tick),
-            (true, vec!["Try the action at several ticks".to_owned()])
+            (true, vec!["Vary this action's tick".to_owned()])
         );
     }
 

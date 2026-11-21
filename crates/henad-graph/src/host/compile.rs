@@ -513,7 +513,7 @@ impl<'a> Compiler<'a> {
                     unsupported(
                         self.pass,
                         Some(node.id),
-                        format!("gives `{name}` a literal with no host value"),
+                        format!("sets `{name}` to a literal the host does not support"),
                     )
                 })?;
                 self.constant(value)
@@ -629,8 +629,13 @@ impl<'a> Compiler<'a> {
             },
             "field.get" => {
                 let (first, layers, field) = self.field(position, &text("field"))?;
-                let zero = HostValue::zero_of(&field.value_type)
-                    .ok_or_else(|| unsupported(self.pass, Some(id), "reads a field with no host value".to_owned()))?;
+                let zero = HostValue::zero_of(&field.value_type).ok_or_else(|| {
+                    unsupported(
+                        self.pass,
+                        Some(id),
+                        "reads a field of a type the host does not support".to_owned(),
+                    )
+                })?;
                 Operation::FieldGet {
                     first,
                     layers,
@@ -817,7 +822,11 @@ impl<'a> Compiler<'a> {
                         literal_of(value)
                             .and_then(|literal| HostValue::from_literal(&literal, self.document))
                             .ok_or_else(|| {
-                                unsupported(self.pass, Some(id), "holds a value with no host form".to_owned())
+                                unsupported(
+                                    self.pass,
+                                    Some(id),
+                                    "holds a value the host does not support".to_owned(),
+                                )
                             })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1137,7 +1146,7 @@ impl<'a> Compiler<'a> {
                     self.pass,
                     Some(id),
                     format!(
-                        "holds the accumulator '{}' of a type with no host value",
+                        "holds the accumulator '{}' of a type the host does not support",
                         accumulator.name
                     ),
                 )

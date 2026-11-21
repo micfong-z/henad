@@ -799,13 +799,13 @@ impl SearchTable {
     fn into_spec(self) -> Result<SearchSpec, SpecFileError> {
         let refuse = |reason| Err(SpecFileError::Search { reason });
         if self.hill_climb.is_some() && self.algorithm != SearchAlgorithmFile::HillClimb {
-            return refuse("[search.hill_climb] applies to a hill_climb search");
+            return refuse("[search.hill_climb] requires a hill_climb search");
         }
         if self.genetic.is_some() && self.algorithm != SearchAlgorithmFile::Genetic {
-            return refuse("[search.genetic] applies to a genetic search");
+            return refuse("[search.genetic] requires a genetic search");
         }
         if self.pse.is_some() && self.algorithm != SearchAlgorithmFile::Pse {
-            return refuse("[search.pse] applies to a pse search");
+            return refuse("[search.pse] requires a pse search");
         }
         let algorithm = match self.algorithm {
             SearchAlgorithmFile::Random => SearchAlgorithm::Random,
@@ -1092,7 +1092,7 @@ pub enum SpecFileError {
     Design {
         /// Index of the block, counting from 0.
         block: usize,
-        /// Message that identifies the key at fault, such as `samples applies to a random or lhs design`.
+        /// Message that identifies the key at fault, such as `samples requires a random or lhs design`.
         reason: &'static str,
     },
     /// A reducer kind that cannot be read.
@@ -1106,7 +1106,7 @@ pub enum SpecFileError {
     },
     /// A `[search]` table whose keys do not fit its algorithm or the rest of the spec.
     Search {
-        /// Message that identifies the key at fault, such as `[search.pse] applies to a pse search`.
+        /// Message that identifies the key at fault, such as `[search.pse] requires a pse search`.
         reason: &'static str,
     },
     /// A factor of the search space with none or both of `param` and `action`.
@@ -1382,13 +1382,13 @@ impl BlockTable {
         let refuse = |reason| Err(SpecFileError::Design { block: index, reason });
         let sampled = matches!(self.design, DesignKindFile::Random | DesignKindFile::Lhs);
         if !sampled && self.samples.is_some() {
-            return refuse("samples applies to a random or lhs design");
+            return refuse("samples requires a random or lhs design");
         }
         if !sampled && self.design_seed.is_some() {
-            return refuse("design_seed applies to a random or lhs design");
+            return refuse("design_seed requires a random or lhs design");
         }
         if self.design != DesignKindFile::Table && (self.file.is_some() || self.table_text.is_some()) {
-            return refuse("file and table_text apply to a table design");
+            return refuse("file and table_text require a table design");
         }
         let design = match (self.design, self.samples) {
             (DesignKindFile::Factorial, _) => DesignKind::Factorial,

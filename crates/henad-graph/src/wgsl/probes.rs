@@ -88,23 +88,23 @@ pub(crate) fn resolve(
             });
         let Some((position, pass, port, slot)) = located else {
             problems.push(CodeDiagnostic::error(format!(
-                "the probe '{output}' names no output of a node in a tick pass, outside every expression and function \
-                 call"
+                "the probe '{output}' must name an output of a node in a tick pass, outside any expression or \
+                 function call"
             )));
             continue;
         };
         let Some(node) = pass.body.nodes.iter().find(|node| node.id == output.node) else {
             problems.push(CodeDiagnostic::error(format!(
-                "the probe '{output}' names no output of a node in a tick pass, outside every expression and function \
-                 call"
+                "the probe '{output}' must name an output of a node in a tick pass, outside any expression or \
+                 function call"
             )));
             continue;
         };
         if node.region.is_some() {
             problems.push(
                 CodeDiagnostic::error(format!(
-                    "the probe '{output}' names a node inside a region, which runs once per iteration, and a probe \
-                     counts once per element"
+                    "the probe '{output}' cannot name a node inside a region: a region runs once per iteration, \
+                     and a probe counts once per element"
                 ))
                 .with_pass(pass.id.clone())
                 .with_node(output.node.to_string()),
@@ -118,12 +118,9 @@ pub(crate) fn resolve(
             .and_then(|port_type| port_type.value_type.as_ref());
         if value_type != Some(&ValueType::Bool) {
             problems.push(
-                CodeDiagnostic::error(format!(
-                    "the probe '{output}' names an output that holds no bool, and a probe counts the elements where \
-                     its output holds"
-                ))
-                .with_pass(pass.id.clone())
-                .with_node(output.node.to_string()),
+                CodeDiagnostic::error(format!("the probe '{output}' must name a bool output"))
+                    .with_pass(pass.id.clone())
+                    .with_node(output.node.to_string()),
             );
             continue;
         }

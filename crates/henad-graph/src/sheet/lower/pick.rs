@@ -112,7 +112,7 @@ impl<'a> CardLowering<'_, 'a> {
         let ranked_by = line
             .ranked_by
             .as_deref()
-            .ok_or_else(|| "the pick ranks by no property".to_owned())?;
+            .ok_or_else(|| "the pick needs a property to rank by".to_owned())?;
         let PickNames { xy, best, ties, .. } = names;
         let value = self.their(&inside, ranked_by)?;
         let value = self.builder.input_as(&inside, &value, &ValueType::F32)?;

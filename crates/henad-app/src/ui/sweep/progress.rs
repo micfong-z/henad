@@ -285,7 +285,7 @@ pub fn left_text(progress: &SweepProgress, state: SessionState) -> String {
 pub fn running_results_text(mode: ExploreMode, output_dir: Option<&Path>) -> String {
     match output_dir {
         Some(dir) => dir.display().to_string(),
-        None => format!("In memory. Save them once the {} ends.", mode.noun()),
+        None => format!("In memory. Press Save results once the {} ends.", mode.noun()),
     }
 }
 
@@ -346,7 +346,7 @@ pub fn status_rows(input: &StatusInput<'_>) -> Vec<ProgressRow> {
         ),
         None => ("Planning".to_owned(), "Planning".to_owned()),
     };
-    rows.push(ProgressRow::new("Runs at once", at_once));
+    rows.push(ProgressRow::new("Concurrent runs", at_once));
     rows.push(ProgressRow::new("Projected memory", memory));
     rows.push(ProgressRow::new("Results", input.results));
     rows
@@ -861,7 +861,7 @@ mod tests {
                 "Failed",
                 "Elapsed",
                 "Left",
-                "Runs at once",
+                "Concurrent runs",
                 "Projected memory",
                 "Results",
             ]
@@ -870,9 +870,12 @@ mod tests {
         assert_eq!(value(&rows, "Running"), "4");
         assert_eq!(value(&rows, "Queued"), "44");
         assert_eq!(value(&rows, "Left"), "About 16 s");
-        assert_eq!(value(&rows, "Runs at once"), "4, with 3 threads each");
+        assert_eq!(value(&rows, "Concurrent runs"), "4, with 3 threads each");
         assert_eq!(value(&rows, "Projected memory"), "About 1.2 GB");
-        assert_eq!(value(&rows, "Results"), "In memory. Save them once the sweep ends.");
+        assert_eq!(
+            value(&rows, "Results"),
+            "In memory. Press Save results once the sweep ends."
+        );
         let failed = rows.iter().find(|row| row.label == "Failed").expect("a Failed row");
         assert_eq!((failed.failure, failed.button), (false, None));
 
@@ -891,7 +894,7 @@ mod tests {
         assert_eq!(value(&rows, "Kept from folder"), "30");
         assert!(!labels(&rows).contains(&"Waiting"), "no runs wait");
         assert_eq!(value(&rows, "Left"), "Paused");
-        assert_eq!(value(&rows, "Runs at once"), "Planning");
+        assert_eq!(value(&rows, "Concurrent runs"), "Planning");
         let failed = rows.iter().find(|row| row.label == "Failed").expect("a Failed row");
         assert!(failed.failure);
         assert_eq!(failed.button, Some(RowButton::ShowFailedRuns));

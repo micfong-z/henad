@@ -700,7 +700,7 @@ pub(crate) fn compile_shaders(
         .map(|lane| {
             if lane.domain != Domain::Cells {
                 problems.push(CodeDiagnostic::error(format!(
-                    "the lane '{}' lives on {}, and a grid's lanes live on cells",
+                    "the lane '{}' lives on {}, expected cells in a grid",
                     lane.id,
                     lane.domain.as_str()
                 )));
@@ -946,8 +946,8 @@ fn refuse_tick_reruns(document: &GraphDocument, problems: &mut Vec<CodeDiagnosti
             {
                 problems.push(
                     CodeDiagnostic::error(format!(
-                        "the action '{}' reruns the tick pass '{run}', and the GPU runs an action's reruns on the \
-                         host, which runs init passes alone",
+                        "the action '{}' cannot rerun the tick pass '{run}': on the GPU, an action can rerun only \
+                         init passes, which run on the host",
                         action.id
                     ))
                     .with_pass(run.clone()),
@@ -1110,11 +1110,12 @@ pub(crate) fn oversized(label: &str, bytes: usize, ranges: &[NodeRange]) -> Code
         }
     }
     let problem = CodeDiagnostic::error(format!(
-        "expands to {bytes} bytes of WGSL in the shader '{label}', past the {MAX_FILE_BYTES} one shader may hold"
+        "expands to {bytes} bytes of WGSL in the shader '{label}', exceeding the limit of {MAX_FILE_BYTES} bytes for \
+         one shader"
     ))
     .with_note(
-        "each node writes lines of its own, and a grid count writes one test per neighbour. A pass with fewer nodes \
-         writes a shorter shader",
+        "each node writes lines of its own, and a grid count writes one test per neighbour. Use fewer nodes in the \
+         pass to shorten the shader",
     );
     match written.iter().max_by_key(|(_, total)| *total) {
         Some((pass, _)) => problem.with_pass(*pass),
@@ -1123,7 +1124,7 @@ pub(crate) fn oversized(label: &str, bytes: usize, ranges: &[NodeRange]) -> Code
 }
 
 /// Note on a problem of a generated shader's composition.
-const COMPILER_FAULT_NOTE: &str = "in WGSL the compiler generated, which is a fault of the compiler";
+const COMPILER_FAULT_NOTE: &str = "compiler fault in generated WGSL";
 
 /// Returns `text` composed with the shared modules and `henad_graph::draw`, or its problems, each against the node
 /// that wrote the line it is placed on.

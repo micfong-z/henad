@@ -61,7 +61,7 @@ impl FromStr for PortRef {
             && !port.split('.').all(is_port_segment)
         {
             return Err(format!(
-                "'{text}' names no port, whose segments are letters, digits and `_`"
+                "invalid port reference '{text}', expected segments of letters, digits and `_`"
             ));
         }
         Ok(Self {

@@ -51,7 +51,7 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
         if (restarts(false) && acts(false)) || (restarts(true) && acts(true)) {
             builder.problem(
                 format!(
-                    "button '{}' starts properties again and also changes them, and a button does one or the other",
+                    "button '{}' cannot both start properties again and change them",
                     button.id
                 ),
                 place,
@@ -61,7 +61,7 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
         if acts(false) && acts(true) {
             builder.problem(
                 format!(
-                    "button '{}' changes {} and the ground, and a button changes one of them",
+                    "button '{}' cannot change both {} and the ground",
                     button.id,
                     builder.thing_words()
                 ),
@@ -125,7 +125,7 @@ fn write_action_pass<'a>(
                     .map(|(_, other)| *other);
                 match (found, earlier) {
                     (Some(_), Some(other)) => Err(format!(
-                        "card '{card_id}' runs for button '{other}' and button '{}', and a card runs for one",
+                        "card '{card_id}' cannot run for both button '{other}' and button '{}'",
                         button.id
                     )),
                     (Some(card_index), None) => {
@@ -133,7 +133,7 @@ fn write_action_pass<'a>(
                         card::lower_card(builder, card_index, pass);
                         Ok(())
                     }
-                    (None, _) => Err(format!("'{card_id}' is no card that runs once")),
+                    (None, _) => Err(format!("'{card_id}' is not a card that runs once")),
                 }
             }
             ButtonStepRule::StartAgain => Ok(()),
@@ -190,11 +190,11 @@ fn set_everywhere(
 ) -> Result<(), String> {
     let button = &builder.document.buttons[button_index];
     let step = &button.does[step_index];
-    let property_id = step.property.as_deref().ok_or("a Set everywhere names no property")?;
+    let property_id = step.property.as_deref().ok_or("a Set everywhere needs a property")?;
     let (_, property) = builder.required_property(property_id)?;
     if builder.is_ground() && property.property_type == PropertyType::States {
         return Err(format!(
-            "the ground's '{property_id}' keeps its painted states, so no button sets it"
+            "the ground's '{property_id}' has painted states and cannot be set by a button"
         ));
     }
     let site = Site::sheet(

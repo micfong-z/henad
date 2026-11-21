@@ -1050,7 +1050,7 @@ impl Machine<'_> {
             Err(WalkEnd::Cells) => {
                 return Err(self.fault(
                     node,
-                    format!("Agents in radius would walk more than {MAX_WALK_CELLS} cells"),
+                    format!("Agents in radius cannot walk more than {MAX_WALK_CELLS} cells"),
                 ));
             }
             Err(WalkEnd::Visits) => {

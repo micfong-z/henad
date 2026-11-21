@@ -205,7 +205,7 @@ pub(crate) fn check_id_grammar(id: &str) -> Result<(), &'static str> {
             if !chars
                 .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_') =>
         {
-            Err("holds a character other than a lowercase ASCII letter, a digit or an underscore")
+            Err("contains a character other than a lowercase ASCII letter, a digit or an underscore")
         }
         Some(_) => Ok(()),
     }
@@ -244,7 +244,8 @@ impl fmt::Display for ModelSetError {
             ),
             Self::InvalidId { id, reason } => write!(
                 f,
-                "model id '{id}' {reason} (an id is a lowercase ASCII letter, then lowercase letters, digits and underscores)"
+                "model id '{id}' {reason} (an id must start with a lowercase ASCII letter, followed by lowercase \
+                 letters, digits and underscores)"
             ),
         }
     }
@@ -274,7 +275,7 @@ impl fmt::Display for ModelLookupError {
             Self::NotInSet { id } => write!(f, "this build does not include model '{id}'"),
             Self::NeedsGpu { id } => write!(
                 f,
-                "model '{id}' needs a GPU with compute support, and this device has none"
+                "model '{id}' needs a GPU with compute support, unavailable on this device"
             ),
         }
     }

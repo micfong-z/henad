@@ -1199,7 +1199,7 @@ mod tests {
         store.push_run(outcome(&recorded_plan, 1, RunStatus::Ok, 1.0, &[1.0]), false);
         assert_eq!(
             store.replay(1).err().as_deref(),
-            Some("Run 1 does not match the plan of its sweep"),
+            Some("Run 1 does not match the sweep plan"),
             "a key that differs under the same model"
         );
         store.schema_matches = false;
@@ -1268,7 +1268,7 @@ mod tests {
         assert!(store.replay(0).is_ok(), "run 0 ran the values of the plan");
         assert_eq!(
             store.replay(1).err().as_deref(),
-            Some("Run 1 does not match the plan of its sweep")
+            Some("Run 1 does not match the sweep plan")
         );
     }
 
@@ -1906,7 +1906,7 @@ mod tests {
         assert!(
             open(MAX_PLANNED_CONFIGS + 1)
                 .replay_refusal()
-                .is_some_and(|refusal| refusal.contains("refuses this sweep's spec")),
+                .is_some_and(|refusal| refusal.contains("rejects this sweep's spec")),
             "a count within the bound plans the spec"
         );
         let set = ResultSet::open_dir(&folder.0, usize::MAX).expect("the folder reads");

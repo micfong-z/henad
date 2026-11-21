@@ -52,7 +52,7 @@ pub(super) fn lower_tick(builder: &mut Builder<'_>) {
         let words = builder.thing_words();
         builder.problem(
             format!(
-                "card '{}' is a second card that runs each tick over {words}, and {words} run one",
+                "card '{}' is a second card that runs each tick over {words}, expected at most one card for {words}",
                 document.cards[second].id
             ),
             Place::Card(second),
@@ -388,9 +388,9 @@ impl<'a> CardLowering<'_, 'a> {
             let message = match reason {
                 Refusal::NotYet(words) => words.to_owned(),
                 Refusal::Conflict(words) => words,
-                Refusal::Record => format!("line {id}: Record counts an event, and a grid counts no events"),
+                Refusal::Record => format!("line {id}: Record cannot count events on a grid"),
                 Refusal::Agents(kind) => format!(
-                    "line {id}: a {} line runs on agents, and this card runs on the cells",
+                    "line {id}: a {} line runs on agents and cannot be used in a card that runs on the cells",
                     kind.as_str()
                 ),
             };
@@ -555,7 +555,7 @@ impl<'a> CardLowering<'_, 'a> {
 
     /// Returns the property `id` of the card's kind of thing with its index.
     pub(super) fn property(&self, id: Option<&str>) -> Result<(usize, &'a SheetProperty), String> {
-        let id = id.ok_or_else(|| "the line names no property".to_owned())?;
+        let id = id.ok_or_else(|| "the line needs a property".to_owned())?;
         self.builder.required_property(id)
     }
 
@@ -615,7 +615,7 @@ impl<'a> CardLowering<'_, 'a> {
             }
             SheetValue::Chip(chip) => self.chip(site, chip),
             SheetValue::Phrase(phrase) => self.phrase(site, phrase),
-            SheetValue::List(_) => Err("a list stands where one value is wanted".to_owned()),
+            SheetValue::List(_) => Err("expected one value, got a list".to_owned()),
         }
     }
 
@@ -651,7 +651,7 @@ impl<'a> CardLowering<'_, 'a> {
                 ..
             } => match self.results.get(line.as_str()).cloned() {
                 Some(Operand::Place(place)) => self.place_property(site, &place, property),
-                _ => Err(format!("line {line} names no place, so it has no properties")),
+                _ => Err(format!("line {line} does not return a place, so it has no properties")),
             },
             SheetChip::My(property) => self.builder.read(self.pass, property),
             SheetChip::MyNew(property) => {
@@ -687,7 +687,7 @@ impl<'a> CardLowering<'_, 'a> {
                 }
             }
             LineKind::Count if line.around == Some(Around::AgentsWithin) => {
-                Err("a count of agents within a distance stands on a line of its own".to_owned())
+                Err("a count of agents within a distance must be on a line of its own".to_owned())
             }
             LineKind::Count => self.count(site, line),
             LineKind::Chance => self.chance(site, line),
@@ -700,7 +700,7 @@ impl<'a> CardLowering<'_, 'a> {
             LineKind::PickCell => self.pick_cell(site, line),
             LineKind::LookAtCell => self.look_at_cell(site, line),
             LineKind::LookAround => {
-                Err("a Look around gives several values, so it stands on a line of its own".to_owned())
+                Err("a Look around returns several values, so it must be on a line of its own".to_owned())
             }
             other => Err(format!("a {} phrase has no lowering", other.as_str())),
         }
@@ -784,7 +784,7 @@ impl<'a> CardLowering<'_, 'a> {
     fn order(&mut self, site: &Site, op: &str, a: &Operand, b: &Operand) -> Result<Operand, String> {
         let value_type = common_type(a, b)?;
         if matches!(value_type, ValueType::Category(_) | ValueType::Bool) && !matches!(op, "cmp.eq" | "cmp.ne") {
-            return Err("states and yes or no values have no order".to_owned());
+            return Err("states and yes or no values cannot be ordered".to_owned());
         }
         let a = self.builder.input_as(site, a, &value_type)?;
         let b = self.builder.input_as(site, b, &value_type)?;
@@ -811,7 +811,7 @@ impl<'a> CardLowering<'_, 'a> {
             let mut places = Vec::with_capacity(rows.len());
             for (row_site, value, condition) in rows {
                 let Operand::Place(place) = value else {
-                    return Err("a choice of places holds a value that is no place".to_owned());
+                    return Err("a choice of places holds a value that is not a place".to_owned());
                 };
                 let condition = self.builder.condition_input(&row_site, &condition)?;
                 places.push((row_site, *place, condition));
@@ -941,7 +941,7 @@ impl<'a> CardLowering<'_, 'a> {
                     ChangeKind::Set { value: set } => set,
                     ChangeKind::Become { .. } => {
                         return Err(format!(
-                            "line {}: a Become changes a property with no states",
+                            "line {}: a Become cannot change a property with no states",
                             change.line
                         ));
                     }
@@ -977,7 +977,7 @@ impl<'a> CardLowering<'_, 'a> {
         let mut inputs = vec![("state".to_owned(), self.builder.input_as(site, current, &lane_type)?)];
         for change in changes {
             let ChangeKind::Become { old_state, new_state } = &change.kind else {
-                return Err(format!("line {}: a Set changes a States property", change.line));
+                return Err(format!("line {}: a Set cannot change a States property", change.line));
             };
             let old_states: Vec<&str> = match old_state {
                 Some(old_state) => vec![old_state.as_str()],
@@ -1002,8 +1002,8 @@ impl<'a> CardLowering<'_, 'a> {
         }
         if rules.len() > MAX_TRANSITION_RULES {
             return Err(format!(
-                "'{}' changes by {} rows, counting a row for each state of a change from any state, and a \
-                 property changes by at most {MAX_TRANSITION_RULES}",
+                "'{}' changes by {} rows, counting a row for each state of a change from any state, expected \
+                 at most {MAX_TRANSITION_RULES}",
                 property.id,
                 rules.len()
             ));

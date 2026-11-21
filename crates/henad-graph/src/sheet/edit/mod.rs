@@ -226,7 +226,7 @@ impl Draft {
             SheetEdit::SetWorld { width, height, edges } => {
                 if width == 0 || height == 0 {
                     return Err(SheetEditError::Invalid(
-                        "the world is at least 1 cell wide and 1 cell high".to_owned(),
+                        "the world must be at least 1 cell wide and 1 cell high".to_owned(),
                     ));
                 }
                 self.document.world.width = width;
@@ -241,7 +241,7 @@ impl Draft {
                     && time.tick_length <= 0.0
                 {
                     return Err(SheetEditError::Invalid(
-                        "one tick lasts a number of units above 0".to_owned(),
+                        "one tick must last more than 0 units".to_owned(),
                     ));
                 }
                 self.document.time = time;
@@ -407,7 +407,7 @@ impl Draft {
             SheetEdit::DrawNewNumbers { line } => {
                 let target = self.line(&line)?;
                 if !holds_draw(target) {
-                    return Err(SheetEditError::Invalid(format!("line '{line}' draws no numbers")));
+                    return Err(SheetEditError::Invalid(format!("line '{line}' does not draw numbers")));
                 }
                 let key = self.mint_key();
                 self.line_mut(&line)?.key = Some(key);
@@ -590,7 +590,7 @@ impl Draft {
         let line = self.line(line_id)?;
         if LINE_TABLE_DEPTH + lines::line_depth(line) > MAX_NESTING {
             return Err(SheetEditError::Invalid(format!(
-                "line '{line_id}' would nest tables and lists past {MAX_NESTING}"
+                "line '{line_id}' cannot nest tables and lists more than {MAX_NESTING} deep"
             )));
         }
         Ok(())

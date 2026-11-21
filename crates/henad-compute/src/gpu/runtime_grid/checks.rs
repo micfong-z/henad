@@ -65,7 +65,7 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
             problems.push((
                 Some(RuleDeclaration::Grid),
                 CodeDiagnostic::error(format!(
-                    "the grid {side} is {value}, but it must be between 1 and {MAX_GRID_SIDE}"
+                    "the grid {side} must be between 1 and {MAX_GRID_SIDE}, got {value}"
                 )),
             ));
         }
@@ -83,7 +83,7 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
         problems.push((
             None,
             CodeDiagnostic::error(format!(
-                "the rule declares {} states, but at most {MAX_STATES} are allowed",
+                "the rule declares {} states, expected at most {MAX_STATES}",
                 rule.states.len()
             )),
         ));
@@ -122,7 +122,7 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
                     state.label
                 )),
                 None => problem(format!(
-                    "state '{}' takes its initial share from '{id}', but no such parameter is declared",
+                    "state '{}' takes its initial share from unknown parameter '{id}'",
                     state.label
                 )),
             },
@@ -135,8 +135,7 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
         problems.push((
             None,
             CodeDiagnostic::error(
-                "every state has an initial share. One state must leave out `initial`, and it will take the cells no \
-                 share claims",
+                "every state has an initial share. One state must omit `initial` and will take the remaining cells",
             ),
         ));
     }
@@ -198,14 +197,14 @@ fn state_constant(label: &str) -> (String, Option<String>) {
             (name, Some(reason))
         }
         Some(name) if naga::keywords::wgsl::RESERVED.contains(&name.as_str()) => {
-            let reason = format!("state '{label}' produces the constant `{name}`, but it is a reserved word of WGSL");
+            let reason = format!("state '{label}' produces the constant `{name}`, but it is a WGSL reserved word");
             (name, Some(reason))
         }
         Some(name) => (name, None),
         None => (
             String::new(),
             Some(format!(
-                "state '{label}' produces no constant name. A label must contain at least one ASCII letter or digit"
+                "state '{label}' produces no constant name. The label must contain at least one ASCII letter or digit"
             )),
         ),
     }
@@ -217,7 +216,7 @@ fn check_params(params: &[ParamDescriptor], problems: &mut Vec<DeclarationProble
         problems.push((
             None,
             CodeDiagnostic::error(format!(
-                "the rule declares {} parameters, but at most {MAX_PARAMS} are allowed",
+                "the rule declares {} parameters, expected at most {MAX_PARAMS}",
                 params.len()
             )),
         ));
@@ -238,8 +237,8 @@ fn check_params(params: &[ParamDescriptor], problems: &mut Vec<DeclarationProble
             || id.starts_with(PRIVATE_PREFIX)
         {
             problem(format!(
-                "parameter id '{id}' is reserved. The engine will fill `params.width`, `params.height` and \
-                 `params.seed`, and will declare `grid_width` and `grid_height`"
+                "parameter id '{id}' is reserved. The engine sets `params.width`, `params.height` and `params.seed`, \
+                 and declares `grid_width` and `grid_height`"
             ));
         } else if naga::keywords::wgsl::RESERVED.contains(&id) {
             problem(format!("parameter id '{id}' is a WGSL keyword"));
@@ -262,7 +261,7 @@ fn check_params(params: &[ParamDescriptor], problems: &mut Vec<DeclarationProble
         }
         if param.format() == ParamFormat::Percent && !matches!(param.kind(), ParamKind::F32 { .. }) {
             problem(format!(
-                "parameter '{id}' shows as a percentage, but only an f32 parameter can hold a fraction"
+                "parameter '{id}' cannot show as a percentage: only an f32 parameter can hold a fraction"
             ));
         }
         let field = match param.kind() {
@@ -334,7 +333,7 @@ fn is_reserved_name(name: &str) -> bool {
 pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic> {
     if step.len() > MAX_STEP_BYTES {
         return vec![CodeDiagnostic::error(format!(
-            "the rule's text holds {} bytes, but at most {MAX_STEP_BYTES} are allowed",
+            "the rule's text holds {} bytes, expected at most {MAX_STEP_BYTES}",
             step.len()
         ))];
     }
@@ -388,8 +387,7 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
                 binding_line_end = code[offset..].find('\n').map_or(code.len(), |end| offset + end);
                 problems.push(place(
                     CodeDiagnostic::error(
-                        "a grid rule must not declare bindings. The engine will bind the cells and `params` for \
-                         the rule",
+                        "a grid rule must not declare bindings. The engine binds the cells and `params` for the rule",
                     ),
                     at,
                     offset + word.len() - at,
@@ -408,9 +406,7 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
         }
         if is_reserved_name(name) || constants.iter().any(|constant| constant == name) {
             problems.push(place(
-                CodeDiagnostic::error(format!(
-                    "`{name}` is a name of the rule template, and must not be declared again"
-                )),
+                CodeDiagnostic::error(format!("`{name}` is already declared by the rule template")),
                 name_offset,
                 name.len(),
             ));
@@ -433,7 +429,7 @@ pub(crate) fn check_text(step: &str, constants: &[String]) -> Vec<CodeDiagnostic
 
 /// Returns the message of a diagnostic about a module-scope item of the rule's text named `name`, a WGSL built-in.
 fn builtin_name_message(name: &str) -> String {
-    format!("`{name}` is a predeclared name of WGSL. A rule's module-scope items must not use it")
+    format!("`{name}` is a predeclared WGSL name. A rule's module-scope items must not use it")
 }
 
 /// Returns the name a declaration keyword ending at byte `after` of `code` declares, with its offset.
@@ -547,10 +543,10 @@ pub(crate) fn check_module(composition: &Composition, start_offset: usize) -> Ve
 /// Returns the reason a value or variable of type `inner` is refused, or `None` when it is allowed.
 fn type_problem(module: &Module, inner: &TypeInner) -> Option<String> {
     if contains_atomic(module, inner) {
-        return Some("holds an atomic, but a grid rule must not use atomics".to_owned());
+        return Some("cannot hold an atomic in a grid rule".to_owned());
     }
     let bytes = type_bytes(module, inner);
-    (bytes > MAX_FUNCTION_BYTES).then(|| format!("takes {bytes} bytes, but at most {MAX_FUNCTION_BYTES} are allowed"))
+    (bytes > MAX_FUNCTION_BYTES).then(|| format!("takes {bytes} bytes, expected at most {MAX_FUNCTION_BYTES}"))
 }
 
 /// Returns the byte size of a value of type `inner`, or `u64::MAX` for a size past naga's limit.
@@ -680,15 +676,15 @@ impl Walker<'_> {
                 if private_bytes > MAX_PRIVATE_BYTES && !private_reported {
                     private_reported = true;
                     self.problems.push(located.place(CodeDiagnostic::error(format!(
-                        "`{name}` brings the shader's `private` variables to {private_bytes} bytes, but at \
-                         most {MAX_PRIVATE_BYTES} are allowed"
+                        "`{name}` brings the shader's `private` variables to {private_bytes} bytes, expected at most \
+                         {MAX_PRIVATE_BYTES}"
                     ))));
                     continue;
                 }
             }
             if contains_atomic(module, inner) {
                 self.problems.push(located.place(CodeDiagnostic::error(format!(
-                    "`{name}` holds an atomic, but a grid rule must not use atomics"
+                    "`{name}` cannot hold an atomic in a grid rule"
                 ))));
             }
         }
@@ -744,18 +740,15 @@ impl Walker<'_> {
             let variable_name = variable.name.as_deref().unwrap_or("a local variable");
             let span = function.local_variables.get_span(local);
             if contains_atomic(self.module, inner) && reported.insert("atomic") {
-                self.report(
-                    span,
-                    format!("`{variable_name}` holds an atomic, but a grid rule must not use atomics"),
-                );
+                self.report(span, format!("`{variable_name}` cannot hold an atomic in a grid rule"));
             }
             local_bytes = local_bytes.saturating_add(type_bytes(self.module, inner));
             if local_bytes > MAX_FUNCTION_BYTES && reported.insert("locals") {
                 self.report(
                     span,
                     format!(
-                        "`{variable_name}` brings the local variables of `{name}` to {local_bytes} bytes, but at \
-                         most {MAX_FUNCTION_BYTES} are allowed"
+                        "`{variable_name}` brings the local variables of `{name}` to {local_bytes} bytes, expected at \
+                         most {MAX_FUNCTION_BYTES}"
                     ),
                 );
             }
@@ -792,8 +785,8 @@ impl Walker<'_> {
                 self.report(
                     function.expressions.get_span(expression),
                     format!(
-                        "`{name}` is a buffer of the engine. Grid rules must read their cell through `cell` and the \
-                         cells around it through `neighbor`"
+                        "`{name}` is an engine buffer. Grid rules must use `cell` to read their cell and `neighbor` to \
+                         read the cells around it"
                     ),
                 );
             }
@@ -849,7 +842,7 @@ impl Walker<'_> {
                 span,
                 format!(
                     "one call of `{name}` runs {} expressions and statements, counting each function's body once per \
-                     call, but at most {MAX_STEP_COST} are allowed",
+                     call, expected at most {MAX_STEP_COST}",
                     cost(current)
                 ),
             );

@@ -79,7 +79,9 @@ impl<'a> CardLowering<'_, 'a> {
                 Some(SheetValue::Chip(SheetChip::Param(parameter))) => self.builder.param(parameter).ok(),
                 _ => None,
             }
-            .ok_or_else(|| format!("the distance of line {id} is a number or a parameter, the same for every agent"))?;
+            .ok_or_else(|| {
+                format!("the distance of line {id} must be a number or a parameter, the same for every agent")
+            })?;
             distance.insert(id, operand);
         }
         let groups = group_looks(&lines)?;
@@ -314,7 +316,7 @@ impl<'a> CardLowering<'_, 'a> {
         let mut types = Vec::with_capacity(line.summaries.len());
         for (index, summary) in line.summaries.iter().enumerate() {
             let Some(kind) = summary.summary else {
-                return Err(format!("summary '{}' says nothing of how to summarize", summary.id));
+                return Err(format!("summary '{}' does not say how to summarize", summary.id));
             };
             if kind == SummaryKind::Count {
                 types.push(ValueType::U32);
@@ -338,7 +340,7 @@ impl<'a> CardLowering<'_, 'a> {
             .folds
             .last()
             .filter(|fold| fold.kind == FoldKind::Agents)
-            .ok_or_else(|| format!("{} stands outside a look at agents", relation.as_str()))?;
+            .ok_or_else(|| format!("{} is used outside a look at agents", relation.as_str()))?;
         let node = fold.node;
         let site = site.inside(node);
         Ok(match relation {
@@ -389,8 +391,7 @@ fn group_looks<'a>(lines: &[(u32, &'a str, &'a SheetLine)]) -> Result<Vec<LookGr
         let count = accumulator_count(line);
         if count > MAX_ACCUMULATORS {
             return Err(format!(
-                "line {id} holds {count} summaries with its count, and a look at agents holds at most \
-                 {MAX_ACCUMULATORS}"
+                "line {id} holds {count} summaries with its count, expected at most {MAX_ACCUMULATORS}"
             ));
         }
         match groups.iter_mut().rev().find(|group| group.include_me == include_me) {

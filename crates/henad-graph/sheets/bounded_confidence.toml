@@ -6,7 +6,7 @@ kind = "sheet"
 version = 1
 id = "bounded_confidence"
 name = "Bounded confidence"
-purpose = "Opinion dynamics. Pattern to look for: with a small Confidence several opinion groups persist, and with a larger one opinions converge."
+purpose = "Opinion dynamics. Look for several opinion groups that persist with a small Confidence, and opinions that converge with a larger Confidence."
 next_line = 4
 
 [world]
@@ -57,7 +57,7 @@ min = 0
 max = 1
 default = 0.2
 step = 0.01
-means = "How far another opinion may be from mine for me to listen (epsilon)"
+means = "How far another opinion can be from mine for me to listen (epsilon)"
 
 [[parameter]]
 id = "hearing_range"

@@ -71,8 +71,8 @@ pub fn for_each_words(name: &str) -> String {
     }
 }
 
-/// First sentence after the chance of a rate note.
-pub const RATE_IS_NOT_A_CHANCE: &str = "A rate is not a chance.";
+/// Opening words of the sentence of a rate note that gives the formula turning the rate into a chance.
+pub const RATE_CONVERSION: &str = "The rate is converted to a chance by";
 
 /// Returns the chances of a line counted for each `count`, at 1 and at 2, for a note.
 ///
@@ -89,14 +89,13 @@ pub fn count_chances(count: &str, first: &str, second: &str) -> String {
 }
 
 /// Returns the note of a rate line, such as "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952.
-/// A rate is not a chance. Henad turns it into one as 1 − e^(−0.1 × 1 day)."
+/// The rate is converted to a chance by 1 − e^(−0.1 × 1 day)."
 ///
 /// `tick` is the length of one tick, `subject` the note's subject from [`become_subject`] and the like, and `chance`
 /// and `rate` are formatted numbers.
 pub fn rate_note(tick: &str, subject: &str, chance: &str, rate: &str) -> String {
     format!(
-        "{}, {subject} with chance {chance}. {RATE_IS_NOT_A_CHANCE} Henad turns it into one as 1 − e^(−{rate} × \
-         {tick}).",
+        "{}, {subject} with chance {chance}. {RATE_CONVERSION} 1 − e^(−{rate} × {tick}).",
         each_tick(Some(tick))
     )
 }
@@ -104,12 +103,10 @@ pub fn rate_note(tick: &str, subject: &str, chance: &str, rate: &str) -> String 
 /// Returns the note of a rate line counted for each `count`, with the chances `first` and `second` at 1 and at 2.
 ///
 /// For example "Each tick (1 day), a Susceptible cell becomes Infected with chance 0.259 with 1 infected neighbour,
-/// and 0.451 with 2. A rate is not a chance. Henad turns it into one as 1 − e^(−0.3 × n × 1 day), where n is Infected
-/// neighbours."
+/// and 0.451 with 2. The rate is converted to a chance by 1 − e^(−0.3 × n × 1 day), where n is Infected neighbours."
 pub fn rate_for_each_note(tick: &str, subject: &str, count: &str, first: &str, second: &str, rate: &str) -> String {
     format!(
-        "{}, {subject} {}. {RATE_IS_NOT_A_CHANCE} Henad turns it into one as 1 − e^(−{rate} × n × {tick}), where n is \
-         {count}.",
+        "{}, {subject} {}. {RATE_CONVERSION} 1 − e^(−{rate} × n × {tick}), where n is {count}.",
         each_tick(Some(tick)),
         count_chances(count, first, second)
     )
@@ -118,8 +115,8 @@ pub fn rate_for_each_note(tick: &str, subject: &str, count: &str, first: &str, s
 /// Returns the note of a rate line whose rate is a Calculate result of a fixed number times the count `count`.
 ///
 /// `rate_words` reads the result, as "0.3 times Infected neighbours". For example "Each tick (1 day), a Susceptible
-/// cell becomes Infected with chance 0.259 with 1 infected neighbour, and 0.451 with 2. A rate is not a chance. Henad
-/// turns it into one as 1 − e^(−r × 1 day), where r is 0.3 times Infected neighbours."
+/// cell becomes Infected with chance 0.259 with 1 infected neighbour, and 0.451 with 2. The rate is converted to a
+/// chance by 1 − e^(−r × 1 day), where r is 0.3 times Infected neighbours."
 pub fn worked_out_rate_note(
     tick: &str,
     subject: &str,
@@ -129,8 +126,7 @@ pub fn worked_out_rate_note(
     rate_words: &str,
 ) -> String {
     format!(
-        "{}, {subject} {}. {RATE_IS_NOT_A_CHANCE} Henad turns it into one as 1 − e^(−r × {tick}), where r is \
-         {rate_words}.",
+        "{}, {subject} {}. {RATE_CONVERSION} 1 − e^(−r × {tick}), where r is {rate_words}.",
         each_tick(Some(tick)),
         count_chances(count, first, second)
     )
@@ -140,17 +136,17 @@ pub fn worked_out_rate_note(
 /// each `count` when there is one.
 ///
 /// For example "Each tick (1 day), a Susceptible cell becomes Infected with a chance that grows with r, where r is
-/// Infected neighbours plus 0.3. A rate is not a chance. Henad turns it into one as 1 − e^(−r × 1 day)."
+/// Infected neighbours plus 0.3. The rate is converted to a chance by 1 − e^(−r × 1 day)."
 pub fn growing_rate_note(tick: &str, subject: &str, rate_words: &str, count: Option<&str>) -> String {
     let head = each_tick(Some(tick));
     match count {
         None => format!(
-            "{head}, {subject} with a chance that grows with r, where r is {rate_words}. {RATE_IS_NOT_A_CHANCE} Henad \
-             turns it into one as 1 − e^(−r × {tick})."
+            "{head}, {subject} with a chance that grows with r, where r is {rate_words}. {RATE_CONVERSION} 1 − \
+             e^(−r × {tick})."
         ),
         Some(count) => format!(
             "{head}, {subject} with a chance that grows with r and n, where r is {rate_words} and n is {count}. \
-             {RATE_IS_NOT_A_CHANCE} Henad turns it into one as 1 − e^(−r × n × {tick})."
+             {RATE_CONVERSION} 1 − e^(−r × n × {tick})."
         ),
     }
 }
@@ -158,11 +154,11 @@ pub fn growing_rate_note(tick: &str, subject: &str, rate_words: &str, count: Opt
 /// Returns the note of a chance line counted for each `count`, with the chances `first` and `second` at 1 and at 2.
 ///
 /// `tick` is the length of one tick, if it has one. For example "Each tick, a cell becomes B with chance 0.2 with 1 B
-/// neighbour, and 0.36 with 2. Each one counted is a separate try: 1 − (1 − 0.2)^n, where n is B neighbours." A
+/// neighbour, and 0.36 with 2. Each one counted is an independent trial: 1 − (1 − 0.2)^n, where n is B neighbours." A
 /// chance without "for each" has no note.
 pub fn chance_for_each_note(tick: Option<&str>, subject: &str, count: &str, first: &str, second: &str) -> String {
     format!(
-        "{}, {subject} {}. Each one counted is a separate try: 1 − (1 − {first})^n, where n is {count}.",
+        "{}, {subject} {}. Each one counted is an independent trial: 1 − (1 − {first})^n, where n is {count}.",
         each_tick(tick),
         count_chances(count, first, second)
     )
@@ -171,11 +167,11 @@ pub fn chance_for_each_note(tick: Option<&str>, subject: &str, count: &str, firs
 /// Returns the note of a chance line counted for each `count` whose chance is a result, read as `chance_words`.
 ///
 /// For example "Each tick, a cell becomes B with a chance that grows with n, where p is Spark chance and n is B
-/// neighbours. Each one counted is a separate try: 1 − (1 − p)^n."
+/// neighbours. Each one counted is an independent trial: 1 − (1 − p)^n."
 pub fn growing_chance_note(tick: Option<&str>, subject: &str, chance_words: &str, count: &str) -> String {
     format!(
         "{}, {subject} with a chance that grows with n, where p is {chance_words} and n is {count}. Each one counted \
-         is a separate try: 1 − (1 − p)^n.",
+         is an independent trial: 1 − (1 − p)^n.",
         each_tick(tick)
     )
 }
@@ -185,7 +181,7 @@ pub fn growing_chance_note(tick: Option<&str>, subject: &str, chance_words: &str
 ///
 /// `chance` is the chance of leaving, `shares` holds each new state with its share, and `rates` each line's rate, all
 /// formatted. For example "Each tick (1 day), an Infected cell leaves Infected with chance 0.0952: Recovered 0.0476,
-/// Dead 0.0476. A rate is not a chance. Henad turns it into one as 1 − e^(−(0.05 + 0.05) × 1 day)."
+/// Dead 0.0476. The rate is converted to a chance by 1 − e^(−(0.05 + 0.05) × 1 day)."
 pub fn competing_note(
     tick: &str,
     state: &str,
@@ -199,8 +195,7 @@ pub fn competing_note(
         .map(|(new_state, share)| format!("{new_state} {share}"))
         .collect();
     format!(
-        "{}, {} {state} {thing} leaves {state} with chance {chance}: {}. {RATE_IS_NOT_A_CHANCE} Henad turns it into one \
-         as 1 − e^(−({}) × {tick}).",
+        "{}, {} {state} {thing} leaves {state} with chance {chance}: {}. {RATE_CONVERSION} 1 − e^(−({}) × {tick}).",
         each_tick(Some(tick)),
         indefinite_article(state),
         shares.join(", "),
@@ -241,28 +236,29 @@ pub const COMPETING_WORD: &str = "or";
 /// which `thing` names one.
 pub fn competing_tooltip(lines: &[usize], state: &str, thing: &str) -> String {
     format!(
-        "Lines {} compete. {} leaves {state} at the sum of their rates, and each line takes its share.",
+        "Lines {} compete. {} leaves {state} at the sum of their rates, split between the lines in proportion to each \
+         rate.",
         number_list(lines),
         upper_first(&with_article(thing))
     )
 }
 
 /// Note on a tick that is long for its rate.
-pub const LONG_TICK: &str = "This tick is long for this rate. A shorter tick follows the rate more closely.";
+pub const LONG_TICK: &str = "This tick is long for this rate. Use a shorter tick for a more accurate result.";
 
 /// Returns the note under a rate line on a tick that is long for it, where `largest` is the chance at the largest
 /// count, such as "up to 0.909 with 8".
 ///
-/// For example "Up to 0.909 with 8. This tick is long for this rate. A shorter tick follows the rate more closely."
+/// For example "Up to 0.909 with 8. This tick is long for this rate. Use a shorter tick for a more accurate result."
 pub fn long_tick_note(largest: &str) -> String {
     format!("{}. {LONG_TICK}", upper_first(largest))
 }
 
 /// Item of a line's menu that turns its chance into a rate.
-pub const CHANGE_TO_RATE: &str = "Change to a rate";
+pub const CHANGE_TO_RATE: &str = "Convert to a rate";
 
 /// Item of a line's menu that turns its rate into a chance.
-pub const CHANGE_TO_CHANCE: &str = "Change to a chance";
+pub const CHANGE_TO_CHANCE: &str = "Convert to a chance";
 
 /// Returns the note under the Time line of the sheet about the lines `lines`, which use chances per tick.
 pub fn chances_per_tick_note(lines: &[usize]) -> String {
@@ -272,7 +268,7 @@ pub fn chances_per_tick_note(lines: &[usize]) -> String {
         ("Lines", "use")
     };
     format!(
-        "{word} {} {verb} chances per tick. They do not follow the time scale.",
+        "{word} {} {verb} chances per tick. These chances do not change with the tick length.",
         number_list(lines)
     )
 }

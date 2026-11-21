@@ -67,7 +67,7 @@ impl ParsedSheet {
     pub fn parse(text: &str) -> Result<Self, SheetFileError> {
         if text.len() > MAX_SHEET_BYTES {
             return Err(SheetFileError::Format(Box::new(CodeDiagnostic::error(format!(
-                "the file holds {} bytes, and a sheet holds at most {MAX_SHEET_BYTES}",
+                "the file holds {} bytes, expected at most {MAX_SHEET_BYTES}",
                 text.len()
             )))));
         }
@@ -95,9 +95,7 @@ impl ParsedSheet {
         let (depth, deepest) = nesting(&root, 1);
         if depth > MAX_NESTING {
             return Err(format_error(Placed(
-                format!(
-                    "the file nests tables and lists {depth} deep, and a sheet nests them at most {MAX_NESTING} deep"
-                ),
+                format!("the file nests tables and lists {depth} deep, expected at most {MAX_NESTING}"),
                 deepest,
             )));
         }
@@ -223,7 +221,7 @@ const TOML_DATETIME_KEY: &str = "$__toml_private_datetime";
 fn toml_message(error: &toml::de::Error) -> String {
     let message = error.message().trim_end();
     if message.contains(TOML_DATETIME_KEY) {
-        return "a sheet holds no dates or times".to_owned();
+        return "a sheet cannot hold dates or times".to_owned();
     }
     if message.starts_with("unknown field")
         && let Some((head, _)) = message.split_once(", expected")
@@ -241,13 +239,13 @@ fn check_version(header: &ModelHeader) -> Result<(), Placed> {
     let number = *version.get_ref();
     if number < 1 {
         return Err(Placed(
-            format!("the file names sheet version {number}, but sheet versions count from 1"),
+            format!("the file names sheet version {number}, expected at least 1"),
             version.span(),
         ));
     }
     if number > i64::from(SHEET_VERSION) {
         return Err(Placed(
-            format!("the file is sheet version {number}, and this build reads sheet versions up to {SHEET_VERSION}"),
+            format!("the file is sheet version {number}, expected at most {SHEET_VERSION}"),
             version.span(),
         ));
     }
@@ -290,7 +288,7 @@ fn finite_pair(raw: Option<Spanned<[f64; 2]>>) -> Result<Option<[f64; 2]>, Place
     if raw.get_ref().iter().all(|value| value.is_finite()) {
         Ok(Some(*raw.get_ref()))
     } else {
-        Err(Placed("a pair holds finite numbers only".to_owned(), raw.span()))
+        Err(Placed("a pair must hold only finite numbers".to_owned(), raw.span()))
     }
 }
 
@@ -302,7 +300,7 @@ fn color(raw: &Spanned<String>) -> Result<Color, Placed> {
     });
     let Some(digits) = digits else {
         return Err(Placed(
-            format!("the colour '{text}' is not written #RRGGBB or #RRGGBBAA"),
+            format!("invalid colour '{text}', expected #RRGGBB or #RRGGBBAA"),
             raw.span(),
         ));
     };
@@ -333,7 +331,7 @@ fn value(raw: Spanned<RawValue>) -> Result<SheetValue, Placed> {
                 let item = value(item)?;
                 if matches!(item, SheetValue::Phrase(_) | SheetValue::List(_)) {
                     return Err(Placed(
-                        "a list holds numbers, percents, true or false, and chips".to_owned(),
+                        "a list item must be a number, a percent, true or false, or a chip".to_owned(),
                         item_span,
                     ));
                 }
@@ -1141,7 +1139,7 @@ fn card_of(card: Spanned<CardTable>) -> Result<SheetCard, Placed> {
     if card.line.len() > MAX_LINES_PER_CARD {
         return Err(Placed(
             format!(
-                "card '{}' holds {} lines, and a card holds at most {MAX_LINES_PER_CARD}",
+                "card '{}' holds {} lines, expected at most {MAX_LINES_PER_CARD}",
                 card.id,
                 card.line.len()
             ),
@@ -1154,7 +1152,7 @@ fn card_of(card: Spanned<CardTable>) -> Result<SheetCard, Placed> {
         let span = table.span();
         let mut table = table.into_inner();
         let Some(kind) = table.kind.take() else {
-            return Err(Placed(format!("line {line_id} names no `kind`"), span));
+            return Err(Placed(format!("line {line_id} has no `kind`"), span));
         };
         sheet_card.line_tables.insert(line_id, table.into_line(&kind)?);
     }
@@ -1289,13 +1287,13 @@ impl ValueTable {
     fn into_line(self, kind: &Spanned<String>) -> Result<SheetLine, Placed> {
         if let Some((key, key_span)) = self.chip_key() {
             return Err(Placed(
-                format!("`{key}` is a key of a chip, and a line or phrase cannot hold it"),
+                format!("a line or phrase cannot hold the chip key `{key}`"),
                 key_span,
             ));
         }
         if let Some(percent) = &self.percent {
             return Err(Placed(
-                "`percent` is the key of a percent, and a line or phrase cannot hold it".to_owned(),
+                "a line or phrase cannot hold the percent key `percent`".to_owned(),
                 percent.span(),
             ));
         }
@@ -1374,7 +1372,7 @@ impl ValueTable {
             .or_else(|| self.line_key());
         if let Some((key, key_span)) = other {
             return Err(Placed(
-                format!("a percent holds `percent` alone, and this one also holds `{key}`"),
+                format!("a percent cannot hold `{key}` in addition to `percent`"),
                 key_span,
             ));
         }
@@ -1385,7 +1383,7 @@ impl ValueTable {
     fn into_chip(self, span: Range<usize>) -> Result<SheetChip, Placed> {
         if let Some((key, key_span)) = self.line_key() {
             return Err(Placed(
-                format!("`{key}` is a key of a line or phrase, and a phrase names its `kind`"),
+                format!("`{key}` is a line or phrase key, but the table has no `kind`"),
                 key_span,
             ));
         }
@@ -1393,7 +1391,7 @@ impl ValueTable {
             for (key, value) in [("part", &self.part), ("property", &self.property)] {
                 if let Some(value) = value {
                     return Err(Placed(
-                        format!("`{key}` belongs to a chip that names a `result`"),
+                        format!("`{key}` requires `result` in the same chip"),
                         value.span(),
                     ));
                 }
@@ -1412,14 +1410,13 @@ impl ValueTable {
         .filter_map(|(key, value)| value.map(|value| (key, value)));
         let Some((key, name)) = names.next() else {
             return Err(Placed(
-                "a chip names one thing by `param`, `result`, `my`, `my_new`, `their`, `relation` or `state`"
-                    .to_owned(),
+                "a chip must have one of `param`, `result`, `my`, `my_new`, `their`, `relation` or `state`".to_owned(),
                 span,
             ));
         };
         if let Some((second, second_name)) = names.next() {
             return Err(Placed(
-                format!("a chip names one thing, and this one holds both `{key}` and `{second}`"),
+                format!("a chip can name only one thing, got both `{key}` and `{second}`"),
                 second_name.span(),
             ));
         }

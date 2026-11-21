@@ -178,7 +178,10 @@ fn a_binding_in_a_module_is_refused() {
         .generate_in(&scratch.out_dir())
     {
         Err(error @ ShaderBuildError::ModuleBinding { line: 4, .. }) => {
-            assert!(error.to_string().contains("belong in the entry shader"), "{error}");
+            assert!(
+                error.to_string().contains("Move the binding to the entry shader"),
+                "{error}"
+            );
         }
         other => panic!("expected a refused module binding, got {other:?}"),
     }

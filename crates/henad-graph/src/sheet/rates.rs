@@ -138,8 +138,8 @@ impl LargestCount {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RateNote {
-    /// Text of the note, such as "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. A rate is
-    /// not a chance. Henad turns it into one as 1 − e^(−0.1 × 1 day)."
+    /// Text of the note, such as "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. The rate
+    /// is converted to a chance by 1 − e^(−0.1 × 1 day)."
     pub text: String,
     /// Mean time a cell stays in the state it leaves, the note's description, for a line that leaves a named state at a
     /// fixed rate with no "for each", the rate its whole condition and no block around it.

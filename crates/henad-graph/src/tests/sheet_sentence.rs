@@ -77,14 +77,14 @@ fn every_wording_table_entry_equals_the_final_words() {
         ("1 line", sentence::line_count(1)),
         ("3 lines", sentence::line_count(3)),
         (
-            "Everyone reads the world as it was at the start of the tick. All changes land together at the end of \
-             it. Whatever no line changes stays as it was.",
+            "Everyone reads the world as it was at the start of the tick. All changes are applied together at the end \
+             of the tick. A property that no line changes is left unchanged.",
             fixed(sentence::LAW),
         ),
         ("Help: lines", fixed(sentence::HELP_LINES_NAME)),
         ("+ Repeat...", fixed(sentence::REPEAT_BUTTON)),
         (
-            "These add a line at the end of the card.",
+            "New lines will be added at the end of the card.",
             fixed(sentence::ADD_AT_END_NOTE),
         ),
         ("+ Add inside line 4", sentence::add_inside_label(4)),
@@ -106,7 +106,10 @@ fn every_wording_table_entry_equals_the_final_words() {
             "Delete Clear line 1",
             sentence::delete_line(&sentence::line_word(Some("Clear"), 1)),
         ),
-        ("Delete. Lines inside stay.", fixed(sentence::DELETE_WHEN_TOOLTIP)),
+        (
+            "Delete. Lines inside will be kept.",
+            fixed(sentence::DELETE_WHEN_TOOLTIP),
+        ),
         ("Draw new numbers", fixed(sentence::DRAW_NEW_NUMBERS)),
         (
             "Another result is already called Alive neighbours.",
@@ -135,7 +138,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         // Conditions and "Choose when".
         ("always", fixed(sentence::ALWAYS)),
         ("Line 2: choose when, now always", sentence::always_name("Line 2")),
-        ("No condition. Choose to add one.", fixed(sentence::ALWAYS_TOOLTIP)),
+        ("No condition. Press to add one.", fixed(sentence::ALWAYS_TOOLTIP)),
         ("when", fixed(sentence::condition_head(ConditionKind::When, false))),
         (
             "with chance",
@@ -161,7 +164,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         ("Choose when", fixed(sentence::CHOOSE_WHEN)),
         (
-            "Line 4 already gives a condition. Choose always to use only that one.",
+            "Line 4 already has a condition. Choose always to use only that condition.",
             sentence::when_lead(4),
         ),
         ("From lines above", fixed(sentence::FROM_LINES_ABOVE)),
@@ -191,7 +194,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         ("When at rate ... per ...", ConditionItem::AtRate.label(true)),
         ("always", ConditionItem::Always.label(false)),
         (
-            "The same as a value. The line offers is not, is more than and others.",
+            "The same as a value. Choose is not, is more than or another comparison on the line.",
             fixed(ConditionItem::Is.description().unwrap_or_default()),
         ),
         (
@@ -270,12 +273,12 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         ("Remove from list", fixed(sentence::REMOVE_FROM_LIST)),
         (
-            "The rate grows with what you choose. With for each infected neighbour, a cell with 2 infected \
-             neighbours gets twice the rate.",
+            "The rate grows with the chosen count. With for each infected neighbour, a cell with 2 infected neighbours \
+             gets twice the rate.",
             fixed(sentence::for_each_lead(DrawKind::Rate)),
         ),
         (
-            "Each one counted is a separate try with this chance.",
+            "Each one counted is an independent trial with this chance.",
             fixed(sentence::for_each_lead(DrawKind::Chance)),
         ),
         ("Remove for each", fixed(sentence::REMOVE_FOR_EACH)),
@@ -301,10 +304,10 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::NO_STATES),
         ),
         (
-            "A chance is from 0 to 1, or from 0% to 100%.",
+            "The chance must be from 0 to 1, or from 0% to 100%.",
             fixed(sentence::CHANCE_OUT_OF_RANGE),
         ),
-        ("A rate cannot be below 0.", fixed(sentence::RATE_BELOW_ZERO)),
+        ("The rate must be at least 0.", fixed(sentence::RATE_BELOW_ZERO)),
         ("Type one number, such as 3 or 0.25.", fixed(sentence::TYPE_ONE_NUMBER)),
         (
             "For a list such as 2, 3, choose is one of the numbers or is none of the numbers first.",
@@ -410,11 +413,11 @@ fn every_wording_table_entry_equals_the_final_words() {
             sentence::result_below_tooltip("Alive neighbours"),
         ),
         (
-            "Infection happens belongs to the lines inside a When this line is not in. Choose another value.",
+            "The result Infection happens is only for lines inside its When. Choose another value.",
             sentence::result_inside_tooltip("Infection happens"),
         ),
         (
-            "For one side only, a plain comparison reads better.",
+            "Only one side is set. Use a plain comparison instead.",
             fixed(sentence::ONE_SIDED_RANGE),
         ),
         (
@@ -488,7 +491,7 @@ fn every_wording_table_entry_equals_the_final_words() {
             sentence::remove_when_name("Line 2"),
         ),
         (
-            "Only line 5 is inside. Its own when can hold this condition.",
+            "Only line 5 is inside. Move this condition into that line's own when.",
             sentence::only_one_inside_note(5),
         ),
         ("Move it into line 5", sentence::move_into_label(5)),
@@ -499,7 +502,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         ("Only when line 4 holds.", sentence::only_when_note(4, None)),
         (
-            "Worked out for every cell, whatever line 4 says. Only lines inside line 4 can use it.",
+            "Worked out for every cell, whether or not line 4 holds. Only lines inside line 4 can use it.",
             sentence::worked_out_everywhere_note(4, "cell"),
         ),
         ("Nothing inside yet.", fixed(sentence::NOTHING_INSIDE)),
@@ -517,8 +520,8 @@ fn every_wording_table_entry_equals_the_final_words() {
             sentence::otherwise_tooltip(&[2], "Cover", Some("Tree"), "cell", OtherwiseRepeat::Apart),
         ),
         (
-            "Lines 2 and 5 also change Cover for a cell that is Tree. When more than one applies, the highest line \
-             wins.",
+            "Lines 2 and 5 also change Cover for a cell that is Tree. When more than one applies, the line nearest the \
+             top of the card wins.",
             sentence::otherwise_tooltip(&[2, 5], "Cover", Some("Tree"), "cell", OtherwiseRepeat::Apart),
         ),
         (
@@ -526,24 +529,24 @@ fn every_wording_table_entry_equals_the_final_words() {
             sentence::otherwise_tooltip(&[2], "Status", Some("S"), "agent", OtherwiseRepeat::Own),
         ),
         (
-            "Lines 2 and 5 also change Status for an agent that is S. When more than one applies at the same time, \
-             the highest line wins.",
+            "Lines 2 and 5 also change Status for an agent that is S. When more than one applies at the same time, the \
+             line nearest the top of the card wins.",
             sentence::otherwise_tooltip(&[2, 5], "Status", Some("S"), "agent", OtherwiseRepeat::Own),
         ),
         (
-            "Line 6 now starts with otherwise. Lines 2 and 5 also change Cover for a cell that is Tree. When more \
-             than one applies, the highest line wins.",
+            "Line 6 now starts with otherwise. Lines 2 and 5 also change Cover for a cell that is Tree. When more than \
+             one applies, the line nearest the top of the card wins.",
             sentence::otherwise_notice("Line 6", &[2, 5], "Cover", Some("Tree"), "cell", OtherwiseRepeat::Apart),
         ),
         (
-            "Lines 2 and 3 also change Status for an agent that is S. When more than one applies, the highest line \
-             wins. Between lines in one Repeat, the first time round that one applies decides.",
+            "Lines 2 and 3 also change Status for an agent that is S. When more than one applies, the line nearest the \
+             top of the card wins. Between lines in one Repeat, the first time round that one applies decides.",
             sentence::otherwise_tooltip(&[2, 3], "Status", Some("S"), "agent", OtherwiseRepeat::Higher),
         ),
         (
-            "Line 6 now starts with otherwise. Lines 2 and 3 also change Status for an agent that is S. When more \
-             than one applies, the highest line wins. Between lines in one Repeat, the first time round that one \
-             applies decides.",
+            "Line 6 now starts with otherwise. Lines 2 and 3 also change Status for an agent that is S. When more than \
+             one applies, the line nearest the top of the card wins. Between lines in one Repeat, the first time round \
+             that one applies decides.",
             sentence::otherwise_notice("Line 6", &[2, 3], "Status", Some("S"), "agent", OtherwiseRepeat::Higher),
         ),
         // Rates and chances.
@@ -597,12 +600,12 @@ fn every_wording_table_entry_equals_the_final_words() {
         // Errors on a rate in a button's card or inside a Repeat, a second agent kind, lines this version cannot run
         // and the ground.
         (
-            "A button's card has no duration, so it takes chances, not rates.",
+            "A button's card has no duration. Use a chance instead of a rate.",
             fixed(sentence::RATE_IN_BUTTON_CARD),
         ),
-        ("a rate cannot stand inside a Repeat", fixed(sentence::RATE_IN_REPEAT)),
+        ("a rate cannot be used inside a Repeat", fixed(sentence::RATE_IN_REPEAT)),
         (
-            "One kind of agent per model in this version.",
+            "Only one kind of agent per model is supported in this version.",
             fixed(sentence::ONE_AGENT_KIND),
         ),
         ("Repeat is not supported yet.", fixed(sentence::NOT_YET_REPEAT)),
@@ -631,7 +634,7 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::SET_IN_REPEAT),
         ),
         (
-            "A look around, a count or a pick of a cell cannot sit inside a Repeat.",
+            "A look around, a count or a pick of a cell cannot be used inside a Repeat.",
             fixed(sentence::LOOK_IN_REPEAT),
         ),
         (
@@ -639,19 +642,19 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::ARROW_COMPARED_WITH_NUMBER),
         ),
         (
-            "Line 3 sets Velocity. A card that sets a property cannot also steer it.",
+            "Line 3 sets Velocity. This card cannot also steer it.",
             sentence::set_already("Line 3", "Velocity"),
         ),
         (
-            "Line 3 steers Velocity. A card that steers a property cannot also set it.",
+            "Line 3 steers Velocity. This card cannot also set it.",
             sentence::steered_already("Line 3", "Velocity"),
         ),
         (
-            "Line 2 moves by an arrow. A card that moves by an arrow cannot also move to a place.",
+            "Line 2 moves by an arrow. This card cannot also move to a place.",
             sentence::moved_by_already("Line 2"),
         ),
         (
-            "Line 2 moves to a place. A card that moves to a place cannot also move by an arrow.",
+            "Line 2 moves to a place. This card cannot also move by an arrow.",
             sentence::moved_to_already("Line 2"),
         ),
         ("line 3, Flockmates", sentence::look_name(&[(3, Some("Flockmates"))])),
@@ -665,13 +668,13 @@ fn every_wording_table_entry_equals_the_final_words() {
             sentence::look_costs_too_much("line 1, Flockmates", "birds", 1_000_000),
         ),
         (
-            "line 3, Flockmates: looked at more than 65536 agents around one agent, and the run stops. A larger world \
-             or a shorter distance looks at fewer",
+            "line 3, Flockmates: looked at more than 65536 agents around one agent, and the run stops. Use a larger \
+             world or a shorter distance to look at fewer agents",
             sentence::look_met_too_many("line 3, Flockmates", 65_536),
         ),
         (
-            "line 3, Flockmates: would search more than 65536 cells around one agent, and the run stops. A shorter \
-             distance searches fewer",
+            "line 3, Flockmates: would search more than 65536 cells around one agent, and the run stops. Use a \
+             shorter distance to search fewer cells",
             sentence::look_searches_too_far("line 3, Flockmates", 65_536),
         ),
         (
@@ -696,35 +699,36 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         ("or", fixed(sentence::COMPETING_WORD)),
         (
-            "Lines 3 and 4 compete. A cell leaves Infected at the sum of their rates, and each line takes its share.",
+            "Lines 3 and 4 compete. A cell leaves Infected at the sum of their rates, split between the lines in \
+             proportion to each rate.",
             sentence::competing_tooltip(&[3, 4], "Infected", "cell"),
         ),
         (
-            "This tick is long for this rate. A shorter tick follows the rate more closely.",
+            "This tick is long for this rate. Use a shorter tick for a more accurate result.",
             fixed(sentence::LONG_TICK),
         ),
-        ("Change to a rate", fixed(sentence::CHANGE_TO_RATE)),
-        ("Change to a chance", fixed(sentence::CHANGE_TO_CHANCE)),
+        ("Convert to a rate", fixed(sentence::CHANGE_TO_RATE)),
+        ("Convert to a chance", fixed(sentence::CHANGE_TO_CHANCE)),
         (
-            "Lines 3 and 5 use chances per tick. They do not follow the time scale.",
+            "Lines 3 and 5 use chances per tick. These chances do not change with the tick length.",
             sentence::chances_per_tick_note(&[3, 5]),
         ),
         // The Lines help.
         (
             "Every cell follows these lines each tick, from the top. A line either works out a result, which lines \
-             below it can use, or changes one of my properties. Everyone reads the world as it was at the start of \
-             the tick, and all changes land together at the end of it. Whatever no line changes stays as it was. \
-             When two changes to one property both apply, the higher line wins, and the lower one shows \
-             \"otherwise\".",
+             below it can use, or changes one of my properties. Everyone reads the world as it was at the start of the \
+             tick. All changes are applied together at the end of the tick. A property that no line changes is left \
+             unchanged. When two changes to one property both apply, the line nearest the top of the card wins, and \
+             the lower line shows \"otherwise\".",
             fixed(sentence::LINES_HELP),
         ),
         (
             "Every agent of this kind follows these lines each tick, from the top. A line either works out a result, \
              which lines below it can use, or changes one of my properties. Everyone reads the world as it was at the \
-             start of the tick, and all changes land together at the end of it. Whatever no line changes stays as it \
-             was. When two changes to one property both apply, the higher line wins, and the lower one shows \
-             \"otherwise\". Inside a Repeat, the first time a change applies decides, so a lower line that applies \
-             earlier wins.",
+             start of the tick. All changes are applied together at the end of the tick. A property that no line \
+             changes is left unchanged. When two changes to one property both apply, the line nearest the top of the \
+             card wins, and the lower line shows \"otherwise\". Inside a Repeat, the first time a change applies \
+             decides, so a lower line that applies earlier wins.",
             fixed(sentence::LINES_HELP_AGENTS),
         ),
         (
@@ -879,8 +883,8 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
     let susceptible = sentence::become_subject("cell", Some("Susceptible"), Some("Infected"));
     vec![
         (
-            "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. A rate is not a chance. Henad \
-             turns it into one as 1 − e^(−0.1 × 1 day).",
+            "Each tick (1 day), an Infected cell becomes Recovered with chance 0.0952. The rate is converted to a \
+             chance by 1 − e^(−0.1 × 1 day).",
             sentence::rate_note(
                 "1 day",
                 &sentence::become_subject("cell", Some("Infected"), Some("Recovered")),
@@ -890,8 +894,8 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
         ),
         (
             "Each tick (1 day), a Susceptible cell becomes Infected with chance 0.259 with 1 infected neighbour, and \
-             0.451 with 2. A rate is not a chance. Henad turns it into one as 1 − e^(−0.3 × n × 1 day), where n is \
-             Infected neighbours.",
+             0.451 with 2. The rate is converted to a chance by 1 − e^(−0.3 × n × 1 day), where n is Infected \
+             neighbours.",
             sentence::rate_for_each_note("1 day", &susceptible, "Infected neighbours", "0.259", "0.451", "0.3"),
         ),
         (
@@ -900,8 +904,8 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
         ),
         (
             "Each tick (1 day), a Susceptible cell becomes Infected with chance 0.259 with 1 infected neighbour, and \
-             0.451 with 2. A rate is not a chance. Henad turns it into one as 1 − e^(−r × 1 day), where r is 0.3 \
-             times Infected neighbours.",
+             0.451 with 2. The rate is converted to a chance by 1 − e^(−r × 1 day), where r is 0.3 times Infected \
+             neighbours.",
             sentence::worked_out_rate_note(
                 "1 day",
                 &susceptible,
@@ -913,17 +917,17 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
         ),
         (
             "Each tick (1 day), a Susceptible cell becomes Infected with a chance that grows with r, where r is \
-             Infected neighbours plus 0.3. A rate is not a chance. Henad turns it into one as 1 − e^(−r × 1 day).",
+             Infected neighbours plus 0.3. The rate is converted to a chance by 1 − e^(−r × 1 day).",
             sentence::growing_rate_note("1 day", &susceptible, "Infected neighbours plus 0.3", None),
         ),
         (
             "Each tick (1 day), a Susceptible cell becomes Infected with a chance that grows with r and n, where r is \
-             ... and n is .... A rate is not a chance. Henad turns it into one as 1 − e^(−r × n × 1 day).",
+             ... and n is .... The rate is converted to a chance by 1 − e^(−r × n × 1 day).",
             sentence::growing_rate_note("1 day", &susceptible, "...", Some("...")),
         ),
         (
-            "Each tick, a cell becomes B with chance 0.2 with 1 B neighbour, and 0.36 with 2. Each one counted is a \
-             separate try: 1 − (1 − 0.2)^n, where n is B neighbours.",
+            "Each tick, a cell becomes B with chance 0.2 with 1 B neighbour, and 0.36 with 2. Each one counted is an \
+             independent trial: 1 − (1 − 0.2)^n, where n is B neighbours.",
             sentence::chance_for_each_note(
                 None,
                 &sentence::become_subject("cell", None, Some("B")),
@@ -934,7 +938,7 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
         ),
         (
             "Each tick, a cell becomes B with a chance that grows with n, where p is ... and n is .... Each one \
-             counted is a separate try: 1 − (1 − p)^n.",
+             counted is an independent trial: 1 − (1 − p)^n.",
             sentence::growing_chance_note(None, &sentence::become_subject("cell", None, Some("B")), "...", "..."),
         ),
         // The restart notice, the Integer kind, and the notes of competing rates, the long tick and the mean stay.
@@ -944,12 +948,12 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
         ),
         ("Integer", fixed(sentence::INTEGER_KIND)),
         (
-            "A number with no fraction, such as 3 or -2.",
+            "A number with no fraction, such as 3 or −2.",
             fixed(sentence::INTEGER_KIND_TOOLTIP),
         ),
         (
             "Each tick (1 day), an Infected cell leaves Infected with chance 0.0952: Recovered 0.0476, Dead 0.0476. \
-             A rate is not a chance. Henad turns it into one as 1 − e^(−(0.05 + 0.05) × 1 day).",
+             The rate is converted to a chance by 1 − e^(−(0.05 + 0.05) × 1 day).",
             sentence::competing_note(
                 "1 day",
                 "Infected",
@@ -1059,11 +1063,11 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
         ("States", fixed(sentence::STATES_KIND)),
         ("Number", fixed(sentence::NUMBER_KIND)),
         (
-            "One of a few named states, such as Dead and Alive. Give it at least two.",
+            "One of a few named states, such as Dead and Alive. Give it at least two states.",
             fixed(sentence::STATES_KIND_DESCRIPTION),
         ),
         (
-            "Holds a number, such as an age or an amount of food.",
+            "A number, such as an age or an amount of food.",
             fixed(sentence::NUMBER_KIND_DESCRIPTION),
         ),
         ("+ Add state", fixed(sentence::ADD_STATE)),
@@ -1128,7 +1132,7 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
         ("Type a chance such as 0.3 or 30%.", fixed(sentence::TYPE_A_CHANCE)),
         ("Type one number, such as 3 or 0.25.", fixed(sentence::TYPE_ONE_NUMBER)),
         (
-            "A chance is from 0 to 1, or from 0% to 100%.",
+            "The chance must be from 0 to 1, or from 0% to 100%.",
             fixed(sentence::CHANCE_OUT_OF_RANGE),
         ),
         ("Use a parameter", fixed(sentence::USE_A_PARAMETER)),
@@ -1140,7 +1144,10 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
         ("New parameter...", fixed(sentence::NEW_PARAMETER)),
         ("Choose a chance", Blank::Chance.picker_title()),
         ("Choose a number", Blank::Number.picker_title()),
-        ("Start again to see it", fixed(sentence::START_AGAIN_TO_SEE)),
+        (
+            "Press Start again to see the change.",
+            fixed(sentence::START_AGAIN_TO_SEE),
+        ),
         // Changed by and the sheet of a blank model.
         ("lines 2, 3", sentence::changed_by(&[2, 3])),
         ("line 2", sentence::changed_by(&[2])),
@@ -1167,7 +1174,10 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
         ("Infection rate max", sentence::parameter_max_name("Infection rate")),
         ("Infection rate unit", sentence::parameter_unit_name("Infection rate")),
         ("none", fixed(sentence::UNIT_FIELD_PLACEHOLDER)),
-        ("A parameter needs a name.", fixed(sentence::PARAMETER_NAME_MISSING)),
+        (
+            "Type a name for the parameter.",
+            fixed(sentence::PARAMETER_NAME_MISSING),
+        ),
         (
             "A parameter called Infection rate already exists.",
             sentence::parameter_name_taken("Infection rate"),
@@ -1200,7 +1210,7 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
         ("Remove measure Alive", sentence::remove_measure_name("Alive")),
         ("Choose a property and a state.", fixed(sentence::MEASURE_NEEDS_STATE)),
         (
-            "Choose a number property.",
+            "Choose a Number property.",
             fixed(sentence::MEASURE_NEEDS_NUMBER_PROPERTY),
         ),
         (
@@ -1266,25 +1276,25 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
             "Spread of a disease through a town. Look for waves of infection.",
         ),
         (
-            "The grid the cells live on: its size, what happens at its edges, and how much time one tick stands for. \
-             A tick is one step of time, and every cell follows the card once per tick. Leave one tick as one step \
-             (no unit) when time has no unit, as in Game of Life. With Wrap around, a cell on the left edge has \
-             neighbours on the right edge.",
+            "The grid the cells live on: its size, what happens at its edges, and the length of one tick. A tick is \
+             one step of time, and every cell follows the card once per tick. Leave one tick as one step (no unit) \
+             when time has no unit, as in Game of Life. With Wrap around, a cell on the left edge has neighbours on \
+             the right edge.",
             "One tick is 1 day",
         ),
         (
             "A property is something every cell has. A States property is one of a few named states, such as Dead or \
-             Alive. A Number property holds a number. Starts as says what every cell holds when the run starts.",
+             Alive. A Number property holds a number. Under Starts as, set what every cell has when the run starts.",
             "Status: States Dead, Alive. Starts as Alive with chance 0.3, otherwise Dead",
         ),
         (
-            "A parameter is a named number with a slider. Lines can use it. The value here is the one the model \
-             keeps. The slider beside the world tries other values in the run without changing the model.",
+            "A parameter is a named number with a slider. Lines can use it. The value here is the one the model keeps. \
+             Move the slider beside the world to try other values in the run without changing the model.",
             "Infection rate = 0.3 per day",
         ),
         (
-            "A measure is a number worked out from all the cells every tick, drawn on the plot under the world. Tick \
-             Plot beside a state to count the cells in it.",
+            "A measure is a number worked out from all the cells every tick, drawn on the plot under the world. Turn \
+             on Plot beside a state to count the cells in it.",
             "Number of cells whose Status is Alive",
         ),
         (
@@ -1341,13 +1351,13 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
             "Default, Min and Max must be numbers.",
             fixed(sentence::LIMITS_NOT_NUMBERS),
         ),
-        ("Min must be below Max.", fixed(sentence::MIN_NOT_BELOW_MAX)),
+        ("Min must be less than Max.", fixed(sentence::MIN_NOT_BELOW_MAX)),
         (
             "Default must be between Min and Max.",
             fixed(sentence::DEFAULT_OUTSIDE_LIMITS),
         ),
         (
-            "A chance stays between 0 and 1. Set Min and Max inside that range.",
+            "For a chance, Min and Max must be between 0 and 1.",
             fixed(sentence::CHANCE_LIMITS_OUTSIDE),
         ),
         ("Create parameter", fixed(sentence::CREATE_PARAMETER)),
@@ -1380,7 +1390,7 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
         ),
         ("Make it the value the model keeps", fixed(sentence::KEEP_TOOLTIP)),
         (
-            "Tick Plot beside a state under Measures to plot the number of cells in it.",
+            "Turn on Plot beside a state under Measures to plot the number of cells in it.",
             fixed(sentence::PLOT_EMPTY),
         ),
         (
@@ -1413,13 +1423,13 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
     ]);
     let [first, second] = sentence::convert_text("Game of Life");
     entries.push((
-        "Game of Life will be copied to a new model, Game of Life (expert), as a node graph.\nGame of Life stays as it \
-         is.",
+        "Game of Life will be copied to a new model, Game of Life (expert), as a node graph.\nGame of Life will not be \
+         changed.",
         first,
     ));
     entries.push((
-        "In the node graph you can edit every node Henad runs.\nThe copy has no sheet or cards, so lines, fire counts \
-         and \"otherwise\" will not appear in it.\nChanges to the copy cannot be turned back into lines.",
+        "Every node Henad runs can be edited in the node graph.\nThe copy has no sheet or cards, so lines, fire counts \
+         and \"otherwise\" will not appear in it.\nChanges to the copy cannot be converted back to lines.",
         second,
     ));
     entries
@@ -1983,10 +1993,7 @@ fn a_typed_number_reads_as_its_known_answers() {
         sentence::world_side_out_of_range(16384),
         "Type a size from 1 to 16384 cells."
     );
-    assert_eq!(
-        sentence::number_not_kept(f64::INFINITY),
-        "that number is too large to keep"
-    );
+    assert_eq!(sentence::number_not_kept(f64::INFINITY), "that number is too large");
     assert_eq!(sentence::number_not_kept(f64::NAN), "that number cannot be worked out");
 }
 
@@ -2209,16 +2216,16 @@ fn a_comparison_of_a_copy_reads_in_full_sentences() {
     );
     assert_eq!(
         sentence::runs_differ("Game of Life", "Game of Life (expert)", 1, "Alive", "366946", "359603"),
-        "Game of Life (expert) first differs from Game of Life at tick 1: Alive is 366946 against 359603."
+        "Game of Life (expert) first differs from Game of Life at tick 1: Alive is 366946 instead of 359603."
     );
     assert_eq!(
         sentence::runs_share_no_measure("Game of Life", "Game of Life (expert)"),
-        "Game of Life (expert) and Game of Life share no measure to compare."
+        "Game of Life (expert) and Game of Life have no measures in common."
     );
     assert_eq!(
         sentence::runs_do_not_replay("Boids", "Boids (expert)"),
-        "Boids does not replay exactly. Two runs at one seed can differ, so compare Boids (expert) with Boids in the \
-         plot."
+        "Boids does not replay exactly. Two runs with the same seed can differ, so compare Boids (expert) with Boids \
+         in the plot."
     );
     assert_eq!(sentence::compare_failed("no adapter"), "Comparison failed: no adapter");
     assert_eq!(sentence::compare_series("Alive", "Game of Life"), "Alive, Game of Life");

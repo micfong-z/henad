@@ -562,7 +562,7 @@ fn a_fault_in_the_apply_window_is_shown_in_the_editor() {
         // A fault the device reports after the build reaches the sink, as on the web, and `logic` reports it.
         app.render_ctx
             .faults
-            .set_once(Fault::refused("running on the GPU", message));
+            .set_once(Fault::refused("running the simulation", message));
         let fault = app.render_ctx.faults.take().expect("the fault is in the sink");
         app.report_fault(fault);
     };
@@ -582,7 +582,7 @@ fn a_fault_in_the_apply_window_is_shown_in_the_editor() {
     assert_eq!(app.loaded_id(), Some("life_rule"));
     app.focus_request = None;
     // A lost device is not the code's fault, and no edit of the text fixes it.
-    app.report_fault(Fault::device_lost("running on the GPU"));
+    app.report_fault(Fault::device_lost("running the simulation"));
     assert!(app.fault.is_some(), "a lost device went to the Editor");
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     assert_eq!(app.focus_request, None);

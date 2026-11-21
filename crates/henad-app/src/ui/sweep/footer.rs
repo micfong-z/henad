@@ -115,7 +115,7 @@ impl BuilderFooter<'_> {
         }
         let Some(counts) = self.summary.counts else {
             return StatusLine {
-                text: "Runs not counted yet".to_owned(),
+                text: "Run count unknown".to_owned(),
                 tone: LineTone::Normal,
                 tooltip: None,
             };

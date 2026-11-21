@@ -66,7 +66,7 @@ pub(crate) fn print_lowered(path: &Path) -> Result<u8> {
     let file = read_model_file(path)?;
     let graph = file.lowered_graph().ok_or_else(|| {
         anyhow!(
-            "model file '{}' holds a grid rule. A grid rule builds as no graph.",
+            "model file '{}' holds a grid rule. A grid rule has no graph to print",
             path.display()
         )
     })?;

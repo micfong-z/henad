@@ -145,11 +145,11 @@ fn a_resolution_that_is_not_a_power_of_two_is_refused() {
 fn a_resolution_needs_a_sum_and_a_sum_needs_a_resolution() {
     let message = graph_refusal(&model("combine = \"max\"\nresolution = 0.25", 1.0, "{ f32 = 0.5 }")).message;
     assert!(
-        message.contains("the field 'f' has a `resolution`, and only a field with `combine = \"sum\"` takes one"),
+        message.contains("the field 'f' cannot have a `resolution` without `combine = \"sum\"`"),
         "{message}"
     );
     let message = graph_refusal(&model("resolution = 0.25", 1.0, "{ f32 = 0.5 }")).message;
-    assert!(message.contains("only a field with `combine = \"sum\"`"), "{message}");
+    assert!(message.contains("without `combine = \"sum\"`"), "{message}");
     let message = graph_refusal(&model("combine = \"sum\"", 1.0, "{ f32 = 0.5 }")).message;
     assert!(
         message.contains("the field 'f' adds up its deposits, and needs a `resolution`"),

@@ -773,7 +773,7 @@ impl GpuSimState for GpuAgentEngine {
         let Some(words) = counters.read_blocking(&self.device, &self.queue) else {
             self.faults.set_once(Fault::refused(
                 STEPPING,
-                format!("{}: the GPU did not read the counters back", self.spec.id),
+                format!("{}: GPU counter readback failed", self.spec.id),
             ));
             return;
         };

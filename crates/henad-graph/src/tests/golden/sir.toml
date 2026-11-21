@@ -6,7 +6,7 @@ kind = "sheet"
 version = 1
 id = "sir"
 name = "SIR epidemic"
-purpose = "A spatial SIR epidemic. Pattern to look for: a travelling wave of infection that leaves recovered cells behind it, and an epidemic curve that rises and falls."
+purpose = "A spatial SIR epidemic. Look for a travelling wave of infection that leaves recovered cells behind it, and an epidemic curve that rises and falls."
 next_line = 5
 
 [world]

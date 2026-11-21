@@ -23,11 +23,11 @@ pub fn expert_copy_name(name: &str) -> String {
 pub fn convert_text(name: &str) -> [String; 2] {
     [
         format!(
-            "{name} will be copied to a new model, {}, as a node graph.\n{name} stays as it is.",
+            "{name} will be copied to a new model, {}, as a node graph.\n{name} will not be changed.",
             expert_copy_name(name)
         ),
-        "In the node graph you can edit every node Henad runs.\nThe copy has no sheet or cards, so lines, fire counts \
-         and \"otherwise\" will not appear in it.\nChanges to the copy cannot be turned back into lines."
+        "Every node Henad runs can be edited in the node graph.\nThe copy has no sheet or cards, so lines, fire counts \
+         and \"otherwise\" will not appear in it.\nChanges to the copy cannot be converted back to lines."
             .to_owned(),
     ]
 }
@@ -151,7 +151,7 @@ pub const SHOW_CHANGES: &str = "Show changes";
 pub const CHANGES_HEADING: &str = "Changes since conversion";
 
 /// Group of the changes list that holds the nodes in no frame. The expert added these nodes after conversion.
-pub const IN_NO_FRAME: &str = "In no frame";
+pub const IN_NO_FRAME: &str = "Not in a frame";
 
 /// Badge of a node the expert added to a copy, and the list's word for it.
 pub const NODE_ADDED: &str = "Added";
@@ -179,7 +179,7 @@ pub fn runs_match(name: &str, copy: &str, ticks: u64) -> String {
 /// Returns the line shown once a copy `copy` first differed from its source `name`, at `tick` in the measure
 /// `measure`, where the copy read `copy_value` and the source `value`.
 pub fn runs_differ(name: &str, copy: &str, tick: u64, measure: &str, copy_value: &str, value: &str) -> String {
-    format!("{copy} first differs from {name} at tick {tick}: {measure} is {copy_value} against {value}.")
+    format!("{copy} first differs from {name} at tick {tick}: {measure} is {copy_value} instead of {value}.")
 }
 
 /// Returns the line shown once the runs of a copy `copy` and its source `name` differ, when either model does not
@@ -188,13 +188,14 @@ pub fn runs_differ(name: &str, copy: &str, tick: u64, measure: &str, copy_value:
 /// Two runs of such a model at one seed can differ, so no tick of the difference is named.
 pub fn runs_do_not_replay(name: &str, copy: &str) -> String {
     format!(
-        "{name} does not replay exactly. Two runs at one seed can differ, so compare {copy} with {name} in the plot."
+        "{name} does not replay exactly. Two runs with the same seed can differ, so compare {copy} with {name} in the \
+         plot."
     )
 }
 
 /// Returns the line shown when a copy and its source share no measure to compare.
 pub fn runs_share_no_measure(name: &str, copy: &str) -> String {
-    format!("{copy} and {name} share no measure to compare.")
+    format!("{copy} and {name} have no measures in common.")
 }
 
 /// Returns the line shown when the runs of a comparison failed with `message`.
@@ -208,7 +209,7 @@ pub fn compare_series(measure: &str, name: &str) -> String {
 }
 
 /// Tooltip of Compare runs in a browser. A browser runs no sweep of a GPU model.
-pub const COMPARE_NEEDS_NATIVE: &str = "Compare runs is unavailable in a browser.";
+pub const COMPARE_NEEDS_NATIVE: &str = "Unavailable in a browser";
 
 /// Button that closes the comparison of a copy and its source.
 pub const CLOSE_COMPARISON: &str = "Close comparison";

@@ -50,7 +50,7 @@ pub(crate) fn run_single(
         && last > args.warmup + args.steps
     {
         eprintln!(
-            "note: --act at tick {last} is past the {} this run reaches, so it never fires",
+            "note: --act at tick {last} is after the last tick {} of this run, so the action will not run",
             args.warmup + args.steps
         );
     }
@@ -126,7 +126,7 @@ fn benchmark(setup: RunSetup, args: &Args, gpu_ctx: Option<&GpuContext>, adapter
                     args.global_warmup
                 );
                 if cfg!(debug_assertions) {
-                    eprintln!("!!! warning: debug build; use --release for benchmarking !!!");
+                    eprintln!("!!! warning: debug build. Use --release for benchmarking !!!");
                 }
             }
             // The number shows while the state builds and steps, and the time follows on the same line.
@@ -144,7 +144,7 @@ fn benchmark(setup: RunSetup, args: &Args, gpu_ctx: Option<&GpuContext>, adapter
                     eprintln!(
                         "  note: the population went from {population} to {after} during the timed steps. \
                      Updates per second are computed from the population after warmup. \
-                     A longer --warmup can reach a steady population first."
+                     Use a longer --warmup to reach a steady population first"
                     );
                 }
                 if args.json {
@@ -285,11 +285,14 @@ fn print_report(timings: &Timings, steps_per_rep: u64) -> Result<()> {
 fn export_final(setup: &RunSetup, args: &Args, path: &Path) -> Result<()> {
     let entry = setup.entry();
     if entry.gpu_needs().is_some() {
-        bail!("model '{}' is GPU-backed; this path is CPU-only", entry.id());
+        bail!(
+            "cannot export GPU model '{}': --export supports CPU models only",
+            entry.id()
+        );
     }
     let topology = entry.topology_hint();
     if !topology.grid && !topology.agents {
-        bail!("model exposes no CPU-side view to export");
+        bail!("model has no grid or agents to export");
     }
     let mut simulation = setup.build(None)?;
     simulation.run_to(args.warmup + args.steps)?;

@@ -57,8 +57,8 @@ pub(super) fn check(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> Costs {
     if !inlinable {
         checker.error(
             format!(
-                "the file holds {inlined} nodes after its function calls and expressions are inlined, and a file holds \
-                 at most {MAX_NODES_INLINED}"
+                "the file holds {inlined} nodes after its function calls and expressions are inlined, expected at \
+                 most {MAX_NODES_INLINED}"
             ),
             Some(checker.file.places().id.clone()),
         );
@@ -72,7 +72,7 @@ pub(super) fn check(checker: &mut Checker<'_>, views: &BodyViews<'_>) -> Costs {
 
 /// Returns the end of the message on a pass past [`MAX_PASS_COST`], shared with [`is_pass_cost`].
 fn pass_cost_limit_text() -> String {
-    format!(", and a pass costs at most {MAX_PASS_COST}")
+    format!(", expected at most {MAX_PASS_COST}")
 }
 
 /// Returns whether `message` is the message of rule V22 on a pass past [`MAX_PASS_COST`].

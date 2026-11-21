@@ -441,7 +441,7 @@ fn a_wrap_inside_a_radius_fold_is_refused() {
         bounds: None,
     });
     assert!(
-        matches!(&refused, Err(EditError::Invalid(message)) if message.contains("cannot sit in the region n25")),
+        matches!(&refused, Err(EditError::Invalid(message)) if message.contains("cannot be in the region n25")),
         "{refused:?}"
     );
     assert_eq!(builder.to_toml(), text, "a refused wrap changes nothing");

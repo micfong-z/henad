@@ -191,19 +191,19 @@ fn check_line_ids(checker: &mut Checker<'_>) {
             let place = Place::Line(index, line_id.clone());
             match line_number(line_id) {
                 None => checker.error(
-                    format!("'{line_id}' is no line id, which is l and a number from 1"),
+                    format!("invalid line id '{line_id}', expected l followed by a positive integer"),
                     &place,
                 ),
                 Some(number) if number >= u64::from(next_line) => {
                     checker.error(
-                        format!("line {line_id} is not below [sheet] next_line {next_line}"),
+                        format!("the number of line {line_id} must be less than [sheet] next_line {next_line}"),
                         &place,
                     );
                 }
                 Some(_) => {}
             }
             if !seen.insert(line_id) {
-                checker.error(format!("line {line_id} sits in two cards"), &place);
+                checker.error(format!("line {line_id} is in two cards"), &place);
             }
         }
     }
@@ -228,7 +228,7 @@ fn check_card(checker: &mut Checker<'_>, index: usize) {
     if !every_is_known {
         checker.error(
             format!(
-                "card '{}' is for '{}', which is no kind of thing with a card",
+                "card '{}' is for '{}', which is not a kind of thing with a card",
                 card.id, card.every
             ),
             &place,
@@ -247,9 +247,9 @@ fn check_card(checker: &mut Checker<'_>, index: usize) {
     for (id, line) in &card.line_tables {
         let line_place = Place::Line(index, id.clone());
         match listed.get(id.as_str()).copied().unwrap_or(0) {
-            0 => checker.error(format!("line {id} is listed in no lines list"), &line_place),
+            0 => checker.error(format!("line {id} is not listed in any lines list"), &line_place),
             1 if checker.relations[index].index(id).is_none() => checker.error(
-                format!("line {id} sits inside a block that no line of the card reaches"),
+                format!("line {id} is inside a block that no line of the card reaches"),
                 &line_place,
             ),
             1 => {}
@@ -323,14 +323,14 @@ fn check_line<'a>(
     };
     if line.kind == LineKind::Always {
         checker.error(
-            format!("line {}: always is a condition, and a line cannot be one", owner.id),
+            format!("line {}: always is a condition and cannot be a line kind", owner.id),
             &place,
         );
         return None;
     }
     if line.name.is_some() && !line.kind.works_out_result() {
         checker.error(
-            format!("line {}: a line that makes a change has no name", owner.id),
+            format!("line {}: a line that makes a change cannot have a name", owner.id),
             &place,
         );
     }
@@ -518,7 +518,7 @@ impl<'a> Checker<'a> {
             && expect != found
         {
             self.error(
-                format!("a slot wants {} and holds {}", expect.words(), found.words()),
+                format!("expected {} in a slot, got {}", expect.words(), found.words()),
                 &context.place,
             );
         }
@@ -529,13 +529,16 @@ impl<'a> Checker<'a> {
     fn phrase(&mut self, phrase: &SheetLine, context: &Context<'a>, state: &mut LineState) {
         if phrase.kind == LineKind::Always {
             if !context.condition {
-                self.error("always stands only in a condition", &context.place);
+                self.error("always can only be used in a condition", &context.place);
             }
             return;
         }
         if !phrase.kind.works_out_result() {
             self.error(
-                format!("a slot holds a {} line, which gives no value", phrase.kind.as_str()),
+                format!(
+                    "a {} line returns no value and cannot be used in a slot",
+                    phrase.kind.as_str()
+                ),
                 &context.place,
             );
             return;
@@ -557,7 +560,7 @@ impl<'a> Checker<'a> {
                 match line.around {
                     None => self.blank(context, state, Want::Select(LineSelect::WhichCells)),
                     Some(Around::Cells8 | Around::Cells4) => {}
-                    Some(_) => self.error("Pick a cell picks among the 8 or the 4 cells around", place),
+                    Some(_) => self.error("Pick a cell can only pick among the 8 or the 4 cells around", place),
                 }
                 let ground = ground_of(context.thing);
                 match line.pick {
@@ -566,7 +569,7 @@ impl<'a> Checker<'a> {
                     Some(_) => match line.ranked_by.as_deref() {
                         None => self.blank(context, state, Want::Blank(Blank::GroundProperty)),
                         Some(property) if self.property_of(property, ground).is_none() => {
-                            self.error(format!("'{property}' is no property of '{ground}'"), place);
+                            self.error(format!("'{property}' is not a property of '{ground}'"), place);
                         }
                         Some(_) => {}
                     },
@@ -644,7 +647,7 @@ impl<'a> Checker<'a> {
                 if let Some(property) = self.changed_property(line, context, state, Want::Blank(Blank::Property)) {
                     if property.property_type != PropertyType::States {
                         self.error(
-                            format!("Depending on reads a States property, and '{}' is not one", property.id),
+                            format!("Depending on needs a States property, got '{}'", property.id),
                             place,
                         );
                     }
@@ -679,15 +682,12 @@ impl<'a> Checker<'a> {
                 match (line.new_state.as_deref(), line.property.as_deref()) {
                     (None, _) | (_, None) => self.blank(context, state, Want::Blank(Blank::State)),
                     (Some(new), Some(id)) => match self.property_of(id, context.thing) {
-                        None => self.error(format!("'{id}' is no property of '{}'", context.thing), place),
+                        None => self.error(format!("'{id}' is not a property of '{}'", context.thing), place),
                         Some(property) => {
                             if property.property_type != PropertyType::States {
-                                self.error(
-                                    format!("Become changes a States property, and '{id}' is not one"),
-                                    place,
-                                );
+                                self.error(format!("Become needs a States property, got '{id}'"), place);
                             } else if !self.has_state(id, new) {
-                                self.error(format!("new_state '{new}' is no state of '{id}'"), place);
+                                self.error(format!("new_state '{new}' is not a state of '{id}'"), place);
                             }
                         }
                     },
@@ -700,7 +700,7 @@ impl<'a> Checker<'a> {
                             && self.property_of(id, context.thing).is_some()
                             && !self.has_state(id, old)
                         {
-                            self.error(format!("start_state '{old}' is no state of '{id}'"), place);
+                            self.error(format!("start_state '{old}' is not a state of '{id}'"), place);
                         }
                     }
                 }
@@ -722,7 +722,7 @@ impl<'a> Checker<'a> {
                 {
                     self.error(
                         format!(
-                            "Set changes a property that is not States, Position or Heading, and '{}' is one",
+                            "Set cannot change '{}': it is a States, Position or Heading property",
                             property.id
                         ),
                         place,
@@ -738,7 +738,7 @@ impl<'a> Checker<'a> {
                     && !matches!(property.property_type, PropertyType::Number | PropertyType::Arrow)
                 {
                     self.error(
-                        format!("Steer changes a Number or an Arrow, and '{}' is neither", property.id),
+                        format!("Steer needs a Number or an Arrow, got '{}'", property.id),
                         place,
                     );
                 }
@@ -780,7 +780,7 @@ impl<'a> Checker<'a> {
                             .is_some_and(|property| property.property_type == PropertyType::Number);
                         if !fits {
                             self.error(
-                                format!("Leave needs a Number property of the ground, and '{id}' is not one"),
+                                format!("Leave needs a Number property of the ground, got '{id}'"),
                                 place,
                             );
                         }
@@ -835,7 +835,10 @@ impl<'a> Checker<'a> {
         };
         let property = self.property_of(id, context.thing);
         if property.is_none() {
-            self.error(format!("'{id}' is no property of '{}'", context.thing), &context.place);
+            self.error(
+                format!("'{id}' is not a property of '{}'", context.thing),
+                &context.place,
+            );
         }
         property
     }
@@ -856,13 +859,13 @@ impl<'a> Checker<'a> {
                 match line.agent_kind.as_deref() {
                     Some(kind) => match document.agents.iter().find(|agents| agents.id == kind) {
                         Some(agents) => looked = agents.id.as_str(),
-                        None => self.error(format!("'{kind}' is no kind of agent"), place),
+                        None => self.error(format!("unknown kind of agent '{kind}'"), place),
                     },
                     None => self.error("a look at agents needs a kind of agent", place),
                 }
                 self.number_slot(&line.distance, &context.inner(), Blank::Number, state);
                 if line.include_me.is_none() {
-                    self.error("a look at agents says whether it includes me: include_me", place);
+                    self.error("a look at agents must say whether it includes me (include_me)", place);
                 }
             }
             Some(_) => {}
@@ -935,7 +938,7 @@ impl<'a> Checker<'a> {
             Some(CompareTest::Outside) => {
                 if !context.condition {
                     self.error(
-                        "is less than ... or more than ... stands only in a condition",
+                        "is less than ... or more than ... can only be used in a condition",
                         &context.place,
                     );
                 }
@@ -988,7 +991,7 @@ impl<'a> Checker<'a> {
                 match governing {
                     None => self.error(format!("the state '{id}' has no property to belong to"), place),
                     Some(property) if !self.has_state(property, id) => {
-                        self.error(format!("'{id}' is no state of '{property}'"), place);
+                        self.error(format!("'{id}' is not a state of '{property}'"), place);
                     }
                     Some(_) => {}
                 }
@@ -1005,7 +1008,7 @@ impl<'a> Checker<'a> {
                     context.thing
                 };
                 let Some(property) = self.property_of(id, thing) else {
-                    self.error(format!("'{id}' is no property of '{thing}'"), place);
+                    self.error(format!("'{id}' is not a property of '{thing}'"), place);
                     return None;
                 };
                 if matches!(chip, SheetChip::MyNew(_)) {
@@ -1088,12 +1091,12 @@ impl<'a> Checker<'a> {
             return None;
         };
         if card != owner.card {
-            self.error(format!("{id} sits in another card"), place);
+            self.error(format!("{id} is in another card"), place);
             return None;
         }
         let source = &self.document.cards[card].line_tables[id];
         if !source.kind.works_out_result() {
-            self.error(format!("{id} makes a change and gives no result"), place);
+            self.error(format!("{id} makes a change and returns no result"), place);
             return None;
         }
         let relations = &self.relations[owner.card];
@@ -1117,18 +1120,21 @@ impl<'a> Checker<'a> {
         }
         if let Some(property) = property {
             if self.phrase_type(source) != Some(ValueType::Place) {
-                self.error(format!("{id} is no place, so it has no properties"), place);
+                self.error(format!("{id} is not a place, so it has no properties"), place);
                 return None;
             }
             let ground = ground_of(context.thing);
             let Some(found) = self.property_of(property, ground) else {
-                self.error(format!("'{property}' is no property of '{ground}'"), place);
+                self.error(format!("'{property}' is not a property of '{ground}'"), place);
                 return None;
             };
             return Some(ValueType::of_property(found.property_type));
         }
         if source.kind == LineKind::LookAround {
-            self.error(format!("{id} gives several values, so its chip names a part"), place);
+            self.error(
+                format!("{id} returns several values, so its chip must name a part"),
+                place,
+            );
             return None;
         }
         self.phrase_type(source)
@@ -1169,7 +1175,7 @@ impl<'a> Checker<'a> {
             return Some(ValueType::YesNo);
         }
         self.error(
-            format!("'{part}' is no part of {id}, a {} line", source.kind.as_str()),
+            format!("'{part}' is not a part of {id}, a {} line", source.kind.as_str()),
             place,
         );
         None

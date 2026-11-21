@@ -6,7 +6,7 @@ kind = "sheet"
 version = 1
 id = "vote"
 name = "Majority vote"
-purpose = "Majority voting on a grid. Pattern to look for: noise coarsens into stable blocks of one opinion with smooth borders."
+purpose = "Majority voting on a grid. Look for noise that coarsens into stable blocks of one opinion with smooth borders."
 next_line = 4
 
 [world]

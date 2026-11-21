@@ -339,7 +339,7 @@ impl GridRule {
             .entry_start_offset(template::ANCHOR, template.anchor_offset)
             .ok_or_else(|| {
                 vec![CodeDiagnostic::error(
-                    "the composer's positions in the rule could not be read back, and the rule cannot be checked",
+                    "failed to read back the composer's positions in the rule, so the rule cannot be checked",
                 )]
             })?;
         Ok((composition, start_offset))

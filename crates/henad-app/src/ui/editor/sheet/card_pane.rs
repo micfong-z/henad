@@ -2733,7 +2733,8 @@ enum LineTool {
 }
 
 /// Draws the menu of `line`, "Line 2 actions": Rename on a result line, Move up and Move down, Draw new numbers on a
-/// line that draws, Change to a rate or Change to a chance on a line whose typed chance or rate can change, and Delete.
+/// line that draws, Convert to a rate or Convert to a chance on a line whose typed chance or rate can change, and
+/// Delete.
 /// Returns the response of its button. The button fills the place `ui` gives it.
 ///
 /// Move up and Move down stay in the menu where the outline keeps the line in place, weak, with the reason as their

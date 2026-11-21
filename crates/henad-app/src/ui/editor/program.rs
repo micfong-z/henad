@@ -56,7 +56,7 @@ impl GraphProgram {
             World::Grid(_) => GridProgram::compile_with_probes(file, probes).map(Self::Grid),
             World::Agents(_) => AgentProgram::compile_with_probes(file, probes).map(Self::Agents),
             _ => Err(vec![CodeDiagnostic::error(
-                "The Editor runs graphs on a grid or of agents.",
+                "Only graphs on a grid or of agents can run in the Editor.",
             )]),
         }
     }

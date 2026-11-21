@@ -227,7 +227,7 @@ impl fmt::Display for SweepStartError {
             } => write!(f, "spec is for model '{spec_model}', expected '{entry_model}'"),
             Self::Plan(_) => f.write_str("cannot plan the sweep"),
             Self::Search(_) => f.write_str("cannot plan the search"),
-            Self::GpuNeedsNative => f.write_str("a GPU sweep needs a native build"),
+            Self::GpuNeedsNative => f.write_str("GPU sweeps are unavailable in a browser"),
             Self::Output(_) => f.write_str("cannot write the results"),
             Self::Manifest(_) => f.write_str("cannot read the manifest of the sweep to resume"),
             Self::Spec(_) => f.write_str("cannot read the spec the manifest records"),

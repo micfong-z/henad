@@ -162,7 +162,7 @@ fn a_refused_edit_changes_nothing_and_names_the_problem() {
     assert!(status.warning, "a refusal shows as a warning");
     let status = status.message;
     assert!(
-        status.starts_with("The parameter 'infection_rate' is still named by"),
+        status.starts_with("The parameter 'infection_rate' is still referenced by"),
         "{status}"
     );
     assert!(status.ends_with('.'), "{status}");

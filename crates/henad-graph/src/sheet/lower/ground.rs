@@ -65,10 +65,10 @@ fn kept_input(builder: &Builder<'_>, slot: &Slot) -> Result<InputValue, String> 
         Some(SheetValue::Chip(SheetChip::Param(id))) => match builder.param(id)? {
             Operand::Param(id, ValueType::F32) => Ok(InputValue::Param(id)),
             _ => Err(format!(
-                "the share kept per tick reads '{id}', which is no Number parameter"
+                "the share kept per tick reads '{id}', which is not a Number parameter"
             )),
         },
-        _ => Err("the share kept per tick is a number or a parameter".to_owned()),
+        _ => Err("the share kept per tick must be a number or a parameter".to_owned()),
     }
 }
 
@@ -117,7 +117,7 @@ pub(super) fn declare(builder: &mut Builder<'_>) {
             PropertyType::Number => declare_number(builder, index, property, &mut shared),
             other => builder.problem(
                 format!(
-                    "property '{}' of the ground is {}, and the ground holds numbers and states",
+                    "property '{}' of the ground is {}, expected number or states",
                     property.id,
                     other.as_str()
                 ),

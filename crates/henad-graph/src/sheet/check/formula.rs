@@ -60,7 +60,7 @@ enum Token<'f> {
 ///
 /// # Errors
 ///
-/// Returns the reason the formula does not parse, such as "the formula ends where it expects a value". A formula
+/// Returns the reason the formula does not parse, such as "unexpected end of formula, expected a value". A formula
 /// nesting groups past [`MAX_FORMULA_NESTING`] does not parse.
 pub(in crate::sheet) fn references(formula: &str) -> Result<Vec<&str>, String> {
     parse_with_references(formula, false).map(|(_, references)| references)
@@ -218,9 +218,9 @@ impl<'f> Parser<'f> {
             Ok(())
         } else {
             match self.peek() {
-                None => Err(format!("the formula ends where it expects '{symbol}'")),
+                None => Err(format!("unexpected end of formula, expected '{symbol}'")),
                 Some(token) => Err(format!(
-                    "the formula holds {} where it expects '{symbol}'",
+                    "the formula holds an unexpected {}, expected '{symbol}'",
                     describe(token)
                 )),
             }
@@ -239,7 +239,7 @@ impl<'f> Parser<'f> {
         }
         if tree.depth() > MAX_FORMULA_DEPTH {
             return Err(format!(
-                "the formula nests operations more than {MAX_FORMULA_DEPTH} deep, the most a formula can run with"
+                "the formula nests operations more than {MAX_FORMULA_DEPTH} deep"
             ));
         }
         Ok(tree)
@@ -307,7 +307,7 @@ impl<'f> Parser<'f> {
     /// Reads a number, a reference, a call or a group in parentheses.
     fn atom(&mut self) -> Result<FormulaTree<'f>, String> {
         let Some(token) = self.peek().cloned() else {
-            return Err("the formula ends where it expects a value".to_owned());
+            return Err("unexpected end of formula, expected a value".to_owned());
         };
         self.position += 1;
         match token {
@@ -337,9 +337,7 @@ impl<'f> Parser<'f> {
                 if count == takes {
                     self.made(FormulaTree::Call(name, values))
                 } else {
-                    Err(format!(
-                        "{name} takes {takes} values in a formula, and this call passes {count}"
-                    ))
+                    Err(format!("{name} takes {takes} values in a formula, got {count}"))
                 }
             }
             Token::Symbol(_) => Err(format!("the formula holds an unexpected {}", describe(&token))),
@@ -409,14 +407,11 @@ mod tests {
     fn a_malformed_formula_is_refused_with_its_reason() {
         for (formula, reason) in [
             ("", "the formula is empty"),
-            ("a +", "the formula ends where it expects a value"),
-            ("(a", "the formula ends where it expects ')'"),
+            ("a +", "unexpected end of formula, expected a value"),
+            ("(a", "unexpected end of formula, expected ')'"),
             ("a b", "the formula holds an unexpected 'b'"),
-            (
-                "smaller(a)",
-                "smaller takes 2 values in a formula, and this call passes 1",
-            ),
-            ("length a", "the formula holds 'a' where it expects '('"),
+            ("smaller(a)", "smaller takes 2 values in a formula, got 1"),
+            ("length a", "the formula holds an unexpected 'a', expected '('"),
             ("a % b", "the formula cannot be read at '% b'"),
             ("*", "the formula holds an unexpected '*'"),
         ] {

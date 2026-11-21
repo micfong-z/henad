@@ -84,7 +84,7 @@ impl FromStr for ValueType {
             if is_id(id) {
                 Ok(id.to_owned())
             } else {
-                Err(format!("'{id}' is no {kind} id"))
+                Err(format!("'{id}' is not a {kind} id"))
             }
         };
         if let Some(id) = text.strip_prefix("cat:") {
@@ -106,7 +106,7 @@ impl FromStr for ValueType {
             "u64" => Ok(Self::U64),
             "f64" => Ok(Self::F64),
             "vec2d" => Ok(Self::Vec2D),
-            _ => Err(format!("'{text}' is no value type")),
+            _ => Err(format!("unknown value type '{text}'")),
         }
     }
 }

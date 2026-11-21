@@ -184,7 +184,7 @@ fn bindings_and_foreign_directives_in_user_text_are_refused() {
     );
     let problems = refusals(&life_with(&step));
     assert_problem_at(&problems, 1, "must not declare bindings");
-    assert_problem_at(&problems, 5, "`neighbor` is a name of the rule template");
+    assert_problem_at(&problems, 5, "`neighbor` is already declared by the rule template");
     assert_eq!(
         problems.iter().filter(|problem| problem.line == Some(1)).count(),
         1,
@@ -199,7 +199,7 @@ fn bindings_and_foreign_directives_in_user_text_are_refused() {
     assert_problem_at(&problems, 1, "only `#import` lines");
     assert_problem_at(&problems, 2, "must not declare `#define_import_path`");
     assert_problem_at(&problems, 3, "`enable` directive");
-    assert_problem_at(&problems, 5, "no `::`");
+    assert_problem_at(&problems, 5, "`::` is not supported in WGSL");
 
     // A binding the text check cannot see, behind a comment break, is refused in the module.
     let step = format!(
@@ -221,8 +221,8 @@ fn bindings_and_foreign_directives_in_user_text_are_refused() {
          return cell + max;\n}}\n"
     );
     let problems = refusals(&life_with(&step));
-    assert_problem_at(&problems, 1, "`min` is a predeclared name");
-    assert_problem_at(&problems, 2, "`vec2` is a predeclared name");
+    assert_problem_at(&problems, 1, "`min` is a predeclared WGSL name");
+    assert_problem_at(&problems, 2, "`vec2` is a predeclared WGSL name");
     assert_eq!(problems.len(), 2, "{problems:#?}");
 
     // An import from the shared modules is allowed.
@@ -255,9 +255,9 @@ fn the_module_check_refuses_a_builtin_name() {
          {STEP_HEAD}    return cell + clamp + max;\n}}\n"
     );
     let problems = module_problems(&life_with(&step));
-    assert_problem_at(&problems, 1, "`min` is a predeclared name");
-    assert_problem_at(&problems, 4, "`max` is a predeclared name");
-    assert_problem_at(&problems, 5, "`clamp` is a predeclared name");
+    assert_problem_at(&problems, 1, "`min` is a predeclared WGSL name");
+    assert_problem_at(&problems, 4, "`max` is a predeclared WGSL name");
+    assert_problem_at(&problems, 5, "`clamp` is a predeclared WGSL name");
     assert_eq!(problems.len(), 3, "{problems:#?}");
     assert!(module_problems(&GridRule::life()).is_empty());
 }
@@ -271,8 +271,8 @@ fn shared_writes_and_barriers_are_refused() {
     );
     let problems = refusals(&life_with(&step));
     assert_problem_at(&problems, 2, "outside `private`");
-    assert_problem_at(&problems, 5, "`state_out` is a buffer of the engine");
-    assert_problem_at(&problems, 6, "`tick_out` is a buffer of the engine");
+    assert_problem_at(&problems, 5, "`state_out` is an engine buffer");
+    assert_problem_at(&problems, 6, "`tick_out` is an engine buffer");
     assert_problem_at(&problems, 7, "writes `henad_cell`");
     assert_problem_at(&problems, 8, "barriers are not allowed");
     assert!(
@@ -311,9 +311,9 @@ fn shared_writes_and_barriers_are_refused() {
          return state_out[0] + tick_out[0] + tick_in[0] + far(cell) + params.width;\n}}\n"
     );
     let problems = refusals(&life_with(&step));
-    assert_problem_at(&problems, 2, "`state_in` is a buffer of the engine");
+    assert_problem_at(&problems, 2, "`state_in` is an engine buffer");
     for buffer in ["state_out", "tick_out", "tick_in"] {
-        assert_problem_at(&problems, 5, &format!("`{buffer}` is a buffer of the engine"));
+        assert_problem_at(&problems, 5, &format!("`{buffer}` is an engine buffer"));
     }
     assert_eq!(problems.len(), 4, "`params` is read freely: {problems:#?}");
 
@@ -322,7 +322,7 @@ fn shared_writes_and_barriers_are_refused() {
          let total = block_sum(0u, 1.0);\n    atomicAdd(&counter, 1u);\n    return cell;\n}}\n"
     );
     let problems = refusals(&life_with(&step));
-    assert_problem_at(&problems, 2, "holds an atomic");
+    assert_problem_at(&problems, 2, "cannot hold an atomic");
     assert_problem_at(&problems, 4, "this calls `block_sum`, which writes `scratch`");
     assert_problem_at(&problems, 5, "atomics are not allowed");
 
@@ -502,10 +502,10 @@ fn a_parameter_its_kind_cannot_hold_is_refused() {
         (1, "outside its bounds"),
         (2, "step that is not a positive"),
         (3, "outside its bounds"),
-        (4, "option '1' reads as an index"),
+        (4, "option '1' parses as an index"),
         (5, "option 'square' appears twice"),
         (6, "no option exists at its default index"),
-        (7, "shows as a percentage"),
+        (7, "cannot show as a percentage"),
     ];
     for (index, text) in expected {
         assert!(

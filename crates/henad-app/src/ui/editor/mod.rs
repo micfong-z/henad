@@ -59,7 +59,7 @@ use sheet::widgets::{DialogButton, DialogButtonKind, Notice, NoticeKind};
 
 /// Text the Editor shows on an adapter that cannot run compute shaders.
 pub const NO_COMPUTE: &str =
-    "Grid rules and graph models cannot run on this device. They need a GPU with compute support.";
+    "Grid rules and graph models are unavailable on this device. They need a GPU with compute support.";
 
 /// Reason Apply and Save model are disabled while the Editor holds no model.
 pub const EMPTY_EDITOR: &str =
@@ -948,7 +948,7 @@ fn file_buttons(ui: &mut egui::Ui, empty: bool, request: &mut Option<EditorReque
         })
         .response;
     graph.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, NEW_NODE_GRAPH));
-    graph.on_hover_text("Start node graph from an example");
+    graph.on_hover_text("Start node graph from example");
     sheet::widgets::vertical_hairline(ui, ui.spacing().interact_size.y);
     let open = add_button(
         ui,
@@ -1356,7 +1356,7 @@ pub fn new_graph_model(app: &mut AppState, file_name: &str) {
     let Some(mut file) =
         henad_graph::starters::starter(file_name).and_then(|starter| GraphFile::parse(starter.text).ok())
     else {
-        app.editor.file_status = Some(FileStatus::failure(format!("Starter {file_name} does not read")));
+        app.editor.file_status = Some(FileStatus::failure(format!("Starter {file_name} cannot be read")));
         return;
     };
     let id = new_model_id(&app.models, &file.document().target.id, "node_");

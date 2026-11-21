@@ -145,7 +145,8 @@ fn a_repeat_within_the_pass_limit_is_refused_by_the_submission_budget_at_a_large
     let refused = entry.shortfalls(&trials_params(4096, 140, 0.1), &limits);
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert!(
-        refused[0].contains("past the budget") && refused[0].contains("pass 'node_repeat_trials_step' is the heaviest"),
+        refused[0].contains("exceeding the budget")
+            && refused[0].contains("pass 'node_repeat_trials_step' is the heaviest"),
         "{refused:?}"
     );
     let Some(ctx) = baseline_device() else {
@@ -153,6 +154,6 @@ fn a_repeat_within_the_pass_limit_is_refused_by_the_submission_budget_at_a_large
     };
     match entry.build(&trials_params(4096, 140, 0.1), None, Some(&ctx)) {
         Ok(_) => panic!("the build passed the budget"),
-        Err(fault) => assert!(fault.to_string().contains("past the budget"), "{fault}"),
+        Err(fault) => assert!(fault.to_string().contains("exceeding the budget"), "{fault}"),
     }
 }

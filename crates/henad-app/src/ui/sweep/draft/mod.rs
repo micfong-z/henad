@@ -134,7 +134,7 @@ pub const COLUMNS_PENDING: &str = "Reading model outputs";
 const NO_SUCH_ACTION: &str = "Model has no such action";
 
 /// Issue of a draft that runs a design table and has none loaded.
-const NO_TABLE: &str = "No table loaded";
+const NO_TABLE: &str = "Select a CSV file";
 
 /// Issue of a search that searches over no parameter and no action tick.
 const NOTHING_SEARCHED: &str = "Select a parameter or an action's Search tick to search over it";
@@ -1462,8 +1462,8 @@ mod tests {
                 step: Some(2.0)
             })
         );
-        assert_eq!(parse_levels("  "), Err("No values".to_owned()));
-        assert_eq!(parse_levels(" , "), Err("No values".to_owned()));
+        assert_eq!(parse_levels("  "), Err("Enter values".to_owned()));
+        assert_eq!(parse_levels(" , "), Err("Enter values".to_owned()));
         assert_eq!(parse_levels("0:1: x"), Err("'x' is not a number".to_owned()));
         assert_eq!(
             parse_levels("0:1:2:3"),
@@ -1623,7 +1623,7 @@ mod tests {
 
         let mut draft = SweepDraft::new(&schema);
         draft.design = DraftDesign::Table;
-        assert_eq!(only(&draft), (DraftSite::Design, "No table loaded".to_owned()));
+        assert_eq!(only(&draft), (DraftSite::Design, "Select a CSV file".to_owned()));
 
         let mut draft = SweepDraft::new(&schema);
         draft.results_in_folder = true;
@@ -2167,7 +2167,14 @@ mod tests {
         .collect();
         assert_eq!(
             words,
-            ["below", "at most", "equal to", "not equal to", "at least", "above"]
+            [
+                "less than",
+                "at most",
+                "equal to",
+                "not equal to",
+                "at least",
+                "greater than"
+            ]
         );
     }
 
@@ -2496,7 +2503,7 @@ mod tests {
         draft.add_action(&schema, 0, 50);
         draft.actions[0].vary_tick = true;
         draft.actions[0].ticks_text = "0:2000000".to_owned();
-        let over_limit = format!("Range gives 2000001 values, over the limit of {MAX_DRAFT_LEVELS}");
+        let over_limit = format!("Range has 2000001 values, over the limit of {MAX_DRAFT_LEVELS}");
 
         let issues = draft.check(&schema, &panel_values).expect_err("every tick is listed");
         assert_eq!(issues, [DraftIssue::new(DraftSite::Action(0), over_limit.clone())]);

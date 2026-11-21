@@ -167,7 +167,7 @@ impl HostLanes {
         }
         if bytes > MAX_HOST_LANE_BYTES {
             return Err(refused(format!(
-                "the lanes take {bytes} bytes over this world, and the host holds at most {MAX_HOST_LANE_BYTES}"
+                "the lanes take {bytes} bytes for this world, expected at most {MAX_HOST_LANE_BYTES}"
             )));
         }
         let mut columns = Vec::with_capacity(document.lanes.len());
@@ -180,7 +180,7 @@ impl HostLanes {
                 .as_ref()
                 .and_then(|literal| HostValue::from_literal(literal, document))
                 .or_else(|| HostValue::zero_of(&lane.value_type))
-                .ok_or_else(|| refused(format!("the lane '{}' has a type with no host value", lane.id)))?;
+                .ok_or_else(|| refused(format!("the lane '{}' has a type the host does not support", lane.id)))?;
             let column = LaneColumn::filled(&lane.id, &lane.value_type, elements, initial)
                 .ok_or_else(|| refused(format!("the lane '{}' does not fit the host", lane.id)))?;
             columns.push(column);
@@ -194,7 +194,7 @@ impl HostLanes {
                 .as_ref()
                 .and_then(|literal| HostValue::from_literal(literal, document))
                 .or_else(|| HostValue::zero_of(&field.value_type))
-                .ok_or_else(|| refused(format!("the field '{}' has a type with no host value", field.id)))?;
+                .ok_or_else(|| refused(format!("the field '{}' has a type the host does not support", field.id)))?;
             for layer in &field.layers {
                 let id = format!("{}.{layer}", field.id);
                 let column = LaneColumn::filled(&id, &field.value_type, elements, initial)
@@ -443,8 +443,8 @@ impl fmt::Display for HostError {
                 place(f, pass, node)?;
                 write!(f, "here: {reason}")
             }
-            Self::NoPass(id) => write!(f, "the file declares no pass '{id}'"),
-            Self::NoAction(id) => write!(f, "the file declares no action '{id}'"),
+            Self::NoPass(id) => write!(f, "the file has no pass '{id}'"),
+            Self::NoAction(id) => write!(f, "the file has no action '{id}'"),
             Self::Fault { pass, node, reason } => {
                 place(f, pass, node)?;
                 write!(f, "faulted: {reason}")

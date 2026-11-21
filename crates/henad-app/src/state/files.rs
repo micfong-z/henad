@@ -21,7 +21,7 @@ const SAVE_PENDING: &str = "Select location to save";
 const SAVE_PENDING: &str = "Downloading";
 
 /// Status of the downloads of several files. A browser can hold back every download after the first.
-const DOWNLOADS_STARTED: &str = "Downloads started. Press Save results again if your browser blocked any.";
+const DOWNLOADS_STARTED: &str = "Downloads started. Press Save results again if the browser blocked any downloads.";
 
 impl AppState {
     /// Opens a save dialog for `bytes` under the name `name`, for the panel `target`.

@@ -797,7 +797,7 @@ fn a_stop_discards_the_speculative_steps() {
     assert_eq!(stopped.series.rows().collect::<Vec<_>>(), kept);
     assert_eq!(
         stopped.note.as_deref(),
-        Some(format!("model refused action 'seed_outbreak' at tick {}", stop_tick - 2).as_str()),
+        Some(format!("model rejected action 'seed_outbreak' at tick {}", stop_tick - 2).as_str()),
         "only the action before the stop is noted"
     );
 }

@@ -288,14 +288,14 @@ fn probes_leave_the_code_identity_and_text_alone() {
 fn a_probe_on_no_bool_output_of_a_tick_pass_is_refused() {
     let file = transition_life();
     for (probe, wanted) in [
-        (output(21, "Alive"), "names no output of a node in a tick pass"),
-        (output(99, "out"), "names no output of a node in a tick pass"),
+        (output(21, "Alive"), "must name an output of a node in a tick pass"),
+        (output(99, "out"), "must name an output of a node in a tick pass"),
         (
             PortRef {
                 node: node_id(11),
                 port: None,
             },
-            "holds no bool",
+            "must name a bool output",
         ),
     ] {
         let problems = GridProgram::compile_with_probes(&file, &Probes::new(vec![probe.clone()]))
@@ -344,7 +344,7 @@ fn a_probe_inside_a_region_is_refused() {
     assert!(
         problems
             .iter()
-            .any(|problem| problem.message.contains("names a node inside a region")),
+            .any(|problem| problem.message.contains("cannot name a node inside a region")),
         "{problems:#?}"
     );
 }

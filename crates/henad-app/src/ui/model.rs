@@ -19,7 +19,7 @@ use crate::ui::{KvGridRows, kv_grid};
 const NO_MODEL_RUNS: &str = "No model in this build runs on this device. GPU models need a GPU with compute support.";
 
 /// Text the Model panel shows for a set without models.
-const NO_MODELS: &str = "This build includes no models.";
+const NO_MODELS: &str = "This build has no models.";
 
 /// Draws the opening that the app rejected and the reason, then `next_step`.
 fn opening_refusal(ui: &mut egui::Ui, refusal: &OpeningRefusal, next_step: &str) {
@@ -72,7 +72,7 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
         );
     let mut picked = None;
 
-    egui::ComboBox::from_label("Select Model")
+    egui::ComboBox::from_label("Select model")
         .selected_text(selected_name)
         // As tall as the window allows. The model list outgrows egui's default of 200 points.
         .height(ui.ctx().content_rect().height())
@@ -198,8 +198,8 @@ fn row_listing(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: Str
 fn topology_label(hint: TopologyHint) -> &'static str {
     match (hint.grid, hint.agents, hint.edges) {
         (false, true, true) => "Network",
-        (true, true, true) => "Network and Grid",
-        (true, true, false) => "Agents and Grid",
+        (true, true, true) => "Network and grid",
+        (true, true, false) => "Agents and grid",
         (true, false, false) => "Grid",
         (false, true, false) => "Agents",
         _ => "None",
@@ -233,7 +233,7 @@ fn lane_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, lanes: &[LaneSpec]) {
     let names: Vec<String> = lanes
         .iter()
         .map(|lane| {
-            let mark = if lane.double_buffered { " (dual)" } else { "" };
+            let mark = if lane.double_buffered { " (double-buffered)" } else { "" };
             format!("{}: {}{mark}", lane.name, lane.ty)
         })
         .collect();
@@ -334,9 +334,8 @@ fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) 
         }
         // A GPU agent model's shaders write RGBA directly and declare no palette.
         None => {
-            ui.label("In shader").on_hover_text(
-                "Palette colours are declared directly in the shaders and are not retrievable directly.",
-            );
+            ui.label("In shader")
+                .on_hover_text("Palette colours are declared in the shaders and cannot be retrieved.");
         }
     }
     rows.end_row(ui);
@@ -370,7 +369,7 @@ fn footprint_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, id: &str, demand: &D
     }
 
     if let Some(widest) = demand.passes.iter().max_by_key(|pass| pass.storage) {
-        let hint = format!("Widest pass is '{}'", widest.label);
+        let hint = format!("Pass with the most storage bindings: '{}'", widest.label);
         ui.label("Storage bindings").on_hover_text(&hint);
         ui.horizontal(|ui| {
             ui.style_mut().spacing.item_spacing.x = 0.0;
@@ -434,7 +433,7 @@ mod tests {
     fn topology_names_every_layer_combination() {
         assert_eq!(topology_label(TopologyHint::GRID), "Grid");
         assert_eq!(topology_label(TopologyHint::AGENTS), "Agents");
-        assert_eq!(topology_label(TopologyHint::COMPOSITE), "Agents and Grid");
+        assert_eq!(topology_label(TopologyHint::COMPOSITE), "Agents and grid");
         assert_eq!(topology_label(TopologyHint::NETWORK), "Network");
         assert_eq!(topology_label(TopologyHint::NONE), "None");
     }

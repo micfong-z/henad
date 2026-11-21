@@ -111,7 +111,7 @@ impl fmt::Display for DesignError {
                     lengths.join(", ")
                 )
             }
-            Self::TooManyConfigs => write!(f, "design takes the plan past {MAX_CONFIGS} configs"),
+            Self::TooManyConfigs => write!(f, "design produces more than {MAX_CONFIGS} configs"),
             Self::NoSamples => write!(f, "a random or Latin hypercube design needs at least 1 sample"),
             Self::NoFactors => write!(f, "a random or Latin hypercube design needs at least 1 factor"),
             Self::UnlistedLevels { factor_index } => {

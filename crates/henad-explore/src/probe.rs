@@ -275,7 +275,7 @@ impl fmt::Display for ProbeError {
             Self::EveryConfigFaulted(faults) => {
                 write!(
                     f,
-                    "the probe build faulted on each of the {} configs tried",
+                    "the probe build failed on each of the {} configs tried",
                     faults.len()
                 )?;
                 for config in faults {

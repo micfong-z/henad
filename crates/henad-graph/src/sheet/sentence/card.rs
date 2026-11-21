@@ -29,8 +29,8 @@ pub fn line_count(count: usize) -> String {
 }
 
 /// Law of the card, shown in a box under its header.
-pub const LAW: &str = "Everyone reads the world as it was at the start of the tick. All changes land together at the \
-                       end of it. Whatever no line changes stays as it was.";
+pub const LAW: &str = "Everyone reads the world as it was at the start of the tick. All changes are applied together \
+                       at the end of the tick. A property that no line changes is left unchanged.";
 
 /// Label of the add button of agent cards that adds a Repeat line.
 pub const REPEAT_BUTTON: &str = "+ Repeat...";
@@ -39,7 +39,7 @@ pub const REPEAT_BUTTON: &str = "+ Repeat...";
 pub const HELP_LINES_NAME: &str = "Help: lines";
 
 /// Note above the add buttons once the card holds a When line.
-pub const ADD_AT_END_NOTE: &str = "These add a line at the end of the card.";
+pub const ADD_AT_END_NOTE: &str = "New lines will be added at the end of the card.";
 
 /// Returns the label of the row that ends When line `number`, such as "+ Add inside line 4".
 pub fn add_inside_label(number: usize) -> String {
@@ -112,7 +112,7 @@ pub fn delete_line(word: &str) -> String {
 }
 
 /// Tooltip of the tool that deletes a When line.
-pub const DELETE_WHEN_TOOLTIP: &str = "Delete. Lines inside stay.";
+pub const DELETE_WHEN_TOOLTIP: &str = "Delete. Lines inside will be kept.";
 
 /// Item of a line's menu that mints a new key for its draws.
 pub const DRAW_NEW_NUMBERS: &str = "Draw new numbers";
@@ -616,7 +616,7 @@ pub fn always_name(prefix: &str) -> String {
 }
 
 /// Tooltip of the "always" button.
-pub const ALWAYS_TOOLTIP: &str = "No condition. Choose to add one.";
+pub const ALWAYS_TOOLTIP: &str = "No condition. Press to add one.";
 
 /// Kind of a condition that is not always: a test, a chance or a rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -656,7 +656,7 @@ pub const CHOOSE_WHEN: &str = "Choose when";
 
 /// Returns the lead of "Choose when" inside When line `number`.
 pub fn when_lead(number: usize) -> String {
-    format!("Line {number} already gives a condition. Choose always to use only that one.")
+    format!("Line {number} already has a condition. Choose always to use only that condition.")
 }
 
 /// Heading of the group of results above a line, in "Choose when" and in a picker of a number.
@@ -748,7 +748,7 @@ impl ConditionItem {
     /// Grey line under the item, `None` for an item without one.
     pub fn description(self) -> Option<&'static str> {
         match self {
-            Self::Is => Some("The same as a value. The line offers is not, is more than and others."),
+            Self::Is => Some("The same as a value. Choose is not, is more than or another comparison on the line."),
             Self::AtLeast => Some("The value or more, such as 1 or more"),
             Self::AtMost => Some("The value or less, such as 4 or less"),
             Self::Outside => Some("Outside a range, such as less than 2 or more than 3"),
@@ -1062,9 +1062,10 @@ pub const LINES_HELP_HEADING: &str = "Lines";
 /// Text of the Lines help.
 pub const LINES_HELP: &str = "Every cell follows these lines each tick, from the top. A line either works out a \
                               result, which lines below it can use, or changes one of my properties. Everyone reads \
-                              the world as it was at the start of the tick, and all changes land together at the end \
-                              of it. Whatever no line changes stays as it was. When two changes to one property both \
-                              apply, the higher line wins, and the lower one shows \"otherwise\".";
+                              the world as it was at the start of the tick. All changes are applied together at the \
+                              end of the tick. A property that no line changes is left unchanged. When two changes to \
+                              one property both apply, the line nearest the top of the card wins, and the lower line \
+                              shows \"otherwise\".";
 
 /// Example of the Lines help.
 pub const LINES_HELP_EXAMPLE: &str = "Alive neighbours = count of the 8 cells around me whose Status is Alive";
@@ -1072,11 +1073,12 @@ pub const LINES_HELP_EXAMPLE: &str = "Alive neighbours = count of the 8 cells ar
 /// Text of the Lines help beside the card of a kind of agent.
 pub const LINES_HELP_AGENTS: &str = "Every agent of this kind follows these lines each tick, from the top. A line \
                                      either works out a result, which lines below it can use, or changes one of my \
-                                     properties. Everyone reads the world as it was at the start of the tick, and all \
-                                     changes land together at the end of it. Whatever no line changes stays as it \
-                                     was. When two changes to one property both apply, the higher line wins, and the \
-                                     lower one shows \"otherwise\". Inside a Repeat, the first time a change applies \
-                                     decides, so a lower line that applies earlier wins.";
+                                     properties. Everyone reads the world as it was at the start of the tick. All \
+                                     changes are applied together at the end of the tick. A property that no line \
+                                     changes is left unchanged. When two changes to one property both apply, the \
+                                     line nearest the top of the card wins, and the lower line shows \"otherwise\". \
+                                     Inside a Repeat, the first time a change applies decides, so a lower line that \
+                                     applies earlier wins.";
 
 /// Example of the Lines help beside the card of a kind of agent.
 pub const LINES_HELP_AGENTS_EXAMPLE: &str =

@@ -136,7 +136,7 @@ fn check_reducers(checker: &mut Checker<'_>, view: &BodyView<'_>, order: &[usize
                     checker,
                     link.reader,
                     format!(
-                        "{}: the input `{}` reads {} of this pass, which is ready only after every element, and \
+                        "{}: the input `{}` reads {} of this pass, which is ready only after every element, but \
                          the node runs per element",
                         view.name(link.reader),
                         link.port,

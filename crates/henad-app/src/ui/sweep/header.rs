@@ -159,7 +159,7 @@ pub fn session_header(
         SessionState::Finished | SessionState::Aborted | SessionState::Stopped | SessionState::Failed
             if header.resumed =>
         {
-            format!("Press New {noun} to set up another.")
+            format!("Press New {noun} to return to settings.")
         }
         SessionState::Finished | SessionState::Aborted | SessionState::Stopped | SessionState::Failed => format!(
             "Press {} to change the settings and run again.",

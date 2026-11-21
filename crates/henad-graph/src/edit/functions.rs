@@ -111,7 +111,7 @@ impl GraphBuilder {
             .functions
             .iter()
             .position(|function| function.id == id)
-            .ok_or_else(|| EditError::Missing(format!("the file declares no function '{id}'")))
+            .ok_or_else(|| EditError::Missing(format!("the file has no function '{id}'")))
     }
 
     /// Returns the ports of `side` of the function `id` for writing.
@@ -468,7 +468,7 @@ impl GraphBuilder {
             let def = lookup(&node.op, self.document.library);
             if let Some(what) = def.and_then(NodeDef::sink) {
                 return Err(EditError::Invalid(format!(
-                    "node {} is {what}, and a function holds none. Leave it out of the selection",
+                    "node {} is {what} and cannot be in a function. Remove it from the selection",
                     node.id
                 )));
             }
@@ -480,13 +480,13 @@ impl GraphBuilder {
             }
             if node.op == OP_FUNCTION_INPUT || node.op == OP_FUNCTION_OUTPUT {
                 return Err(EditError::Invalid(format!(
-                    "node {} is an input or output of this function. Leave it out of the selection",
+                    "node {} is an input or output of this function. Remove it from the selection",
                     node.id
                 )));
             }
             if matches!(scope, Scope::Pass(_)) && self.document.stats.iter().any(|stat| stat.from.node == node.id) {
                 return Err(EditError::Invalid(format!(
-                    "a statistic reads node {}. Leave it out of the selection",
+                    "a statistic reads node {}. Remove it from the selection",
                     node.id
                 )));
             }
@@ -513,7 +513,7 @@ impl GraphBuilder {
                 }
                 let source = entering_key(&self.document, &body.nodes, link).ok_or_else(|| {
                     EditError::Invalid(format!(
-                        "node {} reads {link}, which names no output. Fix the problems of node {} first",
+                        "node {} reads unknown output {link}. Fix the problems of node {} first",
                         reader.id, reader.id
                     ))
                 })?;
@@ -571,10 +571,10 @@ impl GraphBuilder {
         let call = self
             .body(scope)?
             .node(node)
-            .ok_or_else(|| EditError::Missing(format!("the {scope} holds no node {node}")))?
+            .ok_or_else(|| EditError::Missing(format!("the {scope} has no node {node}")))?
             .clone();
         if call.op != OP_FUNCTION_CALL {
-            return Err(EditError::Invalid(format!("node {node} calls no function")));
+            return Err(EditError::Invalid(format!("node {node} is not a function call")));
         }
         let function_id = called_id(&call).unwrap_or_default().to_owned();
         let position = self.function_position(&function_id)?;
@@ -597,7 +597,7 @@ impl GraphBuilder {
                     .unwrap_or_default();
                 let value = call.inputs.get(port).cloned().ok_or_else(|| {
                     EditError::Invalid(format!(
-                        "the call {node} leaves the input `{port}` unwritten. Wire it first"
+                        "the input `{port}` of the call {node} is not set. Wire it first"
                     ))
                 })?;
                 inputs.insert(inner.id, value);
@@ -699,7 +699,7 @@ impl GraphBuilder {
                     Some(InputValue::Link(_)) => {}
                     _ => {
                         return Err(EditError::Invalid(format!(
-                            "the statistic '{}' reads an output of the call {node} that is no node's output",
+                            "the statistic '{}' reads an output of the call {node} that is not an output of any node",
                             stat.label
                         )));
                     }
@@ -752,7 +752,7 @@ impl GraphBuilder {
         let theirs = file.document();
         if theirs.library > self.document.library {
             return Err(EditError::Invalid(format!(
-                "the file to import from uses node library {}, and this file uses {}",
+                "the file to import from uses node library {}, but this file uses {}",
                 theirs.library, self.document.library
             )));
         }
@@ -772,7 +772,7 @@ impl GraphBuilder {
             )
             .map_err(|_taken| {
                 EditError::Invalid(format!(
-                    "the file already declares the function '{target}'. Import it under another name"
+                    "the file already has the function '{target}'. Import it under another name"
                 ))
             })?;
         }
@@ -836,7 +836,7 @@ fn called_id(node: &Node) -> Option<&str> {
 fn check_port_name(id: &str, side: PortSide, port: &str, ports: &[FunctionPort]) -> Result<(), EditError> {
     if !is_port_segment(port) {
         return Err(EditError::Invalid(format!(
-            "'{port}' is no port name, which starts with a lowercase letter and holds lowercase letters, digits and `_`"
+            "invalid port name '{port}', expected lowercase letters, digits and `_`, starting with a lowercase letter"
         )));
     }
     if ports.iter().any(|known| known.port == port) {
@@ -883,7 +883,7 @@ fn imported_functions(document: &GraphDocument, function: &str) -> Result<Vec<St
             .functions
             .iter()
             .find(|known| known.id == name)
-            .ok_or_else(|| EditError::Missing(format!("the file to import from declares no function '{name}'")))?;
+            .ok_or_else(|| EditError::Missing(format!("the file to import from has no function '{name}'")))?;
         for node in found.body.nodes.iter().filter(|node| node.op == OP_FUNCTION_CALL) {
             if let Some(called) = called_id(node)
                 && seen.insert(called.to_owned())

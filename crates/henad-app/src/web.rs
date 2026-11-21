@@ -15,7 +15,7 @@ const LOADING_TEXT_ID: &str = "loading_text";
 /// Note shown in the Performance tab when the thread pool failed to start.
 #[cfg(target_feature = "atomics")]
 const THREAD_POOL_NOTE: &str = "Models run on one thread. The page might lack the Cross-Origin-Opener-Policy and \
-                                Cross-Origin-Embedder-Policy headers, and the browser console has the error.";
+                                Cross-Origin-Embedder-Policy headers. The error appears in the browser console.";
 
 /// Note shown in the Performance tab in a build without atomics. Such a build has no thread pool.
 #[cfg(not(target_feature = "atomics"))]

@@ -779,7 +779,7 @@ fn print_lowered_prints_the_graph_a_sheet_lowers_to() {
     let output = run(&["--model-file", &rule, "--print-lowered"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        stderr(&output).contains("holds a grid rule. A grid rule builds as no graph."),
+        stderr(&output).contains("holds a grid rule. A grid rule has no graph to print"),
         "{}",
         stderr(&output)
     );
@@ -787,7 +787,7 @@ fn print_lowered_prints_the_graph_a_sheet_lowers_to() {
     // The flag takes exactly one model file and runs nothing else.
     let output = run(&["--model-file", &sheet, "--model-file", &graph_file, "--print-lowered"]);
     assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
-    assert!(stderr(&output).contains("--print-lowered takes exactly one --model-file"));
+    assert!(stderr(&output).contains("--print-lowered requires exactly one --model-file"));
     let run_flags: [&[&str]; 5] = [
         &["--params"],
         &["--set", "grid_width=64"],

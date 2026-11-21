@@ -45,7 +45,7 @@ fn check_id<'a>(
 ) {
     if !is_id(id) {
         checker.error(
-            format!("the {kind} id '{id}' is no id, which is a lowercase letter, then lowercase letters, digits and single `_`, up to {MAX_ID_BYTES} bytes"),
+            format!("invalid {kind} id '{id}', expected a lowercase letter followed by lowercase letters, digits and single `_`, up to {MAX_ID_BYTES} bytes"),
             place.clone(),
         );
     }
@@ -57,10 +57,7 @@ fn check_id<'a>(
 /// Reports a list past its limit.
 fn check_count(checker: &mut Checker<'_>, what: &str, count: usize, max: usize, place: Option<Range<usize>>) {
     if count > max {
-        checker.error(
-            format!("the file holds {count} {what}, and a file holds at most {max}"),
-            place,
-        );
+        checker.error(format!("the file holds {count} {what}, expected at most {max}"), place);
     }
 }
 
@@ -68,10 +65,7 @@ fn check_count(checker: &mut Checker<'_>, what: &str, count: usize, max: usize, 
 fn check_label(checker: &mut Checker<'_>, what: &str, label: &str, place: Option<Range<usize>>) {
     if label.len() > MAX_LABEL_BYTES {
         checker.error(
-            format!(
-                "{what} holds {} bytes, and a label holds at most {MAX_LABEL_BYTES}",
-                label.len()
-            ),
+            format!("{what} holds {} bytes, expected at most {MAX_LABEL_BYTES}", label.len()),
             place,
         );
     }
@@ -83,7 +77,7 @@ fn check_header(checker: &mut Checker<'_>) {
     if !is_model_id(&document.id) {
         checker.error(
             format!(
-                "the model id '{}' is no id, which is a lowercase letter, then lowercase letters, digits and `_`",
+                "invalid model id '{}', expected a lowercase letter followed by lowercase letters, digits and `_`",
                 document.id
             ),
             Some(places.id.clone()),
@@ -92,14 +86,14 @@ fn check_header(checker: &mut Checker<'_>) {
     if !is_model_id(&document.target.id) {
         checker.error(
             format!(
-                "the target id '{}' is no id, which is a lowercase letter, then lowercase letters, digits and `_`",
+                "invalid target id '{}', expected a lowercase letter followed by lowercase letters, digits and `_`",
                 document.target.id
             ),
             places.target.clone(),
         );
     }
     if document.library < 1 {
-        checker.error("`library` counts from 1".to_owned(), Some(places.graph.clone()));
+        checker.error("`library` must be at least 1".to_owned(), Some(places.graph.clone()));
     }
     check_label(checker, "the model name", &document.name, Some(places.id.clone()));
     check_label(checker, "the target name", &document.target.name, places.target.clone());
@@ -107,7 +101,7 @@ fn check_header(checker: &mut Checker<'_>) {
         if description.len() > MAX_DESCRIPTION_BYTES {
             checker.error(
                 format!(
-                    "a description holds {} bytes, and a description holds at most {MAX_DESCRIPTION_BYTES}",
+                    "a description holds {} bytes, expected at most {MAX_DESCRIPTION_BYTES}",
                     description.len()
                 ),
                 Some(places.id.clone()),
@@ -129,7 +123,7 @@ fn check_world(checker: &mut Checker<'_>) {
             for (key, side) in [("width", grid.width), ("height", grid.height)] {
                 if !(1..=MAX_GRID_SIDE).contains(&side) {
                     checker.error(
-                        format!("the grid's `{key}` is {side}, outside 1 to {MAX_GRID_SIDE}"),
+                        format!("the grid's `{key}` must be from 1 to {MAX_GRID_SIDE}, got {side}"),
                         place.clone(),
                     );
                 }
@@ -138,23 +132,23 @@ fn check_world(checker: &mut Checker<'_>) {
         World::Agents(agents) => {
             if agents.max_count > MAX_AGENTS {
                 checker.error(
-                    format!(
-                        "`max_count` is {}, and a population holds at most {MAX_AGENTS}",
-                        agents.max_count
-                    ),
+                    format!("`max_count` must be at most {MAX_AGENTS}, got {}", agents.max_count),
                     place.clone(),
                 );
             }
             if agents.count > agents.max_count {
                 checker.error(
-                    format!("`count` is {}, past `max_count` of {}", agents.count, agents.max_count),
+                    format!(
+                        "`count` of {} exceeds `max_count` of {}",
+                        agents.count, agents.max_count
+                    ),
                     place.clone(),
                 );
             }
             for (key, side) in [("width", agents.width), ("height", agents.height)] {
                 if !(1.0..=MAX_WORLD_SIDE).contains(&side) {
                     checker.error(
-                        format!("the world's `{key}` is {side}, outside 1 to {MAX_WORLD_SIDE}"),
+                        format!("the world's `{key}` must be from 1 to {MAX_WORLD_SIDE}, got {side}"),
                         place.clone(),
                     );
                 }
@@ -180,7 +174,7 @@ fn check_categories(checker: &mut Checker<'_>) {
         if category.variants.is_empty() || category.variants.len() > MAX_VARIANTS {
             checker.error(
                 format!(
-                    "the category '{}' holds {} variants, and a category holds 1 to {MAX_VARIANTS}",
+                    "the category '{}' holds {} variants, expected 1 to {MAX_VARIANTS}",
                     category.id,
                     category.variants.len()
                 ),
@@ -192,7 +186,7 @@ fn check_categories(checker: &mut Checker<'_>) {
             if !is_port_segment(&variant.name) {
                 checker.error(
                     format!(
-                        "the category '{}' names the variant '{}', outside the grammar of a port name",
+                        "the category '{}' names the variant '{}', which is not a valid port name",
                         category.id, variant.name
                     ),
                     place.clone(),
@@ -228,17 +222,14 @@ fn check_palettes(checker: &mut Checker<'_>) {
         check_id(checker, "palette", &palette.id, &mut seen, place.clone());
         if document.category(&palette.id).is_some() {
             checker.error(
-                format!(
-                    "the palette '{}' takes the id of a category, and a palette's id is its own",
-                    palette.id
-                ),
+                format!("the palette '{}' has the same id as a category", palette.id),
                 place.clone(),
             );
         }
         if palette.colors.is_empty() || palette.colors.len() > MAX_PALETTE_COLORS {
             checker.error(
                 format!(
-                    "the palette '{}' holds {} colours, and a palette holds 1 to {MAX_PALETTE_COLORS}",
+                    "the palette '{}' holds {} colours, expected 1 to {MAX_PALETTE_COLORS}",
                     palette.id,
                     palette.colors.len()
                 ),
@@ -252,7 +243,7 @@ fn check_palettes(checker: &mut Checker<'_>) {
 fn check_initial(checker: &Checker<'_>, value_type: &ValueType, initial: &Literal) -> Result<(), String> {
     let found = initial.value_type();
     if found != *value_type {
-        return Err(format!("is {found}, and the type is {value_type}"));
+        return Err(format!("has the type {found}, expected {value_type}"));
     }
     if let Literal::Category(name) = initial {
         let known = checker
@@ -271,11 +262,11 @@ fn check_initial(checker: &Checker<'_>, value_type: &ValueType, initial: &Litera
 fn check_declared(checker: &Checker<'_>, value_type: &ValueType) -> Result<(), String> {
     let document = checker.file.document();
     match value_type {
-        ValueType::Category(id) if document.category(id).is_none() => Err(format!(
-            "needs the category '{id}', and the file declares no such category"
-        )),
+        ValueType::Category(id) if document.category(id).is_none() => {
+            Err(format!("needs the category '{id}', which the file does not declare"))
+        }
         ValueType::Layer(id) if document.field(id).is_none() => {
-            Err(format!("needs the field '{id}', and the file declares no such field"))
+            Err(format!("needs the field '{id}', which the file does not declare"))
         }
         _ => Ok(()),
     }
@@ -298,7 +289,7 @@ fn check_lanes(checker: &mut Checker<'_>) {
         if !domain_fits {
             checker.error(
                 format!(
-                    "the lane '{}' belongs to {}, which the {} topology has no lanes of",
+                    "the lane '{}' belongs to {}, which the {} topology does not support",
                     lane.id,
                     lane.domain.as_str(),
                     topology.as_str()
@@ -310,7 +301,7 @@ fn check_lanes(checker: &mut Checker<'_>) {
         if lane.value_type.is_host_only() {
             checker.error(
                 format!(
-                    "the lane '{}' has the type {}, which has no form on the GPU, where lanes live",
+                    "the lane '{}' has the type {}, which the GPU does not support",
                     lane.id, lane.value_type
                 ),
                 place.clone(),
@@ -331,7 +322,7 @@ fn check_lanes(checker: &mut Checker<'_>) {
             positions += 1;
             if lane.value_type != ValueType::Vec2F || topology == Topology::Grid {
                 checker.error(
-                    format!("the position lane '{}' is a `vec2f` lane of agents", lane.id),
+                    format!("the position lane '{}' must be a `vec2f` lane of agents", lane.id),
                     place.clone(),
                 );
             }
@@ -340,7 +331,7 @@ fn check_lanes(checker: &mut Checker<'_>) {
     for (domain, count) in per_domain {
         if count > MAX_LANES_PER_DOMAIN {
             checker.error(
-                format!("the file holds {count} lanes of {domain}, and a domain holds at most {MAX_LANES_PER_DOMAIN}"),
+                format!("the file holds {count} lanes of {domain}, expected at most {MAX_LANES_PER_DOMAIN}"),
                 places.first().cloned(),
             );
         }
@@ -352,9 +343,7 @@ fn check_lanes(checker: &mut Checker<'_>) {
         }
         Topology::Agents if positions != 1 => {
             checker.error(
-                format!(
-                    "an agents model has exactly one lane with `role = \"position\"`, and this file has {positions}"
-                ),
+                format!("an agents model must have exactly one lane with `role = \"position\"`, got {positions}"),
                 place,
             );
         }
@@ -378,23 +367,20 @@ fn check_fields(checker: &mut Checker<'_>) {
         check_id(checker, "field", &field.id, &mut seen, place.clone());
         if document.lane(&field.id).is_some() {
             checker.error(
-                format!("the field '{}' takes the id of a lane", field.id),
+                format!("the field '{}' has the same id as a lane", field.id),
                 place.clone(),
             );
         }
         if document.world.topology() == Topology::Grid {
             checker.error(
-                format!(
-                    "the field '{}' needs the agents topology, and this file is a grid",
-                    field.id
-                ),
+                format!("the field '{}' needs the agents topology, got a grid", field.id),
                 place.clone(),
             );
         }
         if field.value_type != ValueType::F32 && !matches!(field.value_type, ValueType::Category(_)) {
             checker.error(
                 format!(
-                    "the field '{}' has the type {}, and a field holds `f32` or a category",
+                    "the field '{}' has the type {}, expected `f32` or a category",
                     field.id, field.value_type
                 ),
                 place.clone(),
@@ -414,7 +400,7 @@ fn check_fields(checker: &mut Checker<'_>) {
         if field.layers.is_empty() || field.layers.len() > MAX_LAYERS_PER_FIELD {
             checker.error(
                 format!(
-                    "the field '{}' holds {} layers, and a field holds 1 to {MAX_LAYERS_PER_FIELD}",
+                    "the field '{}' holds {} layers, expected 1 to {MAX_LAYERS_PER_FIELD}",
                     field.id,
                     field.layers.len()
                 ),
@@ -438,7 +424,7 @@ fn check_fields(checker: &mut Checker<'_>) {
         {
             checker.error(
                 format!(
-                    "the field '{}' finishes with '{finish}', and the file declares no such function",
+                    "the field '{}' finishes with the function '{finish}', which the file does not declare",
                     field.id
                 ),
                 place,
@@ -463,10 +449,7 @@ fn check_counters(checker: &mut Checker<'_>) {
         check_id(checker, "counter", &counter.id, &mut seen, place.clone());
         if document.world.topology() == Topology::Grid {
             checker.error(
-                format!(
-                    "the counter '{}' needs the agents topology, and this file is a grid",
-                    counter.id
-                ),
+                format!("the counter '{}' needs the agents topology, got a grid", counter.id),
                 place,
             );
         }
@@ -493,7 +476,7 @@ fn check_params(checker: &mut Checker<'_>) {
         }
         if document.lane(id).is_some() || document.field(id).is_some() {
             checker.error(
-                format!("the parameter '{id}' takes the id of a lane or a field"),
+                format!("the parameter '{id}' has the same id as a lane or a field"),
                 place.clone(),
             );
         }
@@ -522,7 +505,7 @@ fn check_tick_length(checker: &mut Checker<'_>) {
     let id = &time.tick_length;
     let Some(index) = document.params.iter().position(|param| param.id() == id) else {
         checker.error(
-            format!("the time scale names the parameter '{id}', and the file declares no parameter '{id}'"),
+            format!("the time scale names the parameter '{id}', but the file declares no parameter '{id}'"),
             None,
         );
         return;
@@ -531,7 +514,7 @@ fn check_tick_length(checker: &mut Checker<'_>) {
     let place = checker.file.places().params.get(index).cloned();
     match param.kind() {
         ParamKind::F32 { min, .. } if *min <= 0.0 => checker.error(
-            format!("the parameter '{id}' sets `tick_unit` and needs a `min` above 0"),
+            format!("the parameter '{id}' sets `tick_unit` and needs a `min` greater than 0"),
             place.clone(),
         ),
         ParamKind::F32 { .. } => {}
@@ -589,7 +572,7 @@ fn check_actions(checker: &mut Checker<'_>) {
             .any(|pass| pass.action.as_deref() == Some(action.id.as_str()));
         if !has_pass && action.runs.is_empty() {
             checker.error(
-                format!("the action '{}' has no pass and reruns none", action.id),
+                format!("the action '{}' has no pass and reruns no passes", action.id),
                 place.clone(),
             );
         }
@@ -597,14 +580,14 @@ fn check_actions(checker: &mut Checker<'_>) {
             match document.passes.iter().find(|pass| pass.id == *id) {
                 None => checker.error(
                     format!(
-                        "the action '{}' reruns the pass '{id}', and the file declares no such pass",
+                        "the action '{}' reruns the pass '{id}', which the file does not declare",
                         action.id
                     ),
                     place.clone(),
                 ),
                 Some(pass) if !matches!(pass.stage, PassStage::Init | PassStage::Tick) => checker.error(
                     format!(
-                        "the action '{}' reruns the {} pass '{id}', and an action reruns an init or a tick pass",
+                        "the action '{}' reruns the {} pass '{id}', expected an init or a tick pass",
                         action.id,
                         pass.stage.as_str()
                     ),
@@ -669,7 +652,7 @@ pub(super) fn check_node_ids(checker: &mut Checker<'_>) -> Vec<NodeId> {
                 duplicates.insert(node.id);
                 checker.add(
                     henad_core::diagnostic::CodeDiagnostic::error(format!(
-                        "two nodes hold the id {}, as a merge of two branches can leave them, and the file needs its duplicates renumbered",
+                        "two nodes have the id {}, which a merge of two branches can cause. Renumber the duplicates",
                         node.id
                     ))
                     .with_node(node.id.to_string()),

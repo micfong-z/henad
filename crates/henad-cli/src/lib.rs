@@ -194,7 +194,7 @@ fn parse_args(
     if args.print_lowered && args.model_file.len() != 1 {
         return Err(command.error(
             ErrorKind::WrongNumberOfValues,
-            "--print-lowered takes exactly one --model-file",
+            "--print-lowered requires exactly one --model-file",
         ));
     }
     // Clap accepts any number of model files in place of the model id. Only one of them can stand in for it.
@@ -227,12 +227,12 @@ struct Args {
     #[arg(required_unless_present_any = ["list", "info", "spec", "merge", "model_file"])]
     model: Option<String>,
 
-    /// Load a model file and add its model to this build's models, in place of a model with the same id. Repeatable.
+    /// Load a model file and add its model to this build's models, replacing a model with the same id. Repeatable.
     #[arg(long = "model-file", value_name = "PATH")]
     model_file: Vec<PathBuf>,
 
-    /// Print the graph that the one `--model-file` builds as in its canonical text, a sheet's lowered graph included,
-    /// and exit.
+    /// Print the canonical text of the graph that the single `--model-file` builds, and exit. For a sheet, print the
+    /// lowered graph.
     #[arg(
         long = "print-lowered",
         requires = "model_file",
@@ -251,8 +251,8 @@ struct Args {
     #[arg(long, default_value_t = 0)]
     warmup: u64,
 
-    /// Untimed steps for a one-time hardware warm-up before the timed reps. Ramps GPU clocks and
-    /// pays first-use compilation, so rep 1 isn't cold. Its cost scales with the workload.
+    /// Untimed steps for a one-time hardware warm-up before the timed reps. The warm-up ramps up GPU clocks and
+    /// triggers first-use compilation, so rep 1 is not cold. Its cost scales with the workload.
     #[arg(long = "global-warmup", default_value_t = 0)]
     global_warmup: u64,
 
@@ -269,10 +269,10 @@ struct Args {
     #[arg(long = "set", value_name = "ID=VALUE", value_parser = parse_set)]
     set: Vec<(String, String)>,
 
-    /// Run one of the model's actions at a tick, e.g. `--act clear@500`. Repeatable. An unknown id is
-    /// refused, and the error lists the ids the model declares. Each rep and each run of a sweep replays the same
-    /// schedule. A sweep names the action by its id, or `ID_2` for the second `--act` of an id, skipping a name an
-    /// earlier `--act` has taken.
+    /// Run one of the model's actions at a tick, e.g. `--act clear@500`. Repeatable. An unknown id is rejected, and the
+    /// error lists the ids the model declares. Each rep and each run of a sweep replays the same schedule. A sweep
+    /// names the action by its id, or `ID_2` for the second `--act` of an id, skipping a name an earlier `--act` has
+    /// taken.
     #[arg(long = "act", value_name = "ID@TICK", value_parser = check_act)]
     act: Vec<String>,
 
@@ -280,12 +280,12 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     export: Option<PathBuf>,
 
-    /// Write the per-tick stat time series to this path as CSV, then exit. Runs one configuration
-    /// for `warmup + steps` steps, sampling every `--stats-every` ticks.
+    /// Write the per-tick stat time series to this path as CSV, then exit. One configuration runs for `warmup + steps`
+    /// steps, with stats sampled every `--stats-every` ticks.
     #[arg(long = "export-stats", value_name = "PATH")]
     export_stats: Option<PathBuf>,
 
-    /// Sample stats every N ticks when using `--export-stats` or sweeping. 1 records every tick.
+    /// Sample stats every N ticks when using `--export-stats` or sweeping. Set to 1 to record every tick.
     #[arg(long = "stats-every", default_value_t = 1, value_name = "N")]
     stats_every: u64,
 
@@ -298,8 +298,8 @@ struct Args {
     #[arg(long, conflicts_with_all = ["out", "dry_run"])]
     params: bool,
 
-    /// Print host and GPU information. With no model and no sweep it prints and exits. Otherwise it
-    /// prints as a provenance header before the benchmark or sweep.
+    /// Print host and GPU information. With no model and no sweep, print it and exit. Otherwise print it as a
+    /// provenance header before the benchmark or sweep.
     #[arg(long)]
     info: bool,
 
@@ -307,7 +307,7 @@ struct Args {
     #[arg(long)]
     json: bool,
 
-    /// Worker threads for CPU models. 0 leaves rayon's own choice, which is one per logical cpu.
+    /// Worker threads for CPU models. Set to 0 to use rayon's default of one thread per logical CPU.
     #[arg(long, default_value_t = 0, value_name = "N")]
     threads: usize,
 
@@ -372,7 +372,7 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
         rayon::ThreadPoolBuilder::new()
             .num_threads(args.threads)
             .build_global()
-            .context("cannot size the worker pool")?;
+            .context("cannot set the number of worker threads")?;
     }
     if mode == Mode::Merge {
         return explore::merge_shards(args);
@@ -444,7 +444,7 @@ fn headless_device(models: &ModelSet, gpu_models: bool) -> Option<GpuContext> {
         Ok(ctx) => ctx,
         Err(err) => {
             if gpu_models {
-                eprintln!("note: no GPU available ({err}); GPU models disabled");
+                eprintln!("note: no GPU available ({err}), so GPU models are disabled");
             }
             return None;
         }
@@ -456,8 +456,8 @@ fn headless_device(models: &ModelSet, gpu_models: bool) -> Option<GpuContext> {
         && classify_adapter(&runtime.adapter) == GpuVerdict::Absent
     {
         eprintln!(
-            "!!! warning: adapter '{}' is a software rasteriser, not a GPU; \
-                 GPU-model results from this machine are not GPU results !!!",
+            "!!! warning: adapter '{}' is a software rasteriser, not a GPU. GPU-model results from this machine are \
+                 not GPU results !!!",
             runtime.adapter.name
         );
     }

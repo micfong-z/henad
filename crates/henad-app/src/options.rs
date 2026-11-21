@@ -248,10 +248,10 @@ impl std::fmt::Display for OpeningError {
             ),
             Self::OtherSchema(model) => write!(
                 formatter,
-                "the setup to open declares other parameters, stats or actions than model '{model}' of this build"
+                "the setup to open declares different parameters, stats or actions from model '{model}' of this build"
             ),
             Self::RunRefused { model, reason } => {
-                write!(formatter, "model '{model}' refuses the run to open: {reason}")
+                write!(formatter, "model '{model}' rejects the run to open: {reason}")
             }
         }
     }
@@ -368,7 +368,7 @@ impl WebStartError {
 impl std::fmt::Display for WebStartError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
-            WebStartErrorKind::NoWindow => formatter.write_str("the app runs outside a browser window with a document"),
+            WebStartErrorKind::NoWindow => formatter.write_str("the app must run in a browser window with a document"),
             WebStartErrorKind::MissingCanvas(id) => write!(formatter, "the page has no canvas '{id}'"),
             WebStartErrorKind::Opening(error) => write!(formatter, "the app cannot open: {error}"),
             WebStartErrorKind::Eframe(error) => write!(formatter, "the app failed to start: {error}"),
@@ -484,7 +484,7 @@ mod tests {
             options(examples.clone(), unknown_action).check_opening(),
             Err(OpeningError::RunRefused {
                 model: "sir".to_owned(),
-                reason: "model has no action 'absent'".to_owned(),
+                reason: "unknown action 'absent'".to_owned(),
             })
         );
 

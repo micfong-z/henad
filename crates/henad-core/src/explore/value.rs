@@ -108,13 +108,13 @@ impl fmt::Display for ValueError {
             Self::NotANumber { raw, .. } => write!(f, "'{raw}' is not a number"),
             Self::NotAnInteger { raw, .. } => write!(f, "'{raw}' is not an integer"),
             Self::NotABool { raw, .. } => write!(f, "'{raw}' is not a bool"),
-            Self::OutOfRange { value, min, max } => write!(f, "{value} is outside {min}..={max}"),
+            Self::OutOfRange { value, min, max } => write!(f, "{value} is outside the range {min} to {max}"),
             Self::UnknownOption { raw, options } if raw.parse::<usize>().is_ok() => {
                 write!(f, "index {raw} is not one of {options:?}")
             }
             Self::UnknownOption { raw, options } => write!(f, "'{raw}' is not one of {options:?}"),
-            Self::UnknownParam { id, .. } => write!(f, "model has no parameter '{id}'"),
-            Self::BadOverride { raw } => write!(f, "bad --set '{raw}', expected ID=VALUE"),
+            Self::UnknownParam { id, .. } => write!(f, "unknown parameter '{id}'"),
+            Self::BadOverride { raw } => write!(f, "invalid --set '{raw}', expected ID=VALUE"),
             Self::Param { id, .. } => write!(f, "parameter '{id}'"),
             Self::WrongKind { expected, found, value } => {
                 let example = match expected {
@@ -123,7 +123,7 @@ impl fmt::Display for ValueError {
                     ValueKind::Bool => "a bool value",
                     ValueKind::Choice => "a choice such as ParamValue::Choice(0)",
                 };
-                write!(f, "expected {example}, found the {found} {value}")
+                write!(f, "expected {example}, got the {found} {value}")
             }
         }
     }
@@ -548,15 +548,9 @@ mod tests {
                 value: "1".to_owned(),
             }
         );
-        assert_eq!(
-            error.to_string(),
-            "expected an f32 value such as 1.0f32, found the u32 1"
-        );
+        assert_eq!(error.to_string(), "expected an f32 value such as 1.0f32, got the u32 1");
         let error = check_value(descriptors[0].kind(), &ParamValue::F32(256.0)).expect_err("an f32 for a u32");
-        assert_eq!(
-            error.to_string(),
-            "expected a u32 value such as 1u32, found the f32 256"
-        );
+        assert_eq!(error.to_string(), "expected a u32 value such as 1u32, got the f32 256");
         let error = check_value(descriptors[2].kind(), &ParamValue::U32(1)).expect_err("a u32 for a choice");
         assert!(
             matches!(
@@ -571,10 +565,10 @@ mod tests {
         );
         assert_eq!(
             error.to_string(),
-            "expected a choice such as ParamValue::Choice(0), found the u32 1"
+            "expected a choice such as ParamValue::Choice(0), got the u32 1"
         );
         let wrap = bool_param("wrap", "Wrap", true);
         let error = check_value(wrap.kind(), &ParamValue::Choice(0)).expect_err("a choice for a bool");
-        assert_eq!(error.to_string(), "expected a bool value, found the choice 0");
+        assert_eq!(error.to_string(), "expected a bool value, got the choice 0");
     }
 }

@@ -73,9 +73,7 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
         );
         let build = match &build_disabled_reason {
             None if replays_sheet => build.on_hover_text(BUILD_SHEET_TOOLTIP),
-            None => {
-                build.on_hover_text("Build the selected model from given parameters, replacing any running simulation")
-            }
+            None => build.on_hover_text("Build selected model from given parameters, replacing any running simulation"),
             Some(reason) => build.on_disabled_hover_text(reason.as_str()),
         };
         if build.clicked() {
@@ -129,7 +127,7 @@ pub(crate) fn tick_counter(app: &AppState) -> Option<String> {
 pub const PREVIEW_APPLY: &str = "Press Apply in the Editor to run the model at its own size.";
 
 /// Hover text of the preview line once the Editor holds a grid rule or nothing.
-pub const PREVIEW_ORPHANED: &str = "Editor holds another model. Press Offload to stop preview.";
+pub const PREVIEW_ORPHANED: &str = "Another model is open in the Editor. Press Offload to stop the preview.";
 
 /// Line under the preview of the Editor's sheet while it waits at tick 0.
 pub const PREVIEW_WAITS_FOR_PLAY: &str = "Press Play to run the preview.";

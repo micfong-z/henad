@@ -6,7 +6,7 @@ kind = "sheet"
 version = 1
 id = "boids"
 name = "Boids"
-purpose = "Flocking from three local rules. Pattern to look for: scattered birds form flocks that move as one."
+purpose = "Flocking from three local rules. Look for scattered birds forming flocks that move as one."
 next_line = 9
 
 [world]

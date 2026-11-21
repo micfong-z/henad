@@ -678,7 +678,7 @@ impl fmt::Display for OutputError {
             ),
             Self::Link { path } => write!(
                 f,
-                "'{}' is a symbolic link. A sweep writes to no table through a link",
+                "'{}' is a symbolic link. A sweep cannot write to a table through a link",
                 path.display()
             ),
             Self::Read { path, .. } => write!(f, "cannot read '{}'", path.display()),

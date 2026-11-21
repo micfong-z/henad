@@ -79,7 +79,7 @@ fn the_reader_refuses_a_second_tick_length_and_an_unknown_unit() {
     let second = TICK_LENGTH.replace("\"tick_length\"", "\"other_length\"");
     let message = graph_refusal(&life_with(&format!("{TICK_LENGTH}\n{second}"))).message;
     assert!(
-        message.contains("'tick_length' and 'other_length' both set `tick_unit`"),
+        message.contains("only one parameter can set `tick_unit`, got 'tick_length' and 'other_length'"),
         "{message}"
     );
 
@@ -104,7 +104,7 @@ fn the_checker_holds_a_tick_length_to_a_hidden_positive_f32() {
     let at_zero = TICK_LENGTH.replace("min = 0.01", "min = 0.0");
     assert_eq!(
         graph_errors(&life_with(&at_zero)),
-        ["the parameter 'tick_length' sets `tick_unit` and needs a `min` above 0"]
+        ["the parameter 'tick_length' sets `tick_unit` and needs a `min` greater than 0"]
     );
     let below_zero = TICK_LENGTH.replace("min = 0.01", "min = -1.0");
     assert_eq!(graph_errors(&life_with(&below_zero)).len(), 1);

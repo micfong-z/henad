@@ -141,11 +141,15 @@ pub enum ScheduleError {
 impl fmt::Display for ScheduleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BadEntry { raw } => write!(f, "bad --act '{raw}', expected ID@TICK"),
-            Self::BadTick { raw, .. } => write!(f, "bad tick in --act '{raw}'"),
+            Self::BadEntry { raw } => write!(f, "invalid --act '{raw}', expected ID@TICK"),
+            Self::BadTick { raw, .. } => write!(f, "invalid tick in --act '{raw}'"),
             Self::NoActions { model } => write!(f, "'{model}' declares no actions"),
             Self::UnknownAction { id, model, known } => {
-                write!(f, "unknown action '{id}' for '{model}' (has {})", known.join(", "))
+                write!(
+                    f,
+                    "unknown action '{id}' for '{model}', expected one of {}",
+                    known.join(", ")
+                )
             }
         }
     }
@@ -407,8 +411,8 @@ mod tests {
                 .expect_err("refused")
                 .to_string()
         };
-        assert_eq!(refuse("clear", &actions), "bad --act 'clear', expected ID@TICK");
-        assert_eq!(refuse("clear@soon", &actions), "bad tick in --act 'clear@soon'");
+        assert_eq!(refuse("clear", &actions), "invalid --act 'clear', expected ID@TICK");
+        assert_eq!(refuse("clear@soon", &actions), "invalid tick in --act 'clear@soon'");
         let bad_tick = Schedule::parse(&["clear@soon".to_owned()], "life", &actions).expect_err("refused");
         let source = std::error::Error::source(&bad_tick).map(ToString::to_string);
         assert_eq!(
@@ -419,7 +423,7 @@ mod tests {
         assert_eq!(refuse("clear@5", &[]), "'life' declares no actions");
         assert_eq!(
             refuse("reset@5", &actions),
-            "unknown action 'reset' for 'life' (has randomise, clear)"
+            "unknown action 'reset' for 'life', expected one of randomise, clear"
         );
     }
 

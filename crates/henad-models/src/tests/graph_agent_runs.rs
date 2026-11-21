@@ -137,11 +137,11 @@ fn every_agent_file_at_its_largest_population_in_its_largest_world_fits_the_work
             panic!("{name}: {found:?}");
         };
         let budget = format!(
-            "units of work on the host, past the budget of {}",
+            "units of work on the host, exceeding the budget of {}",
             grouped(HOST_WORK_BUDGET)
         );
         assert!(
-            line.contains("_init' would run ") && line.ends_with(&budget),
+            line.contains("_init' runs ") && line.ends_with(&budget),
             "{name}: {line}"
         );
         let at_declared = entry.shortfalls(&budget_params(&name, &entry, declared, BudgetWorld::Largest), &limits);
@@ -219,14 +219,14 @@ fn every_agent_file_in_its_declared_world_admits_its_pinned_largest_population()
         let [line] = refused.as_slice() else {
             panic!("{name} at {}: {refused:?}", pinned + 1);
         };
-        let budget = format!("past the budget of {}", grouped(SUBMISSION_WORK_BUDGET));
+        let budget = format!("exceeding the budget of {}", grouped(SUBMISSION_WORK_BUDGET));
         let pass = format!(
             "and pass '{}' is the heaviest at {} per step",
             heaviest.label,
             grouped(heaviest.work)
         );
         assert!(
-            line.starts_with("one submission would run ") && line.ends_with(&format!("{budget}, {pass}")),
+            line.starts_with("one submission runs ") && line.ends_with(&format!("{budget}, {pass}")),
             "{name} at {}: {line}",
             pinned + 1
         );
@@ -436,7 +436,7 @@ fn a_field_update_reads_each_layer_at_its_own_cell() {
     assert!(
         error
             .to_string()
-            .contains("reads the field 'trail' in the update that runs its `finish` 'cut'"),
+            .contains("cannot read the field 'trail' in the update that runs its `finish` 'cut'"),
         "{error}"
     );
 }

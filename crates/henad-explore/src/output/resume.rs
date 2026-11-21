@@ -463,8 +463,8 @@ impl fmt::Display for ResumeError {
             }
             Self::CodeChanged { recorded, current } => write!(
                 f,
-                "the directory holds runs of different model code ({recorded}, expected {current}). A model \
-                 composed at run time resumes only with the code its runs ran"
+                "the directory holds runs of different model code ({recorded}, expected {current}). A resume cannot \
+                 change the code of a model composed at run time"
             ),
             Self::SchemaChanged { recorded, current } => write!(
                 f,

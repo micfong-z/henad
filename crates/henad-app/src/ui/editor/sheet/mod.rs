@@ -397,7 +397,9 @@ impl SheetEditor {
     /// unchanged.
     pub fn keep_value(&mut self, parameter: &str, value: f64) -> Result<(), SheetEditError> {
         let Some(kept) = self.document().parameters.iter().find(|known| known.id == parameter) else {
-            return Err(SheetEditError::Missing(format!("no parameter has the id {parameter}")));
+            return Err(SheetEditError::Missing(format!(
+                "the sheet has no parameter '{parameter}'"
+            )));
         };
         let edit = set_parameter_edit(kept, kept.min.min(value), kept.max.max(value), value, kept.unit.clone());
         let mut builder = self.builder.clone();

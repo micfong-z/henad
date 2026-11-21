@@ -136,7 +136,7 @@ fn a_grid_rule_refuses_the_time_scale_keys() {
         let name = key.split(' ').next().unwrap_or_default();
         let message = &error.diagnostics()[0].message;
         assert!(
-            message.contains(&format!("must not set `{name}`, which only a graph file reads")),
+            message.contains(&format!("cannot set `{name}` outside a graph file")),
             "{message}"
         );
         assert_eq!(
@@ -227,7 +227,10 @@ fn a_declaration_error_points_at_its_table() {
     placed.sort_unstable();
     let expected = [
         (line_of(&text, "id = \"Life\""), "rule id 'Life'"),
-        (line_of(&text, "[grid]"), "the grid width is 0"),
+        (
+            line_of(&text, "[grid]"),
+            "the grid width must be between 1 and 16384, got 0",
+        ),
         (line_at(&text, third_state), "both produce the constant `DEAD`"),
         (line_at(&text, second_param), "parameter id 'seed' is reserved"),
     ];
@@ -531,5 +534,5 @@ fn only_a_graph_is_held_to_the_graph_size_limit() {
     let starter = henad_graph::starters::starter("vote.toml").expect("the Vote starter");
     let padded = format!("{}\n# {}\n", starter.text, "x".repeat(limit));
     let error = ModelFile::parse(&padded).expect_err("a graph past the limit read");
-    assert!(error.to_string().contains("a graph file holds at most"), "{error}");
+    assert!(error.to_string().contains("bytes, expected at most"), "{error}");
 }

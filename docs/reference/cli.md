@@ -42,8 +42,8 @@ With two files or more and no spec, `MODEL` is required, and a command line with
 | `--params` | | Print the model's parameters, with kinds, defaults and ranges, and exit. With `--json`, print them as [one JSON line](#parameters-as-json) |
 | `--info` | | Print host and GPU details. Without a model or a sweep, prints and exits. Otherwise, prints as a provenance header |
 | `--json` | | Emit one JSON object per line instead of the human report, for a driver to parse |
-| `--model-file <PATH>` | | Load a [model file](#model-files) and add its model to the build's models, in place of a model with the same id. Repeatable |
-| `--print-lowered` | | Print the graph that the one `--model-file` builds as, in its canonical text, and exit. For a sheet this is the graph it [lowers to](#sheets) |
+| `--model-file <PATH>` | | Load a [model file](#model-files) and add its model to the build's models, replacing a model with the same id. Repeatable |
+| `--print-lowered` | | Print the canonical text of the graph that the single `--model-file` builds, and exit. For a sheet, print the [lowered graph](#sheets) |
 | `--threads <N>` | 0 | Worker threads for CPU models. 0 uses the rayon default, one per logical cpu |
 | `--set <ID=VALUE>` | | Override one parameter. Repeatable |
 | `--act <ID@TICK>` | | Run one of the model's actions at that tick. Repeatable. In a sweep, every run fires it |
@@ -218,7 +218,7 @@ A copy of the example whose line `l2` becomes a state that Status does not hold 
 Error: cannot load model file 'game_of_life.toml'
 
 Caused by:
-    game_of_life.toml:95:1: error: new_state 'zombie' is no state of 'status'
+    game_of_life.toml:95:1: error: new_state 'zombie' is not a state of 'status'
 ```
 
 A sheet with no property prints a warning at its `[world]` table and stops with the same words as an error there.
@@ -256,7 +256,7 @@ A spec file with a `[search]` table runs a [search](#searches) instead.
 |---|---|---|
 | `--out <DIR>` | | Run the sweep and write its results to this directory. With `--merge`, write the merged shards to this directory |
 | `--spec <FILE>` | | Read the sweep from a TOML spec file, or run the [search](#searches) of one with a `[search]` table |
-| `--dry-run` | | Print the sweep's plan and write nothing. The first config that builds without a fault and the last config are built as a check |
+| `--dry-run` | | Print the sweep's plan and write nothing. The first config that builds without errors and the last config are built as a check |
 | `--vary <ID=LEVELS>` | | Vary one parameter over [its levels](#levels), or the tick of an action with `action.NAME=LEVELS`. Repeatable |
 | `--zip` | | Pair the levels of every `--vary` by position |
 | `--sample <lhs:N\|random:N>` | | Draw `N` configs from the `--vary` levels and ranges, spread as a Latin hypercube or drawn uniformly. See [designs](#designs) |
@@ -274,7 +274,7 @@ A spec file with a `[search]` table runs a [search](#searches) instead.
 | `--shard <I/N>` | `0/1` | Run only the runs whose `run_id` leaves remainder `I` when divided by `N` |
 | `--resume` | | Resume the sweep in the `--out` directory and run only the missing and timed-out runs. See [resuming](#resuming) |
 | `--retry-failed` | | With `--resume`, also rerun failed runs |
-| `--merge <DIR>...` | | Merge the directories of a sweep's shards into the `--out` directory. Takes no model |
+| `--merge <DIR>...` | | Merge a sweep's shard directories into the `--out` directory. Takes no model |
 
 `--out`, `--spec` and `--dry-run` each request a sweep, and every other flag in this table apart from `--merge` needs one of them.
 `--spec` needs `--out`, `--dry-run` or `--params`.
@@ -460,7 +460,7 @@ An action due at a later tick fires after the step that reaches it, before that 
 Warm-up ticks count toward the tick, as in a benchmark.
 Actions due at one tick fire in the order they are listed, and each fires at most once per run.
 An action due past the run's last tick never fires, and the plan warns about it.
-A rejected action is noted in the `note` column as `model refused action 'ID' at tick TICK`, and the run keeps its status.
+A rejected action is noted in the `note` column as `model rejected action 'ID' at tick TICK`, and the run keeps its status.
 
 ### Timeouts
 

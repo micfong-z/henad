@@ -153,7 +153,9 @@ fn a_random_number_start_of_a_whole_number_is_refused() {
     );
     let error = only_refusal(&text);
     assert!(
-        error.message.contains("starts a Number property only"),
+        error
+            .message
+            .contains("only a Number property can start as a random number"),
         "{}",
         error.message
     );
@@ -379,7 +381,7 @@ fn a_hued_shading_ramps_from_its_darkest_to_its_lightest_value() {
     // Two equal ends leave no range to shade over.
     let flat = edited(&shaded, "lightest = 10", "lightest = 2");
     let error = only_refusal(&flat);
-    assert!(error.message.contains("same value 2"), "{}", error.message);
+    assert!(error.message.contains("got 2 for both"), "{}", error.message);
     assert!(placed_at(&error, &flat).starts_with("[color.cells]"));
     assert!(crate::sheet::ParsedSheet::parse(&edited(&shaded, "hue = \"blue\"", "hue = \"teal\"")).is_err());
 }

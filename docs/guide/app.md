@@ -562,7 +562,7 @@ At 0 steps, a run measures only the last tick of its warm-up.
 
 Tick **Stop when** to end a run at the first sample where a stat passes a threshold, as `--stop` does.
 Pick the **Stat**, the comparison and the threshold under **Condition**, and set **From tick** to the first tick at which the condition can end a run.
-The comparison dropdown shows each comparison in words, then its symbol: **below** `<`, **at most** `<=`, **equal to** `==`, **not equal to** `!=`, **at least** `>=` and **above** `>`.
+The comparison dropdown shows each comparison in words, then its symbol: **less than** `<`, **at most** `<=`, **equal to** `==`, **not equal to** `!=`, **at least** `>=` and **greater than** `>`.
 The line under them spells the condition out, as in **Runs will end at the first sample where Infected is at most 0, from tick 0.**
 Tick **Timeout** to end a run once it has stepped for **Seconds per run**, 600 to begin with.
 The field takes 1 s or more, and a shorter timeout from a loaded spec file stays as written.
@@ -694,7 +694,7 @@ Under the bar, <span class="ui" markdown>:material-pencil-outline: Edit sweep</s
 <span class="ui" markdown>:material-tray-arrow-down: Save results</span>
 : Saves the four files of a sweep held in memory: `runs.csv`, `series.csv`, `summary.csv` and `manifest.json`.
   The desktop app prompts for a folder, and rejects a folder that already holds a file of the same name.
-  A browser downloads the files one after another, with no dialog, and the status reads **Downloads started. Press Save results again if your browser blocked any.**
+  A browser downloads the files one after another, with no dialog, and the status reads **Downloads started. Press Save results again if the browser blocked any downloads.**
   In the desktop app the button disappears once the files are saved.
   In a browser it stays, with the warnings about unsaved results, because the browser can hold back every download after the first.
   A sweep with an output folder wrote its files as it ran, and has no such button.
@@ -1046,10 +1046,10 @@ When it reads Unavailable, network models still run, but their edges are not dra
 
 A banner at the top appears when there are potential compatibility issues with the GPU, and can be one of the following:
 
-| Banner                                           | Issue                                                                               |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| :material-information: GPU performance uncertain | No discrete GPU was directly detected. This may or may not affect performance.      |
-| :material-alert: No GPU detected                 | Rendering is going through a software rasteriser, and GPU models will be very slow. |
+| Banner                                           | Issue                                                                   |
+| ------------------------------------------------ | ----------------------------------------------------------------------- |
+| :material-information: GPU performance uncertain | No discrete GPU was detected. This may or may not affect performance.   |
+| :material-alert: No GPU detected                 | Rendering uses a software rasteriser, and GPU models will be very slow. |
 
 ## :material-code-braces: Editor tab
 
@@ -1102,7 +1102,7 @@ The new code replaces the model of the same id, and the panels describe it at on
 
 The running simulation keeps the code it was built with.
 A run still at tick 0, neither playing nor running to a tick, is rebuilt under the new code straight away.
-For any other run, a **Rebuild model** dialog appears first, reading **The model will be rebuilt from tick 0. The current run will be lost.**
+For any other run, a **Rebuild model?** dialog appears first, reading **The model will be rebuilt from tick 0. The current run will be lost.**
 
 <span class="ui">Rebuild</span>
 : Ends the run and builds the model again from tick 0, under the new code.

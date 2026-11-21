@@ -71,7 +71,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.add",
         label: "Add",
-        semantics: "Sum of `a` and `b`. Integers wrap and vectors add per component. A float NaN input gives NaN on the host.",
+        semantics: "Sum of `a` and `b`. Integers wrap and vectors add per component. A float NaN input returns NaN on the host.",
         cases: &[
             case("u32 wraps", &[("a", U32(u32::MAX)), ("b", U32(2))], &[("out", U32(1))]),
             case(
@@ -96,7 +96,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.sub",
         label: "Subtract",
-        semantics: "Difference `a - b`. Integers wrap and vectors subtract per component. A float NaN input gives NaN on the host.",
+        semantics: "Difference `a - b`. Integers wrap and vectors subtract per component. A float NaN input returns NaN on the host.",
         cases: &[
             case("u32 wraps", &[("a", U32(0)), ("b", U32(1))], &[("out", U32(u32::MAX))]),
             case("i32", &[("a", I32(-3)), ("b", I32(4))], &[("out", I32(-7))]),
@@ -112,7 +112,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.mul",
         label: "Multiply",
-        semantics: "Product of `a` and `b`. Integers wrap and vectors multiply per component. A float NaN input gives NaN on the host.",
+        semantics: "Product of `a` and `b`. Integers wrap and vectors multiply per component. A float NaN input returns NaN on the host.",
         cases: &[
             case(
                 "u32 wraps",
@@ -161,7 +161,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.rem",
         label: "Remainder",
-        semantics: "Truncated remainder of `a / b`, which takes the sign of `a`. Integer `x % 0` is 0 and `i32::MIN % -1` is 0. On floats the host computes `fmod`, a shader computes `a - b * trunc(a / b)`, and `x % 0` is NaN on the host and indeterminate in a shader, so parity is approximate.",
+        semantics: "Truncated remainder of `a / b`, which takes the sign of `a`. Integer `x % 0` is 0 and `i32::MIN % -1` is 0. On floats the host computes `fmod`, a shader computes `a - b * trunc(a / b)`, and `x % 0` is NaN on the host and indeterminate in a shader. Parity is approximate.",
         type_var: REMAINDER,
         parity: Parity::Approx,
         cases: &[
@@ -233,7 +233,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.abs",
         label: "Absolute value",
-        semantics: "Absolute value of `a`, per component on vectors. Integers wrap, so `abs(i32::MIN)` is `i32::MIN`. On floats it clears the sign, so a NaN input stays NaN on the host and is indeterminate in a shader.",
+        semantics: "Absolute value of `a`, per component on vectors. Integers wrap, so `abs(i32::MIN)` is `i32::MIN`. On floats it clears the sign. A NaN input stays NaN on the host and is indeterminate in a shader.",
         type_var: SIGNED,
         cases: &[
             case("i32", &[("a", I32(-3))], &[("out", I32(3))]),
@@ -287,7 +287,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.round",
         label: "Round",
-        semantics: "Rounds `a` to the nearest whole number, per component on vectors. A tie goes to the even neighbour, as WGSL's `round` does, where Rust's `f32::round` goes away from zero. A NaN input stays NaN on the host and is indeterminate in a shader.",
+        semantics: "Rounds `a` to the nearest integer, per component on vectors. A tie goes to the even neighbour, as WGSL's `round` does, where Rust's `f32::round` goes away from zero. A NaN input stays NaN on the host and is indeterminate in a shader.",
         type_var: FLOATS,
         cases: &[
             case("nearest", &[("a", F32(1.25))], &[("out", F32(1.0))]),
@@ -361,7 +361,7 @@ pub(super) static KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.powi",
         label: "Integer power",
-        semantics: "`base` to the whole power `min(exponent, max_exponent)`, as Rust's `f32::powi`, with `x^0 = 1`. The host computes a table of `max_exponent + 1` entries when the model is built, and the element reads the table on both backends, so parity is exact.",
+        semantics: "`base` to the integer power `min(exponent, max_exponent)`, as Rust's `f32::powi`, with `x^0 = 1`. The host computes a table of `max_exponent + 1` entries when the model is built, and the element reads the table on both backends, so parity is exact.",
         config: &[config(
             "max_exponent",
             ConfigType::Integer {
@@ -558,7 +558,7 @@ pub(super) static A2_KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.clamp",
         label: "Clamp",
-        semantics: "`min(max(x, lo), hi)` per component, composed of `math.max` and `math.min`, so `hi` wins when `lo > hi`. On the host a NaN `x` gives `lo`, where `f32::clamp` gives NaN, and a shader leaves it indeterminate.",
+        semantics: "`min(max(x, lo), hi)` per component, composed of `math.max` and `math.min`, so `hi` wins when `lo > hi`. On the host a NaN `x` returns `lo`, where `f32::clamp` returns NaN, and a shader leaves it indeterminate.",
         group: "Arithmetic",
         type_var: NUMERIC,
         inputs: &[
@@ -683,7 +683,7 @@ pub(super) static A2_KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.midpoint",
         label: "Midpoint",
-        semantics: "`f32::midpoint(a, b)`, the point halfway between `a` and `b`, which does not overflow for large inputs and is not `(a + b) * 0.5` written out. The host computes it when the model is built, so both inputs take a constant or a parameter, and parity is exact.",
+        semantics: "`f32::midpoint(a, b)`, the point halfway between `a` and `b`. It does not overflow for large inputs and is not `(a + b) * 0.5` written out. The host computes it when the model is built, so both inputs take a constant or a parameter, and parity is exact.",
         group: "Arithmetic",
         inputs: &[
             input_up_to("a", F32_TYPE, Rate::Parameter),
@@ -703,7 +703,7 @@ pub(super) static A2_KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.expr",
         label: "Expression",
-        semantics: "An expression over the inputs `config.inputs`, each `{ name, type }`, that sets the outputs `config.outputs`. The text is a list of assignments `name = expression`, separated by `;` or a new line, each setting an output once, in an order where an assignment reads only the inputs and the outputs set before it. An expression holds number literals, input and output names, `+ - * / %`, unary `-`, the comparisons `< <= > >= == !=`, `and`, `or`, `not`, `true`, `false`, the components `.x` and `.y` of a vector, `if(cond, a, b)` and calls of `min`, `max`, `clamp`, `abs`, `floor`, `ceil`, `trunc`, `round`, `sqrt`, `recip`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `pow`, `vec`, `dot` and `length`. Operators bind as in Rust, `not` above the comparisons, and `and` above `or`. A whole-number literal takes the type of the other operand, `u32` when that is no number, and a literal with a point is `f32`, or `f64` beside an `f64`. A vector times or by a scalar scales it. The node expands into the arithmetic, comparison, logic and vector kinds it names, operand order kept, before the file is checked, and has their semantics.",
+        semantics: "An expression over the inputs `config.inputs`, each `{ name, type }`, that sets the outputs `config.outputs`. The text is a list of assignments `name = expression`, separated by `;` or a new line, each setting an output once, in an order where an assignment reads only the inputs and the outputs set before it. An expression holds number literals, input and output names, `+ - * / %`, unary `-`, the comparisons `< <= > >= == !=`, `and`, `or`, `not`, `true`, `false`, the components `.x` and `.y` of a vector, `if(cond, a, b)` and calls of `min`, `max`, `clamp`, `abs`, `floor`, `ceil`, `trunc`, `round`, `sqrt`, `recip`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `pow`, `vec`, `dot` and `length`. Operators bind as in Rust, `not` above the comparisons, and `and` above `or`. An integer literal takes the type of the other operand, `u32` when that is not a number, and a literal with a point is `f32`, or `f64` beside an `f64`. A vector times or by a scalar scales it. The node expands into the arithmetic, comparison, logic and vector kinds it names, operand order kept, before the file is checked, and has their semantics.",
         group: "Arithmetic",
         config: &[
             config("text", ConfigType::ExpressionText),

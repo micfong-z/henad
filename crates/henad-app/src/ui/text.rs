@@ -32,13 +32,13 @@ pub fn capitalize(text: &str) -> String {
 
 /// Returns `duration` rounded down for a progress line.
 ///
-/// It returns "under 1 ms" below a millisecond, milliseconds under a second, seconds under a minute, minutes and
+/// It returns "less than 1 ms" below a millisecond, milliseconds under a second, seconds under a minute, minutes and
 /// seconds under ten minutes, minutes under an hour, and hours and minutes past that.
 pub fn format_duration(duration: Duration) -> String {
     let seconds = duration.as_secs();
     let (hours, minutes) = (seconds / 3600, seconds % 3600 / 60);
     match seconds {
-        0 if duration.subsec_millis() == 0 => "under 1 ms".to_owned(),
+        0 if duration.subsec_millis() == 0 => "less than 1 ms".to_owned(),
         0 => format!("{} ms", duration.subsec_millis()),
         1..60 => format!("{seconds} s"),
         60..600 => format!("{minutes} min {} s", seconds % 60),
@@ -71,8 +71,8 @@ mod tests {
 
     #[test]
     fn a_duration_is_rounded_to_the_units_a_progress_line_needs() {
-        assert_eq!(format_duration(Duration::ZERO), "under 1 ms");
-        assert_eq!(format_duration(Duration::from_micros(900)), "under 1 ms");
+        assert_eq!(format_duration(Duration::ZERO), "less than 1 ms");
+        assert_eq!(format_duration(Duration::from_micros(900)), "less than 1 ms");
         assert_eq!(format_duration(Duration::from_micros(40_700)), "40 ms");
         assert_eq!(format_duration(Duration::from_millis(480)), "480 ms");
         assert_eq!(format_duration(Duration::from_millis(999)), "999 ms");

@@ -271,7 +271,7 @@ pub enum StopError {
 impl fmt::Display for StopError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingColumn { raw } => write!(f, "stop condition '{raw}' names no column"),
+            Self::MissingColumn { raw } => write!(f, "stop condition '{raw}' has no column"),
             Self::Comparison { raw, .. } => {
                 write!(
                     f,

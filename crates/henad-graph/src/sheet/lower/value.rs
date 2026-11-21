@@ -104,7 +104,9 @@ pub(super) fn common_type(first: &Operand, second: &Operand) -> Result<ValueType
             }
         }
         (None, None) => Ok(ValueType::F32),
-        (Some(one), Some(other)) => Err(format!("a value of type {one} meets a value of type {other}")),
+        (Some(one), Some(other)) => Err(format!(
+            "mismatched types: a value of type {one} and a value of type {other}"
+        )),
     }
 }
 
@@ -126,7 +128,11 @@ pub(super) fn shared_type(operands: &[&Operand]) -> Result<Option<ValueType>, St
             None => found,
             Some(known) if known == found => known,
             Some(known) if is_number(&known) && is_number(&found) => ValueType::F32,
-            Some(known) => return Err(format!("a value of type {known} meets a value of type {found}")),
+            Some(known) => {
+                return Err(format!(
+                    "mismatched types: a value of type {known} and a value of type {found}"
+                ));
+            }
         });
     }
     let Some(known) = shared else {
@@ -143,7 +149,7 @@ pub(super) fn shared_type(operands: &[&Operand]) -> Result<Option<ValueType>, St
         return Ok(Some(known));
     }
     if !is_number(&known) {
-        return Err(format!("a number meets a value of type {known}"));
+        return Err(format!("mismatched types: a number and a value of type {known}"));
     }
     if typed_numbers.iter().all(|number| holds(&known, *number)) {
         Ok(Some(known))
@@ -206,7 +212,7 @@ pub(super) fn number(value: f32) -> InputValue {
 fn number_input(number: f64, value_type: &ValueType, truncate: bool) -> Result<InputValue, String> {
     number_literal(number, value_type, truncate)
         .map(InputValue::Literal)
-        .ok_or_else(|| format!("the number {number} cannot stand where a {value_type} is wanted"))
+        .ok_or_else(|| format!("expected a {value_type}, got the number {number}"))
 }
 
 /// Returns the literal of `number` in `value_type`, `None` when the type cannot hold it.
@@ -278,7 +284,7 @@ impl Builder<'_> {
             Operand::Number(number) => number_input(*number, target, truncate),
             Operand::State(state) => match target {
                 ValueType::Category(property) => Ok(InputValue::Literal(state_literal(property, state))),
-                _ => Err(format!("the state '{state}' stands where a {target} is wanted")),
+                _ => Err(format!("expected a {target}, got the state '{state}'")),
             },
             Operand::Constant(literal) if literal.value_type() == *target => Ok(InputValue::Literal(literal.clone())),
             Operand::Constant(literal) => {
@@ -286,7 +292,7 @@ impl Builder<'_> {
                     Literal::U32(value) => f64::from(*value),
                     Literal::I32(value) => f64::from(*value),
                     Literal::F32(value) => f64::from(*value),
-                    _ => return Err(format!("a {} stands where a {target} is wanted", literal.value_type())),
+                    _ => return Err(format!("expected a {target}, got a {}", literal.value_type())),
                 };
                 number_input(number, target, truncate)
             }
@@ -320,9 +326,7 @@ impl Builder<'_> {
             (ValueType::Vec2I | ValueType::Vec2U, ValueType::Vec2F) => "conv.to_vec2f",
             (ValueType::Vec2F | ValueType::Vec2U, ValueType::Vec2I) => "conv.to_vec2i",
             _ => {
-                return Err(format!(
-                    "a value of type {value_type} stands where a {target} is wanted"
-                ));
+                return Err(format!("expected a {target}, got a value of type {value_type}"));
             }
         };
         let node = self.emit(site, op, Vec::new(), vec![("a".to_owned(), source)]);

@@ -864,7 +864,7 @@ fn an_error_at_a_line_the_card_does_not_show_stays_in_the_list() {
     assert!(
         messages
             .iter()
-            .any(|message| message.contains("listed in no lines list")),
+            .any(|message| message.contains("not listed in any lines list")),
         "{messages:?}"
     );
 
@@ -967,8 +967,8 @@ fn otherwise_inside_a_repeat_says_the_higher_line_wins_at_the_same_time() {
     assert_eq!(lines[4].otherwise, ["l3", "l4"]);
     assert_eq!(
         lines[4].otherwise_tooltip,
-        "Lines 3 and 4 also change Status for a walker that is S. When more than one applies, the highest line wins. \
-         Between lines in one Repeat, the first time round that one applies decides."
+        "Lines 3 and 4 also change Status for a walker that is S. When more than one applies, the line nearest the top \
+         of the card wins. Between lines in one Repeat, the first time round that one applies decides."
     );
 }
 

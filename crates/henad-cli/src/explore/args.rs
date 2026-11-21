@@ -35,8 +35,8 @@ pub struct ExploreArgs {
     #[arg(long, value_name = "DIR")]
     pub out: Option<PathBuf>,
 
-    /// Read the sweep from a TOML spec file. The file names the model and every setting that changes a result. A
-    /// `[search]` table in it runs a search instead.
+    /// Read the sweep from a TOML spec file. The file names the model and every setting that changes a result. With a
+    /// `[search]` table in the file, run a search instead.
     #[arg(
         long,
         value_name = "FILE",
@@ -84,7 +84,7 @@ pub struct ExploreArgs {
     #[arg(long, requires = "explore")]
     pub independent_seeds: bool,
 
-    /// Keep a series row every N ticks, a multiple of `--stats-every`. 0 keeps no series. Defaults to
+    /// Keep a series row every N ticks, a multiple of `--stats-every`. Set to 0 to keep no series. Defaults to
     /// `--stats-every`.
     #[arg(long, value_name = "N", requires = "explore")]
     pub series_every: Option<u64>,
@@ -100,12 +100,12 @@ pub struct ExploreArgs {
     #[arg(long, value_name = "COLUMN:KIND", value_parser = parse_reduce, requires = "explore")]
     pub reduce: Vec<ReducerSpec>,
 
-    /// Drop the final, min, max and mean reducers every stat column gets by default.
+    /// Remove the default final, min, max and mean reducers from every stat column.
     #[arg(long, requires = "explore")]
     pub no_default_reducers: bool,
 
-    /// End a run after this many seconds of wall-clock time and record it as `timed_out`. Beside other GPU runs, a
-    /// run's clock counts its share of the device. With `--resume`, it will run again.
+    /// End a run after this many seconds of wall-clock time and record it as `timed_out`. With `--resume`, it will run
+    /// again. For concurrent GPU runs, only each run's share of device time counts.
     #[arg(long, value_name = "SECONDS", value_parser = parse_timeout, requires = "explore")]
     pub timeout: Option<Duration>,
 
@@ -136,7 +136,7 @@ pub struct ExploreArgs {
     #[arg(long, requires = "resume")]
     pub retry_failed: bool,
 
-    /// Merge the directories of a sweep's shards into the `--out` directory. Takes no model.
+    /// Merge a sweep's shard directories into the `--out` directory. Takes no model.
     #[arg(
         long,
         value_name = "DIR",
@@ -151,8 +151,8 @@ pub struct ExploreArgs {
     )]
     pub merge: Vec<PathBuf>,
 
-    /// Print the sweep's plan and write nothing. The first config that builds without a fault and the last config
-    /// are built as a check.
+    /// Print the sweep's plan and write nothing. The first config that builds without errors and the last config are
+    /// built as a check.
     #[arg(long)]
     pub dry_run: bool,
 }

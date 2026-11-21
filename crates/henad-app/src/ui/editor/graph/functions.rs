@@ -19,7 +19,7 @@ pub fn functions_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRe
     ui.strong("Functions");
     let document = graph.document();
     if document.functions.is_empty() {
-        ui.weak("No functions. Select nodes and press Function, or add one below.");
+        ui.weak("No functions. Select nodes and press Function, or add a function below.");
     }
     for function in &document.functions {
         function_row(ui, graph, function, requests);
@@ -208,7 +208,7 @@ fn import_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequest>)
     };
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("Functions in {}", source.name)).small().weak());
-        if ui.small_button("Close").on_hover_text("Forget this file").clicked() {
+        if ui.small_button("Close").on_hover_text("Close this file").clicked() {
             requests.push(GraphRequest::CloseImport);
         }
     });
@@ -223,7 +223,7 @@ fn import_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequest>)
                     .hint_text(function.as_str())
                     .desired_width(FIELD_WIDTH - 40.0),
             )
-            .on_hover_text(format!("Name the function '{function}' takes in this model"));
+            .on_hover_text(format!("Enter a name for function '{function}' in this model"));
             let import = add_button(ui, !name.is_empty(), Button::new("Import"), "Import")
                 .on_hover_text("Copy function and the functions it calls");
             if import.clicked() {

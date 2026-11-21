@@ -299,7 +299,7 @@ fn skipped_failure(
         )),
         (SkipReason::NoDevice | SkipReason::NativeOnly, Some(message)) if check.builds() => Some(message.to_owned()),
         (SkipReason::NoDevice, _) if gpu_required => {
-            Some("HENAD_REQUIRE_GPU is set, but the settings give no GPU device.".to_owned())
+            Some("HENAD_REQUIRE_GPU is set, but the settings do not provide a GPU device.".to_owned())
         }
         _ => None,
     }
@@ -425,7 +425,7 @@ fn stat_bits(entries: &[StatEntry]) -> Vec<(&str, Vec<u64>)> {
 fn first_stat_difference(first: &[StatEntry], second: &[StatEntry]) -> Option<String> {
     let (first, second) = (stat_bits(first), stat_bits(second));
     if first.len() != second.len() {
-        return Some(format!("{} stats against {}", first.len(), second.len()));
+        return Some(format!("the number of stats ({} and {})", first.len(), second.len()));
     }
     first
         .iter()

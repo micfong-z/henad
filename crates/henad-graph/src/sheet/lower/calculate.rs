@@ -47,7 +47,7 @@ impl<'a> Scope<'a> for PassScope<'_, 'a> {
         match chip {
             SheetChip::My(property) => self.builder.read(self.pass, property),
             SheetChip::Param(id) => self.builder.param(id),
-            _ => Err("a measure's formula reads my properties and the parameters alone".to_owned()),
+            _ => Err("a measure's formula can only read my properties and the parameters".to_owned()),
         }
     }
 }
@@ -132,7 +132,7 @@ fn formula_text(
             // The narrowing is checked below: a number past the range of `f32` is refused.
             let narrowed = number as f32;
             if !narrowed.is_finite() {
-                return Err(format!("the number {written} is too large for a number of the sheet"));
+                return Err(format!("the number {written} is too large for the sheet"));
             }
             // Debug writes a point or an exponent, so the expression reads the number as an `f32`.
             (format!("{narrowed:?}"), ValueType::F32)
@@ -184,7 +184,7 @@ fn formula_text(
                 if arrow {
                     Ok(())
                 } else {
-                    Err(format!("{what} reads an arrow, and its value is a number"))
+                    Err(format!("{what} takes an arrow, got a number"))
                 }
             };
             match *function {
@@ -199,7 +199,7 @@ fn formula_text(
                     let value = written.join(", ");
                     (format!("({value} / max(length({value}), 0.000001))"), ValueType::Vec2F)
                 }
-                other => return Err(format!("the formula calls '{other}', which no formula knows")),
+                other => return Err(format!("unknown function '{other}' in the formula")),
             }
         }
     })

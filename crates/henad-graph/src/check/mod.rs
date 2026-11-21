@@ -196,7 +196,7 @@ fn check_file_size(checker: &mut Checker<'_>) -> bool {
         .fold(0usize, usize::saturating_add);
     if total > MAX_NODES_IN_FILE {
         checker.error(
-            format!("the file holds {total} nodes, and a file holds at most {MAX_NODES_IN_FILE}"),
+            format!("the file holds {total} nodes, expected at most {MAX_NODES_IN_FILE}"),
             Some(checker.file.places().id.clone()),
         );
     }
@@ -215,7 +215,7 @@ fn check_body_sizes(checker: &mut Checker<'_>, views: &BodyViews<'_>) {
         if body.nodes.len() > MAX_NODES_PER_BODY {
             checker.error(
                 format!(
-                    "the table holds {} nodes, and a pass or a function holds at most {MAX_NODES_PER_BODY}",
+                    "the table holds {} nodes, expected at most {MAX_NODES_PER_BODY} per pass or function",
                     body.nodes.len()
                 ),
                 Some(body_places.table.clone()),

@@ -106,9 +106,8 @@ fn gpu_batching_controls(ui: &mut egui::Ui, app: &mut AppState) {
     let mut changed = ui
         .checkbox(&mut app.gpu_batch.adaptive, "Adaptive batching")
         .on_hover_text(
-            "Automatically pick steps-per-batch to keep each GPU submission under the target \
-             time below, instead of a fixed batch size, so large batches don't block egui's own \
-             rendering on the shared queue.",
+            "Set steps per batch automatically to keep each GPU submission under the target \
+             time below, instead of using a fixed batch size. Large batches slow the interface.",
         )
         .changed();
 

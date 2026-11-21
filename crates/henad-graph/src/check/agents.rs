@@ -32,7 +32,7 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, view: &BodyView<'_>) {
                 checker,
                 position,
                 format!(
-                    "{} deposits into the static field '{}', which takes no deposits",
+                    "{} cannot deposit into the static field '{}'",
                     view.name(position),
                     field.id
                 ),
@@ -65,7 +65,7 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, view: &BodyView<'_>) {
                     checker,
                     position,
                     format!(
-                        "{} writes the static field '{}', which only an init pass writes",
+                        "{} cannot write the static field '{}': only an init pass can",
                         view.name(position),
                         field.id
                     ),
@@ -89,7 +89,7 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, view: &BodyView<'_>) {
                     checker,
                     position,
                     format!(
-                        "{} writes a layer of the field '{}' that {} may write already, and a pass writes a layer once per cell",
+                        "{} cannot write a layer of the field '{}' that {} might already write: a pass writes a layer only once per cell",
                         view.name(position),
                         field.id,
                         view.nodes[first].id
@@ -140,7 +140,7 @@ fn check_get_at(checker: &mut Checker<'_>, view: &BodyView<'_>, position: usize)
             checker,
             position,
             format!(
-                "{} reads another element at {link}, and reaches one only through `cell` or `other` of a fold around it",
+                "{} reads another element at {link}, expected `cell` or `other` of a fold around it",
                 view.name(position)
             ),
             view.input_place(position, "at"),
@@ -162,15 +162,15 @@ fn check_nesting(checker: &mut Checker<'_>, view: &BodyView<'_>, position: usize
         return;
     }
     let reason = if inner == OP_RADIUS_FOLD || outer == OP_RADIUS_FOLD {
-        "a radius fold visits as many agents as it meets, and holds no region and sits in none"
+        "a radius fold visits as many agents as it meets, so it cannot hold or be nested in another region"
     } else {
-        "a Repeat holds a Repeat or a neighborhood fold, and a neighborhood fold holds a Repeat"
+        "a Repeat can hold only a Repeat or a neighborhood fold, and a neighborhood fold can hold only a Repeat"
     };
     view.error(
         checker,
         position,
         format!(
-            "{} sits in the region {}, and {reason}",
+            "{} cannot be nested in the region {}: {reason}",
             view.name(position),
             view.nodes[parent].id
         ),
@@ -211,8 +211,8 @@ pub(super) fn check_finishes(checker: &mut Checker<'_>, functions: &[BodyView<'_
                         checker,
                         position,
                         format!(
-                            "{} reads the field '{}' in the update that runs its `finish` '{finish}', which writes \
-                             that field in place. The merged value arrives as the input `value`",
+                            "{} cannot read the field '{}' in the update that runs its `finish` '{finish}': the update \
+                             writes that field in place. Read the merged value from the input `value`",
                             view.name(position),
                             field.id
                         ),
@@ -246,7 +246,7 @@ pub(super) fn check_passes(checker: &mut Checker<'_>, views: &[BodyView<'_>]) {
                     checker,
                     position,
                     format!(
-                        "{} reads positions after the pass '{writer}' writes them, and the index holds the positions at the start of the tick",
+                        "{} cannot read positions after the pass '{writer}' writes them: the index holds the positions at the start of the tick",
                         view.name(position)
                     ),
                     view.op_place(position),
@@ -273,7 +273,7 @@ pub(super) fn check_passes(checker: &mut Checker<'_>, views: &[BodyView<'_>]) {
                     checker,
                     *position,
                     format!(
-                        "{} takes its `cell_size` from another source than the first radius fold, and every radius fold shares one index",
+                        "{} must take its `cell_size` from the same source as the first radius fold, since every radius fold shares one index",
                         view.name(*position)
                     ),
                     view.input_place(*position, "cell_size"),
@@ -326,7 +326,7 @@ fn check_composed_keys(checker: &mut Checker<'_>, views: &[BodyView<'_>]) {
                     checker,
                     position,
                     format!(
-                        "{} draws with the key {key} inside a call, which another draw ({first}) has too, and two draws with one key correlate. Remint the key of a call",
+                        "{} draws with the key {key} inside a call, the same key as another draw ({first}), so the two draws correlate. Remint the key of a call",
                         view.name(position)
                     ),
                     view.table_place(position),

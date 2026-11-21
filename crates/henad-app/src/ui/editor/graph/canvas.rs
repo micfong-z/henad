@@ -1626,7 +1626,7 @@ impl GraphViewer<'_> {
             }
         })
         .response
-        .on_hover_text("Type of the input");
+        .on_hover_text("Input type");
         if let Some(choice) = picked {
             let mut list = inputs.to_vec();
             list[index].1 = choice;
@@ -1708,7 +1708,7 @@ impl GraphViewer<'_> {
             }
         })
         .response
-        .on_hover_text("Names the text assigns, separated by commas. Each is an output of the node.");
+        .on_hover_text("Enter comma-separated names assigned in the text. Each name is an output of the node.");
     }
 
     /// Draws the controls of the region `id` in its input half: a Repeat's bound `max`, and the accumulators with
@@ -1733,7 +1733,7 @@ impl GraphViewer<'_> {
         let mut max = max_now;
         ui.horizontal(|ui| {
             ui.add(Label::new(RichText::new("Max").small()).selectable(false))
-                .on_hover_text("Largest number of iterations. A larger count runs this many.");
+                .on_hover_text("Largest number of iterations. A larger count is limited to this value.");
             ui.add(
                 DragValue::new(&mut max)
                     .range(1..=MAX_REPEAT_ITERATIONS as i64)
@@ -1803,7 +1803,7 @@ impl GraphViewer<'_> {
             }
         })
         .response
-        .on_hover_text("Type of the value");
+        .on_hover_text("Value type");
         ui.menu_button(RichText::new(accumulator.combine.as_str()).small(), |ui| {
             for combine in Combine::ALL {
                 if combine.applies_to(&accumulator.value_type) && ui.button(combine.as_str()).clicked() {

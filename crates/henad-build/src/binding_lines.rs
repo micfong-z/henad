@@ -113,7 +113,7 @@ fn read_line(code: &str) -> Result<Option<Binding>, Refusal> {
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || character == '_')
     {
-        return Err(form("the binding has no plain name"));
+        return Err(form("the binding name is not an ASCII identifier"));
     }
     let binding_type = kind_text
         .trim()

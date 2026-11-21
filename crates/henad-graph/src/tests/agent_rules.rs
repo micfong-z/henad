@@ -143,7 +143,7 @@ in.value = "n1"
     let fold = fold!("n10", "n11", "n12", "n13", "{ f32 = 1.0 }");
     refuses(
         &format!("{move_first}{look}{fold}"),
-        "reads positions after the pass 'move'",
+        "cannot read positions after the pass 'move'",
     );
     accepts(&format!("{look}{fold}"));
 }
@@ -167,7 +167,10 @@ fn every_radius_fold_takes_its_cell_size_from_one_source() {
     );
     // The two passes write `v`, which no fold reads at another agent, so `v` is plain.
     accepts(&format!("{first}{same}"));
-    refuses(&format!("{first}{other}"), "takes its `cell_size` from another source");
+    refuses(
+        &format!("{first}{other}"),
+        "must take its `cell_size` from the same source",
+    );
 }
 
 #[test]
@@ -378,7 +381,7 @@ config.lane = "v"
 in.value = "n2.seen"
 "#
         ),
-        "only the body of n2 can read",
+        "cannot read n2.other outside the body of n2",
     );
 }
 
@@ -406,7 +409,7 @@ in.at = "n2.cell"
 in.value = { f32 = 1.0 }
 "#
     );
-    refuses(deposit_into_static, "deposits into the static field 's'");
+    refuses(deposit_into_static, "cannot deposit into the static field 's'");
     let action = r#"
 [[action]]
 id = "clear"
@@ -438,7 +441,7 @@ op = "field.set"
 config.field = "f"
 in.value = { f32 = 0.0 }
 "#;
-    refuses(action, "writes the static field 's', which only an init pass writes");
+    refuses(action, "cannot write the static field 's': only an init pass can");
     let twice = r#"
 [[action]]
 id = "clear"
@@ -464,7 +467,10 @@ op = "field.set"
 config.field = "f"
 in.value = { f32 = 1.0 }
 "#;
-    refuses(twice, "writes a layer of the field 'f' that n1 may write already");
+    refuses(
+        twice,
+        "cannot write a layer of the field 'f' that n1 might already write",
+    );
 }
 
 /// A function `noise` of one draw, called twice from a tick pass whose calls have keys `$first` and `$second`.
@@ -568,7 +574,7 @@ fn two_calls_of_one_function_draw_apart_through_composed_keys() {
         two_calls!("11", "12"),
         compose_key(11, 5)
     );
-    refuses(&colliding, "inside a call, which another draw");
+    refuses(&colliding, "inside a call, the same key as another draw");
 }
 
 #[test]
@@ -593,7 +599,7 @@ op = "lane.set"
 config.lane = "v"
 in.value = "n101"
 "#;
-    refuses(sink, "is a lane write, and the function 'bad' is pure");
+    refuses(sink, "is a lane write, a side effect the function 'bad' cannot have");
     // A function holding a draw, called from a view pass, is refused at the call, with a note into the body.
     let view = format!(
         "{}\n[[palette]]\nid = \"one\"\ncolors = [[0, 0, 0]]\n\n[[pass]]\nid = \"look\"\nstage = \"view\"\nkind = \"map\"\ndomain = \"agents\"\n\n[[pass.node]]\nid = \"n1\"\nop = \"fn.call\"\nconfig.function = \"noise\"\nconfig.key = 9\n\n[[pass.node]]\nid = \"n2\"\nop = \"view.color\"\nconfig.palette = \"one\"\nin.index = \"n1\"\n",
@@ -616,7 +622,7 @@ kind = "pure"
 port = "y"
 type = "f32"
 "#;
-    refuses(unset, "never sets its output 'y'");
+    refuses(unset, "has no `fn.output` for its output 'y'");
 }
 
 #[test]
@@ -929,7 +935,7 @@ fn a_radius_fold_past_its_cell_cap_faults_before_it_walks() {
         .run_pass("flock", &mut lanes, &[], &RunContext::tick(None, 0), &mut 1)
         .expect_err("the walk passes its cell cap");
     let message = error.to_string();
-    assert!(message.contains("would walk more than 65536 cells"), "{message}");
+    assert!(message.contains("cannot walk more than 65536 cells"), "{message}");
     assert!(message.contains("node n11") && message.contains("'flock'"), "{message}");
     // A radius of 2 covers 81 by 81 cells.
     let evaluator = HostEvaluator::new(&GraphFile::parse(&text("in.radius = { f32 = 2.0 }")).expect("the file reads"))

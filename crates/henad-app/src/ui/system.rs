@@ -24,16 +24,15 @@ fn gpu_warnings(ui: &mut egui::Ui, info: &RuntimeInfo) {
             MDI_INFORMATION,
             ui.visuals().text_color(),
             "GPU performance uncertain",
-            "No discrete GPU was directly detected. This may be a basic integrated GPU, a virtual GPU, or a SoC. \
-            If you believe you have a discrete GPU, check that your OS is configured to use it for Henad.",
+            "No discrete GPU was detected. The adapter might be a basic integrated GPU, a virtual GPU, or a system \
+            on a chip (SoC). If this machine has a discrete GPU, check that the OS is configured to use it for Henad.",
         ),
         GpuVerdict::Absent => banner(
             ui,
             MDI_ALERT,
             ui.visuals().error_fg_color,
             "No GPU detected",
-            "Rendering is going through a software rasteriser. GPU-backed models will likely be \
-             extremely slow.",
+            "Rendering uses a software rasteriser. GPU-backed models will be slow.",
         ),
     }
 }
@@ -93,9 +92,8 @@ pub fn system_ui(ui: &mut egui::Ui, app: &AppState) {
             if info.vertex_storage {
                 ui.label("Supported");
             } else {
-                ui.label("Unavailable").on_hover_text(
-                    "Drawing edges is unsupported on this GPU. Network models should still run normally.",
-                );
+                ui.label("Unavailable")
+                    .on_hover_text("Drawing edges is unsupported on this GPU. Network models will still run normally.");
             }
             rows.end_row(ui);
         });

@@ -295,7 +295,7 @@ inside its crate. henad-graph's `the_copies_of_the_test_sheets_equal_their_sourc
 `a_blank_model_builds_the_rates_sir_with_its_lines_and_equals_the_starter` (the time set on the
 sheet, both rates through "New parameter..." in "per day", line 2's "for each" from the grow offer,
 New outbreak's "Choose when" with no rate, then alignment, label-in-name and the words rule),
-`the_run_once_card_offers_no_rate_after_rates_arrive` (the SIR notes, the mean stay, "Change to a
+`the_run_once_card_offers_no_rate_after_rates_arrive` (the SIR notes, the mean stay, "Convert to a
 chance" on a typed rate, none on New outbreak's typed chance),
 `the_sird_lines_3_and_4_read_or_with_one_bracket_and_one_group_note` (from
 `src/tests/sheets/sird.toml`, a copy of henad-graph's),

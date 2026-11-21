@@ -328,7 +328,7 @@ impl fmt::Display for SweepWarning {
                 } else {
                     write!(
                         f,
-                        "the directory's runs so far came from the {role_name} build {recorded_text}, and this build \
+                        "the directory's runs so far came from the {role_name} build {recorded_text}, but this build \
                          is {current_text}"
                     )?;
                 }

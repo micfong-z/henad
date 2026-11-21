@@ -685,7 +685,7 @@ fn lanes_past_the_host_budget_are_refused_before_they_are_allocated() {
     .expect("the file reads");
     let refused = HostLanes::new(wide.document(), largest);
     assert!(
-        matches!(&refused, Err(HostError::Unsupported { reason, .. }) if reason.contains("the host holds at most")),
+        matches!(&refused, Err(HostError::Unsupported { reason, .. }) if reason.contains("expected at most")),
         "{refused:?}"
     );
     let wide = HostEvaluator::new(&wide).expect("the file checks");

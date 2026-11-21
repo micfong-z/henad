@@ -215,7 +215,7 @@ fn controls(ui: &mut egui::Ui, store: &ResultsStore, view: &mut SeriesView, sele
         })
         .on_hover_text(band_tooltip(view.band));
         ui.checkbox(&mut view.show_runs, "Show runs")
-            .on_hover_text("Draw every replicate as a thin line. Click one to select its run.");
+            .on_hover_text("Draw every replicate as a thin line. Click a line to select its run.");
     });
 }
 

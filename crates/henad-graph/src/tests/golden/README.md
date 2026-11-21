@@ -23,6 +23,8 @@ grep -v '^#' scratch/<name>.toml > golden/<name>.toml
 At `dfab1fb` the four sheets already equalled `check.py`'s output apart from their comments.
 The ants starter later took a note under its last line on its slower trail formation, which the format's example lacks, so the test drops every line's note before it writes the four sheets.
 The four starters later took the ids `sheet_game_of_life`, `sheet_sir`, `sheet_boids` and `sheet_ants`, and the test takes `sheet_` off each id before it writes, so the golden files keep the examples' ids.
+The four purposes and the ants starter's description of its trail strength were later reworded, and the new words were put into the golden files by hand.
+The procedure's three commands, run on a copy of each edited file in place of the sheet, return the file unchanged.
 
 ## The rules the files follow
 

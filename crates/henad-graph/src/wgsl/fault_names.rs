@@ -56,22 +56,22 @@ impl FaultNames {
 
 /// Returns the fault of looks at agents named `look` that met more than `cap` agents around one agent in a run.
 ///
-/// For example "line 3, Flockmates: looked at more than 65536 agents around one agent, and the run stops. A larger
-/// world or a shorter distance looks at fewer".
+/// For example "line 3, Flockmates: looked at more than 65536 agents around one agent, and the run stops. Use a
+/// larger world or a shorter distance to look at fewer agents".
 pub fn look_met_too_many(look: &str, cap: u32) -> String {
     format!(
-        "{look}: looked at more than {cap} agents around one agent, and the run stops. A larger world or a shorter \
-         distance looks at fewer"
+        "{look}: looked at more than {cap} agents around one agent, and the run stops. Use a larger world or a \
+         shorter distance to look at fewer agents"
     )
 }
 
 /// Returns the fault of looks at agents named `look` that would search more than `cap` cells around one agent.
 ///
-/// For example "line 3, Flockmates: would search more than 65536 cells around one agent, and the run stops. A shorter
-/// distance searches fewer".
+/// For example "line 3, Flockmates: would search more than 65536 cells around one agent, and the run stops. Use a
+/// shorter distance to search fewer cells".
 pub fn look_searches_too_far(look: &str, cap: u32) -> String {
     format!(
-        "{look}: would search more than {cap} cells around one agent, and the run stops. A shorter distance searches \
-         fewer"
+        "{look}: would search more than {cap} cells around one agent, and the run stops. Use a shorter distance to \
+         search fewer cells"
     )
 }

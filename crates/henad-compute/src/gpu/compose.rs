@@ -54,7 +54,7 @@ const DECORATION: &str = "X_naga_oil_mod_X";
 const OVERRIDE_DECORATION: &str = "X_naga_oil_vrt_X";
 
 /// Note on a diagnostic about the text in front of the caller's text, such as a grid rule's template.
-pub(crate) const BEFORE_TEXT_NOTE: &str = "the problem is in the engine's template, at no line of the rule's text";
+pub(crate) const BEFORE_TEXT_NOTE: &str = "the problem is in the engine's template, outside the rule's text";
 
 /// Characters that end a line for naga but not for `naga_oil` and the directive check: a vertical tab, a form feed,
 /// U+0085, U+2028 and U+2029.
@@ -163,7 +163,7 @@ impl Composition {
         naga::back::wgsl::write_string(&self.module, &self.info, naga::back::wgsl::WriterFlags::empty()).map_err(
             |error| {
                 vec![CodeDiagnostic::error(format!(
-                    "the composed shader could not be written: {error}"
+                    "cannot write the composed shader: {error}"
                 ))]
             },
         )
@@ -292,7 +292,7 @@ pub(crate) fn compose(
 ) -> Result<Composition, Vec<CodeDiagnostic>> {
     if modules.len() > MAX_MODULES {
         return Err(vec![CodeDiagnostic::error(format!(
-            "{} modules passed, but at most {MAX_MODULES} are allowed",
+            "{} modules passed, expected at most {MAX_MODULES}",
             modules.len()
         ))]);
     }
@@ -506,7 +506,7 @@ fn check_directives(text: &str, is_module: bool, known: &[String], file: &FileIn
     if text.len() > MAX_FILE_BYTES {
         return vec![
             CodeDiagnostic::error(format!(
-                "the file holds {} bytes, but at most {MAX_FILE_BYTES} are allowed",
+                "the file holds {} bytes, expected at most {MAX_FILE_BYTES}",
                 text.len()
             ))
             .with_file(&file.path),
@@ -575,16 +575,18 @@ fn check_directives(text: &str, is_module: bool, known: &[String], file: &FileIn
                 line,
                 column,
                 2,
-                "WGSL has no `::`. Import an item with `#import <module>::{<item>}` and name it alone".to_owned(),
+                "`::` is not supported in WGSL. Import an item with `#import <module>::{<item>}` and use its name \
+                 alone"
+                    .to_owned(),
             );
         } else if let Some(column) = line.code.find('"') {
-            problem(line, column, 1, "WGSL has no strings".to_owned());
+            problem(line, column, 1, "strings are not supported in WGSL".to_owned());
         } else if let Some(column) = line.code.find("@binding(auto)") {
             problem(
                 line,
                 column,
                 "@binding(auto)".len(),
-                "a binding needs a number".to_owned(),
+                "expected a binding number, got `auto`".to_owned(),
             );
         } else if let Some((column, word)) = words(&line.code)
             .into_iter()
@@ -632,14 +634,14 @@ fn check_directive_line(trimmed: &str, is_module: bool, known: &[String]) -> Res
         return if rest.starts_with(char::is_whitespace) && is_module_path(rest.trim()) {
             Ok(())
         } else {
-            Err("write `#define_import_path <module>`, with a module path of identifiers".to_owned())
+            Err("expected `#define_import_path <module>`, with a module path of identifiers".to_owned())
         };
     }
     let Some(rest) = code.strip_prefix("#import") else {
         return Err("only `#import` lines are allowed here. naga_oil's other directives are not supported".to_owned());
     };
     if !rest.starts_with(char::is_whitespace) {
-        return Err("write `#import <module>::{<item>, ...}`".to_owned());
+        return Err("expected `#import <module>::{<item>, ...}`".to_owned());
     }
     let body = rest.trim().trim_end_matches(';').trim_end();
     let (module, items) = match body.split_once("::{") {
@@ -652,14 +654,14 @@ fn check_directive_line(trimmed: &str, is_module: bool, known: &[String]) -> Res
         }
         None => match body.rsplit_once("::") {
             Some((module, item)) => (module, vec![item.trim()]),
-            None => return Err("write `#import <module>::{<item>, ...}`".to_owned()),
+            None => return Err("expected `#import <module>::{<item>, ...}`".to_owned()),
         },
     };
     if !is_module_path(module) {
         return Err(format!("`{module}` is not a module path"));
     }
     if !known.iter().any(|path| path == module) {
-        return Err(format!("there is no module `{module}` to import from"));
+        return Err(format!("unknown module `{module}`"));
     }
     if items.is_empty() {
         return Err("an `#import` line must name at least one item".to_owned());

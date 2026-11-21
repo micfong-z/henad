@@ -216,7 +216,7 @@ impl Demand {
         let allowed = limits.max_storage_buffers_per_shader_stage;
         lines.extend(self.passes.iter().filter(|pass| pass.storage > allowed).map(|pass| {
             format!(
-                "pass '{}' binds {} storage buffers, past the {allowed} this device allows per shader stage",
+                "pass '{}' binds {} storage buffers, exceeding the {allowed} this device allows per shader stage",
                 pass.label, pass.storage
             )
         }));
@@ -233,14 +233,14 @@ impl Demand {
         for pass in &self.passes {
             if pass.uniform_bytes > uniform {
                 lines.push(format!(
-                    "pass '{}' reads a uniform block of {} bytes, past the {uniform} this device allows for one \
+                    "pass '{}' reads a uniform block of {} bytes, exceeding the {uniform} this device allows for one \
                      uniform binding",
                     pass.label, pass.uniform_bytes
                 ));
             }
             if pass.workgroup_bytes > workgroup {
                 lines.push(format!(
-                    "pass '{}' declares {} bytes of workgroup memory, past the {workgroup} this device allows",
+                    "pass '{}' declares {} bytes of workgroup memory, exceeding the {workgroup} this device allows",
                     pass.label, pass.workgroup_bytes
                 ));
             }
@@ -255,7 +255,7 @@ impl Demand {
             .filter(|&(work, _)| work > SUBMISSION_WORK_BUDGET)
             .map(|(work, heaviest)| {
                 let mut line = format!(
-                    "one submission would run {} units of work, past the budget of {}",
+                    "one submission runs {} units of work, exceeding the budget of {}",
                     fmt_units(work),
                     fmt_units(SUBMISSION_WORK_BUDGET)
                 );
@@ -275,7 +275,7 @@ impl Demand {
             .collect();
         lines.extend(self.host.iter().filter(|run| run.work > HOST_WORK_BUDGET).map(|run| {
             format!(
-                "'{}' would run {} units of work on the host, past the budget of {}",
+                "'{}' runs {} units of work on the host, exceeding the budget of {}",
                 run.label,
                 fmt_units(run.work),
                 fmt_units(HOST_WORK_BUDGET)
@@ -344,7 +344,7 @@ impl Group<'_> {
             n => format!("'{}' and {} more each need", self.first, n - 1),
         };
         format!(
-            "{subject} {}, past the {} this device allows for one {}",
+            "{subject} {}, exceeding the {} this device allows for one {}",
             fmt_bytes(self.bytes),
             fmt_bytes(self.limit),
             self.what
@@ -468,7 +468,7 @@ mod tests {
         let found = demand.shortfalls(&wgpu::Limits::default());
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(
-            found[0].contains("one submission would run") && found[0].contains("'heavy' is the heaviest"),
+            found[0].contains("one submission runs") && found[0].contains("'heavy' is the heaviest"),
             "{}",
             found[0]
         );

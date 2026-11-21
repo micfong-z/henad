@@ -183,7 +183,7 @@ fn a_sheet_is_held_to_its_size_limit() {
     assert!(
         diagnostic
             .message
-            .contains(&format!("a sheet holds at most {MAX_SHEET_BYTES}")),
+            .contains(&format!("expected at most {MAX_SHEET_BYTES}")),
         "{diagnostic}"
     );
 

@@ -6,7 +6,7 @@ use crate::gpu::built_pass::Sides;
 use crate::gpu::grid_spec::RerunUploads;
 
 /// Phase of a fault a press raises.
-pub(crate) const PRESSING: &str = "pressing an action";
+pub(crate) const PRESSING: &str = "running an action";
 
 /// Multiplier of the per-press seed.
 const PRESS_MULTIPLIER: u32 = 747_796_405;
@@ -51,7 +51,7 @@ pub(crate) fn upload_rerun(
             faults.set_once(Fault::refused(
                 PRESSING,
                 format!(
-                    "{model}: a rerun wrote {} words to buffer {buffer_index} of {len}",
+                    "{model}: a rerun wrote {} words to buffer {buffer_index}, expected {len}",
                     words.len()
                 ),
             ));

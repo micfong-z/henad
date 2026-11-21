@@ -185,7 +185,7 @@ fn a_refused_action_is_noted_and_the_run_stays_ok() {
     assert_eq!(refused.run_column("stop_reason"), ["steps"]);
     assert_eq!(
         refused.run_column("note"),
-        ["model refused action 'seed_outbreak' at tick 0; model refused action 'seed_outbreak' at tick 6"]
+        ["model rejected action 'seed_outbreak' at tick 0; model rejected action 'seed_outbreak' at tick 6"]
     );
 
     let mut quiet = spec.clone();

@@ -185,7 +185,7 @@ fn a_blank_model_builds_the_chance_sir_with_its_lines_and_equals_the_sheet() {
         shows(
             &mut harness,
             "Each tick, a Susceptible cell becomes Infected with chance 0.3 with 1 infected neighbour, and 0.51 with \
-             2. Each one counted is a separate try: 1 − (1 − 0.3)^n, where n is Infected neighbours."
+             2. Each one counted is an independent trial: 1 − (1 − 0.3)^n, where n is Infected neighbours."
         ),
         "a chance for each has its note"
     );
@@ -888,7 +888,7 @@ fn a_nested_when_stores_its_parent_and_deleting_the_outer_when_keeps_its_lines()
     click(&mut harness, "Line 6: choose when, now always");
     assert!(shows(
         &mut harness,
-        "Line 5 already gives a condition. Choose always to use only that one."
+        "Line 5 already has a condition. Choose always to use only that condition."
     ));
     seen.look(&mut harness);
     harness.press(Key::Escape, Modifiers::NONE);
@@ -903,7 +903,7 @@ fn a_nested_when_stores_its_parent_and_deleting_the_outer_when_keeps_its_lines()
     // Line 5 holds line 6 alone, which holds always, so line 5 offers to move its condition there.
     assert!(shows(
         &mut harness,
-        "Only line 6 is inside. Its own when can hold this condition."
+        "Only line 6 is inside. Move this condition into that line's own when."
     ));
     assert!(!named(&mut harness, "Line 5: move it into line 6").is_empty());
     assert_controls_hold_their_words(&mut harness);

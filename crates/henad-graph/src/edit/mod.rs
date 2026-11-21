@@ -456,10 +456,10 @@ impl fmt::Display for EditError {
         match self {
             Self::Missing(message) | Self::Invalid(message) => f.write_str(message),
             Self::Referenced { subject, references } => {
-                write!(f, "{subject} is still named by {}", references.join(", "))
+                write!(f, "{subject} is still referenced by {}", references.join(", "))
             }
-            Self::Paste(error) => write!(f, "the pasted text is no graph: {error}"),
-            Self::Import(error) => write!(f, "the file to import from is no graph: {error}"),
+            Self::Paste(error) => write!(f, "the pasted text is not a graph: {error}"),
+            Self::Import(error) => write!(f, "the file to import from is not a graph: {error}"),
         }
     }
 }
@@ -652,7 +652,7 @@ impl GraphBuilder {
                 param,
             } => {
                 if !self.document.params.iter().any(|known| known.id() == param) {
-                    return Err(EditError::Missing(format!("the file declares no parameter '{param}'")));
+                    return Err(EditError::Missing(format!("the file has no parameter '{param}'")));
                 }
                 self.set_input(&scope, node, &port, InputValue::Param(param))
             }
@@ -663,7 +663,7 @@ impl GraphBuilder {
                 value,
             } => {
                 if !is_port_segment(&key) {
-                    return Err(EditError::Invalid(format!("'{key}' is no configuration key")));
+                    return Err(EditError::Invalid(format!("'{key}' is not a configuration key")));
                 }
                 self.require_node(&scope, node)?;
                 self.name_bare_links(&scope, node);
@@ -683,7 +683,7 @@ impl GraphBuilder {
             | EditCommand::WrapInRepeat { .. }) => self.run_region(command),
             EditCommand::Move { node, pos } => {
                 if !self.all_nodes().any(|known| known.id == node) {
-                    return Err(EditError::Missing(format!("the file holds no node {node}")));
+                    return Err(EditError::Missing(format!("the file has no node {node}")));
                 }
                 self.editor.set_node_pos(node, pos);
                 Ok(Vec::new())
@@ -755,7 +755,7 @@ impl GraphBuilder {
                 .find(|function| function.id == *id)
                 .map(|function| &function.body),
         }
-        .ok_or_else(|| EditError::Missing(format!("the file declares no {scope}")))
+        .ok_or_else(|| EditError::Missing(format!("the file has no {scope}")))
     }
 
     /// Returns the body of `scope` for writing.
@@ -774,7 +774,7 @@ impl GraphBuilder {
                 .find(|function| function.id == *id)
                 .map(|function| &mut function.body),
         }
-        .ok_or_else(|| EditError::Missing(format!("the file declares no {scope}")))
+        .ok_or_else(|| EditError::Missing(format!("the file has no {scope}")))
     }
 
     /// Returns an error unless `scope` holds node `node`.
@@ -782,12 +782,12 @@ impl GraphBuilder {
         self.body(scope)?
             .node(node)
             .map(|_| ())
-            .ok_or_else(|| EditError::Missing(format!("the {scope} holds no node {node}")))
+            .ok_or_else(|| EditError::Missing(format!("the {scope} has no node {node}")))
     }
 
     /// Returns node `node` of `scope` for writing.
     fn node_mut(&mut self, scope: &Scope, node: NodeId) -> Result<&mut Node, EditError> {
-        let missing = EditError::Missing(format!("the {scope} holds no node {node}"));
+        let missing = EditError::Missing(format!("the {scope} has no node {node}"));
         self.body_mut(scope)?
             .nodes
             .iter_mut()
@@ -814,7 +814,7 @@ impl GraphBuilder {
         value: InputValue,
     ) -> Result<Vec<NodeId>, EditError> {
         if !port.split('.').all(is_port_segment) {
-            return Err(EditError::Invalid(format!("'{port}' is no port name")));
+            return Err(EditError::Invalid(format!("'{port}' is not a port name")));
         }
         self.node_mut(scope, node)?.inputs.insert(port.to_owned(), value);
         Ok(Vec::new())
@@ -881,12 +881,12 @@ impl GraphBuilder {
         let node = self
             .body(scope)?
             .node(region)
-            .ok_or_else(|| EditError::Missing(format!("the {scope} holds no node {region}")))?;
+            .ok_or_else(|| EditError::Missing(format!("the {scope} has no node {region}")))?;
         let is_region = lookup(&node.op, self.document.library).is_some_and(|def| def.is_region);
         if is_region {
             Ok(())
         } else {
-            Err(EditError::Invalid(format!("node {region} is no region")))
+            Err(EditError::Invalid(format!("node {region} is not a region")))
         }
     }
 
@@ -935,7 +935,9 @@ impl GraphBuilder {
             let body = self.body(scope)?;
             let mut path = body.region_path(region);
             if region == node || path.contains(&node) {
-                return Err(EditError::Invalid(format!("node {node} cannot sit inside itself")));
+                return Err(EditError::Invalid(format!(
+                    "node {node} cannot be placed inside itself"
+                )));
             }
             path.insert(0, region);
             self.name_links_into_path(scope, node, &path);

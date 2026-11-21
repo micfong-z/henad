@@ -39,7 +39,10 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, index: usize, view: &BodyVie
             place.clone(),
         ),
         Some(Domain::Agents) if topology == Topology::Grid => checker.error(
-            format!("the pass '{}' runs over agents, and a grid holds cells", pass.id),
+            format!(
+                "the pass '{}' runs over agents, expected cells in a grid model",
+                pass.id
+            ),
             place.clone(),
         ),
         _ => {}
@@ -53,7 +56,7 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, index: usize, view: &BodyVie
             if !document.actions.iter().any(|known| known.id == *action) {
                 checker.error(
                     format!(
-                        "the pass '{}' belongs to the action '{action}', and the file declares no such action",
+                        "the pass '{}' belongs to the action '{action}', which the file does not declare",
                         pass.id
                     ),
                     place.clone(),
@@ -62,7 +65,7 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, index: usize, view: &BodyVie
         }
         (Some(_), _) => checker.error(
             format!(
-                "the {} pass '{}' holds an `action`, which only an action pass holds",
+                "the {} pass '{}' cannot hold an `action`: only an action pass can",
                 pass.stage.as_str(),
                 pass.id
             ),
@@ -75,7 +78,7 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, index: usize, view: &BodyVie
         if !param.is_some_and(|param| matches!(param.kind(), ParamKind::Bool { .. })) {
             checker.error(
                 format!(
-                    "the pass '{}' binds `enabled` to '{id}', which is no `bool` parameter",
+                    "the pass '{}' binds `enabled` to '{id}', which is not a `bool` parameter",
                     pass.id
                 ),
                 place.clone(),
@@ -93,7 +96,7 @@ pub(super) fn check_pass(checker: &mut Checker<'_>, index: usize, view: &BodyVie
             checker,
             second,
             format!(
-                "{} sets a colour the pass sets already, and a pass sets it once",
+                "{} cannot set a colour the pass already sets: a pass sets each colour once",
                 view.name(second)
             ),
             view.table_place(second),
@@ -119,7 +122,7 @@ fn check_draw_order(checker: &mut Checker<'_>, view: &BodyView<'_>, place: Optio
         if !is_stream {
             checker.error(
                 format!(
-                    "the `draw_order` of the pass '{}' lists {id}, which is no stream node of the pass",
+                    "the `draw_order` of the pass '{}' lists {id}, which is not a stream node of the pass",
                     pass.id
                 ),
                 place.cloned(),
@@ -134,7 +137,7 @@ fn check_draw_order(checker: &mut Checker<'_>, view: &BodyView<'_>, place: Optio
                 checker,
                 position,
                 format!(
-                    "{} draws from the stream, and the `draw_order` of its pass lists no such node",
+                    "{} draws from the stream but is not listed in the `draw_order` of its pass",
                     view.name(position)
                 ),
                 view.table_place(position),
@@ -152,7 +155,7 @@ fn check_lane_writes(checker: &mut Checker<'_>, view: &BodyView<'_>) {
                 checker,
                 position,
                 format!(
-                    "{} writes the lane '{lane}', which {} writes already, and a pass writes a lane once per element",
+                    "{} cannot write the lane '{lane}', which {} already writes: a pass writes a lane once per element",
                     view.name(position),
                     view.nodes[first].id
                 ),
@@ -254,7 +257,7 @@ pub(super) fn check_lanes(checker: &mut Checker<'_>, passes: &[BodyView<'_>]) ->
                 checker,
                 position,
                 format!(
-                    "{} reads a lane in the init pass '{}', which an action reruns on the host, where lanes do not live",
+                    "{} cannot read a lane in the init pass '{}': an action reruns this pass on the host, which has no lanes",
                     view.name(position),
                     pass.id
                 ),
@@ -294,7 +297,7 @@ fn check_tick_passes(checker: &mut Checker<'_>, passes: &[BodyView<'_>]) {
     match document.world.topology() {
         Topology::Grid if tick_passes.len() != 1 => checker.error(
             format!(
-                "a grid model has exactly one tick pass, and this file has {}",
+                "this file has {} tick passes, expected exactly one for a grid model",
                 tick_passes.len()
             ),
             tick_passes
@@ -310,7 +313,7 @@ fn check_tick_passes(checker: &mut Checker<'_>, passes: &[BodyView<'_>]) {
                     .is_some_and(|pass| pass.domain != Some(Domain::Agents))
                 {
                     checker.error(
-                        "a tick pass of an agents model runs over agents".to_owned(),
+                        "a tick pass of an agents model must run over agents".to_owned(),
                         places.passes.get(index).map(|places| places.table.clone()),
                     );
                 }
@@ -337,7 +340,7 @@ pub(super) fn check_keys(checker: &mut Checker<'_>, views: &BodyViews<'_>) {
                     checker,
                     position,
                     format!(
-                        "{} has the key {key}, which {first} has already, and two draws with one key correlate",
+                        "{} has the same key {key} as {first}, so their draws correlate",
                         view.name(position)
                     ),
                     view.config_place(position, "key"),
@@ -361,7 +364,7 @@ pub(super) fn check_stats(checker: &mut Checker<'_>, passes: &[BodyView<'_>], po
         let Some((_, ports)) = found else {
             checker.error(
                 format!(
-                    "the stat '{}' reads {}, and no stats pass holds that node",
+                    "the stat '{}' reads {}, which is not in any stats pass",
                     stat.label, stat.from
                 ),
                 place,
@@ -375,7 +378,7 @@ pub(super) fn check_stats(checker: &mut Checker<'_>, passes: &[BodyView<'_>], po
         let Some(port) = stat.from.output_in(outputs) else {
             checker.error(
                 format!(
-                    "the stat '{}' reads {}, which names no output of the node",
+                    "the stat '{}' reads {}, which is not an output of the node",
                     stat.label, stat.from
                 ),
                 place,
@@ -385,7 +388,7 @@ pub(super) fn check_stats(checker: &mut Checker<'_>, passes: &[BodyView<'_>], po
         if port.rate > Rate::Tick {
             checker.error(
                 format!(
-                    "the stat '{}' reads {}, a value per element, and a stat reads a reducer's result",
+                    "the stat '{}' reads {}, a value per element, expected a reducer's result",
                     stat.label, stat.from
                 ),
                 place.clone(),
@@ -399,7 +402,7 @@ pub(super) fn check_stats(checker: &mut Checker<'_>, passes: &[BodyView<'_>], po
         {
             checker.error(
                 format!(
-                    "the stat '{}' reads {}, of type {value_type}, which no stat holds",
+                    "the stat '{}' reads {}, of type {value_type}, which a stat does not support",
                     stat.label, stat.from
                 ),
                 place,

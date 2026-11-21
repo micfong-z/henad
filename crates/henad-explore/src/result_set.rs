@@ -1011,8 +1011,8 @@ pub enum ResultReplayError {
 impl fmt::Display for ResultReplayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Plan(_) | Self::Search(_) => f.write_str("the model refuses the spec of these results"),
-            Self::UnknownRun { run_id } => write!(f, "the results hold no run {run_id}"),
+            Self::Plan(_) | Self::Search(_) => f.write_str("the model rejects the spec of these results"),
+            Self::UnknownRun { run_id } => write!(f, "the results have no run {run_id}"),
             Self::Mismatch { run_id } => write!(f, "run {run_id} of the results does not match its plan"),
         }
     }

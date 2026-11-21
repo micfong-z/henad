@@ -73,7 +73,7 @@ width = 1024
 
 [sheet]
 next_line = 5
-purpose = "Conway's Game of Life. Pattern to look for: gliders and other shapes that persist and travel."
+purpose = "Conway's Game of Life. Look for gliders and other shapes that persist and travel."
 name = "Game of Life"
 id = "sheet_game_of_life"
 version = 1
@@ -276,7 +276,7 @@ fn a_number_that_is_not_finite_is_refused() {
     document.parameters[0].default = f64::NAN;
     let error = document.to_text().expect_err("NaN writes");
     assert_eq!(error.key, "default");
-    assert!(error.to_string().contains("only finite numbers"), "{error}");
+    assert!(error.to_string().contains("expected a finite number"), "{error}");
     let mut document = read(sheet_text("game_of_life.toml"));
     if let Some((_, line)) = document.cards[0].line_tables.iter_mut().nth(1)
         && let Some(SheetValue::Phrase(condition)) = match &mut line.condition {

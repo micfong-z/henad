@@ -227,7 +227,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         id: "fn.input",
         group: "Functions",
         label: "Function input",
-        semantics: "Inside a function's body, the value the call gives the function's input `port`. It has the port's type and the rate of the call's input.",
+        semantics: "Inside a function's body, the value the call passes to the function's input `port`. It has the port's type and the rate of the call's input.",
         config: &[config("port", ConfigType::InterfacePort)],
         outputs: &[output("value", SocketType::InterfacePort)],
         cost: NodeCost::Units(0),

@@ -194,7 +194,7 @@ impl GraphFile {
     pub fn parse(text: &str) -> Result<Self, GraphFileError> {
         if text.len() > MAX_FILE_BYTES {
             return Err(format_error(format!(
-                "the file holds {} bytes, and a graph file holds at most {MAX_FILE_BYTES}",
+                "the file holds {} bytes, expected at most {MAX_FILE_BYTES}",
                 text.len()
             )));
         }
@@ -203,7 +203,7 @@ impl GraphFile {
         let canonical = canonical_text(&file.document, file.editor.as_ref()).len();
         if canonical > MAX_FILE_BYTES {
             return Err(format_error(format!(
-                "the file's canonical text holds {canonical} bytes, and a graph file holds at most {MAX_FILE_BYTES}"
+                "the file's canonical text holds {canonical} bytes, expected at most {MAX_FILE_BYTES}"
             )));
         }
         Ok(file)
@@ -246,7 +246,7 @@ impl GraphFile {
     pub fn from_code(code: &ModelCode) -> Result<Self, GraphFileError> {
         if code.format() != CODE_FORMAT {
             return Err(format_error(format!(
-                "Recorded under {}, and this build runs {CODE_FORMAT}",
+                "Recorded in format {}, but this build reads {CODE_FORMAT}",
                 code.format()
             )));
         }

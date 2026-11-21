@@ -125,7 +125,7 @@ pub(crate) fn normalise_body(
             (copies, expansion.outputs)
         } else {
             let function =
-                called_function(node, document).ok_or_else(|| fail("calls no declared function".to_owned()))?;
+                called_function(node, document).ok_or_else(|| fail("calls an undeclared function".to_owned()))?;
             let mut calls = origin.as_ref().map(|origin| origin.calls.clone()).unwrap_or_default();
             calls.push(origin.as_ref().map_or(node.id, |origin| origin.node));
             if calls.len() > MAX_CALL_DEPTH {
@@ -137,7 +137,7 @@ pub(crate) fn normalise_body(
         };
         added = added.saturating_add(copies.len());
         if added > MAX_NODES_INLINED {
-            return Err(fail(format!("expands past {MAX_NODES_INLINED} nodes")));
+            return Err(fail(format!("expands to more than {MAX_NODES_INLINED} nodes")));
         }
         replaced.insert(node.id, outputs);
         pending.extend(copies);
