@@ -9,12 +9,13 @@ use henad_core::explore::fingerprint::fnv1a64;
 use super::sheet_support::{SHEET_HOSTILE, edited_sheet, sheets};
 use super::support::{mutations, without_each_key};
 use crate::sheet::check::SheetDiagnostic;
+use crate::sheet::limits::MAX_FORMULA_DEPTH;
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{
     ARROW_COMPARED_WITH_NUMBER, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, NOT_RUN_TICK, RATE_BELOW_ZERO,
     RATE_IN_BUTTON_CARD,
 };
-use crate::sheet::{ParsedSheet, check};
+use crate::sheet::{ParsedSheet, SheetFile, check};
 
 /// Kind of a diagnostic a mutation must produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -598,4 +599,295 @@ fn a_comparison_of_an_arrow_with_a_number_is_an_error_at_its_line() {
     );
     let report = ParsedSheet::parse(&length).expect("the sheet reads").check();
     assert!(!report.has_errors(), "{:?}", report.diagnostics);
+}
+
+#[test]
+fn a_world_or_a_population_past_the_model_limits_is_an_error_at_its_table() {
+    let world = |file_name: &str, old: &str, new: &str| edited_sheet(file_name, &[(old, new)]);
+    let cells = "width = 1024\nheight = 1024";
+    let space = "width = 1000\nheight = 1000";
+    assert_reported(
+        &world("game_of_life.toml", cells, "width = 65536\nheight = 1024"),
+        Expected::Error,
+        "the world must be at most 16384 cells wide and 16384 cells high, got 65536 by 1024",
+        "[world]",
+    );
+    assert_reported(
+        &world("boids.toml", space, "width = 1000\nheight = 4294967295"),
+        Expected::Error,
+        "the world must be at most 10000 cells wide and 10000 cells high, got 1000 by 4294967295",
+        "[world]",
+    );
+    assert_reported(
+        &world("boids.toml", "max_count = 1000000", "max_count = 20000000"),
+        Expected::Error,
+        "the max_count of the agents 'bird' must be at most 10000000, got 20000000",
+        "[[agents]]",
+    );
+    // A world and a population at the limits check clean.
+    for text in [
+        world("game_of_life.toml", cells, "width = 16384\nheight = 16384"),
+        world("boids.toml", space, "width = 10000\nheight = 10000"),
+        world("boids.toml", "max_count = 1000000", "max_count = 10000000"),
+    ] {
+        let report = ParsedSheet::parse(&text).expect("the sheet reads").check();
+        assert!(!report.has_errors(), "{:?}", report.diagnostics);
+    }
+}
+
+#[test]
+fn a_depending_on_value_for_no_state_is_an_error_at_its_line() {
+    let text = edited_sheet(
+        "game_of_life.toml",
+        &[
+            (
+                "lines = [\"l1\", \"l2\", \"l3\"]",
+                "lines = [\"l1\", \"l2\", \"l3\", \"l5\"]",
+            ),
+            (
+                "# Lines of Clear",
+                "[card.line.l5]\nkind = \"depending_on\"\nproperty = \"status\"\nbranches = { dead = 0, alive = 1, \
+                 zombie = 2 }\n\n# Lines of Clear",
+            ),
+            ("next_line = 5", "next_line = 6"),
+        ],
+    );
+    assert_reported(
+        &text,
+        Expected::Error,
+        "'zombie' is not a state of 'status'",
+        "[card.line.l5]",
+    );
+}
+
+#[test]
+fn a_depending_on_a_property_with_no_states_is_one_error() {
+    let text = typed_walk("kind = \"depending_on\"\nproperty = \"energy\"\nbranches = { calm = 0, busy = 1 }");
+    assert_reported(
+        &text,
+        Expected::Error,
+        "Depending on needs a States property, got 'energy'",
+        "[card.line.l3]",
+    );
+    let report = ParsedSheet::parse(&text).expect("the sheet reads").check();
+    let errors = report.errors().count();
+    assert_eq!(errors, 1, "{:?}", report.diagnostics);
+}
+
+/// Returns the random walk sheet with a property of each type a Set or a comparison reads, and `line` as line 3 of
+/// its card.
+fn typed_walk(line: &str) -> String {
+    let properties = "[[agents.property]]
+id = \"heading\"
+name = \"Heading\"
+type = \"heading\"
+
+[[agents.property]]
+id = \"energy\"
+name = \"Energy\"
+type = \"number\"
+
+[agents.property.starts_as]
+rule = \"value\"
+value = 0
+
+[[agents.property]]
+id = \"whole\"
+name = \"Whole\"
+type = \"whole_number\"
+
+[agents.property.starts_as]
+rule = \"value\"
+value = 0
+
+[[agents.property]]
+id = \"flag\"
+name = \"Flag\"
+type = \"yes_no\"
+
+[agents.property.starts_as]
+rule = \"value\"
+value = false
+
+[[agents.property]]
+id = \"status\"
+name = \"Status\"
+type = \"states\"
+states = [
+  { id = \"calm\", name = \"Calm\", color = \"#151515\" },
+  { id = \"busy\", name = \"Busy\", color = \"#00E676\" },
+]
+
+[agents.property.starts_as]
+rule = \"value\"
+value = { state = \"calm\" }
+";
+    let text = edited_sheet(
+        "random_walk.toml",
+        &[
+            (
+                "[[agents.property]]\nid = \"heading\"\nname = \"Heading\"\ntype = \"heading\"\n",
+                properties,
+            ),
+            ("lines = [\"l1\"]", "lines = [\"l1\", \"l3\"]"),
+            ("next_line = 3", "next_line = 4"),
+        ],
+    );
+    format!("{text}\n[card.line.l3]\n{line}\n")
+}
+
+#[test]
+fn a_value_of_the_wrong_type_is_an_error_at_its_line_as_the_lowering_refuses_it() {
+    let set = |property: &str, value: &str| {
+        format!(
+            "kind = \"set\"\nproperty = \"{property}\"\nvalue = {value}\n\n[card.line.l3.condition]\nkind = \"always\""
+        )
+    };
+    let keep = |property: &str| format!("kind = \"keep_between\"\nproperty = \"{property}\"\nminimum = 0\nmaximum = 1");
+    // "Set Energy to 1, when my <left> <test> <right>".
+    let compare = |left: &str, test: &str, right: &str| {
+        format!(
+            "kind = \"set\"\nproperty = \"energy\"\nvalue = 1\n\n[card.line.l3.condition]\nkind = \"compare\"\n\
+             test = \"{test}\"\nleft = {{ my = \"{left}\" }}\n{right}"
+        )
+    };
+    let unordered = "states and yes or no values cannot be ordered";
+    let cases = [
+        (set("energy", "true"), "expected a number in a slot, got yes or no"),
+        (
+            set("whole", "{ my = \"flag\" }"),
+            "expected a number in a slot, got yes or no",
+        ),
+        (set("flag", "3"), "expected yes or no in a slot, got a number"),
+        (
+            set("flag", "{ my = \"energy\" }"),
+            "expected yes or no in a slot, got a number",
+        ),
+        (keep("status"), "Keep between needs a Number or an Arrow, got 'status'"),
+        (keep("flag"), "Keep between needs a Number or an Arrow, got 'flag'"),
+        (
+            compare("status", "is", "right = 1"),
+            "cannot compare a state with a number",
+        ),
+        (
+            compare("energy", "is", "right = { my = \"flag\" }"),
+            "cannot compare a number with yes or no",
+        ),
+        (
+            compare("energy", "one_of", "right = [1, { my = \"status\" }]"),
+            "cannot compare a number with a state",
+        ),
+        (compare("flag", "at_least", "right = true"), unordered),
+        (compare("status", "outside", "low = 0\nhigh = 1"), unordered),
+        (
+            compare("energy", "within", "right = true\ntolerance = 1"),
+            "is within compares numbers, got yes or no",
+        ),
+        (
+            compare("status", "within", "right = 1\ntolerance = 1"),
+            "is within compares numbers, got a state",
+        ),
+    ];
+    for (line, message) in cases {
+        let text = typed_walk(&line);
+        assert_reported(&text, Expected::Error, message, "[card.line.l3]");
+        // Each is a value the lowering refuses too.
+        let parsed = ParsedSheet::parse(&text).expect("the sheet reads");
+        let mut report = parsed.check();
+        report
+            .diagnostics
+            .retain(|diagnostic| diagnostic.diagnostic.severity != DiagnosticSeverity::Error);
+        assert!(
+            !SheetFile::lowering_problems(&parsed, &report).is_empty(),
+            "the lowering takes {line}"
+        );
+    }
+    // A Number takes a yes or no worked out by a line as 1 or 0, and so does "is within".
+    for line in [
+        set("energy", "{ my = \"flag\" }"),
+        compare("flag", "within", "right = 1\ntolerance = 1"),
+        compare("whole", "at_least", "right = { my = \"energy\" }"),
+        compare("status", "one_of", "right = [{ state = \"busy\" }]"),
+    ] {
+        let text = typed_walk(&line);
+        if let Err(error) = SheetFile::parse(&text) {
+            panic!("{line} does not lower: {error}");
+        }
+    }
+}
+
+#[test]
+fn a_formula_past_the_depth_limit_is_an_error_at_its_line() {
+    let calculate = |formula: &str| {
+        edited_sheet(
+            "game_of_life.toml",
+            &[
+                (
+                    "lines = [\"l1\", \"l2\", \"l3\"]",
+                    "lines = [\"l1\", \"l2\", \"l3\", \"l5\"]",
+                ),
+                (
+                    "# Lines of Clear",
+                    &format!(
+                        "[card.line.l5]\nkind = \"calculate\"\nname = \"Sum\"\nformula = \"{formula}\"\n\n# Lines of Clear"
+                    ),
+                ),
+                ("next_line = 5", "next_line = 6"),
+            ],
+        )
+    };
+    let sum = |terms: usize| vec!["1"; terms].join(" + ");
+    assert_reported(
+        &calculate(&sum(MAX_FORMULA_DEPTH + 1)),
+        Expected::Error,
+        &format!(
+            "the formula joins more than {MAX_FORMULA_DEPTH} values in one chain of operations. Group some of them in \
+             parentheses"
+        ),
+        "[card.line.l5]",
+    );
+    let report = ParsedSheet::parse(&calculate(&sum(MAX_FORMULA_DEPTH)))
+        .expect("the sheet reads")
+        .check();
+    assert!(!report.has_errors(), "{:?}", report.diagnostics);
+}
+
+#[test]
+fn a_set_of_an_arrow_takes_a_place_as_the_lowering_does() {
+    // The ants with an Arrow property, Aim, and `line` as line 17 of the ant's card.
+    let ants_with = |line: &str| {
+        let aim = "[[agents.property]]\nid = \"aim\"\nname = \"Aim\"\ntype = \"arrow\"\n\n\
+                   [agents.property.starts_as]\nrule = \"value\"\nkey = 99\n\n[agents.property.starts_as.value]\n\
+                   kind = \"random_direction\"\nlength = 1\n\n[[agents.property]]\nid = \"heading\"\n";
+        let text = edited_sheet(
+            "ants.toml",
+            &[
+                ("[[agents.property]]\nid = \"heading\"\n", aim),
+                ("\"l12\", \"l16\"]", "\"l12\", \"l16\", \"l17\"]"),
+                ("next_line = 17", "next_line = 18"),
+            ],
+        );
+        format!("{text}\n[card.line.l17]\n{line}\n")
+    };
+    // "Set Aim to Food way", and to Ahead, a place picked and a place looked at.
+    for place in ["l1", "l6"] {
+        let text = ants_with(&format!(
+            "kind = \"set\"\nproperty = \"aim\"\nvalue = {{ result = \"{place}\" }}\n\n[card.line.l17.condition]\n\
+             kind = \"always\""
+        ));
+        if let Err(error) = SheetFile::parse(&text) {
+            panic!("a Set of Aim to {place} does not build: {error}");
+        }
+    }
+    // A comparison of an arrow with a place is refused by both.
+    let text = ants_with(
+        "kind = \"set\"\nproperty = \"reward_held\"\nvalue = 1\n\n[card.line.l17.condition]\nkind = \"compare\"\n\
+         test = \"is\"\nleft = { my = \"aim\" }\nright = { result = \"l6\" }",
+    );
+    assert_reported(
+        &text,
+        Expected::Error,
+        "cannot compare an arrow with a place",
+        "[card.line.l17]",
+    );
 }

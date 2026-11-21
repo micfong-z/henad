@@ -907,6 +907,40 @@ fn a_result_used_above_its_line_is_red_with_its_tooltip() {
 }
 
 #[test]
+fn a_result_used_on_its_own_line_is_red_with_its_tooltip() {
+    // Line 4, "Loop", compares its own result.
+    let text = edited(
+        &edited(
+            starter_text("game_of_life.toml"),
+            "lines = [\"l1\", \"l2\", \"l3\"]",
+            "lines = [\"l1\", \"l2\", \"l3\", \"l5\"]",
+        ),
+        "# Lines of Clear",
+        "[card.line.l5]\nkind = \"compare\"\nname = \"Loop\"\ntest = \"is\"\nleft = { result = \"l5\" }\nright = true\n\n\
+         # Lines of Clear",
+    );
+    let text = edited(&text, "next_line = 5", "next_line = 6");
+    let lines = lines_of(&text, 0);
+    assert_eq!(
+        lines[3]
+            .red_chips
+            .iter()
+            .map(|(_, tooltip)| tooltip.as_str())
+            .collect::<Vec<_>>(),
+        ["Loop is the result of this line. Choose another value."]
+    );
+    assert_eq!(
+        lines[3].notes,
+        [LineNote {
+            text: "Uses its own result. Choose another value.".to_owned(),
+            color: NoteColor::Red,
+            action: None,
+            description: None,
+        }]
+    );
+}
+
+#[test]
 fn chips_name_the_property_when_two_share_a_state_name() {
     let mut document = ParsedSheet::parse(starter_text("game_of_life.toml"))
         .expect("the starter reads")

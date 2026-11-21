@@ -39,6 +39,16 @@ fn rename_entry<'a>(
     Ok(())
 }
 
+/// Returns an error when the card id `id` is longer than [`MAX_SHEET_ID_BYTES`].
+fn refuse_long_card_id(id: &str) -> Result<(), SheetEditError> {
+    if id.len() > MAX_SHEET_ID_BYTES {
+        return Err(SheetEditError::Invalid(format!(
+            "the card id '{id}' exceeds {MAX_SHEET_ID_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
 impl Draft {
     /// Adds a property named `name` of `property_type` to `thing`.
     pub(super) fn add_property(
@@ -251,11 +261,7 @@ impl Draft {
         }
         self.require_thing(every)?;
         let id = Self::tick_card_id(every);
-        if id.len() > MAX_SHEET_ID_BYTES {
-            return Err(SheetEditError::Invalid(format!(
-                "the card id '{id}' exceeds {MAX_SHEET_ID_BYTES} bytes"
-            )));
-        }
+        refuse_long_card_id(&id)?;
         if self.document.cards.iter().any(|card| card.id == id) {
             return Err(SheetEditError::Taken(format!("the sheet already has the card '{id}'")));
         }
@@ -604,6 +610,7 @@ impl Draft {
                 let old_tick = Self::tick_card_id(old);
                 let new_tick = Self::tick_card_id(id);
                 if self.document.cards.iter().any(|card| card.id == old_tick) {
+                    refuse_long_card_id(&new_tick)?;
                     taken(self.document.cards.iter().any(|card| card.id == new_tick))?;
                     self.rename_card(&old_tick, &new_tick);
                 }

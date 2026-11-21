@@ -356,6 +356,9 @@ pub(super) fn parent_of(card: &SheetCard, line_id: &str) -> Option<String> {
 
 /// Returns the block lines of `card` around a line inside `parent`, nearest first: `parent` itself, then each block that
 /// lists the one before, up to the top of the card.
+///
+/// Note that a card whose blocks list each other in a cycle has no top. The walk then stops after as many blocks as the
+/// card has lines.
 pub(super) fn ancestors<'a>(
     card: &'a SheetCard,
     parent: Option<&str>,
@@ -365,6 +368,7 @@ pub(super) fn ancestors<'a>(
         let outer = parent_of(card, id)?;
         card.line_tables.get_key_value(outer.as_str())
     })
+    .take(card.line_tables.len())
     .map(|(_, line)| line)
 }
 

@@ -31,11 +31,11 @@ pub(super) enum Want {
 }
 
 impl Want {
-    /// Words after "choose" in the skip note, such as "a state" or "unit of time".
+    /// Words after "choose" in the skip note, such as "a state" or "a unit of time".
     fn words(self) -> &'static str {
         match self {
             Self::Blank(blank) => blank.want(),
-            Self::Select(select) => select.words(),
+            Self::Select(select) => select.want(),
         }
     }
 }
@@ -354,8 +354,13 @@ fn check_line<'a>(
             (source < owner.position && skipped.contains(result.as_str())).then_some((result, source + 1))
         });
         if let Some((result, number)) = unfinished {
+            // A result that reads as its line word names the line already.
             let name = checker.result_name(result);
-            state.skip = Some(sentence::not_run_result_unfinished(&name, number));
+            state.skip = Some(if name == sentence::line_word(None, number) {
+                sentence::not_run_when_unfinished(number)
+            } else {
+                sentence::not_run_result_unfinished(&name, number)
+            });
         }
     }
     if state.skip.is_none() && holds_rate(line) && document.time.is_none() {
@@ -392,12 +397,15 @@ fn check_line<'a>(
 }
 
 impl<'a> Checker<'a> {
-    /// Returns the name of the result of line `id`: its name, or its sentence when it has none.
+    /// Returns the name of the result of line `id` as its chip reads: its name, the automatic name of an unnamed
+    /// Count, or else its line word, such as "line 4".
     fn result_name(&self, id: &str) -> String {
-        match self.document.line(id).and_then(|(_, line)| line.name.clone()) {
-            Some(name) => name,
-            None => self.sentences.line(id, &[]),
-        }
+        let chip = SheetChip::Result {
+            line: id.to_owned(),
+            part: None,
+            property: None,
+        };
+        self.sentences.value(&SheetValue::Chip(chip), None)
     }
 
     /// Returns the name the sheet shows for `place`: the name of its property, measure or button, or the heading of
@@ -503,6 +511,11 @@ impl<'a> Checker<'a> {
             SheetValue::Literal(SheetLiteral::Bool(_)) => Some(ValueType::YesNo),
             SheetValue::Literal(_) => Some(ValueType::Number),
             SheetValue::List(items) => {
+                // An empty list reads as a blank. It holds nothing to compare with.
+                if items.is_empty() {
+                    self.blank(context, state, Want::Blank(blank));
+                    return None;
+                }
                 for item in items {
                     self.value(item, context, blank, None, governing, state);
                 }
@@ -644,31 +657,41 @@ impl<'a> Checker<'a> {
                 self.slot(&line.otherwise, &inner, Blank::Value, None, None, state);
             }
             LineKind::DependingOn => {
-                if let Some(property) = self.changed_property(line, context, state, Want::Blank(Blank::Property)) {
-                    if property.property_type != PropertyType::States {
-                        self.error(
-                            format!("Depending on needs a States property, got '{}'", property.id),
-                            place,
-                        );
+                let Some(property) = self.changed_property(line, context, state, Want::Blank(Blank::Property)) else {
+                    for value in line.branches.values() {
+                        self.value(value, &inner, Blank::Value, None, None, state);
                     }
-                    let states: Vec<&str> = property.states.iter().map(|item| item.id.as_str()).collect();
-                    let keys: Vec<&str> = line.branches.keys().map(String::as_str).collect();
-                    let mut sorted = states.clone();
-                    sorted.sort_unstable();
-                    if keys != sorted {
-                        self.error(
-                            format!("Depending on needs one value for each state of '{}'", property.id),
-                            place,
-                        );
+                    return;
+                };
+                if property.property_type != PropertyType::States {
+                    self.error(
+                        format!("Depending on needs a States property, got '{}'", property.id),
+                        place,
+                    );
+                    for value in line.branches.values() {
+                        self.value(value, &inner, Blank::Value, None, None, state);
+                    }
+                    return;
+                }
+                for (key, value) in &line.branches {
+                    if !property.states.iter().any(|held| held.id == *key) {
+                        self.error(format!("'{key}' is not a state of '{}'", property.id), place);
+                        self.value(value, &inner, Blank::Value, None, None, state);
                     }
                 }
-                for value in line.branches.values() {
-                    self.value(value, &inner, Blank::Value, None, None, state);
+                // A state with no value yet is a blank of the line, in the order the sentence shows the states.
+                for held in &property.states {
+                    match line.branches.get(&held.id) {
+                        None => self.blank(context, state, Want::Blank(Blank::Value)),
+                        Some(value) => {
+                            self.value(value, &inner, Blank::Value, None, None, state);
+                        }
+                    }
                 }
             }
             LineKind::Calculate => match line.formula.as_deref().filter(|formula| !formula.trim().is_empty()) {
                 None => self.blank(context, state, Want::Blank(Blank::Number)),
-                Some(formula) => match formula::references(formula) {
+                Some(formula) => match formula::checked_references(formula) {
                     Err(reason) => self.error(reason, place),
                     Ok(references) => {
                         for reference in references {
@@ -729,7 +752,15 @@ impl<'a> Checker<'a> {
                     );
                 }
                 let governing = property.map(|property| property.id.as_str());
-                self.slot(&line.value, &inner, value_want, None, governing, state);
+                let found = self.slot(&line.value, &inner, value_want, None, governing, state);
+                if let (Some(property), Some(found)) = (property, found)
+                    && let Some(expect) = set_takes(property.property_type, found, line.value.value())
+                {
+                    self.error(
+                        format!("expected {} in a slot, got {}", expect.words(), found.words()),
+                        place,
+                    );
+                }
                 self.condition(line, context, state, true);
             }
             LineKind::Steer => {
@@ -750,7 +781,15 @@ impl<'a> Checker<'a> {
                 self.condition(line, context, state, false);
             }
             LineKind::KeepBetween => {
-                self.changed_property(line, context, state, Want::Blank(Blank::Property));
+                let property = self.changed_property(line, context, state, Want::Blank(Blank::Property));
+                if let Some(property) = property
+                    && matches!(property.property_type, PropertyType::States | PropertyType::YesNo)
+                {
+                    self.error(
+                        format!("Keep between needs a Number or an Arrow, got '{}'", property.id),
+                        place,
+                    );
+                }
                 self.number_slot(&line.minimum, &inner, Blank::LowerNumber, state);
                 self.number_slot(&line.maximum, &inner, Blank::UpperNumber, state);
                 self.condition(line, context, state, false);
@@ -946,6 +985,13 @@ impl<'a> Checker<'a> {
                 self.number_slot(&line.high, &inner, Blank::UpperNumber, state);
                 if left == Some(ValueType::Arrow) {
                     self.error(ARROW_COMPARED_WITH_NUMBER, &context.place);
+                } else if let Some(left) = left {
+                    self.compared(
+                        CompareTest::Outside,
+                        (left, false),
+                        (ValueType::Number, false),
+                        &context.place,
+                    );
                 }
             }
             Some(test) => {
@@ -956,15 +1002,77 @@ impl<'a> Checker<'a> {
                     (false, true) => Blank::NumberList,
                     (false, false) => Blank::Number,
                 };
-                let right = self.slot(&line.right, &inner, want, None, governing, state);
+                // Each item of a list is compared with the left side on its own.
+                let right: Vec<(Option<ValueType>, bool)> = match line.right.value() {
+                    Some(SheetValue::List(items)) if !items.is_empty() => items
+                        .iter()
+                        .map(|item| (self.value(item, &inner, want, None, governing, state), is_yes_no(item)))
+                        .collect(),
+                    value => vec![(
+                        self.slot(&line.right, &inner, want, None, governing, state),
+                        value.is_some_and(is_yes_no),
+                    )],
+                };
                 if test == CompareTest::Within {
                     self.number_slot(&line.tolerance, &inner, Blank::Number, state);
                 }
-                let sides = [left, right];
-                if sides.contains(&Some(ValueType::Arrow)) && sides.contains(&Some(ValueType::Number)) {
-                    self.error(ARROW_COMPARED_WITH_NUMBER, &context.place);
+                let left_literal = line.left.value().is_some_and(is_yes_no);
+                for (found, literal) in right {
+                    let (Some(left), Some(found)) = (left, found) else {
+                        continue;
+                    };
+                    let sides = [left, found];
+                    let fits = if sides.contains(&ValueType::Arrow) && sides.contains(&ValueType::Number) {
+                        self.error(ARROW_COMPARED_WITH_NUMBER, &context.place);
+                        false
+                    } else {
+                        self.compared(test, (left, left_literal), (found, literal), &context.place)
+                    };
+                    // One problem is reported for a whole list.
+                    if !fits {
+                        break;
+                    }
                 }
             }
+        }
+    }
+
+    /// Checks the two sides of a comparison by `test`, each a type and whether it is a yes or no typed as such, and
+    /// returns whether they can be compared.
+    ///
+    /// Equal types can be told apart, numbers, numbers and arrows, and arrows can be ordered, and "is within" works
+    /// out the distance between two numbers. A yes or no worked out by a line counts as 1 or 0 there.
+    fn compared(
+        &mut self,
+        test: CompareTest,
+        (left, left_literal): (ValueType, bool),
+        (right, right_literal): (ValueType, bool),
+        place: &Place,
+    ) -> bool {
+        let sides = [left, right];
+        let problem = match test {
+            CompareTest::Is | CompareTest::IsNot | CompareTest::OneOf | CompareTest::NotOneOf => {
+                (left != right).then(|| format!("cannot compare {} with {}", left.words(), right.words()))
+            }
+            CompareTest::Within => sides
+                .into_iter()
+                .zip([left_literal, right_literal])
+                .find(|(side, literal)| *literal || !matches!(side, ValueType::Number | ValueType::YesNo))
+                .map(|(side, _)| format!("is within compares numbers, got {}", side.words())),
+            _ if sides
+                .iter()
+                .any(|side| matches!(side, ValueType::YesNo | ValueType::State)) =>
+            {
+                Some("states and yes or no values cannot be ordered".to_owned())
+            }
+            _ => (left != right).then(|| format!("cannot compare {} with {}", left.words(), right.words())),
+        };
+        match problem {
+            Some(problem) => {
+                self.error(problem, place);
+                false
+            }
+            None => true,
         }
     }
 
@@ -1104,7 +1212,9 @@ impl<'a> Checker<'a> {
             state.skip(|| sentence::not_run_choose(blank.want()));
             return None;
         };
-        if index >= owner.position {
+        if index == owner.position {
+            state.skip(|| sentence::USES_OWN_RESULT.to_owned());
+        } else if index > owner.position {
             let name = self.result_name(id);
             state.skip(|| sentence::uses_result_below(&name));
         } else if let Some(block) = relations.parent(id)
@@ -1366,4 +1476,26 @@ pub(super) fn value_rates(value: &SheetValue) -> bool {
         SheetValue::List(items) => items.iter().any(value_rates),
         _ => false,
     }
+}
+
+/// Returns whether `value` is a yes or no typed as such, `true` or `false`.
+fn is_yes_no(value: &SheetValue) -> bool {
+    matches!(value, SheetValue::Literal(SheetLiteral::Bool(_)))
+}
+
+/// Returns the type a Set of a property of type `property_type` expects when it cannot take `value`, of type
+/// `found`, and `None` when it takes it.
+///
+/// A Set takes a value of the property's own type. A Number property also takes a yes or no that a line works out
+/// or a property holds, as 1 or 0, and an Arrow property takes a place, as its column and row. A States, Position or
+/// Heading property is not checked, since no Set changes one.
+fn set_takes(property_type: PropertyType, found: ValueType, value: Option<&SheetValue>) -> Option<ValueType> {
+    let expect = ValueType::of_property(property_type);
+    let takes = match property_type {
+        PropertyType::States | PropertyType::Position | PropertyType::Heading => true,
+        PropertyType::Number => found == expect || found == ValueType::YesNo && !value.is_some_and(is_yes_no),
+        PropertyType::Arrow => matches!(found, ValueType::Arrow | ValueType::Place),
+        _ => found == expect,
+    };
+    (!takes).then_some(expect)
 }

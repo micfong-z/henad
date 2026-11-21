@@ -71,7 +71,7 @@ use super::document::{
     AgentKind, LineKind, MadeOf, MeasureRule, SheetDocument, SheetLine, SheetMeasure, SheetProperty, SheetValue,
     StartRule, StartsAs,
 };
-use super::limits::MAX_NESTING;
+use super::limits::{MAX_NESTING, MAX_SHEET_BYTES};
 use super::sentence::{self, ANY_STATE_ID};
 use crate::keys::KeyStream;
 
@@ -124,7 +124,8 @@ impl SheetBuilder {
     /// # Errors
     ///
     /// Returns the reason the edit is refused. On an error nothing changes. An edit that would leave a number that is
-    /// not finite anywhere in a sheet that held none is refused with [`sentence::number_not_kept`].
+    /// not finite anywhere in a sheet that held none is refused with [`sentence::number_not_kept`], and an edit that
+    /// would make the text of a sheet within [`MAX_SHEET_BYTES`] longer than that limit is refused as well.
     pub fn apply(&mut self, edit: SheetEdit) -> Result<Vec<String>, SheetEditError> {
         let mut draft = Draft {
             document: self.document.clone(),
@@ -136,14 +137,24 @@ impl SheetBuilder {
         draft.finish();
         names::update_summary_names(&self.document, &mut draft.document);
         names::update_names(&self.document, &mut draft.document);
-        // A sheet the writer cannot write, one holding a number that is not finite, would leave no text to undo to. A
-        // sheet that held such a number before the edit takes edits as before.
-        if let Err(error) = draft.document.to_text()
-            && self.document.to_text().is_ok()
-        {
-            return Err(SheetEditError::Invalid(
-                sentence::number_not_kept(error.value).to_owned(),
-            ));
+        // A sheet the writer cannot write, one holding a number that is not finite, would leave no text to undo to, and
+        // a text past the reader's limit would not read back. A sheet past either limit before the edit takes edits as
+        // before.
+        match draft.document.to_text() {
+            Err(error) if self.document.to_text().is_ok() => {
+                return Err(SheetEditError::Invalid(
+                    sentence::number_not_kept(error.value).to_owned(),
+                ));
+            }
+            Ok(text)
+                if text.len() > MAX_SHEET_BYTES
+                    && self.document.to_text().is_ok_and(|old| old.len() <= MAX_SHEET_BYTES) =>
+            {
+                return Err(SheetEditError::Invalid(format!(
+                    "the sheet cannot be longer than {MAX_SHEET_BYTES} bytes"
+                )));
+            }
+            _ => {}
         }
         self.document = draft.document;
         self.keys = draft.keys;
@@ -209,8 +220,9 @@ fn starts_draws(document: &SheetDocument, starts: &StartsAs) -> bool {
                 .is_some_and(|painted| painted.single_cells(starts.state.as_deref().unwrap_or("")) > 1)
 }
 
-/// Depth of a line table in a sheet's text: the cards, the card, `line` and the line's id.
-const LINE_TABLE_DEPTH: usize = 4;
+/// Depth of a line table in a sheet's text, as the reader counts it: the file, the cards, the card, `line` and the
+/// line's id.
+const LINE_TABLE_DEPTH: usize = 5;
 
 impl Draft {
     /// Runs one edit on the draft.

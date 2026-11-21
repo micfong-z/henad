@@ -66,6 +66,16 @@ pub(in crate::sheet) fn references(formula: &str) -> Result<Vec<&str>, String> {
     parse_with_references(formula, false).map(|(_, references)| references)
 }
 
+/// Returns the references of `formula` in the order they appear, as [`references`] does, after checking the depth of
+/// its operations as [`parse`] does.
+///
+/// # Errors
+///
+/// Returns the reason the formula does not parse, as [`parse`] does.
+pub(in crate::sheet) fn checked_references(formula: &str) -> Result<Vec<&str>, String> {
+    parse_with_references(formula, true).map(|(_, references)| references)
+}
+
 /// Returns `formula` parsed.
 ///
 /// # Errors
@@ -239,7 +249,8 @@ impl<'f> Parser<'f> {
         }
         if tree.depth() > MAX_FORMULA_DEPTH {
             return Err(format!(
-                "the formula nests operations more than {MAX_FORMULA_DEPTH} deep"
+                "the formula joins more than {MAX_FORMULA_DEPTH} values in one chain of operations. Group some of them \
+                 in parentheses"
             ));
         }
         Ok(tree)
@@ -347,7 +358,7 @@ impl<'f> Parser<'f> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, references};
+    use super::{checked_references, parse, references};
     use crate::sheet::limits::{MAX_FORMULA_DEPTH, MAX_FORMULA_NESTING};
 
     #[test]
@@ -395,12 +406,26 @@ mod tests {
     fn a_formula_nesting_operations_past_the_depth_limit_does_not_parse() {
         let sum = |terms: usize| vec!["x"; terms].join(" + ");
         assert!(parse(&sum(MAX_FORMULA_DEPTH)).is_ok());
-        assert!(parse(&sum(MAX_FORMULA_DEPTH + 2)).is_err());
+        assert_eq!(
+            parse(&sum(MAX_FORMULA_DEPTH + 1)),
+            Err(format!(
+                "the formula joins more than {MAX_FORMULA_DEPTH} values in one chain of operations. Group some of them \
+                 in parentheses"
+            ))
+        );
         assert!(
             references(&sum(MAX_FORMULA_DEPTH + 2)).is_ok(),
-            "the checker reads any length"
+            "the references alone read any length"
         );
+        assert_eq!(
+            checked_references(&sum(MAX_FORMULA_DEPTH + 1)),
+            parse(&sum(MAX_FORMULA_DEPTH + 1)).map(|_| Vec::new())
+        );
+        assert!(checked_references(&vec!["x"; 100_000].join("+")).is_err());
         assert!(parse(&vec!["x"; 100_000].join("+")).is_err());
+        // Terms grouped in parentheses make a shallower formula.
+        let grouped = format!("({}) + ({})", sum(9), sum(8));
+        assert!(checked_references(&grouped).is_ok());
     }
 
     #[test]

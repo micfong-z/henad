@@ -942,6 +942,22 @@ impl LineSelect {
         }
     }
 
+    /// Words of what the select wants, after "choose" in a skip note: "a unit of time", "which cells".
+    pub fn want(self) -> &'static str {
+        match self {
+            Self::UnitOfTime => "a unit of time",
+            Self::Comparison => "a comparison",
+            Self::WhichCells => "which cells",
+            Self::TotalOrAverage => "total or average",
+            Self::Operation => "an operation",
+            Self::SteerMode => "by or towards",
+            Self::MoveMode => "by or to",
+            Self::Pick => "most, least or random",
+            Self::WhichCell => "which cell",
+            Self::LookSummary(_) => "a summary",
+        }
+    }
+
     /// Returns the accessible name of the select, such as "Line 2: unit of time", or "Line 1: summary 2" for the
     /// second summary of a look at agents.
     pub fn name(self, prefix: &str) -> String {

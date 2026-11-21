@@ -13,7 +13,7 @@ pub const START_FROM: &str = "Start from";
 
 /// Starters with their descriptions, in the order the dialog shows them.
 pub const STARTER_CHOICES: [(&str, &str); 9] = [
-    ("Blank", "An empty grid of cells to build on."),
+    ("Blank", "An empty model to build on."),
     (
         "Game of Life",
         "Conway's Life. A dead cell with 3 live neighbours comes alive.",

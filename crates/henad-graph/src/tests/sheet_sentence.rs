@@ -385,12 +385,16 @@ fn every_wording_table_entry_equals_the_final_words() {
             sentence::not_run_choose(Blank::UpperNumber.want()),
         ),
         (
-            "Not run yet: choose unit of time",
-            sentence::not_run_choose(LineSelect::UnitOfTime.words()),
+            "Not run yet: choose a unit of time",
+            sentence::not_run_choose(LineSelect::UnitOfTime.want()),
         ),
         (
             "Uses Alive neighbours, which is below this line",
             sentence::uses_result_below("Alive neighbours"),
+        ),
+        (
+            "Uses its own result. Choose another value.",
+            fixed(sentence::USES_OWN_RESULT),
         ),
         (
             "Uses Infection happens from inside line 2. Only lines inside line 2 can use it. Choose another value.",
@@ -411,6 +415,10 @@ fn every_wording_table_entry_equals_the_final_words() {
         (
             "Alive neighbours is below this line. Move this line under it, or choose another value.",
             sentence::result_below_tooltip("Alive neighbours"),
+        ),
+        (
+            "Loop is the result of this line. Choose another value.",
+            sentence::result_own_tooltip("Loop"),
         ),
         (
             "The result Infection happens is only for lines inside its When. Choose another value.",
@@ -1250,7 +1258,7 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
 )]
 fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
     let starters = [
-        ("Blank", "An empty grid of cells to build on."),
+        ("Blank", "An empty model to build on."),
         (
             "Game of Life",
             "Conway's Life. A dead cell with 3 live neighbours comes alive.",

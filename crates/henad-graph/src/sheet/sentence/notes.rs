@@ -8,10 +8,10 @@ use super::grammar::{number_list, plural, upper_first, with_article, word_list};
 // Notes under a line, in the order a line shows them
 
 /// Returns the skip note of a line whose first empty blank wants `want`, such as "Not run yet: choose a state", where
-/// `want` is [`Blank::want`] or [`LineSelect::words`].
+/// `want` is [`Blank::want`] or [`LineSelect::want`].
 ///
 /// [`Blank::want`]: super::Blank::want
-/// [`LineSelect::words`]: super::LineSelect::words
+/// [`LineSelect::want`]: super::LineSelect::want
 pub fn not_run_choose(want: &str) -> String {
     format!("Not run yet: choose {want}")
 }
@@ -20,6 +20,9 @@ pub fn not_run_choose(want: &str) -> String {
 pub fn uses_result_below(name: &str) -> String {
     format!("Uses {name}, which is below this line")
 }
+
+/// Skip note of a line that uses its own result.
+pub const USES_OWN_RESULT: &str = "Uses its own result. Choose another value.";
 
 /// Returns the skip note of a line that uses the result `name` from inside When line `number`, which does not hold
 /// the line.
@@ -35,7 +38,8 @@ pub fn not_run_result_unfinished(name: &str, number: usize) -> String {
 /// Skip note of a rate while one tick has no length.
 pub const NOT_RUN_TICK: &str = "Not run yet: set how long one tick is, under World on the sheet";
 
-/// Returns the skip note of a line inside When line `number`, which does not run.
+/// Returns the skip note of a line held up by line `number`, which does not run: a When or Repeat around the line, or
+/// a line without a name whose result the line uses.
 pub fn not_run_when_unfinished(number: usize) -> String {
     format!("Not run yet: line {number} is not finished")
 }
@@ -43,6 +47,11 @@ pub fn not_run_when_unfinished(number: usize) -> String {
 /// Returns the tooltip of the red chip of the result `name` of a line below.
 pub fn result_below_tooltip(name: &str) -> String {
     format!("{name} is below this line. Move this line under it, or choose another value.")
+}
+
+/// Returns the tooltip of the red chip of the result `name` of the line that holds the chip.
+pub fn result_own_tooltip(name: &str) -> String {
+    format!("{name} is the result of this line. Choose another value.")
 }
 
 /// Returns the tooltip of the red chip of the result `name` from inside a When that does not hold the line.

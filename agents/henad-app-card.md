@@ -52,9 +52,10 @@ paints a competing group's bracket in the gutter between the numbers and the bod
 (`CardRelations`): id, number, depth (indent 20 points), `prefix` (`line_prefix`, "Line 2" or "Clear
 line 1"), `word` (`line_word`, for tool names), the plain `sentence`, its `parts` and their `places`
 from `Sentences::placed_parts` with `otherwise_numbers`, the ids and tooltip of its "otherwise",
-`red_chips` (a result chip whose line sits at or below this one, or whose direct When does not hold
-this line), `swatches`, `otherwise_notice` (`otherwise_notice`, beside the tooltip from
-`otherwise_words_of`, both saying "at the same time" when a higher line sits in the line's own
+`red_chips` (a result chip of the line itself, with `result_own_tooltip` and `USES_OWN_RESULT`, of
+a line below it, or of a line whose direct When does not hold this line), `swatches`,
+`otherwise_notice` (`otherwise_notice`, beside the tooltip from `otherwise_words_of`, both saying
+"at the same time" when a higher line sits in the line's own
 Repeat, as `CardRelations::repeat_of` finds it, and that the first time round decides when two
 higher lines share another Repeat, through `sentence::OtherwiseRepeat`), `notes` (the report's
 diagnostics at that card and

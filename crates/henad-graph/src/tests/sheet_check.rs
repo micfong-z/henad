@@ -447,7 +447,7 @@ fn every_skip_note_equals_its_wording_table_entry() {
             blank("around = \"cells_8\"\n", ""),
             "l1",
             "Not run yet: choose which cells",
-            sentence::not_run_choose(LineSelect::WhichCells.words()),
+            sentence::not_run_choose(LineSelect::WhichCells.want()),
         ),
         (
             blank(
@@ -455,8 +455,8 @@ fn every_skip_note_equals_its_wording_table_entry() {
                 "left = { result = \"l1\" }\n",
             ),
             "l2",
-            "Not run yet: choose comparison",
-            sentence::not_run_choose(LineSelect::Comparison.words()),
+            "Not run yet: choose a comparison",
+            sentence::not_run_choose(LineSelect::Comparison.want()),
         ),
         (
             blank("left = { result = \"l1\" }\nright = 3", "left = { result = \"l1\" }"),
@@ -497,8 +497,8 @@ fn every_skip_note_equals_its_wording_table_entry() {
                 )],
             )),
             "l3",
-            "Not run yet: choose unit of time",
-            sentence::not_run_choose(LineSelect::UnitOfTime.words()),
+            "Not run yet: choose a unit of time",
+            sentence::not_run_choose(LineSelect::UnitOfTime.want()),
         ),
         // A result of a deleted line reads as a blank.
         (
@@ -908,4 +908,71 @@ fn an_empty_start_chance_names_its_property() {
         .map(|diagnostic| diagnostic.diagnostic.message)
         .collect();
     assert_eq!(errors, [sentence::empty_field("Health", "a chance")]);
+}
+
+#[test]
+fn an_empty_list_reads_as_a_blank() {
+    // "none of the numbers" with no numbers would hold for every cell, and "one of" for none.
+    for test in ["not_one_of", "one_of"] {
+        let text = edited_sheet(
+            "game_of_life.toml",
+            &[(
+                "test = \"not_one_of\"\nleft = { result = \"l1\" }\nright = [2, 3]",
+                &format!("test = \"{test}\"\nleft = {{ result = \"l1\" }}\nright = []"),
+            )],
+        );
+        let sheet = ParsedSheet::parse(&text).expect("the sheet reads");
+        let report = sheet.check();
+        assert!(!report.has_errors(), "{:?}", report.diagnostics);
+        assert_eq!(report.skip_note("l3"), Some("Not run yet: choose a list of numbers"));
+        let document = sheet.into_document();
+        let sentence = Sentences::new(&document).line("l3", &[]);
+        assert!(sentence.ends_with("of the numbers ..."), "{sentence}");
+    }
+}
+
+#[test]
+fn a_line_that_reads_its_own_result_says_so_and_unnamed_results_read_as_their_lines() {
+    // Lines 4 and 5 of the edited Life sheet, unnamed as only a file writes them.
+    let with_lines = |lines: &str| {
+        edited_sheet(
+            "game_of_life.toml",
+            &[
+                (
+                    "lines = [\"l1\", \"l2\", \"l3\"]",
+                    "lines = [\"l1\", \"l2\", \"l3\", \"l5\", \"l6\"]",
+                ),
+                ("# Lines of Clear", &format!("{lines}\n# Lines of Clear")),
+                ("next_line = 5", "next_line = 7"),
+            ],
+        )
+    };
+    let own = report(&with_lines(
+        "[card.line.l5]\nkind = \"calculate\"\nformula = \"l5 + 1\"\n\n[card.line.l6]\nkind = \"calculate\"\n\
+         formula = \"l5 * 2\"\n",
+    ));
+    assert!(!own.has_errors(), "{:?}", own.diagnostics);
+    assert_eq!(own.skip_note("l5"), Some(sentence::USES_OWN_RESULT));
+    assert_eq!(sentence::USES_OWN_RESULT, "Uses its own result. Choose another value.");
+    let compare = |id: &str, reads: &str| {
+        format!(
+            "[card.line.{id}]\nkind = \"compare\"\ntest = \"is\"\nleft = {{ result = \"{reads}\" }}\nright = true\n\n"
+        )
+    };
+    let mutual = report(&with_lines(&format!("{}{}", compare("l5", "l6"), compare("l6", "l5"))));
+    assert!(!mutual.has_errors(), "{:?}", mutual.diagnostics);
+    // Each names the other as its chip reads, its line word.
+    assert_eq!(mutual.skip_note("l5"), Some("Uses line 5, which is below this line"));
+    assert_eq!(mutual.skip_note("l6"), Some("Not run yet: line 4 is not finished"));
+    // An unnamed Count reads as its automatic name, as its chip does.
+    let count = report(&with_lines(
+        "[card.line.l5]\nkind = \"calculate\"\nname = \"Twice\"\nformula = \"l6 * 2\"\n\n[card.line.l6]\n\
+         kind = \"count\"\naround = \"cells_8\"\n\n[card.line.l6.whose]\nkind = \"compare\"\ntest = \"is\"\n\
+         left = { their = \"status\" }\nright = { state = \"dead\" }\n",
+    ));
+    assert!(!count.has_errors(), "{:?}", count.diagnostics);
+    assert_eq!(
+        count.skip_note("l5"),
+        Some("Uses Dead neighbours, which is below this line")
+    );
 }

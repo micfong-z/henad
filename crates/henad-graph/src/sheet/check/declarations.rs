@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use super::lines::{Context, Draw, ValueType, line_number, value_draws, value_rates};
 use super::{Checker, Place, Thing};
 use crate::ids::is_id;
+use crate::limits::{MAX_AGENTS, MAX_GRID_SIDE, MAX_WORLD_SIDE};
 use crate::sheet::SHEET_VERSION;
 use crate::sheet::document::{
     ButtonStepRule, CELLS_ID, CardRuns, ColorRuleKind, GROUND_ID, MadeOf, MeasureRule, PropertyType, SheetDocument,
@@ -83,6 +84,20 @@ fn check_world(checker: &mut Checker<'_>) {
     if world.width == 0 || world.height == 0 {
         checker.error("the world must be at least 1 cell wide and 1 cell high", &Place::World);
     }
+    // The largest side of a grid of cells, and of the open space of agents, that a model can run.
+    let largest = match world.made_of {
+        MadeOf::Cells => f64::from(MAX_GRID_SIDE),
+        MadeOf::Agents => f64::from(MAX_WORLD_SIDE),
+    };
+    if f64::from(world.width) > largest || f64::from(world.height) > largest {
+        checker.error(
+            format!(
+                "the world must be at most {largest} cells wide and {largest} cells high, got {} by {}",
+                world.width, world.height
+            ),
+            &Place::World,
+        );
+    }
     match world.made_of {
         MadeOf::Cells => {
             if !document.agents.is_empty() || document.ground.is_some() {
@@ -109,6 +124,15 @@ fn check_world(checker: &mut Checker<'_>) {
         if !(1..=kind.max_count).contains(&kind.count) {
             checker.error(
                 format!("the agents '{}' need a count from 1 to max_count", kind.id),
+                &place,
+            );
+        }
+        if kind.max_count > MAX_AGENTS {
+            checker.error(
+                format!(
+                    "the max_count of the agents '{}' must be at most {MAX_AGENTS}, got {}",
+                    kind.id, kind.max_count
+                ),
                 &place,
             );
         }

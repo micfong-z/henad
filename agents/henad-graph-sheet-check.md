@@ -13,7 +13,9 @@ and `MAX_FORMULA_NESTING` (32 groups of parentheses, calls and `^` right sides, 
 formula parser descends, so a deep formula is an error instead of a stack overflow) and
 `MAX_FORMULA_DEPTH` (16 operations nested in a formula the lowering writes, each operator, negation
 and call one level, since `math.expr` reads 64 levels and its text spends up to three per
-operation). The reader enforces the first three.
+operation, so a flat sum of 17 terms is past it; the checker holds a Calculate to it through
+`formula::checked_references`, and the message asks for parentheses, which make a sum shallower).
+The reader enforces the first three.
 
 **The checker.** `check::check(&document)` returns diagnostics with no span in a stable order (the
 tables outside the cards, then every card's line ids, then each card's lists and its lines in
@@ -27,14 +29,22 @@ Errors (file-level, technical messages in the graph checker's style): version, t
 `world_height`, `tick_length` and `henad_*`, for a kind of thing `cells` and `ground`, for a state
 `any_state`), a Look around's summary ids (grammar, length, the reserved words and `l<digits>`, one
 id per line), the namespaces of author-format section 2.2, line ids (form, below `next_line`, one
-card, one list, reachable, listed ids held), lines on a non-block kind, the world's kinds,
+card, one list, reachable, listed ids held), lines on a non-block kind, the world's kinds, the
+world's sides and a kind's `max_count` against `crate::limits` (`MAX_GRID_SIDE` for cells,
+`MAX_WORLD_SIDE` for agents, `MAX_AGENTS`) at `[world]` and `[[agents]]`, so the graph checker's
+own limits never place an error at `[sheet]`,
 `ONE_AGENT_KIND` on every agent kind after the first, property types, marks, starts (states, keys, a
 rate in a start), parameter defaults, measures, colour rules, buttons (a run-once step names a card
 that runs once), a card's kind of thing (`cells` in any grid world), a name on a change, `always` as
 a line or outside a condition, a When that is always, `outside` outside a condition, a phrase of a
 change kind, unknown parameters, states of another property, `their` and relations outside a look,
 results from another card or of a change line, parts, places, value types (a slot's expected type
-against a literal, chip or phrase, and `ARROW_COMPARED_WITH_NUMBER`), formulas, keys held twice,
+against a literal, chip or phrase, and `ARROW_COMPARED_WITH_NUMBER`; a Set's value against its
+property, `set_takes`, a Number taking a yes or no worked out or read but never `true` or `false`,
+and an Arrow a place; Keep between on a States or yes or no property; and the two sides of a
+comparison, `compared`, each item of a list on its own: equal types for is and one of, no order on
+states or yes or no, and "is within" over numbers and worked-out yes or no; each only where both
+types are known, and only what the lowering refuses too), formulas, keys held twice,
 Count, Look around and Pick a cell inside a Repeat (`LOOK_IN_REPEAT`) or a run-once card,
 `RATE_IN_BUTTON_CARD`, a rate inside a Repeat (`RATE_IN_REPEAT`), and the ranges from the wording table
 (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on literals, a percent divided by 100,
@@ -43,20 +53,27 @@ yet (a Steer or Move mode, a pick rule, `which`, an event, `agent_kind`, `includ
 when absent. Warnings that keep the line running: a draw with no key, two result lines with one
 name, and `SHEET_EMPTY` at `[world]` for a grid sheet with no cells property. Skip warnings, one per
 line, the first problem in the line's sentence order: a blank slot or select reads `not_run_choose`
-with `Blank::want` or `LineSelect::words` ("Not run yet: choose the old state"), Become's property
-counting as its new state; a result of a line no card holds reads the same; a result at or below its
-user reads `uses_result_below`; a result inside a When or Repeat that does not hold the user reads
+with `Blank::want` or `LineSelect::want` ("Not run yet: choose the old state"), an empty list
+reading as its slot's blank (the sentence draws it as one too), Become's property counting as its
+new state; a result of a line no card holds reads the same; a result below its user reads
+`uses_result_below` and the user's own result `USES_OWN_RESULT`; a result inside a When or Repeat
+that does not hold the user reads
 `uses_result_inside`; `my_new` at or above the last change reads `uses_result_below("my new X")`,
 and with no change at all as a blank. After the slots, in order: a result of a skipped line above
 reads `not_run_result_unfinished`, a rate with no `[time]` reads `NOT_RUN_TICK`, and a change, When
 or Repeat inside a skipped block, or any line with a skipped Repeat among its blocks at any depth,
 reads `not_run_when_unfinished` with the direct parent's number, or else the nearest skipped
-Repeat's. A result without a name reads as its sentence in a note. Outside the cards a blank or
-unusable value is an error. A value's type walk through results stops past `MAX_NESTING`. A rate
-whose `rate` is a parameter whose Unit names another unit (`edit::unit_in_text`) than the line's
-`rate_unit` warns `unit_mismatch` at the line and keeps running in the line's unit. A Record with no
-event, a Leave or a pick with no ground property and a Repeat with no times skip their line in the
-blank's words. `changes_property` is the rule of `my_new`, public for the card's picker.
+Repeat's. A result without a name reads in a note as its chip does (`result_name`): an unnamed Count
+by its automatic name, another by its line word, and the note of such a result on a skipped line is
+`not_run_when_unfinished`. Outside the cards a blank or unusable value is an error. A value's type
+walk through results stops past `MAX_NESTING`. A rate whose `rate` is a parameter whose Unit names
+another unit (`edit::unit_in_text`) than the line's `rate_unit` warns `unit_mismatch` at the line
+and keeps running in the line's unit. A Record with no event, a Leave or a pick with no ground
+property and a Repeat with no times skip their line in the blank's words, and so does a Depending on
+with no value for a state of its property (a new state included), each missing value a
+`Blank::Value` in state order. A value keyed by no state of the property is an error, and a property
+of another type is one error for the whole line. `changes_property` is the rule of `my_new`, public
+for the card's picker.
 
 **Tests.** Checker tests sit in `src/tests/sheet_mutation.rs` (the 25 cases of the author format's
 mutation run, one test each on a committed sheet edited in the test, each asserting error, warning

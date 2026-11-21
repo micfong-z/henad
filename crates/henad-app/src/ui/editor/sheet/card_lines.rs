@@ -9,9 +9,10 @@ use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
     ALWAYS, ANY_STATE_ID, BLANK_TEXT, ChipKind, FOR_EACH_BLANK_WORDS, FOR_EACH_WORDS, LineSelect, OtherwiseRepeat,
-    PartPlace, SentenceChip, SentencePart, Sentences, UNIT_PLACEHOLDER, always_name, for_each_change_name,
-    for_each_optional_name, line_name, line_prefix, line_word, otherwise_notice, otherwise_tooltip, otherwise_words,
-    result_below_tooltip, result_inside_tooltip, sentence_text, uses_result_below, uses_result_inside,
+    PartPlace, SentenceChip, SentencePart, Sentences, UNIT_PLACEHOLDER, USES_OWN_RESULT, always_name,
+    for_each_change_name, for_each_optional_name, line_name, line_prefix, line_word, otherwise_notice,
+    otherwise_tooltip, otherwise_words, result_below_tooltip, result_inside_tooltip, result_own_tooltip, sentence_text,
+    uses_result_below, uses_result_inside,
 };
 use henad_graph::sheet::sentence::{COMPETING_WORD, competing_parts, competing_tooltip};
 
@@ -262,8 +263,8 @@ struct RedChip {
     note: String,
 }
 
-/// Returns the result chips of line `line_id`, at `position` in display order, that name a result below it or a
-/// result inside a When the line is not in.
+/// Returns the result chips of line `line_id`, at `position` in display order, that name its own result, a result
+/// below it or a result inside a When the line is not in.
 fn red_chips(relations: &CardRelations<'_>, line_id: &str, position: usize, parts: &[SentencePart]) -> Vec<RedChip> {
     parts
         .iter()
@@ -282,7 +283,14 @@ fn red_chips(relations: &CardRelations<'_>, line_id: &str, position: usize, part
                 .and_then(|line| line.name.clone())
                 .unwrap_or_else(|| name.clone());
             let result_position = relations.index(result)?;
-            if result_position >= position {
+            if result_position == position {
+                return Some(RedChip {
+                    index,
+                    tooltip: result_own_tooltip(&result_name),
+                    note: USES_OWN_RESULT.to_owned(),
+                });
+            }
+            if result_position > position {
                 return Some(RedChip {
                     index,
                     tooltip: result_below_tooltip(&result_name),

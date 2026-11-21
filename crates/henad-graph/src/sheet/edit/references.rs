@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use super::lines::{SLOT_KEYS, slots_mut};
-use crate::sheet::document::{SheetChip, SheetDocument, SheetLine, SheetProperty, SheetValue, Slot};
+use crate::sheet::document::{LineKind, SheetChip, SheetDocument, SheetLine, SheetProperty, SheetValue, Slot};
 
 /// An item whose references change.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,12 +230,17 @@ impl<'a> Walker<'a> {
         match value {
             SheetValue::Literal(_) => false,
             SheetValue::Phrase(phrase) => {
+                // A Calculate in a slot whose formula a clear empties turns the slot blank. The card edits no formula
+                // in a slot, and a blank slot takes a value from its picker.
+                let formula = phrase.kind == LineKind::Calculate && phrase.formula.is_some();
                 self.line(phrase);
-                false
+                formula && phrase.formula.is_none()
             }
             SheetValue::List(items) => {
+                // A list a clear leaves empty turns the slot blank, as a cleared chip does.
+                let held = !items.is_empty();
                 self.values(items, about);
-                false
+                held && items.is_empty()
             }
             SheetValue::Chip(chip) => match chip {
                 SheetChip::Param(id) if self.is_parameter(id) => self.hit(id),

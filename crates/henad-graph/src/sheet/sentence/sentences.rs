@@ -5,8 +5,8 @@ use std::fmt;
 
 use super::card::{
     ALWAYS, ANY_STATE_ID, BLANK_TEXT, Blank, ConditionKind, DrawKind, LineSelect, around_words, button_card_heading,
-    card_header, comparison_words, condition_head, function_words, operation_words, rate_unit_word, relation_words,
-    shared_state_name,
+    card_header, comparison_words, condition_head, function_words, line_word, operation_words, rate_unit_word,
+    relation_words, shared_state_name,
 };
 use super::grammar::{lower_first, plural, possessive, thing_word, upper_first};
 use super::parts::{
@@ -19,6 +19,7 @@ use crate::sheet::document::{
     Around, CardRuns, CellWhich, CompareTest, LineKind, LineMode, MadeOf, PickRule, PropertyType, SheetCard, SheetChip,
     SheetDocument, SheetEvent, SheetLine, SheetLiteral, SheetParameter, SheetProperty, SheetValue, Slot, SummaryKind,
 };
+use crate::sheet::relations::CardRelations;
 use crate::sheet::writer::format_number;
 
 /// Parts of a sentence being written, each with its place. Adjacent words merge into one [`SentencePart::Text`].
@@ -558,11 +559,13 @@ impl<'a> Sentences<'a> {
         self.slot_parts(slot, about, Blank::Value, "").plain()
     }
 
-    /// Returns the parts of the value in `slot`, the slot of the key `key`, or `blank` for a blank slot.
+    /// Returns the parts of the value in `slot`, the slot of the key `key`, or `blank` for a blank slot or an empty
+    /// list.
     ///
     /// `about` is the property that a state in the slot belongs to. Every place is under the slot.
     fn slot_parts(&self, slot: &Slot, about: Option<&str>, blank: Blank, key: &str) -> Parts {
         slot.value()
+            .filter(|value| !matches!(value, SheetValue::List(items) if items.is_empty()))
             .map_or_else(
                 || Parts::placed(SentencePart::Blank(blank), PlaceTarget::Slot(String::new()), None),
                 |value| self.value_parts(value, about),
@@ -636,6 +639,7 @@ impl<'a> Sentences<'a> {
             SheetChip::Result { line, part, property } => {
                 let result = self.lines.get(line.as_str());
                 // An unnamed Count reads as its automatic name, which reads no result and so never comes back here.
+                // Another unnamed result reads as its line, since its automatic name can read this chip again.
                 let base = result
                     .and_then(|result| {
                         result.name.clone().or_else(|| {
@@ -644,7 +648,7 @@ impl<'a> Sentences<'a> {
                                 .flatten()
                         })
                     })
-                    .unwrap_or_else(|| line.clone());
+                    .unwrap_or_else(|| self.line_word_of(line));
                 let name = if let Some(part) = part {
                     if part == "open" {
                         format!("{base} is open")
@@ -663,6 +667,17 @@ impl<'a> Sentences<'a> {
                 SentenceChip::plain(ChipKind::Result(line.clone()), name)
             }
         }
+    }
+
+    /// Returns the line word of line `line_id` as its card numbers it, such as "line 2", or the id of a line that no
+    /// card holds.
+    fn line_word_of(&self, line_id: &str) -> String {
+        self.document
+            .cards
+            .iter()
+            .find(|card| card.line_tables.contains_key(line_id))
+            .and_then(|card| CardRelations::new(self.document, card).number(line_id))
+            .map_or_else(|| line_id.to_owned(), |number| line_word(None, number))
     }
 
     /// Returns the parts of the phrase or result line `line` after its name.

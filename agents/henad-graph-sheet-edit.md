@@ -15,7 +15,8 @@ entropy, `with_key_seed` from a seed), and `apply(SheetEdit)` runs one command o
 so a refused command changes nothing, then returns the ids it made. A command checks structure (ids,
 names, the line a path reaches, a block to add inside) and leaves meaning to the checker. A command
 that leaves a number that is not finite is refused in `sentence::number_not_kept`'s words, found
-by `to_text` failing after it and not before, so the history's texts always write.
+by `to_text` failing after it and not before, so the history's texts always write, and one whose
+text passes `MAX_SHEET_BYTES` when the text before it did not is refused, so they also read back.
 `SheetEditError` is `Missing`, `Invalid`, `Taken` (a name of the same kind, case aside, or an id)
 and `Reserved` (the id). Commands: the sheet's name and purpose, `SetWorld`, `SetTime`;
 `AddProperty` (the first States property of a kind of thing with no colour rule colours it by
@@ -56,7 +57,8 @@ mints against buttons and cards together. `ChangeId` checks the grammar, the len
 that the sheet holds the item under its kind (else `Missing` in `missing`'s words, as `Delete` says
 it, also for an id another kind holds and for the item's own id) and the namespace, then rewrites
 every reference; a card of the button's id that the button runs and an agent kind's tick card
-follow. A suffixed id that is reserved (`henad_2`) is refused like a
+follow, and a kind id whose tick card id passes `MAX_SHEET_ID_BYTES` is refused in `AddCard`'s
+words. A suffixed id that is reserved (`henad_2`) is refused like a
 reserved base. `is_reserved_name(name, space)` lets a form refuse such a name first, in the words of
 `sentence::name_reserved` ("Count is a reserved name. Choose another name."). Lines take `l<next_line>`, and `next_line` grows past it, so a deleted number
 never comes back. After a command, every line it touched that draws gets a key no other draw holds
@@ -70,10 +72,11 @@ slot, list, item, branch, summary, row, line field, formula (`rewrite_formula`, 
 lexing, so numbers and function names stay), start, blocked state, measure, colour rule, button step
 and card. A state chip belongs to the property its slot is about (a Become's property, the left of a
 comparison through `compared_property`, a start's own property, a Set's property), else to the one
-property that holds the state id. A clear blanks a slot, drops a list item, empties a field, empties
-a formula that names the target, and drops a table about the target (a measure, a start row or
-shape, a blocked state, a colour rule over a deleted property, a button step naming a deleted
-property or card); a start's `otherwise`, `base` or state chip `value` falls back to the first
+property that holds the state id. A clear blanks a slot, drops a list item (and blanks the slot of
+a list it empties), empties a field, empties a formula that names the target (and blanks the slot
+of a Calculate whose formula it empties there, since the card edits no formula in a slot), and
+drops a table about the target (a measure, a start row or shape, a blocked state, a colour rule
+over a deleted property, a button step naming a deleted property or card); a start's `otherwise`, `base` or state chip `value` falls back to the first
 remaining state of the property, and an `on_ground` start's `state` to the first remaining state of
 its ground property. A deleted property clears its states' references first. A deleted line's
 result chips turn blank: the user is skipped, never refused. Most blanks in a card line are
@@ -91,15 +94,17 @@ the last into a phrase. The lowering's `LineMap` paths use the same grammar, and
 holds them together. `slot_value(line, path)`, exported from `sheet::edit`, reads the value at a
 path over the same steps, and the Card pane reads every slot of a line through it. `SetSlot` with a
 filled value at one past the last item or row appends, and a blank removes an item or a branch. A
-line whose tables would nest past `MAX_NESTING` (counted
-generously from the line table's depth of 4) is refused, and so is a card past `MAX_LINES_PER_CARD`.
-Moves follow the outline: the first line of a block moves up out
+line whose tables would nest past `MAX_NESTING` (counted generously from the line table's depth of
+5, the reader counting the file as 1) is refused, and so is a card past `MAX_LINES_PER_CARD`. Moves
+follow the outline: the first line of a block moves up out
 of it and the last moves down out of it, a line that is not a block beside a block moves into it (at
 its end from below, at its start from above), and a block swaps with the line or block beside it; a
 move past the card's top or bottom is `Invalid`. `AddLine` inside a When gives a Become or Set with
 a blank condition `always`, and a Become with no old state the state of the nearest When that tests
-`my X is S`. `ChooseCondition` keeps the condition's values when the form stays (Is, AtLeast and
-AtMost share the compare form and set its test, a list right side keeping its first item), makes a
+`my X is S`. The walk out to that When (`lines::ancestors`) stops after as many blocks as the card
+has lines, so `AddLine` also returns inside blocks a file lists inside each other. `ChooseCondition`
+keeps the condition's values when the form stays (Is, AtLeast and AtMost share the compare form and
+set its test, a list right side keeping its first item), makes a
 blank phrase otherwise, and refuses always on a When. `UseOneSide` turns an outside test with one
 side filled into `less_than` the low or `more_than` the high. `UseCountForEach` moves a Count result
 in the chance or rate (of a Chance or Rate line, or a change's condition) into `tries`.

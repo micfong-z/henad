@@ -19,7 +19,9 @@ editor's wording table: constants for fixed text and functions for templates, ea
 words (`card_header`, `otherwise_words`, `not_run_choose`, `gap_note`, `for_each_words`), with the
 enums `AddButton` and `AddItem` (labels, tooltips, headings, patterns; `+ Chance` has the tooltip
 "Change a state by chance"), `ConditionItem` ("Choose when"), `Blank` (visible word, `want`,
-accessible name, picker title), `LineSelect`, `DrawKind` and `ConditionKind`. A template takes the
+accessible name, picker title), `LineSelect` (`words` in the accessible name, `want` with its
+article in a skip note: "Not run yet: choose a unit of time"), `DrawKind` and `ConditionKind`. A
+template takes the
 line number, the line word ("line 2", "Clear line 1") or the line prefix ("Line 2", "Clear line 1")
 it needs. Beyond the card it holds the sheet (`SheetSection` with each heading, help text and
 example, `SheetSection::shown` for a world of cells or of agents, the World and Time words, the
@@ -58,7 +60,8 @@ named by the button that runs it) and `line(line_id, otherwise)`, where `otherwi
 numbers of the higher lines that override the line ("otherwise (when line 2 does not apply) become
 ..."). The sentence decides no "otherwise" of its own. The writer passes
 `CardRelations::otherwise_numbers`. A blank reads `...`, an unknown reference as its id, an
-unnamed Count result as its automatic name. Words
+unnamed Count result as its automatic name, and another unnamed result as its line word ("line
+4"), since its automatic name can read the same chip again. Words
 follow the wording table: "Become X from Y" ("from any state"), ", always", "when my Cargo is
 Searching" (no "I am"), "is none of the numbers 2, 3" and "is one of the states" when the left reads
 a States property, "count of ... whose X, only those whose Y", "Set Hit to yes with chance P,

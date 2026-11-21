@@ -14,16 +14,17 @@ use super::sheet_writer::{RENAME_HUNKS, STEER_REORDER_HUNKS, WANING_HUNKS, asser
 use crate::keys::KeyStream;
 use crate::sheet::check;
 use crate::sheet::document::{
-    BlockedState, ButtonStepRule, CardRuns, CompareTest, LineKind, Marks, MeasureRule, PaintedShape, ParameterType,
-    PropertyType, ShapeKind, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetTime, SheetValue, Slot, StartRule,
-    StartsAs, StartsAsRow,
+    BlockedState, ButtonStepRule, CardRuns, ChooseRow, CompareTest, LineKind, Marks, MeasureRule, PaintedShape,
+    ParameterType, PropertyType, ShapeKind, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetTime, SheetValue,
+    Slot, StartRule, StartsAs, StartsAsRow,
 };
 use crate::sheet::edit::{
     IdSpace, LineField, MoveDirection, STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem,
     automatic_name, mint_id, unit_in_text,
 };
+use crate::sheet::limits::MAX_NESTING;
 use crate::sheet::relations::CardRelations;
-use crate::sheet::sentence::{ConditionItem, Sentences};
+use crate::sheet::sentence::{Blank, ConditionItem, SentencePart, Sentences};
 use crate::sheet::{ParsedSheet, starters};
 
 #[test]
@@ -431,6 +432,41 @@ fn change_id_rewrites_every_reference_and_nothing_else() {
 }
 
 #[test]
+fn a_kind_of_agent_takes_no_id_its_tick_card_cannot_follow() {
+    // The tick card `<id>_tick` holds 5 bytes more than the kind's id, and a sheet id holds at most 48.
+    let mut builder = builder_of("boids.toml");
+    let longest = "a".repeat(43);
+    run(
+        &mut builder,
+        SheetEdit::ChangeId {
+            item: SheetItem::AgentKind("bird".to_owned()),
+            id: longest.clone(),
+        },
+    );
+    assert!(
+        builder
+            .document()
+            .cards
+            .iter()
+            .any(|card| card.id == format!("{longest}_tick"))
+    );
+    assert!(!check::check(builder.document()).has_errors());
+    let before = write(builder.document());
+    let too_long = "b".repeat(44);
+    let refused = builder.apply(SheetEdit::ChangeId {
+        item: SheetItem::AgentKind(longest),
+        id: too_long.clone(),
+    });
+    assert_eq!(
+        refused,
+        Err(SheetEditError::Invalid(format!(
+            "the card id '{too_long}_tick' exceeds 48 bytes"
+        )))
+    );
+    assert_eq!(write(builder.document()), before, "a refused id changes nothing");
+}
+
+#[test]
 fn a_deleted_line_number_is_never_minted_again() {
     let mut builder = builder_of("game_of_life.toml");
     let first = add_line(&mut builder, "cell_tick", None, SheetLine::new(LineKind::Become));
@@ -598,6 +634,122 @@ fn a_seeded_key_stream_gives_its_known_first_keys() {
     let mut stream = KeyStream::seeded(1);
     let keys = [stream.next_key(), stream.next_key(), stream.next_key()];
     assert_eq!(keys, [605_988_705, 180_871_622, 1_319_607_719]);
+}
+
+#[test]
+fn a_line_added_inside_a_block_that_lists_itself_is_added() {
+    // A file can list a block inside itself, or two blocks inside each other. The checker reports it, and the
+    // editor still adds a line inside such a block.
+    let block = |kind: LineKind, inner: &str| {
+        let mut block = SheetLine::new(kind);
+        block.lines = vec![inner.to_owned()];
+        if kind == LineKind::Repeat {
+            block.times = Slot::Filled(SheetValue::Literal(SheetLiteral::Number(2.0)));
+        }
+        block
+    };
+    let cases = [
+        vec![("l5", block(LineKind::Repeat, "l5"))],
+        vec![("l5", block(LineKind::When, "l5"))],
+        vec![
+            ("l5", block(LineKind::When, "l6")),
+            ("l6", block(LineKind::Repeat, "l5")),
+        ],
+    ];
+    for blocks in cases {
+        let mut document = read(sheet_text("game_of_life.toml"));
+        let card = &mut document.cards[0];
+        card.lines.push("l5".to_owned());
+        for (id, line) in &blocks {
+            card.line_tables.insert((*id).to_owned(), line.clone());
+        }
+        document.sheet.next_line = 7;
+        assert!(check::check(&document).has_errors(), "{blocks:?}");
+        let mut builder = SheetBuilder::new(document).with_key_seed(12);
+        let made = add_line(&mut builder, "cell_tick", Some("l5"), SheetLine::new(LineKind::Become));
+        assert_eq!(made, ["l7"], "{blocks:?}");
+    }
+}
+
+#[test]
+fn an_edit_the_builder_takes_leaves_a_text_that_reads_back() {
+    // A value nested `depth` phrases deep in one of four ways, around a number or a list of one number.
+    fn nested(shape: usize, depth: usize, list: bool) -> SheetValue {
+        let number = SheetValue::Literal(SheetLiteral::Number(3.0));
+        if depth == 0 {
+            return if list { SheetValue::List(vec![number]) } else { number };
+        }
+        let inner = nested(shape, depth - 1, list);
+        let phrase = match shape {
+            0 => {
+                let mut phrase = SheetLine::new(LineKind::Compare);
+                phrase.test = Some(CompareTest::Is);
+                phrase.left = Slot::Filled(inner);
+                phrase
+            }
+            1 => {
+                let mut phrase = SheetLine::new(LineKind::AllOf);
+                phrase.items = vec![inner];
+                phrase
+            }
+            2 => {
+                let mut phrase = SheetLine::new(LineKind::Choose);
+                phrase.rows = vec![ChooseRow {
+                    value: Slot::Filled(inner),
+                    condition: Slot::Blank,
+                }];
+                phrase
+            }
+            _ => {
+                let mut phrase = SheetLine::new(LineKind::DependingOn);
+                phrase.property = Some("status".to_owned());
+                phrase.branches.insert("alive".to_owned(), inner);
+                phrase
+            }
+        };
+        SheetValue::Phrase(Box::new(phrase))
+    }
+    for (shape, list) in (0..4).flat_map(|shape| [(shape, false), (shape, true)]) {
+        let mut taken = 0;
+        let mut refused = 0;
+        for depth in 0..=MAX_NESTING {
+            let mut builder = builder_of("game_of_life.toml");
+            let edit = SheetEdit::SetSlot {
+                line: "l2".to_owned(),
+                path: "condition".to_owned(),
+                value: Slot::Filled(nested(shape, depth, list)),
+            };
+            if builder.apply(edit).is_err() {
+                refused += 1;
+                break;
+            }
+            taken += 1;
+            let text = write(builder.document());
+            if let Err(error) = ParsedSheet::parse(&text) {
+                panic!("shape {shape} ({list}) at depth {depth} does not read back: {error}");
+            }
+        }
+        assert!(taken > 0 && refused > 0, "shape {shape} ({list}): never refused");
+    }
+    // The text of a sheet holds at most the bytes the reader reads.
+    let mut builder = builder_of("game_of_life.toml");
+    let before = write(builder.document());
+    let refused = builder.apply(SheetEdit::SetPurpose {
+        purpose: Some("a".repeat(1_100_000)),
+    });
+    assert_eq!(
+        refused,
+        Err(SheetEditError::Invalid(
+            "the sheet cannot be longer than 1048576 bytes".to_owned()
+        ))
+    );
+    assert_eq!(write(builder.document()), before);
+    run(
+        &mut builder,
+        SheetEdit::SetPurpose {
+            purpose: Some("a".repeat(1000)),
+        },
+    );
 }
 
 #[test]
@@ -994,6 +1146,141 @@ fn a_delete_leaves_skipped_lines_and_never_an_error() {
     );
     assert!(builder.document().cards.iter().all(|card| card.id != "clear"));
     assert!(!check::check(builder.document()).has_errors());
+}
+
+#[test]
+fn a_delete_that_empties_a_list_leaves_a_blank_and_a_skipped_line() {
+    let list = |item: SheetValue| Slot::Filled(SheetValue::List(vec![item]));
+    // Line 2 becomes "when Alive neighbours is one of the numbers Birth count".
+    let mut builder = builder_of("game_of_life.toml");
+    let made = run(
+        &mut builder,
+        SheetEdit::AddParameter {
+            name: "Birth count".to_owned(),
+            parameter_type: ParameterType::WholeNumber,
+            min: 0.0,
+            max: 8.0,
+            default: 3.0,
+            unit: None,
+        },
+    );
+    let parameter = made[0].clone();
+    run(
+        &mut builder,
+        SheetEdit::SetField {
+            line: "l2".to_owned(),
+            phrase: "condition".to_owned(),
+            field: LineField::Test(Some(CompareTest::OneOf)),
+        },
+    );
+    let Some(SheetValue::Phrase(condition)) = line(&builder, "l2").condition.value() else {
+        panic!("line 2 keeps its comparison");
+    };
+    assert_eq!(condition.right, list(SheetValue::Literal(SheetLiteral::Number(3.0))));
+    set_slot(
+        &mut builder,
+        "l2",
+        "condition.right",
+        list(SheetValue::Chip(SheetChip::Param(parameter.clone()))),
+    );
+    assert!(!check::check(builder.document()).is_skipped("l2"));
+    run(
+        &mut builder,
+        SheetEdit::Delete {
+            item: SheetItem::Parameter(parameter),
+        },
+    );
+    let Some(SheetValue::Phrase(condition)) = line(&builder, "l2").condition.value() else {
+        panic!("line 2 keeps its comparison");
+    };
+    assert_eq!(condition.right, Slot::Blank);
+    let report = check::check(builder.document());
+    assert!(!report.has_errors(), "{:?}", report.diagnostics);
+    assert_eq!(report.skip_note("l2"), Some("Not run yet: choose a list of numbers"));
+    // A list of states loses its last state the same way.
+    let mut builder = builder_of("game_of_life.toml");
+    let mut compare = SheetLine::new(LineKind::Compare);
+    compare.test = Some(CompareTest::NotOneOf);
+    compare.left = chip(SheetChip::My("status".to_owned()));
+    compare.right = list(SheetValue::Chip(SheetChip::State("alive".to_owned())));
+    let mut become_dead = SheetLine::new(LineKind::Become);
+    become_dead.property = Some("status".to_owned());
+    become_dead.new_state = Some("dead".to_owned());
+    become_dead.start_state = Some("any_state".to_owned());
+    become_dead.condition = phrase(compare);
+    let made = add_line(&mut builder, "cell_tick", None, become_dead);
+    run(
+        &mut builder,
+        SheetEdit::Delete {
+            item: SheetItem::State {
+                property: "status".to_owned(),
+                state: "alive".to_owned(),
+            },
+        },
+    );
+    let report = check::check(builder.document());
+    assert!(!report.has_errors(), "{:?}", report.diagnostics);
+    assert_eq!(report.skip_note(&made[0]), Some("Not run yet: choose a list of states"));
+}
+
+#[test]
+fn a_depending_on_waits_for_a_value_for_each_state() {
+    let number = |value: f64| SheetValue::Literal(SheetLiteral::Number(value));
+    let mut depending = SheetLine::new(LineKind::DependingOn);
+    depending.property = Some("status".to_owned());
+    depending.branches.insert("dead".to_owned(), number(0.0));
+    depending.branches.insert("alive".to_owned(), number(1.0));
+    let mut builder = builder_of("game_of_life.toml");
+    let made = add_line(&mut builder, "cell_tick", None, depending);
+    let report = check::check(builder.document());
+    assert!(
+        !report.has_errors() && !report.is_skipped(&made[0]),
+        "{:?}",
+        report.diagnostics
+    );
+    // A new state of the property leaves the line waiting for its value.
+    run(
+        &mut builder,
+        SheetEdit::AddState {
+            property: "status".to_owned(),
+            name: "Zombie".to_owned(),
+            color: None,
+        },
+    );
+    let report = check::check(builder.document());
+    assert!(!report.has_errors(), "{:?}", report.diagnostics);
+    assert_eq!(report.skip_note(&made[0]), Some("Not run yet: choose a value"));
+    // So does a new Depending on as soon as its property is chosen.
+    let made = add_line(&mut builder, "cell_tick", None, SheetLine::new(LineKind::DependingOn));
+    set_field(&mut builder, &made[0], LineField::Property(Some("status".to_owned())));
+    let report = check::check(builder.document());
+    assert!(!report.has_errors(), "{:?}", report.diagnostics);
+    assert_eq!(report.skip_note(&made[0]), Some("Not run yet: choose a value"));
+}
+
+#[test]
+fn a_delete_that_empties_a_formula_in_a_slot_leaves_the_slot_blank() {
+    // Lines 3 and 4 of the ants leave an amount worked out from Trail falloff.
+    let mut builder = builder_of("ants.toml");
+    run(
+        &mut builder,
+        SheetEdit::Delete {
+            item: SheetItem::Parameter("trail_falloff".to_owned()),
+        },
+    );
+    let report = check::check(builder.document());
+    for id in ["l3", "l4"] {
+        assert_eq!(line(&builder, id).amount, Slot::Blank, "{id}");
+        assert_eq!(report.skip_note(id), Some("Not run yet: choose a number"), "{id}");
+    }
+    // The blank is placed at the slot, so the card opens its picker there.
+    let sentences = Sentences::new(builder.document());
+    let blank = sentences
+        .placed_parts("l3", &[])
+        .into_iter()
+        .find(|placed| placed.part == SentencePart::Blank(Blank::Number))
+        .expect("line 3 shows a blank");
+    assert!(blank.place.is_some(), "{blank:?}");
 }
 
 #[test]
