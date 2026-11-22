@@ -36,7 +36,18 @@ header, running over the columns after it that have none, then a hairline) and t
 column to the right edge (the trying line, a refused field's message). A row ends in a gray 800
 hairline and takes the theme's hover fill under the pointer. `TableRow::message` reads a field's
 refusal. A delete button is `delete_button`, a "×" `text_control`, right-aligned in the last
-column by `TableRow::delete_cell`, which returns the click. The tables and their orders:
+column by `TableRow::delete_cell`, which returns the click. The × of a parameter and the property
+form's Delete go through `delete_or_ask`: a delete that `DeleteQuestion::before` finds emptying a
+formula the editor cannot write again (henad-graph's `lines_losing_formulas` and
+`measures_losing_formulas`) waits in `PaneState::delete_question` (a `PendingDelete` with its form),
+and `delete_question_ui` draws the dialog from the next frame on, past the click
+(`delete_question.rs`: `DELETE_PARAMETER_HEADING` or `DELETE_PROPERTY_HEADING`, `sentence::used_by`
+naming each line by its number, or "Clear line 1" on a button's card, and each measure by its name,
+then Cancel and Delete, destructive, which Enter presses). Delete pushes the edit with its form,
+Cancel, Escape and a click outside drop it, and an undo closes it. Any other delete runs at once.
+The deletes of an event, a measure or a button name nothing a formula reads
+(`a_delete_of_an_item_that_formulas_use_asks_first`, which also holds the ants' To food, read by
+the measure Total trail, and Undo after each delete). The tables and their orders:
 
 - Properties (`property_table`, of any thing): Starts as takes the room left over. Short of room it
   gives up width down to 150, then Changed by, Kind and Name down to their longest words (Changed

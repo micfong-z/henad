@@ -110,6 +110,21 @@ pub fn click_in(harness: &mut Harness, dialog: &str, item: &str) {
     harness.click_at(position);
 }
 
+/// Presses the button named exactly `label` of the modal dialog titled `title`, and settles.
+///
+/// A modal dialog's node holds no bounds, so the button is found by the dialog that holds it.
+pub fn press_in_dialog(harness: &mut Harness, title: &str, label: &str) {
+    let nodes = harness.settle();
+    let found: Vec<&Node> = nodes
+        .iter()
+        .filter(|node| node.dialog == title && node.label == label && node.role == Role::Button)
+        .collect();
+    assert_eq!(found.len(), 1, "one {label} in {title}: {found:?}");
+    let position = found[0].bounds.expect("bounds").center();
+    harness.click_at(position);
+    harness.settle();
+}
+
 /// Clicks the widget named exactly `item` on the line whose accessible name starts with `line`.
 pub fn click_on_line(harness: &mut Harness, line: &str, item: &str) {
     let nodes = harness.settle();

@@ -441,9 +441,14 @@ pub fn overlay_title(ui: &mut Ui, title: &str) -> Response {
 
 /// Draws the label of a group of an overlay's items as a [`caption`], with a hairline above it across the overlay, and
 /// returns the label's response.
-pub fn overlay_group(ui: &mut Ui, label: &str) -> Response {
-    ui.add_space(4.0);
-    overlay_rule(ui);
+///
+/// A group right under the overlay's title (`under_title`) shares the hairline under the title and draws none of its
+/// own.
+pub fn overlay_group(ui: &mut Ui, label: &str, under_title: bool) -> Response {
+    if !under_title {
+        ui.add_space(4.0);
+        overlay_rule(ui);
+    }
     ui.add_space(4.0);
     let caption = caption(ui, label);
     ui.add_space(2.0);

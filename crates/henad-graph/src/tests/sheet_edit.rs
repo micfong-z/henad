@@ -20,7 +20,7 @@ use crate::sheet::document::{
 };
 use crate::sheet::edit::{
     IdSpace, LineField, MoveDirection, STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem,
-    automatic_name, mint_id, unit_in_text,
+    automatic_name, lines_losing_formulas, measures_losing_formulas, mint_id, unit_in_text,
 };
 use crate::sheet::limits::MAX_NESTING;
 use crate::sheet::relations::CardRelations;
@@ -549,6 +549,46 @@ fn id_minting_follows_its_known_answers() {
         builder.apply(add_parameter("infection RATE")),
         Err(SheetEditError::Taken(_))
     ));
+}
+
+/// A new parameter takes no id of a fixed column of `runs.csv`, whose sweep writes the parameters among those columns,
+/// and no parameter changes its id to one. A property of the name takes the id, since no property is a column.
+#[test]
+fn a_parameter_takes_no_id_of_a_column_of_sweep_results() {
+    let mut builder = builder_of("game_of_life.toml");
+    let add_parameter = |name: &str| SheetEdit::AddParameter {
+        name: name.to_owned(),
+        parameter_type: ParameterType::Number,
+        min: 0.0,
+        max: 1.0,
+        default: 0.1,
+        unit: None,
+    };
+    assert_eq!(run(&mut builder, add_parameter("Seed")), ["seed_2"]);
+    assert_eq!(run(&mut builder, add_parameter("Population")), ["population_2"]);
+    let property = run(
+        &mut builder,
+        SheetEdit::AddProperty {
+            thing: "cells".to_owned(),
+            name: "Note".to_owned(),
+            property_type: PropertyType::Number,
+        },
+    );
+    assert_eq!(property, ["note"]);
+    let report = check::check(builder.document());
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.diagnostic.message.contains("is reserved")),
+        "{:?}",
+        report.diagnostics
+    );
+    let reserved = builder.apply(SheetEdit::ChangeId {
+        item: SheetItem::Parameter("seed_2".to_owned()),
+        id: "seed".to_owned(),
+    });
+    assert_eq!(reserved, Err(SheetEditError::Reserved("seed".to_owned())));
 }
 
 #[test]
@@ -1256,6 +1296,105 @@ fn a_depending_on_waits_for_a_value_for_each_state() {
     let report = check::check(builder.document());
     assert!(!report.has_errors(), "{:?}", report.diagnostics);
     assert_eq!(report.skip_note(&made[0]), Some("Not run yet: choose a value"));
+}
+
+/// A delete names the lines whose formulas it empties when the card cannot write them again: a formula inside a slot,
+/// as the ants' Leave amounts, or one of more than one operation on a Calculate line. A formula of one operation on a
+/// Calculate line, which the card rebuilds, names no line, and neither does the length of one of my properties in a
+/// slot, which a picker offers, or a line the delete takes with it.
+#[test]
+fn a_delete_names_the_lines_whose_formulas_the_card_cannot_write_again() {
+    let ants = builder_of("ants.toml");
+    let losing = |builder: &SheetBuilder, edit: SheetEdit| lines_losing_formulas(builder.document(), &edit);
+    let delete = |item: SheetItem| SheetEdit::Delete { item };
+    let parameter = |id: &str| delete(SheetItem::Parameter(id.to_owned()));
+    let property = |id: &str| delete(SheetItem::Property(id.to_owned()));
+    assert_eq!(losing(&ants, parameter("trail_falloff")), ["l3", "l4"]);
+    assert_eq!(losing(&ants, property("reward_held")), ["l3", "l4"]);
+    assert_eq!(losing(&ants, SheetEdit::DeleteLine { line: "l2".to_owned() }), ["l3"]);
+    // Line 3 holds its own formula, which goes with it.
+    assert_eq!(
+        losing(&ants, SheetEdit::DeleteLine { line: "l3".to_owned() }),
+        Vec::<String>::new()
+    );
+    // Line 8 sets a random direction of length (length of my Velocity), which a picker offers again.
+    let mut boids = builder_of("boids.toml");
+    assert_eq!(losing(&boids, property("velocity")), Vec::<String>::new());
+    let mut length = SheetLine::new(LineKind::Calculate);
+    length.formula = Some("min_speed * 2".to_owned());
+    set_slot(&mut boids, "l8", "value.length", phrase(length));
+    assert_eq!(
+        losing(&boids, parameter("min_speed")),
+        ["l8"],
+        "no picker offers a formula of one operation in a slot"
+    );
+
+    // Two Calculate lines on the SIR card, of one operation and of two.
+    let mut sir = builder_of("sir.toml");
+    let calculate = |formula: &str| {
+        let mut line = SheetLine::new(LineKind::Calculate);
+        line.formula = Some(formula.to_owned());
+        line
+    };
+    let one = add_line(&mut sir, "cell_tick", None, calculate("infection_rate * 2"));
+    let two = add_line(
+        &mut sir,
+        "cell_tick",
+        None,
+        calculate("infection_rate * 2 + recovery_rate"),
+    );
+    assert_eq!(losing(&sir, parameter("infection_rate")), two);
+    assert_eq!(losing(&sir, parameter("recovery_rate")), two);
+    assert_eq!(losing(&sir, parameter("initial_infected")), Vec::<String>::new());
+    run(&mut sir, parameter("infection_rate"));
+    assert_eq!(
+        line(&sir, &one[0]).formula,
+        None,
+        "the card rebuilds the formula of one operation"
+    );
+}
+
+/// A delete names the measures whose formula it empties, since the Sheet pane writes none, the length of one of my
+/// properties included. A measure the delete takes with it is left out.
+#[test]
+fn a_delete_names_the_measures_whose_formulas_it_empties() {
+    let measures = |file_name: &str, edit: SheetEdit| measures_losing_formulas(builder_of(file_name).document(), &edit);
+    let property = |id: &str| SheetEdit::Delete {
+        item: SheetItem::Property(id.to_owned()),
+    };
+    // Total trail adds up my.to_food + my.to_home over the ground.
+    assert_eq!(measures("ants.toml", property("to_food")), ["total_trail"]);
+    assert_eq!(measures("ants.toml", property("to_home")), ["total_trail"]);
+    assert_eq!(measures("ants.toml", property("reward_held")), Vec::<String>::new());
+    // Average speed reads length(my.velocity). Average velocity reads Velocity through a chip, which holds no formula.
+    assert_eq!(measures("boids.toml", property("velocity")), ["average_speed"]);
+    let delete_measure = SheetEdit::Delete {
+        item: SheetItem::Measure("total_trail".to_owned()),
+    };
+    assert_eq!(measures("ants.toml", delete_measure), Vec::<String>::new());
+}
+
+/// A removed summary of a look at agents names the lines whose formulas read it, and not the look itself, whose
+/// summary takes its own value with it.
+#[test]
+fn a_removed_summary_names_the_lines_that_read_it_and_not_its_own_look() {
+    let mut boids = builder_of("boids.toml");
+    let mut centre = SheetLine::new(LineKind::Calculate);
+    centre.formula = Some("visual_range * 2 + 1".to_owned());
+    set_slot(&mut boids, "l1", "summaries.1.value", phrase(centre));
+    let mut reads = SheetLine::new(LineKind::Calculate);
+    reads.formula = Some("length(l1.average_velocity) * 2".to_owned());
+    let reads = add_line(&mut boids, "bird_tick", None, reads);
+    let remove = |index: usize| SheetEdit::DeleteSummary {
+        line: "l1".to_owned(),
+        index,
+    };
+    assert_eq!(lines_losing_formulas(boids.document(), &remove(0)), reads);
+    assert_eq!(
+        lines_losing_formulas(boids.document(), &remove(1)),
+        Vec::<String>::new(),
+        "the centre's own value goes with it"
+    );
 }
 
 #[test]

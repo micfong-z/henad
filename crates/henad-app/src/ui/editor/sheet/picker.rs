@@ -230,6 +230,8 @@ impl CardPicker {
     fn contents(&self, ui: &mut Ui, popup_id: Id) -> Option<Choice> {
         let mut choice = None;
         let title = overlay_title(ui, &self.title).id;
+        // The first group label right under the title shares the title's hairline.
+        let mut under_title = self.lead.is_none();
         if let Some(lead) = &self.lead {
             ui.add(egui::Label::new(RichText::new(lead).weak()).wrap());
             ui.add_space(4.0);
@@ -237,18 +239,20 @@ impl CardPicker {
         let mut offered = false;
         if let Some(number_box) = self.number_box.as_ref().filter(|number_box| number_box.first) {
             offered = true;
+            under_title = false;
             if let Some(literal) = number_box_ui(ui, popup_id, number_box) {
                 choice = Some(Choice::Value(SheetValue::Literal(literal)));
             }
         }
         if self.list_box {
             offered = true;
-            if let Some(numbers) = list_box_ui(ui, popup_id) {
+            if let Some(numbers) = list_box_ui(ui, popup_id, under_title) {
                 choice = Some(Choice::Numbers(numbers));
             }
+            under_title = false;
         }
         offered |= self.groups.iter().any(|group| !group.items.is_empty());
-        if let Some(clicked) = groups_ui(ui, &self.groups, self.current.as_deref()) {
+        if let Some(clicked) = groups_ui(ui, &self.groups, self.current.as_deref(), under_title) {
             choice = Some(clicked);
         }
         if self.new_parameter || self.number_box.as_ref().is_some_and(|number_box| !number_box.first) {
@@ -335,7 +339,7 @@ impl ParameterPicker<'_> {
             heading: PARAMETERS.to_owned(),
             items: parameter_items(self.document, self.number_use),
         };
-        let mut choice = groups_ui(ui, &[parameters], None);
+        let mut choice = groups_ui(ui, &[parameters], None, true);
         ui.add_space(4.0);
         let row = OverlayItem {
             label: NEW_PARAMETER,
@@ -391,14 +395,17 @@ fn picker_overlay<R>(
 }
 
 /// Draws the groups of a picker that hold an item, each a menu under its heading, and returns the choice of the item
-/// clicked. The item whose words are `current` takes the tinted fill and a check.
-fn groups_ui(ui: &mut Ui, groups: &[PickerGroup], current: Option<&str>) -> Option<Choice> {
+/// clicked. The item whose words are `current` takes the tinted fill and a check. `under_title` is whether the first
+/// group sits right under the picker's title.
+fn groups_ui(ui: &mut Ui, groups: &[PickerGroup], current: Option<&str>, under_title: bool) -> Option<Choice> {
     let mut choice = None;
+    let mut under_title = under_title;
     for group in groups {
         if group.items.is_empty() {
             continue;
         }
-        let heading = overlay_group(ui, &group.heading).id;
+        let heading = overlay_group(ui, &group.heading, under_title).id;
+        under_title = false;
         menu_group(ui, heading, |ui| {
             for item in &group.items {
                 let row = OverlayItem {
@@ -544,9 +551,9 @@ fn parameter_number_box(ui: &mut Ui, number_use: NumberUse) -> Option<SheetLiter
 }
 
 /// Draws the list box of the picker `popup_id`, and returns the numbers typed once Enter or Use is pressed on text
-/// that reads as one or more numbers.
-fn list_box_ui(ui: &mut Ui, popup_id: Id) -> Option<Vec<SheetLiteral>> {
-    overlay_group(ui, LIST_GROUP);
+/// that reads as one or more numbers. `under_title` is whether the list box sits right under the picker's title.
+fn list_box_ui(ui: &mut Ui, popup_id: Id, under_title: bool) -> Option<Vec<SheetLiteral>> {
+    overlay_group(ui, LIST_GROUP, under_title);
     ui.weak(LIST_HINT);
     let id = popup_id.with(LIST_BOX_ID);
     let mut draft: BoxDraft = ui.data(|data| data.get_temp(id)).unwrap_or_default();

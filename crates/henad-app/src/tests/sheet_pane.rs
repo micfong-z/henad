@@ -1583,3 +1583,117 @@ fn a_starts_chance_offers_no_parameter_the_check_refuses_from_its_chip_or_use_a_
         );
     }
 }
+
+/// A delete that empties formulas the editor cannot write again asks first, and names the lines and the measures whose
+/// formulas it empties: the Parameters table's ×, Delete property and the line menu's Delete. Cancel and Escape keep
+/// the item, Delete deletes it, and Undo brings back the sheet as it was. A delete that the card can rebuild, of a
+/// formula of one operation, runs at once.
+#[test]
+fn a_delete_of_an_item_that_formulas_use_asks_first() {
+    use henad_graph::sheet::document::{LineKind, SheetLine};
+    use henad_graph::sheet::sentence::{
+        DELETE, DELETE_LINE_HEADING, DELETE_PARAMETER_HEADING, DELETE_PROPERTY_HEADING, used_by,
+    };
+
+    use crate::tests::panes::{is_open, press_in_dialog, shows};
+
+    let text = |harness: &Harness| sheet(harness).text().to_owned();
+
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "ants.toml");
+    let has_parameter = |harness: &Harness, id: &str| {
+        sheet(harness)
+            .document()
+            .parameters
+            .iter()
+            .any(|parameter| parameter.id == id)
+    };
+    let lines_3_and_4 = |name: &str| used_by(name, &[(None, 3), (None, 4)], &[]);
+    let starter = text(&harness);
+
+    click(&mut harness, "Delete parameter Trail falloff");
+    assert!(is_open(&mut harness, DELETE_PARAMETER_HEADING), "no dialog asks");
+    assert!(shows(&mut harness, &lines_3_and_4("Trail falloff")));
+    assert_eq!(text(&harness), starter, "the parameter went before Delete");
+    press_in_dialog(&mut harness, DELETE_PARAMETER_HEADING, CANCEL);
+    assert!(!is_open(&mut harness, DELETE_PARAMETER_HEADING));
+    assert_eq!(text(&harness), starter, "Cancel keeps the parameter");
+    click(&mut harness, "Delete parameter Trail falloff");
+    press_in_dialog(&mut harness, DELETE_PARAMETER_HEADING, DELETE);
+    assert!(!is_open(&mut harness, DELETE_PARAMETER_HEADING));
+    assert!(
+        !has_parameter(&harness, "trail_falloff"),
+        "Delete deletes the parameter"
+    );
+    click(&mut harness, UNDO);
+    assert_eq!(
+        text(&harness),
+        starter,
+        "Undo brings back the parameter and its formulas"
+    );
+
+    click(&mut harness, "Edit property Reward held");
+    click(&mut harness, DELETE_PROPERTY);
+    assert!(is_open(&mut harness, DELETE_PROPERTY_HEADING), "no dialog asks");
+    assert!(shows(&mut harness, &lines_3_and_4("Reward held")));
+    press_in_dialog(&mut harness, DELETE_PROPERTY_HEADING, DELETE);
+    harness.settle();
+    let document = sheet(&harness).document();
+    assert!(
+        document.agents[0]
+            .properties
+            .iter()
+            .all(|property| property.id != "reward_held"),
+        "Delete deletes the property"
+    );
+    assert!(!shows(&mut harness, DONE), "the property form closes with the delete");
+    click(&mut harness, UNDO);
+    assert_eq!(text(&harness), starter);
+
+    // Total trail adds up To food and To home over the ground, and the Sheet pane writes no formula of a measure.
+    click(&mut harness, "Edit property To food");
+    click(&mut harness, DELETE_PROPERTY);
+    assert!(shows(&mut harness, &used_by("To food", &[], &["Total trail"])));
+    harness.press(egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(!is_open(&mut harness, DELETE_PROPERTY_HEADING));
+    assert_eq!(text(&harness), starter, "Escape keeps the property");
+    click(&mut harness, CANCEL);
+
+    let number = {
+        let document = sheet(&harness).document();
+        let (card, _) = document.line("l2").expect("the ants hold line l2");
+        henad_graph::sheet::relations::CardRelations::new(document, &document.cards[card])
+            .number("l2")
+            .expect("line l2 is on its card")
+    };
+    click(&mut harness, &format!("Line {number} actions"));
+    click(&mut harness, &format!("Delete line {number}"));
+    assert!(is_open(&mut harness, DELETE_LINE_HEADING), "no dialog asks");
+    assert!(shows(&mut harness, &used_by("Home way", &[(None, 3)], &[])));
+    press_in_dialog(&mut harness, DELETE_LINE_HEADING, DELETE);
+    harness.settle();
+    assert!(
+        sheet(&harness).document().line("l2").is_none(),
+        "Delete deletes the line"
+    );
+    click(&mut harness, UNDO);
+    assert_eq!(text(&harness), starter);
+
+    // A Calculate line of one operation is rebuilt on the card, and its parameter goes at once.
+    open_starter(&mut harness, "sir.toml");
+    let mut line = SheetLine::new(LineKind::Calculate);
+    line.formula = Some("infection_rate * 2".to_owned());
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::AddLine {
+            card: "cell_tick".to_owned(),
+            inside: None,
+            line: Box::new(line),
+        },
+    );
+    click(&mut harness, "Delete parameter Infection rate");
+    assert!(!is_open(&mut harness, DELETE_PARAMETER_HEADING));
+    assert!(!has_parameter(&harness, "infection_rate"));
+}

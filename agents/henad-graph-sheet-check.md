@@ -36,7 +36,9 @@ world's sides and a kind's `max_count` against `crate::limits` (`MAX_GRID_SIDE` 
 `MAX_WORLD_SIDE` for agents, `MAX_AGENTS`) at `[world]` and `[[agents]]`, so the graph checker's
 own limits never place an error at `[sheet]`,
 `ONE_AGENT_KIND` on every agent kind after the first, property types, marks, starts (states, keys, a
-rate in a start), parameter defaults, measures (`measure_name_reserved` at a measure whose name,
+rate in a start), parameters (`parameter_id_reserved` at a parameter whose id is one of the graph
+checker's `RUNS_CSV_COLUMNS`, and the default inside the range), measures
+(`measure_name_reserved` at a measure whose name,
 its stat's label and column, is one of the graph checker's `RESERVED_STAT_LABELS`, `run_id`,
 `tick` or `time` compared exactly), colour rules, buttons (a run-once step names a card
 that runs once), a card's kind of thing (`cells` in any grid world), a name on a change, `always` as

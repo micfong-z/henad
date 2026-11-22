@@ -1,5 +1,6 @@
 //! The summaries of a Look around under edits: automatic names that follow their property and summary kind, names typed
-//! by hand, new ids that reach every reference, removed summaries that blank their users, and the names of round 1.
+//! by hand, new ids that reach every reference, removed summaries that blank their users, and the automatic name of
+//! each summary kind and value, which every look at agents of the committed sheets holds.
 
 use super::sheet_support::{
     add_line, builder_of, chip, line, read, run, set_field, set_slot, sheet_text, sheets, write,
@@ -236,7 +237,7 @@ fn a_count_summary_takes_an_id_that_no_summary_holds() {
 }
 
 #[test]
-fn the_automatic_summary_names_follow_round_1() {
+fn the_automatic_summary_names_follow_kind_and_value_in_every_sheet() {
     let document = read(sheet_text("boids.toml"));
     let summary = |kind: SummaryKind, value: Slot| {
         let mut summary = LookSummary::new("", "");

@@ -168,8 +168,12 @@ fn applying_an_edit_installs_and_rebuilds_from_tick_zero() {
         "the rebuild starts at tick 0"
     );
     let next_build = selected_source(&app);
-    app.editor
-        .settle_outcome(Some(&highlife), next_build.as_ref(), app.pending_rebuild.is_some());
+    app.editor.settle_outcome(
+        Some(&highlife),
+        next_build.as_ref(),
+        app.pending_rebuild.is_some(),
+        None,
+    );
     assert_eq!(
         app.editor.outcome,
         Some(ApplyOutcome::Applied),
@@ -290,8 +294,12 @@ fn applying_beside_another_run_past_tick_zero_waits_for_build() {
     assert_eq!(app.loaded_id(), Some("life_rule"));
     let loaded = app.loaded_entry().map(|entry| entry.source().clone());
     let next_build = selected_source(&app);
-    app.editor
-        .settle_outcome(loaded.as_ref(), next_build.as_ref(), app.pending_rebuild.is_some());
+    app.editor.settle_outcome(
+        loaded.as_ref(),
+        next_build.as_ref(),
+        app.pending_rebuild.is_some(),
+        None,
+    );
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     app.wait_for_build();
     assert_built(&app, "the model");
@@ -436,7 +444,7 @@ fn applying_again_after_cancel_asks_to_rebuild_again() {
     app.pending_rebuild = None;
     let next_build = selected_source(&app);
     app.editor
-        .settle_outcome(Some(&life), next_build.as_ref(), app.pending_rebuild.is_some());
+        .settle_outcome(Some(&life), next_build.as_ref(), app.pending_rebuild.is_some(), None);
     assert_eq!(
         app.editor.outcome,
         Some(ApplyOutcome::Installed),
@@ -486,7 +494,7 @@ fn applying_during_another_build_replaces_it_and_cancel_waits_for_build() {
     );
     let next_build = selected_source(&app);
     app.editor
-        .settle_outcome(None, next_build.as_ref(), app.pending_rebuild.is_some());
+        .settle_outcome(None, next_build.as_ref(), app.pending_rebuild.is_some(), None);
     assert_eq!(
         app.editor.outcome,
         Some(ApplyOutcome::Installed),
@@ -496,8 +504,12 @@ fn applying_during_another_build_replaces_it_and_cancel_waits_for_build() {
     app.reset_simulation();
     let loaded = app.loaded_entry().map(|entry| entry.source().clone());
     let next_build = selected_source(&app);
-    app.editor
-        .settle_outcome(loaded.as_ref(), next_build.as_ref(), app.pending_rebuild.is_some());
+    app.editor.settle_outcome(
+        loaded.as_ref(),
+        next_build.as_ref(),
+        app.pending_rebuild.is_some(),
+        None,
+    );
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied), "Build runs the rule");
     app.wait_for_build();
     assert_built(&app, "the model");
@@ -796,7 +808,7 @@ fn an_apply_the_device_cannot_hold_builds_nothing() {
     app.runtime.granted.max_buffer_size = 512;
     apply(&mut app);
     match &app.editor.outcome {
-        Some(ApplyOutcome::Faulted(problems)) => {
+        Some(ApplyOutcome::BuildRefused(problems)) => {
             assert_eq!(problems.len(), 1, "{problems:?}");
             assert!(
                 problems[0].message.starts_with("Too large for this device: "),
@@ -825,7 +837,7 @@ fn an_apply_while_the_seed_is_no_integer_builds_nothing() {
     assert_eq!(app.build_refusal().as_deref(), Some(INVALID_SEED));
     apply(&mut app);
     match &app.editor.outcome {
-        Some(ApplyOutcome::Faulted(problems)) => {
+        Some(ApplyOutcome::BuildRefused(problems)) => {
             assert_eq!(problems.len(), 1, "{problems:?}");
             assert_eq!(problems[0].message, INVALID_SEED);
         }
@@ -854,7 +866,7 @@ fn an_apply_that_build_refuses_names_the_reason() {
     let starter = app.editor.model.file_text();
     app.seed_text = "12a".to_owned();
     let reasons = |app: &AppState| match &app.editor.outcome {
-        Some(ApplyOutcome::Faulted(problems)) => problems
+        Some(ApplyOutcome::BuildRefused(problems)) => problems
             .iter()
             .map(|problem| problem.message.clone())
             .collect::<Vec<_>>(),
@@ -885,10 +897,119 @@ fn an_apply_that_build_refuses_names_the_reason() {
     press_build(&mut app);
     let loaded = app.loaded_entry().map(|entry| entry.source().clone());
     let next_build = selected_source(&app);
-    app.editor
-        .settle_outcome(loaded.as_ref(), next_build.as_ref(), app.pending_rebuild.is_some());
+    app.editor.settle_outcome(
+        loaded.as_ref(),
+        next_build.as_ref(),
+        app.pending_rebuild.is_some(),
+        None,
+    );
     assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
     app.wait_for_build();
+}
+
+/// Once the reason Build or Rebuild was disabled is gone, the line of a refused Apply says what the button will do:
+/// Build with nothing loaded, and Rebuild over a run at tick 0 whose Rebuild model dialog is open. Until then the line
+/// reads as an error and names the reason the button gives now.
+#[test]
+fn a_refused_build_says_what_the_button_does_once_the_reason_is_gone() {
+    let Some(mut app) = app_with_starter() else {
+        return;
+    };
+    let ctx = egui::Context::default();
+    let line = |app: &AppState| app.editor.outcome.as_ref().map(|outcome| outcome.summary());
+    let starter = app.editor.model.file_text();
+
+    // Nothing loaded.
+    let named = |app: &AppState| -> Vec<String> {
+        app.editor
+            .outcome
+            .iter()
+            .flat_map(ApplyOutcome::diagnostics)
+            .map(|problem| problem.message.clone())
+            .collect()
+    };
+    app.seed_text = "12a".to_owned();
+    apply(&mut app);
+    editor_frame(&ctx, &mut app, Vec::new());
+    assert!(line(&app).is_some_and(|(_, error)| error), "{:?}", app.editor.outcome);
+    assert_eq!(named(&app), [INVALID_SEED]);
+    // A device too small for the rule gives Build another reason, and the line names it.
+    let granted = app.runtime.granted.clone();
+    app.runtime.granted.max_storage_buffer_binding_size = 512;
+    app.runtime.granted.max_buffer_size = 512;
+    editor_frame(&ctx, &mut app, Vec::new());
+    let reasons = named(&app);
+    assert!(
+        matches!(reasons.as_slice(), [reason] if reason.starts_with("Too large for this device: ")),
+        "{reasons:?}"
+    );
+    app.runtime.granted = granted;
+    editor_frame(&ctx, &mut app, Vec::new());
+    assert_eq!(named(&app), [INVALID_SEED]);
+    app.seed_text = String::new();
+    editor_frame(&ctx, &mut app, Vec::new());
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Installed), "the seed is fixed");
+    assert!(!app.has_simulation());
+
+    // A run at tick 0, rebuilt by its dialog.
+    press_build(&mut app);
+    app.wait_for_build();
+    editor_frame(&ctx, &mut app, Vec::new());
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
+    app.seed_text = "12a".to_owned();
+    app.editor.model = EditorModel::Rule(edited(&starter, BIRTH_LINE, HIGHLIFE_LINE));
+    apply(&mut app);
+    editor_frame(&ctx, &mut app, Vec::new());
+    assert!(app.pending_rebuild.is_some(), "the Rebuild model dialog is closed");
+    assert!(line(&app).is_some_and(|(_, error)| error), "{:?}", app.editor.outcome);
+    app.seed_text = String::new();
+    editor_frame(&ctx, &mut app, Vec::new());
+    assert_eq!(
+        app.editor.outcome,
+        Some(ApplyOutcome::AwaitingRebuild),
+        "the seed is fixed"
+    );
+}
+
+/// While Build replays the preview of the Editor's sheet, Apply builds the applied model, and a refused Apply's line
+/// keeps naming the reason, also for an Apply pressed during the replay. Once the reason is gone, the line goes, as the
+/// line of an Apply that waits for Build does while Build replays the preview.
+#[test]
+fn a_refused_build_line_keeps_its_reason_while_build_replays_the_preview() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let refused = |app: &AppState| {
+        matches!(
+            &app.editor.outcome,
+            Some(ApplyOutcome::BuildRefused(problems)) if problems[0].message == INVALID_SEED
+        )
+    };
+    run_sir_past_tick_zero(&mut app);
+    open_text(&mut app.editor, starter_text("game_of_life.toml").to_owned(), None);
+    settle_preview(&mut app);
+    app.seed_text = "12a".to_owned();
+    apply(&mut app);
+    assert!(refused(&app), "{:?}", app.editor.outcome);
+    assert_eq!(app.loaded_id(), Some("sir"), "the other model's run keeps going");
+
+    app.offload_simulation();
+    settle_preview(&mut app);
+    assert!(app.build_replays_preview());
+    let texts = editor_texts(&mut app);
+    assert!(refused(&app), "{:?}", app.editor.outcome);
+    assert!(holds_line(&texts, INVALID_SEED), "{texts:?}");
+
+    // Apply pressed during the replay names the reason too.
+    apply(&mut app);
+    let texts = editor_texts(&mut app);
+    assert!(refused(&app), "{:?}", app.editor.outcome);
+    assert!(holds_line(&texts, INVALID_SEED), "{texts:?}");
+
+    app.seed_text = String::new();
+    let texts = editor_texts(&mut app);
+    assert_eq!(app.editor.outcome, None, "Build replays the preview");
+    assert!(!holds_line(&texts, INVALID_SEED), "{texts:?}");
 }
 
 /// Runs one frame of the Editor tab over `app` with `events`.

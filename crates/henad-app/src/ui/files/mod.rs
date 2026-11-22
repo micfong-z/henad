@@ -18,10 +18,12 @@ pub enum SaveTarget {
     /// The files of a sweep held in memory, from the Sweep panel, identified by their generation number
     /// ([`crate::ui::results::ResultsPanel::files_generation`]).
     SweepResults(u64),
-    /// A model file, from the Editor.
-    Model,
-    /// The model file of the model the Editor holds beside the one shown, from the unsaved changes dialog.
-    Counterpart,
+    /// A model file of the model the Editor shows, identified by the number of the save
+    /// ([`crate::ui::editor::EditorPanel`] numbers each save it starts).
+    Model(u64),
+    /// The model file of the model the Editor holds beside the one shown, from the unsaved changes dialog, identified
+    /// by the number of the save as [`Self::Model`] is.
+    Counterpart(u64),
 }
 
 /// Result of one save.

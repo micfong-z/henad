@@ -2,7 +2,8 @@
 
 use super::grammar::{number_list, plural, upper_first, word_list};
 
-// Errors on a rate in a button's card or inside a Repeat, on a second agent kind and on a measure's name
+// Errors on a rate in a button's card or inside a Repeat, on a second agent kind, on a measure's name and on a
+// parameter's id
 
 /// Error on a rate in the card of a button.
 pub const RATE_IN_BUTTON_CARD: &str = "A button's card has no duration. Use a chance instead of a rate.";
@@ -19,6 +20,13 @@ pub const ONE_AGENT_KIND: &str = "Only one kind of agent per model is supported 
 /// For example "The measure name time is reserved for the time column of exported stats or sweep results."
 pub fn measure_name_reserved(name: &str) -> String {
     format!("The measure name {name} is reserved for the {name} column of exported stats or sweep results.")
+}
+
+/// Returns the error on a parameter whose id is `id`, a column that sweep results write beside the parameters.
+///
+/// For example "The parameter id status is reserved for the status column of sweep results."
+pub fn parameter_id_reserved(id: &str) -> String {
+    format!("The parameter id {id} is reserved for the {id} column of sweep results.")
 }
 
 // Errors on the lines and worlds a sheet can hold that this version cannot run yet

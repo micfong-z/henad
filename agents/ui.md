@@ -105,7 +105,9 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     gray 600 with the words in the text colour on hover or while its menu is open. A note's button
     and the segmented toggle (Lines, Diagram) are egui's `Button`, small and selectable.
   - Overlay (picker, line menu, add menus, select list): egui's popup frame (`Frame::popup`),
-    opaque from its first frame, its title and group labels each with a hairline. An
+    opaque from its first frame, a hairline under its title and above each group label
+    (`overlay_group`), but for a group right under the title, which shares the title's
+    (`a_group_right_under_an_overlay_title_takes_no_second_hairline`). An
     item is a full-width row in the theme's hover fill under the pointer or the keyboard focus,
     the selection fill with a check and its words in the selection's text colour when current,
     weak with its reason as a tooltip when it cannot apply.
@@ -142,19 +144,19 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     is not interactable, as egui's own tooltip of plain text, so a click under it reaches the
     control there. A label, a hover-only mark and an item inside an open overlay keep
     `on_hover_text`.
-  - Dialog (`dialog_frame`, `dialog_title`, `dialog_buttons`, the New model, New parameter,
-    Rebuild model, conversion and unsaved changes dialogs): egui's window frame (`Frame::window`)
-    with 12 points of margin, its title (`title_text`) with a gray 800 hairline under it
-    across the dialog, and the buttons in one row at the bottom right, the primary last (blue 700,
-    or red 900 under red 200 for Rebuild). Enter presses the primary unless another button took
-    the key or the dialog opened on that frame, and Escape closes through `Modal`. `dialog_title`
-    marks the dialog's AccessKit node modal and makes the title a heading (`heading_caption`, a
-    `caption` of role `Heading` named by its words as written). A list of
-    choices is `choice_row`s: full-width radio buttons with a weak description under the name, the
-    theme's hover fill under the pointer or the focus, the selection fill with a check and its
+  - Dialog (`dialog_frame`, `dialog_title`, `dialog_buttons`, the New model, New parameter, Rebuild
+    model, conversion, unsaved changes, replace applied model and delete dialogs): egui's window
+    frame (`Frame::window`) with 12 points of margin, its title (`title_text`) with a gray 800
+    hairline under it across the dialog, and the buttons in one row at the bottom right, the primary
+    last (blue 700, or red 900 under red 200 for Rebuild, Replace and Delete). Enter presses the
+    primary unless another button took the key or the dialog opened on that frame, and Escape closes
+    through `Modal`. `dialog_title` marks the dialog's AccessKit node modal and makes the title a
+    heading (`heading_caption`, a `caption` of role `Heading` named by its words as written). A list
+    of choices is `choice_row`s: full-width radio buttons with a weak description under the name,
+    the theme's hover fill under the pointer or the focus, the selection fill with a check and its
     words in the selection's text colour when chosen, as an overlay's current item (`list_row_fill`
-    and `paint_list_row_marks` paint both). A list
-    that can outgrow the window scrolls in `dialog_list`, which keeps the buttons in view.
+    and `paint_list_row_marks` paint both). A list that can outgrow the window scrolls in
+    `dialog_list`, which keeps the buttons in view.
   - Notice (`Notice`, `notice_ui` for information): an icon in the hue of its kind at step 500
     before the text in the text colour, one label, with no bar at its left: blue and an
     information icon for information, orange and a triangle for a warning, red and an exclamation

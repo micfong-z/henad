@@ -209,6 +209,7 @@ impl eframe::App for HenadApp {
         ui::rebuild::rebuild_modal(ui.ctx(), &mut self.state);
         ui::editor::sheet::new_model::new_model_modal(ui.ctx(), &mut self.state);
         ui::editor::unsaved_modal(ui.ctx(), &mut self.state);
+        ui::editor::replace_question_modal(ui.ctx(), &mut self.state);
         ui::about::about_modal(ui.ctx(), &mut self.state);
 
         let mut dock_style = Style::from_egui(ui.style());

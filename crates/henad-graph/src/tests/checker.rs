@@ -6,7 +6,7 @@ use super::corpus;
 use super::host::KEEP_X;
 use super::support::node_id;
 use crate::GraphFile;
-use crate::check::CheckReport;
+use crate::check::{CheckReport, RUNS_CSV_COLUMNS};
 use crate::limits::MAX_PASS_COST;
 
 /// Header and declarations of a grid with a category lane `c`, a `u32` lane `x` and a few parameters.
@@ -639,6 +639,31 @@ fn a_stat_labelled_run_id_tick_or_time_is_an_error() {
                 "the stat label '{label}' is reserved for the '{label}' column of exported stats or sweep results"
             )]
         );
+    }
+}
+
+/// A parameter whose id is a fixed column of `runs.csv`, such as `seed` or `status`, is an error, since a sweep writes
+/// the parameters among those columns. An id that holds more than a column's name is an id of its own.
+#[test]
+fn a_parameter_named_after_a_column_of_sweep_results_is_an_error() {
+    let errors_with = |id: &str| {
+        let text = GRID.replace("id = \"steps\"", &format!("id = \"{id}\""));
+        GraphFile::parse(&text)
+            .unwrap_or_else(|error| panic!("{id}: the file reads: {error}"))
+            .check()
+            .errors()
+            .map(|diagnostic| diagnostic.message.clone())
+            .collect::<Vec<_>>()
+    };
+    let clean = errors_with("steps");
+    for id in ["seeds", "row_status", "notes", "ticks_left"] {
+        assert_eq!(errors_with(id), clean, "{id}");
+    }
+    for id in RUNS_CSV_COLUMNS {
+        let reserved = format!("the parameter id '{id}' is reserved for the '{id}' column of sweep results");
+        let mut expected = clean.clone();
+        expected.push(reserved);
+        assert_eq!(errors_with(id), expected, "{id}");
     }
 }
 

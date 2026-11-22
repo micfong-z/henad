@@ -55,8 +55,8 @@ pub struct Counterpart {
     pub file_path: Option<PathBuf>,
     /// Edit mark of the model when it was opened, made or last saved, as [`EditorPanel`] keeps it for the model shown.
     pub saved_mark: u64,
-    /// Save of the model, from its start until it reports.
-    pub saving: Option<PendingSave>,
+    /// Saves of the model, each from its start until it reports.
+    pub saving: Vec<PendingSave>,
 }
 
 impl Counterpart {
@@ -68,7 +68,7 @@ impl Counterpart {
             file_name: panel.file_name.take(),
             file_path: panel.file_path.take(),
             saved_mark: panel.saved_mark,
-            saving: panel.saving.take(),
+            saving: std::mem::take(&mut panel.saving),
         }
     }
 

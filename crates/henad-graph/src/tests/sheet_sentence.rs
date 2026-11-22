@@ -657,6 +657,10 @@ fn every_wording_table_entry_equals_the_final_words() {
             "The measure name time is reserved for the time column of exported stats or sweep results.",
             sentence::measure_name_reserved("time"),
         ),
+        (
+            "The parameter id status is reserved for the status column of sweep results.",
+            sentence::parameter_id_reserved("status"),
+        ),
         ("Repeat is not supported yet.", fixed(sentence::NOT_YET_REPEAT)),
         (
             "Keep between, When, Repeat, Leave, Record and Move to inside a Repeat are not supported yet.",
@@ -1418,6 +1422,48 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
         ),
         ("Save model", fixed(sentence::SAVE_MODEL)),
         ("Discard changes", fixed(sentence::DISCARD_CHANGES)),
+        // The dialog that asks before Apply replaces a model applied from another sheet.
+        ("Replace applied model?", fixed(sentence::REPLACE_APPLIED_HEADING)),
+        (
+            "Replace the applied model Chance SIR? It has the same id as this model, untitled_model.",
+            sentence::replace_applied("Chance SIR", "untitled_model"),
+        ),
+        ("Replace", fixed(sentence::REPLACE)),
+        // The dialog that asks before a delete or a removal empties formulas that the editor cannot write again.
+        ("Delete parameter?", fixed(sentence::DELETE_PARAMETER_HEADING)),
+        ("Delete property?", fixed(sentence::DELETE_PROPERTY_HEADING)),
+        ("Delete line?", fixed(sentence::DELETE_LINE_HEADING)),
+        ("Remove summary?", fixed(sentence::REMOVE_SUMMARY_HEADING)),
+        ("Delete", fixed(sentence::DELETE)),
+        ("Remove", fixed(sentence::REMOVE)),
+        (
+            "Home way is used by line 3. Delete it?",
+            sentence::used_by("Home way", &[(None, 3)], &[]),
+        ),
+        (
+            "Trail falloff is used by lines 3 and 4. Delete it?",
+            sentence::used_by("Trail falloff", &[(None, 3), (None, 4)], &[]),
+        ),
+        (
+            "Rate is used by line 2 and Clear lines 1 and 3. Delete it?",
+            sentence::used_by(
+                "Rate",
+                &[(None, 2), (Some("Clear"), 1), (Some("Clear"), 3), (None, 2)],
+                &[],
+            ),
+        ),
+        (
+            "To food is used by the measure Total trail. Delete it?",
+            sentence::used_by("To food", &[], &["Total trail"]),
+        ),
+        (
+            "Velocity is used by Randomise line 1 and the measures Average speed and Spread. Delete it?",
+            sentence::used_by("Velocity", &[(Some("Randomise"), 1)], &["Average speed", "Spread"]),
+        ),
+        (
+            "Average heading is used by lines 4 and 6. Remove it?",
+            sentence::summary_used_by("average heading", &[(None, 4), (None, 6)]),
+        ),
         // The New parameter dialog.
         ("New parameter", fixed(sentence::NEW_PARAMETER_HEADING)),
         (
@@ -1774,6 +1820,14 @@ fn an_empty_total_or_average_value_is_a_number_property_blank() {
 /// Fixed wording entries that the words rule holds, each a whole string of the sheet.
 const FIXED_WORDING: &[&str] = &[
     sentence::LAW,
+    sentence::REPLACE_APPLIED_HEADING,
+    sentence::REPLACE,
+    sentence::DELETE_PARAMETER_HEADING,
+    sentence::DELETE_PROPERTY_HEADING,
+    sentence::DELETE_LINE_HEADING,
+    sentence::REMOVE_SUMMARY_HEADING,
+    sentence::DELETE,
+    sentence::REMOVE,
     sentence::ADD_AT_END_NOTE,
     sentence::BUTTON_CARD_EMPTY,
     sentence::BLANK_MODEL_CARD,
@@ -1835,6 +1889,14 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
     let mut texts: Vec<String> = FIXED_WORDING.iter().map(|text| (*text).to_owned()).collect();
     texts.push(sentence::name_reserved("Count"));
     texts.push(sentence::measure_name_reserved("tick"));
+    texts.push(sentence::parameter_id_reserved("status"));
+    texts.push(sentence::replace_applied("Chance SIR", "untitled_model"));
+    texts.push(sentence::used_by(
+        "Trail falloff",
+        &[(None, 3), (Some("Clear"), 1)],
+        &["Total trail"],
+    ));
+    texts.push(sentence::summary_used_by("Average heading", &[(None, 4)]));
     texts.push(sentence::add_up_worked_out_note(70_000, "ant", "To home", "65536"));
     for grows in [true, false] {
         texts.push(sentence::kept_outside_note("To food", "5", grows));

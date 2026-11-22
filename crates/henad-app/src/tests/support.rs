@@ -41,7 +41,7 @@ use crate::ui::editor::graph::canvas::pin_key;
 use crate::ui::editor::graph::{GraphEditor, GraphRequest, graph_ui};
 use crate::ui::editor::preview::{DEBOUNCE, poll_at};
 use crate::ui::editor::sheet::new_model::new_model_modal;
-use crate::ui::editor::{editor_ui, open_text, unsaved_modal};
+use crate::ui::editor::{editor_ui, open_text, replace_question_modal, unsaved_modal};
 use crate::ui::menu_bar::file_menu;
 
 /// Returns an app over the example models on a headless device that runs compute shaders, or `None` to skip on a
@@ -771,6 +771,7 @@ impl Harness {
             editor_ui(ui, app);
             new_model_modal(ui.ctx(), app);
             unsaved_modal(ui.ctx(), app);
+            replace_question_modal(ui.ctx(), app);
             about_modal(ui.ctx(), app);
         });
         output.textures_delta.clear();

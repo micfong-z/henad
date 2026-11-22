@@ -129,7 +129,7 @@ pub(super) fn slots_mut(line: &mut SheetLine) -> [&mut Slot; 21] {
 }
 
 /// Returns the slots of `line` in the order of [`SLOT_KEYS`].
-fn slots(line: &SheetLine) -> [&Slot; 21] {
+pub(super) fn slots(line: &SheetLine) -> [&Slot; 21] {
     [
         &line.distance,
         &line.place,

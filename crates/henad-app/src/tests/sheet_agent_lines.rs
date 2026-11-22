@@ -1168,3 +1168,62 @@ fn a_state_picker_on_an_agent_card_with_no_states_points_at_the_agents_section()
     let life = starter_document("game_of_life.toml");
     assert_eq!(empty(&life, "l1", false), NO_STATES);
 }
+
+/// Removing a summary that a formula reads asks first and names the lines that read it, and Remove removes it. A
+/// summary that no formula reads goes at once, and Undo brings it back.
+#[test]
+fn removing_a_summary_that_a_formula_reads_asks_first() {
+    use henad_graph::sheet::relations::CardRelations;
+    use henad_graph::sheet::sentence::{CANCEL, REMOVE, REMOVE_SUMMARY, REMOVE_SUMMARY_HEADING, UNDO, summary_used_by};
+
+    use crate::tests::panes::press_in_dialog;
+
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "boids.toml");
+    let mut reads = SheetLine::new(LineKind::Calculate);
+    reads.formula = Some("length(l1.average_velocity) * 2".to_owned());
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::AddLine {
+            card: "bird_tick".to_owned(),
+            inside: None,
+            line: Box::new(reads),
+        },
+    );
+    harness.settle();
+    let number = {
+        let document = sheet(&harness).document();
+        let card = &document.cards[0];
+        let relations = CardRelations::new(document, card);
+        let last = relations.order().last().copied().expect("the card holds lines");
+        relations.number(last).expect("the new line is on the card")
+    };
+    let summaries = |harness: &Harness| sheet(harness).document().line("l1").expect("line 1").1.summaries.len();
+    let text = sheet(&harness).text().to_owned();
+
+    // Line 5 steers by the centre through a chip, which the card sets again, and the centre goes at once.
+    click(&mut harness, "Line 1: summary 2");
+    click(&mut harness, REMOVE_SUMMARY);
+    assert!(!is_open(&mut harness, REMOVE_SUMMARY_HEADING));
+    assert_eq!(summaries(&harness), 1);
+    click(&mut harness, UNDO);
+    assert_eq!(sheet(&harness).text(), text);
+
+    click(&mut harness, "Line 1: summary 1");
+    click(&mut harness, REMOVE_SUMMARY);
+    assert!(is_open(&mut harness, REMOVE_SUMMARY_HEADING), "no dialog asks");
+    assert!(shows(
+        &mut harness,
+        &summary_used_by("average velocity", &[(None, number)])
+    ));
+    press_in_dialog(&mut harness, REMOVE_SUMMARY_HEADING, CANCEL);
+    assert!(!is_open(&mut harness, REMOVE_SUMMARY_HEADING));
+    assert_eq!(sheet(&harness).text(), text, "Cancel keeps the summary");
+    click(&mut harness, "Line 1: summary 1");
+    click(&mut harness, REMOVE_SUMMARY);
+    press_in_dialog(&mut harness, REMOVE_SUMMARY_HEADING, REMOVE);
+    assert!(!is_open(&mut harness, REMOVE_SUMMARY_HEADING));
+    assert_eq!(summaries(&harness), 1, "Remove removes the summary");
+}

@@ -6,10 +6,10 @@ view, a graph model on the canvas of `ui/editor/graph/` (below), or a sheet in t
 (`AppState::editor`: the model under edit as `model: EditorModel`, the file name, the `ApplyOutcome`
 of the last Apply, the open and save status, and the `ModelSource` applied last) and `editor_ui`,
 which matches on the model: a header of New model (`NEW_MODEL_BUTTON`, which opens the New model
-dialog of `henad-app-sheet.md`), New grid rule, New node graph (`NEW_NODE_GRAPH`, its widget name
-too, a menu of henad-graph's `starters()` then `agent_starters()`, labelled by each starter's model
-name), a vertical hairline, Open model and Save model, wrapping in a narrow tab, then Apply at the
-right end as the one primary button (`filled_button`, blue 700), then the code view, the graph
+dialog of `henad-app-sheet-open.md`), New grid rule, New node graph (`NEW_NODE_GRAPH`, its widget
+name too, a menu of henad-graph's `starters()` then `agent_starters()`, labelled by each starter's
+model name), a vertical hairline, Open model and Save model, wrapping in a narrow tab, then Apply at
+the right end as the one primary button (`filled_button`, blue 700), then the code view, the graph
 editor or the sheet editor. Apply is drawn last, so the keyboard path keeps its order. Each of
 these buttons shows its tooltip under the pointer and on keyboard focus
 (`FocusTooltip::on_hover_or_focus_text`, `agents/ui.md`). The header's second row (`name_row`)
@@ -31,10 +31,10 @@ text is empty, on which Save model and Apply are disabled), `file_text` (what Ap
 with no preview), `preview_program` and `place` (a sheet places a fault's problem in the sheet),
 plus `rule_text`, `graph`, `graph_mut` and `sheet` for the sites of one kind. `load` sets `Rule`,
 `load_graph` sets `Graph` and `load_sheet` sets `Sheet`. Open model goes through `open_text`, which
-dispatches on the header's `kind` (`henad-app-sheet.md`). The `Empty` arm draws the code view over
-a fresh `String` each frame and becomes a `Rule` once typing leaves it non-empty. For a grid rule
-the list under the code holds the outcome and each `CodeDiagnostic` as a selectable notice in the
-mono face reading `<line>:<column> <message>`, its notes weak under it, whose press moves the
+dispatches on the header's `kind` (`henad-app-sheet-open.md`). The `Empty` arm draws the code view
+over a fresh `String` each frame and becomes a `Rule` once typing leaves it non-empty. For a grid
+rule the list under the code holds the outcome and each `CodeDiagnostic` as a selectable notice in
+the mono face reading `<line>:<column> <message>`, its notes weak under it, whose press moves the
 cursor there (`move_cursor_to`). Every line of the status area under the panes is a
 `widgets::Notice` (`NoticeKind::Info`, `Warning` or `Error`, `NoticeKind::of` a problem's
 severity): the last open or save (`file_status`, a `FileStatus` that is a note or a failure,
@@ -74,7 +74,7 @@ sheet of a `henad-sheet/1` author text, else the graph or the grid rule of the c
 `EditorPanel::load_model` loads it from no file. Each action that replaces the model asks first
 while it holds unsaved edits (`henad-app.md`, unsaved edits). `can_edit` is
 `editable_model(...).is_some()`. Open model and Save model go through `OpenTarget::Model` and
-`SaveTarget::Model`, a `.toml` file on
+`SaveTarget::Model(n)`, a `.toml` file on
 native and a picked file or a download in a browser. Opening loads the text and applies nothing.
 `AppState::show_fault` gives a fault to the Editor (`EditorPanel::claims`) when it belongs to a run
 built from the applied source that has not passed tick 0, in place of the fault modal. A lost
@@ -89,11 +89,20 @@ browser `catching_on` pushes no scopes, and the device reports a refused rule th
 `FaultSink` a frame or more after the build. Without compute, Apply is disabled and the tab reads
 `NO_COMPUTE`. Apply builds no model that Build refuses (`build_refusal`: the sizes the device
 lacks at the next build's values, a Seed field that does not parse, values the setup rejects), and
-reports the reason as `ApplyOutcome::Faulted`. An outcome that would ask for a Rebuild or a Build
-that is disabled (`rebuild_refusal`, `build_refusal`) reads `Faulted` with the reason as well, the
-Rebuild model modal still open, and `settle_outcome` turns it `Applied` once the loaded model runs
-the applied source, as after Build with the seed fixed. A build fault of the applied code leaves
-nothing loaded (`an_apply_that_build_refuses_names_the_reason`). `reset_simulation`, `open_run` and
+reports the reason as `ApplyOutcome::BuildRefused`, which reads as a fault does ("Model build
+failed. Fix the problem below."). An outcome that would ask for a Rebuild or a Build that is
+disabled (`rebuild_refusal`, `build_refusal`) reads `BuildRefused` with the reason as well, the
+Rebuild model modal still open.
+`settle_outcome` takes the reason the button gives now (`rebuild_refusal` while the modal is open,
+else `build_refusal`, read only for a `BuildRefused` outcome): it names a new reason, turns
+`AwaitingRebuild` or `Installed` once the reason is gone, is dropped once Build builds another
+model, and turns `Applied` once the loaded model runs the applied source, as after Build with the
+seed fixed (`a_refused_build_says_what_the_button_does_once_the_reason_is_gone`). While Build
+replays the sheet's preview, which Playback enables whatever the refusal, Apply builds the applied
+model, so the line keeps the reason Apply meets and goes once it is gone, as `Installed` does then
+(`a_refused_build_line_keeps_its_reason_while_build_replays_the_preview`). `Faulted` is a
+fault of a build of the applied code, which leaves nothing loaded, and turns `Applied` the same way
+(`an_apply_that_build_refuses_names_the_reason`). `reset_simulation`, `open_run` and
 `open_setup` refuse the sizes too, since the engine's own assert would end a browser's page, and
 `reset_simulation` refuses a Seed field that holds no seed, which would build at the last valid
 seed (`an_apply_while_the_seed_is_no_integer_builds_nothing`). `src/tests/editor.rs` holds
@@ -110,8 +119,9 @@ seed (`an_apply_while_the_seed_is_no_integer_builds_nothing`). `src/tests/editor
 `a_code_edit_that_fails_validation_keeps_the_running_model`,
 `a_fault_in_the_apply_window_is_shown_in_the_editor`,
 `a_build_fault_of_the_applied_code_reaches_the_editor_from_the_build_thread`,
-`a_diagnostic_moves_the_cursor_to_its_line` and `edit_model_shows_the_code_the_rule_runs`. Keep
-them.
+`a_diagnostic_moves_the_cursor_to_its_line`, `edit_model_shows_the_code_the_rule_runs`,
+`a_refused_build_says_what_the_button_does_once_the_reason_is_gone` and
+`a_refused_build_line_keeps_its_reason_while_build_replays_the_preview`. Keep them.
 
 ## The graph editor
 
@@ -129,8 +139,20 @@ and Edit model opens a runtime entry whose code is `henad-graph/1` and records n
 `new_model_id(models, id, prefix)` gives a new model its id: `id` while no compiled entry of the set
 holds it, else `prefix` and `id` (`sheet_` for New model from Blank or a starter, `node_` for
 `new_graph_model`, none for New grid rule), numbered by `mint_id` while compiled code holds that
-too. A runtime entry holds no id, and a new model replaces it on Apply. `src/tests/model_ids.rs`
-holds it, with compiled models of the user's own beside the examples.
+too. A runtime entry holds no id, and a new model replaces it on Apply. `apply` asks first through
+`replace_question` when the runtime entry was applied from a sheet (author text in
+`SHEET_CODE_FORMAT`) whose name differs from the new entry's and whose source is not the one the
+Editor applied last (`is_applied`, so a rename of that sheet does not ask):
+`EditorPanel::replace_question` holds a `ReplaceQuestion` (name and id), and
+`replace_question_modal`, drawn from `lib.rs`, is a dialog titled `REPLACE_APPLIED_HEADING` with
+`sentence::replace_applied`, Cancel and Replace (destructive, which Enter presses). Replace runs
+`apply_replacing`, which reads the text again and installs it through `install_applied`, or
+applies it as `apply` does when its id is no longer the question's. Nothing changes before the
+answer, and a load or a swap drops the question (`clear_outcome`). The test `Harness` draws the
+dialog too. Note that a swap clears `applied`, so a rename of the sheet after a swap and back asks.
+`src/tests/model_ids.rs` holds it, with compiled models of the user's own beside the examples
+(`apply_asks_before_it_replaces_a_model_applied_from_another_sheet`,
+`the_replace_question_closes_on_cancel_a_click_outside_and_a_swap`).
 `GraphEditor::new` places every body without placement through `arrange` (no undo step) and opens
 the first tick pass.
 

@@ -75,7 +75,8 @@ characters, and a file that grows past that splits by subsystem, as henad-app's 
 | henad-app: options, state, builds, teardown, install, export | `agents/henad-app.md` |
 | henad-app's Editor tab | `agents/henad-app-editor.md` |
 | henad-app's graph editor: the canvas, its panels, regions, functions and the WGSL view | `agents/henad-app-graph-editor.md` |
-| henad-app's sheet editor: the Sheet pane, the toolbar, the New model dialog | `agents/henad-app-sheet.md` |
+| henad-app's sheet editor: its edits, the Sheet pane's sections and forms, the toolbar, undo | `agents/henad-app-sheet.md` |
+| henad-app's sheet editor: opening a sheet, Apply of a sheet, its preview, the New model dialog | `agents/henad-app-sheet-open.md` |
 | henad-app's Sheet pane layout: sections, form rows, tables and their column order, a world of agents | `agents/henad-app-sheet-pane.md` |
 | henad-app's Card pane: lines written with blanks, pickers and chips, When blocks, moves, rates, agent lines, Repeat blocks and fire counts | `agents/henad-app-card.md` |
 | henad-app's Sweep and Results tabs | `agents/henad-app-sweep.md` |

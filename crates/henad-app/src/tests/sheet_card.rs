@@ -1406,3 +1406,41 @@ fn a_calculate_line_keeps_its_values_as_a_draft_until_both_are_chosen() {
     assert_eq!(formula_of_l5(&harness).as_deref(), Some("5 - factor"));
     assert_no_forbidden_word(&seen);
 }
+
+/// The first group label of an overlay shares the hairline under the overlay's title. It sits as far under the title
+/// as a later group label sits under the item before it, each with one hairline between.
+#[test]
+fn a_group_right_under_an_overlay_title_takes_no_second_hairline() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "random_walk.toml");
+    click(&mut harness, &add_inside_label(1));
+    let title = add_inside_name(1);
+    let nodes = harness.settle();
+    let inside = |role: Role| {
+        let mut found: Vec<egui::Rect> = nodes
+            .iter()
+            .filter(|node| node.role == role && node.dialog == title)
+            .filter_map(|node| node.bounds)
+            .collect();
+        found.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        found
+    };
+    let heading = inside(Role::Heading);
+    let labels = inside(Role::Label);
+    let items = inside(Role::MenuItem);
+    assert_eq!(heading.len(), 1, "{heading:?}");
+    assert!(labels.len() >= 2, "two groups at least: {labels:?}");
+    let under_title = labels[0].top() - heading[0].bottom();
+    let item_before = items
+        .iter()
+        .rev()
+        .find(|item| item.bottom() <= labels[1].top())
+        .expect("an item of the first group");
+    let under_item = labels[1].top() - item_before.bottom();
+    assert!(
+        (under_title - under_item).abs() < 0.5,
+        "{under_title} under the title, {under_item} under an item"
+    );
+}

@@ -10,11 +10,16 @@ use henad_core::topology::NeighborhoodKind;
 use henad_core::view::{StatDescriptor, StatValue};
 use henad_graph::sheet::document::{PropertyType, SheetLiteral, SheetValue, Slot, StartRule, StartsAs};
 use henad_graph::sheet::edit::SheetEdit;
+use henad_graph::sheet::sentence::UNTITLED_MODEL;
 
 use crate::state::AppState;
+use crate::tests::panes::apply_sheet_edit;
 use crate::tests::support::{edited, headless_app, settle_preview, starter_text};
 use crate::ui::editor::sheet::new_model::{create_blank_agent_model, create_blank_model, create_model};
-use crate::ui::editor::{ApplyOutcome, EditorModel, apply, new_graph_model, new_grid_rule, new_model_id};
+use crate::ui::editor::{
+    ApplyOutcome, EditorModel, ReplaceQuestion, apply, apply_replacing, new_graph_model, new_grid_rule, new_model_id,
+    replace_question_modal,
+};
 
 /// Declares a grid model compiled into the app under `$id` and `$name`, as a program of the user's own registers one.
 macro_rules! compiled_model {
@@ -236,4 +241,158 @@ fn starters_keep_their_ids_unless_a_compiled_model_holds_them() {
         app.editor.model.graph().expect("a graph").document().target.id,
         "node_sir"
     );
+}
+
+/// Renames the sheet in the Editor to `name`. The sheet keeps its id.
+fn rename_sheet(app: &mut AppState, name: &str) {
+    let EditorModel::Sheet(sheet) = &mut app.editor.model else {
+        panic!("the Editor holds a sheet");
+    };
+    apply_sheet_edit(sheet, SheetEdit::SetSheetName { name: name.to_owned() });
+}
+
+/// Returns the name of the model of id `id` in the set.
+fn name_of(app: &AppState, id: &str) -> String {
+    app.models.get(id).expect("the set holds the id").name().to_owned()
+}
+
+/// Runs one frame of the dialog that asks before Apply replaces a model, with `events`.
+fn replace_frame(ctx: &egui::Context, app: &mut AppState, events: Vec<egui::Event>) {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+        events,
+        ..egui::RawInput::default()
+    };
+    let mut output = ctx.run_ui(input, |ui| replace_question_modal(ui.ctx(), app));
+    output.textures_delta.clear();
+}
+
+/// Returns the events of a press of `key`.
+fn key_press(key: egui::Key) -> Vec<egui::Event> {
+    [true, false]
+        .map(|pressed| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        })
+        .to_vec()
+}
+
+/// Apply asks before it replaces a model applied from another sheet under the same id, a sheet of another name, and
+/// leaves the applied model until Replace. A second sheet of the same name, and a rename of the sheet the Editor
+/// applied last, replace the applied model without asking.
+#[test]
+fn apply_asks_before_it_replaces_a_model_applied_from_another_sheet() {
+    let Some(mut app) = app() else {
+        return;
+    };
+    create_blank_model(&mut app, UNTITLED_MODEL);
+    let id = sheet_id(&app);
+    add_a_number(&mut app);
+    apply_and_build(&mut app);
+    create_blank_model(&mut app, UNTITLED_MODEL);
+    assert_eq!(sheet_id(&app), id);
+    add_a_number(&mut app);
+    apply_and_build(&mut app);
+    assert_eq!(app.editor.replace_question, None, "a sheet of the same name");
+    rename_sheet(&mut app, "Chance SIR");
+    apply(&mut app);
+    assert_eq!(app.editor.replace_question, None, "the sheet the Editor applied last");
+    assert_eq!(name_of(&app, &id), "Chance SIR");
+    app.wait_for_build();
+
+    // Another sheet, renamed before its Apply.
+    create_blank_model(&mut app, UNTITLED_MODEL);
+    add_a_number(&mut app);
+    rename_sheet(&mut app, "Rates SIR");
+    apply(&mut app);
+    let question = ReplaceQuestion {
+        name: "Chance SIR".to_owned(),
+        id: id.clone(),
+    };
+    assert_eq!(app.editor.replace_question.as_ref(), Some(&question));
+    assert_eq!(
+        name_of(&app, &id),
+        "Chance SIR",
+        "the applied model waits on the dialog"
+    );
+    assert_eq!(app.editor.outcome, None);
+
+    // Escape cancels, and Enter presses Replace.
+    let ctx = egui::Context::default();
+    replace_frame(&ctx, &mut app, Vec::new());
+    replace_frame(&ctx, &mut app, key_press(egui::Key::Escape));
+    assert_eq!(app.editor.replace_question, None);
+    assert_eq!(name_of(&app, &id), "Chance SIR", "Cancel keeps the applied model");
+    apply(&mut app);
+    assert_eq!(app.editor.replace_question.as_ref(), Some(&question));
+    replace_frame(&ctx, &mut app, Vec::new());
+    replace_frame(&ctx, &mut app, key_press(egui::Key::Enter));
+    assert_eq!(app.editor.replace_question, None);
+    assert_eq!(name_of(&app, &id), "Rates SIR", "Replace applies the sheet");
+    assert_eq!(app.editor.outcome, Some(ApplyOutcome::Applied));
+    app.wait_for_build();
+
+    // The question goes with the model it asked about, and a later Replace applies nothing.
+    create_blank_model(&mut app, UNTITLED_MODEL);
+    add_a_number(&mut app);
+    rename_sheet(&mut app, "Third SIR");
+    apply(&mut app);
+    assert!(app.editor.replace_question.is_some());
+    new_grid_rule(&mut app);
+    assert_eq!(app.editor.replace_question, None, "another model replaced the sheet");
+    apply_replacing(&mut app);
+    assert_eq!(name_of(&app, &id), "Rates SIR");
+}
+
+/// The dialog that asks before Apply replaces a model closes on Cancel and on a click outside it, and goes once the
+/// models change places, each time with the applied model left as it is.
+#[test]
+fn the_replace_question_closes_on_cancel_a_click_outside_and_a_swap() {
+    use henad_graph::sheet::sentence::{CANCEL, REPLACE_APPLIED_HEADING};
+
+    use crate::tests::panes::press_in_dialog;
+    use crate::tests::support::Harness;
+    use crate::ui::editor::expert::{convert_sheet, swap_counterpart};
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    let app = &mut harness.app;
+    create_blank_model(app, UNTITLED_MODEL);
+    let id = sheet_id(app);
+    add_a_number(app);
+    rename_sheet(app, "Chance SIR");
+    apply_and_build(app);
+    create_blank_model(app, UNTITLED_MODEL);
+    add_a_number(app);
+    rename_sheet(app, "Rates SIR");
+    apply(app);
+    assert!(app.editor.replace_question.is_some());
+
+    press_in_dialog(&mut harness, REPLACE_APPLIED_HEADING, CANCEL);
+    assert_eq!(harness.app.editor.replace_question, None, "Cancel closes the dialog");
+    assert_eq!(name_of(&harness.app, &id), "Chance SIR");
+
+    apply(&mut harness.app);
+    harness.settle();
+    harness.click_at(egui::pos2(4.0, 996.0));
+    assert_eq!(
+        harness.app.editor.replace_question, None,
+        "a click outside closes the dialog"
+    );
+    assert_eq!(name_of(&harness.app, &id), "Chance SIR");
+
+    // The node graph copy shows after the conversion, and a swap brings the sheet back.
+    convert_sheet(&mut harness.app);
+    swap_counterpart(&mut harness.app.editor);
+    assert!(harness.app.editor.model.sheet().is_some());
+    apply(&mut harness.app);
+    assert!(harness.app.editor.replace_question.is_some());
+    swap_counterpart(&mut harness.app.editor);
+    assert_eq!(harness.app.editor.replace_question, None, "a swap drops the question");
+    harness.settle();
+    assert_eq!(name_of(&harness.app, &id), "Chance SIR");
 }

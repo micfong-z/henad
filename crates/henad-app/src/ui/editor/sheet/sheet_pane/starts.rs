@@ -249,7 +249,7 @@ pub(super) fn property_form_or_add(
 ) {
     if let Some(form) = pane.property_form.as_mut().filter(|form| form.thing == thing) {
         let mut close = false;
-        property_form(ui, document, form, &mut close, pending);
+        property_form(ui, document, form, &mut close, &mut pane.delete_question, pending);
         if close {
             pane.property_form = None;
         }

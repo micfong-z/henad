@@ -36,6 +36,7 @@ use henad_graph::sheet::sentence::{
 };
 use henad_graph::value::Color;
 
+use super::delete_question::{DeleteAnswer, DeleteQuestion};
 use super::help::Help;
 use super::widgets::{
     NewParameterDialog, NumberUse, OverlayItem, REGION_GAP, commit_area, commit_number, field_message, message_ui,
@@ -134,6 +135,18 @@ pub struct PaneState {
     /// Whether the last edit of the pane changed the length or the unit of one tick. The notice under the Time line
     /// then names the lines that use chances per tick, read from the sheet as it is drawn.
     time_changed: bool,
+    /// Delete that waits on the dialog that asks before it empties formulas the card cannot write again, `None` while
+    /// the dialog is closed.
+    delete_question: Option<PendingDelete>,
+}
+
+/// A delete of the Sheet pane that waits on the dialog that asks first, with the form it comes from.
+#[derive(Debug)]
+struct PendingDelete {
+    /// The dialog's question and the delete.
+    question: DeleteQuestion,
+    /// Form the delete comes from, `None` for a button of a table. The form closes once the delete is kept.
+    form: Option<FormKind>,
 }
 
 impl PaneState {
@@ -149,10 +162,12 @@ impl PaneState {
             refusal: None,
             parameter_message: None,
             time_changed: false,
+            delete_question: None,
         }
     }
 
-    /// Closes every form and the New parameter dialog, and drops every message, as an undo or a redo does.
+    /// Closes every form, the New parameter dialog and the dialog that asks before a delete, and drops every message,
+    /// as an undo or a redo does.
     pub fn close_forms(&mut self) {
         self.property_form = None;
         self.measure_form = None;
@@ -162,11 +177,12 @@ impl PaneState {
         self.refusal = None;
         self.parameter_message = None;
         self.time_changed = false;
+        self.delete_question = None;
     }
 
-    /// Returns whether the New parameter dialog is open.
+    /// Returns whether the New parameter dialog or the dialog that asks before a delete is open.
     pub fn dialog_open(&self) -> bool {
-        self.new_parameter.is_some()
+        self.new_parameter.is_some() || self.delete_question.is_some()
     }
 }
 
@@ -481,6 +497,44 @@ impl Pending {
     }
 }
 
+/// Pushes `edit`, a delete of the item named `name` made in the form `form`, to `pending`, or holds it in `waiting`
+/// when it empties formulas that the card cannot write again. The dialog titled `title` then asks first, from the next
+/// frame on, past the click that made the delete.
+fn delete_or_ask(
+    document: &SheetDocument,
+    edit: SheetEdit,
+    (title, name): (&'static str, &str),
+    form: Option<FormKind>,
+    waiting: &mut Option<PendingDelete>,
+    pending: &mut Vec<Pending>,
+) {
+    if let Some(question) = DeleteQuestion::before(document, &edit, title, name) {
+        *waiting = Some(PendingDelete { question, form });
+    } else {
+        let mut delete = Pending::one(edit);
+        delete.form = form;
+        pending.push(delete);
+    }
+}
+
+/// Draws the dialog that asks before the delete `pane` holds, and pushes the delete to `pending` once Delete is
+/// pressed. An answer closes the dialog.
+fn delete_question_ui(ui: &Ui, pane: &mut PaneState, pending: &mut Vec<Pending>) {
+    let Some(waiting) = &pane.delete_question else {
+        return;
+    };
+    let Some(answer) = waiting.question.show(ui.ctx()) else {
+        return;
+    };
+    if let Some(waiting) = pane.delete_question.take()
+        && answer == DeleteAnswer::Delete
+    {
+        let mut delete = Pending::one(waiting.question.edit);
+        delete.form = waiting.form;
+        pending.push(delete);
+    }
+}
+
 /// Draws every section of `sheet`, in the order of [`SheetSection::shown`] for its world, each heading with its help,
 /// and runs every edit made in it.
 ///
@@ -501,6 +555,8 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
             builder, pane, report, ..
         } = &mut *sheet;
         let document = builder.document();
+        // A delete held in the frame before asks first. It ran on the sheet as it is drawn now.
+        delete_question_ui(ui, pane, &mut pending);
         ui.push_id(pane.widgets, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             let agents = document.world.made_of == MadeOf::Agents;

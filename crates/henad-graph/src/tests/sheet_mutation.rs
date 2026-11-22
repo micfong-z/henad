@@ -8,6 +8,7 @@ use henad_core::explore::fingerprint::fnv1a64;
 
 use super::sheet_support::{SHEET_HOSTILE, VALUES, edited_sheet, sheets};
 use super::support::{mutations, without_each_key};
+use crate::check::RUNS_CSV_COLUMNS;
 use crate::sheet::check::SheetDiagnostic;
 use crate::sheet::limits::MAX_FORMULA_DEPTH;
 use crate::sheet::relations::CardRelations;
@@ -546,6 +547,33 @@ fn a_measure_named_run_id_tick_or_time_is_an_error() {
     for name in ["Time", "Tick", "time spent"] {
         let report = ParsedSheet::parse(&named(name)).expect("the sheet reads").check();
         assert!(!report.has_errors(), "{name}: {:?}", report.diagnostics);
+    }
+}
+
+/// A parameter whose id is a fixed column of `runs.csv`, such as `seed` or `status`, is an error at its table, since a
+/// sweep writes the parameters among those columns. An id that holds more than a column's name is an id of its own.
+#[test]
+fn a_parameter_with_the_id_of_a_column_of_sweep_results_is_an_error() {
+    let with_id = |id: &str| {
+        edited_sheet(
+            "sir.toml",
+            &[
+                ("id = \"recovery_rate\"", &format!("id = \"{id}\"")),
+                ("param = \"recovery_rate\"", &format!("param = \"{id}\"")),
+            ],
+        )
+    };
+    for id in RUNS_CSV_COLUMNS {
+        assert_reported(
+            &with_id(id),
+            Expected::Error,
+            &sentence::parameter_id_reserved(id),
+            &format!("[[parameter]]\nid = \"{id}\""),
+        );
+    }
+    for id in ["seeds", "recovery_status", "notes"] {
+        let report = ParsedSheet::parse(&with_id(id)).expect("the sheet reads").check();
+        assert!(!report.has_errors(), "{id}: {:?}", report.diagnostics);
     }
 }
 

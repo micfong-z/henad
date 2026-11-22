@@ -1,5 +1,6 @@
 //! Tests of [`crate::model_file`] on sheets: every sheet starter builds an entry under the sheet's code, a sheet's
-//! errors and warnings come back placed at their tables, and a sheet is held to its size limit.
+//! errors and warnings come back placed at their tables, a sheet is held to its size limit, and no parameter takes the
+//! id of a column of `runs.csv`.
 
 use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
 use henad_core::provenance::CodeOrigin;
@@ -8,6 +9,7 @@ use henad_graph::sheet::sentence::SHEET_EMPTY;
 use henad_graph::sheet::{SheetFile, starters};
 
 use crate::model_file::{ModelFile, ModelFileError};
+use crate::output::runs_csv::{ID_COLUMNS, NOTE_COLUMN, OUTCOME_COLUMNS};
 use crate::tests::support::{edited, line_of};
 
 /// Text of the Game of Life sheet starter.
@@ -192,4 +194,33 @@ fn a_sheet_is_held_to_its_size_limit() {
     let under = format!("{}\n# {}\n", life(), "x".repeat(room));
     assert_eq!(under.len(), MAX_SHEET_BYTES);
     assert!(matches!(ModelFile::parse(&under), Ok(ModelFile::Sheet(_))));
+}
+
+/// Every fixed column that `runs.csv` writes beside the parameters is refused as the id of a parameter of a sheet and
+/// of a graph model, so no sweep writes a column twice.
+#[test]
+fn no_parameter_takes_the_id_of_a_fixed_column_of_runs_csv() {
+    let sheet = starters()
+        .iter()
+        .find(|starter| starter.file_name == "sir.toml")
+        .expect("the SIR sheet is a starter")
+        .text;
+    let graph = henad_graph::starters::starter("sir.toml")
+        .expect("the SIR graph is a starter")
+        .text;
+    let columns = ID_COLUMNS.iter().chain(&OUTCOME_COLUMNS).chain([&NOTE_COLUMN]);
+    for column in columns {
+        for text in [sheet, graph] {
+            assert!(text.contains("\"recovery_rate\""));
+            let renamed = text.replace("\"recovery_rate\"", &format!("\"{column}\""));
+            let error = ModelFile::parse(&renamed)
+                .and_then(|file| file.entry())
+                .expect_err("a parameter took the id of a column");
+            let printed = error.to_string();
+            assert!(
+                printed.contains("column of sweep results") && printed.contains(column),
+                "{column}: {printed}"
+            );
+        }
+    }
 }

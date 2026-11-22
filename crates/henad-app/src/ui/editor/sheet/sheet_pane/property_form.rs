@@ -12,10 +12,10 @@ use henad_graph::sheet::edit::{
 use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::name_reserved;
 use henad_graph::sheet::sentence::{
-    ADD_STATE, DELETE_PROPERTY, INTEGER_KIND_TOOLTIP, KIND_LABEL, NAME_LABEL, NEW_PROPERTY, NUMBER_KIND_DESCRIPTION,
-    PROPERTY_NAME_FIELD, PROPERTY_NAME_MISSING, PROPERTY_NAME_PLACEHOLDER, STATE_NAMES_REPEATED,
-    STATES_KIND_DESCRIPTION, TOO_FEW_STATES, edit_property_heading, property_name_taken, remove_state_name,
-    state_color_name, state_name_field,
+    ADD_STATE, DELETE_PROPERTY, DELETE_PROPERTY_HEADING, INTEGER_KIND_TOOLTIP, KIND_LABEL, NAME_LABEL, NEW_PROPERTY,
+    NUMBER_KIND_DESCRIPTION, PROPERTY_NAME_FIELD, PROPERTY_NAME_MISSING, PROPERTY_NAME_PLACEHOLDER,
+    STATE_NAMES_REPEATED, STATES_KIND_DESCRIPTION, TOO_FEW_STATES, edit_property_heading, property_name_taken,
+    remove_state_name, state_color_name, state_name_field,
 };
 use henad_graph::sheet::sentence::{
     ARROW_KIND_DESCRIPTION, HEADING_KIND_DESCRIPTION, POSITION_KIND_DESCRIPTION, YES_NO_KIND_DESCRIPTION,
@@ -26,20 +26,22 @@ use super::colors::shaded_rule;
 use super::layout::{Form, ITEM_GAP, delete_button, line};
 use super::starts::kind_words;
 use super::{
-    DELETE_WIDTH, EditRun, FormKind, FormState, Pending, PropertyForm, STATE_FIELD_WIDTH, form_buttons, form_heading,
-    form_name_field,
+    DELETE_WIDTH, EditRun, FormKind, FormState, Pending, PendingDelete, PropertyForm, STATE_FIELD_WIDTH, delete_or_ask,
+    form_buttons, form_heading, form_name_field,
 };
 use crate::ui::editor::sheet::widgets::FocusTooltip as _;
 use crate::ui::editor::sheet::widgets::{color_button, color_name, message_ui, name_taken, set_name};
 use crate::ui::editor::sheet::{find_property, properties_of};
 use crate::ui::sweep::layout::destructive_button;
 
-/// Draws the property form, and sets `close` on Cancel. Done checks the form and adds or changes the property.
+/// Draws the property form, and sets `close` on Cancel. Done checks the form and adds or changes the property. Delete
+/// property deletes it, or holds the delete in `waiting` while it empties formulas that the card cannot write again.
 pub(super) fn property_form(
     ui: &mut Ui,
     document: &SheetDocument,
     form: &mut PropertyForm,
     close: &mut bool,
+    waiting: &mut Option<PendingDelete>,
     pending: &mut Vec<Pending>,
 ) {
     let heading = match &form.editing {
@@ -95,11 +97,11 @@ pub(super) fn property_form(
     }
     *close |= cancel;
     if let Some(id) = form.editing.as_ref().filter(|_| delete) {
-        let item = SheetItem::Property(id.clone());
-        pending.push(Pending::from_form(
-            FormKind::Property,
-            Box::new(move |builder| builder.apply(SheetEdit::Delete { item }).map(drop)),
-        ));
+        let edit = SheetEdit::Delete {
+            item: SheetItem::Property(id.clone()),
+        };
+        let asked = (DELETE_PROPERTY_HEADING, form.original.as_str());
+        delete_or_ask(document, edit, asked, Some(FormKind::Property), waiting, pending);
     }
 }
 

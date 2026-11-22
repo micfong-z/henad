@@ -95,6 +95,7 @@ Each state takes a colour, and a few usual names take their usual colour as you 
 
 **Parameters** lists the named numbers lines can use, each with its value, its range and an optional unit.
 The value on the sheet is the one the model keeps.
+A parameter named after a column of sweep results, such as Population, takes the id `population_2`, since `runs.csv` writes a `population` column of its own.
 **Measures** plots a number worked out from every cell each tick: tick **Plot** beside a state to plot how many cells are in it.
 An average keeps the name it was given, such as "Average of Food", in step with its property: renaming Food to Energy renames it "Average of Energy", and the column of the results with it, until you rename the measure yourself.
 A measure cannot be named run_id, tick or time, the names of the first columns of exported stats and sweep results.
@@ -311,7 +312,12 @@ A line moved above the result it uses says "Uses Alive neighbours, which is belo
 ### Notes under a line
 
 A line that cannot run yet keeps its place on the card and says why under it, such as "Not run yet: choose a state", and the rest of the model runs without it.
-The card never blocks editing.
+The card never blocks editing, apart from one question before a delete.
+Deleting a parameter, a property or a line, or removing a summary of a look at agents, empties every formula that uses it.
+The card writes again only a formula of one operation on a Calculate line of its own, and the length of a property, such as "length of my Velocity", where a value goes.
+Before a delete that would empty any other formula, a measure's included, a dialog names the lines and the measures that use the item.
+In the ant foraging model, deleting Trail falloff asks **Trail falloff is used by lines 3 and 4. Delete it?**, and deleting the ground's To food asks **To food is used by the measure Total trail. Delete it?**
+Press <span class="ui">Delete</span>, or <span class="ui">Remove</span> for a summary, to go ahead, or <span class="ui">Cancel</span> to keep the item.
 Grey notes explain how lines work together:
 
 - Two Become lines from different states say that their order does not matter, as in Game of Life: "Lines 2 and 3 change different cells (Dead and Alive), so their order does not matter."
@@ -339,6 +345,9 @@ A model made from a starter keeps the starter's id, and a blank model takes the 
 Where a model built into the app already holds that id, such as the example model Game of Life holds `game_of_life`, the new model takes `sheet_` before it.
 The Game of Life starter's id is `sheet_game_of_life`, and so is the id of a blank model named Game of Life, so either model joins the model list beside the example, and the list shows the id after each of the two names.
 Apply of a new model therefore never replaces a model built into the app, while it does replace a model you applied before under the same id.
+When that model was applied from a sheet of another name, Apply asks first, as in **Replace the applied model Chance SIR? It has the same id as this model, untitled_model.**
+Press <span class="ui">Replace</span> to apply the sheet in its place, or <span class="ui">Cancel</span> to keep the applied model.
+A rename of the sheet you applied last replaces it without asking.
 A sheet that holds a problem still opens, with the problem under its line, or listed under the panes when no line holds it.
 [Sheets](../reference/model-files.md#sheets) in the model file reference describes the file.
 
@@ -556,6 +565,7 @@ What happens to the run depends on what was running:
   Once you select another model in the Model tab, Build builds that model, and the Editor reads **Press Apply to check and install the model.**
 
 When <span class="ui" markdown>:material-restart: Build</span> or <span class="ui">Rebuild</span> is disabled, for example while the **Seed** field shows an error, the Editor reads **Model build failed. Fix the problem below.** and names the reason instead.
+Once the problem is fixed, the line names the button again, as in **Model applied. Press Build to run it.**
 
 Applying the code the run already runs changes nothing, and the Editor reads **Model unchanged.**
 Once you edit the model after Apply, the line goes, and the Editor reads **Press Apply to check and install the model.** again.

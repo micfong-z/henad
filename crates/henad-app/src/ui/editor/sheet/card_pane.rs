@@ -48,7 +48,9 @@ use henad_graph::sheet::document::{
     Around, CELLS_ID, CardRuns, CellWhich, ChooseRow, CompareTest, GROUND_ID, LineKind, LineMode, LookSummary, MadeOf,
     PickRule, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine, SheetValue, Slot, SummaryKind,
 };
-use henad_graph::sheet::edit::{LineField, MoveDirection, SheetBuilder, SheetEdit, SheetEditError, slot_value};
+use henad_graph::sheet::edit::{
+    LineField, MoveDirection, SheetBuilder, SheetEdit, SheetEditError, automatic_name, slot_value,
+};
 use henad_graph::sheet::rates::{chance_note, conversion, count_as_draw, grow_count, parameter_defaults, rate_note};
 use henad_graph::sheet::relations::{CardRelations, RelationNote, RelationNoteKind};
 use henad_graph::sheet::sentence::{
@@ -63,15 +65,17 @@ use henad_graph::sheet::sentence::{
     use_for_each_name, use_instead_label, use_instead_name,
 };
 use henad_graph::sheet::sentence::{
-    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, LOOK_IN_REPEAT, RANDOM_VALUE_GROUP, add_choose_row_name,
-    add_for_each_label, add_for_each_name, add_summary_name, comparison_words, fire_count, fire_count_description,
-    include_me_tool, leave_me_out_tool, long_tick_note, rate_grow_prompt, tick_set_notice,
+    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, DELETE_LINE_HEADING, LOOK_IN_REPEAT, RANDOM_VALUE_GROUP,
+    REMOVE_SUMMARY_HEADING, add_choose_row_name, add_for_each_label, add_for_each_name, add_summary_name,
+    comparison_words, fire_count, fire_count_description, include_me_tool, leave_me_out_tool, long_tick_note,
+    rate_grow_prompt, tick_set_notice,
 };
 
 #[cfg(test)]
 use super::card_lines::LineControl;
 pub use super::card_lines::{CardLine, LineNote, NoteColor, card_lines, draws_diagnostic};
 use super::card_lines::{NoteAction, button_of, select_words};
+use super::delete_question::{DeleteAnswer, DeleteQuestion};
 use super::help::{Help, help_button};
 use super::picker::{
     CalcDraft, CardPicker, Choice, DraftUpdate, LineContext, SelectOption, apply_choice, around_options,
@@ -176,6 +180,9 @@ pub struct CardState {
     otherwise_notice: Option<String>,
     /// Notice that a rate's unit set the length of one tick, `None` while none shows.
     tick_notice: Option<String>,
+    /// Delete of a line that waits on the dialog that asks before it empties formulas the card cannot write again,
+    /// `None` while the dialog is closed.
+    delete_question: Option<DeleteQuestion>,
 }
 
 impl CardState {
@@ -193,6 +200,7 @@ impl CardState {
             explained: None,
             otherwise_notice: None,
             tick_notice: None,
+            delete_question: None,
         }
     }
 
@@ -204,8 +212,8 @@ impl CardState {
         };
     }
 
-    /// Closes the rename field and the New parameter dialog, drops every draft and message, and ends every range being
-    /// filled, as an undo or a redo does.
+    /// Closes the rename field, the New parameter dialog and the dialog that asks before a delete, drops every draft
+    /// and message, and ends every range being filled, as an undo or a redo does.
     pub fn close(&mut self) {
         self.renaming = None;
         self.drafts.clear();
@@ -216,11 +224,12 @@ impl CardState {
         self.refusal = None;
         self.otherwise_notice = None;
         self.tick_notice = None;
+        self.delete_question = None;
     }
 
-    /// Returns whether the New parameter dialog is open.
+    /// Returns whether the New parameter dialog or the dialog that asks before a delete is open.
     pub fn dialog_open(&self) -> bool {
-        self.new_parameter.is_some()
+        self.new_parameter.is_some() || self.delete_question.is_some()
     }
 
     /// Drops the notice that a rate's unit set the length of one tick, as an edit of that length on the Sheet pane
@@ -334,6 +343,14 @@ pub fn card_pane(
     fires: Option<&LineFires>,
 ) {
     let mut pending = Vec::new();
+    // A delete held in the frame before asks first. It ran on the sheet as it is drawn now.
+    if let Some(question) = &sheet.card.delete_question
+        && let Some(answer) = question.show(ui.ctx())
+        && let Some(question) = sheet.card.delete_question.take()
+        && answer == DeleteAnswer::Delete
+    {
+        pending.push(CardEdit::commands(vec![question.edit], After::Stay));
+    }
     {
         let document = sheet.builder.document();
         let state = &mut sheet.card;
@@ -912,8 +929,8 @@ fn add_inside_ui(
             menu_dialog(ui, &title, |ui, _| {
                 overlay_items(ui, |ui| {
                     let mut chosen = None;
-                    for &button in groups {
-                        let group = overlay_group(ui, button.group()).id;
+                    for (index, &button) in groups.iter().enumerate() {
+                        let group = overlay_group(ui, button.group(), index == 0).id;
                         if let Some(item) = add_items_ui(ui, group, button, agents, states, block.in_repeat) {
                             chosen = Some(item);
                         }
@@ -1185,7 +1202,7 @@ fn add_items_ui(
         let (group, tail) = rest.split_at(end);
         rest = tail;
         if let Some(heading) = opens_group(*first) {
-            label = overlay_group(ui, heading).id;
+            label = overlay_group(ui, heading, false).id;
         }
         menu_group(ui, label, |ui| {
             for item in group {
@@ -2717,10 +2734,21 @@ fn select_edit(
             LineField::Summaries(summaries)
         }
         SelectOption::RemoveSummary(index) => {
-            return Some(CardEdit::commands(
-                vec![SheetEdit::DeleteSummary { line: line_id, index }],
-                After::Stay,
-            ));
+            let remove = SheetEdit::DeleteSummary { line: line_id, index };
+            // A summary is named as its chip reads, by its id while it has no name.
+            let name = line.summaries.get(index).map(|summary| {
+                if summary.name.is_empty() {
+                    &summary.id
+                } else {
+                    &summary.name
+                }
+            })?;
+            let document = drawing.context.document;
+            if let Some(question) = DeleteQuestion::before(document, &remove, REMOVE_SUMMARY_HEADING, name) {
+                state.delete_question = Some(question);
+                return None;
+            }
+            return Some(CardEdit::commands(vec![remove], After::Stay));
         }
         SelectOption::Test(test) => LineField::Test(Some(test)),
         SelectOption::Around(around) => LineField::Around(Some(around)),
@@ -2847,7 +2875,24 @@ fn line_menu_ui(
         Some(LineTool::DrawNewNumbers) => pending.push(edit(SheetEdit::DrawNewNumbers { line: line_id })),
         Some(LineTool::ChangeToRate) => pending.push(edit(SheetEdit::ChangeToRate { line: line_id })),
         Some(LineTool::ChangeToChance) => pending.push(edit(SheetEdit::ChangeToChance { line: line_id })),
-        Some(LineTool::Delete) => pending.push(edit(SheetEdit::DeleteLine { line: line_id })),
+        Some(LineTool::Delete) => {
+            let delete = SheetEdit::DeleteLine { line: line_id };
+            // The line is named as a chip of its result reads: by its name, an unnamed Count by its automatic name, and
+            // any other line by its number. A line that a formula names works out a result.
+            let name = line_data
+                .name
+                .clone()
+                .or_else(|| {
+                    (line_data.kind == LineKind::Count)
+                        .then(|| automatic_name(document, line_data))
+                        .flatten()
+                })
+                .unwrap_or_else(|| line.prefix.clone());
+            match DeleteQuestion::before(document, &delete, DELETE_LINE_HEADING, &name) {
+                Some(question) => state.delete_question = Some(question),
+                None => pending.push(edit(delete)),
+            }
+        }
         None => {}
     }
     response

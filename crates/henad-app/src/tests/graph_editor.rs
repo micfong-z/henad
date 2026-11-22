@@ -461,3 +461,46 @@ fn a_copy_confirmation_shows_in_the_text_colour() {
         "a copy confirmation shows in the warning colour"
     );
 }
+
+/// The canvas takes its keys only under the pointer, and a modal dialog's backdrop covers it, so Cmd+Z under an open
+/// dialog leaves the graph alone and undoes once the dialog closes.
+#[test]
+fn a_modal_dialog_keeps_the_undo_keys_from_the_canvas() {
+    use egui::{Event, Key, Modifiers};
+
+    use crate::tests::support::Harness;
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    new_graph_model(&mut harness.app, "sir.toml");
+    harness.settle();
+    let graph = harness.app.editor.model.graph_mut().expect("a graph");
+    graph.request(GraphRequest::Arrange);
+    harness.settle();
+    let graph = harness.app.editor.model.graph().expect("a graph");
+    let depth = graph.history().undo_depth();
+    let canvas = graph.canvas(graph.scope()).expect("a canvas").canvas_rect.center();
+    let undo_depth = |harness: &Harness| {
+        let graph = harness.app.editor.model.graph().expect("a graph");
+        graph.history().undo_depth()
+    };
+
+    harness.app.about_open = true;
+    harness.settle();
+    harness.frame(vec![Event::PointerMoved(canvas)]);
+    harness.press(Key::Z, Modifiers::COMMAND);
+    harness.settle();
+    assert_eq!(
+        undo_depth(&harness),
+        depth,
+        "the About modal keeps Cmd+Z from the canvas"
+    );
+
+    harness.app.about_open = false;
+    harness.settle();
+    harness.frame(vec![Event::PointerMoved(canvas)]);
+    harness.press(Key::Z, Modifiers::COMMAND);
+    harness.settle();
+    assert_eq!(undo_depth(&harness), depth - 1, "Cmd+Z over the canvas undoes");
+}

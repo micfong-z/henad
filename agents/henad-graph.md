@@ -196,8 +196,11 @@ across regions, puts, host types, and warns of unreached nodes. `bounds.rs` warn
 call order with Kahn's algorithm, so no step recurses on a hostile file. `passes.rs` holds the
 rules across a pass and across passes, and `declarations.rs` the tables. A stat cannot take a
 label of `RESERVED_STAT_LABELS` (`run_id`, `tick`, `time`, compared exactly), the columns that
-exported stats or `series.csv` write before the stats. Every pass needs a `domain`, stats passes
-included, since library 1 has no domain-free reducer. `schedule.rs` orders
+exported stats or `series.csv` write before the stats, and a parameter no id of
+`RUNS_CSV_COLUMNS`, the fixed columns `runs.csv` writes beside the parameters (henad-explore's
+`ID_COLUMNS`, `OUTCOME_COLUMNS` and `NOTE_COLUMN`, which its test
+`no_parameter_takes_the_id_of_a_fixed_column_of_runs_csv` holds to the list). Every pass needs a
+`domain`, stats passes included, since library 1 has no domain-free reducer. `schedule.rs` orders
 the top of each pass (a region stands for its body) and splits it as the host does into prelude,
 element and post: a node that runs per element and reads a reducer's result of its own pass is an
 error at the input that reads it (`ir-spec.md` section 6.1, reducers end a map pass), and tick-rate

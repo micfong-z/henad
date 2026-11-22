@@ -57,6 +57,24 @@ impl AppState {
         self.poll_saves();
     }
 
+    /// Reports `result` as the outcome of the save requested through [`Self::save_as`] for `target`, and polls it, as
+    /// a dialog that ends would. Test builds only.
+    ///
+    /// # Panics
+    ///
+    /// Panics when no save was requested for `target`.
+    #[cfg(test)]
+    pub fn finish_save_of(&mut self, target: SaveTarget, result: SaveResult) {
+        let requested = self.saves_requested.as_mut().expect("saves are recorded");
+        let index = requested
+            .iter()
+            .position(|(requested, _)| *requested == target)
+            .expect("a save was requested for the target");
+        requested.remove(index);
+        drop(self.saves.0.send(SaveOutcome { target, result }));
+        self.poll_saves();
+    }
+
     /// Opens a dialog that saves the four files of a sweep, `files`, together, for the panel `target`.
     ///
     /// Results can be polled via [`Self::poll_saves`].
@@ -70,7 +88,7 @@ impl AppState {
         match target {
             SaveTarget::Export => self.export_status = Some(text),
             SaveTarget::SweepSpec | SaveTarget::SweepResults(_) => self.sweep.status = Some(text),
-            SaveTarget::Model | SaveTarget::Counterpart => {
+            SaveTarget::Model(_) | SaveTarget::Counterpart(_) => {
                 self.editor.file_status = Some(crate::ui::editor::FileStatus { text, failed });
             }
         }
@@ -90,7 +108,7 @@ impl AppState {
                 SaveResult::Saved(name) | SaveResult::Downloaded(name) => Some(name.clone()),
                 SaveResult::DownloadsStarted | SaveResult::Failed(_) | SaveResult::Canceled => None,
             };
-            if matches!(target, SaveTarget::Model | SaveTarget::Counterpart) {
+            if matches!(target, SaveTarget::Model(_) | SaveTarget::Counterpart(_)) {
                 self.editor.save_finished(target, saved.clone());
             }
             let failed = matches!(result, SaveResult::Failed(_));
@@ -102,7 +120,7 @@ impl AppState {
                 SaveResult::Canceled => "Save canceled".to_owned(),
             };
             self.set_save_status(target, text, failed);
-            if matches!(target, SaveTarget::Model | SaveTarget::Counterpart) {
+            if matches!(target, SaveTarget::Model(_) | SaveTarget::Counterpart(_)) {
                 crate::ui::editor::continue_replacement(self, target, saved.is_some());
             }
         }

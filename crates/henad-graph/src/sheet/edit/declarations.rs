@@ -6,6 +6,7 @@ use super::{
     Draft, IdSpace, STATE_COLORS, SheetEditError, SheetItem, clean_name, mint_id, missing, refuse_infinite,
     refuse_taken,
 };
+use crate::check::RUNS_CSV_COLUMNS;
 use crate::ids::is_id;
 use crate::sheet::document::{
     BlockedState, ButtonStep, ButtonStepRule, CardRuns, ColorRule, ColorRuleKind, Marks, MeasureRule, ParameterType,
@@ -168,7 +169,11 @@ impl Draft {
             self.document.parameters.iter().map(|parameter| parameter.name.as_str()),
             "parameter",
         )?;
-        let id = self.mint_item(&name)?;
+        // A parameter's id names its column in sweep results, and the fixed columns beside it count as taken.
+        let taken = self.item_ids();
+        let id = mint_id(&name, IdSpace::Item, |id| {
+            taken.contains(id) || RUNS_CSV_COLUMNS.contains(&id)
+        })?;
         let mut parameter = SheetParameter::new(id.clone(), name, parameter_type, min, max, default);
         parameter.unit = unit.filter(|unit| !unit.trim().is_empty());
         self.document.parameters.push(parameter);
@@ -506,7 +511,7 @@ impl Draft {
             SheetItem::Card(_) => IdSpace::Card,
             SheetItem::AgentKind(_) => IdSpace::Thing,
         };
-        if space.is_reserved(id) {
+        if space.is_reserved(id) || matches!(item, SheetItem::Parameter(_)) && RUNS_CSV_COLUMNS.contains(&id) {
             return Err(SheetEditError::Reserved(id.to_owned()));
         }
         self.require_item(item)?;

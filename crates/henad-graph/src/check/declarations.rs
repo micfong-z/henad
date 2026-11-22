@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use henad_core::params::ParamKind;
 
-use super::{Checker, RESERVED_STAT_LABELS};
+use super::{Checker, RESERVED_STAT_LABELS, RUNS_CSV_COLUMNS};
 use crate::document::{Domain, LaneRole, PassStage, Topology, World};
 use crate::ids::{NodeId, is_id, is_model_id, is_port_segment};
 use crate::limits::{
@@ -490,6 +490,12 @@ fn check_params(checker: &mut Checker<'_>) {
         check_id(checker, "parameter", id, &mut seen, place.clone());
         if RESERVED_PARAM_IDS.contains(&id) || id.starts_with("henad_") {
             checker.error(format!("the parameter id '{id}' is reserved"), place.clone());
+        }
+        if RUNS_CSV_COLUMNS.contains(&id) {
+            checker.error(
+                format!("the parameter id '{id}' is reserved for the '{id}' column of sweep results"),
+                place.clone(),
+            );
         }
         if document.lane(id).is_some() || document.field(id).is_some() {
             checker.error(

@@ -4,7 +4,9 @@
 in the Editor tab as its Sheet and Card panes, and holds the New model dialog. The code view and the
 expert mode are in `agents/henad-app-editor.md`, and the canvas in
 `agents/henad-app-graph-editor.md`. The Sheet pane edits every section, those of a world of agents
-included, and the Card pane writes the lines of a cells card (`agents/henad-app-card.md`).
+included, and the Card pane writes the lines of a cells card (`agents/henad-app-card.md`). This file
+holds the `SheetEditor`, its edits, the Sheet pane's sections and forms, the toolbar and undo, and
+`agents/henad-app-sheet-open.md` opening a sheet, its preview and the New model dialog.
 
 `mod.rs` holds `SheetEditor`: a `SheetBuilder` over the `SheetDocument` (so new draws take fresh
 keys), its canonical text (`text`, which Save model writes and Apply reads through
@@ -122,7 +124,8 @@ kind runs `SetPropertyType` and starts afresh the same way, and otherwise remove
 `Delete`, kept ones `Rename` and `Recolor`, then new rows `AddState` (`change_states`). A rename
 onto a name another state still holds, as in a swap or a chain, first gives every renamed state a
 `spare_name` such as "alive 1" (`the_property_form_swaps_the_names_of_two_states`). "Delete
-property" (edit only) runs `Delete`. The form closes once its edit is kept.
+property" (edit only) runs `Delete`, through the delete dialog when the delete empties a formula the
+editor cannot write again (`agents/henad-app-sheet-pane.md`). The form closes once its edit is kept.
 
 The other sections. Purpose is a `commit_area` named "Purpose" with `PURPOSE_PLACEHOLDER`,
 committing `SetPurpose` on focus loss. Parameters: a table (`PARAMETER_COLUMNS`) of the name,
@@ -138,7 +141,8 @@ or released slider, an arrow key on the focused slider or an AccessKit request c
 untouched slider returns the stored default to the value field, so boids' Protected range keeps and
 shows 8 in 0.5 to 50, after Tab moves the focus onto it and after an Undo with the focus on it,
 `a_slider_that_takes_the_focus_keeps_a_default_off_its_steps`), the value field named
-`value_field_name` (a typed value outside the range widens it) and × named `delete_parameter_name`,
+`value_field_name` (a typed value outside the range widens it) and × named `delete_parameter_name`
+(through the delete dialog, as Delete property),
 Min and Max fields (`with_range_end`: Min above Max
 swaps, equal ends make Max one more, the value moves into the range) and Unit as a
 `suggestion_field` named `parameter_unit_name` with `UNIT_FIELD_PLACEHOLDER` and `unit_suggestions`
@@ -201,7 +205,8 @@ to an `EditorRequest`. Undo (`SheetEditor::history`, the Editor's `History` of c
 restart rule with `starts_only` when the two documents differ only in starts, the name and the
 purpose, `without_starts_or_words`). `sheet_ui` takes Cmd or Ctrl+Z, Shift+Cmd+Z and Cmd+Y
 (`editor::undo_redo_keys`, which the graph editor shares, redo read first) while `keys` (no New
-model dialog), no New parameter dialog (`dialog_open`), no modal of the app (egui memory's
+model dialog), no New parameter or delete dialog of either pane (`dialog_open`), no modal of the app
+(egui memory's
 `top_modal_layer`, from the previous frame) and no focused text field (`text_edit_focused`),
 anywhere in the Editor tab. A focused field keeps its own undo. `Pending::one` counts `SetPurpose`
 and `SetSheetName` as `starts_only`, so a name or a purpose leaves the running world alone. The
@@ -271,8 +276,9 @@ words of a world of agents) and `help_button`: a `MDI_HELP_CIRCLE_OUTLINE` butto
 under the pointer and on focus alone, named `SheetSection::help_name` or `HELP_LINES_NAME` ("Help:
 World", "Help: lines"), whose tooltip (`FocusTooltip::on_hover_or_focus_ui`, under the pointer or on
 keyboard focus) holds the text and "Example:" with the example in the weak colour, wrapping at 320
-points. A click opens nothing. The button's accessible description holds the same words. `sheet_ui` makes each pane a `Group` named
-"Sheet" or "Card" (`pane_group`), so "region" never reaches the tree.
+points. A click opens nothing. The button's accessible description holds the same words. `sheet_ui`
+makes each pane a `Group` named "Sheet" or "Card" (`pane_group`), so "region" never reaches the
+tree.
 
 **Accessible names and the words rule**. Every chip is a button named by its
 text, blanks and selects by what they want and where ("Line 2: choose the old state", "Line 2:
@@ -282,81 +288,8 @@ tab or in what a sheet puts in the world tabs (names, measures, buttons, the tic
 controls that open or create a node graph (New node graph) and the world tabs' own controls (Seed,
 Build) are exempt.
 
-The Editor opens a file by the `kind` in its header (`open_text`, through
-`model_text::read_header`): `sheet` through `ParsedSheet::parse` alone into
-`EditorPanel::load_sheet`, so a sheet with checker errors opens and shows them, `graph` through
-`GraphFile::parse` onto the canvas, and any other text in the code view. A sheet or a graph that
-does not read opens in the code view. For a sheet the reader's problem is set as
-`ApplyOutcome::Unread` ("Model file has problems. Fix them, then press Apply."), so the list under
-the code names it at once without reading as a refused Apply. `load_sheet` clears the outcome, the
-applied source and the preview, as `load_graph` does. The list under the panes (`sheet_outcome_ui`)
-shows the preview's state (`preview_ui` over a `PreviewShown`: `preview_running_text` names Play
-until `past_start`, and a preview running while the sheet has errors reads `STALE_WORLD_NOTICE`
-instead), the last Apply's outcome with any problem the check does
-not list, then every diagnostic of the report the card does not draw and every lowering problem the
-report lacks, each an error or a warning notice (`NoticeKind::of`) of the message alone. Its line
-and column point into the sheet's text, which sheet mode never shows. A waiting preview reads the
-sheet's `PREVIEW_WAITS`, which names Offload. A problem of a line the card shows sits under it on
-the card. `save_name` suggests `<sheet id>.toml` for a sheet with no file name,
-errors or not. Apply is unchanged: `ModelFile::parse(...).and_then(|file| file.entry())` installs
-the lowered graph's entry, whose source records the sheet's canonical text as its author text, and
-`edit_model` reopens an applied sheet's entry as that sheet unless the Editor applied it. A note
-edit leaves the source equal: Apply reads `Unchanged`, rebuilds nothing, and replaces the set's
-entry through `install_models` when `same_author` fails, so a sweep started next records the new
-text (`a_note_edit_does_not_reinstall_the_model`).
-
-**The preview**. A sheet's preview takes the graph editor's path (`preview.rs`,
-`henad-app-editor.md`) with one difference: `EditorModel::preview_plays` is false, so
-`load_preview` builds it paused at tick 0 with its start drawn, and Playback's Play runs it.
-Playback's `preview_line` adds `PREVIEW_WAITS_FOR_PLAY` ("Press Play to run the preview.") while a
-sheet's preview waits at tick 0. `AppState::previews_editor_sheet` holds while the preview runs and
-the loaded id is the sheet's. `load_preview` records the selection in `preview_selection`, and
-`AppState::build_replays_preview` adds that the selection is still that one. Only then does Build's
-`press_build` run `preview::rebuild_preview` instead of `reset_simulation`: the same setup at the
-same seed (the preview's seed is `None`, the model's default), so the world starts again as it
-started before, paused. Build is enabled then whatever the selected model's `build_refusal`, with
-the tooltip `BUILD_SHEET_TOOLTIP`, and Run to tick runs the preview, replaying its start for a tick
-behind (`henad-app.md`). Once the Model tab selects another model, Build builds that
-model with its usual tooltip and refusal, as behind a graph's preview. After Apply the run is the
-selected model's, and Build builds it as for any model, at the Seed field's seed. While Build
-replays the preview, `settle_outcome` drops an `Installed` outcome ("Model applied. Press Build to
-run it."), as after Apply beside another model's run past tick 0 and then Offload, which loads the
-waiting preview. The list then reads the preview's line and "Press Apply to check and install the
-model.", and Apply builds the sheet at its own size
-(`a_sheet_applied_beside_another_run_drops_the_build_line_once_its_preview_loads`).
-`AppState::runs_editor_sheet` holds for the sheet's preview or the source the Editor applied, and
-Playback's `tick_counter` then reads `henad_graph::sheet::sentence::tick_counter` ("Tick 4 (a tick
-is one step of time)", or "Tick 4 (4 days)" through `time_axis::elapsed_text` once the entry has a
-time scale). No autosave and no Facilitator panel.
-
-**The New model dialog** (`new_model.rs`). `NewModelDialog` sits in
-`EditorPanel::new_model` while open: the `StarterChoice`s (`starter_choices`: every sheet starter,
-grid and agent alike, with its file name, the model name read from it, and its
-description from `STARTER_CHOICES` by that name), the chosen index, the Name text, `name_typed` and
-`made_of`. `choose` sets the index and, until the
-author types in Name, the name to the starter's. "Untitled model" is the default name of Blank, the
-first choice. `open_new_model` opens it from the Editor header's New model, the File menu's first
-entry and the Model tab's New model. `lib.rs` calls `new_model_modal` every frame beside the other
-modals: an `egui::Modal` (`henad_new_model_modal`, a dialog of `widgets.rs` named "New model"),
-the title `NEW_MODEL`, `START_FROM` as a caption with one `widgets::choice_row` per starter (a
-radio button named by the starter, its description weak under its name, the selection fill and
-a check while chosen) in `widgets::dialog_list`, which scrolls in a short window, the world
-question indented under Blank, a Name `TextEdit` labelled by its label, Cancel and Create (blue
-700). Enter creates, as Create does, and Cancel, Escape or a click on
-the backdrop closes it. `create_model(app, file_name, name)` reads the
-starter, runs `SheetEdit::SetSheetName` when the name differs (an empty name is `UNTITLED_MODEL`,
-and a refused one keeps the starter's name with the reason as the file status), loads the sheet
-under the id `new_model_id` gives (`agents/henad-app-editor.md`) with no file name and brings the
-Editor to the front. The world question of the dialog shows only
-under Blank, and Blank is offered first. `starter_choices` puts Blank first (`file_name`
-`None`, "Untitled model" as its name), and the world question (`WORLD_QUESTION`, `CELLS_ON_A_GRID`
-or `AGENTS_IN_OPEN_SPACE` into `made_of`) shows under Blank while it is chosen. `create_blank_model`
-loads `blank_model(name)`: 100 by 100 cells that wrap, the id minted from the name (or
-`untitled_model`, and `open_blank` passes it through `new_model_id`), no property, parameter or
-card. `create_blank_agent_model` loads
-`blank_agent_model(name)`: the same world made of agents, one kind `agent` named `BLANK_AGENT_NAME`
-with 1000 agents and room for a million, a Position that starts anywhere at random (through
-`SheetBuilder`, so its start takes a key) and a Heading.
+Opening a sheet, the list under the panes, Apply of a sheet, its preview and the New model
+dialog are in `agents/henad-app-sheet-open.md`.
 
 `src/tests/sheet_editor.rs` holds
 `every_sheet_starter_opens_as_a_sheet_previews_at_tick_zero_plays_and_applies` (each starter waits
@@ -364,8 +297,8 @@ at tick 0 in the preview run of its world, `PreviewRun::Grid` or `PreviewRun::Ag
 it, applies and builds), `the_new_model_dialog_offers_every_starter_with_its_description`,
 `the_card_pane_reads_the_life_lines_as_their_sentences` (and the vote's "otherwise"),
 `applying_the_life_sheet_keeps_the_example_model_of_that_name` (Apply installs, selects and loads
-the sheet as `sheet_game_of_life`, and the example `game_of_life` keeps its compiled source beside the
-sheet and builds it),
+the sheet as `sheet_game_of_life`, and the example `game_of_life` keeps its compiled source beside
+the sheet and builds it),
 `save_writes_the_canonical_text_and_the_saved_file_reopens_to_the_same_document` (a hand-edited
 sheet saves canonical, and `save_name` without a file),
 `a_sheet_with_a_skipped_line_opens_and_previews` (Game of Life with line 2's old state blank),
@@ -387,13 +320,13 @@ list groups, chips, selects and help buttons),
 `a_help_shows_its_tooltip_while_the_keyboard_holds_its_focus`,
 `the_sheet_editor_never_shows_a_forbidden_word` (every starter, every help's words, a skipped and a
 red line, the New model dialog, the control that opens a node graph exempt),
-`every_accessible_name_holds_its_visible_words` (each control of a line, note button and add row
-in the tree and holding its words through `assert_controls_hold_their_words`, selects aside), `the_world_tabs_show_no_forbidden_word_from_a_sheet`, and over a
-`Harness` that draws the File menu, the Editor tab, the dialog, the unsaved changes dialog and the
-About modal with AccessKit on:
-`new_model_opens_a_dialog_and_create_opens_the_chosen_sheet` (the dialog role, the three radios in
-order, Name following the starter, a typed name kept, Create, the three lines, Cancel and Escape),
-`the_new_model_dialog_is_modal_and_headed_by_its_title`,
+`every_accessible_name_holds_its_visible_words` (each control of a line, note button and add row in
+the tree and holding its words through `assert_controls_hold_their_words`, selects aside),
+`the_world_tabs_show_no_forbidden_word_from_a_sheet`, and over a `Harness` that draws the File menu,
+the Editor tab, the dialog, the unsaved changes and replace dialogs and the About modal with
+AccessKit on: `new_model_opens_a_dialog_and_create_opens_the_chosen_sheet` (the dialog role, the
+three radios in order, Name following the starter, a typed name kept, Create, the three lines,
+Cancel and Escape), `the_new_model_dialog_is_modal_and_headed_by_its_title`,
 `enter_in_the_name_field_creates_the_model` and
 `new_node_graph_lists_the_six_graph_starters_from_the_header_and_the_file_menu` (a submenu's label
 ends with " ⏵", which the harness strips). `the_empty_editor_names_every_way_in` holds
@@ -415,50 +348,49 @@ value and random number), `editing_a_property_renames_recolors_and_changes_its_k
 `the_property_form_checks_in_the_order_of_the_page`,
 `the_new_parameter_dialog_starts_from_the_values_of_the_page` and
 `the_edited_sections_show_no_forbidden_word_in_any_state` (at least 25 states, with the
-label-in-name check), and
-`a_blank_model_builds_the_life_sheet_and_undo_walks_back_to_blank` (New model named Game of Life,
-1024 by 1024, Status with Alive picked Green, Initial density, Plot Alive, colour by Status, the
-starter's purpose, Randomise and Clear, then `align_with_starter` against `without_card_lines` of
-the starter equal in canonical text, Undo through each step to Blank and Redo back, the same walk
-with Cmd+Z and Shift+Cmd+Z, Cmd+Y, the About modal and a focused field keeping the keys),
-`aligning_a_starter_with_itself_changes_nothing_and_restores_a_changed_key` (Game of Life's cells,
-then the ants' agent and ground starts),
+label-in-name check), and `a_blank_model_builds_the_life_sheet_and_undo_walks_back_to_blank` (New
+model named Game of Life, 1024 by 1024, Status with Alive picked Green, Initial density, Plot Alive,
+colour by Status, the starter's purpose, Randomise and Clear, then `align_with_starter` against
+`without_card_lines` of the starter equal in canonical text, Undo through each step to Blank and
+Redo back, the same walk with Cmd+Z and Shift+Cmd+Z, Cmd+Y, the About modal and a focused field
+keeping the keys), `aligning_a_starter_with_itself_changes_nothing_and_restores_a_changed_key` (Game
+of Life's cells, then the ants' agent and ground starts),
 `parameters_edit_on_the_sheet_by_the_rules_of_the_page`,
 `a_parameter_edit_after_play_restarts_at_tick_zero_with_the_notice` (a purpose, its Undo and its
-Redo do not),
-`measures_count_states_average_numbers_and_follow_their_state_colour` (the average published by the
-preview), `each_layout_keeps_a_width_of_its_own_for_the_sheet_pane` (through `drag_sheet_divider`),
-`every_plot_box_of_three_states_stays_in_the_sheet_pane_and_takes_a_click` (a 450-point Editor), `a_number_property_shades_the_cells_in_a_hue_between_two_values` (equal ends refused in
-the field, reversed ends kept),
-`buttons_start_again_or_run_once_and_check_their_names`, `the_model_name_renames_from_the_toolbar`,
+Redo do not), `measures_count_states_average_numbers_and_follow_their_state_colour` (the average
+published by the preview), `each_layout_keeps_a_width_of_its_own_for_the_sheet_pane` (through
+`drag_sheet_divider`), `every_plot_box_of_three_states_stays_in_the_sheet_pane_and_takes_a_click` (a
+450-point Editor), `a_number_property_shades_the_cells_in_a_hue_between_two_values` (equal ends
+refused in the field, reversed ends kept), `buttons_start_again_or_run_once_and_check_their_names`,
+`the_model_name_renames_from_the_toolbar`,
 `the_charts_tab_says_how_to_plot_while_the_sheet_has_no_measure`,
 `the_remaining_sections_show_no_forbidden_word_in_any_state` (at least 25 states) and
-`keep_on_the_parameters_tab_is_one_step_of_undo`. `Harness::screen` (1600 by 1000, or
-`TALL_SCREEN`, 1800 by 2600, through `Harness::tall` for a long sheet), `headless_app` (the example
-models on a device that runs compute shaders), `align_with_starter` (keys of drawing lines and starts, a parameter's `step` and
-`means`, a state's or measure's colour the palette names alike, no id) and `without_card_lines`
-(card lines, the cards that run each tick and `next_line`) sit in `src/tests/support.rs`. Keep
-them. The alignment covers the properties of every thing and copies no parameter's type. The
-random walk's rebuild, which has no card lines, sets Steps per tick to Number in the expected
-document. The helpers that drive the Sheet and Card panes through the `Harness` (clicks by exact
-name, fields, selects, pickers, the property and New parameter forms, `Seen` and the label-in-name
-checks) sit in `src/tests/panes.rs` for every sheet and card test file, with the sections two
-rebuilds from Blank share: `build_life_sections` (the Life sheet but its lines and Clear, returning
-the text after each step for the undo walk), `build_sir_sections` with `start_infected_by_chance`
-and `add_new_outbreak` for the chance and rates SIR, and `new_blank_agents`, `agent_sheet` and
-`add_average_measure` for the random walk.
+`keep_on_the_parameters_tab_is_one_step_of_undo`. `Harness::screen` (1600 by 1000, or `TALL_SCREEN`,
+1800 by 2600, through `Harness::tall` for a long sheet), `headless_app` (the example models on a
+device that runs compute shaders), `align_with_starter` (keys of drawing lines and starts, a
+parameter's `step` and `means`, a state's or measure's colour the palette names alike, no id) and
+`without_card_lines` (card lines, the cards that run each tick and `next_line`) sit in
+`src/tests/support.rs`. Keep them. The alignment covers the properties of every thing and copies no
+parameter's type. The random walk's rebuild, which has no card lines, sets Steps per tick to Number
+in the expected document. The helpers that drive the Sheet and Card panes through the `Harness`
+(clicks by exact name, fields, selects, pickers, the property and New parameter forms, `Seen` and
+the label-in-name checks) sit in `src/tests/panes.rs` for every sheet and card test file, with the
+sections two rebuilds from Blank share: `build_life_sections` (the Life sheet but its lines and
+Clear, returning the text after each step for the undo walk), `build_sir_sections` with
+`start_infected_by_chance` and `add_new_outbreak` for the chance and rates SIR, and
+`new_blank_agents`, `agent_sheet` and `add_average_measure` for the random walk.
 `src/tests/sheet_agents.rs` holds
 `a_blank_agent_model_builds_the_random_walk_sheet_by_accessible_names` (New model, Agents in open
 space, 1000 by 1000, Walker, 10000, Colour agents by Heading, the purpose, two parameters, Average
 of Position, then equal to `without_card_lines` of the starter after `align_with_starter`),
 `the_agents_take_a_name_and_an_integer_up_to_the_most_the_world_holds`,
-`agents_take_states_numbers_and_yes_or_no_and_no_start_on_an_unpainted_ground` (the kinds
-offered, starts, no on-ground start on a ground made on the pane, a count of agents, the buttons),
+`agents_take_states_numbers_and_yes_or_no_and_no_start_on_an_unpainted_ground` (the kinds offered,
+starts, no on-ground start on a ground made on the pane, a count of agents, the buttons),
 `a_ground_property_adds_up_its_marks_fades_and_blocks_agents` (only States and Number for the
 ground, `marks = "add_up"` lowering to `combine = "sum"`),
 `events_are_added_renamed_and_deleted_on_the_sheet`,
-`the_ant_starter_shows_its_ground_and_starts_ants_on_single_painted_cells` (the painted entry,
-only Food and Nest offered, the Food start lowering) and
+`the_ant_starter_shows_its_ground_and_starts_ants_on_single_painted_cells` (the painted entry, only
+Food and Nest offered, the Food start lowering) and
 `the_agent_sections_show_no_forbidden_word_in_any_state` (at least 25 states, the agent starters,
-and the label-in-name check). `the_sheet_editor_never_shows_a_forbidden_word` reads the help of
-each section `SheetSection::shown` lists for the starter's world from its button's description.
+and the label-in-name check). `the_sheet_editor_never_shows_a_forbidden_word` reads the help of each
+section `SheetSection::shown` lists for the starter's world from its button's description.

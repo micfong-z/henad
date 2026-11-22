@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::lines::{Context, Draw, ValueType, line_number, value_draws, value_rates};
 use super::{Checker, Place, Thing};
-use crate::check::RESERVED_STAT_LABELS;
+use crate::check::{RESERVED_STAT_LABELS, RUNS_CSV_COLUMNS};
 use crate::ids::is_id;
 use crate::limits::{MAX_AGENTS, MAX_GRID_SIDE, MAX_WORLD_SIDE};
 use crate::sheet::SHEET_VERSION;
@@ -15,7 +15,9 @@ use crate::sheet::document::{
 };
 use crate::sheet::format_number;
 use crate::sheet::limits::MAX_SHEET_ID_BYTES;
-use crate::sheet::sentence::{ANY_STATE_ID, Blank, ONE_AGENT_KIND, SHEET_EMPTY, measure_name_reserved};
+use crate::sheet::sentence::{
+    ANY_STATE_ID, Blank, ONE_AGENT_KIND, SHEET_EMPTY, measure_name_reserved, parameter_id_reserved,
+};
 
 /// Ids a sheet item cannot take: the words of a formula, the parts of a result and the chips of mine.
 pub(crate) const RESERVED_IDS: [&str; 9] = [
@@ -430,10 +432,13 @@ fn check_state_field(checker: &mut Checker<'_>, property: &str, state: Option<&s
     }
 }
 
-/// Checks every parameter's default against its range.
+/// Checks every parameter's id against the columns of sweep results, and its default against its range.
 fn check_parameters(checker: &mut Checker<'_>) {
     let document = checker.document;
     for (index, parameter) in document.parameters.iter().enumerate() {
+        if RUNS_CSV_COLUMNS.contains(&parameter.id.as_str()) {
+            checker.error(parameter_id_reserved(&parameter.id), &Place::Parameter(index));
+        }
         let (min, max, default) = (parameter.min, parameter.max, parameter.default);
         if !(min <= default && default <= max) {
             let number = |value: f64| format_number(value).unwrap_or_else(|| value.to_string());

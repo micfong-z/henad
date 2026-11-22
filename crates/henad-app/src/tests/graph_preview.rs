@@ -624,7 +624,7 @@ fn the_submission_budget_refuses_apply_at_full_size_and_lets_the_preview_run() {
 
     apply(&mut app);
     match &app.editor.outcome {
-        Some(ApplyOutcome::Faulted(problems)) => {
+        Some(ApplyOutcome::BuildRefused(problems)) => {
             assert!(problems[0].message.contains("one submission runs"), "{problems:?}");
         }
         other => panic!("the model was not refused: {other:?}"),

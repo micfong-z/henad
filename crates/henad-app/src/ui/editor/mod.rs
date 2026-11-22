@@ -38,8 +38,8 @@ use henad_graph::model_text::read_header;
 use henad_graph::sheet::document::SheetDocument;
 use henad_graph::sheet::edit::{IdSpace, mint_id};
 use henad_graph::sheet::sentence::{
-    CANCEL, DISCARD_CHANGES, PREVIEW_WAITS as SHEET_PREVIEW_WAITS, SAVE_MODEL, SHEET_EMPTY, STALE_WORLD_NOTICE,
-    UNSAVED_HEADING, WORLD_EMPTY, unsaved_changes,
+    CANCEL, DISCARD_CHANGES, PREVIEW_WAITS as SHEET_PREVIEW_WAITS, REPLACE, REPLACE_APPLIED_HEADING, SAVE_MODEL,
+    SHEET_EMPTY, STALE_WORLD_NOTICE, UNSAVED_HEADING, WORLD_EMPTY, replace_applied, unsaved_changes,
 };
 use henad_graph::sheet::{KIND_SHEET, ParsedSheet, SHEET_CODE_FORMAT};
 use henad_graph::starters::{Starter, agent_starters, starters};
@@ -249,10 +249,16 @@ pub struct EditorPanel {
     applied_mark: Option<u64>,
     /// Edit mark of the model when it was opened, made or last saved. Apply leaves it alone.
     saved_mark: u64,
-    /// Save model of the model shown, from its start until it reports.
-    saving: Option<PendingSave>,
+    /// Saves of the model shown, each from its start until it reports.
+    saving: Vec<PendingSave>,
+    /// Number of saves started, of the model shown and of the model held beside it. The next save takes the number
+    /// after it.
+    saves_started: u64,
     /// Action that replaces the models, waiting on the unsaved changes dialog, `None` while the dialog is closed.
     pub ask: Option<Replacement>,
+    /// Model that Apply replaces, a model applied from another sheet under the same id, while the dialog that asks
+    /// before Apply replaces it is open, `None` while the dialog is closed.
+    pub replace_question: Option<ReplaceQuestion>,
     /// Action that replaces the models, waiting for the saves that the dialog's Save model started.
     after_save: Option<AfterSave>,
     /// Edit marks of the model shown and of the model held beside it when the Open model dialog started, `None` while
@@ -332,13 +338,23 @@ pub type BannerKey = (u64, u64, Option<u64>);
 /// Edit marks of the model the Editor shows and of the model it holds beside it, `None` for no model beside it.
 type EditMarks = (u64, Option<u64>);
 
+/// Model applied from another sheet that Apply would replace, which the replace dialog names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplaceQuestion {
+    /// Name of the applied model.
+    pub name: String,
+    /// Id the applied model and the Editor's model share.
+    pub id: String,
+}
+
 /// A save of a model the Editor holds, from its start until it reports.
 ///
 /// The save stays with its model when the model and the counterpart change places, and goes with a model that is
 /// replaced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingSave {
-    /// Target the save reports to: the model shown or the model held beside it, when the save started.
+    /// Target the save reports to, with the number of the save: the model shown or the model held beside it, when the
+    /// save started.
     pub target: SaveTarget,
     /// Edit mark of the model when the save started.
     pub mark: u64,
@@ -360,9 +376,11 @@ pub enum ApplyOutcome {
     Refused(Vec<CodeDiagnostic>),
     /// The opened file does not read as the kind its header names, with every problem found. Nothing was applied.
     Unread(Vec<CodeDiagnostic>),
-    /// The model was installed, and the device or the engine refused it when it was built, or Build or Rebuild refuses
-    /// it, as for a size the device cannot hold at the values of the next build or a Seed field that does not parse.
+    /// The model was installed, and the device or the engine refused it when it was built.
     Faulted(Vec<CodeDiagnostic>),
+    /// The model was installed and not built, since Build or Rebuild is disabled for it, with the reason they give, as
+    /// for a size the device cannot hold at the values of the next build or a Seed field that does not parse.
+    BuildRefused(Vec<CodeDiagnostic>),
 }
 
 impl ApplyOutcome {
@@ -375,14 +393,18 @@ impl ApplyOutcome {
             Self::Unchanged => ("Model unchanged.", false),
             Self::Refused(_) => ("Model not applied. Fix the problems below.", true),
             Self::Unread(_) => ("Model file has problems. Fix them, then press Apply.", true),
-            Self::Faulted(_) => ("Model build failed. Fix the problem below.", true),
+            // A refused build reads as a failed one, and names its reason below.
+            Self::Faulted(_) | Self::BuildRefused(_) => ("Model build failed. Fix the problem below.", true),
         }
     }
 
     /// Problems the outcome lists, empty for an outcome without any.
     pub fn diagnostics(&self) -> &[CodeDiagnostic] {
         match self {
-            Self::Refused(diagnostics) | Self::Unread(diagnostics) | Self::Faulted(diagnostics) => diagnostics,
+            Self::Refused(diagnostics)
+            | Self::Unread(diagnostics)
+            | Self::Faulted(diagnostics)
+            | Self::BuildRefused(diagnostics) => diagnostics,
             Self::Applied | Self::AwaitingRebuild | Self::Installed | Self::Unchanged => &[],
         }
     }
@@ -470,18 +492,24 @@ impl EditorPanel {
 
     /// Replaces the Editor's model with `model`, from the file `file_name` or from no file, as saved, and clears what
     /// belonged to the model it replaces.
+    ///
+    /// A replacement that waited for the saves of the model it replaces goes with it. Otherwise the report of such a
+    /// save would run that replacement over the new model.
     fn replace(&mut self, model: EditorModel, file_name: Option<String>) {
         self.clear_expert();
         self.model = model;
         self.file_name = file_name;
         self.clear_outcome();
         self.saved_mark = self.model.edit_mark();
-        self.saving = None;
+        self.saving.clear();
+        self.after_save = None;
     }
 
-    /// Clears the outcome of the last Apply, the line to scroll to and the state of the preview.
+    /// Clears the outcome of the last Apply, the question asked before it replaced a model, the line to scroll to and
+    /// the state of the preview.
     fn clear_outcome(&mut self) {
         self.outcome = None;
+        self.replace_question = None;
         self.applied = None;
         self.applied_mark = None;
         self.scroll_to = None;
@@ -531,80 +559,79 @@ impl EditorPanel {
 
     /// Returns the names of the models that hold unsaved edits: the model shown, then the model held beside it.
     pub fn unsaved_names(&self) -> Vec<String> {
-        self.names_of(&self.unsaved_targets(None))
+        self.names_of(&self.unsaved_models(None))
     }
 
-    /// Returns the saves of the models with unsaved edits that `replacement` drops, or that any replacement drops for
-    /// `None`: the model shown, then the model held beside it.
+    /// Returns the models with unsaved edits that `replacement` drops, or that any replacement drops for `None`: the
+    /// model shown, then the model held beside it.
     ///
     /// A conversion keeps the sheet shown, and drops the model held beside it alone.
-    fn unsaved_targets(&self, replacement: Option<&Replacement>) -> Vec<SaveTarget> {
-        let mut targets = Vec::new();
+    fn unsaved_models(&self, replacement: Option<&Replacement>) -> Vec<HeldModel> {
+        let mut models = Vec::new();
         if self.is_unsaved() && !matches!(replacement, Some(Replacement::Convert)) {
-            targets.push(SaveTarget::Model);
+            models.push(HeldModel::Shown);
         }
         if self
             .counterpart
             .as_ref()
             .is_some_and(|counterpart| counterpart.is_unsaved())
         {
-            targets.push(SaveTarget::Counterpart);
+            models.push(HeldModel::Beside);
         }
-        targets
+        models
     }
 
-    /// Returns the names of the models that `targets` save, in their order.
-    fn names_of(&self, targets: &[SaveTarget]) -> Vec<String> {
-        targets
+    /// Returns the names of `models`, in their order.
+    fn names_of(&self, models: &[HeldModel]) -> Vec<String> {
+        models
             .iter()
-            .filter_map(|target| match target {
-                SaveTarget::Model => Some(model_name(&self.model, self.file_name.as_deref())),
-                SaveTarget::Counterpart => self
+            .filter_map(|held| match held {
+                HeldModel::Shown => Some(model_name(&self.model, self.file_name.as_deref())),
+                HeldModel::Beside => self
                     .counterpart
                     .as_ref()
                     .map(|counterpart| model_name(&counterpart.model, counterpart.file_name.as_deref())),
-                SaveTarget::Export | SaveTarget::SweepSpec | SaveTarget::SweepResults(_) => None,
             })
             .collect()
     }
 
-    /// Takes the outcome of a save started for `target`, with the file name it saved under or `None` for a save that
-    /// saved nothing.
+    /// Returns the number of the next save, one past the number of the last save started.
+    fn next_save(&mut self) -> u64 {
+        self.saves_started += 1;
+        self.saves_started
+    }
+
+    /// Takes the outcome of the save `target`, with the file name it saved under or `None` for a save that saved
+    /// nothing.
     ///
     /// The model the save started for, shown or held beside, takes the file name and reads as saved at the edit mark it
-    /// had when the save started. A save of a model the Editor no longer holds names no model.
-    ///
-    /// Note that two saves pending under one target, as of a model and of the model that replaced it, are told apart
-    /// by nothing. The one that reports first names the model the Editor holds.
+    /// had when the save started. A save of a model the Editor no longer holds names no model. Each save carries its
+    /// own number, so two saves pending under one target, as of a model and of the model that replaced it, or two
+    /// saves of one model, each name and mark the model it saved, in the order they report.
     pub fn save_finished(&mut self, target: SaveTarget, saved: Option<String>) {
-        let started = |saving: Option<PendingSave>| saving.is_some_and(|save| save.target == target);
-        let (file_name, file_path, saved_mark, saving) = if started(self.saving) {
-            (
-                &mut self.file_name,
-                &mut self.file_path,
-                &mut self.saved_mark,
-                &mut self.saving,
-            )
-        } else if let Some(counterpart) = self
-            .counterpart
-            .as_mut()
-            .filter(|counterpart| started(counterpart.saving))
+        let take = |saving: &mut Vec<PendingSave>| {
+            let index = saving.iter().position(|save| save.target == target)?;
+            Some(saving.remove(index))
+        };
+        let (file_name, file_path, saved_mark, save) = if let Some(save) = take(&mut self.saving) {
+            (&mut self.file_name, &mut self.file_path, &mut self.saved_mark, save)
+        } else if let Some(counterpart) = self.counterpart.as_mut()
+            && let Some(save) = take(&mut counterpart.saving)
         {
             (
                 &mut counterpart.file_name,
                 &mut counterpart.file_path,
                 &mut counterpart.saved_mark,
-                &mut counterpart.saving,
+                save,
             )
         } else {
             return;
         };
-        let mark = saving.take().map_or(*saved_mark, |save| save.mark);
         if let Some(name) = saved {
             *file_name = Some(name);
             // The file was saved where the dialog chose, which can be another folder.
             *file_path = None;
-            *saved_mark = mark;
+            *saved_mark = save.mark;
         }
     }
 
@@ -616,12 +643,18 @@ impl EditorPanel {
     }
 
     /// Brings an outcome that waited up to date. `loaded` is the source of the loaded model, `next_build` the source of
-    /// the model Playback's Build builds now, and `rebuild_pending` whether the Rebuild model dialog is open.
+    /// the model Playback's Build builds now, `rebuild_pending` whether the Rebuild model dialog is open, and `refusal`
+    /// the reason Rebuild is disabled while the dialog is open, or else the reason Build is disabled, `None` while the
+    /// button is enabled.
     ///
-    /// An outcome that waited for Rebuild or Build, or that named the reason they were disabled, reads as applied once
-    /// the loaded model runs the applied code, from the start of its build. A fault of a build of the applied code
-    /// leaves nothing loaded. One that waited for Rebuild waits for Build once the dialog closes without a rebuild.
-    /// An outcome that read as applied waits for Build once nothing is loaded, as after Cancel or Offload.
+    /// An outcome that waited for Rebuild or Build, that named the reason they were disabled, or that reported a fault
+    /// of the build, reads as applied once the loaded model runs the applied code, from the start of its build. A
+    /// fault of a build of the applied code leaves nothing loaded. One that waited for Rebuild waits for Build once
+    /// the dialog closes without a rebuild. An outcome that read as applied waits for Build once nothing is loaded, as
+    /// after Cancel or Offload.
+    ///
+    /// An outcome that named the reason Build or Rebuild was disabled names the reason they give now, and waits for
+    /// the button once `refusal` is `None`. It is dropped once Build builds another model.
     ///
     /// An outcome that waits for Build is dropped once Build builds another model, as while it replays the preview of
     /// the Editor's sheet. `next_build` is `None` then. An outcome that reads as applied or unchanged is dropped once
@@ -631,6 +664,7 @@ impl EditorPanel {
         loaded: Option<&ModelSource>,
         next_build: Option<&ModelSource>,
         rebuild_pending: bool,
+        refusal: Option<&str>,
     ) {
         let edited = self.applied_mark.is_some_and(|mark| mark != self.model.edit_mark());
         let applied = matches!(
@@ -648,10 +682,27 @@ impl EditorPanel {
         }
         let waiting = matches!(
             self.outcome,
-            Some(ApplyOutcome::AwaitingRebuild | ApplyOutcome::Installed | ApplyOutcome::Faulted(_))
+            Some(
+                ApplyOutcome::AwaitingRebuild
+                    | ApplyOutcome::Installed
+                    | ApplyOutcome::Faulted(_)
+                    | ApplyOutcome::BuildRefused(_)
+            )
         );
+        let builds_other = next_build.is_some() && next_build != self.applied.as_ref();
         if waiting && loaded.is_some() && loaded == self.applied.as_ref() {
             self.outcome = Some(ApplyOutcome::Applied);
+        } else if let Some(ApplyOutcome::BuildRefused(problems)) = &mut self.outcome {
+            match refusal {
+                _ if builds_other && !rebuild_pending => self.outcome = None,
+                None if rebuild_pending => self.outcome = Some(ApplyOutcome::AwaitingRebuild),
+                None => self.outcome = Some(ApplyOutcome::Installed),
+                Some(reason) => {
+                    if !matches!(problems.as_slice(), [problem] if problem.message == reason) {
+                        *problems = vec![CodeDiagnostic::error(reason)];
+                    }
+                }
+            }
         } else if (self.outcome == Some(ApplyOutcome::AwaitingRebuild) && !rebuild_pending)
             || (self.outcome == Some(ApplyOutcome::Applied) && loaded.is_none())
         {
@@ -702,8 +753,19 @@ pub struct OpenedFile {
 #[derive(Debug)]
 struct AfterSave {
     replacement: Replacement,
-    /// Saves yet to report, the one that runs now first.
-    remaining: Vec<SaveTarget>,
+    /// Models whose saves are yet to report, the one whose save runs now first.
+    remaining: Vec<HeldModel>,
+    /// Save that runs now, `None` before the first starts.
+    running: Option<SaveTarget>,
+}
+
+/// Model the Editor holds: the one it shows, or the one it holds beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeldModel {
+    /// The model shown.
+    Shown,
+    /// The model held beside the one shown, its counterpart.
+    Beside,
 }
 
 /// Choice made in the unsaved changes dialog.
@@ -716,6 +778,9 @@ enum UnsavedChoice {
 
 /// Width in points of the unsaved changes dialog.
 const UNSAVED_DIALOG_WIDTH: f32 = 420.0;
+
+/// Width in points of the dialog that asks before Apply replaces a model applied from another sheet.
+const REPLACE_DIALOG_WIDTH: f32 = 420.0;
 
 /// Request from the Editor, applied once the tab has drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -928,8 +993,19 @@ fn settle_outcome(app: &mut AppState) {
         .filter(|_| !app.build_replays_preview())
         .map(|entry| entry.source().clone());
     let rebuild_pending = app.pending_rebuild.is_some();
-    app.editor
-        .settle_outcome(loaded.as_ref(), next_build.as_ref(), rebuild_pending);
+    // Only a refused build reads the reason, which can cost a probe of the device's limits. While Build replays the
+    // preview, Apply builds the applied model, and the reason stays the one Apply meets.
+    let refusal = match app.editor.outcome {
+        Some(ApplyOutcome::BuildRefused(_)) if rebuild_pending => app.rebuild_refusal(),
+        Some(ApplyOutcome::BuildRefused(_)) => app.build_refusal(),
+        _ => None,
+    };
+    app.editor.settle_outcome(
+        loaded.as_ref(),
+        next_build.as_ref(),
+        rebuild_pending,
+        refusal.as_deref(),
+    );
 }
 
 /// Returns each value the preview of the Editor's sheet tries, as the Sheet pane shows it beside its parameter. Empty
@@ -1417,7 +1493,9 @@ fn apply_request(ctx: &egui::Context, app: &mut AppState, request: EditorRequest
         EditorRequest::NewGraphModel(file_name) => replace_model(app, Replacement::NewGraphModel(file_name)),
         EditorRequest::OpenModel => replace_model(app, Replacement::OpenModel),
         EditorRequest::PickImport => app.open_file(OpenTarget::Function),
-        EditorRequest::SaveModel => save_model(app),
+        EditorRequest::SaveModel => {
+            save_model(app);
+        }
         EditorRequest::Apply => apply(app),
         EditorRequest::Convert => expert::open_convert(&mut app.editor),
         EditorRequest::ConfirmConvert => replace_model(app, Replacement::Convert),
@@ -1584,37 +1662,40 @@ pub fn open_model(app: &mut AppState) {
 }
 
 /// Opens a dialog that saves the Editor's model: a grid rule's text as written, comments included, or a graph model's
-/// or a sheet's canonical text.
-pub fn save_model(app: &mut AppState) {
+/// or a sheet's canonical text. Returns the target the save reports to, `None` for an empty model, which is not saved.
+pub fn save_model(app: &mut AppState) -> Option<SaveTarget> {
     if app.editor.model.is_empty() {
-        return;
+        return None;
     }
     let name = save_name(&app.editor);
     let bytes = app.editor.model.file_text().into_bytes();
-    app.editor.saving = Some(PendingSave {
-        target: SaveTarget::Model,
+    let target = SaveTarget::Model(app.editor.next_save());
+    app.editor.saving.push(PendingSave {
+        target,
         mark: app.editor.model.edit_mark(),
     });
-    app.save_as(SaveTarget::Model, &name, bytes);
+    app.save_as(target, &name, bytes);
+    Some(target)
 }
 
-/// Opens a dialog that saves the model the Editor holds beside the one shown, as [`save_model`] saves the one shown.
-fn save_counterpart(app: &mut AppState) {
-    let Some(counterpart) = app
+/// Opens a dialog that saves the model the Editor holds beside the one shown, as [`save_model`] saves the one shown,
+/// and returns the target the save reports to.
+fn save_counterpart(app: &mut AppState) -> Option<SaveTarget> {
+    let number = app.editor.next_save();
+    let counterpart = app
         .editor
         .counterpart
         .as_mut()
-        .filter(|counterpart| !counterpart.model.is_empty())
-    else {
-        return;
-    };
+        .filter(|counterpart| !counterpart.model.is_empty())?;
     let name = save_name_of(&counterpart.model, counterpart.file_name.as_deref());
     let bytes = counterpart.model.file_text().into_bytes();
-    counterpart.saving = Some(PendingSave {
-        target: SaveTarget::Counterpart,
+    let target = SaveTarget::Counterpart(number);
+    counterpart.saving.push(PendingSave {
+        target,
         mark: counterpart.model.edit_mark(),
     });
-    app.save_as(SaveTarget::Counterpart, &name, bytes);
+    app.save_as(target, &name, bytes);
+    Some(target)
 }
 
 /// Returns the file name a save of the Editor's text suggests: the name it was opened or saved under, then the model's
@@ -1650,7 +1731,7 @@ fn model_name(model: &EditorModel, file_name: Option<&str>) -> String {
 /// Runs `replacement` at once while no model it drops has unsaved edits, and otherwise opens the unsaved changes
 /// dialog, which runs it once the edits are saved or discarded.
 pub fn replace_model(app: &mut AppState, replacement: Replacement) {
-    if app.editor.unsaved_targets(Some(&replacement)).is_empty() {
+    if app.editor.unsaved_models(Some(&replacement)).is_empty() {
         run_replacement(app, replacement);
     } else {
         app.editor.ask = Some(replacement);
@@ -1672,26 +1753,27 @@ fn run_replacement(app: &mut AppState, replacement: Replacement) {
     }
 }
 
-/// Starts the save of the model shown, for [`SaveTarget::Model`], or of the model held beside it.
-fn save_target(app: &mut AppState, target: SaveTarget) {
-    if target == SaveTarget::Counterpart {
-        save_counterpart(app);
-    } else {
-        save_model(app);
+/// Starts the save of `held`, the model shown or the model held beside it, and returns the target the save reports
+/// to, `None` for an empty model, which is not saved.
+fn save_held(app: &mut AppState, held: HeldModel) -> Option<SaveTarget> {
+    match held {
+        HeldModel::Shown => save_model(app),
+        HeldModel::Beside => save_counterpart(app),
     }
 }
 
-/// Carries on with the replacement waiting for the saves the unsaved changes dialog started, once the save for
-/// `target` reports whether it `saved`.
+/// Carries on with the replacement waiting for the saves the unsaved changes dialog started, once the save `target`
+/// reports whether it `saved`.
 ///
 /// The next save starts, or the replacement runs once each model is saved. A save that saved nothing, as a canceled
 /// dialog, drops the replacement, and the models stay. A model edited after its save started asks again, as
-/// [`replace_model`] does.
+/// [`replace_model`] does. The report of any other save, such as a second Save model pressed while the dialog is
+/// open, carries the replacement no further.
 pub fn continue_replacement(app: &mut AppState, target: SaveTarget, saved: bool) {
     let Some(after) = app.editor.after_save.as_mut() else {
         return;
     };
-    if after.remaining.first() != Some(&target) {
+    if after.running != Some(target) {
         return;
     }
     if !saved {
@@ -1699,13 +1781,33 @@ pub fn continue_replacement(app: &mut AppState, target: SaveTarget, saved: bool)
         return;
     }
     after.remaining.remove(0);
-    match after.remaining.first().copied() {
-        Some(next) => save_target(app, next),
-        None => {
+    start_next_save(app);
+}
+
+/// Starts the save of the next model the waiting replacement saves, or runs the replacement once each model is saved.
+/// A model that holds nothing to save is passed over.
+fn start_next_save(app: &mut AppState) {
+    while let Some(next) = app
+        .editor
+        .after_save
+        .as_ref()
+        .map(|after| after.remaining.first().copied())
+    {
+        let Some(held) = next else {
             if let Some(after) = app.editor.after_save.take() {
                 replace_model(app, after.replacement);
             }
+            return;
+        };
+        let running = save_held(app, held);
+        let Some(after) = app.editor.after_save.as_mut() else {
+            return;
+        };
+        if running.is_some() {
+            after.running = running;
+            return;
         }
+        after.remaining.remove(0);
     }
 }
 
@@ -1719,8 +1821,8 @@ pub fn unsaved_modal(ctx: &egui::Context, app: &mut AppState) {
     let Some(asked) = &app.editor.ask else {
         return;
     };
-    let targets = app.editor.unsaved_targets(Some(asked));
-    let names = app.editor.names_of(&targets);
+    let models = app.editor.unsaved_models(Some(asked));
+    let names = app.editor.names_of(&models);
     if names.is_empty() {
         // The edits went, as after Undo back to the saved text, and nothing is left to lose.
         if let Some(replacement) = app.editor.ask.take() {
@@ -1759,13 +1861,48 @@ pub fn unsaved_modal(ctx: &egui::Context, app: &mut AppState) {
         UnsavedChoice::Cancel => {}
         UnsavedChoice::Discard => run_replacement(app, replacement),
         UnsavedChoice::Save => {
-            let remaining = targets;
-            let first = remaining.first().copied();
-            app.editor.after_save = Some(AfterSave { replacement, remaining });
-            if let Some(first) = first {
-                save_target(app, first);
-            }
+            app.editor.after_save = Some(AfterSave {
+                replacement,
+                remaining: models,
+                running: None,
+            });
+            start_next_save(app);
         }
+    }
+}
+
+/// Draws the dialog that asks before Apply replaces a model applied from another sheet under the same id, while
+/// [`EditorPanel::replace_question`] holds the model: its title, the question that names the model and the id, then
+/// Cancel and Replace.
+///
+/// Replace applies the Editor's model in place of the applied model, and Enter presses it. Cancel, Escape and a click
+/// outside close the dialog and leave the applied model as it is.
+pub fn replace_question_modal(ctx: &egui::Context, app: &mut AppState) {
+    let Some(question) = &app.editor.replace_question else {
+        return;
+    };
+    let sentence = replace_applied(&question.name, &question.id);
+    let mut pressed = None;
+    let modal = Modal::new(egui::Id::new("henad_replace_applied_modal")).frame(sheet::widgets::dialog_frame(ctx));
+    let response = modal.show(ctx, |ui| {
+        sheet::widgets::dialog_title(
+            ui,
+            REPLACE_APPLIED_HEADING,
+            REPLACE_APPLIED_HEADING,
+            REPLACE_DIALOG_WIDTH,
+        );
+        ui.label(&sentence);
+        let buttons = [
+            DialogButton::new(CANCEL, DialogButtonKind::Plain),
+            DialogButton::new(REPLACE, DialogButtonKind::Destructive),
+        ];
+        pressed = sheet::widgets::dialog_buttons(ui, &buttons);
+    });
+    match pressed {
+        Some(1) => apply_replacing(app),
+        Some(_) => app.editor.replace_question = None,
+        None if response.should_close() => app.editor.replace_question = None,
+        None => {}
     }
 }
 
@@ -1862,8 +1999,10 @@ pub fn receive_import(app: &mut AppState, result: OpenResult) {
 
 /// Reads the Editor's model file, compiles its model, and installs and runs the model.
 ///
-/// A text that is refused leaves the set and the running model alone, and the Editor lists the problems. Otherwise
-/// the model replaces the set's entry with its id, or joins the set, and becomes the selection:
+/// A text that is refused leaves the set and the running model alone, and the Editor lists the problems. A model of an
+/// id that holds a model applied from another sheet, a sheet of another name that the Editor did not apply last, waits
+/// on the dialog that asks before it replaces that model ([`replace_question_modal`]). Otherwise the model replaces the
+/// set's entry with its id, or joins the set, and becomes the selection:
 ///
 /// - a run of the model past tick 0 keeps going and waits on the Rebuild model dialog, as
 ///   [`AppState::install_models`] leaves it, and a run of the model at tick 0 is rebuilt at once. The dialog opens
@@ -1874,23 +2013,77 @@ pub fn receive_import(app: &mut AppState, result: OpenResult) {
 ///   the reason, such as the sizes the device lacks or a Seed field that holds no seed.
 /// - a run of another model past tick 0 keeps going, and the model waits for Build.
 ///
-/// A model that waits for a Rebuild or a Build that is disabled reads as [`ApplyOutcome::Faulted`] with the reason the
-/// button gives.
+/// A model that waits for a Rebuild or a Build that is disabled reads as [`ApplyOutcome::BuildRefused`] with the reason
+/// the button gives, and as waiting for the button once the reason is gone.
 ///
 /// A build runs on the app's build thread on native, and the outcome reads as applied from its start. A fault of the
 /// build that the Editor claims replaces the outcome when the build returns it.
 pub fn apply(app: &mut AppState) {
-    if app.gpu_ctx.is_none() {
-        app.editor.outcome = Some(ApplyOutcome::Refused(vec![CodeDiagnostic::error(NO_COMPUTE)]));
+    let Some(entry) = checked_entry(app) else {
+        return;
+    };
+    if let Some(question) = replace_question(app, &entry) {
+        app.editor.replace_question = Some(question);
         return;
     }
-    let entry = match ModelFile::parse(&app.editor.model.file_text()).and_then(|file| file.entry()) {
-        Ok(entry) => entry,
+    install_applied(app, entry);
+}
+
+/// Applies the Editor's model as [`apply`] does, in place of a model applied from another sheet, after Replace in the
+/// dialog that asks first.
+///
+/// A model of another id than the one the dialog named, as one opened while the dialog was open, is applied as
+/// [`apply`] applies it, asking again where it replaces a model applied from another sheet.
+pub fn apply_replacing(app: &mut AppState) {
+    let Some(question) = app.editor.replace_question.take() else {
+        return;
+    };
+    let Some(entry) = checked_entry(app) else {
+        return;
+    };
+    if entry.id() == question.id {
+        install_applied(app, entry);
+    } else {
+        apply(app);
+    }
+}
+
+/// Returns the entry of the Editor's model file, or `None` once the file is refused, as without compute, with the
+/// problems as the outcome.
+fn checked_entry(app: &mut AppState) -> Option<ModelEntry> {
+    if app.gpu_ctx.is_none() {
+        app.editor.outcome = Some(ApplyOutcome::Refused(vec![CodeDiagnostic::error(NO_COMPUTE)]));
+        return None;
+    }
+    match ModelFile::parse(&app.editor.model.file_text()).and_then(|file| file.entry()) {
+        Ok(entry) => Some(entry),
         Err(error) => {
             app.editor.outcome = Some(ApplyOutcome::Refused(error.diagnostics().to_vec()));
-            return;
+            None
         }
-    };
+    }
+}
+
+/// Returns the question to ask before `entry` replaces the model of its id, `None` when Apply replaces it without
+/// asking.
+///
+/// Apply asks when the model was applied from a sheet whose name differs from the name of `entry`, and the Editor did
+/// not apply it last, as before a rename of the same sheet.
+fn replace_question(app: &AppState, entry: &ModelEntry) -> Option<ReplaceQuestion> {
+    let held = app.models.get(entry.id())?;
+    let from_sheet = held
+        .source()
+        .author()
+        .is_some_and(|author| author.format() == SHEET_CODE_FORMAT);
+    let other = from_sheet && held.name() != entry.name() && !app.editor.is_applied(held.source());
+    other.then(|| ReplaceQuestion {
+        name: held.name().to_owned(),
+        id: entry.id().to_owned(),
+    })
+}
+
+/// Installs `entry`, the Editor's model, and runs it as [`apply`] says.
+fn install_applied(app: &mut AppState, entry: ModelEntry) {
     let id = entry.id().to_owned();
     let source = entry.source().clone();
     // A preview runs the source at another size, and Apply replaces it.
@@ -1940,7 +2133,7 @@ pub fn apply(app: &mut AppState) {
         // engine's own check of the sizes would end the page.
         if let Some(message) = app.build_refusal() {
             let problem = CodeDiagnostic::error(message);
-            app.editor.outcome = Some(ApplyOutcome::Faulted(vec![problem]));
+            app.editor.outcome = Some(ApplyOutcome::BuildRefused(vec![problem]));
             return;
         }
         app.reset_simulation();
@@ -1961,7 +2154,7 @@ pub fn apply(app: &mut AppState) {
             app.build_refusal()
         };
         match refusal {
-            Some(reason) => ApplyOutcome::Faulted(vec![CodeDiagnostic::error(reason)]),
+            Some(reason) => ApplyOutcome::BuildRefused(vec![CodeDiagnostic::error(reason)]),
             None if awaits_rebuild => ApplyOutcome::AwaitingRebuild,
             None => ApplyOutcome::Installed,
         }
@@ -1999,6 +2192,7 @@ mod tests {
         assert!(ApplyOutcome::Refused(Vec::new()).summary().1);
         assert!(ApplyOutcome::Unread(Vec::new()).summary().1);
         assert!(ApplyOutcome::Faulted(Vec::new()).summary().1);
+        assert!(ApplyOutcome::BuildRefused(Vec::new()).summary().1);
     }
 
     #[test]

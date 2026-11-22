@@ -36,6 +36,27 @@ use view::{BodyView, BodyViews, Owner};
 /// A label is compared with them exactly, so `Time` is a label of its own.
 pub(crate) const RESERVED_STAT_LABELS: [&str; 3] = ["run_id", "tick", "time"];
 
+/// Parameter ids a model cannot take: the names of the columns that `runs.csv` of a sweep writes beside the
+/// parameters, the ids, seed and key of a run before them, and its outcome, timing and note after them.
+///
+/// An id is compared with them exactly.
+pub(crate) const RUNS_CSV_COLUMNS: [&str; 14] = [
+    "run_id",
+    "config_id",
+    "block",
+    "rep",
+    "seed",
+    "run_key",
+    "status",
+    "stop_reason",
+    "ticks",
+    "population",
+    "build_ms",
+    "wall_ms",
+    "steps_per_s",
+    "note",
+];
+
 /// Result of checking a graph file.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]

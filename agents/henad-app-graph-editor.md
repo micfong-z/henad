@@ -41,7 +41,9 @@ focus moves (`pressed`, `focused`), so two drags of one field are two steps. The
 parameter's range and default show `shown_world` and `shown_param`, the last waiting `SetWorld` or
 `SetParam`, so a dragged field shows its value while the requests wait for the release. Keys over
 the canvas while no field has focus: command Z, command shift Z or command Y, Delete or Backspace on
-the selection, and egui's `Copy`, `Cut` and `Paste` events. Copy puts
+the selection, and egui's `Copy`, `Cut` and `Paste` events. The canvas reads them only under the
+pointer (`rect_contains_pointer`, which checks the top layer), and a modal dialog's backdrop covers
+it, so an open dialog keeps them (`a_modal_dialog_keeps_the_undo_keys_from_the_canvas`). Copy puts
 `GraphBuilder::copy` text on the clipboard, and Paste places the nodes' top left at the pointer.
 
 `canvas.rs` holds `BodyCanvas` (the `Snarl<NodeView>`, the `NodeId` to egui-snarl node map, the

@@ -117,7 +117,10 @@ fn the_editor_asks_before_replacing_a_model_with_unsaved_edits() {
     harness.click("New grid rule");
     click_in(&mut harness, &sentence, SAVE_MODEL);
     let requested = harness.app.saves_requested.clone().unwrap_or_default();
-    assert_eq!(requested, [(SaveTarget::Model, "opened.toml".to_owned())]);
+    assert!(
+        matches!(requested.as_slice(), [(SaveTarget::Model(_), name)] if name == "opened.toml"),
+        "{requested:?}"
+    );
     assert!(
         harness.app.editor.model.sheet().is_some(),
         "the sheet waits for its save"
@@ -357,7 +360,10 @@ fn the_sheet_beside_its_copy_keeps_its_unsaved_edits_and_saves_in_turn() {
         "the copy waits for the sheet's save"
     );
     let requested = harness.app.saves_requested.clone().unwrap_or_default();
-    assert_eq!(requested, [(SaveTarget::Counterpart, "opened.toml".to_owned())]);
+    assert!(
+        matches!(requested.as_slice(), [(SaveTarget::Counterpart(_), name)] if name == "opened.toml"),
+        "{requested:?}"
+    );
     harness.app.finish_save(SaveResult::Saved("life.toml".to_owned()));
     assert!(
         harness.app.editor.model.rule_text().is_some(),
@@ -432,9 +438,8 @@ fn a_second_conversion_asks_before_it_drops_an_edited_copy() {
     click_in(&mut harness, &sentence, SAVE_MODEL);
     let requested = harness.app.saves_requested.clone().unwrap_or_default();
     assert_eq!(requested.len(), 1);
-    assert_eq!(
-        requested[0].0,
-        SaveTarget::Counterpart,
+    assert!(
+        matches!(requested[0].0, SaveTarget::Counterpart(_)),
         "the copy is saved, and the sheet is not"
     );
     assert!(
@@ -539,4 +544,140 @@ fn a_late_save_names_the_model_it_saved() {
         Some("copy.toml"),
         "the copy takes the name it was saved under"
     );
+}
+
+/// Two saves pending under one target name the model each saved. A save of a model that was replaced names no model,
+/// also when it reports before the save of the model that replaced it. A model saved twice, edited between the saves,
+/// takes the name and the edit mark of each save as it reports.
+#[test]
+fn each_save_names_and_marks_the_model_it_saved() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    save_model(&mut harness.app);
+    replace_model(&mut harness.app, Replacement::NewGridRule);
+    save_model(&mut harness.app);
+    harness.app.finish_save(SaveResult::Saved("my_sheet.toml".to_owned()));
+    assert_eq!(
+        harness.app.editor.file_name, None,
+        "the rule takes no name of the sheet's save"
+    );
+    harness.app.finish_save(SaveResult::Saved("my_rule.toml".to_owned()));
+    assert_eq!(harness.app.editor.file_name.as_deref(), Some("my_rule.toml"));
+    assert!(!harness.app.editor.is_unsaved());
+
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    save_model(&mut harness.app);
+    edit_purpose(&mut harness, "Edited between two saves.");
+    save_model(&mut harness.app);
+    harness.app.finish_save(SaveResult::Saved("first.toml".to_owned()));
+    assert_eq!(harness.app.editor.file_name.as_deref(), Some("first.toml"));
+    assert!(
+        harness.app.editor.is_unsaved(),
+        "the first save holds the sheet before the edit"
+    );
+    harness.app.finish_save(SaveResult::Saved("second.toml".to_owned()));
+    assert_eq!(harness.app.editor.file_name.as_deref(), Some("second.toml"));
+    assert!(!harness.app.editor.is_unsaved(), "the second save holds the edit");
+
+    // The same two saves, reporting the other way round. The file named last holds the sheet before the edit.
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    let first = save_model(&mut harness.app).expect("the sheet is saved");
+    edit_purpose(&mut harness, "Edited between two saves.");
+    let second = save_model(&mut harness.app).expect("the sheet is saved");
+    assert_ne!(first, second);
+    harness
+        .app
+        .finish_save_of(second, SaveResult::Saved("second.toml".to_owned()));
+    assert_eq!(harness.app.editor.file_name.as_deref(), Some("second.toml"));
+    assert!(!harness.app.editor.is_unsaved());
+    harness
+        .app
+        .finish_save_of(first, SaveResult::Saved("first.toml".to_owned()));
+    assert_eq!(harness.app.editor.file_name.as_deref(), Some("first.toml"));
+    assert!(
+        harness.app.editor.is_unsaved(),
+        "first.toml holds the sheet before the edit"
+    );
+
+    // The unsaved changes dialog waits for the save it started, and a second Save model carries it no further.
+    edit_purpose(&mut harness, "Edited before New grid rule.");
+    replace_model(&mut harness.app, Replacement::NewGridRule);
+    let sentence = asking(&mut harness).expect("the dialog asks");
+    click_in(&mut harness, &sentence, SAVE_MODEL);
+    let (asked, _) = harness
+        .app
+        .saves_requested
+        .as_ref()
+        .and_then(|requested| requested.last().cloned())
+        .expect("the dialog started a save");
+    let pressed = save_model(&mut harness.app).expect("the sheet is saved");
+    harness
+        .app
+        .finish_save_of(pressed, SaveResult::Saved("pressed.toml".to_owned()));
+    assert!(
+        harness.app.editor.model.sheet().is_some(),
+        "the rule waits for the dialog's save"
+    );
+    harness
+        .app
+        .finish_save_of(asked, SaveResult::Saved("asked.toml".to_owned()));
+    assert!(
+        harness.app.editor.model.rule_text().is_some(),
+        "the dialog's save reported, and the rule replaced the sheet"
+    );
+}
+
+/// A replacement that waits for the dialog's save goes once another replacement replaces the model, so the save's
+/// report replaces nothing. A save that fails drops the replacement too, and the model stays.
+#[test]
+fn a_replacement_waiting_for_a_save_goes_with_its_model() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    edit_purpose(&mut harness, "Edited before New grid rule.");
+    replace_model(&mut harness.app, Replacement::NewGridRule);
+    let sentence = asking(&mut harness).expect("the dialog asks");
+    click_in(&mut harness, &sentence, SAVE_MODEL);
+    let (asked, _) = harness
+        .app
+        .saves_requested
+        .as_ref()
+        .and_then(|requested| requested.last().cloned())
+        .expect("the dialog started a save");
+
+    // While the save dialog is open, a node graph replaces the sheet and its edits are discarded.
+    replace_model(&mut harness.app, Replacement::NewGraphModel("sir.toml"));
+    let sentence = asking(&mut harness).expect("the dialog asks again");
+    click_in(&mut harness, &sentence, DISCARD_CHANGES);
+    assert!(harness.app.editor.model.graph().is_some());
+    harness
+        .app
+        .finish_save_of(asked, SaveResult::Saved("life.toml".to_owned()));
+    harness.settle();
+    assert!(
+        harness.app.editor.model.graph().is_some(),
+        "the grid rule waited for the sheet, which is gone"
+    );
+    assert_eq!(
+        harness.app.editor.file_name, None,
+        "the graph takes no name of the sheet's save"
+    );
+
+    // A save that fails keeps the sheet and drops the replacement.
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    edit_purpose(&mut harness, "Edited before New grid rule.");
+    replace_model(&mut harness.app, Replacement::NewGridRule);
+    let sentence = asking(&mut harness).expect("the dialog asks");
+    click_in(&mut harness, &sentence, SAVE_MODEL);
+    harness.app.finish_save(SaveResult::Failed("disk full".to_owned()));
+    harness.settle();
+    assert!(
+        harness.app.editor.model.sheet().is_some(),
+        "a failed save keeps the sheet"
+    );
+    assert!(harness.app.editor.is_unsaved());
+    assert_eq!(asking(&mut harness), None);
 }

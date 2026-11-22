@@ -18,6 +18,7 @@
 
 pub mod card_lines;
 pub mod card_pane;
+pub mod delete_question;
 pub mod diagram;
 pub mod help;
 pub mod new_model;

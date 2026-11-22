@@ -1,7 +1,8 @@
-//! Words of the New model, unsaved changes and New parameter dialogs, the top bar, the world tabs and the Diagram.
+//! Words of the New model, unsaved changes, replace, delete and New parameter dialogs, the top bar, the world tabs and
+//! the Diagram.
 
 use super::card::line_count;
-use super::grammar::word_list;
+use super::grammar::{number_list, upper_first, word_list};
 
 // The New model dialog
 
@@ -77,6 +78,95 @@ pub const UNSAVED_MARK: &str = "Unsaved changes";
 
 /// Tooltip of the mark beside the name of a model with unsaved changes.
 pub const UNSAVED_MARK_TOOLTIP: &str = "Unsaved changes. Press Save model to keep them.";
+
+// The dialog that asks before Apply replaces a model applied from another sheet
+
+/// Title of the dialog that asks before Apply replaces a model applied from another sheet under the same id.
+pub const REPLACE_APPLIED_HEADING: &str = "Replace applied model?";
+
+/// Returns the question of the dialog that asks before Apply replaces the model `name`, applied from another sheet
+/// under the id `id`.
+///
+/// For example "Replace the applied model Chance SIR? It has the same id as this model, sir."
+pub fn replace_applied(name: &str, id: &str) -> String {
+    format!("Replace the applied model {name}? It has the same id as this model, {id}.")
+}
+
+/// Action of the dialog that asks before Apply replaces a model, which applies the model in its place.
+pub const REPLACE: &str = "Replace";
+
+// The dialog that asks before a delete or a removal empties formulas that the editor cannot write again
+
+/// Title of the dialog that asks before a parameter is deleted that formulas use.
+pub const DELETE_PARAMETER_HEADING: &str = "Delete parameter?";
+
+/// Title of the dialog that asks before a property is deleted that formulas use.
+pub const DELETE_PROPERTY_HEADING: &str = "Delete property?";
+
+/// Title of the dialog that asks before a line is deleted that formulas use.
+pub const DELETE_LINE_HEADING: &str = "Delete line?";
+
+/// Title of the dialog that asks before a summary of a look at agents is removed that formulas use.
+pub const REMOVE_SUMMARY_HEADING: &str = "Remove summary?";
+
+/// Action of the dialog that asks before a delete, which deletes the item.
+pub const DELETE: &str = "Delete";
+
+/// Action of the dialog that asks before a summary is removed, which removes it.
+pub const REMOVE: &str = "Remove";
+
+/// Returns the question of the dialog that asks before the item `name` is deleted while the lines `lines` and the
+/// measures named `measures` use it.
+///
+/// They use the item in formulas the editor cannot write again, as in "Trail falloff is used by lines 3 and 4. Delete
+/// it?" or "To food is used by the measure Total trail. Delete it?". Each line is the button of its card, `None` for a
+/// card that runs each tick, and its number on that card. The lines of a button's card take its name, as in "Clear
+/// line 1".
+pub fn used_by(name: &str, lines: &[(Option<&str>, usize)], measures: &[&str]) -> String {
+    format!("{name} is used by {}. Delete it?", users(lines, measures))
+}
+
+/// Returns the question of the dialog that asks before the summary `name` is removed while the lines `lines` use it,
+/// as [`used_by`] words the lines.
+///
+/// The name opens the sentence with a capital, since a summary takes a name such as "average heading": "Average heading
+/// is used by line 4. Remove it?".
+pub fn summary_used_by(name: &str, lines: &[(Option<&str>, usize)]) -> String {
+    format!("{} is used by {}. Remove it?", upper_first(name), users(lines, &[]))
+}
+
+/// Returns the lines `lines` and the measures named `measures` as a list, such as "line 2, Clear lines 1 and 3 and the
+/// measure Total trail".
+fn users(lines: &[(Option<&str>, usize)], measures: &[&str]) -> String {
+    let mut cards: Vec<(Option<&str>, Vec<usize>)> = Vec::new();
+    for &(button, number) in lines {
+        match cards.iter_mut().find(|(known, _)| *known == button) {
+            Some((_, numbers)) if numbers.contains(&number) => {}
+            Some((_, numbers)) => numbers.push(number),
+            None => cards.push((button, vec![number])),
+        }
+    }
+    let mut words: Vec<String> = cards
+        .iter()
+        .map(|(button, numbers)| {
+            let noun = if numbers.len() == 1 { "line" } else { "lines" };
+            let numbers = number_list(numbers);
+            match button {
+                Some(button) => format!("{button} {noun} {numbers}"),
+                None => format!("{noun} {numbers}"),
+            }
+        })
+        .collect();
+    match measures {
+        [] => {}
+        [measure] => words.push(format!("the measure {measure}")),
+        _ => {
+            let names: Vec<String> = measures.iter().map(|&measure| measure.to_owned()).collect();
+            words.push(format!("the measures {}", word_list(&names)));
+        }
+    }
+    word_list(&words)
+}
 
 // The New parameter dialog
 

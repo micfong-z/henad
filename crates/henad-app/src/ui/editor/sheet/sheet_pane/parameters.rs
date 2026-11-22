@@ -7,8 +7,8 @@ use henad_graph::sheet::document::{ParameterType, SheetDocument, SheetLiteral, S
 use henad_graph::sheet::edit::{SheetEdit, SheetItem};
 use henad_graph::sheet::format_number;
 use henad_graph::sheet::sentence::{
-    ADD_PARAMETER, MAX_LABEL, MIN_LABEL, PARAMETER_COLUMNS, PARAMETER_NAME_MISSING, TYPE_ONE_NUMBER,
-    UNIT_FIELD_PLACEHOLDER, UNIT_LABEL, delete_parameter_name, parameter_max_name, parameter_min_name,
+    ADD_PARAMETER, DELETE_PARAMETER_HEADING, MAX_LABEL, MIN_LABEL, PARAMETER_COLUMNS, PARAMETER_NAME_MISSING,
+    TYPE_ONE_NUMBER, UNIT_FIELD_PLACEHOLDER, UNIT_LABEL, delete_parameter_name, parameter_max_name, parameter_min_name,
     parameter_name_taken, parameter_unit_name, read_typed_number, sheet_parameter_name_field, sheet_trying_value,
     unit_suggestions, value_field_name, value_slider_name,
 };
@@ -16,6 +16,7 @@ use henad_graph::sheet::sentence::{
 use super::layout::{Column, ITEM_GAP, Table, line, text_width, wrapped_line};
 use super::{
     DELETE_WIDTH, FIELD_WIDTH, PARAMETER_NAME_WIDTH, PaneState, Pending, SLIDER_WIDTH, SheetTrial, UNIT_WIDTH,
+    delete_or_ask,
 };
 use crate::ui::editor::sheet::set_parameter_edit;
 use crate::ui::editor::sheet::widgets::{
@@ -359,9 +360,11 @@ fn parameter_row(
         row.cell(4, |ui| line(ui, |ui| fields.unit(ui, ui.available_width(), pending)));
     }
     if row.delete_cell(last, &delete_parameter_name(&parameter.name)) {
-        pending.push(Pending::one(SheetEdit::Delete {
+        let edit = SheetEdit::Delete {
             item: SheetItem::Parameter(parameter.id.clone()),
-        }));
+        };
+        let asked = (DELETE_PARAMETER_HEADING, parameter.name.as_str());
+        delete_or_ask(document, edit, asked, None, &mut pane.delete_question, pending);
     }
     if !wide {
         row.below(0, |ui| fields.range_line(ui, pending));
