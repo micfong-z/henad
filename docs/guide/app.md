@@ -11,7 +11,7 @@ Before we start, make sure you have [installed Henad](installation.md) and can [
 
 <figure markdown="span">
   ![The Henad window running Ant Foraging on the GPU](../assets/app/overview.png){ width="900" }
-<figcaption>Ant Foraging (GPU) at roughly 30,000 ticks per second.</figcaption>
+<figcaption>Ant Foraging (GPU) at roughly 40,000 ticks per second.</figcaption>
 </figure>
 
 ## Overview

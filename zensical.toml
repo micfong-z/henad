@@ -193,6 +193,7 @@ nav = [
             { "#106, 2026-11-10" = "developing/agent-record/20261110-106-open-decisions-settled.md" },
             { "#107, 2026-11-11" = "developing/agent-record/20261111-107-open-questions-restyle-cleanup.md" },
             { "#108, 2026-11-22" = "developing/agent-record/20261122-108-strings-and-audit-fixes.md" },
+            { "#109, 2026-11-22" = "developing/agent-record/20261122-109-editor-look-decisions-and-fold.md" },
         ] },
     ] },
 ]
