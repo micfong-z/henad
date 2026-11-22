@@ -60,6 +60,7 @@ A host refers to it as `henad::runner::GpuSimState`.
 | Method | Role |
 |---|---|
 | `encode_steps` | Records `count` steps into an encoder, advancing the tick counter |
+| `submission_steps` | The most steps the next submission may hold, 64 unless the state measures its work on the device |
 | `encode_action` | Records one declared action's pass, without advancing the tick counter |
 | `encode_snapshot_passes` | Records the display and reduce passes, at snapshot cadence |
 | `encode_stats_passes` | Records the reduce passes alone, for a sample that draws nothing |

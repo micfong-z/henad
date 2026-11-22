@@ -28,7 +28,7 @@ use henad_core::helpers::{f32_param, u32_param};
 use henad_core::params::ParamDescriptor;
 
 use super::agent_hooks::{AgentGraphHooks, BufferSource, WalkCharge};
-use super::emit::{AGENT_COLORS, AgentPlan, EmitInput, Emitted, FIRST_COUNTER, FieldPlan, LanePlan, Role};
+use super::emit::{AGENT_COLORS, AgentPlan, EmitInput, Emitted, FieldPlan, LanePlan, Role, counters_end};
 use super::fault_names::{FaultNames, look_met_too_many, look_searches_too_far};
 use super::hooks::{PassUniform, action_plans};
 use super::pack::{self, LaneBuffer, LaneEntry, LaneLayout};
@@ -448,7 +448,7 @@ impl AgentProgram {
             uniforms,
             stats,
             sum_lanes: sum_lanes.clone(),
-            tally_base: FIRST_COUNTER + plan.counters,
+            tally_base: counters_end(plan.counters),
             counters: plan.counters,
             faults,
             cell_size,
@@ -492,7 +492,8 @@ impl AgentProgram {
         ];
         params.extend(own_params(&document.params, &live::reload_only(&evaluator)));
         let reduce_domain = reduce.and_then(GeneratedShader::domain).unwrap_or(EngineDomain::Agents);
-        let cleared = FIRST_COUNTER + plan.counters..FIRST_COUNTER + plan.counters + tallies;
+        // The document's counters run the whole run and sit before the cleared range.
+        let cleared = counters_end(plan.counters)..counters_end(plan.counters) + tallies;
         Ok(Self {
             parts: Arc::new(AgentParts {
                 declarations: ProgramDeclarations::read(file, document, &report),
@@ -1082,7 +1083,7 @@ pub(crate) fn compile_agent_shaders(
                 .sum::<usize>()
         });
     // The probes' counts follow the reduce leaf's tallies.
-    let fire_base = FIRST_COUNTER + counters + reduce_tallies;
+    let fire_base = counters_end(counters) + reduce_tallies;
     let fire_counters = fire_base..fire_base + probes.len();
     let plan = AgentPlan {
         fields,

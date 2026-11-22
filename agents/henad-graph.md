@@ -321,7 +321,7 @@ reader takes `resolution` only with `sum`, needs it there, and refuses any other
 with the nearest allowed one (`FieldCombine::sum`). Every `GraphFile` comes through the reader, so
 no checked document holds a shift past 24. `check/agents.rs` refuses a deposit into a sum whose
 `value` is a literal at or past the wrap bound, or a parameter whose maximum is, and names the
-bound. Other deposits can still wrap at run time, as a counter does. The host's deposit column of a
+bound. Other deposits can still wrap at run time. The host's deposit column of a
 sum is `u32`, the total as a count of the resolution: `host::run::sum_word` rounds `max(value, 0)`
 times `deposit_scale()` half to even and saturates, a NaN adding 0, and the column adds it wrapping.
 `HostLanes::deposits` documents both column types. The catalogue case `a sum in whole resolutions,
@@ -378,7 +378,7 @@ calls by `cost.rs`, with `math.expr` costing its expansion.
 **The host over agents.** `HostWorld::Agents` holds the count and the world's width and height.
 `HostLanes` holds the lanes, then each field's layers (`layers()`, `column("<field>.<layer>")`), the
 deposits of each dynamic layer (`deposits(id)`, merged by the engine's field update, not here) and
-the counters (`counter`, `set_counter`, wrapping `u32`). The radius fold builds a `SpatialHash` of
+the counters (`counter`, `set_counter`, `u64` totals). The radius fold builds a `SpatialHash` of
 the start-of-pass positions per cell size and walks it in `for_each_within`'s order (`run::walk`),
 counting candidates and faulting past `MAX_FOLD_CANDIDATES` with the node, and faulting before it
 walks when its bounds cover more than `MAX_WALK_CELLS` (65536) cells, a negative radius none. A draw

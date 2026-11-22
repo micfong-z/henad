@@ -76,6 +76,13 @@ pub struct HostWork {
 /// A command buffer that runs too long trips the OS GPU watchdog, with no error, and every later readback reads zero.
 /// The budget lowers that risk on a slow GPU and does not remove it. It admits every grid corpus file at 16384 by
 /// 16384 cells.
+///
+/// A build is refused when a submission of [`MAX_STEPS_PER_SUBMISSION`] steps passes the budget at the charge the
+/// model declares. For a model of agents that walks a neighbour index, that charge assumes the agents spread evenly.
+/// The engine then measures it: it runs the first step in a submission of its own, reads back the largest bucket of
+/// the index, and holds each later submission to the steps whose work fits the budget when every cell a walk covers
+/// is that full ([`Demand::submission_steps`]). It measures again with a stats readback, at most once every
+/// [`MAX_STEPS_PER_SUBMISSION`] ticks, and after a press from the next step.
 pub const SUBMISSION_WORK_BUDGET: u64 = 600_000_000_000;
 
 /// Work units one run on the host may take, the init passes at build or a rerun on a press.
@@ -167,6 +174,24 @@ impl Demand {
     /// stat passes, or the passes of one press, whichever is more.
     pub fn submission_work(&self) -> u64 {
         self.submissions().map(|(work, _)| work).max().unwrap_or(0)
+    }
+
+    /// Returns the most steps, from 1 to [`MAX_STEPS_PER_SUBMISSION`], whose batch with the display and stat passes
+    /// fits [`SUBMISSION_WORK_BUDGET`].
+    ///
+    /// A step whose work alone passes the budget still gets 1, the least a submission holds.
+    pub fn submission_steps(&self) -> u32 {
+        let (step, rest) = self
+            .passes
+            .iter()
+            .fold((0u64, 0u64), |(step, rest), pass| match pass.kind {
+                PassKind::Step => (step.saturating_add(pass.work), rest),
+                PassKind::Display | PassKind::Reduce => (step, rest.saturating_add(pass.work)),
+                PassKind::Action(_) => (step, rest),
+            });
+        let room = SUBMISSION_WORK_BUDGET.saturating_sub(rest);
+        let steps = room.checked_div(step).unwrap_or(u64::MAX);
+        steps.clamp(1, u64::from(MAX_STEPS_PER_SUBMISSION)) as u32
     }
 
     /// Returns each kind of submission with its work and its heaviest pass: the batch of steps first, then one per
@@ -494,6 +519,33 @@ mod tests {
                 "{extra}"
             );
         }
+    }
+
+    /// The steps of a submission are the most whose work with the display and stat passes fits the budget, from 1 to
+    /// 64. A press counts toward no batch of steps.
+    #[test]
+    fn a_submission_holds_the_steps_that_fit_the_budget() {
+        let steps_at = |step: u64, rest: u64| {
+            let mut demand = Demand::default();
+            demand.push_pass("step".to_owned(), PassKind::Step, 2, step);
+            demand.push_pass("reduce".to_owned(), PassKind::Reduce, 2, rest);
+            demand.push_pass("press".to_owned(), PassKind::Action(0), 1, SUBMISSION_WORK_BUDGET);
+            demand.submission_steps()
+        };
+        let steps = u64::from(MAX_STEPS_PER_SUBMISSION);
+        assert_eq!(steps_at(0, 0), MAX_STEPS_PER_SUBMISSION, "work of unknown cost");
+        assert_eq!(steps_at(SUBMISSION_WORK_BUDGET / steps, 0), MAX_STEPS_PER_SUBMISSION);
+        assert_eq!(
+            steps_at(SUBMISSION_WORK_BUDGET / steps + 1, 0),
+            MAX_STEPS_PER_SUBMISSION - 1
+        );
+        assert_eq!(steps_at(SUBMISSION_WORK_BUDGET / 10, SUBMISSION_WORK_BUDGET / 10), 9);
+        assert_eq!(
+            steps_at(SUBMISSION_WORK_BUDGET, 1),
+            1,
+            "a step past the budget still runs alone"
+        );
+        assert_eq!(steps_at(u64::MAX, u64::MAX), 1);
     }
 
     /// Each press is its own submission. Two actions that each fit are not summed, and one past the budget is named.

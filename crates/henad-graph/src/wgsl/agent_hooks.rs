@@ -14,7 +14,7 @@ use henad_core::view::StatValue;
 use super::agents::AGENT_PARAMS;
 use super::compiled_at;
 use super::emit::SumLane;
-use super::emit::{FAULT_WORD, FIRST_COUNTER};
+use super::emit::{FAULT_WORD, counter_total};
 use super::hooks::{ActionPlan, PassUniform, StatSource, pass_sums, stat_value, tick32};
 use super::uniform::Dispatch;
 use crate::document::Domain;
@@ -85,7 +85,7 @@ pub(crate) struct AgentGraphHooks {
     pub sum_lanes: Vec<SumLane>,
     /// First word of the leaf's tallies in the counters.
     pub tally_base: usize,
-    /// Number of the document's counters, after the fault word and the tick.
+    /// Number of the document's counters, two words each after the fault word and the tick.
     pub counters: usize,
     /// Message of each fault code, the code its position plus one.
     pub faults: Vec<String>,
@@ -284,9 +284,7 @@ impl AgentHooks for AgentGraphHooks {
         let own = self.own(params);
         let world = world_of(geom);
         let context = RunContext::tick(run.seed, tick32(run.tick));
-        let own_counters: Vec<u32> = (0..self.counters)
-            .map(|k| counters.get(FIRST_COUNTER + k).copied().unwrap_or(0))
-            .collect();
+        let own_counters: Vec<u64> = (0..self.counters).map(|k| counter_total(counters, k)).collect();
         let mut frames: BTreeMap<usize, Option<Vec<HostValue>>> = BTreeMap::new();
         self.stats
             .iter()
@@ -360,8 +358,55 @@ impl AgentHooks for AgentGraphHooks {
     ///
     /// A walk past [`crate::limits::MAX_WALK_CELLS`] cells faults before it starts and costs one unit. The visits
     /// assume a uniform spread, at most every agent and at most the visit cap. Agents that gather visit more than
-    /// the charge, and the device's caps bound each walk then.
+    /// the charge. The build is held to the budget at this charge, and the engine measures the walks once the first
+    /// step has run, through [`Self::measured_step_cost`].
     fn step_cost(&self, step: usize, geom: &Geometry, params: &[ParamValue]) -> u64 {
+        let Some(grid) = geom.index else {
+            return 0;
+        };
+        let index_cells = u64::from(grid.grid_w) * u64::from(grid.grid_h);
+        let agents = u64::from(geom.num_agents);
+        self.walk_cost(step, geom, params, |cells| {
+            agents.saturating_mul(cells).div_ceil(index_cells.max(1))
+        })
+    }
+
+    /// Returns the walks of the step's radius folds as [`Self::step_cost`] charges them, with each cell a walk covers
+    /// holding `largest` agents, at most every agent and at most the visit cap, or `None` for a model whose tick
+    /// passes hold no radius fold.
+    ///
+    /// The engine measures `largest`, the fullest cell of the neighbour index. A crowd in one cell is then charged for
+    /// every agent it holds.
+    fn measured_step_cost(&self, step: usize, geom: &Geometry, params: &[ParamValue], largest: u32) -> Option<u64> {
+        if self.walks.iter().all(Vec::is_empty) {
+            return None;
+        }
+        Some(self.walk_cost(step, geom, params, |cells| cells.saturating_mul(u64::from(largest))))
+    }
+
+    fn fault(&self, counters: &[u32]) -> Option<String> {
+        let code = *counters.get(FAULT_WORD)?;
+        if code == 0 {
+            return None;
+        }
+        Some(
+            self.faults
+                .get(code as usize - 1)
+                .cloned()
+                .unwrap_or_else(|| format!("a shader reported the fault {code}, which the compiler never wrote")),
+        )
+    }
+}
+
+impl AgentGraphHooks {
+    /// Returns the work units one invocation of the step pass at `step` spends on its radius folds: per fold, the
+    /// cells its walk covers, then the agents it visits times the cost of a visit, its body's cost plus
+    /// [`VISIT_COST`]. `visits` returns the agents a walk over that many cells visits. The charge holds it to every
+    /// agent and to the visit cap.
+    ///
+    /// A walk past [`crate::limits::MAX_WALK_CELLS`] cells faults before it starts and costs one unit. A step with no
+    /// fold, or a world with no index, costs nothing.
+    fn walk_cost(&self, step: usize, geom: &Geometry, params: &[ParamValue], visits: impl Fn(u64) -> u64) -> u64 {
         let (Some(walks), Some(grid)) = (self.walks.get(step), geom.index) else {
             return 0;
         };
@@ -383,9 +428,7 @@ impl AgentHooks for AgentGraphHooks {
                 if cells > u64::from(crate::limits::MAX_WALK_CELLS) {
                     return 1;
                 }
-                let visits = agents
-                    .saturating_mul(cells)
-                    .div_ceil(index_cells.max(1))
+                let visits = visits(cells)
                     .min(agents)
                     .min(u64::from(crate::limits::MAX_FOLD_CANDIDATES));
                 cells.saturating_add(visits.saturating_mul(walk.body.saturating_add(VISIT_COST)))
@@ -393,21 +436,6 @@ impl AgentHooks for AgentGraphHooks {
             .fold(0, u64::saturating_add)
     }
 
-    fn fault(&self, counters: &[u32]) -> Option<String> {
-        let code = *counters.get(FAULT_WORD)?;
-        if code == 0 {
-            return None;
-        }
-        Some(
-            self.faults
-                .get(code as usize - 1)
-                .cloned()
-                .unwrap_or_else(|| format!("a shader reported the fault {code}, which the compiler never wrote")),
-        )
-    }
-}
-
-impl AgentGraphHooks {
     /// Returns the frame of the stats pass of `source` after its post block, with the graph's parameter values `own`,
     /// from the reduce leaf's `sums` and the engine's `counters`.
     #[expect(clippy::too_many_arguments, reason = "each argument is one input of the post block")]
@@ -417,7 +445,7 @@ impl AgentGraphHooks {
         own: &[HostValue],
         sums: &[f32],
         counters: &[u32],
-        own_counters: &[u32],
+        own_counters: &[u64],
         world: HostWorld,
         context: &RunContext,
     ) -> Option<Vec<HostValue>> {

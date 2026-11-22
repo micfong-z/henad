@@ -64,7 +64,9 @@ alone. An out-of-memory build beside live runs goes back to the head of the queu
 cap by one and holds admission until a live run ends. Each round reads the `SweepControl` once and
 visits every track once. A visit takes a landed sample through `poll_stats_readback(false)`,
 submits the actions due at the track's tick, each on its own, then one `stepping::submit_slice` of
-at most `steps_per_submission` steps, cut at the next tick a sample or an action is due at. A
+at most `steps_per_submission` steps, cut at the next tick a sample or an action is due at. The
+state's `submission_steps(false)` lowers that bound for a model of agents that measures its walks,
+1 until its measurement lands, and the visit never waits for it. A
 track keeps at most `submissions_per_track` buffers on the device, and records the interval after
 a sample while that sample reads back. The sample's tick is kept at encode time. By the time the
 readback lands, `state.tick()` has moved on. A round in which no track moved waits for the oldest

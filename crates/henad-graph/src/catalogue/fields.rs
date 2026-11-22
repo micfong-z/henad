@@ -513,7 +513,7 @@ pub(super) static KINDS: &[NodeDef] = &[
         id: "counter.add",
         group: "Fields",
         label: "Count event",
-        semantics: "Adds `amount` to the run-long counter `counter`, wrapping at 2^32. No action resets a counter.",
+        semantics: "Adds `amount` to the run-long counter `counter`, a 64-bit total. No action resets a counter.",
         contexts: ContextSet {
             tick: true,
             ..ContextSet::NONE
@@ -521,19 +521,34 @@ pub(super) static KINDS: &[NodeDef] = &[
         config: &[config("counter", ConfigType::CounterId)],
         inputs: &[input_up_to("amount", U32_TYPE, Rate::Element)],
         effects: &[Effect::Counts],
-        cases: &[pass_case(
-            "wraps",
-            PassCase {
-                width: 10,
-                height: 10,
-                agents: 3,
-                tables: COUNT_EVENTS,
-                before: &[("n", &[U32(1), U32(2), U32(u32::MAX)])],
-                counters_before: &[("c", 5)],
-                counters_after: &[("c", 7)],
-                ..PassCase::EMPTY
-            },
-        )],
+        cases: &[
+            pass_case(
+                "carries an add past 2^32",
+                PassCase {
+                    width: 10,
+                    height: 10,
+                    agents: 3,
+                    tables: COUNT_EVENTS,
+                    before: &[("n", &[U32(1), U32(2), U32(u32::MAX)])],
+                    counters_before: &[("c", 5)],
+                    counters_after: &[("c", 4_294_967_303)],
+                    ..PassCase::EMPTY
+                },
+            ),
+            pass_case(
+                "carries a total past 2^32",
+                PassCase {
+                    width: 10,
+                    height: 10,
+                    agents: 3,
+                    tables: COUNT_EVENTS,
+                    before: &[("n", &[U32(1), U32(2), U32(3)])],
+                    counters_before: &[("c", 4_294_967_294)],
+                    counters_after: &[("c", 4_294_967_300)],
+                    ..PassCase::EMPTY
+                },
+            ),
+        ],
         ..BASE
     },
     NodeDef {
@@ -551,8 +566,8 @@ pub(super) static KINDS: &[NodeDef] = &[
                 height: 10,
                 agents: 1,
                 tables: COUNTER_TOTAL,
-                counters_before: &[("c", 9)],
-                stats: &[("n1", U64(9))],
+                counters_before: &[("c", 4_294_967_305)],
+                stats: &[("n1", U64(4_294_967_305))],
                 ..PassCase::EMPTY
             },
         )],

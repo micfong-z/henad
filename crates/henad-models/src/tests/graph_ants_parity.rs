@@ -490,6 +490,10 @@ impl AgentHooks for PlantedHooks {
     fn step_cost(&self, step: usize, geom: &Geometry, params: &[ParamValue]) -> u64 {
         self.inner.step_cost(step, geom, params)
     }
+
+    fn measured_step_cost(&self, step: usize, geom: &Geometry, params: &[ParamValue], largest: u32) -> Option<u64> {
+        self.inner.measured_step_cost(step, geom, params, largest)
+    }
 }
 
 /// Returns the entry of `file`, a graph of agents, whose build uploads the words of `planted` in place of the seeded

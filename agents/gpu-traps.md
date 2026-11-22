@@ -11,10 +11,15 @@ is about not undoing them.
   trips the OS GPU watchdog — no error, no panic, and every later readback reads zero. Batch at 64
   steps per submission, as `GpuAgentState::run_batched` and the real runner do. This first showed up
   as a flaky test. The kit's `FullSubmission` compares one full submission of every GPU model at its
-  defaults with single steps run before it. The sweep's GPU tracks
-  (`henad-explore/src/exec/gpu.rs`) keep the bound per run. Each command buffer holds the steps of
-  one run, and two runs' buffers are never merged. N runs of 64 steps in one buffer would trip the
-  watchdog again.
+  defaults with single steps run before it. 64 steps can still be too many when a step's work
+  depends on where agents stand: a crowd in one cell walks every agent. Every host holds each
+  command buffer to `GpuSimState::submission_steps`. A graph of agents with a radius fold sizes
+  it from the largest bucket of its index, measured after the first step
+  (`agents/henad-compute.md`). A host that submits 64 steps without asking undoes that. The kit's
+  `FullSubmission` and `SampledSlice` submit 64 on purpose, at the model's defaults. The sweep's
+  GPU tracks (`henad-explore/src/exec/gpu.rs`) keep the bound per run. Each command buffer holds
+  the steps of one run, and two runs' buffers are never merged. N runs of 64 steps in one buffer
+  would trip the watchdog again.
 - **`max_storage_buffers_per_shader_stage` is 8** in `wgpu::Limits::default()` and in the WebGPU
   baseline. `limits.rs::raise` asks for exactly what the models need, the `GpuNeeds` a host reads
   from its set through `ModelSet::gpu_needs()` before any device exists. Each GPU entry declares its

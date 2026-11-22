@@ -347,6 +347,9 @@ impl GpuSimState for FaultyGpu {
     fn encode_steps(&mut self, encoder: &mut wgpu::CommandEncoder, count: u32, timestamps: Option<&wgpu::QuerySet>) {
         self.inner.encode_steps(encoder, count, timestamps);
     }
+    fn submission_steps(&mut self, block: bool) -> u32 {
+        self.inner.submission_steps(block)
+    }
     fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
         std::thread::scope(|scope| scope.spawn(|| request_oversized_buffer(&self.device)).join())
             .expect("the request returns");

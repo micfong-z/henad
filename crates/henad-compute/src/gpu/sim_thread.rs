@@ -2,8 +2,9 @@
 //!
 //! [`GpuSimThread`] is the counterpart of [`crate::cpu::sim_thread::SimThread`], and [`crate::runner`] drives it the
 //! same way. A batch of `batch_size` steps goes out in submissions of at most
-//! [`crate::gpu::MAX_STEPS_PER_SUBMISSION`] steps each, with one batch outstanding at a time. The display and stats
-//! passes run once per snapshot interval, whatever the batch size, and the snapshot goes out once their readback lands.
+//! [`crate::gpu::MAX_STEPS_PER_SUBMISSION`] steps each, or the fewer [`GpuSimState::submission_steps`] returns, with
+//! one batch outstanding at a time. The display and stats passes run once per snapshot interval, whatever the batch
+//! size, and the snapshot goes out once their readback lands.
 //! In adaptive mode the batch size tracks a wall-clock budget per batch, `target_ms`.
 //!
 //! A runner starts uncapped. [`SimCommand::SetUncapped`] and [`SimCommand::SetTargetTps`] cap it at a rate in ticks
@@ -23,11 +24,24 @@ use crate::snapshot::{FireCounts, GpuSnapshot};
 pub trait GpuSimState: SimState {
     /// Records `count` steps into `encoder`, advancing the model's own tick counter by `count`.
     ///
-    /// `count` must not exceed [`crate::gpu::MAX_STEPS_PER_SUBMISSION`] for one submission.
+    /// `count` must not exceed [`crate::gpu::MAX_STEPS_PER_SUBMISSION`] for one submission, and a runner holds it to
+    /// [`Self::submission_steps`].
     ///
     /// When `timestamps` is `Some`, the state stamps the beginning of the first step and the end of the last
     /// into query indices 0 and 1, so the caller can measure GPU time over `count` steps.
     fn encode_steps(&mut self, encoder: &mut wgpu::CommandEncoder, count: u32, timestamps: Option<&wgpu::QuerySet>);
+
+    /// Returns the most steps the next command buffer of this state may hold, from 1 to
+    /// [`crate::gpu::MAX_STEPS_PER_SUBMISSION`].
+    ///
+    /// A state whose step work depends on where its agents are measures that work on the device, and may submit a
+    /// small command buffer of its own here. `block` allows a wait for the measurement where the target can wait.
+    /// Without one, the state returns 1 until the measurement lands. Call it between submissions, never while an
+    /// encoder holding this state's passes waits to be submitted. The default returns
+    /// [`crate::gpu::MAX_STEPS_PER_SUBMISSION`].
+    fn submission_steps(&mut self, _block: bool) -> u32 {
+        MAX_STEPS_PER_SUBMISSION
+    }
 
     /// Records the model's declared action at `index`, and returns whether the model declares one.
     ///
@@ -726,7 +740,10 @@ impl Loop {
         let mut write_submission = None;
         while submitted < steps {
             let steps_to_action = self.steps_to_next_action();
-            let chunk = MAX_STEPS_PER_SUBMISSION.min(steps - submitted);
+            let chunk = self
+                .state
+                .submission_steps(CAN_BLOCK_ON_READBACK)
+                .min(steps - submitted);
             let chunk = steps_to_action.map_or(chunk, |steps| steps.min(u64::from(chunk)) as u32);
             let action_due = steps_to_action == Some(u64::from(chunk));
             let mut encoder = self.encoder("henad_gpu_sim_encoder");
@@ -903,8 +920,10 @@ pub(crate) fn submit_due<'s>(
     (last, refused)
 }
 
-/// Submits `count` steps of `state`, at most [`MAX_STEPS_PER_SUBMISSION`] per command buffer, each labelled `label`.
-/// Nothing waits on the GPU.
+/// Submits `count` steps of `state`, at most [`GpuSimState::submission_steps`] per command buffer, each labelled
+/// `label`.
+///
+/// Nothing waits on the GPU, but for the measurement a state may take after its first step.
 pub(crate) fn submit_in_chunks(
     state: &mut dyn GpuSimState,
     device: &wgpu::Device,
@@ -916,7 +935,7 @@ pub(crate) fn submit_in_chunks(
     // queue up and the caller's one wait drains them, letting the CPU encode ahead of the GPU.
     let mut remaining = count;
     while remaining > 0 {
-        let chunk = remaining.min(u64::from(MAX_STEPS_PER_SUBMISSION)) as u32;
+        let chunk = remaining.min(u64::from(state.submission_steps(true))) as u32;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
         state.encode_steps(&mut encoder, chunk, None);
         queue.submit(Some(encoder.finish()));
@@ -1128,6 +1147,7 @@ mod tests {
 
     use super::{
         Command, GpuBatchSettings, GpuCommand, GpuSimState, GpuSimThread, GpuStats, Loop, SNAPSHOT_INTERVAL, StatsPoll,
+        submit_in_chunks,
     };
     use crate::cpu::sim_thread::SimCommand;
     use crate::gpu::{GpuContext, headless_context};
@@ -1385,6 +1405,108 @@ mod tests {
         fn view(&self) -> GpuSnapshot {
             GpuSnapshot::default()
         }
+    }
+
+    /// Counts encoded steps as its tick, records the count of each call that encodes steps, and holds a submission to
+    /// one step at tick 0 and to [`SIZED`] steps after.
+    struct ChunkRecorder {
+        tick: u64,
+        chunks: Arc<Mutex<Vec<u32>>>,
+    }
+
+    /// Steps a [`ChunkRecorder`] submission holds once its first step has run.
+    const SIZED: u32 = 5;
+
+    impl SimState for ChunkRecorder {
+        fn step(&mut self) {
+            self.tick += 1;
+        }
+        fn tick(&self) -> u64 {
+            self.tick
+        }
+        fn stats(&self) -> Vec<StatEntry> {
+            Vec::new()
+        }
+        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
+            false
+        }
+        fn population(&self) -> u64 {
+            0
+        }
+        fn heap_bytes(&self) -> usize {
+            0
+        }
+    }
+
+    impl GpuSimState for ChunkRecorder {
+        fn encode_steps(&mut self, _encoder: &mut wgpu::CommandEncoder, count: u32, _t: Option<&wgpu::QuerySet>) {
+            if count > 0 {
+                self.chunks.lock().expect("chunk log").push(count);
+            }
+            self.tick += u64::from(count);
+        }
+        fn submission_steps(&mut self, _block: bool) -> u32 {
+            if self.tick == 0 { 1 } else { SIZED }
+        }
+        fn encode_snapshot_passes(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
+        fn begin_stats_readback(&mut self) {}
+        fn poll_stats_readback(&mut self, _device: &wgpu::Device, _block: bool) -> StatsPoll {
+            StatsPoll::Landed
+        }
+        fn stats_readback_pending(&self) -> bool {
+            false
+        }
+        fn view(&self) -> GpuSnapshot {
+            GpuSnapshot::default()
+        }
+    }
+
+    /// Steps submitted in chunks keep to the state's submission steps, one at tick 0 and five after.
+    #[test]
+    fn chunked_steps_keep_to_the_submission_steps() {
+        let Some(ctx) = headless_context("henad_chunk_test") else {
+            return;
+        };
+        let chunks = Arc::new(Mutex::new(Vec::new()));
+        let mut state = ChunkRecorder {
+            tick: 0,
+            chunks: Arc::clone(&chunks),
+        };
+        submit_in_chunks(&mut state, &ctx.device, &ctx.queue, 23, "henad_chunk_test");
+        assert_eq!(*chunks.lock().expect("chunk log"), [1, 5, 5, 5, 5, 2]);
+    }
+
+    /// A playing runner's batches of 100 go out in submissions that keep to the state's submission steps: one step,
+    /// then 19 of five and one of four, then 20 of five each.
+    #[test]
+    fn the_runner_keeps_to_the_submission_steps() {
+        let Some(ctx) = headless_context("henad_runner_chunk_test") else {
+            return;
+        };
+        let chunks = Arc::new(Mutex::new(Vec::new()));
+        let state = ChunkRecorder {
+            tick: 0,
+            chunks: Arc::clone(&chunks),
+        };
+        let faults = ctx.faults.clone();
+        let mut thread = GpuSimThread::new(ctx, Box::new(state), fixed_batches(100), None, faults);
+        thread.play();
+        // Five seconds at most for the first batch.
+        for _ in 0..500 {
+            if chunks.lock().expect("chunk log").len() >= 21 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        thread.pause();
+        settle();
+        let chunks = chunks.lock().expect("chunk log").clone();
+        assert!(chunks.len() >= 21, "the first batch went out: {chunks:?}");
+        let mut first_batch = vec![1];
+        first_batch.extend([SIZED; 19]);
+        first_batch.push(4);
+        assert_eq!(chunks[..21], first_batch);
+        assert!(chunks[21..].iter().all(|&chunk| chunk == SIZED), "{chunks:?}");
     }
 
     /// Returns a thread over an [`ActionRecorder`] state in batches of a fixed 100 steps, its tick and its action log.

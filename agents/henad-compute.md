@@ -179,7 +179,29 @@ types an unsuffixed literal falls back to.
   cells, so `Demand::shortfalls` holds an agents graph to the submission and host budgets and to the
   uniform and workgroup limits as it does a grid. Each step's cost also adds
   `hooks.step_cost(step, geom, params)`, the work that depends on the parameters (a graph's radius
-  walks), which the steps, first in `declared_passes`, take by position. `AgentHooks` has provided
+  walks), which the steps, first in `declared_passes`, take by position. That charge holds the
+  build to the budget. `hooks.measured_step_cost(step, geom, params, largest)` charges the same
+  work when the fullest cell of the index holds `largest` agents, `None` by default, and
+  `GpuAgentSpec::submission_steps(params, limits, largest)` turns it into the steps one submission
+  may hold, through `Demand::submission_steps` over a demand built with that charge
+  (`demand_charging`, shared with `demand`). When a step measures and the spec declares an index,
+  the engine builds a `LargestBucket` of its `GpuSpatialHash` (`gpu/primitives/hash_largest.wgsl`:
+  the largest `counts` entry of the latest build, a workgroup `atomicMax` then one global
+  `atomicMax`, into a one-word `CounterReadback` tagged with the tick).
+  `GpuSimState::submission_steps(block)` (default `MAX_STEPS_PER_SUBMISSION`) returns 1 until a
+  measurement of a step after `stale_tick` lands, submits a measurement of its own once a step has
+  run, and waits for it when `block` holds. `encode_stats_passes` records a measurement too. It
+  rides on the stats readback's submission and poll, at most once per `MAX_STEPS_PER_SUBMISSION`
+  ticks after one sized the submissions (`measured_tick`), and a landed one resizes them. A
+  press sets `stale_tick` to its tick and forgets the size. The step after it goes alone. A run
+  that reads no stats, such as `stepping::run_steps` alone, keeps the first measurement's size. No
+  hook runs per step: the size is worked out once per landed measurement of a new largest bucket
+  (`sized_from`). A state that wraps another forwards `submission_steps`, or the wrapped one's
+  measurement is lost. `chunked_steps_keep_to_the_submission_steps`,
+  `the_runner_keeps_to_the_submission_steps` and henad-explore's
+  `a_track_keeps_to_the_submission_steps` hold the three submitters to it, and henad-models'
+  `the_neighbour_index_alone_sizes_no_submission` holds stock `gpu_boids`, whose hooks measure
+  nothing, to 64 from its first submission. `AgentHooks` has provided
   methods for a model composed at run time. The engine calls `run_params_bytes(AgentPassId, ctx,
   AgentRun, params)`, a `Result`, and `run_stats(.., AgentRun, params)`, which forward to
   `pass_params_bytes` and `stats` by default (16 zero bytes for the colour pass, which
@@ -205,7 +227,10 @@ types an unsuffixed literal falls back to.
   `Demand.host` holds `HostWork` runs (a graph's init, an action's rerun). `Demand::shortfalls`
   refuses a submission past `SUBMISSION_WORK_BUDGET` (600e9 units: `MAX_STEPS_PER_SUBMISSION`
   times the step passes plus display and reduce, or one press's passes), naming the heaviest pass,
-  and a host run past `HOST_WORK_BUDGET` (4e9 units). Work saturates. Both budgets come from one
+  and a host run past `HOST_WORK_BUDGET` (4e9 units). The refusal charges the work the model
+  declares, a radius walk at an even spread. The runner, `stepping` and the sweep tracks then hold
+  each submission to `GpuSimState::submission_steps`, measured as above.
+  Work saturates. Both budgets come from one
   measurement on an Apple M4 Pro (Metal, release builds, 2026-11-03). Stock `gpu_sir` at 16384 by
   16384 ran 45.7 to 46.2 steps a second (21.6 to 21.9 ms a step, 81 ps a cell; 79 ps at 8192),
   so 64 steps take about 1.4 s. Its exact port `gpu_sir_exact.toml` costs 29 units a cell a tick,
@@ -233,7 +258,8 @@ types an unsuffixed literal falls back to.
   else), and no buffer label is reserved or ends in `_in` or `_out`. Either mismatch validates
   and runs wrong.
   `gpu/stepping.rs` steps a `GpuSimState` from a host with no sim thread, native only. It submits
-  at most `MAX_STEPS_PER_SUBMISSION` steps per command buffer, fires a `Schedule` under either
+  at most `GpuSimState::submission_steps(true)` steps per command buffer (`submit_in_chunks`,
+  which `run_batched` shares), fires a `Schedule` under either
   `Fire` rule, waits once at the end of a run, and blocks on a stats readback. `submit_slice`
   submits one command buffer of steps, with the stats passes when sampling, and returns its
   `SubmissionIndex` without waiting. Its stats passes are `GpuSimState::encode_stats_passes`, the

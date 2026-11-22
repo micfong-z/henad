@@ -120,6 +120,7 @@ A network model's layout runs when a snapshot is published, outside any tick.
 A GPU model is driven differently again.
 Its runner encodes many steps into a single submission, capped at 64 steps per submission.
 The cap exists because enough passes in one command buffer trips the OS GPU watchdog, which raises no error and no panic and leaves every later readback silently reading zero.
+A model of agents whose step work depends on where its agents stand measures that work on the device after its first step, and `GpuSimState::submission_steps` then caps its submissions lower where a crowd needs it.
 An action on a GPU model goes out in its own submission.
 
 On native the app builds a model on a thread of its own, `henad-model-build`.

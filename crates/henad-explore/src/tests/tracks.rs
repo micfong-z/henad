@@ -55,6 +55,8 @@ struct Misbehavior {
     readback_delay: u32,
     /// Whether every action is rejected.
     refuses_actions: bool,
+    /// Steps a submission holds once the first step has run, one before, in place of the steps of the wrapped state.
+    submission_steps: Option<u32>,
 }
 
 /// Counts over every state that an entry from [`instrument`] built.
@@ -70,6 +72,8 @@ struct StateCounts {
     refused_actions: AtomicUsize,
     /// Tick that each state had recorded steps to when it was dropped.
     final_ticks: Mutex<Vec<u64>>,
+    /// Steps of each call that recorded any, over every state.
+    chunks: Mutex<Vec<u32>>,
 }
 
 /// GPU state that forwards to the state of a real model, and misbehaves as its [`Misbehavior`] specifies.
@@ -134,6 +138,19 @@ impl GpuSimState for HarnessState {
         }
         self.state.encode_steps(encoder, count, timestamps);
         self.counts.highest_tick.fetch_max(end, Ordering::Relaxed);
+        if count > 0
+            && let Ok(mut chunks) = self.counts.chunks.lock()
+        {
+            chunks.push(count);
+        }
+    }
+
+    fn submission_steps(&mut self, block: bool) -> u32 {
+        match self.misbehavior.submission_steps {
+            Some(_) if self.state.tick() == 0 => 1,
+            Some(steps) => steps,
+            None => self.state.submission_steps(block),
+        }
     }
 
     fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
@@ -535,6 +552,33 @@ fn an_interleaved_queue_executes_every_step() {
             model.id()
         );
     }
+}
+
+/// A track holds each submission to the state's submission steps: one step at tick 0, then five at a time up to the
+/// sample at tick 23.
+#[test]
+fn a_track_keeps_to_the_submission_steps() {
+    let Some(ctx) = headless_device() else {
+        return;
+    };
+    let counts = Arc::new(StateCounts::default());
+    let model = instrument(entry("gpu_sir", Some(&ctx)), &ctx, &counts, |_| Misbehavior {
+        submission_steps: Some(5),
+        ..Misbehavior::default()
+    });
+    let mut spec = SweepSpec::new(model.id());
+    spec.fixed = fixed(&[("grid_width", "32"), ("grid_height", "32")]);
+    spec.run.steps = 23;
+    spec.measure.stats_every = 23;
+    spec.measure.series_every = 23;
+    let (plan, measure) = planned(&model, Some(&ctx), &spec);
+    let finished = outcomes(&executor(&model, &ctx, &measure, tracks(1)), &plan);
+    assert_eq!(finished.len(), 1);
+    assert_eq!((finished[0].status, finished[0].ticks), (RunStatus::Ok, 23));
+    assert_eq!(
+        *counts.chunks.lock().expect("the chunks are recorded"),
+        [1, 5, 5, 5, 5, 2]
+    );
 }
 
 #[test]

@@ -328,6 +328,14 @@ A model past either budget is refused before anything is built.
 A single run stops with an error, a sweep stops before its first run, and a search records each candidate past a budget as `refused`.
 A sheet's refusal names its lines, and a graph's names the heaviest pass.
 
+Agents that gather visit more agents than an even spread puts in a walk.
+Henad therefore measures a model with an `agent.radius_fold` as it runs.
+Its first tick goes to the GPU alone, and Henad then reads the most agents any one cell of the neighbour index holds.
+Each later submission holds at most the ticks that fit the budget when every cell a walk covers holds that many agents.
+For a crowd that is fewer than 64.
+Henad measures again with a sample of the statistics, at most once every 64 ticks, and after a press from the next tick on.
+Results do not depend on how the ticks are split into submissions.
+
 ### Faults while a model runs
 
 An `agent.radius_fold` that would walk more than 65536 cells of the neighbour index, or that visits more than 65536 agents, ends its run with a fault.

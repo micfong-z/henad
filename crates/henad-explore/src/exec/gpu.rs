@@ -2,8 +2,9 @@
 //!
 //! The interleaver runs on the calling thread, since wgpu's error scopes belong to one thread. It visits the live
 //! tracks in turn, and each visit collects a completed sample and submits the next command buffer of one track. A
-//! command buffer holds the steps of one track only, at most [`GpuTrackDepth::steps_per_submission`] of them. The
-//! steps of several tracks in one buffer could pass that bound together and trip the operating system's GPU watchdog.
+//! command buffer holds the steps of one track only, at most [`GpuTrackDepth::steps_per_submission`] of them, or the
+//! fewer that the state's [`GpuSimState::submission_steps`] returns. The steps of several tracks in one buffer could
+//! pass that bound together and trip the operating system's GPU watchdog.
 //!
 //! A track records its work in the order a blocking run takes it: at each tick the actions due there, then the stats
 //! passes of the sample due there, then the steps to the next tick anything is due at. A sample reads back while the
@@ -566,7 +567,11 @@ impl GpuTrack {
             }
             (0, true)
         } else {
-            let mut boundary = sample_tick.min(self.tick + u64::from(depth.steps_per_submission));
+            // A state that measures its steps' work may submit the measurement, and never waits for it here.
+            let state = &mut self.state;
+            let measured = catching_on(ctx, STEPPING, || state.submission_steps(false))?;
+            let steps = depth.steps_per_submission.min(measured);
+            let mut boundary = sample_tick.min(self.tick + u64::from(steps));
             if let Some(due) = self.schedule.next_due_after(self.tick) {
                 boundary = boundary.min(due);
             }

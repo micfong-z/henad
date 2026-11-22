@@ -74,8 +74,11 @@ field that takes deposits over `Cells(layers)` (`max(field, bitcast(accum))` or 
 zeroed, then the `finish` body through the merged lane), then `advance_tick` when a GPU pass reads
 the tick. The tick lives in word `TICK_WORD` (1) of the engine's `counters`, read with `atomicLoad`,
 and `advance_tick` adds 1 from invocation 0 after the step's last pass. Word `FAULT_WORD` (0) is the
-fault, the document's counters start at `FIRST_COUNTER` (2), and the reduce leaf's tallies follow,
-`cleared_counters` in the spec. Buffers: each `[[lane]]` at its own position as `lane_<id>_<domain>`
+fault, and the document's counters start at `FIRST_COUNTER` (2), two words each (`COUNTER_WORDS`):
+counter `k`'s low word at `counter_word(k)` and its high word after it. The reduce leaf's tallies
+follow at `counters_end(counters)`, `cleared_counters` in the spec. That range never covers a
+counter.
+Buffers: each `[[lane]]` at its own position as `lane_<id>_<domain>`
 (a `vec2` one interleaved `vec2<T>`, the position lane drawable, a lane of `CheckReport::dual_lanes`
 whose writer runs dual), `field_<id>_cells` (layers one after another), `accum_<id>_cells` per field
 taking deposits, `agent_colors` (drawable). `Role::Color` runs the view passes over agents and
@@ -111,7 +114,20 @@ each pass's cost, uniform size and workgroup bytes, `init_cost` and each action'
 `AgentGraphHooks::step_cost` charges each radius fold of a step at the parameters: the cells its
 walk covers (from the radius the prelude gives and the index of `geom`), plus the agents a uniform
 spread puts there, at most every agent and the visit cap, times the body's instruction count plus
-`VISIT_COST` (8). A walk past the cell cap costs 1, since it faults at once. `reports_faults` holds
+`VISIT_COST` (8). A walk past the cell cap costs 1, since it faults at once. That charge holds the
+build to the work budget. `measured_step_cost` charges the same walks, through the shared
+`walk_cost`, with every cell a walk covers holding the `largest` agents the engine measured in one
+cell of the index, and returns `None` for a model whose tick passes hold no radius fold. The engine
+sizes its submissions from it after the first step (`agents/henad-compute.md`).
+`a_crowd_in_one_cell_sizes_the_second_submission_from_its_measurement`,
+`a_press_measures_the_index_again_after_the_next_step`,
+`a_measurement_from_before_a_press_sizes_nothing` and
+`a_stats_readback_carries_the_measurement` (`engine_runs.rs`) hold it on the device. In the crowd
+agent 0 alone walks, through the fold's `when`, so the step stays cheap on a CPU adapter while the
+charge counts a walk for every agent. `the_submission_sizes_change_no_result` holds a run sized
+from a measurement to the buffers of one tick a submission, word for word, and
+`a_graph_with_nothing_to_measure_submits_64_steps_from_the_start` holds a grid and a graph of
+agents with no fold to 64 steps from the first submission, with no wait. `reports_faults` holds
 when a fold can fault. `run_params_bytes` returns a prelude's fault, and `pass_params_bytes` alone
 still zeroes the block. The field update runs one invocation per slot `layer * cells + cell`
 (`henad_slot`): its body's `henad_index`, own cell and default `at` are the cell, a draw's element
@@ -155,20 +171,24 @@ test. A fold the table does not hold keeps the graph's message, and a graph file
 The names change no shader, so the text and the code identity stay. henad-explore's `ModelFile`
 passes a sheet's `SheetFile::fault_names`.
 
-**Counters and deposits.** A step that adds to a counter declares `var<workgroup>
-henad_counter_tally`, one `atomic<u32>` slot per counter its passes add to, numbered in the order
-the passes first add to each (`Emitter::counter_slots`). `counter.add` skips a zero amount and
-adds any other into its counter's slot. `main` zeroes the slots before a `workgroupBarrier()` at
-its top. After a second barrier at its end, the invocation of each slot adds a non-zero tally to
-the counter's word of `counters` with one `atomicAdd`, the shape of the reduce leaf. A counter
-therefore takes one global atomic per workgroup. Both barriers sit at the top level of `main`,
-outside the guard of every pass. A tally wraps at 2^32 as the counter does, and the sum of the
-tallies equals the host's total. The step's `workgroup_bytes` are four a slot, which
-`Demand::shortfalls` holds to the device. The checker keeps `counter.add` at the top of a tick
-pass over agents (its contexts, and no function holds a sink), and the compiler refuses one
-anywhere else. `field.deposit` issues its `atomicMax` only inside the test that the value is above
-0, so a zero, a negative or a NaN issues no atomic. An `accum` word starts at 0 and never falls,
-and an `atomicMax` of 0 on it changes nothing. A field whose `combine` is a sum
+**Counters and deposits.** A counter is a 64-bit total in two `u32` words. A step that adds to a
+counter declares `var<workgroup> henad_counter_tally`, two `atomic<u32>` words per slot, one slot
+per counter its passes add to, numbered in the order the passes first add to each
+(`Emitter::counter_slots`). 256 adds of up to 2^32 - 1 pass one word. A slot therefore takes both.
+`counter.add` skips a zero amount and adds any other into the slot's low word, and an add whose
+returned old value plus the amount passes 2^32 - 1 adds 1 to the high word. `main` zeroes the
+words before a `workgroupBarrier()` at its top. After a second barrier at its end, the invocation
+of each slot adds a non-zero low word to the counter's low word in `counters` with one
+`atomicAdd`, carries 1 when that add wraps, and adds the slot's high word plus the carry to the
+counter's high word when non-zero, the shape of the reduce leaf. A counter therefore takes one or
+two global atomics per workgroup. Both barriers sit at the top level of `main`, outside the guard
+of every pass. The total wraps only at 2^64, and the host's `HostLanes` counters are `u64` with the
+same total (`counter_total` joins the words for `stat.counter`). The step's `workgroup_bytes` are
+eight a slot, which `Demand::shortfalls` holds to the device. The checker keeps `counter.add` at
+the top of a tick pass over agents (its contexts, and no function holds a sink), and the compiler
+refuses one anywhere else. `field.deposit` issues its `atomicMax` only inside the test that the
+value is above 0, so a zero, a negative or a NaN issues no atomic. An `accum` word starts at 0 and
+never falls, and an `atomicMax` of 0 on it changes nothing. A field whose `combine` is a sum
 (`FieldPlan::combine`, and `Operation::Deposit::combine` at the node) adds `u32(round(value * 2^k))`
 with `atomicAdd` inside the same test, the scale 2^k a literal. The product by a power of two is
 exact, and WGSL's `round` rounds half to even as `f32::round_ties_even` does on the host. Its field
@@ -180,7 +200,11 @@ henad_deposit)`. The scale and the resolution both come from `FieldCombine::depo
 `a_deposit_issues_no_atomic_unless_its_value_is_above_zero` (`agent_wgsl.rs`) hold the text,
 `no_step_returns_early` (`wgsl.rs`) every starter's and fixture's shaders but the display, and
 `a_counter_over_many_workgroups_equals_the_host_total` (`gpu_cases.rs`) a million agents, half
-adding 0, to the host's total on the device.
+adding 0 and half a hashed word that makes tallies and the total carry, to the host's total on the
+device.
+`counter.add`'s known answers carry past 2^32 in the tally and at the flush on both backends, and
+`a_counter_past_2_32_reads_its_whole_total_through_the_engine` (`engine_runs.rs`) reads 5e9 and
+1e10 through a built engine.
 
 **Probes** (`wgsl/probes.rs`). `GridProgram::compile_with_probes(file, &Probes)` and
 `AgentProgram::compile_with_probes` take a `Probes` list beside the file (and

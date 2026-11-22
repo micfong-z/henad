@@ -115,9 +115,9 @@ pub struct PassCase {
     /// Deposits the pass leaves for the field update, per cell, by `<field>.<layer>`.
     pub deposits: &'static [(&'static str, &'static [CaseValue])],
     /// Counter values before the pass, by counter id. A counter left out starts at 0.
-    pub counters_before: &'static [(&'static str, u32)],
+    pub counters_before: &'static [(&'static str, u64)],
     /// Counter values after the pass, by counter id.
-    pub counters_after: &'static [(&'static str, u32)],
+    pub counters_after: &'static [(&'static str, u64)],
     /// Expected tick-rate outputs by port reference such as `n2.S`, for a stats pass.
     pub stats: &'static [(&'static str, CaseValue)],
     /// Expected palette index per element, for a view pass.

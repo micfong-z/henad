@@ -62,8 +62,32 @@ pub(crate) const FAULT_WORD: usize = 0;
 /// Word of an agents world's `counters` that holds the tick, which the last pass of a step advances.
 pub(crate) const TICK_WORD: usize = 1;
 
-/// Word of an agents world's `counters` that holds the document's first counter.
+/// Word of an agents world's `counters` that holds the low word of the document's first counter.
 pub(crate) const FIRST_COUNTER: usize = 2;
+
+/// Words of an agents world's `counters` that each document counter takes: its low word, then its high word. The
+/// high word counts the carries out of the low word.
+pub(crate) const COUNTER_WORDS: usize = 2;
+
+/// Returns the word of an agents world's `counters` that holds the low word of the document counter at `position`.
+/// Its high word follows it.
+pub(crate) const fn counter_word(position: usize) -> usize {
+    FIRST_COUNTER + COUNTER_WORDS * position
+}
+
+/// Returns the first word of an agents world's `counters` after the words of `counters` document counters, where the
+/// reduce leaf's tallies start.
+pub(crate) const fn counters_end(counters: usize) -> usize {
+    counter_word(counters)
+}
+
+/// Returns the 64-bit total of the document counter at `position` from the words of an agents world's `counters`,
+/// 0 for a word `words` lacks.
+pub(crate) fn counter_total(words: &[u32], position: usize) -> u64 {
+    let word = |index: usize| u64::from(words.get(index).copied().unwrap_or(0));
+    let low = counter_word(position);
+    word(low) | (word(low + 1) << 32)
+}
 
 /// Label of the buffer of packed RGBA words that the colour pass of an agents world writes and the point view draws.
 pub(crate) const AGENT_COLORS: &str = "agent_colors";
@@ -119,10 +143,10 @@ impl FieldPlan {
 pub(crate) struct AgentPlan {
     /// Fields in `[[field]]` order.
     pub fields: Vec<FieldPlan>,
-    /// Number of the document's counters, which take the words after the fault word of `counters`.
+    /// Number of the document's counters. Each takes two words of `counters` after the tick word.
     pub counters: usize,
-    /// Words of the `counters` buffer: the fault word, the tick, the document's counters, the reduce leaf's tallies,
-    /// then the counts of the probes.
+    /// Words of the `counters` buffer: the fault word, the tick, the low and high word of each document counter, the
+    /// reduce leaf's tallies, then the counts of the probes.
     pub counter_words: usize,
     /// Each radius fold that can fault, as its pass id and node. At position `p`, its fault code past its visit cap is
     /// `2 * p + 1`, and past its cell cap `2 * p + 2`.
@@ -1684,10 +1708,15 @@ impl Emitter<'_> {
                 let next = self.counter_slots.len();
                 let slot = *self.counter_slots.entry(*counter).or_insert(next);
                 let n = node.number();
+                // The slot's low word wraps at 2^32, and each add that wraps it carries 1 into the high word.
+                let (low, high) = (COUNTER_WORDS * slot, COUNTER_WORDS * slot + 1);
                 lines.push_str(&format!(
                     "{indent}let henad_amount_n{n} = {amount};\n\
                      {indent}if (henad_amount_n{n} != 0u) {{\n\
-                     {indent}    atomicAdd(&henad_counter_tally[{slot}u], henad_amount_n{n});\n\
+                     {indent}    let henad_before_n{n} = atomicAdd(&henad_counter_tally[{low}u], henad_amount_n{n});\n\
+                     {indent}    if (henad_before_n{n} > 0xffffffffu - henad_amount_n{n}) {{\n\
+                     {indent}        atomicAdd(&henad_counter_tally[{high}u], 1u);\n\
+                     {indent}    }}\n\
                      {indent}}}\n"
                 ));
             }
@@ -2467,7 +2496,7 @@ impl Emitter<'_> {
             unreachable!("an agents shader has a plan");
         };
         let tallies = self.tally_offset;
-        let tally_base = FIRST_COUNTER + plan.counters;
+        let tally_base = counters_end(plan.counters);
         let mut bindings = Bindings::default();
         self.bind_lanes(&mut bindings);
         let merged = match self.role {
@@ -2520,9 +2549,11 @@ impl Emitter<'_> {
             ));
         }
         let counted = self.counter_slots.len();
+        // Each slot holds a low and a high word, since 256 adds of up to 2^32 - 1 pass one word.
+        let tally_words = COUNTER_WORDS * counted;
         if counted > 0 {
             text.text.push_str(&format!(
-                "var<workgroup> henad_counter_tally: array<atomic<u32>, {counted}>;\n\n"
+                "var<workgroup> henad_counter_tally: array<atomic<u32>, {tally_words}>;\n\n"
             ));
         }
         let fired = self.fire_slots.len();
@@ -2582,8 +2613,8 @@ impl Emitter<'_> {
                 // A barrier needs uniform control flow, so it sits at the top level of `main`, and no step returns
                 // early.
                 text.text.push_str(&format!(
-                    "    if (henad_lid.x < {counted}u) {{\n        atomicStore(&henad_counter_tally[henad_lid.x], \
-                     0u);\n    }}\n    workgroupBarrier();\n"
+                    "    if (henad_lid.x < {tally_words}u) {{\n        \
+                     atomicStore(&henad_counter_tally[henad_lid.x], 0u);\n    }}\n    workgroupBarrier();\n"
                 ));
             }
             text.text
@@ -2670,14 +2701,23 @@ impl Emitter<'_> {
                 _ => text.append(body),
             }
             if counted > 0 {
-                // Each counter takes one global atomic per workgroup, from the invocation of its slot.
+                // Each counter takes one global atomic per workgroup on its low word, from the invocation of its slot,
+                // and one on its high word when the tally's high word or the carry out of the low word is non-zero.
                 text.push("    workgroupBarrier();\n");
                 for (&counter, &slot) in &self.counter_slots {
+                    let (low, high) = (COUNTER_WORDS * slot, COUNTER_WORDS * slot + 1);
+                    let word = counter_word(counter);
                     text.text.push_str(&format!(
-                        "    if (henad_lid.x == {slot}u) {{\n        let henad_tally_{slot} = \
-                         atomicLoad(&henad_counter_tally[{slot}u]);\n        if (henad_tally_{slot} != 0u) {{\n            \
-                         atomicAdd(&counters[{word}u], henad_tally_{slot});\n        }}\n    }}\n",
-                        word = FIRST_COUNTER + counter
+                        "    if (henad_lid.x == {slot}u) {{\n        \
+                         let henad_tally_{slot} = atomicLoad(&henad_counter_tally[{low}u]);\n        \
+                         var henad_carry_{slot} = atomicLoad(&henad_counter_tally[{high}u]);\n        \
+                         if (henad_tally_{slot} != 0u) {{\n            \
+                         let henad_before_{slot} = atomicAdd(&counters[{word}u], henad_tally_{slot});\n            \
+                         if (henad_before_{slot} > 0xffffffffu - henad_tally_{slot}) {{\n                \
+                         henad_carry_{slot} = henad_carry_{slot} + 1u;\n            }}\n        }}\n        \
+                         if (henad_carry_{slot} != 0u) {{\n            \
+                         atomicAdd(&counters[{}u], henad_carry_{slot});\n        }}\n    }}\n",
+                        word + 1
                     ));
                 }
             }
@@ -2694,7 +2734,7 @@ impl Emitter<'_> {
                 };
                 tallies as u64 * 4 + sums
             }
-            _ => (counted + fired) as u64 * 4,
+            _ => (tally_words + fired) as u64 * 4,
         };
         Emitted {
             text: text.text,

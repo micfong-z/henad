@@ -157,6 +157,11 @@ impl CounterReadback {
         try_read_words(device, queue, &self.storage)
     }
 
+    /// Returns the tag of the copy that [`Self::values`] holds, 0 before the first map lands.
+    pub(crate) fn values_tag(&self) -> u64 {
+        self.values_tag
+    }
+
     /// Returns whether a map started by [`Self::begin_map`] has not been consumed yet.
     pub fn is_pending(&self) -> bool {
         self.pending.is_some()

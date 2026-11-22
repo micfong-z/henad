@@ -291,7 +291,8 @@ impl AgentRun {
 /// same name.
 ///
 /// The engine calls no hook per step or per element. It reads the sizes and seeds once at construction, a uniform block
-/// once per build or action press, and the stat values once per read.
+/// once per build or action press, the stat values once per read, and the step costs once per measurement of the
+/// index that lands with a new largest bucket.
 ///
 /// The methods with a default body serve a model composed at run time. [`Self::run_params_bytes`] and
 /// [`Self::run_stats`] forward to [`Self::pass_params_bytes`] and [`Self::stats`] by default, and the engine calls
@@ -387,8 +388,25 @@ pub trait AgentHooks: Send + Sync {
     ///
     /// A model composed at run time adds here the work that depends on the parameters, such as the cells and agents a
     /// radius query walks, so [`GpuAgentSpec::demand`] counts it. The default adds none.
+    ///
+    /// The engine refuses a build whose submission of [`crate::gpu::MAX_STEPS_PER_SUBMISSION`] steps passes
+    /// [`crate::gpu::SUBMISSION_WORK_BUDGET`] at this charge. A charge that assumes the agents spread evenly is
+    /// measured after the first step through [`Self::measured_step_cost`].
     fn step_cost(&self, _step: usize, _geom: &Geometry, _params: &[ParamValue]) -> u64 {
         0
+    }
+
+    /// Returns the work units one invocation of the step pass at `step` adds, as [`Self::step_cost`] does, when the
+    /// fullest cell of the neighbour index holds `largest` agents, or `None` when the work does not depend on where
+    /// the agents are.
+    ///
+    /// When it returns `Some` for a step and the spec declares an index, the engine runs the first step in a
+    /// submission of its own, measures the largest bucket of its index on the device, and sizes each later submission
+    /// from this charge with [`GpuAgentSpec::submission_steps`]. It measures again with a stats readback, at most once
+    /// every [`crate::gpu::MAX_STEPS_PER_SUBMISSION`] ticks, and after a press, from the next step. The default returns
+    /// `None`, and the engine then measures nothing.
+    fn measured_step_cost(&self, _step: usize, _geom: &Geometry, _params: &[ParamValue], _largest: u32) -> Option<u64> {
+        None
     }
 
     /// Returns whether a shader of the model can record a fault in the counters, which [`Self::fault`] reads.
@@ -669,6 +687,33 @@ impl GpuAgentSpec {
 
     /// Resources that would be allocated for this model based on `params`.
     pub fn demand(&self, params: &[ParamValue], limits: &wgpu::Limits) -> Demand {
+        self.demand_charging(params, limits, |step, geom| self.hooks.step_cost(step, geom, params))
+    }
+
+    /// Returns the most steps one submission may hold, from 1 to [`crate::gpu::MAX_STEPS_PER_SUBMISSION`], when the
+    /// fullest cell of the neighbour index holds `largest` agents: the most whose work with the display and stat
+    /// passes fits [`crate::gpu::SUBMISSION_WORK_BUDGET`], each step charged as
+    /// [`AgentHooks::measured_step_cost`] charges it.
+    ///
+    /// A step the hooks do not measure keeps the charge of [`AgentHooks::step_cost`]. A step whose work alone passes
+    /// the budget still gets one step a submission.
+    pub fn submission_steps(&self, params: &[ParamValue], limits: &wgpu::Limits, largest: u32) -> u32 {
+        self.demand_charging(params, limits, |step, geom| {
+            self.hooks
+                .measured_step_cost(step, geom, params, largest)
+                .unwrap_or_else(|| self.hooks.step_cost(step, geom, params))
+        })
+        .submission_steps()
+    }
+
+    /// Returns the demand of the model at `params`, with `step_cost` the work units one invocation of each step pass
+    /// adds to the cost the pass declares, by the step's position and over the geometry.
+    fn demand_charging(
+        &self,
+        params: &[ParamValue],
+        limits: &wgpu::Limits,
+        step_cost: impl Fn(usize, &Geometry) -> u64,
+    ) -> Demand {
         let geom = self.geometry(params, limits);
         let mut demand = Demand::default();
         for (buffer, len) in self.buffers.iter().zip(self.hooks.buffer_lens(&geom)) {
@@ -687,7 +732,7 @@ impl GpuAgentSpec {
                 _ => pass.domain.map_or(0, |domain| u64::from(domain.invocations(&geom))),
             };
             let cost = if position < self.steps.len() {
-                pass.cost.saturating_add(self.hooks.step_cost(position, &geom, params))
+                pass.cost.saturating_add(step_cost(position, &geom))
             } else {
                 pass.cost
             };

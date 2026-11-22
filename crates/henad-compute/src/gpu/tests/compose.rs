@@ -11,6 +11,11 @@ const ENTRIES: &[(&str, &str, &str)] = &[
         crate::shader_bindings::primitives::hash_count::SHADER_STRING,
     ),
     (
+        "primitives/hash_largest.wgsl",
+        include_str!("../primitives/hash_largest.wgsl"),
+        crate::shader_bindings::primitives::hash_largest::SHADER_STRING,
+    ),
+    (
         "primitives/hash_scatter.wgsl",
         include_str!("../primitives/hash_scatter.wgsl"),
         crate::shader_bindings::primitives::hash_scatter::SHADER_STRING,

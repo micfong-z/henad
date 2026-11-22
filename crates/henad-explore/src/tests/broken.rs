@@ -660,6 +660,10 @@ impl GpuSimState for BuggyGpuState {
         self.state.encode_steps(encoder, count, timestamps);
     }
 
+    fn submission_steps(&mut self, block: bool) -> u32 {
+        self.state.submission_steps(block)
+    }
+
     fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
         self.state.encode_action(encoder, index)
     }

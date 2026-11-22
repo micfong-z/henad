@@ -8,6 +8,7 @@ mod catalogue;
 mod checker;
 mod corpus;
 mod edit;
+mod engine_runs;
 mod file_format;
 mod functions;
 mod gpu_cases;

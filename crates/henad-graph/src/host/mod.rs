@@ -136,7 +136,7 @@ pub struct HostLanes {
     /// Deposits per layer of a field that takes deposits, with the id of the layer.
     deposits: Vec<LaneColumn>,
     /// Value of each counter, in `[[counter]]` order.
-    counters: Vec<(String, u32)>,
+    counters: Vec<(String, u64)>,
 }
 
 impl HostLanes {
@@ -260,8 +260,8 @@ impl HostLanes {
         self.deposits.iter().find(|column| column.id() == id)
     }
 
-    /// Returns the value of the counter `id`.
-    pub fn counter(&self, id: &str) -> Option<u32> {
+    /// Returns the value of the counter `id`, a 64-bit total.
+    pub fn counter(&self, id: &str) -> Option<u64> {
         self.counters
             .iter()
             .find(|(known, _)| known == id)
@@ -269,7 +269,7 @@ impl HostLanes {
     }
 
     /// Sets the counter `id` to `value`, and returns whether the world holds the counter.
-    pub fn set_counter(&mut self, id: &str, value: u32) -> bool {
+    pub fn set_counter(&mut self, id: &str, value: u64) -> bool {
         match self.counters.iter_mut().find(|(known, _)| known == id) {
             Some((_, slot)) => {
                 *slot = value;

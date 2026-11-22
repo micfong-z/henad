@@ -9,7 +9,6 @@ use henad_core::params::ParamValue;
 use henad_core::view::{StatEntry, stat_entries};
 
 use crate::fault::{Fault, FaultSink, STEPPING};
-use crate::gpu::GpuContext;
 use crate::gpu::agent_spec::{AgentPassId, AgentRun, GpuAgentSpec};
 use crate::gpu::built_pass::{BuiltPass, PassDescriptor, Sides, buffer_binding, stamps};
 use crate::gpu::capacity::Demand;
@@ -18,12 +17,13 @@ use crate::gpu::primitives::dispatch::linear_dispatch;
 use crate::gpu::primitives::pipeline::{lane_buffer, storage_buffer};
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll, read_words};
 use crate::gpu::primitives::reduce::GpuLaneReduce;
-use crate::gpu::primitives::spatial_hash::GpuSpatialHash;
+use crate::gpu::primitives::spatial_hash::{GpuSpatialHash, LargestBucket};
 use crate::gpu::shader_spec::{ShaderBinding, ShaderSpec};
 use crate::gpu::sides::SideTable;
 use crate::gpu::sim_thread::{GpuSimState, snapshot_blocking, submit_in_chunks};
 use crate::gpu::view::agents::GpuAgents;
 use crate::gpu::view::display::{DisplayTarget, GpuDisplay, build_display_target};
+use crate::gpu::{GpuContext, MAX_STEPS_PER_SUBMISSION};
 use crate::snapshot::{FireCounts, GpuSnapshot};
 
 /// Pass of an agent spec, with the invocations its uniform block reads.
@@ -53,7 +53,7 @@ impl AgentPass {
 /// [`GpuAgentState`] builds the spec from a model type and forwards every call here.
 ///
 /// A step calls no hook of the spec, an action press calls one for its uniform block, and [`SimState::stats`] calls one
-/// for the values.
+/// for the values. A measurement of the index that lands with a new largest bucket calls the step costs once.
 pub(crate) struct GpuAgentEngine {
     spec: Arc<GpuAgentSpec>,
     geom: Geometry,
@@ -105,6 +105,19 @@ pub(crate) struct GpuAgentEngine {
     faults: FaultSink,
     /// Whether the counters reported a fault, which ends the run.
     faulted: bool,
+    /// Measurement of the largest bucket of the neighbour index, when the hooks charge a step from it.
+    occupancy: Option<LargestBucket>,
+    /// Most steps one submission holds, sized from the latest measurement, `None` until one lands.
+    measured_steps: Option<u32>,
+    /// Largest bucket of the latest measurement that sized the submissions, with the steps it allows. An equal
+    /// measurement then calls no hook.
+    sized_from: Option<(u32, u32)>,
+    /// Tick up to which a measurement is out of date: 0 at the build, then the tick of the latest press. Only a
+    /// measurement of a later step sizes a submission.
+    stale_tick: u64,
+    /// Tick of the latest measurement recorded. A stats readback measures again once [`MAX_STEPS_PER_SUBMISSION`]
+    /// ticks have passed.
+    measured_tick: u64,
 
     agents: Sides<Arc<GpuAgents>>,
 }
@@ -232,6 +245,13 @@ impl GpuAgentEngine {
 
         let counters =
             (spec.counters > 0).then(|| CounterReadback::new(device, &format!("{id}_counters"), spec.counters));
+        // The hooks charge a walk of the index from the agents its cells hold, and the engine measures them.
+        let measured =
+            (0..spec.steps.len()).any(|step| spec.hooks.measured_step_cost(step, &geom, params, num_agents).is_some());
+        let occupancy = index
+            .as_ref()
+            .filter(|_| measured)
+            .map(|hash| hash.largest_bucket(device, id));
 
         // The display pass binds the view, and the snapshot carries the handle.
         let (display_view, display_handle) = match spec
@@ -382,6 +402,11 @@ impl GpuAgentEngine {
             buffer_lens: lens,
             faults: ctx.faults.clone(),
             faulted: false,
+            occupancy,
+            measured_steps: None,
+            sized_from: None,
+            stale_tick: 0,
+            measured_tick: 0,
         }
     }
 
@@ -427,6 +452,27 @@ impl GpuAgentEngine {
             }
         }
         Ok(blocks)
+    }
+
+    /// Sizes the submissions from a measurement of the index that landed, unless it reads a step up to
+    /// [`Self::stale_tick`]. Waits for one in flight when `block` holds and no measurement sizes them yet.
+    fn take_measurement(&mut self, block: bool) {
+        let Some(occupancy) = &mut self.occupancy else {
+            return;
+        };
+        let landed = occupancy.poll(&self.device, block && self.measured_steps.is_none());
+        let Some((_, largest)) = landed.filter(|&(tick, _)| tick > self.stale_tick) else {
+            return;
+        };
+        let steps = match self.sized_from {
+            Some((known, steps)) if known == largest => steps,
+            _ => {
+                let steps = self.spec.submission_steps(&self.params, &self.device.limits(), largest);
+                self.sized_from = Some((largest, steps));
+                steps
+            }
+        };
+        self.measured_steps = Some(steps);
     }
 
     /// Runs the rerun of action `index` on the host and uploads the buffers it writes to their current sides.
@@ -679,9 +725,35 @@ impl GpuSimState for GpuAgentEngine {
         }
     }
 
+    /// Returns [`MAX_STEPS_PER_SUBMISSION`] for a model whose hooks measure nothing. Otherwise the first step after the
+    /// build or a press goes alone, a measurement of its index follows in a submission of its own, and the steps come
+    /// from the measurement once it lands.
+    fn submission_steps(&mut self, block: bool) -> u32 {
+        let Some(occupancy) = &mut self.occupancy else {
+            return MAX_STEPS_PER_SUBMISSION;
+        };
+        if self.measured_steps.is_none() && self.tick > self.stale_tick && !occupancy.is_pending() {
+            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("henad_gpu_agent_measure"),
+            });
+            if occupancy.encode(&mut encoder, self.tick) {
+                self.queue.submit(Some(encoder.finish()));
+                occupancy.begin_readback();
+                self.measured_tick = self.tick;
+            }
+        }
+        self.take_measurement(block);
+        self.measured_steps.unwrap_or(1)
+    }
+
     fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
         if index >= self.actions.len() {
             return false;
+        }
+        // A press can move the agents. The next step goes alone and is measured again.
+        if self.occupancy.is_some() {
+            self.measured_steps = None;
+            self.stale_tick = self.tick;
         }
         // A fresh seed per press, so pressing twice draws twice. The write is queued before the
         // encoder is submitted, so the pass reads the new value.
@@ -737,12 +809,26 @@ impl GpuSimState for GpuAgentEngine {
         if let Some(counters) = &mut self.counters {
             counters.encode_copy_tagged(encoder, self.counted_tick);
         }
+        // The measurement of the index rides on the stats readback, once a step after the build or the press ran,
+        // and at most once per submission's worth of ticks after a measurement sized the submissions.
+        let due = self.measured_steps.is_none()
+            || self.tick >= self.measured_tick.saturating_add(u64::from(MAX_STEPS_PER_SUBMISSION));
+        if let Some(occupancy) = &mut self.occupancy
+            && self.tick > self.stale_tick
+            && due
+            && occupancy.encode(encoder, self.tick)
+        {
+            self.measured_tick = self.tick;
+        }
     }
 
     fn begin_stats_readback(&mut self) {
         self.reduce.begin_readback();
         if let Some(counters) = &mut self.counters {
             counters.begin_map();
+        }
+        if let Some(occupancy) = &mut self.occupancy {
+            occupancy.begin_readback();
         }
     }
 
@@ -753,6 +839,7 @@ impl GpuSimState for GpuAgentEngine {
             .as_mut()
             .map_or(StatsPoll::Landed, |readback| readback.poll_or_block(device, block));
         let poll = sums_poll.and(counters_poll);
+        self.take_measurement(false);
         if poll == StatsPoll::Landed && !self.faulted {
             let counters = self.counters.as_ref().map_or(&[][..], CounterReadback::values);
             if let Some(message) = self.spec.hooks.fault(counters) {
@@ -867,8 +954,10 @@ impl<M: GpuAgentModel> GpuAgentState<M> {
         }
     }
 
-    /// Submits `steps` steps, at most [`MAX_STEPS_PER_SUBMISSION`](crate::gpu::MAX_STEPS_PER_SUBMISSION) per command
-    /// buffer, as the runner does. Nothing waits on the GPU.
+    /// Submits `steps` steps, at most [`GpuSimState::submission_steps`] per command buffer, as the runner does.
+    ///
+    /// Nothing waits on the GPU, but for the measurement a model of agents with a radius fold takes after its first
+    /// step.
     pub fn run_batched(&mut self, steps: u32) {
         let (device, queue) = (self.engine.device.clone(), self.engine.queue.clone());
         submit_in_chunks(
@@ -948,6 +1037,10 @@ impl<M: GpuAgentModel> GpuSimState for GpuAgentState<M> {
     /// data.
     fn encode_steps(&mut self, encoder: &mut wgpu::CommandEncoder, count: u32, timestamps: Option<&wgpu::QuerySet>) {
         self.engine.encode_steps(encoder, count, timestamps);
+    }
+
+    fn submission_steps(&mut self, block: bool) -> u32 {
+        self.engine.submission_steps(block)
     }
 
     fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {

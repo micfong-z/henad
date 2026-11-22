@@ -198,7 +198,7 @@ fn hot_params(params: &[ParamValue]) -> BoidParams {
 mod tests {
     use super::*;
     use henad_compute::cpu::agent_engine::AgentModelState;
-    use henad_compute::gpu::{GpuAgentState, GpuContext};
+    use henad_compute::gpu::{GpuAgentState, GpuContext, GpuSimState as _, MAX_STEPS_PER_SUBMISSION};
     use henad_core::model::SimState as _;
     use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
@@ -367,5 +367,20 @@ mod tests {
                 "boid {i} left the world at ({x}, {y}); the dispatch fold probably missed it"
             );
         }
+    }
+
+    /// A neighbour index alone measures nothing: the stock model submits 64 steps from its first submission, and never
+    /// waits for a measurement.
+    #[test]
+    fn the_neighbour_index_alone_sizes_no_submission() {
+        let Some(ctx) = headless_context() else {
+            log::warn!("skipping the_neighbour_index_alone_sizes_no_submission: no adapter");
+            return;
+        };
+
+        let mut state = State::new(&ctx, &params(1_000, 800.0));
+        assert_eq!(state.submission_steps(false), MAX_STEPS_PER_SUBMISSION, "at tick 0");
+        state.run_batched(1);
+        assert_eq!(state.submission_steps(false), MAX_STEPS_PER_SUBMISSION, "after a step");
     }
 }

@@ -6,7 +6,7 @@ use henad_core::params::ParamValue;
 
 use super::support::{big_category, node, powi_flood_tables, tally_pass};
 use crate::GraphFile;
-use crate::wgsl::emit::FIRST_COUNTER;
+use crate::wgsl::emit::counter_word;
 use crate::wgsl::{AgentProgram, GridProgram, ShaderRole};
 
 /// Returns the file `id` of an agents world of 1000 agents, at most 1000000, with a position lane, then
@@ -373,8 +373,9 @@ fn two_counters() -> GraphFile {
     agents_file("node_two_counters", declarations, &passes)
 }
 
-/// Each counter a step adds to is tallied in workgroup memory, with a zero amount skipped, and flushed with one global
-/// atomic per workgroup after a barrier at the top level of `main`. The step reports the tallies' workgroup bytes.
+/// Each counter a step adds to is tallied in two words of workgroup memory, with a zero amount skipped and an add that
+/// wraps the low word carried into the high word, and flushed with one global atomic per word per workgroup after a
+/// barrier at the top level of `main`. The step reports the tallies' workgroup bytes.
 #[test]
 fn each_counter_flushes_once_per_workgroup_after_a_top_level_barrier() {
     let program = AgentProgram::compile(&two_counters()).unwrap_or_else(|problems| panic!("{problems:#?}"));
@@ -385,14 +386,21 @@ fn each_counter_flushes_once_per_workgroup_after_a_top_level_barrier() {
         .expect("the step shader");
     let text = step.text();
     assert!(
-        text.contains("var<workgroup> henad_counter_tally: array<atomic<u32>, 2>;"),
+        text.contains("var<workgroup> henad_counter_tally: array<atomic<u32>, 4>;"),
         "{text}"
     );
-    for word in [FIRST_COUNTER, FIRST_COUNTER + 1] {
-        let flush = format!("atomicAdd(&counters[{word}u], ");
-        assert_eq!(text.matches(&flush).count(), 1, "{flush}\n{text}");
+    for counter in 0..2 {
+        for word in [counter_word(counter), counter_word(counter) + 1] {
+            let flush = format!("atomicAdd(&counters[{word}u], ");
+            assert_eq!(text.matches(&flush).count(), 1, "{flush}\n{text}");
+        }
     }
-    assert_eq!(text.matches("atomicAdd(&henad_counter_tally[").count(), 3, "{text}");
+    // Each add takes the low word and, when it wraps, the high word.
+    assert_eq!(text.matches("atomicAdd(&henad_counter_tally[").count(), 6, "{text}");
+    for n in 2..=4 {
+        let carry = format!("if (henad_before_n{n} > 0xffffffffu - henad_amount_n{n}) {{");
+        assert_eq!(text.matches(&carry).count(), 1, "{carry}\n{text}");
+    }
     for n in 2..=4 {
         let skip = format!("if (henad_amount_n{n} != 0u) {{");
         assert_eq!(text.matches(&skip).count(), 1, "{skip}\n{text}");
@@ -415,7 +423,7 @@ fn each_counter_flushes_once_per_workgroup_after_a_top_level_barrier() {
         .iter()
         .find(|pass| pass.label.ends_with("count"))
         .expect("the step's spec");
-    assert_eq!(pass.workgroup_bytes, 8, "two tallies of four bytes");
+    assert_eq!(pass.workgroup_bytes, 16, "two tallies of two words of four bytes");
 
     let ants = crate::starters::starter("ants.toml").expect("the ants starter");
     let ants = AgentProgram::compile(&GraphFile::parse(ants.text).expect("the starter reads")).expect("it compiles");
@@ -425,7 +433,7 @@ fn each_counter_flushes_once_per_workgroup_after_a_top_level_barrier() {
         .map(|shader| {
             shader
                 .text()
-                .matches(&format!("atomicAdd(&counters[{FIRST_COUNTER}u], "))
+                .matches(&format!("atomicAdd(&counters[{}u], ", counter_word(0)))
                 .count()
         })
         .sum();

@@ -43,6 +43,9 @@ Read before touching a kernel, a chunk driver, the spatial hash or the scatter g
   hands a kernel the deltas the range test already computed, so it does not work them out twice.
   Don't reintroduce O(n²) neighbor search. `HashGrid::new` is the one place the cell geometry is
   decided, for the CPU sort and the GPU one alike, and it caps the grid at `MAX_INDEX_CELLS`.
+  The GPU hash's `LargestBucket` pass reads the counts once per measurement (after the first step
+  and a press, and in a stats readback at most once per 64 ticks), never once per step. A step
+  pays nothing for it.
 - `henad-compute/src/cpu/primitives/scatter.rs` (`ScatterGrid`) handles the one write pattern the rest of the
   engine can't: many agents depositing into the same cell. Read its module docs before changing
   it — the strategy choice is measured (`benches/scatter.rs`), not assumed, and **atomics are not

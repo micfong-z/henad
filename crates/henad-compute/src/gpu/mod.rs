@@ -49,7 +49,7 @@ pub use grid_spec::{
 };
 pub use limits::GpuNeeds;
 pub use primitives::readback::StatsPoll;
-pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
+pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid, LargestBucket};
 #[cfg(feature = "runtime-wgsl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
 pub use shader_spec::{ShaderBinding, ShaderSpec};

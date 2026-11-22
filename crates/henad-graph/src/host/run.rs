@@ -43,9 +43,9 @@ struct Machine<'a> {
     /// Deposits staged by the pass, by position among the deposit columns.
     deposits: Vec<Option<LaneColumn>>,
     /// Counters at the start of the pass, which a counter total reads.
-    start_counters: Vec<u32>,
+    start_counters: Vec<u64>,
     /// Counters after the pass's additions.
-    counters: Vec<u32>,
+    counters: Vec<u64>,
     /// State of each float sum.
     sums: Vec<SumState>,
     /// Number of elements of the pass.
@@ -214,7 +214,7 @@ pub(crate) struct Readback {
     /// Total of each float sum by sum number, and whether it sums `vec2f` values. A sum the readback leaves out is 0.
     pub sums: Vec<([f64; 2], bool)>,
     /// Value of each counter, in `[[counter]]` order.
-    pub counters: Vec<u32>,
+    pub counters: Vec<u64>,
 }
 
 /// Returns the frame of `program` after its prelude and, when `readback` is `Some`, its post block, with each tally's
@@ -329,7 +329,7 @@ impl<'a> Machine<'a> {
     ) -> Self {
         let world = *lanes.world();
         let (width, height, boundary) = world.domain_grid();
-        let start_counters: Vec<u32> = lanes.counters.iter().map(|(_, value)| *value).collect();
+        let start_counters: Vec<u64> = lanes.counters.iter().map(|(_, value)| *value).collect();
         Self {
             program,
             lanes,
@@ -484,15 +484,15 @@ impl Machine<'_> {
                     node: Some(node),
                     reason: "adds to a counter the world does not hold".to_owned(),
                 })?;
-                *total = total.wrapping_add(amount);
+                *total = total.wrapping_add(u64::from(amount));
                 return Ok(());
             }
-            Operation::CounterTotal { counter } => HostValue::U64(u64::from(
+            Operation::CounterTotal { counter } => HostValue::U64(
                 *self
                     .start_counters
                     .get(*counter)
                     .ok_or_else(|| self.fault(node, "reads a counter the world does not hold"))?,
-            )),
+            ),
             Operation::Clamp { x, lo, hi } => {
                 let raised = binary(BinaryOp::Max, frame[*x], frame[*lo]).ok_or_else(|| mismatch(self))?;
                 binary(BinaryOp::Min, raised, frame[*hi]).ok_or_else(|| mismatch(self))?

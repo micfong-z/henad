@@ -11,7 +11,9 @@ use crate::gpu::{GpuContext, GpuSimState, MAX_STEPS_PER_SUBMISSION, StatsPoll};
 
 /// Submits `count` steps on the GPU without waiting for them.
 ///
-/// Each command buffer holds at most [`MAX_STEPS_PER_SUBMISSION`] steps.
+/// Each command buffer holds at most [`GpuSimState::submission_steps`] steps, never more than
+/// [`MAX_STEPS_PER_SUBMISSION`]. A state that measures its steps' work waits for that measurement once, after its
+/// first step.
 pub fn submit_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) {
     submit_in_chunks(state, &ctx.device, &ctx.queue, count, "henad_gpu_steps");
 }
@@ -23,8 +25,9 @@ pub fn submit_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) {
 ///
 /// # Panics
 ///
-/// Panics when `count` exceeds [`MAX_STEPS_PER_SUBMISSION`]. A debug build also panics on a sample while the
-/// previous readback is pending, since the readback would skip it and report the stale values.
+/// Panics when `count` exceeds [`MAX_STEPS_PER_SUBMISSION`]. A caller holds `count` to
+/// [`GpuSimState::submission_steps`] as well. A debug build also panics on a sample while the previous readback is
+/// pending, since the readback would skip it and report the stale values.
 pub fn submit_slice(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u32, sample: bool) -> wgpu::SubmissionIndex {
     assert!(
         count <= MAX_STEPS_PER_SUBMISSION,

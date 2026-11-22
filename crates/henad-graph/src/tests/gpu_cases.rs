@@ -29,7 +29,7 @@ use crate::types::{Rate, ValueType};
 use crate::value::{ConfigValue, InputValue, PortRef};
 use crate::wgsl::agent_hooks::AgentGraphHooks;
 use crate::wgsl::agents::CompiledAgents;
-use crate::wgsl::emit::{FIRST_COUNTER, FieldPlan, SumLane};
+use crate::wgsl::emit::{FieldPlan, SumLane, counter_total, counter_word, counters_end};
 use crate::wgsl::uniform::Dispatch;
 use crate::wgsl::{GeneratedShader, Probes, ShaderRole, compile_shaders};
 use henad_core::authoring::model::field::Extent;
@@ -372,7 +372,9 @@ fn run_agent_pass_case(
             .iter()
             .position(|counter| counter.id == *id)
             .expect("a counter of the case");
-        counters[FIRST_COUNTER + position] = *value;
+        // The low word, then the high word.
+        counters[counter_word(position)] = *value as u32;
+        counters[counter_word(position) + 1] = (*value >> 32) as u32;
     }
     let lanes_of_leaf = shader.sum_lanes().len().max(1);
     let mut named: Vec<(&str, Vec<u32>)> = vec![
@@ -479,16 +481,12 @@ fn run_agent_pass_case(
             .iter()
             .position(|counter| counter.id == *id)
             .expect("a counter of the case");
-        assert_eq!(
-            counters[FIRST_COUNTER + position],
-            *expected,
-            "{what}: the counter {id}"
-        );
+        assert_eq!(counter_total(counters, position), *expected, "{what}: the counter {id}");
     }
     if !case.stats.is_empty() {
         let (_, program) = evaluator.program("case").expect("the case pass");
         let first = first_tally(&evaluator, shader, "case");
-        let tally_base = FIRST_COUNTER + compiled.plan.counters;
+        let tally_base = counters_end(compiled.plan.counters);
         let partials = &result.named[1];
         let lane_total = |lane: usize| -> f64 {
             (0..groups.0 as usize)
@@ -501,7 +499,7 @@ fn run_agent_pass_case(
                 .collect(),
             sums: sum_totals(program.sums.len(), shader.sum_lanes(), position, lane_total),
             counters: (0..compiled.plan.counters)
-                .map(|k| counters[FIRST_COUNTER + k])
+                .map(|k| counter_total(counters, k))
                 .collect(),
         };
         let frame = run::finish(program, &params, &context, world, Some(&readback))
@@ -868,7 +866,9 @@ fn run_many_agents_step(
 }
 
 /// A counter that every agent of a million adds to, half of them 0, ends at the host's total after one step on the
-/// device, each workgroup's tally flushed with one global atomic.
+/// device, each workgroup's tally flushed with one global atomic on each word.
+///
+/// The amounts are hashed words. A workgroup's tally carries past 2^32, and the total does too, near 2^50.
 #[test]
 fn a_counter_over_many_workgroups_equals_the_host_total() {
     let Some(device) = device_for("a_counter_over_many_workgroups_equals_the_host_total") else {
@@ -905,11 +905,15 @@ fn a_counter_over_many_workgroups_equals_the_host_total() {
         .run_pass("count", &mut lanes, &[], &RunContext::tick(None, 0), &mut stream)
         .unwrap_or_else(|error| panic!("{error}"));
     let host_total = lanes.counter("events").expect("the counter");
-    let written_total = (0..MANY_AGENTS).fold(0u32, |total, index| total.wrapping_add(counted_amount(index)));
-    assert_eq!(host_total, written_total, "the host adds every amount, wrapping");
+    let written_total: u64 = (0..MANY_AGENTS).map(|index| u64::from(counted_amount(index))).sum();
+    assert_eq!(host_total, written_total, "the host adds every amount");
+    assert!(
+        written_total > 1 << 48,
+        "the total is {written_total}, and should pass 2^32 by far"
+    );
 
     assert_eq!(
-        result.named[0][FIRST_COUNTER],
+        counter_total(&result.named[0], 0),
         host_total,
         "the counter on the device\n{}",
         shader.text()
