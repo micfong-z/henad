@@ -14,14 +14,13 @@ use henad_graph::sheet::sentence::{
 };
 
 use super::layout::{Column, ITEM_GAP, Table, line, text_width, wrapped_line};
-use super::starts::caption_width;
 use super::{
     DELETE_WIDTH, FIELD_WIDTH, PARAMETER_NAME_WIDTH, PaneState, Pending, SLIDER_WIDTH, SheetTrial, UNIT_WIDTH,
 };
 use crate::ui::editor::sheet::set_parameter_edit;
 use crate::ui::editor::sheet::widgets::{
-    NewParameterDialog, NumberUse, caption, commit_field, commit_number, message_ui, name_taken, set_name,
-    suggestion_field,
+    NewParameterDialog, NumberUse, caption, caption_width, commit_field, commit_number, message_ui, name_taken,
+    set_name, suggestion_field,
 };
 
 /// Returns the step of a slider over `range`: about a 200th of it, rounded down to 1, 2 or 5 times a power of ten.

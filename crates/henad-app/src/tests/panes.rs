@@ -180,7 +180,7 @@ pub fn line_text(harness: &mut Harness, prefix: &str) -> String {
     found[0].label[prefix.len() + 2..].to_owned()
 }
 
-/// Every text a settled frame shows, gathered while menus, pickers and help popovers are open, with the number of
+/// Every text a settled frame shows, gathered while menus and pickers are open, with the number of
 /// frames looked at.
 #[derive(Debug, Default)]
 pub struct Seen {
@@ -327,7 +327,7 @@ pub fn assert_controls_hold_their_words(harness: &mut Harness) {
                 "{owner} has no control named {}",
                 control.name
             );
-            let words = control.visible.trim_end_matches("...").trim().to_lowercase();
+            let words = control.visible.trim_end_matches('…').trim().to_lowercase();
             assert!(
                 control.select || control.name.to_lowercase().contains(&words),
                 "{} does not hold {}",
@@ -339,9 +339,9 @@ pub fn assert_controls_hold_their_words(harness: &mut Harness) {
 }
 
 /// Asserts that a button, a radio button or a check box of `nodes` shows `visible` and that its name holds it, a
-/// leading "+ " and a trailing "..." aside.
+/// leading "+ " and a trailing "…" aside.
 pub fn assert_control_holds(nodes: &[Node], visible: &str) {
-    let words = visible.trim_start_matches("+ ").trim_end_matches("...").to_lowercase();
+    let words = visible.trim_start_matches("+ ").trim_end_matches('…').to_lowercase();
     let named = nodes.iter().any(|node| {
         matches!(node.role, Role::Button | Role::RadioButton | Role::CheckBox)
             && node.label.to_lowercase().contains(&words)
@@ -538,8 +538,8 @@ pub fn add_new_outbreak(harness: &mut Harness, seen: &mut Seen) {
     pick(harness, seen, "Choose the old state", "Susceptible");
     click(harness, "New outbreak line 1: choose when");
     assert!(is_open(harness, CHOOSE_WHEN));
-    assert!(!shows(harness, "at rate ... per ..."), "a button's card takes no rate");
-    pick(harness, seen, CHOOSE_WHEN, "with chance ...");
+    assert!(!shows(harness, "at rate … per …"), "a button's card takes no rate");
+    pick(harness, seen, CHOOSE_WHEN, "with chance …");
     click(harness, "New outbreak line 1: choose a chance");
     assert!(picker_offers(harness, "Choose a chance", "Initial infected"));
     for rate in ["Infection rate", "Recovery rate"] {

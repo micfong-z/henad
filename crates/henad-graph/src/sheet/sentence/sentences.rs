@@ -898,7 +898,7 @@ impl<'a> Sentences<'a> {
                 .filter(|state| !states.contains(state)),
         );
         let branches = ordered.map(|state| {
-            let mut parts = Parts::text(&format!("{} -> ", self.state_name(property, Some(state))));
+            let mut parts = Parts::text(&format!("{} → ", self.state_name(property, Some(state))));
             let key = format!("branches.{state}");
             parts.append(match line.branches.get(state) {
                 Some(value) => self.value_parts(value, None).under(&key, Blank::Value),

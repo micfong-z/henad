@@ -8,7 +8,7 @@
 //!
 //! A line reads as its sentence from [`henad_graph::sheet::sentence`], drawn part by part: words with its lead words in
 //! the semibold face, a chosen value as a *chip* whose ground and border tell what it refers to, an empty slot as a
-//! dashed *blank*, a select inside the line, the grey "always" and the muted "otherwise" words. A line inside a When
+//! *blank*, a select inside the line, the grey "always" and the muted "otherwise" words. A line inside a When
 //! or a Repeat is indented one step per level on a darker ground, with a guide down each level.
 //!
 //! A click on a blank or a chip opens its *picker* ([`super::picker`]), and a choice runs one edit of the sheet. A
@@ -82,10 +82,10 @@ use super::picker::{
 use super::sheet_pane::SheetTrial;
 use super::widgets::{
     ARROW_WIDTH, DialogOutcome, FocusTooltip as _, KIND_BAR_WIDTH, NewParameterDialog, NumberUse, OverlayItem,
-    REGION_GAP, add_row_button, arrow_control, blank_shapes, blank_ui, caption, chip_with_id, dashed_rect,
-    escape_to_anchor, hairline, kind_bar, menu_button, menu_group, menu_item, message_ui, new_parameter_modal,
-    note_button, notice_ui, overlay, overlay_group, overlay_items, overlay_title, parameter_names, placed,
-    refusal_text, region, select_control, select_list, set_name, small_label, text_control,
+    REGION_GAP, add_row_button, arrow_control, blank_shapes, blank_ui, caption, chip_with_id, escape_to_anchor,
+    hairline, kind_bar, menu_button, menu_group, menu_item, message_ui, new_parameter_modal, note_button, notice_ui,
+    overlay, overlay_group, overlay_items, overlay_title, parameter_names, placed, refusal_text, region,
+    select_control, select_list, set_name, slot_outline, small_label, text_control, title_text,
 };
 use super::{LineFires, SheetEditor, accessible_group, find_property, over_agents, properties_of};
 use crate::init::semibold_font;
@@ -123,7 +123,7 @@ const SENTENCE_SIZE: f32 = 13.0;
 /// Size in points of the law.
 const LAW_SIZE: f32 = 12.0;
 
-/// Inset in points of the law's bar from the card's left edge, and of the title from it.
+/// Inset in points of the title and the law from the card's left edge.
 const CARD_INSET: f32 = 10.0;
 
 /// Width in points of the column at the right of a row that holds the line's menu.
@@ -690,7 +690,7 @@ fn card_ui(
 }
 
 /// Draws a card's title row, with a hairline under it: the `heading` in gray 100 and the semibold face, the help `help`
-/// beside it where the card has one, and the number of lines `count` as a small upper-case label at the right edge.
+/// beside it where the card has one, and the number of lines `count` as a [`caption`] at the right edge.
 fn title_bar_ui(ui: &mut Ui, heading: &str, count: Option<usize>, help: Option<Help>) {
     Frame::NONE
         .inner_margin(Margin {
@@ -704,8 +704,7 @@ fn title_bar_ui(ui: &mut Ui, heading: &str, count: Option<usize>, help: Option<H
             Sides::new().shrink_left().wrap().show(
                 ui,
                 |ui| {
-                    let font = semibold_font(ui.ctx(), TextStyle::Body.resolve(ui.style()).size);
-                    ui.add(Label::new(RichText::new(heading).font(font).color(mcs::GRAY_100)));
+                    ui.add(Label::new(title_text(ui, heading)));
                     if let Some(help) = help {
                         help_button(ui, help);
                     }
@@ -720,12 +719,11 @@ fn title_bar_ui(ui: &mut Ui, heading: &str, count: Option<usize>, help: Option<H
     hairline(ui);
 }
 
-/// Draws the law of a card that runs each tick in gray 400, after a bar of 2 points of gray 600, with a hairline under
-/// it.
+/// Draws the law of a card that runs each tick in gray 400, with a hairline under it.
 fn law_ui(ui: &mut Ui) {
-    let response = Frame::NONE
+    Frame::NONE
         .inner_margin(Margin {
-            left: (CARD_INSET * 2.0) as i8,
+            left: CARD_INSET as i8,
             right: CARD_INSET as i8,
             top: 6,
             bottom: 6,
@@ -734,26 +732,20 @@ fn law_ui(ui: &mut Ui) {
             ui.set_width(ui.available_width());
             let words = RichText::new(LAW).size(LAW_SIZE).color(mcs::GRAY_400);
             ui.add(Label::new(words).wrap());
-        })
-        .response;
-    let place = response.rect.shrink2(vec2(0.0, 6.0));
-    let bar = Rect::from_min_size(pos2(place.left() + CARD_INSET, place.top()), vec2(2.0, place.height()));
-    ui.painter().rect_filled(bar, CornerRadius::ZERO, mcs::GRAY_600);
+        });
     hairline(ui);
 }
 
-/// Draws `words` in a dashed box where the lines of an empty card would be: gray 500 dashes around words in gray 400.
+/// Draws `words` in an empty slot where the lines of an empty card would be: weak words inside a faded outline.
 fn empty_card_ui(ui: &mut Ui, words: &str) {
     Frame::NONE.inner_margin(Margin::same(8)).show(ui, |ui| {
-        let response = Frame::NONE
+        Frame::NONE
             .inner_margin(Margin::symmetric(8, 6))
+            .stroke(slot_outline(false))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.add(Label::new(RichText::new(words).color(mcs::GRAY_400)).wrap());
-            })
-            .response;
-        ui.painter()
-            .extend(dashed_rect(response.rect, Stroke::new(1.0, mcs::GRAY_500)));
+                ui.add(Label::new(RichText::new(words).weak()).wrap());
+            });
     });
 }
 
@@ -1855,7 +1847,7 @@ fn notes_ui(
                 label.on_hover_text(description.as_str());
             }
             if let Some(action) = note.action {
-                let button = note_button(ui, &action.label, &action.name, NOTE_SIZE);
+                let button = note_button(ui, &action.label, &action.name);
                 focused |= button.has_focus();
                 if button.clicked() {
                     let after = match action.edit {

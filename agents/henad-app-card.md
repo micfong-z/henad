@@ -6,33 +6,31 @@ sheet editor, the Sheet pane, the toolbar and the New model dialog are in
 `agents/henad-app-sheet.md`. The card writes the lines of a card over `cells`, rates included,
 and of a card over agents (**Agent lines** below).
 
-**Drawing.** `card_pane(ui, sheet, past_start, trials)` collects every `CardEdit` of a frame in
-draw order and runs each through `run_card_edit`, as the Sheet pane does, so a rename field that
-loses the focus to a note's button keeps its name. It draws the notices (`notice_ui`) and every
-card in file order with the body text at `SENTENCE_SIZE` 13, `REGION_GAP` 12 apart, each in
-`widgets::region` (gray 900 inside a gray 800 hairline): `title_bar_ui`
-(`Sentences::card_heading` in the semibold face in gray 100, the Lines help on a card that runs
-every tick, `line_count` at the right as a `caption`, a hairline), on a card that runs every tick
-`law_ui` (`LAW` at 12 in gray 400 after a 2 point gray 600 bar, a hairline), the dashed
-`empty_card_ui` of an empty card, the lines in a group of role `List` named `line_list_name`
-("Lines", "Lines of Clear"), then `footer_ui` (a hairline, `ADD_AT_END_NOTE` on a card holding a
-block, the add buttons). A world of cells with no cells card that runs each tick shows
-`card_header("cell")`, `BLANK_MODEL_CARD` and the add buttons in a frame first, and its first line
-adds the card (`AddCard`, then `AddLine`, one edit). `card_ui` computes the card's
-`CardRelations::notes` once, `runs` read from the report's skip notes, and passes them to each
-line. After each line, `closing_blocks` gives the blocks that close there (after the last line
-inside them, or after an empty When or Repeat), inner blocks first, and `add_inside_ui` draws each
-one's row: a dashed `add_row_button` `add_inside_label` at the block's inner indent, a bar in the
-block line's hue. Its `Popup::menu` is a `menu_dialog` (an `overlay`, a group of role `Dialog`
-named by its title, the title a heading) named `add_inside_name`, with, for each group of
-`add_inside_groups`
+**Drawing.** `card_pane(ui, sheet, past_start, trials)` collects every `CardEdit` of a frame in draw
+order and runs each through `run_card_edit`, as the Sheet pane does, so a rename field that loses
+the focus to a note's button keeps its name. It draws the notices (`notice_ui`) and every card in
+file order with the body text at `SENTENCE_SIZE` 13, `REGION_GAP` 12 apart, each in
+`widgets::region` (gray 900 inside a gray 800 hairline): `title_bar_ui` (`Sentences::card_heading`
+in the semibold face in gray 100, the Lines help on a card that runs every tick, `line_count` at the
+right as a `caption`, a hairline), on a card that runs every tick `law_ui` (`LAW` at 12 in gray 400
+under the title, then a hairline), the empty slot `empty_card_ui` of an empty card (weak words in a
+`slot_outline`), the lines in a group of role `List` named `line_list_name` ("Lines", "Lines of
+Clear"), then `footer_ui` (a hairline, `ADD_AT_END_NOTE` on a card holding a block, the add
+buttons). A world of cells with no cells card that runs each tick shows `card_header("cell")`,
+`BLANK_MODEL_CARD` and the add buttons in a frame first, and its first line adds the card
+(`AddCard`, then `AddLine`, one edit). `card_ui` computes the card's `CardRelations::notes` once,
+`runs` read from the report's skip notes, and passes them to each line. After each line,
+`closing_blocks` gives the blocks that close there (after the last line inside them, or after an
+empty When or Repeat), inner blocks first, and `add_inside_ui` draws each one's row: an
+`add_row_button` `add_inside_label` at the block's inner indent, a bar in the block line's hue. Its
+`Popup::menu` is a `menu_dialog` (an `overlay`, a group of role `Dialog` named by its title, the
+title a heading) named `add_inside_name`, with, for each group of `add_inside_groups`
 (`AddButton::ADD_INSIDE_ORDER`, or the Change group alone on a card that runs once, which only a
 written file can give a When), the `AddButton::group` label and `add_items_ui`'s items, and an item
 runs `AddLine` with `inside` set to the When. `add_items_ui` puts the items of one add button in a
-`menu_group` labelled by the node it is passed (the group label here, the title in an add
-button's menu), and each later group that `opens_group` heads ("Or a yes or no that several lines
-share", "Or a random value") in a `menu_group` of its own. The groups, and the items of each add
-button's menu,
+`menu_group` labelled by the node it is passed (the group label here, the title in an add button's
+menu), and each later group that `opens_group` heads ("Or a yes or no that several lines share", "Or
+a random value") in a `menu_group` of its own. The groups, and the items of each add button's menu,
 sit in `widgets::overlay_items`, a scroll area as tall as the window leaves under the title, so the
 24 items of a card over agents stay in reach of the wheel in a short window.
 
@@ -108,29 +106,28 @@ family, as in a test) in gray 100, `From` dotted with `from_tooltip` of the card
 After the first condition word of a Become, Set, Leave, Record or When (`takes_condition`) the
 condition arrow follows on the word's row (`arrow_control`, `ARROW_WIDTH` with its hit area the
 row's height, named `condition_arrow_name`, tooltip `CONDITION_ARROW_TOOLTIP`) and opens "Choose
-when". A chip (`chip_with_id`, the open picker's look read from the popup id), a blank
-(`blank_ui`), a select (`select_control`, its words and a chevron, named `LineSelect::name`, its
-words as value, dashed while empty), `Always` (a `text_control` named `always_name`), `ForEach`
-(the words "for each", named `for_each_change_name`) and `ForEachBlank` (named
-`for_each_optional_name`, quiet until its row is hovered or focused, then a blank) each take the
-widget id `CardState::control_id(line, target, tag)`, so another frame can open or focus them.
-After the last item of a list, `add_value_ui` draws "+" named `add_value_name`, which opens the
-list's picker for one item past the end. `CardLine::control` returns each control's visible words
-and name, which the label-in-name tests read. Hovering or focusing a result chip or "otherwise"
-highlights the lines it names on the next frame. Notes are `NOTE_SIZE` 11.5 in their three colours,
-a note's button a `note_button`. The add buttons (`add_buttons_ui`) are dashed `add_row_button`s,
-each with a square of its group's `kind_hue`, so they read as the legend of the bars, and each
-menu is a `menu_dialog` named `AddButton::heading_for`. Every popup of the pane takes
-`Frame::NONE` and draws its contents in an `overlay`: titles are headings (`overlay_title`), group
-labels `caption`s, a picker's or a menu's items `menu_item`s in `menu_group`s and a select's
-options `overlay_item`s (a picker's current value marked by `CardPicker::current`, the chip's name,
-and a state's swatch from `PickerItem::swatch`, a select's current option by its words, its list
-drawn by `widgets::select_list`, which the Sheet pane's selects share). The line
-menu's tools are one `menu_group` labelled by the menu's button. Its Move up and Move down stay
-listed where `can_move` refuses, disabled with
-`MOVE_UP_FIRST` or `MOVE_DOWN_LAST` as their tooltip. The pane's header draws Lines and Diagram as
-the two segments of a toggle (`toggle_label`), each a selected or unselected button on the keyboard
-path that Space or Enter presses (`both_segments_of_the_card_toggle_take_the_focus_and_a_key`).
+when". A chip (`chip_with_id`, the open picker's look read from the popup id), a blank (`blank_ui`),
+a select (`select_control`, its words and a chevron, named `LineSelect::name`, its words as value, a
+`slot_outline` while empty), `Always` (a `text_control` named `always_name`), `ForEach` (the words
+"for each", named `for_each_change_name`) and `ForEachBlank` (named `for_each_optional_name`, its
+weak words alone until its row is hovered or focused, then a blank) each take the widget id
+`CardState::control_id(line, target, tag)`, so another frame can open or focus them. After the last
+item of a list, `add_value_ui` draws "+" named `add_value_name`, which opens the list's picker for
+one item past the end. `CardLine::control` returns each control's visible words and name, which the
+label-in-name tests read. Hovering or focusing a result chip or "otherwise" highlights the lines it
+names on the next frame. Notes are `NOTE_SIZE` 11.5 in their three colours, a note's button a
+`note_button`. The add buttons (`add_buttons_ui`) are `add_row_button`s, each with a square of its
+group's `kind_hue`, so they read as the legend of the bars, and each menu is a `menu_dialog` named
+`AddButton::heading_for`. Every popup of the pane takes `Frame::NONE` and draws its contents in an
+`overlay`: titles are headings (`overlay_title`), group labels `caption`s, a picker's or a menu's
+items `menu_item`s in `menu_group`s and a select's options `overlay_item`s (a picker's current value
+marked by `CardPicker::current`, the chip's name, and a state's swatch from `PickerItem::swatch`, a
+select's current option by its words, its list drawn by `widgets::select_list`, which the Sheet
+pane's selects share). The line menu's tools are one `menu_group` labelled by the menu's button. Its
+Move up and Move down stay listed where `can_move` refuses, disabled with `MOVE_UP_FIRST` or
+`MOVE_DOWN_LAST` as their tooltip. The pane's header draws Lines and Diagram as the two segments of
+a toggle (`toggle_label`), each egui's selectable button on the keyboard path that Space or Enter
+presses (`both_segments_of_the_card_toggle_take_the_focus_and_a_key`).
 
 **Pickers** (`picker.rs`). `control_picker` opens a control's picker or select when it is clicked or
 due to open (`CardState::open_next`), and takes the focus for `CardState::focus_next`. A picker's
@@ -148,7 +145,7 @@ a name, with the ground's states on a card over agents only where `ground` holds
 `ground` holds), "any state" first for an old state, the States or Number properties, or a number's
 groups (`number_picker`: "From lines above" with "line N: [sentence]" under each result, "This
 cell's properties" as "my Food" with "this cell's Food", "Parameters" with value and unit, "New
-parameter...", and the Number box first and focused, or last for the value left of a comparison and
+parameter…", and the Number box first and focused, or last for the value left of a comparison and
 a "for each" count). A chance reads in `NumberUse::Chance` and a rate in `NumberUse::Rate`, which
 refuse a chance outside 0 to 1 and a negative rate in the box. A typed list in a box of one number
 adds `LIST_IN_ONE_NUMBER`. A list blank offers the list box (`LIST_GROUP`, `LIST_HINT`, "2, 3" in
@@ -161,7 +158,7 @@ lines after it inside that When. `choose_when(context, otherwise)` lists the yes
 "otherwise" in place of "always" when `otherwise_if_always` finds a higher line (the line's
 condition set to always on a copy of the sheet), and "at rate" only on a card that runs each tick
 (`offers_condition`), since a button's card has no duration and takes chances only. On a When line
-the items read "When ..." (`ConditionItem::label(true)`, and a result item
+the items read "When …" (`ConditionItem::label(true)`, and a result item
 `result_condition_item(name, true)`), and "always" is left out. A line inside a When takes the lead
 `when_lead` with the When's number. Selects list `comparison_options` (the list words of a States
 property), `around_options`, `summary_options`, `operation_options` and `unit_options` ("second" to
@@ -181,7 +178,7 @@ chosen), shown as chips, and writes the formula with `Formula` once both values 
 (`calculate_edit`, `value_token`). A percent operand is written as its decimal and reads as one.
 Only the line's own values and operation take a choice: a formula inside a slot has no places, and
 the guards in `field_choice`, `select_edit` and `draft_value` hold an empty phrase path. "New
-parameter..." opens the New parameter dialog for the place (a chance's or a rate's values, the
+parameter…" opens the New parameter dialog for the place (a chance's or a rate's values, the
 rate's "per [unit]" as its Unit), drawn from the next frame, since the click that chose it would
 land on its backdrop. Create runs `NewParameter::add_edit` and the place's commands as one edit.
 The add buttons (`add_buttons_ui`) are `AddButton::ALL`, "+ When, for several lines" last, or "+
@@ -264,22 +261,21 @@ holds that every add item's line takes its button's hue.
 
 **The Diagram** (`ui/editor/sheet/diagram.rs`). The toggle `DIAGRAM` beside `LINES_VIEW` after the
 Card heading (tooltip `DIAGRAM_TOOLTIP`) sets `SheetEditor::diagram` and closes the card's pickers,
-a click on Lines clears it, and
-the pane then draws `diagram_ui` in place of `card_pane`: `DIAGRAM_NOTE` and `EDIT_AS_NODE_GRAPH`
-(disabled with `ConvertRefusal::tooltip`, `agents/henad-app-editor.md`), then each card's heading
-and line count and its drawing in a horizontal scroll area. `diagram_boxes` returns a `DiagramBox`
-per line from `card_lines` and `CardRelations`: prefix, number, sentence, the result it works out,
-the results of lines on the card it reads (from its `ChipKind::Result` chips, once each), its When
-and whether it is one. A box's column is one past every box it reads and its When (`columns`), and
-each box takes a row of its own in display order, so every arrow runs right and down. A frame
-"Inside line N" (`inside_line_frame`) surrounds the boxes inside each When, nested Whens included,
-built innermost first as the union of its boxes and inner frames, with a connector from the When's
-box. The drawing is painted with the painter and holds no widget. It is one accessible node of role
-`Image` named `diagram_name` ("Diagram of the card's 3 lines, read-only"). Colours: boxes gray 900
-with a gray 600 stroke and a gray 800 header, a bar at a box's left in its
-line's `kind_hue` (`DiagramBox::group`), results and arrows blue, frames dashed gray 500. A card's
-heading is in the semibold face with its count as a `caption`, as on the card. The toggle is the
-Diagram segment beside Lines, weak while off and over a blue 500 line while on.
+a click on Lines clears it, and the pane then draws `diagram_ui` in place of `card_pane`:
+`DIAGRAM_NOTE` and `EDIT_AS_NODE_GRAPH` (disabled with `ConvertRefusal::tooltip`,
+`agents/henad-app-editor.md`), then each card's heading and line count and its drawing in a
+horizontal scroll area. `diagram_boxes` returns a `DiagramBox` per line from `card_lines` and
+`CardRelations`: prefix, number, sentence, the result it works out, the results of lines on the card
+it reads (from its `ChipKind::Result` chips, once each), its When and whether it is one. A box's
+column is one past every box it reads and its When (`columns`), and each box takes a row of its own
+in display order, so every arrow runs right and down. A frame "Inside line N" (`inside_line_frame`)
+surrounds the boxes inside each When, nested Whens included, built innermost first as the union of
+its boxes and inner frames, with a connector from the When's box. The drawing is painted with the
+painter and holds no widget. It is one accessible node of role `Image` named `diagram_name`
+("Diagram of the card's 3 lines, read-only"). Colours: boxes gray 900 with a gray 600 stroke and a
+gray 800 header, a bar at a box's left in its line's `kind_hue` (`DiagramBox::group`), results and
+arrows blue, frames a gray 700 outline. A card's heading is in the semibold face with its count as a
+`caption`, as on the card. The toggle is the Diagram segment beside Lines, egui's selectable button.
 
 `src/tests/sheet_card.rs` holds
 `a_blank_model_builds_game_of_life_with_its_lines_and_equals_the_starter` and
@@ -299,7 +295,7 @@ menu, a titled overlay's heading, through `Node::menu`),
 and "Choose when", each settled once open, as the rows come from the frame before),
 `a_focused_item_scrolls_into_its_picker_and_the_card_stays_put` (↑ to the last item of "Choose
 when" over the list under the panes and in a scrolled picker, through `last_item_by_key`),
-`escape_returns_the_focus_from_a_select_and_a_help_popover`,
+`escape_returns_the_focus_from_a_select`,
 `the_number_box_keeps_the_arrow_keys_and_its_use_button_passes_them_to_the_items` (through
 `focus_is_an_item_of`),
 `a_tooltip_shows_on_keyboard_focus_but_not_while_a_menu_is_open` (an add button focused by Escape,
@@ -334,7 +330,7 @@ inside its crate. henad-graph's `the_copies_of_the_test_sheets_equal_their_sourc
 
 `src/tests/sheet_rates.rs` holds
 `a_blank_model_builds_the_rates_sir_with_its_lines_and_equals_the_starter` (the time set on the
-sheet, both rates through "New parameter..." in "per day", line 2's "for each" from the grow offer,
+sheet, both rates through "New parameter…" in "per day", line 2's "for each" from the grow offer,
 New outbreak's "Choose when" with no rate, then alignment, label-in-name and the words rule),
 `the_run_once_card_offers_no_rate_after_rates_arrive` (the SIR notes, the mean stay, "Convert to a
 chance" on a typed rate, none on New outbreak's typed chance),
@@ -352,7 +348,7 @@ count nodes other than text runs.
 `PickCell`, `CellHereOrAhead`; Chance: `BecomeWithChance`, `WithChance`, then under
 `RANDOM_VALUE_GROUP` `RandomNumber`, `RandomDirection`, and no rates; Calculate: `Calculate`,
 `Choose`, `DependingOn`; Change: `Become`, `Set`, `Steer`, `KeepBetween`, `MoveBy`, `MoveTo`,
-`Leave`, `Record`). The buttons are `AddButton::AGENTS`, "+ Repeat..." last, and a block's add row
+`Leave`, `Record`). The buttons are `AddButton::AGENTS`, "+ Repeat…" last, and a block's add row
 takes `AGENTS_INSIDE_ORDER`. A Repeat is a block like a When (`LineKind::is_block`), with its add
 row and the add-at-end note. `cards_ui` draws a world of agents with no tick card as `card_header`
 of the kind and adds `AddCard { every: kind }` with the first line. `new_line(item, every)` fills

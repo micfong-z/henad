@@ -170,7 +170,7 @@ right = 0.5
 value = 2
 condition = { result = "l2", part = "any_flagged" }
 
-# By status = depending on my Status: Dead -> Spread, Alive -> 10
+# By status = depending on my Status: Dead → Spread, Alive → 10
 [card.line.l5]
 kind = "depending_on"
 name = "By status"

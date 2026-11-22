@@ -226,11 +226,9 @@ pub fn style() -> Style {
                 active: WidgetVisuals {
                     bg_fill: Color32::from_rgba_premultiplied(55, 55, 55, 255),
                     weak_bg_fill: Color32::from_rgba_premultiplied(55, 55, 55, 255),
-                    // egui draws a focused button, checkbox, radio or combo box in these visuals, and this outline is
-                    // the focus outline of the app's own controls.
                     bg_stroke: Stroke {
-                        width: 1.5,
-                        color: mcs::BLUE_500,
+                        width: 1.0,
+                        color: Color32::from_rgba_premultiplied(255, 255, 255, 255),
                     },
                     corner_radius: CornerRadius {
                         nw: 0,
@@ -264,13 +262,11 @@ pub fn style() -> Style {
                     expansion: 0.0,
                 },
             },
-            // The current item of a list takes the tinted fill. egui also draws selected text, a slider's trailing fill
-            // and the outline of a focused text field in these colours.
             selection: Selection {
-                bg_fill: mcs::BLUE_900,
+                bg_fill: mcs::BLUE_700,
                 stroke: Stroke {
-                    width: 1.5,
-                    color: mcs::BLUE_200,
+                    width: 1.0,
+                    color: Color32::from_rgba_premultiplied(192, 222, 255, 255),
                 },
             },
             hyperlink_color: mcs::BLUE_200,
@@ -292,10 +288,9 @@ pub fn style() -> Style {
                 offset: [10, 20],
             },
             window_fill: mcs::GRAY_900,
-            // The border of every popup, menu, tooltip and modal, the overlay border of the palette.
             window_stroke: Stroke {
                 width: 1.0,
-                color: mcs::GRAY_600,
+                color: mcs::GRAY_800,
             },
             menu_corner_radius: CornerRadius {
                 nw: 0,
@@ -304,8 +299,12 @@ pub fn style() -> Style {
                 se: 0,
             },
             panel_fill: Color32::from_rgba_premultiplied(21, 21, 21, 255),
-            // An overlay stands apart by its border and its opaque fill.
-            popup_shadow: Shadow::NONE,
+            popup_shadow: Shadow {
+                spread: 0,
+                color: Color32::from_rgba_premultiplied(0, 0, 0, 96),
+                blur: 8,
+                offset: [6, 10],
+            },
             resize_corner_size: 12.0,
             text_cursor: TextCursorStyle {
                 stroke: Stroke {
@@ -319,8 +318,7 @@ pub fn style() -> Style {
             collapsing_header_frame: true,
             indent_has_left_vline: true,
             striped: false,
-            // egui fills a slider's rail in the selection fill, which is too dark on the rail. The handle shows the value.
-            slider_trailing_fill: false,
+            slider_trailing_fill: true,
             ..Default::default()
         },
         animation_time: 0.083_333_336,

@@ -1,6 +1,6 @@
 //! Tests of the sheet editor in the Editor tab: a sheet opens by the `kind` in its header, previews paused at tick 0,
 //! applies and saves its canonical text, and the New model dialog opens a sheet starter under a name. The Card pane
-//! reads each line as its sentence with its notes, red chips and "otherwise", the help popovers, the words rule and the
+//! reads each line as its sentence with its notes, red chips and "otherwise", the help tooltips, the words rule and the
 //! label-in-name rule hold over every starter, a note edit installs nothing, Open in Editor in the Results tab opens
 //! the sheet a sweep recorded, and the Sweep tab tells a sheet it sweeps from one the Editor holds unapplied.
 
@@ -24,7 +24,7 @@ use henad_graph::sheet::document::{
     StartsAs,
 };
 use henad_graph::sheet::sentence::{
-    A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE, NEW_MODEL, STALE_WORLD_NOTICE, STARTER_CHOICES,
+    A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CREATE, NEW_MODEL, STALE_WORLD_NOTICE, STARTER_CHOICES,
 };
 use henad_graph::sheet::{ParsedSheet, starters};
 
@@ -1134,75 +1134,77 @@ fn otherwise_carries_its_partner_as_a_description() {
     );
 }
 
-// Help popovers, the words rule and the label-in-name rule
+// Help tooltips, the words rule and the label-in-name rule
+
+/// Returns the words of the help of the World section of Game of Life, each a label of its tooltip.
+fn world_help_words() -> [&'static str; 3] {
+    [
+        henad_graph::sheet::sentence::SheetSection::World.help(),
+        "Example:",
+        "One tick is 1 day",
+    ]
+}
+
+/// Returns how many of [`world_help_words`] a settled frame of `harness` shows as a label.
+fn world_help_shown(harness: &mut Harness) -> usize {
+    let labels = harness.labels();
+    world_help_words()
+        .iter()
+        .filter(|text| labels.iter().any(|known| known == *text))
+        .count()
+}
 
 #[test]
-fn a_help_popover_opens_and_closes() {
+fn a_help_shows_as_a_tooltip_under_the_pointer_and_a_click_opens_nothing() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
     harness.open_sheet(starter_text("game_of_life.toml"));
-    harness.click("Help: World");
+    assert_eq!(world_help_shown(&mut harness), 0, "the help waits for the pointer");
+    let help = harness.find("Help: World");
+    harness.frame(vec![egui::Event::PointerMoved(help)]);
+    for _ in 0..60 {
+        harness.frame(Vec::new());
+    }
+    assert_eq!(
+        world_help_shown(&mut harness),
+        world_help_words().len(),
+        "the pointer held on the help shows its words"
+    );
+    harness.click_at(help);
     let nodes = harness.settle();
     assert!(
-        nodes
-            .iter()
-            .any(|node| node.role == egui::accesskit::Role::Dialog && node.label == "World help"),
-        "the popover has a dialog role"
+        !nodes.iter().any(|node| node.role == egui::accesskit::Role::Dialog),
+        "a click opens no popover"
     );
-    let texts = harness.accessible_texts();
-    for text in [
-        henad_graph::sheet::sentence::SheetSection::World.help(),
-        "Example:",
-        "One tick is 1 day",
-    ] {
-        assert!(texts.iter().any(|known| known == text), "{text} is missing");
-    }
-    harness.click("Close help");
-    let texts = harness.accessible_texts();
+    let described = nodes
+        .iter()
+        .find(|node| node.label == "Help: World")
+        .map(|node| node.description.clone())
+        .unwrap_or_default();
     assert!(
-        !texts.iter().any(|known| known == "Close help"),
-        "Close help closed the popover"
+        world_help_words().iter().all(|text| described.contains(text)),
+        "the button's description holds the help: {described}"
     );
 }
 
 #[test]
-fn each_lines_help_button_opens_its_own_popover() {
-    let Some(mut harness) = Harness::new() else {
+fn a_help_shows_its_tooltip_while_the_keyboard_holds_its_focus() {
+    let Some(mut harness) = Harness::tall() else {
         return;
     };
-    let two_tick_cards = edited(
-        starter_text("game_of_life.toml"),
-        "runs = \"once\"",
-        "runs = \"each_tick\"",
-    );
-    harness.open_sheet(&two_tick_cards);
-    let nodes = harness.settle();
-    let mut buttons: Vec<egui::Pos2> = nodes
-        .iter()
-        .filter(|node| node.role == egui::accesskit::Role::Button && node.label == "Help: lines")
-        .filter_map(|node| node.bounds.map(|bounds| bounds.center()))
-        .collect();
-    // The lower button first. Its popover opens below it and leaves the upper button free to press.
-    buttons.sort_by(|a, b| b.y.total_cmp(&a.y));
-    assert_eq!(buttons.len(), 2, "each card that runs every tick has a Lines help");
-    let lines_help = |harness: &mut Harness| -> Vec<egui::Rect> {
-        harness
-            .settle()
-            .into_iter()
-            .filter(|node| node.role == egui::accesskit::Role::Dialog && node.label == "Lines help")
-            .filter_map(|node| node.bounds)
-            .collect()
-    };
-    harness.click_at(buttons[0]);
-    assert_eq!(lines_help(&mut harness).len(), 1, "the first button opens a popover");
-    // A press on the second button opens its own popover. A shared one would close instead.
-    harness.click_at(buttons[1]);
-    let open = lines_help(&mut harness);
-    assert_eq!(open.len(), 1, "the second button opens its own popover");
-    assert!(
-        open[0].top() >= buttons[1].y,
-        "the popover sits below the second button"
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    for _ in 0..60 {
+        if harness.focused == "Help: World" {
+            break;
+        }
+        harness.press(egui::Key::Tab, egui::Modifiers::NONE);
+    }
+    assert_eq!(harness.focused, "Help: World", "Tab reaches the help");
+    assert_eq!(
+        world_help_shown(&mut harness),
+        world_help_words().len(),
+        "the focused help shows its words"
     );
 }
 
@@ -1220,15 +1222,16 @@ fn the_sheet_editor_never_shows_a_forbidden_word() {
             .document()
             .world
             .made_of;
-        let helps = henad_graph::sheet::sentence::SheetSection::shown(made_of)
-            .iter()
-            .map(|section| section.help_name())
-            .chain(["Help: lines".to_owned()]);
-        for help in helps {
-            harness.click(&help);
-            seen.look(&mut harness);
-            harness.press(egui::Key::Escape, egui::Modifiers::NONE);
-        }
+        // Each help button's description holds its words, which the look reads.
+        assert!(
+            henad_graph::sheet::sentence::SheetSection::shown(made_of)
+                .iter()
+                .map(|section| section.help_name())
+                .chain(["Help: lines".to_owned()])
+                .all(|help| harness.labels().contains(&help)),
+            "every help of {} shows",
+            starter.file_name
+        );
     }
     for text in [life_with_a_skipped_line(), life_with_a_result_below()] {
         harness.open_sheet(&text);
@@ -1242,7 +1245,7 @@ fn the_sheet_editor_never_shows_a_forbidden_word() {
 
 #[test]
 fn every_accessible_name_holds_its_visible_words() {
-    // Every section's help button, the last at the foot of a long sheet, takes a click.
+    // A tall window draws the whole of a long sheet.
     let Some(mut harness) = Harness::tall() else {
         return;
     };
@@ -1254,14 +1257,8 @@ fn every_accessible_name_holds_its_visible_words() {
         harness.open_sheet(&text);
         assert_controls_hold_their_words(&mut harness);
     }
-    // Each help popover and the New model dialog hold controls whose visible words are fixed.
+    // The New model dialog holds controls whose visible words are fixed.
     harness.open_sheet(starter_text("game_of_life.toml"));
-    for help in HELP_BUTTONS {
-        harness.click(help);
-        let nodes = harness.settle();
-        assert_control_holds(&nodes, CLOSE_HELP);
-        harness.press(egui::Key::Escape, egui::Modifiers::NONE);
-    }
     harness.click("New model");
     let nodes = harness.settle();
     for visible in [CREATE, CANCEL]
@@ -1271,18 +1268,6 @@ fn every_accessible_name_holds_its_visible_words() {
         assert_control_holds(&nodes, visible);
     }
 }
-
-/// Accessible names of the "?" buttons of the Game of Life sheet, each of which opens a help popover.
-const HELP_BUTTONS: [&str; 8] = [
-    "Help: Purpose",
-    "Help: World",
-    "Help: Cells",
-    "Help: Parameters",
-    "Help: Measures",
-    "Help: Colours",
-    "Help: Buttons",
-    "Help: lines",
-];
 
 #[test]
 fn the_world_tabs_show_no_forbidden_word_from_a_sheet() {

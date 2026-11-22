@@ -15,14 +15,13 @@ use henad_graph::sheet::sentence::{
 };
 
 use super::layout::{Column, Form, Table, line, text_cell, text_width};
-use super::starts::caption_width;
 use super::{
     ButtonForm, DELETE_WIDTH, EditRun, FormKind, PaneState, Pending, form_buttons, form_heading, form_name_field,
     measured_thing, select,
 };
 use crate::ui::editor::sheet::card_pane::card_lines;
 use crate::ui::editor::sheet::widgets::{
-    CHIP_HEIGHT, OverlayItem, hairline, message_ui, name_taken, region, small_label, text_control,
+    CHIP_HEIGHT, OverlayItem, caption_width, hairline, message_ui, name_taken, region, small_label, text_control,
 };
 use crate::ui::editor::sheet::{find_property, properties_of};
 

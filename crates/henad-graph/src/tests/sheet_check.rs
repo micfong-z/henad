@@ -583,7 +583,7 @@ fn the_outside_test_stands_only_in_a_condition_and_counts_for_otherwise() {
         .collect();
     assert_eq!(
         messages,
-        ["is less than ... or more than ... can only be used in a condition"]
+        ["is less than … or more than … can only be used in a condition"]
     );
 }
 
@@ -963,7 +963,7 @@ fn an_empty_list_reads_as_a_blank() {
         assert_eq!(report.skip_note("l3"), Some("Not run yet: choose a list of numbers"));
         let document = sheet.into_document();
         let sentence = Sentences::new(&document).line("l3", &[]);
-        assert!(sentence.ends_with("of the numbers ..."), "{sentence}");
+        assert!(sentence.ends_with("of the numbers …"), "{sentence}");
     }
 }
 

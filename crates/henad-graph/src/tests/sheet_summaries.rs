@@ -1,7 +1,9 @@
 //! The summaries of a Look around under edits: automatic names that follow their property and summary kind, names typed
 //! by hand, new ids that reach every reference, removed summaries that blank their users, and the names of round 1.
 
-use super::sheet_support::{add_line, builder_of, chip, line, read, run, set_field, set_slot, sheet_text, sheets};
+use super::sheet_support::{
+    add_line, builder_of, chip, line, read, run, set_field, set_slot, sheet_text, sheets, write,
+};
 use crate::sheet::document::{
     Around, ChipRelation, LineKind, LookSummary, SheetChip, SheetLine, SheetValue, Slot, SummaryKind,
 };
@@ -280,4 +282,57 @@ fn the_automatic_summary_names_follow_round_1() {
             }
         }
     }
+}
+
+/// Returns `document` written and read back as a sheet saved when a blank read as three full stops: each name `new`
+/// written as `old`.
+fn saved_with_full_stops(document: &crate::sheet::document::SheetDocument, new: &str, old: &str) -> SheetBuilder {
+    let text = write(document);
+    let (new, old) = (format!("name = \"{new}\""), format!("name = \"{old}\""));
+    assert!(text.contains(&new), "the sheet stores {new}");
+    SheetBuilder::new(read(&text.replace(&new, &old))).with_key_seed(12)
+}
+
+#[test]
+fn names_stored_with_full_stops_for_a_blank_still_follow_their_lines() {
+    // A total of nothing over the cells around, named "Total … around".
+    let mut builder = SheetBuilder::new(read(include_str!("sheets/values.toml"))).with_key_seed(12);
+    let mut look = SheetLine::new(LineKind::LookAround);
+    look.around = Some(Around::Cells8);
+    let mut total = LookSummary::new("level_sum", "level sum");
+    total.summary = Some(SummaryKind::Total);
+    look.summaries = vec![total];
+    let look = add_line(&mut builder, "cell_tick", None, look)[0].clone();
+    assert_eq!(line(&builder, &look).name.as_deref(), Some("Total … around"));
+    let mut builder = saved_with_full_stops(builder.document(), "Total … around", "Total ... around");
+    assert_eq!(
+        line(&builder, &look).name.as_deref(),
+        Some("Total ... around"),
+        "reading leaves the stored name as it is"
+    );
+    set_slot(
+        &mut builder,
+        &look,
+        "summaries.0.value",
+        chip(SheetChip::Their("level".to_owned())),
+    );
+    assert_eq!(line(&builder, &look).name.as_deref(), Some("Total Level around"));
+
+    // A summary of no kind on a look at agents, named "…".
+    let mut builder = builder_of("boids.toml");
+    let mut agents = new_look();
+    agents.summaries[0].summary = None;
+    let agents = add_line(&mut builder, "bird_tick", None, agents)[0].clone();
+    assert_eq!(summaries_of(&builder, &agents)[0].1, "…");
+    let mut builder = saved_with_full_stops(builder.document(), "…", "...");
+    assert_eq!(
+        summaries_of(&builder, &agents)[0].1,
+        "...",
+        "reading leaves the stored name as it is"
+    );
+    let mut summaries = line(&builder, &agents).summaries.clone();
+    summaries[0].summary = Some(SummaryKind::Average);
+    summaries[0].value = chip(SheetChip::Their("velocity".to_owned()));
+    set_field(&mut builder, &agents, LineField::Summaries(summaries));
+    assert_eq!(summaries_of(&builder, &agents)[0].1, "average velocity");
 }

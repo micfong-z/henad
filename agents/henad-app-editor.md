@@ -238,6 +238,8 @@ their tooltips shown on hover),
 `the_words_rule_exempts_whole_controls_and_still_reports_a_bare_node`,
 `converting_game_of_life_opens_the_copy_with_frames_titled_by_line_and_the_banner` (frames apart
 from one another, at their drawn sizes),
+`a_converted_copy_opens_at_a_readable_zoom_and_frame_all_fits_every_node` (SIR's copy at 0.5 or
+more in a window of 1000 by 700, then Frame all below 0.5 with every node in view),
 `editing_a_node_of_the_copy_changes_the_banner_and_a_new_node_joins_no_frame`,
 `open_original_returns_to_the_sheet_and_its_line_opens_the_copy` (and `OriginalChanged` after a
 sheet edit), `a_sheet_with_a_file_has_its_copy_written_beside_it_and_found_again` (a taken file

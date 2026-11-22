@@ -73,6 +73,9 @@ const UNDRAWN_NODE_SIZE: egui::Vec2 = vec2(160.0, 80.0);
 /// Lowest zoom of the canvas.
 pub const MIN_SCALE: f32 = 0.1;
 
+/// Lowest zoom a converted copy opens at, the least at which its nodes read.
+pub const READABLE_SCALE: f32 = 0.5;
+
 /// Highest zoom of the canvas.
 pub const MAX_SCALE: f32 = 2.0;
 
@@ -218,6 +221,9 @@ pub enum Framing {
     Node(NodeId),
     /// Every node of the body.
     All,
+    /// Every node of the body at [`READABLE_SCALE`] or more, from their top left corner where they do not fit at
+    /// that zoom, as a converted copy opens.
+    Readable,
 }
 
 /// The canvas of one body.
@@ -254,8 +260,9 @@ pub struct BodyCanvas {
 }
 
 impl BodyCanvas {
-    /// Returns an empty canvas under the egui id `canvas_id`, which brings every node into view on its first frame.
-    pub fn new(canvas_id: Id) -> Self {
+    /// Returns an empty canvas under the egui id `canvas_id`, which brings its nodes into view by `framing` on its first
+    /// frame.
+    pub fn new(canvas_id: Id, framing: Framing) -> Self {
         Self {
             canvas_id,
             snarl: Snarl::new(),
@@ -267,7 +274,7 @@ impl BodyCanvas {
             canvas_rect: Rect::ZERO,
             frames: Vec::new(),
             revision: u64::MAX,
-            framing: Some(Framing::All),
+            framing: Some(framing),
             framed: None,
             query: String::new(),
             menu_origin: None,
@@ -1075,14 +1082,25 @@ pub fn framing_transform(target: Rect, canvas: Rect) -> TSTransform {
     }
 }
 
+/// Returns the transform that shows `target` in `canvas` as [`framing_transform`] does where it fits at
+/// [`READABLE_SCALE`] or more. Otherwise the zoom is [`READABLE_SCALE`], and the top left corner of `target`, with
+/// [`FRAMING_MARGIN`] around it, sits at the top left corner of `canvas`.
+pub fn readable_transform(target: Rect, canvas: Rect) -> TSTransform {
+    let view = target.expand(FRAMING_MARGIN);
+    if (canvas.size() / view.size()).min_elem() >= READABLE_SCALE {
+        return framing_transform(target, canvas);
+    }
+    TSTransform {
+        scaling: READABLE_SCALE,
+        translation: canvas.min.to_vec2() - view.min.to_vec2() * READABLE_SCALE,
+    }
+}
+
 /// Returns the canvas style: square corners on nodes, headers and the selection, and no space before the title.
-///
-/// Nodes and the canvas keep a gray 800 border. The theme's window border is the brighter border of an overlay.
 pub fn canvas_style(style: &Style) -> SnarlStyle {
     let node_frame = Frame::window(style)
         .corner_radius(CornerRadius::ZERO)
-        .shadow(Shadow::NONE)
-        .stroke(Stroke::new(1.0, mcs::GRAY_800));
+        .shadow(Shadow::NONE);
     SnarlStyle {
         node_frame: Some(node_frame),
         header_frame: Some(node_frame),
@@ -1094,12 +1112,7 @@ pub fn canvas_style(style: &Style) -> SnarlStyle {
             stroke: Stroke::new(1.0, mcs::BLUE_500),
         }),
         wire_style: Some(WireStyle::Bezier5),
-        bg_frame: Some(
-            Frame::canvas(style)
-                .corner_radius(CornerRadius::ZERO)
-                .inner_margin(0)
-                .stroke(Stroke::new(1.0, mcs::GRAY_800)),
-        ),
+        bg_frame: Some(Frame::canvas(style).corner_radius(CornerRadius::ZERO).inner_margin(0)),
         bg_pattern: Some(BackgroundPattern::Grid(Grid::new(vec2(50.0, 50.0), 0.0))),
         bg_pattern_stroke: Some(Stroke::new(1.0, mcs::GRAY_900)),
         pin_placement: Some(PinPlacement::Edge),
@@ -1173,8 +1186,8 @@ struct GraphViewer<'a> {
     drop_targets: Vec<usize>,
     /// Region, depth and canvas rectangle of each region frame painted this frame.
     region_rects: Vec<(NodeId, usize, Rect)>,
-    /// Rectangle to bring into view this frame, with the canvas rectangle.
-    framing: Option<(Rect, Rect)>,
+    /// Rectangle to bring into view this frame, with the canvas rectangle and whether to show it at a readable zoom.
+    framing: Option<(Rect, Rect, bool)>,
     rects: &'a mut HashMap<PinNode, DrawnRect>,
     query: &'a mut String,
     /// Canvas position where the open menu was opened.
@@ -2371,8 +2384,12 @@ impl SnarlViewer<NodeView> for GraphViewer<'_> {
     }
 
     fn current_transform(&mut self, to_global: &mut TSTransform, _snarl: &mut Snarl<NodeView>) {
-        if let Some((target, canvas)) = self.framing.take() {
-            *to_global = framing_transform(target, canvas);
+        if let Some((target, canvas, readable)) = self.framing.take() {
+            *to_global = if readable {
+                readable_transform(target, canvas)
+            } else {
+                framing_transform(target, canvas)
+            };
         }
         self.transform = *to_global;
     }
@@ -2608,14 +2625,14 @@ pub fn show_canvas(ui: &mut Ui, canvas: &mut BodyCanvas, context: CanvasContext<
     let framing = canvas.framing.and_then(|target| {
         let rect = match target {
             Framing::Node(node) => canvas.current_rect(node),
-            Framing::All => canvas.all_rect(),
+            Framing::All | Framing::Readable => canvas.all_rect(),
         };
         let drawn = match target {
             Framing::Node(node) => canvas
                 .nodes
                 .get(&node)
                 .is_some_and(|pin_node| canvas.rects.contains_key(pin_node)),
-            Framing::All => canvas
+            Framing::All | Framing::Readable => canvas
                 .nodes
                 .values()
                 .all(|pin_node| canvas.rects.contains_key(pin_node)),
@@ -2627,7 +2644,7 @@ pub fn show_canvas(ui: &mut Ui, canvas: &mut BodyCanvas, context: CanvasContext<
         } else {
             canvas.framed = rect;
         }
-        rect.map(|rect| (rect, canvas_rect))
+        rect.map(|rect| (rect, canvas_rect, target == Framing::Readable))
     });
     let restore = ui.ctx().input_mut(|input| {
         let is_plain_click = input.pointer.primary_released()

@@ -29,9 +29,9 @@ use super::{
 use crate::ui::editor::sheet::picker::{Choice, ParameterPicker};
 use crate::ui::editor::sheet::widgets::FocusTooltip as _;
 use crate::ui::editor::sheet::widgets::{
-    CHIP_HEIGHT, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, chip_within, color32, commit_number,
-    field_message, forget_field, message_ui, new_parameter_modal, parameter_names, swatch_ui, text_control,
-    text_control_width,
+    CHIP_HEIGHT, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, caption_width, chip_within, color32,
+    commit_number, field_message, forget_field, message_ui, new_parameter_modal, parameter_names, swatch_ui,
+    text_control, text_control_width,
 };
 use crate::ui::editor::sheet::{find_property, properties_of};
 use crate::ui::sweep::layout::{add_button, filled_button};
@@ -71,8 +71,9 @@ pub(super) fn cells(
 ///
 /// Starts as takes the room left over. Short of room, Starts as gives up width down to 150 points, then Changed by,
 /// Kind and Name down to their longest words, wrapping at them, then Starts as down to the width of "Use a parameter",
-/// its selects and chips ending in an ellipsis, and last Kind and Name down to their least widths, a word too long for
-/// them ending in an ellipsis.
+/// its selects and chips ending in an ellipsis, then Kind down to the longest word of a state's name without its
+/// swatch, the names wrapping under their swatches, and last Kind and Name down to their least widths, a word too long
+/// for them ending in an ellipsis.
 pub(super) fn property_table(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -86,8 +87,10 @@ pub(super) fn property_table(
     let changed = |property: &SheetProperty| changed_by(&changing_lines(document, &property.id));
     let names = widest(&|property| text_width(ui, &property.name));
     let name_words = widest(&|property| longest_word(ui, &property.name));
-    let kinds = widest(&|property| kind_width(ui, property, text_width));
-    let kind_words = widest(&|property| kind_width(ui, property, longest_word));
+    let kinds = widest(&|property| kind_width(ui, property, text_width, STATE_SWATCH_WIDTH));
+    let kind_words = widest(&|property| kind_width(ui, property, longest_word, STATE_SWATCH_WIDTH));
+    // A state's name that wraps under its swatch needs no room beside the swatch.
+    let kind_under = widest(&|property| kind_width(ui, property, longest_word, 0.0));
     let starts = widest(&|property| starts_width(ui, document, thing, property));
     let changes = widest(&|property| text_width(ui, &changed(property)));
     let change_words = widest(&|property| longest_word(ui, &changed(property)));
@@ -124,6 +127,7 @@ pub(super) fn property_table(
         (1, kind_words),
         (0, name_words),
         (2, starts_least),
+        (1, kind_under),
         (1, 0.0),
         (0, 0.0),
     ];
@@ -186,26 +190,14 @@ fn fitted_label(ui: &Ui, text: impl Into<egui::WidgetText>) -> Label {
     }
 }
 
-/// Returns the width in points of `text` as the small upper-case label of a table header.
-pub(super) fn caption_width(ui: &Ui, text: &str) -> f32 {
-    ui.painter()
-        .layout_no_wrap(
-            text.to_uppercase(),
-            egui::FontId::monospace(crate::ui::editor::sheet::widgets::SMALL_LABEL),
-            egui::Color32::PLACEHOLDER,
-        )
-        .size()
-        .x
-}
-
-/// Returns the width in points the kind of `property` takes: its word, or the swatch and the name of its widest state,
-/// each measured by `measure`, the width of a whole text or of its longest word.
-fn kind_width(ui: &Ui, property: &SheetProperty, measure: fn(&Ui, &str) -> f32) -> f32 {
+/// Returns the width in points the kind of `property` takes: its word, or the name of its widest state with `swatch`
+/// points for the swatch before it, each measured by `measure`, the width of a whole text or of its longest word.
+fn kind_width(ui: &Ui, property: &SheetProperty, measure: fn(&Ui, &str) -> f32, swatch: f32) -> f32 {
     let word = measure(ui, kind_words(property.property_type));
     property
         .states
         .iter()
-        .map(|state| measure(ui, &state.name) + STATE_SWATCH_WIDTH)
+        .map(|state| measure(ui, &state.name) + swatch)
         .fold(word, f32::max)
 }
 
@@ -245,7 +237,7 @@ fn starts_width(ui: &Ui, document: &SheetDocument, thing: &str, property: &Sheet
 const STARTS_MOST: f32 = 280.0;
 
 /// Draws the property form under the table of `thing` while it is open for that thing, or the button that opens it,
-/// named `add_name`. The button is the section's primary action while `primary` holds, and dashed otherwise.
+/// named `add_name`. The button is the section's primary action while `primary` holds, and an add button otherwise.
 pub(super) fn property_form_or_add(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -282,15 +274,13 @@ fn kind_ui(ui: &mut Ui, property: &SheetProperty) {
             text_cell(ui, fitted_label(ui, STATES_KIND));
             ui.spacing_mut().item_spacing.y = 0.0;
             for state in &property.states {
-                ui.horizontal_top(|ui| {
+                // The column's width, taken before the swatch: a name that fits it wraps under the swatch.
+                let label = fitted_label(ui, &state.name);
+                ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x =
                         STATE_SWATCH_WIDTH - crate::ui::editor::sheet::widgets::CHIP_SWATCH;
                     swatch_ui(ui, color32(state.color));
-                    let row = ui.text_style_height(&egui::TextStyle::Body);
-                    ui.vertical(|ui| {
-                        ui.add_space(((CHIP_HEIGHT - row) / 2.0).max(0.0));
-                        ui.add(fitted_label(ui, &state.name));
-                    });
+                    ui.add(label);
                 });
             }
         }

@@ -17,6 +17,7 @@ use crate::tests::support::{
 };
 use crate::ui::editor::expert::{CopyState, convert_refusal, copy_banner, find_original, open_original_of, today};
 use crate::ui::editor::graph::arrange::NODE_SIZE;
+use crate::ui::editor::graph::canvas::READABLE_SCALE;
 use crate::ui::editor::sheet::diagram::diagram_boxes;
 use crate::ui::editor::{FileStatus, open_text};
 
@@ -299,6 +300,39 @@ fn the_words_rule_exempts_whole_controls_and_still_reports_a_bare_node() {
             "{reported} is reported: {words:?}"
         );
     }
+}
+
+#[test]
+fn a_converted_copy_opens_at_a_readable_zoom_and_frame_all_fits_every_node() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = egui::vec2(1000.0, 700.0);
+    convert_starter(&mut harness, "sir.toml");
+    let shown = |harness: &Harness| {
+        let graph = harness.app.editor.model.graph().expect("the copy opens in the Editor");
+        let canvas = graph.canvas(graph.scope()).expect("the open pass has a canvas");
+        let nodes = canvas.all_rect().expect("the pass holds nodes");
+        (canvas.transform, canvas.transform * nodes, canvas.canvas_rect)
+    };
+    let (opened, _, _) = shown(&harness);
+    assert!(
+        opened.scaling >= READABLE_SCALE,
+        "the copy opens at a zoom of {}",
+        opened.scaling
+    );
+    harness.click("Frame all");
+    harness.settle();
+    let (framed, nodes, canvas) = shown(&harness);
+    assert!(
+        framed.scaling < READABLE_SCALE,
+        "the pass fits at {}, so the test shows no difference",
+        framed.scaling
+    );
+    assert!(
+        canvas.expand(1.0).contains_rect(nodes),
+        "Frame all shows {nodes:?} inside {canvas:?}"
+    );
 }
 
 #[test]

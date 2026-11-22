@@ -1,8 +1,8 @@
-//! Layout of the Sheet pane: framed sections, form rows with one label column, and tables.
+//! Layout of the Sheet pane: sections, form rows with one label column, and tables.
 //!
-//! A *section* is a framed region with its title and its help at the top. A *form* lays its rows out as a label column
-//! and a field column, every label on one left edge. A *table* has a header row of small upper-case labels, a hairline
-//! under it and under each row, and the row under the pointer in the theme's hover fill.
+//! A *section* is its title with a rule running to its help, then its rows, with no frame of its own. A *form* lays its
+//! rows out as a label column and a field column, every label on one left edge. A *table* has a header row of small
+//! labels, a hairline under it and under each row, and the row under the pointer in the theme's hover fill.
 //!
 //! A table's columns take their natural widths while those fit, and the room left over goes to one column. When they do
 //! not fit, columns give up width in a stated order, each down to its least width. A table that does not fit at its
@@ -19,7 +19,7 @@ use egui::{Ui, UiBuilder, pos2, vec2};
 use henad_graph::sheet::sentence::REMOVE_ROW_LABEL;
 
 use crate::ui::editor::sheet::help::{Help, help_button};
-use crate::ui::editor::sheet::widgets::{CHIP_HEIGHT, caption, field_message, region, region_title, text_control};
+use crate::ui::editor::sheet::widgets::{CHIP_HEIGHT, caption, field_message, region_title, text_control};
 use crate::ui::mcs;
 
 /// Height in points of one line of a form row or of a table cell. A field, a select or a chip sits centred in it.
@@ -37,34 +37,32 @@ const LINE_GAP: f32 = 4.0;
 /// Padding in points above and below the contents of a table row.
 const ROW_PADDING: f32 = 2.0;
 
-/// Inset in points of a section's contents from its border, at its sides.
-const SECTION_INSET: i8 = 10;
-
 /// Share of a form's width its label column takes at most.
 const LABEL_SHARE: f32 = 0.45;
 
 /// Height in points a cell gives itself when nothing in it reaches further down.
 const CELL_DEPTH: f32 = 4096.0;
 
-/// Draws a section of the Sheet pane: a framed region with `title` and the help `help` at its top, then what `add`
-/// draws.
+/// Space in points a section leaves at its right edge, to keep its help clear of the divider beside the pane.
+const SECTION_END: i8 = 10;
+
+/// Draws a section of the Sheet pane: `title` with a rule running to the help `help` at its top, then what `add`
+/// draws, on the pane's own ground with no frame.
 pub(super) fn section(ui: &mut Ui, title: &str, help: Help, add: impl FnOnce(&mut Ui)) {
-    region(ui, |ui| {
-        Frame::NONE
-            .inner_margin(Margin {
-                left: SECTION_INSET,
-                right: SECTION_INSET,
-                top: 6,
-                bottom: 10,
-            })
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.y = LINE_GAP;
-                region_title(ui, title, |ui| help_button(ui, help));
-                ui.add_space(2.0);
-                add(ui);
-            });
-    });
+    Frame::NONE
+        .inner_margin(Margin {
+            left: 0,
+            right: SECTION_END,
+            top: 6,
+            bottom: 10,
+        })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = LINE_GAP;
+            region_title(ui, title, |ui| help_button(ui, help));
+            ui.add_space(2.0);
+            add(ui);
+        });
 }
 
 /// Returns the width in points of `text` on one line in the body font.
@@ -317,8 +315,8 @@ impl TableRows {
         self.left(last + 1) - self.left(first) - COLUMN_GAP
     }
 
-    /// Draws the header row: each header as a small upper-case label over its column and the columns after it that
-    /// have none, then a hairline. A table with no header draws none.
+    /// Draws the header row: each header as a [`caption`] over its column and the columns after it that have none,
+    /// then a hairline. A table with no header draws none.
     fn header(&self, ui: &mut Ui) {
         if self.headers.iter().all(|header| header.is_empty()) {
             return;

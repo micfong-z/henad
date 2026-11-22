@@ -32,8 +32,12 @@ description), the Editor's unsaved changes dialog (`UNSAVED_HEADING`, `unsaved_c
 `SAVE_MODEL`, `DISCARD_CHANGES`) and the mark beside the name of a model with unsaved changes
 (`UNSAVED_MARK`, `UNSAVED_MARK_TOOLTIP`), the top bar, the world tabs (`tick_counter`, the
 tried-value words, `PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion. Rows the wording
-table marks "Not built" are left out. The rate notes are templates taking numbers already formatted
-(`rate_note`,
+table marks "Not built" are left out. Shown text takes the proper characters: "…" in a menu item,
+a pattern or a button ("+ Repeat…", "New parameter…", "when … is …"), "→" between a state and its
+value in a Depending on, and "×" and "−" in a note. A blank reads `BLANK_TEXT`, "…", in shown
+text and in an automatic name. An automatic name that an older sheet stores with "..." for a blank
+still counts as automatic (`names::read_blanks`), and the next edit writes it with "…". The rate
+notes are templates taking numbers already formatted (`rate_note`,
 `rate_for_each_note`, `worked_out_rate_note`, `growing_rate_note`, `chance_for_each_note`,
 `growing_chance_note`, `competing_note`, `mean_stay_note`, and `otherwise_rate_note` after any of
 them), which `sheet::rates` fills. The end of
@@ -60,13 +64,13 @@ conversion words sit under the node-graph exemption and are outside that test.
 every cell", or "Lines of Clear: run once, every cell, when pressed" for a card that runs once,
 named by the button that runs it) and `line(line_id, otherwise)`, where `otherwise` holds the
 numbers of the higher lines that override the line ("otherwise (when line 2 does not apply) become
-..."). The sentence decides no "otherwise" of its own. The writer passes
-`CardRelations::otherwise_numbers`. A blank reads `...`, an unknown reference as its id, an
+…"). The sentence decides no "otherwise" of its own. The writer passes
+`CardRelations::otherwise_numbers`. A blank reads `…`, an unknown reference as its id, an
 unnamed Count result as its automatic name, and another unnamed result as its line word ("line
 4"), since its automatic name can read the same chip again. Words
 follow the wording table: "Become X from Y" ("from any state"), ", always", "when my Cargo is
 Searching" (no "I am"), "is none of the numbers 2, 3" and "is one of the states" when the left reads
-a States property, "count of ... whose X, only those whose Y", "Set Hit to yes with chance P,
+a States property, "count of … whose X, only those whose Y", "Set Hit to yes with chance P,
 otherwise no", "the 3 by 3 block including me", "for each infected neighbour" through
 `for_each_words` (a name whose last word is not a plural reads "for each of B in my block"), a
 percent as typed ("30%"), a Compare line's name hidden while it equals its sentence, a Calculate

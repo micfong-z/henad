@@ -91,7 +91,7 @@ impl SheetSection {
         format!("Help: {}", self.heading())
     }
 
-    /// Text of the section's help popover.
+    /// Text of the section's help tooltip.
     pub fn help(self) -> &'static str {
         match self {
             Self::Purpose => "Say in a sentence what the model is for and what to look for when it runs.",
@@ -138,7 +138,7 @@ impl SheetSection {
         }
     }
 
-    /// Example of the section's help popover, shown after [`HELP_EXAMPLE_LABEL`](super::HELP_EXAMPLE_LABEL).
+    /// Example of the section's help tooltip, shown after [`HELP_EXAMPLE_LABEL`](super::HELP_EXAMPLE_LABEL).
     pub fn help_example(self) -> &'static str {
         match self {
             Self::Purpose => "Spread of a disease through a town. Look for waves of infection.",

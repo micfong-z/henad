@@ -56,7 +56,10 @@ and Delete. A node with an error takes a red 500 stroke and a red 900 badge, a w
 and the badge's press frames the node, as does a press on a problem in the list under the canvas. A
 framing holds over frames until the target's rectangle stops changing, and `framing_transform` fits
 it at no less than `MIN_SCALE` (0.1), the canvas's zoom floor and egui-snarl's `min_scale`, which
-clamps any lower transform on the next frame. A plain click selects through the modifier write of
+clamps any lower transform on the next frame. A canvas of a converted copy (an editor region with a
+`model_origin`) opens with `Framing::Readable`: `readable_transform` fits every node at
+`READABLE_SCALE` (0.5) or more, and where they do not fit at 0.5 puts their top left corner at the
+canvas's. Frame all keeps `framing_transform`. A plain click selects through the modifier write of
 record #62 around `show`. Quick-add (`quick_add.rs`) opens on the background
 and on a dropped wire, and adds the node where the pointer was when the menu opened (`menu_origin`),
 since egui-snarl passes the menu's top left: `offered_kinds(document, Option<&Pass>, ..)` keeps the

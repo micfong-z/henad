@@ -108,27 +108,31 @@ pub fn default_dock_state() -> DockState<Tab> {
 // Splits of the Editor layout, each the share of the left or top side of its split.
 
 /// Share of the width that the Editor's leaf takes.
-const EDITOR_LEAF_SHARE: f32 = 0.625;
+const EDITOR_LEAF_SHARE: f32 = 0.7;
 /// Share of the right column's height that the Viewport takes.
 const VIEWPORT_LEAF_SHARE: f32 = 0.46;
-/// Share of the height under the Viewport that Playback and Pacing take.
+/// Share of the height under the Viewport that Playback, Pacing and Model take.
 const PLAYBACK_LEAF_SHARE: f32 = 0.3;
 
 /// Returns the Editor layout, as Reset layout restores it.
 ///
 /// The Editor is in front of Sweep and Results on the left. The column on the right holds the Viewport, then Playback
-/// in front of Pacing, then Charts in front of Parameters, Statistics and Model. Performance, System and Export are
+/// in front of Pacing and Model, then Charts in front of Parameters and Statistics. Performance, System and Export are
 /// closed.
 pub fn editor_dock_state() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::Editor, Tab::Sweep, Tab::Results]);
     let surface = dock.main_surface_mut();
 
     let [_, viewport] = surface.split_right(NodeIndex::root(), EDITOR_LEAF_SHARE, vec![Tab::Viewport]);
-    let [_, playback] = surface.split_below(viewport, VIEWPORT_LEAF_SHARE, vec![Tab::Playback, Tab::Pacing]);
+    let [_, playback] = surface.split_below(
+        viewport,
+        VIEWPORT_LEAF_SHARE,
+        vec![Tab::Playback, Tab::Pacing, Tab::Model],
+    );
     surface.split_below(
         playback,
         PLAYBACK_LEAF_SHARE,
-        vec![Tab::Charts, Tab::Params, Tab::Stats, Tab::Model],
+        vec![Tab::Charts, Tab::Params, Tab::Stats],
     );
 
     dock
@@ -553,8 +557,8 @@ mod tests {
     const EDITOR_LAYOUT_STACKS: [&[Tab]; 4] = [
         &[Tab::Editor, Tab::Sweep, Tab::Results],
         &[Tab::Viewport],
-        &[Tab::Playback, Tab::Pacing],
-        &[Tab::Charts, Tab::Params, Tab::Stats, Tab::Model],
+        &[Tab::Playback, Tab::Pacing, Tab::Model],
+        &[Tab::Charts, Tab::Params, Tab::Stats],
     ];
 
     #[test]

@@ -6,8 +6,11 @@ use henad_core::metadata::TimeUnit;
 use super::grammar::{number_list, plural};
 use crate::sheet::document::{Around, ChipRelation, CompareTest, LineKind};
 
-/// Text of a blank in a sentence written as plain text.
-pub const BLANK_TEXT: &str = "...";
+/// Text of a blank in a sentence written as plain text, and in an automatic name that holds a blank.
+pub const BLANK_TEXT: &str = "…";
+
+/// Text of a blank in an automatic name that an older sheet stores, three full stops.
+pub(crate) const OLD_BLANK_TEXT: &str = "...";
 
 /// Reserved state id of a Become line that changes a cell in any state.
 pub const ANY_STATE_ID: &str = "any_state";
@@ -33,7 +36,7 @@ pub const LAW: &str = "Everyone reads the world as it was at the start of the ti
                        at the end of the tick. A property that no line changes is left unchanged.";
 
 /// Label of the add button of agent cards that adds a Repeat line.
-pub const REPEAT_BUTTON: &str = "+ Repeat...";
+pub const REPEAT_BUTTON: &str = "+ Repeat…";
 
 /// Accessible name of the "?" beside the add buttons, which opens the Lines help.
 pub const HELP_LINES_NAME: &str = "Help: lines";
@@ -472,36 +475,34 @@ impl AddItem {
     pub fn pattern(self, states: Option<(&str, &str)>) -> String {
         let (new, old) = states.unwrap_or(("a new state", "an old state"));
         match self {
-            Self::Count => "count of the cells around me (8, 4 or a 3 by 3 block) whose ... is ...".to_owned(),
-            Self::TotalOrAverage => "total of ... over the cells around me (8, 4 or a 3 by 3 block)".to_owned(),
-            Self::BecomeWithChance => format!("Become {new} from {old}, with chance ..., optionally for each ..."),
-            Self::BecomeAtRate => format!("Become {new} from {old}, at rate ... per day, optionally for each ..."),
-            Self::WithChance => "a yes or no: with chance ...".to_owned(),
-            Self::AtRate => "a yes or no: at rate ... per day".to_owned(),
-            Self::Compare => "... is ..., is at least ..., is more than ... and others".to_owned(),
-            Self::AllOf => "all of ..., ...".to_owned(),
-            Self::AnyOf => "any of ..., ...".to_owned(),
-            Self::Calculate => "... plus ...".to_owned(),
-            Self::Become => format!("Change a state: Become {new} from {old}, when ..."),
-            Self::Set => "Change a number: Set ... to ..., when ...".to_owned(),
-            Self::When => "When ...: then add the lines that share it".to_owned(),
-            Self::CountAgents => "count of the agents within ... whose ... is ...".to_owned(),
-            Self::LookAroundAgents => {
-                "look at the agents within ...: average of ..., total of ... and others".to_owned()
-            }
-            Self::PickCell => "the open neighbouring cell with the most ... (ties at random)".to_owned(),
+            Self::Count => "count of the cells around me (8, 4 or a 3 by 3 block) whose … is …".to_owned(),
+            Self::TotalOrAverage => "total of … over the cells around me (8, 4 or a 3 by 3 block)".to_owned(),
+            Self::BecomeWithChance => format!("Become {new} from {old}, with chance …, optionally for each …"),
+            Self::BecomeAtRate => format!("Become {new} from {old}, at rate … per day, optionally for each …"),
+            Self::WithChance => "a yes or no: with chance …".to_owned(),
+            Self::AtRate => "a yes or no: at rate … per day".to_owned(),
+            Self::Compare => "… is …, is at least …, is more than … and others".to_owned(),
+            Self::AllOf => "all of …, …".to_owned(),
+            Self::AnyOf => "any of …, …".to_owned(),
+            Self::Calculate => "… plus …".to_owned(),
+            Self::Become => format!("Change a state: Become {new} from {old}, when …"),
+            Self::Set => "Change a number: Set … to …, when …".to_owned(),
+            Self::When => "When …: then add the lines that share it".to_owned(),
+            Self::CountAgents => "count of the agents within … whose … is …".to_owned(),
+            Self::LookAroundAgents => "look at the agents within …: average of …, total of … and others".to_owned(),
+            Self::PickCell => "the open neighbouring cell with the most … (ties at random)".to_owned(),
             Self::CellHereOrAhead => "the cell I am on, or the cell ahead of me".to_owned(),
-            Self::RandomNumber => "a random number between ... and ...".to_owned(),
-            Self::RandomDirection => "a random direction of length ...".to_owned(),
-            Self::Choose => "choose, first that applies: ..., when ...; otherwise ...".to_owned(),
-            Self::DependingOn => "depending on my ...: a value for each state".to_owned(),
-            Self::Steer => "Steer ... by or towards ..., strength ...".to_owned(),
-            Self::KeepBetween => "Keep ... between ... and ...".to_owned(),
-            Self::MoveBy => "Move by ..., such as a random direction".to_owned(),
+            Self::RandomNumber => "a random number between … and …".to_owned(),
+            Self::RandomDirection => "a random direction of length …".to_owned(),
+            Self::Choose => "choose, first that applies: …, when …; otherwise …".to_owned(),
+            Self::DependingOn => "depending on my …: a value for each state".to_owned(),
+            Self::Steer => "Steer … by or towards …, strength …".to_owned(),
+            Self::KeepBetween => "Keep … between … and …".to_owned(),
+            Self::MoveBy => "Move by …, such as a random direction".to_owned(),
             Self::MoveTo => "Move to a cell a line above picks".to_owned(),
-            Self::Leave => "Leave ... on a ground property, when ...".to_owned(),
-            Self::Record => "Record an event, when ...".to_owned(),
-            Self::Repeat => "Repeat ... times: then add the lines to repeat".to_owned(),
+            Self::Leave => "Leave … on a ground property, when …".to_owned(),
+            Self::Record => "Record an event, when …".to_owned(),
+            Self::Repeat => "Repeat … times: then add the lines to repeat".to_owned(),
         }
     }
 }
@@ -601,7 +602,7 @@ pub fn comparison_words(test: CompareTest, of_states: bool) -> &'static str {
         CompareTest::NotOneOf if of_states => "is none of the states",
         CompareTest::NotOneOf => "is none of the numbers",
         CompareTest::Within => "is within",
-        CompareTest::Outside => "is less than ... or more than ...",
+        CompareTest::Outside => "is less than … or more than …",
     }
 }
 
@@ -736,12 +737,12 @@ impl ConditionItem {
         let when = condition_head(ConditionKind::When, on_when_line);
         match self {
             Self::Always => ALWAYS.to_owned(),
-            Self::Is => format!("{when} ... {} ...", comparison_words(CompareTest::Is, false)),
-            Self::AtLeast => format!("{when} ... {} ...", comparison_words(CompareTest::AtLeast, false)),
-            Self::AtMost => format!("{when} ... {} ...", comparison_words(CompareTest::AtMost, false)),
-            Self::Outside => format!("{when} ... {}", comparison_words(CompareTest::Outside, false)),
-            Self::WithChance => format!("{} ...", condition_head(ConditionKind::Chance, on_when_line)),
-            Self::AtRate => format!("{} ... per ...", condition_head(ConditionKind::Rate, on_when_line)),
+            Self::Is => format!("{when} … {} …", comparison_words(CompareTest::Is, false)),
+            Self::AtLeast => format!("{when} … {} …", comparison_words(CompareTest::AtLeast, false)),
+            Self::AtMost => format!("{when} … {} …", comparison_words(CompareTest::AtMost, false)),
+            Self::Outside => format!("{when} … {}", comparison_words(CompareTest::Outside, false)),
+            Self::WithChance => format!("{} …", condition_head(ConditionKind::Chance, on_when_line)),
+            Self::AtRate => format!("{} … per …", condition_head(ConditionKind::Rate, on_when_line)),
         }
     }
 
@@ -992,7 +993,7 @@ impl DrawKind {
 }
 
 /// Words the optional "for each ..." blank shows.
-pub const FOR_EACH_BLANK_WORDS: &str = "for each ...";
+pub const FOR_EACH_BLANK_WORDS: &str = "for each …";
 
 /// Returns the accessible name of the optional "for each ..." blank, such as "Line 2: for each, optional".
 pub fn for_each_optional_name(prefix: &str) -> String {
@@ -1072,9 +1073,6 @@ pub fn shared_state_name(property: &str, state: &str, shared: bool) -> String {
 
 // The Lines help
 
-/// Heading of the Lines help.
-pub const LINES_HELP_HEADING: &str = "Lines";
-
 /// Text of the Lines help.
 pub const LINES_HELP: &str = "Every cell follows these lines each tick, from the top. A line either works out a \
                               result, which lines below it can use, or changes one of my properties. Everyone reads \
@@ -1100,16 +1098,8 @@ pub const LINES_HELP_AGENTS: &str = "Every agent of this kind follows these line
 pub const LINES_HELP_AGENTS_EXAMPLE: &str =
     "Too close = look at birds within Protected range: total of offset away from them (push)";
 
-/// Label before the example of a help popover.
+/// Label before the example of a help tooltip.
 pub const HELP_EXAMPLE_LABEL: &str = "Example:";
-
-/// Button that closes a help popover.
-pub const CLOSE_HELP: &str = "Close help";
-
-/// Returns the accessible name of the help popover under `heading`, such as "World help" or "Lines help".
-pub fn help_dialog_name(heading: &str) -> String {
-    format!("{heading} help")
-}
 
 /// Words the card and the text a sheet produces never show, outside the controls that open a node graph.
 pub const FORBIDDEN_WORDS: [&str; 19] = [

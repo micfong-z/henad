@@ -296,7 +296,7 @@ test = "is"
 left = { my = "cargo" }
 right = { state = "carrying_food" }
 
-# Way = depending on my Cargo: Searching -> Food way, Carrying food -> Home way
+# Way = depending on my Cargo: Searching → Food way, Carrying food → Home way
 [card.line.l5]
 kind = "depending_on"
 name = "Way"

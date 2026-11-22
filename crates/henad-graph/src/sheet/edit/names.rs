@@ -6,6 +6,7 @@
 //! hand as it is. Result names are unique across the sheet, case aside: a repeated automatic name takes " 2", " 3" and
 //! so on, in display order, after the names typed by hand.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use super::references::{Change, Target, change_references};
@@ -16,8 +17,8 @@ use crate::sheet::document::{
 };
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{
-    self, ALL_OF_RESULT, ANY_OF_RESULT, BLANK_TEXT, CALCULATE_RESULT_EMPTY, COUNT_RESULT_EMPTY, HAPPENS, Sentences,
-    TEST_RESULT_EMPTY, UNIT_PLACEHOLDER,
+    self, ALL_OF_RESULT, ANY_OF_RESULT, BLANK_TEXT, CALCULATE_RESULT_EMPTY, COUNT_RESULT_EMPTY, HAPPENS,
+    OLD_BLANK_TEXT, Sentences, TEST_RESULT_EMPTY, UNIT_PLACEHOLDER,
 };
 
 /// Returns the automatic name of the result line `line` of `document`, `None` for a line of a kind that has none.
@@ -183,6 +184,16 @@ fn compare_is_filled(line: &SheetLine) -> bool {
     !line.left.is_blank() && line.test.is_some() && right
 }
 
+/// Returns `name`, a stored name, with each [`OLD_BLANK_TEXT`] read as [`BLANK_TEXT`]. A name an older sheet stores
+/// for a line with a blank then still equals its automatic name.
+fn read_blanks(name: &str) -> Cow<'_, str> {
+    if name.contains(OLD_BLANK_TEXT) {
+        Cow::Owned(name.replace(OLD_BLANK_TEXT, BLANK_TEXT))
+    } else {
+        Cow::Borrowed(name)
+    }
+}
+
 /// Returns whether `name` is `base`, or `base` with a number from 2 after a space.
 fn is_numbered(name: &str, base: &str) -> bool {
     name == base
@@ -221,11 +232,14 @@ pub(super) fn update_names(before: &SheetDocument, after: &mut SheetDocument) {
             // A name the edit left alone follows when it followed before the edit.
             Some((_, old)) if old.name == line.name => match (&old.name, old_names.get(id)) {
                 (None, _) => true,
-                (Some(name), Some(old_base)) => is_numbered(name, old_base),
+                (Some(name), Some(old_base)) => is_numbered(&read_blanks(name), old_base),
                 (Some(_), None) => false,
             },
             // A new line, or a name the edit set, follows when it has no name or its automatic name.
-            _ => line.name.as_deref().is_none_or(|name| is_numbered(name, new_base)),
+            _ => line
+                .name
+                .as_deref()
+                .is_none_or(|name| is_numbered(&read_blanks(name), new_base)),
         }
     };
     let mut taken: HashSet<String> = HashSet::new();
@@ -348,8 +362,10 @@ fn summary_names_of(
         .enumerate()
         .map(
             |(index, summary)| match old_line.and_then(|old| old.summaries.get(index)) {
-                Some(old) if old.name == summary.name => is_numbered(&old.name, &automatic_summary_name(before, old)),
-                _ => summary.name.is_empty() || summary.name == automatic_summary_name(after, summary),
+                Some(old) if old.name == summary.name => {
+                    is_numbered(&read_blanks(&old.name), &automatic_summary_name(before, old))
+                }
+                _ => summary.name.is_empty() || read_blanks(&summary.name) == automatic_summary_name(after, summary),
             },
         )
         .collect();

@@ -4,11 +4,12 @@
 sections of a world of agents. The rest of the Sheet pane, what each section edits and how, is in
 `agents/henad-app-sheet.md`, and the look of each component in `agents/ui.md`.
 
-**Sections.** `section(ui, title, help, add)` draws a `widgets::region` (gray 900 inside a gray 800
-border, as a card is) with an inset of 10 at its sides, `region_title` (the heading as a small
-upper-case mono `caption`, a hairline to the help button at the right edge), then `add`, its rows 4
+**Sections.** `section(ui, title, help, add)` draws on the pane's own ground with no frame, from
+the pane's left edge to `SECTION_END` 10 short of its right (the help clear of the divider's grab),
+`region_title` (the heading as a
+`title_text`, a hairline to the help button at the right edge), then `add`, its rows 4
 apart. `sheet_pane` puts `REGION_GAP` 12 between sections. A section's "+ Add ..." is its last row,
-the dashed `widgets::add_row_button` with no kind, except "+ Add property" while the sheet holds no
+the `widgets::add_row_button` with no kind, except "+ Add property" while the sheet holds no
 property, which stays the primary `filled_button`. A form inside a section (property, measure,
 button, event) is `form_heading` in the semibold face, `Form` rows and `form_buttons` (Done, Cancel,
 then the property form's Delete, returning the presses), with no box of its own. The property,
@@ -39,9 +40,11 @@ column by `TableRow::delete_cell`, which returns the click. The tables and their
 
 - Properties (`property_table`, of any thing): Starts as takes the room left over. Short of room it
   gives up width down to 150, then Changed by, Kind and Name down to their longest words (Changed
-  by to the word "CHANGED" of its header), wrapping at them, then Starts as down to
+  by to the word "Changed" of its header), wrapping at them, then Starts as down to
   `text_control_width` of "Use a parameter", its selects and chips ending in an ellipsis, then Kind
-  and Name down to 56 and 40, a word too long ending in an ellipsis with the tooltip.
+  down to the longest word of a state's name without its swatch (`kind_under`, the name wrapping
+  under its swatch in a `horizontal_wrapped`), then Kind and Name down to 56 and 40, a word too
+  long ending in an ellipsis with the tooltip.
 - Parameters: one line per parameter (name, value as slider and field, Min, Max, Unit, ×) when the
   section holds every column at its comfortable width, Value taking the room left over and Unit,
   Value, Name, Min and Max giving up width in that order. Otherwise name, value and × on the first
@@ -53,7 +56,7 @@ column by `TableRow::delete_cell`, which returns the click. The tables and their
 Every select of the pane is `select` (`select_within` at most as wide as its line, keyed by the salt
 of the `ComboBox` it replaced, over `select_list`), its options `OverlayItem`s with the current one
 marked and a state's swatch. The kind of a States property shows "States" over each state's swatch
-and name.
+and name, the name wrapping under the swatch where the column has no room for both.
 
 **A world of agents**. The pane works on a *thing*, `CELLS_ID`, `GROUND_ID` or the agent kind's id:
 `properties_of`, `find_property`, `all_properties` and `over_agents` in `sheet/mod.rs`, which the

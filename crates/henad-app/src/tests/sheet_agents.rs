@@ -713,11 +713,7 @@ fn the_agent_sections_show_no_forbidden_word_in_any_state() {
     click(&mut harness, ADD_BUTTON);
     seen.look(&mut harness);
     click(&mut harness, CANCEL);
-    for help in ["Help: Agents", "Help: Ground", "Help: Events"] {
-        click(&mut harness, help);
-        seen.look(&mut harness);
-        harness.press(Key::Escape, Modifiers::NONE);
-    }
+    // The description of each help button holds its words, which the looks read.
     for starter in ["boids.toml", "bounded_confidence.toml", "ants.toml"] {
         let text = starter_document(starter).to_text().expect("the starter writes");
         harness.open_sheet(&text);

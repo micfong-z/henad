@@ -885,12 +885,20 @@ impl GraphEditor {
     /// egui-snarl keeps the selection, the transform and the node sizes in egui's memory under the canvas's id. A new
     /// canvas takes an id no canvas had before, so a body opened again after its canvas was dropped, or a pass that
     /// takes a renamed pass's id, starts from a fresh state.
+    ///
+    /// A canvas of a copy converted from a sheet opens at a zoom its nodes read at ([`Framing::Readable`]). Any other
+    /// canvas opens with every node in view.
     fn canvas_mut(&mut self) -> &mut BodyCanvas {
+        let framing = if self.editor_region().model_origin().is_some() {
+            Framing::Readable
+        } else {
+            Framing::All
+        };
         let made = &mut self.canvases_made;
         let load = self.load;
         self.canvases.entry(self.scope.clone()).or_insert_with(|| {
             *made += 1;
-            BodyCanvas::new(Id::new("henad_graph_canvas").with(load).with(*made))
+            BodyCanvas::new(Id::new("henad_graph_canvas").with(load).with(*made), framing)
         })
     }
 

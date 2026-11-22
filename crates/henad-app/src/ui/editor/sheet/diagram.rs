@@ -2,7 +2,7 @@
 //!
 //! A *box* stands for one line. It shows the line prefix, the result the line works out on the right, the line's
 //! sentence as the card writes it, and on the left each result of a line above that the line reads. An *arrow* runs
-//! from a result to each line that reads it, and a dashed *frame* labelled "Inside line N" surrounds the lines inside
+//! from a result to each line that reads it, and a *frame* labelled "Inside line N" surrounds the lines inside
 //! each When, nested Whens included, with a connector from the When's box to its frame.
 //!
 //! The drawing is painted with the painter and holds no widget. Each card's drawing is one accessible image named by
@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use egui::accesskit::Role;
 use egui::epaint::CubicBezierShape;
-use egui::{Align2, Color32, CornerRadius, FontId, Galley, Painter, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui};
+use egui::{Align2, Color32, CornerRadius, FontId, Galley, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui};
 use egui::{Button, ScrollArea, TextStyle, pos2, vec2};
 use henad_graph::sheet::ConvertRefusal;
 use henad_graph::sheet::check::SheetReport;
@@ -444,16 +444,14 @@ fn paint_box(painter: &Painter, line: &DiagramBox, placed: &PlacedBox, font: &Fo
     }
 }
 
-/// Paints the dashed frame `rect` around the lines inside line `number`, with its label.
+/// Paints the frame `rect` around the lines inside line `number`, a gray 700 outline, with its label.
 fn paint_frame(painter: &Painter, rect: Rect, number: usize) {
-    let corners = [
-        rect.left_top(),
-        rect.right_top(),
-        rect.right_bottom(),
-        rect.left_bottom(),
-        rect.left_top(),
-    ];
-    painter.extend(Shape::dashed_line(&corners, Stroke::new(1.0, mcs::GRAY_500), 6.0, 4.0));
+    painter.rect_stroke(
+        rect,
+        CornerRadius::ZERO,
+        Stroke::new(1.0, mcs::GRAY_700),
+        StrokeKind::Inside,
+    );
     painter.text(
         rect.left_top() + vec2(FRAME_MARGIN, FRAME_LABEL / 2.0),
         Align2::LEFT_CENTER,

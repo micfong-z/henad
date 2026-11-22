@@ -82,7 +82,7 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::LAW),
         ),
         ("Help: lines", fixed(sentence::HELP_LINES_NAME)),
-        ("+ Repeat...", fixed(sentence::REPEAT_BUTTON)),
+        ("+ Repeat…", fixed(sentence::REPEAT_BUTTON)),
         (
             "New lines will be added at the end of the card.",
             fixed(sentence::ADD_AT_END_NOTE),
@@ -151,16 +151,16 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         ("Change the kind of condition", fixed(sentence::CONDITION_ARROW_TOOLTIP)),
         (
-            "When ...",
-            format!("{} ...", sentence::condition_head(ConditionKind::When, true)),
+            "When …",
+            format!("{} …", sentence::condition_head(ConditionKind::When, true)),
         ),
         (
-            "When with chance ...",
-            format!("{} ...", sentence::condition_head(ConditionKind::Chance, true)),
+            "When with chance …",
+            format!("{} …", sentence::condition_head(ConditionKind::Chance, true)),
         ),
         (
-            "When at rate ...",
-            format!("{} ...", sentence::condition_head(ConditionKind::Rate, true)),
+            "When at rate …",
+            format!("{} …", sentence::condition_head(ConditionKind::Rate, true)),
         ),
         ("Choose when", fixed(sentence::CHOOSE_WHEN)),
         (
@@ -181,17 +181,17 @@ fn every_wording_table_entry_equals_the_final_words() {
             "otherwise, when line 2 does not apply",
             sentence::otherwise_item_name(&[2]),
         ),
-        ("when ... is ...", ConditionItem::Is.label(false)),
-        ("when ... is at least ...", ConditionItem::AtLeast.label(false)),
-        ("when ... is at most ...", ConditionItem::AtMost.label(false)),
+        ("when … is …", ConditionItem::Is.label(false)),
+        ("when … is at least …", ConditionItem::AtLeast.label(false)),
+        ("when … is at most …", ConditionItem::AtMost.label(false)),
         (
-            "when ... is less than ... or more than ...",
+            "when … is less than … or more than …",
             ConditionItem::Outside.label(false),
         ),
-        ("with chance ...", ConditionItem::WithChance.label(false)),
-        ("at rate ... per ...", ConditionItem::AtRate.label(false)),
-        ("When with chance ...", ConditionItem::WithChance.label(true)),
-        ("When at rate ... per ...", ConditionItem::AtRate.label(true)),
+        ("with chance …", ConditionItem::WithChance.label(false)),
+        ("at rate … per …", ConditionItem::AtRate.label(false)),
+        ("When with chance …", ConditionItem::WithChance.label(true)),
+        ("When at rate … per …", ConditionItem::AtRate.label(true)),
         ("always", ConditionItem::Always.label(false)),
         (
             "The same as a value. Choose is not, is more than or another comparison on the line.",
@@ -216,7 +216,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         ("Line 2: total or average", LineSelect::TotalOrAverage.name("Line 2")),
         ("Line 2: operation", LineSelect::Operation.name("Line 2")),
         ("unit", fixed(sentence::UNIT_PLACEHOLDER)),
-        ("for each ...", fixed(sentence::FOR_EACH_BLANK_WORDS)),
+        ("for each …", fixed(sentence::FOR_EACH_BLANK_WORDS)),
         ("Line 2: for each, optional", sentence::for_each_optional_name("Line 2")),
         (
             "Optional: make the rate grow with a count",
@@ -266,7 +266,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         ("my Food", sentence::my_property_item("Food")),
         ("this cell's Food", sentence::this_cells_property("Food")),
         ("Parameters", fixed(sentence::PARAMETERS)),
-        ("New parameter...", fixed(sentence::NEW_PARAMETER)),
+        ("New parameter…", fixed(sentence::NEW_PARAMETER)),
         ("States", fixed(sentence::STATES)),
         ("any state", fixed(sentence::ANY_STATE)),
         ("Properties", fixed(sentence::PROPERTIES)),
@@ -336,14 +336,14 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::SHARED_DRAW_GROUP),
         ),
         (
-            "Become Alive from Dead, when ...",
+            "Become Alive from Dead, when …",
             AddItem::Become
                 .pattern(Some(("Alive", "Dead")))
                 .trim_start_matches("Change a state: ")
                 .to_owned(),
         ),
         (
-            "Change a state: Become a new state from an old state, when ...",
+            "Change a state: Become a new state from an old state, when …",
             AddItem::Become.pattern(None),
         ),
         // Result names.
@@ -785,10 +785,6 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::LINES_HELP_EXAMPLE),
         ),
         ("Example:", fixed(sentence::HELP_EXAMPLE_LABEL)),
-        ("Close help", fixed(sentence::CLOSE_HELP)),
-        ("Lines", fixed(sentence::LINES_HELP_HEADING)),
-        ("World help", sentence::help_dialog_name(SheetSection::World.heading())),
-        ("Lines help", sentence::help_dialog_name(sentence::LINES_HELP_HEADING)),
         (
             "pass, stage, lane, domain, IR, shader, WGSL, kernel, buffer, node, port, wire, category, variant, seed, \
              stream, accumulator, region, compile",
@@ -828,19 +824,19 @@ fn every_wording_table_entry_equals_the_final_words() {
 
     // Each add menu's items, as "label: pattern", with the Become patterns' states in brackets.
     let items = [
-        "Count: count of the cells around me (8, 4 or a 3 by 3 block) whose ... is ...",
-        "Total or average: total of ... over the cells around me (8, 4 or a 3 by 3 block)",
-        "Become, with chance: Become [new] from [old], with chance ..., optionally for each ...",
-        "Become, at a rate: Become [new] from [old], at rate ... per day, optionally for each ...",
-        "With chance: a yes or no: with chance ...",
-        "At a rate: a yes or no: at rate ... per day",
-        "Compare: ... is ..., is at least ..., is more than ... and others",
-        "All of: all of ..., ...",
-        "Any of: any of ..., ...",
-        "Calculate: ... plus ...",
-        "Become: Change a state: Become [new] from [old], when ...",
-        "Set: Change a number: Set ... to ..., when ...",
-        "When: When ...: then add the lines that share it",
+        "Count: count of the cells around me (8, 4 or a 3 by 3 block) whose … is …",
+        "Total or average: total of … over the cells around me (8, 4 or a 3 by 3 block)",
+        "Become, with chance: Become [new] from [old], with chance …, optionally for each …",
+        "Become, at a rate: Become [new] from [old], at rate … per day, optionally for each …",
+        "With chance: a yes or no: with chance …",
+        "At a rate: a yes or no: at rate … per day",
+        "Compare: … is …, is at least …, is more than … and others",
+        "All of: all of …, …",
+        "Any of: any of …, …",
+        "Calculate: … plus …",
+        "Become: Change a state: Become [new] from [old], when …",
+        "Set: Change a number: Set … to …, when …",
+        "When: When …: then add the lines that share it",
     ];
     let written: Vec<String> = AddButton::ALL
         .iter()
@@ -975,8 +971,8 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
         ),
         (
             "Each tick (1 day), a Susceptible cell becomes Infected with a chance that grows with r and n, where r is \
-             ... and n is .... The rate is converted to a chance by 1 − e^(−r × n × 1 day).",
-            sentence::growing_rate_note("1 day", &susceptible, "...", Some("...")),
+             … and n is …. The rate is converted to a chance by 1 − e^(−r × n × 1 day).",
+            sentence::growing_rate_note("1 day", &susceptible, "…", Some("…")),
         ),
         (
             "Each tick, a cell becomes B with chance 0.2 with 1 B neighbour, and 0.36 with 2. Each one counted is an \
@@ -990,9 +986,9 @@ fn rate_note_entries() -> Vec<(&'static str, String)> {
             ),
         ),
         (
-            "Each tick, a cell becomes B with a chance that grows with n, where p is ... and n is .... Each one \
+            "Each tick, a cell becomes B with a chance that grows with n, where p is … and n is …. Each one \
              counted is an independent trial: 1 − (1 − p)^n.",
-            sentence::growing_chance_note(None, &sentence::become_subject("cell", None, Some("B")), "...", "..."),
+            sentence::growing_chance_note(None, &sentence::become_subject("cell", None, Some("B")), "…", "…"),
         ),
         // The restart notice, the Integer kind, and the notes of competing rates, the long tick and the mean stay.
         (
@@ -1215,7 +1211,7 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
             sentence::starts_field_name(&sentence::starts_row_place("Status", 1), StartsField::UseParameter),
         ),
         ("Choose a parameter", fixed(sentence::CHOOSE_A_PARAMETER)),
-        ("New parameter...", fixed(sentence::NEW_PARAMETER)),
+        ("New parameter…", fixed(sentence::NEW_PARAMETER)),
         ("Choose a chance", Blank::Chance.picker_title()),
         ("Choose a number", Blank::Number.picker_title()),
         (
@@ -1334,7 +1330,7 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
     entries
 }
 
-/// Returns the entries of the dialogs, the top bar, the world tabs, the help popovers, the Diagram and the
+/// Returns the entries of the dialogs, the top bar, the world tabs, the help tooltips, the Diagram and the
 /// conversion, each template called with the table's example.
 #[expect(
     clippy::too_many_lines,
@@ -1603,7 +1599,7 @@ fn agent_lines_read_round_1_words_in_the_final_conventions() {
     );
     assert_eq!(
         sentences[4],
-        "Way = depending on my Cargo: Searching -> Food way, Carrying food -> Home way"
+        "Way = depending on my Cargo: Searching → Food way, Carrying food → Home way"
     );
     assert_eq!(
         sentences[6],
@@ -1793,7 +1789,6 @@ const FIXED_WORDING: &[&str] = &[
     sentence::AGENT_WALLS_SENTENCE,
     sentence::AGENT_WRAP_TOOLTIP,
     sentence::WORLD_HELP_AGENTS,
-    sentence::LINES_HELP_HEADING,
     sentence::FOR_EACH_BLANK_WORDS,
     sentence::FROM_WORD,
     sentence::RATE_IN_BUTTON_CARD,
@@ -1838,7 +1833,6 @@ const FIXED_WORDING: &[&str] = &[
 #[test]
 fn no_fixed_wording_entry_holds_a_forbidden_word() {
     let mut texts: Vec<String> = FIXED_WORDING.iter().map(|text| (*text).to_owned()).collect();
-    texts.push(sentence::help_dialog_name(sentence::LINES_HELP_HEADING));
     texts.push(sentence::name_reserved("Count"));
     texts.push(sentence::measure_name_reserved("tick"));
     texts.push(sentence::add_up_worked_out_note(70_000, "ant", "To home", "65536"));
@@ -1853,7 +1847,6 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
     }
     texts.push(sentence::empty_field("Health", "a chance"));
     for section in SheetSection::ALL {
-        texts.push(sentence::help_dialog_name(section.heading()));
         texts.push(section.help().to_owned());
         texts.push(section.help_example().to_owned());
     }
@@ -1995,7 +1988,7 @@ fn otherwise_blanks_and_the_empty_for_each_are_parts_of_their_own() {
     let parts = sentences.line_parts("l2", &[]);
     assert!(parts.contains(&SentencePart::Blank(Blank::OldState)), "{parts:?}");
     assert_eq!(parts.last(), Some(&SentencePart::Blank(Blank::When)));
-    assert_eq!(sentence_text(&parts), "Become Alive from ..., ...");
+    assert_eq!(sentence_text(&parts), "Become Alive from …, …");
 }
 
 #[test]
@@ -2079,7 +2072,7 @@ fn lead_words_result_names_and_alternatives_leave_every_sentence_as_written() {
                     let expected = if line.kind == LineKind::Choose {
                         line.rows.len() + 1
                     } else {
-                        comment.matches(" -> ").count()
+                        comment.matches(" → ").count()
                     };
                     assert_eq!(count, expected, "{file_name} {id}");
                     alternatives += count;
@@ -2210,7 +2203,7 @@ fn a_new_count_wants_a_property_then_a_state_and_an_empty_calculate_its_two_valu
     let parts = sentences.line_parts("l1", &[]);
     assert_eq!(
         sentence_text(&parts),
-        "Count = count of the 8 cells around me whose ... is ..."
+        "Count = count of the 8 cells around me whose … is …"
     );
     assert!(parts.contains(&SentencePart::Blank(Blank::Property)), "{parts:?}");
     assert!(parts.contains(&SentencePart::Blank(Blank::State)), "{parts:?}");
@@ -2231,7 +2224,7 @@ fn a_new_count_wants_a_property_then_a_state_and_an_empty_calculate_its_two_valu
             field(FieldPlace::SecondOperand)
         ]
     );
-    assert_eq!(sentences.line("l9", &[]), "Result = ... ... ...");
+    assert_eq!(sentences.line("l9", &[]), "Result = … … …");
     assert_eq!(
         sentence::binary_formula("l1 / 2"),
         Some(("l1".to_owned(), '/', "2".to_owned()))

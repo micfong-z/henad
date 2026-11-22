@@ -2,8 +2,8 @@
 //! accessible names, the list blanks of numbers and of states, a list typed in a blank of one number, a chance refused
 //! in the field, shared state names, the line menu, a cleared blank's skip note, When blocks built through their add
 //! rows, the offer to remove a When, moves that skip a line, the "otherwise" notice, a button's card with its notice
-//! and a When, a Calculate line written through its draft, and the words rule over every menu, picker, select, note
-//! and help popover opened on the way.
+//! and a When, a Calculate line written through its draft, and the words rule over every menu, picker, select and note
+//! opened on the way.
 
 use egui::accesskit::Role;
 use egui::{Key, Modifiers};
@@ -76,7 +76,7 @@ fn a_blank_model_builds_game_of_life_with_its_lines_and_equals_the_starter() {
         &mut seen,
         "Line 2: choose when",
         CHOOSE_WHEN,
-        "when ... is ...",
+        "when … is …",
     );
     open_and_pick(
         &mut harness,
@@ -103,7 +103,7 @@ fn a_blank_model_builds_game_of_life_with_its_lines_and_equals_the_starter() {
         &mut seen,
         "Line 3: choose when",
         CHOOSE_WHEN,
-        "when ... is ...",
+        "when … is …",
     );
     open_and_pick(
         &mut harness,
@@ -150,7 +150,6 @@ fn a_blank_model_builds_game_of_life_with_its_lines_and_equals_the_starter() {
         "the rebuild equals the starter in canonical text and lowered code"
     );
     assert_controls_hold_their_words(&mut harness);
-    click(&mut harness, "Help: lines");
     seen.look(&mut harness);
     assert_no_forbidden_word(&seen);
 
@@ -209,7 +208,6 @@ fn a_blank_model_builds_the_chance_sir_with_its_lines_and_equals_the_sheet() {
         "the rebuild equals the chance SIR in canonical text and lowered code"
     );
     assert_controls_hold_their_words(&mut harness);
-    click(&mut harness, "Help: lines");
     seen.look(&mut harness);
     assert_no_forbidden_word(&seen);
 }
@@ -401,10 +399,7 @@ fn the_line_menu_renames_a_result_and_deletes_a_line() {
     click(&mut harness, "Delete line 1");
     let document = sheet(&harness).document().clone();
     assert!(document.line("l1").is_none());
-    assert_eq!(
-        line_text(&mut harness, "Line 1"),
-        "Become Alive from Dead, when ... is 3"
-    );
+    assert_eq!(line_text(&mut harness, "Line 1"), "Become Alive from Dead, when … is 3");
     assert!(
         matches!(condition_right(&harness, "l2").value(), Some(SheetValue::Literal(_))),
         "the number stays"
@@ -467,9 +462,9 @@ fn add_menus_line_menus_and_pickers_hold_menu_items_in_menus() {
         &mut harness,
         Some(CHOOSE_WHEN),
         &[
-            ("when ... is ...", CONDITIONS),
-            ("when ... is at least ...", CONDITIONS),
-            ("with chance ...", CONDITIONS),
+            ("when … is …", CONDITIONS),
+            ("when … is at least …", CONDITIONS),
+            ("with chance …", CONDITIONS),
         ],
     );
 }
@@ -590,7 +585,7 @@ fn last_item_by_key(height: f32) -> Option<[egui::Rect; 4]> {
     harness.settle();
     harness.press(Key::ArrowUp, Modifiers::NONE);
     let nodes = harness.settle();
-    assert_eq!(harness.focused, "at rate ... per ...", "↑ moves to the last item");
+    assert_eq!(harness.focused, "at rate … per …", "↑ moves to the last item");
     let item = nodes
         .iter()
         .find(|node| node.label == harness.focused)
@@ -620,7 +615,7 @@ fn a_focused_item_scrolls_into_its_picker_and_the_card_stays_put() {
 }
 
 #[test]
-fn escape_returns_the_focus_from_a_select_and_a_help_popover() {
+fn escape_returns_the_focus_from_a_select() {
     let Some(mut harness) = Harness::tall() else {
         return;
     };
@@ -631,10 +626,6 @@ fn escape_returns_the_focus_from_a_select_and_a_help_popover() {
     assert_eq!(harness.focused, "Wrap around", "↓ moves into the select's list");
     harness.press(Key::Escape, Modifiers::NONE);
     assert_eq!(harness.focused, "Edges");
-    click(&mut harness, "Help: World");
-    harness.settle();
-    harness.press(Key::Escape, Modifiers::NONE);
-    assert_eq!(harness.focused, "Help: World");
 }
 
 #[test]
@@ -827,7 +818,7 @@ fn a_chance_result_is_named_happens_until_its_chance_names_it() {
     let mut seen = Seen::default();
     open_starter(&mut harness, "forest_fire.toml");
     add(&mut harness, &mut seen, AddButton::Chance, "With chance");
-    assert_eq!(line_text(&mut harness, "Line 6"), "Happens = with chance ...");
+    assert_eq!(line_text(&mut harness, "Line 6"), "Happens = with chance …");
     assert!(is_open(&mut harness, "Choose a chance"), "the new line's chance opens");
     type_and_enter(&mut harness, "30%");
     assert_eq!(
@@ -871,7 +862,7 @@ fn the_one_side_offer_waits_while_the_range_is_being_filled() {
         &mut harness,
         &mut seen,
         CHOOSE_WHEN,
-        "when ... is less than ... or more than ...",
+        "when … is less than … or more than …",
     );
     open_and_pick(
         &mut harness,
@@ -911,7 +902,7 @@ fn a_count_chosen_as_a_chance_offers_to_count_it_for_each() {
     click(&mut harness, "Line 3: use a chance for each infected neighbour");
     assert_eq!(
         line_text(&mut harness, "Line 3"),
-        "Become Recovered from Infected, with chance ... for each infected neighbour"
+        "Become Recovered from Infected, with chance … for each infected neighbour"
     );
     assert!(
         is_open(&mut harness, "Choose a chance"),
@@ -1031,7 +1022,7 @@ fn a_blank_model_builds_the_forest_fire_with_otherwise_and_equals_the_starter() 
         &mut seen,
         "Line 2: choose when",
         CHOOSE_WHEN,
-        "when ... is at least ...",
+        "when … is at least …",
     );
     open_and_pick(
         &mut harness,
@@ -1113,10 +1104,7 @@ fn the_run_once_condition_picker_offers_no_rate() {
     click(&mut harness, "Clear line 1: choose when, now always");
     assert!(is_open(&mut harness, CHOOSE_WHEN));
     let texts = harness.accessible_texts();
-    assert!(
-        texts.iter().any(|text| text == "with chance ..."),
-        "a chance is offered"
-    );
+    assert!(texts.iter().any(|text| text == "with chance …"), "a chance is offered");
     assert!(
         !texts.iter().any(|text| text.contains("at rate")),
         "no rate is offered: {texts:?}"
@@ -1199,7 +1187,7 @@ fn add_dead_when(harness: &mut Harness, seen: &mut Seen) {
     assert!(is_open(harness, CHOOSE_WHEN), "a new When's condition opens by itself");
     seen.look(harness);
     assert!(!shows(harness, "always"), "a When cannot be always");
-    click_in(harness, CHOOSE_WHEN, "When ... is ...");
+    click_in(harness, CHOOSE_WHEN, "When … is …");
     harness.settle();
     open_and_pick(harness, seen, "Line 4: choose a value", "Choose a value", "my Status");
     open_and_pick(harness, seen, "Line 4: choose a state", "Choose a state", "Dead");
@@ -1226,7 +1214,7 @@ fn a_nested_when_stores_its_parent_and_deleting_the_outer_when_keeps_its_lines()
     seen.look(&mut harness);
     click_in(&mut harness, &add_inside_name(4), "When");
     harness.settle();
-    click_in(&mut harness, CHOOSE_WHEN, "When ... is at least ...");
+    click_in(&mut harness, CHOOSE_WHEN, "When … is at least …");
     harness.settle();
     open_and_pick(
         &mut harness,
@@ -1244,7 +1232,7 @@ fn a_nested_when_stores_its_parent_and_deleting_the_outer_when_keeps_its_lines()
     assert!(shows(&mut harness, "Only when line 4 holds: my Status is Dead."));
 
     // Line 6, inside line 5: a Become starts always, from the state of the nearest When around it testing
-    // "my Status is ...", which is line 4. Line 5 tests a count.
+    // "my Status is …", which is line 4. Line 5 tests a count.
     click(&mut harness, &add_inside_label(5));
     seen.look(&mut harness);
     click_in(&mut harness, &add_inside_name(5), "Become");

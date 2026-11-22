@@ -61,7 +61,7 @@ Henad has two layouts, and <span class="ui" markdown>:material-view-dashboard-ou
 **Editor layout**
 : For writing a model and trying it.
   The <span class="ui" markdown>:material-code-braces: Editor</span> takes most of the window, with <span class="ui" markdown>:material-flask-outline: Sweep</span> and <span class="ui" markdown>:material-chart-box-outline: Results</span> behind it.
-  A column on the right holds the <span class="ui" markdown>:material-cube-outline: Viewport</span>, then <span class="ui" markdown>:material-play-circle-outline: Playback</span> with <span class="ui" markdown>:material-speedometer: Pacing</span> behind it, then <span class="ui" markdown>:material-chart-line: Charts</span> with <span class="ui" markdown>:material-tune: Parameters</span>, <span class="ui" markdown>:material-table: Statistics</span> and <span class="ui" markdown>:material-cog-outline: Model</span> behind it.
+  A column on the right holds the <span class="ui" markdown>:material-cube-outline: Viewport</span>, then <span class="ui" markdown>:material-play-circle-outline: Playback</span> with <span class="ui" markdown>:material-speedometer: Pacing</span> and <span class="ui" markdown>:material-cog-outline: Model</span> behind it, then <span class="ui" markdown>:material-chart-line: Charts</span> with <span class="ui" markdown>:material-tune: Parameters</span> and <span class="ui" markdown>:material-table: Statistics</span> behind it.
   Performance, System and Export are closed.
 
 <figure markdown="span">
@@ -1080,10 +1080,10 @@ The sheet opens in two panes.
 **Sheet** lists what every cell has and what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.
 **Card** lists the lines every cell, or every agent, follows each tick, numbered from 1, each as a sentence such as "Become Alive from Dead, when Alive neighbours is 3".
 In a sentence, each chosen value is a chip: a result in blue, a state with its colour, a parameter with a slider mark, and "my" before a property in grey.
-An empty slot is a dashed box that names what it wants, such as "old state".
+An empty slot is a faint box that names what it wants, such as "old state".
 Hover over a result chip to highlight the line that works it out.
 Hover over "otherwise" to highlight the higher line and read which line wins when both apply.
-Press the help button beside a heading for a short explanation with an example.
+Hover over the help button beside a heading for a short explanation with an example.
 The world stays in the Viewport, Playback, Pacing, Parameters and Charts tabs.
 
 A sheet starts at a small size in the Viewport, paused at tick 0 with the start drawn.

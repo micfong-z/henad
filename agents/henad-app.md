@@ -56,12 +56,13 @@ panel. `Tab::Editor` is the last variant, since egui keys a tab's stored state o
 and sits after Parameters in `Tab::ALL`, the View menu's order. A `Layout` is `Default` or `Editor`,
 and `Layout::dock_state` builds its tree. `default_dock_state` stacks Sweep and Results behind
 Viewport and leaves the Editor closed. `editor_dock_state` splits the width at `EDITOR_LEAF_SHARE`
-(0.625): the Editor in front of Sweep and Results on the left, and a column of the Viewport
-(`VIEWPORT_LEAF_SHARE`, 0.46), Playback in front of Pacing (`PLAYBACK_LEAF_SHARE`, 0.3 of the rest)
-and Charts in front of Parameters, Statistics and Model, with Performance, System and Export closed.
-The four tabs of the bottom stack need about 480 points, so a wider Editor leaf cuts the Model tab
-at 1280 points. `HenadApp` holds a `Workspace`: one `DockState` per layout for the session (nothing
-stored, the app starts in the default layout), the layout that shows and `editor_layout_on_open`,
+(0.7): the Editor in front of Sweep and Results on the left, and a column of the Viewport
+(`VIEWPORT_LEAF_SHARE`, 0.46), Playback in front of Pacing and Model (`PLAYBACK_LEAF_SHARE`, 0.3 of
+the rest) and Charts in front of Parameters and Statistics, with Performance, System and Export
+closed. The column is 384 points wide in a window of 1280, and each stack's tab bar holds three
+tabs, about 380 points. A fourth tab in a stack would be cut off at that width. `HenadApp` holds a
+`Workspace`: one `DockState` per layout for the session (nothing stored, the app starts in the
+default layout), the layout that shows and `editor_layout_on_open`,
 the View menu's checkbox (`menu_bar::EDITOR_LAYOUT_ON_OPEN`, "Open models in the Editor layout", on
 at start). `Workspace::toggle` and `focus` open a closed tab through `open_tab`: the Editor of the
 default layout in a leaf of its own split to the right of the Viewport's leaf (`EDITOR_SPLIT`) with

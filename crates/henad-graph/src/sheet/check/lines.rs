@@ -991,7 +991,7 @@ impl<'a> Checker<'a> {
             Some(CompareTest::Outside) => {
                 if !context.condition {
                     self.error(
-                        "is less than ... or more than ... can only be used in a condition",
+                        "is less than … or more than … can only be used in a condition",
                         &context.place,
                     );
                 }

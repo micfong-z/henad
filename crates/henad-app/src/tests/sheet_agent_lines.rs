@@ -59,7 +59,7 @@ fn new_parameter(harness: &mut Harness, seen: &mut Seen, name: &str, default: &s
     harness.settle();
 }
 
-/// Clicks the control named `control`, picks "New parameter..." in the picker titled `dialog` it opens, and creates
+/// Clicks the control named `control`, picks "New parameter…" in the picker titled `dialog` it opens, and creates
 /// the parameter `name` with `default` in `min` to `max`.
 #[expect(clippy::too_many_arguments, reason = "a parameter's four values each take a part")]
 fn parameter_at(
@@ -133,7 +133,7 @@ fn a_blank_agent_model_builds_the_random_walk_with_its_lines_and_equals_the_star
         &mut seen,
         "Line 2: choose a value",
         "Choose a value",
-        "a random direction of length ...",
+        "a random direction of length …",
     );
     parameter_at(
         &mut harness,
@@ -157,7 +157,6 @@ fn a_blank_agent_model_builds_the_random_walk_with_its_lines_and_equals_the_star
         "the rebuild equals the random walk in canonical text and lowered code"
     );
     assert_controls_hold_their_words(&mut harness);
-    click(&mut harness, "Help: lines");
     seen.look(&mut harness);
     assert_no_forbidden_word(&seen);
 }
@@ -201,7 +200,7 @@ fn build_boids_looks(harness: &mut Harness, seen: &mut Seen) {
         "their Velocity",
     );
     click(harness, &add_summary_name("Line 1"));
-    pick(harness, seen, "Choose a summary", "average of ...");
+    pick(harness, seen, "Choose a summary", "average of …");
     pick(harness, seen, "Choose a value", "offset to them");
     rename(harness, seen, "Line 1", "line 1", "Flockmates");
     assert_eq!(
@@ -353,7 +352,7 @@ fn build_boids_motion(harness: &mut Harness, seen: &mut Seen) {
     );
     click(harness, "Randomise headings line 1: choose a value");
     assert!(shows(harness, OR_A_NEW_VALUE), "the value picker offers new values");
-    pick(harness, seen, "Choose a value", "a random direction of length ...");
+    pick(harness, seen, "Choose a value", "a random direction of length …");
     choose_at(
         harness,
         seen,
@@ -401,7 +400,6 @@ fn a_blank_agent_model_builds_boids_with_its_lines_and_equals_the_starter() {
         "the rebuild equals boids in canonical text and lowered code"
     );
     assert_controls_hold_their_words(&mut harness);
-    click(&mut harness, "Help: lines");
     seen.look(&mut harness);
     assert_no_forbidden_word(&seen);
 }
@@ -800,9 +798,9 @@ fn each_agent_slot_offers_what_fits_it() {
     // A number on a card over agents offers an arrow's length and a random number, a value a random direction too.
     let number = picker_items(&boids, "l8", Blank::Number);
     assert!(number.iter().any(|item| item == "length of my Velocity"), "{number:?}");
-    assert!(number.iter().any(|item| item == "a random number between ... and ..."));
-    assert!(!number.iter().any(|item| item == "a random direction of length ..."));
-    assert!(steer.iter().any(|item| item == "a random direction of length ..."));
+    assert!(number.iter().any(|item| item == "a random number between … and …"));
+    assert!(!number.iter().any(|item| item == "a random direction of length …"));
+    assert!(steer.iter().any(|item| item == "a random direction of length …"));
 }
 
 #[test]

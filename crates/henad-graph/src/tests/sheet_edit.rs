@@ -968,7 +968,7 @@ fn the_condition_offers_of_the_final_editor_are_one_command_each() {
     let sentences = |builder: &SheetBuilder| Sentences::new(builder.document()).line("l2", &[]);
     assert_eq!(
         sentences(&builder),
-        "Become B from any state, when B in my block is less than ... or more than 4"
+        "Become B from any state, when B in my block is less than … or more than 4"
     );
     run(&mut builder, SheetEdit::UseOneSide { line: "l2".to_owned() });
     assert_eq!(

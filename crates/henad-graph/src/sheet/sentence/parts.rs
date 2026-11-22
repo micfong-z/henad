@@ -34,7 +34,7 @@ pub enum SentencePart {
     From,
     /// A chosen value, drawn as a chip.
     Chip(SentenceChip),
-    /// An empty slot, drawn as a dashed button that shows [`Blank::word`]. Plain text reads it as [`BLANK_TEXT`].
+    /// An empty slot, drawn as a button that shows [`Blank::word`]. Plain text reads it as [`BLANK_TEXT`].
     Blank(Blank),
     /// A select inside the line and the words chosen in it, empty while nothing is chosen. Plain text reads an empty
     /// select as [`BLANK_TEXT`].

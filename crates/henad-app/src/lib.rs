@@ -216,8 +216,6 @@ impl eframe::App for HenadApp {
         dock_style.tab_bar.corner_radius = egui::CornerRadius::ZERO;
         // `egui_dock` draws an overflowing tab bar's scroll bar as a pill. The wheel still scrolls the bar without it.
         dock_style.tab_bar.show_scroll_bar_on_overflow = false;
-        // `from_egui` takes the drop zone's tint from the selection fill, the dark tinted fill of a list's current item.
-        dock_style.overlay.selection_color = ui::mcs::BLUE_700.linear_multiply(0.5);
         self.state.layout = self.workspace.layout();
         DockArea::new(self.workspace.dock_mut())
             .style(dock_style)

@@ -36,7 +36,7 @@ The row under it shows the model's name, a dot while the model holds changes you
 For a sheet, the row also holds <span class="ui" markdown>:material-undo: Undo</span>, <span class="ui" markdown>:material-redo: Redo</span> and the **Model actions** menu.
 
 Under the panes, the Editor lists its messages: the state of the preview, the outcome of the last open, save or Apply, and each problem.
-Each message starts with a bar and an icon in the colour of its kind, blue for information, orange for a warning and red for an error.
+Each message starts with an icon in the colour of its kind, blue for information, orange for a warning and red for an error.
 
 New model, New grid rule, New node graph and Open model replace the Editor's model, and so does Open in Editor in the Results tab.
 Edit model replaces it too, but keeps the model, your edits since the last Apply included, while the selected model runs the code the Editor applied last.
@@ -67,7 +67,7 @@ A sheet opens in two panes beside each other.
 **Sheet** lists what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.
 **Card** lists the lines every cell, or every agent, follows each tick, numbered from 1, each as a sentence such as "Become Alive from Dead, when Alive neighbours is 3".
 The world itself runs in the <span class="ui" markdown>:material-cube-outline: Viewport</span>, and the Playback, Pacing, Parameters and Charts tabs control it as they control any model.
-Each heading has a help button with a short explanation and an example.
+Each heading has a help button: hover over it, or move the keyboard focus to it, to read a short explanation and an example.
 
 ![The Editor holding a forest fire: the header with the name row, the Sheet pane, and the card, where line 5 starts with otherwise and a notice above the card says why](../assets/app/editor-sheet.png){ width="700" }
 
@@ -76,7 +76,7 @@ A click on the name renames the model.
 
 ### The Sheet pane
 
-The pane holds one framed section for each part of the model, its title in small capitals and its help button at the right end.
+The pane holds one section for each part of the model, its title over a rule that runs to its help button at the right end.
 A section that lists several things, such as the properties under **Cells** or the **Parameters**, lists them in a table under a row of column headings, and a button at its end adds one more, such as **+ Add parameter**.
 A field applies what you type when you press <kbd>Enter</kbd> or move away from it, and <kbd>Escape</kbd> puts back what the sheet holds.
 In the purpose, <kbd>Enter</kbd> starts a new line, and <kbd>Escape</kbd> applies what you typed.
@@ -104,13 +104,13 @@ A measure cannot be named run_id, tick or time, the names of the first columns o
 ### The Card pane
 
 Each card is a frame with its heading, such as "Each tick, every cell", and its number of lines at the right end.
-Under the heading, a grey bar marks the rule every line follows: everyone reads the world as it was at the start of the tick, all changes are applied together at the end of the tick, and a property that no line changes is left unchanged.
+Under the heading, grey words give the rule every line follows: everyone reads the world as it was at the start of the tick, all changes are applied together at the end of the tick, and a property that no line changes is left unchanged.
 
 A line either works out a result, which lines below it can use, or changes one of the cell's properties.
 A bar at the left of each line shows its kind by colour, as the square on each add button does: blue for a look around, purple for a chance, yellow for a yes or no, grey for a calculation, green for a change, and white for a When or a Repeat.
 Hover over the bar to read the kind.
 In a sentence, each chosen value is a *chip*: a result in blue, a state with its colour, a parameter with a slider mark, and "my" before a property in grey.
-An empty slot is a dashed *blank* that names what it wants, such as "state" or "old state".
+An empty slot is a *blank*, a faint box that names what it wants, such as "state" or "old state".
 Hover over a result chip to highlight the line that works it out.
 
 The add buttons under the lines add a line at the end of the card, each from a menu with a pattern of the sentence under every item:
@@ -130,14 +130,14 @@ A button's card runs its lines once when the button is pressed, and offers **+ C
 A new line's first blank opens its *picker*, which lists only what fits there, in groups.
 A picker opens as a framed list under its blank, titled with what it asks for, such as **Choose a value**, and a press on a filled chip opens it again.
 Where the window has no room for it under the blank, it opens above, and where neither side has room, it opens on the side with more room and scrolls.
-A number takes a typed number, a result of a line above, one of the cell's properties, a parameter, or **New parameter...**, which creates one in a dialog and puts it in the blank.
+A number takes a typed number, a result of a line above, one of the cell's properties, a parameter, or **New parameter…**, which creates one in a dialog and puts it in the blank.
 A chance takes a number from 0 to 1 or a percent such as 30%, and refuses anything else as you type it.
 "is one of the numbers" takes a list, such as 2, 3, typed in one go.
 
 ![The card of a forest fire with a When block at line 6, its value chip open on the Choose a value picker, which lists Burning neighbours from line 1, my Cover, three parameters and New parameter, over a box to type a number](../assets/app/editor-picker.png){ width="536" }
 
 After a choice the keyboard moves to the next blank of the line.
-An empty state blank opens by itself, as does the upper number of "is less than ... or more than ..." after the lower one.
+An empty state blank opens by itself, as does the upper number of "is less than … or more than …" after the lower one.
 Press <kbd>↓</kbd> and <kbd>↑</kbd> to move through the items of an open picker or menu, and <kbd>Escape</kbd> to close it and return to the control that opened it.
 A control's tooltip shows while the control has the keyboard focus, as well as under the pointer.
 
@@ -150,9 +150,9 @@ A new change from **+ Change** starts with an empty "when" blank and does nothin
 The blank opens **Choose when**, which lists the yes or no results of the lines above, then the kinds of condition:
 
 - **always**, for a change that applies to every cell in its old state.
-- **when ... is ...**, **when ... is at least ...**, **when ... is at most ...**, and **when ... is less than ... or more than ...**, which compare a value.
-- **with chance ...**, for a change made by chance.
-- **at rate ... per ...**, for a change made at a rate, on a card that runs each tick.
+- **when … is …**, **when … is at least …**, **when … is at most …**, and **when … is less than … or more than …**, which compare a value.
+- **with chance …**, for a change made by chance.
+- **at rate … per …**, for a change made at a rate, on a card that runs each tick.
 
 The words "when", "with chance" and "at rate" on a line are plain text.
 The small arrow after them opens **Choose when** again to change the kind of condition.
@@ -243,7 +243,7 @@ Two offers fold a When that holds no more than its lines need:
 ### Agents
 
 A world of agents runs a card over its kind of agent, such as "Each tick, every bird", and the same add buttons offer the lines agents need.
-**+ Repeat...** comes after them on a card over agents alone.
+**+ Repeat…** comes after them on a card over agents alone.
 
 - **+ Look around** counts the agents within a distance whose property is in a state, looks at them and sums them up, picks the neighbouring cell of the ground with the most or the least of a property or one at random, or looks at the cell an agent is on or the cell ahead of it.
 - **+ Chance** adds a change made by chance, a yes or no drawn by chance, a random number between two values, or a random direction of a length.
@@ -251,8 +251,8 @@ A world of agents runs a card over its kind of agent, such as "Each tick, every 
 - **+ Change** adds a Become, a Set, a Steer of a number or an arrow by a value or towards it, a Keep between that holds a number or an arrow's length inside two bounds, a Move by an arrow or to a cell, a Leave that marks the ground, and a Record that counts an event.
   A ground property whose marks add up takes at most 65536 on one cell in a tick, and a Leave of a fixed amount that the most agents on one cell can take past that shows a warning under its line.
   A Leave of a worked-out amount shows a warning once the most agents of the kind reach 65536, since nothing bounds the amount.
-- **+ Repeat...** adds a Repeat line, whose lines run that many times each tick.
-  Its number of times takes an integer parameter, and **New parameter...** there makes one.
+- **+ Repeat…** adds a Repeat line, whose lines run that many times each tick.
+  Its number of times takes an integer parameter, and **New parameter…** there makes one.
   Each time round reads the world as it was at the start of the tick, and the moves and steers inside it add up.
   "Steer Level towards 10, strength 0.5" repeated 4 times from 0 adds 4 × 0.5 × 10 = 20, and a note under the Steer says that its steers add up.
   Each time, the changes of one property inside it are tried from the top, and the first time a change applies decides.
@@ -366,7 +366,7 @@ Inside a Repeat a Become counts the agents it changed, and every other change sh
 
 Press **Diagram**, beside **Lines** after the Card heading, to draw each card as boxes and arrows in place of its lines.
 Each line is a box with its sentence, the result it works out on its right, and on its left the results of lines above that it reads.
-An arrow runs from a result to every line that reads it, and a dashed frame labelled "Inside line N" surrounds the lines inside each When.
+An arrow runs from a result to every line that reads it, and a frame labelled "Inside line N" surrounds the lines inside each When.
 The Diagram is read-only: edit the lines to change it, and press **Lines** to return to them.
 
 ### Converting to a node graph
@@ -382,6 +382,7 @@ The copy has no sheet or cards, so lines, fire counts and "otherwise" do not app
 On the desktop, a sheet opened from a file has its copy saved beside that file.
 
 The copy opens on the canvas with a frame around the nodes of each line, titled with the line's number and sentence, such as "Line 2: Become Alive from Dead, when Alive neighbours is 3".
+It opens at a zoom its nodes can be read at, from the top left corner of a pass too large to fit, and Frame all shows every node.
 Nodes several lines share sit in a frame naming them all, and nodes made by the sheet itself, such as a start or a measure, in a grey frame.
 A node shows its kind's name, such as **Is** or **Count around me**, over the kind as the file writes it, such as `cmp.eq`.
 A node named on the card, such as "Alive neighbours", shows that name instead.

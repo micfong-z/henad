@@ -106,7 +106,7 @@ fn a_blank_model_builds_the_rates_sir_with_its_lines_and_equals_the_starter() {
     pick(&mut harness, &mut seen, "Choose the old state", "Susceptible");
     assert_eq!(
         line_text(&mut harness, "Line 2"),
-        "Become Infected from Susceptible, at rate ... per day"
+        "Become Infected from Susceptible, at rate … per day"
     );
     click(&mut harness, "Line 2: choose a rate");
     pick(&mut harness, &mut seen, "Choose a rate", NEW_PARAMETER);
@@ -146,7 +146,6 @@ fn a_blank_model_builds_the_rates_sir_with_its_lines_and_equals_the_starter() {
         "the rebuild equals the SIR starter in canonical text and lowered code"
     );
     assert_controls_hold_their_words(&mut harness);
-    click(&mut harness, "Help: lines");
     seen.look(&mut harness);
     assert_no_forbidden_word(&seen);
 }
@@ -173,7 +172,7 @@ fn the_run_once_card_offers_no_rate_after_rates_arrive() {
     // A line that runs each tick offers the rate in "Choose when", and a typed rate changes to a chance.
     click(&mut harness, "Line 3: change the kind of condition");
     assert!(is_open(&mut harness, CHOOSE_WHEN));
-    assert!(shows(&mut harness, "at rate ... per ..."));
+    assert!(shows(&mut harness, "at rate … per …"));
     seen.look(&mut harness);
     harness.press(Key::Escape, Modifiers::NONE);
     harness.settle();
@@ -189,7 +188,7 @@ fn the_run_once_card_offers_no_rate_after_rates_arrive() {
     // The card of New outbreak offers no rate, in "Choose when" or in its line menu, even for a typed chance.
     click(&mut harness, "New outbreak line 1: change the kind of condition");
     assert!(is_open(&mut harness, CHOOSE_WHEN));
-    assert!(!shows(&mut harness, "at rate ... per ..."));
+    assert!(!shows(&mut harness, "at rate … per …"));
     seen.look(&mut harness);
     harness.press(Key::Escape, Modifiers::NONE);
     harness.settle();

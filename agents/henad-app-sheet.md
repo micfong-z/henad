@@ -105,7 +105,7 @@ and 1 to start). Each Starts as number (`start_number`) is a `commit_field` name
 reopens `Blank::picker_title` with the Number box. A row's empty field empties the chance, text that
 does not read keeps the old value with `TYPE_A_CHANCE` or `TYPE_ONE_NUMBER`, and a chance outside 0
 to 1 `CHANCE_OUT_OF_RANGE`. `start_edit` changes the start as the builder holds it when the edit
-runs. "New parameter..." opens the New parameter dialog for that `StartTarget`, and Create runs
+runs. "New parameter…" opens the New parameter dialog for that `StartTarget`, and Create runs
 `AddParameter` and the start's change as one edit, marked `starts_only` since only the start uses
 the parameter. Past the start it waits for Start again, as a chosen parameter does.
 
@@ -260,21 +260,18 @@ which shows on the anchor as open, closing on a choice, a click outside or Escap
 card picker's shell (`picker_overlay`: an `overlay` `PICKER_WIDTH` wide named as a `Dialog` by its
 title), its `PickerItem`s, `Choice`s and group rows (`groups_ui`, empty groups left out), and its
 parameter items (`parameter_items` of the field's `number_use`, as the card's pickers offer), then
-"New parameter..." and a Number box 120 points wide named by its hint, its text kept under
+"New parameter…" and a Number box 120 points wide named by its hint, its text kept under
 `ui.id()` with "henad_number_box".
 
 `card_pane.rs` and `picker.rs` draw and edit the cards, which `agents/henad-app-card.md` describes.
 
 `help.rs` holds `Help` (`Section(SheetSection)`, `Lines`, and `AgentWorld` and `AgentLines` with the
-words of a world of agents) and `help_button`: a borderless
-`MDI_HELP_CIRCLE_OUTLINE` button named `SheetSection::help_name` or `HELP_LINES_NAME` ("Help:
-World", "Help: lines") toggling a `Popup` (320 points wide, closed by a click outside, Escape or
-Close help) drawn as an overlay (`widgets::overlay`) that holds the heading as its small upper-case
-title (`LINES_HELP_HEADING` for the lines), the text, "Example:" with the example in the weak
-colour, and Close help as a small button. The popup is a `Dialog` named by `help_dialog_name` ("World help"),
-apart from the button's name. Its id derives from the button's, so two "Help: lines" buttons open
-two popovers. `sheet_ui` makes each pane a `Group` named "Sheet" or "Card" (`pane_group`), so
-"region" never reaches the tree.
+words of a world of agents) and `help_button`: a `MDI_HELP_CIRCLE_OUTLINE` button with egui's frame
+under the pointer and on focus alone, named `SheetSection::help_name` or `HELP_LINES_NAME` ("Help:
+World", "Help: lines"), whose tooltip (`FocusTooltip::on_hover_or_focus_ui`, under the pointer or on
+keyboard focus) holds the text and "Example:" with the example in the weak colour, wrapping at 320
+points. A click opens nothing. The button's accessible description holds the same words. `sheet_ui` makes each pane a `Group` named
+"Sheet" or "Card" (`pane_group`), so "region" never reaches the tree.
 
 **Accessible names and the words rule**. Every chip is a button named by its
 text, blanks and selects by what they want and where ("Line 2: choose the old state", "Line 2:
@@ -341,8 +338,8 @@ first choice. `open_new_model` opens it from the Editor header's New model, the 
 entry and the Model tab's New model. `lib.rs` calls `new_model_modal` every frame beside the other
 modals: an `egui::Modal` (`henad_new_model_modal`, a dialog of `widgets.rs` named "New model"),
 the title `NEW_MODEL`, `START_FROM` as a caption with one `widgets::choice_row` per starter (a
-radio button named by the starter, its description weak under its name, the tinted fill and a
-check while chosen) in `widgets::dialog_list`, which scrolls in a short window, the world
+radio button named by the starter, its description weak under its name, the selection fill and
+a check while chosen) in `widgets::dialog_list`, which scrolls in a short window, the world
 question indented under Blank, a Name `TextEdit` labelled by its label, Cancel and Create (blue
 700). Enter creates, as Create does, and Cancel, Escape or a click on
 the backdrop closes it. `create_model(app, file_name, name)` reads the
@@ -384,8 +381,10 @@ line), `a_result_used_above_its_line_is_red_with_its_tooltip`,
 `chips_name_the_property_when_two_share_a_state_name` ("Status Alive", swatch colours),
 `otherwise_carries_its_partner_as_a_description` (forest fire line 3),
 `every_line_of_the_life_starter_reads_its_sentence_by_accessible_name` (the four lines, the pane and
-list groups, chips, selects and help buttons), `a_help_popover_opens_and_closes`,
-`the_sheet_editor_never_shows_a_forbidden_word` (every starter, every help popover, a skipped and a
+list groups, chips, selects and help buttons),
+`a_help_shows_as_a_tooltip_under_the_pointer_and_a_click_opens_nothing`,
+`a_help_shows_its_tooltip_while_the_keyboard_holds_its_focus`,
+`the_sheet_editor_never_shows_a_forbidden_word` (every starter, every help's words, a skipped and a
 red line, the New model dialog, the control that opens a node graph exempt),
 `every_accessible_name_holds_its_visible_words` (each control of a line, note button and add row
 in the tree and holding its words through `assert_controls_hold_their_words`, selects aside), `the_world_tabs_show_no_forbidden_word_from_a_sheet`, and over a
@@ -460,5 +459,5 @@ ground, `marks = "add_up"` lowering to `combine = "sum"`),
 `the_ant_starter_shows_its_ground_and_starts_ants_on_single_painted_cells` (the painted entry,
 only Food and Nest offered, the Food start lowering) and
 `the_agent_sections_show_no_forbidden_word_in_any_state` (at least 25 states, the agent starters,
-and the label-in-name check). `the_sheet_editor_never_shows_a_forbidden_word` opens the help of
-each section `SheetSection::shown` lists for the starter's world.
+and the label-in-name check). `the_sheet_editor_never_shows_a_forbidden_word` reads the help of
+each section `SheetSection::shown` lists for the starter's world from its button's description.

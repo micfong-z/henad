@@ -36,70 +36,79 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   entry from that mapping in place of a `gamma_multiply` tint, a `Color32` literal or a theme
   colour borrowed as a fill. A node of a converted copy added since the conversion is green, and a
   node changed since then is yellow (`ChangeMark::colors`, badge 900 and 200, stroke 500). The
-  theme. The theme's neutral surfaces and strokes in `init.rs` predate MCS and stay as they are,
-  apart from the values below. Data colours (the plot series, the heatmap scale and its no-data
-  grey) are not MCS and come from `ui/results/plot.rs`.
-- **Theme values for overlays and focus** (`init.rs`), each with its value before. egui's own
-  popups, menus, tooltips and modals read as the app's overlays, and its focus as the app's.
-  - `window_stroke`: gray 800, now 1 point gray 600, the border of every popup, menu, tooltip and
-    modal. The graph canvas and its nodes set their gray 800 border themselves (`canvas_style`).
-  - `popup_shadow`: black at alpha 96, blur 8, offset (6, 10), now `Shadow::NONE`.
-  - `selection.bg_fill`: blue 700, now blue 900. `selection.stroke`: 1 point of (192, 222, 255),
-    now 1.5 points of blue 200. A list's current item, a selected toggle and selected text take
-    the tinted fill. egui also outlines a focused text field in `selection.stroke`, so a focused
-    field is outlined in blue 200, where every other control's focus is blue 500.
-  - `widgets.active.bg_stroke`: 1 point of white, now 1.5 points of blue 500, the focus outline
-    of egui's buttons, checkboxes, radios and combo boxes. A pressed button shows it too.
-  - `slider_trailing_fill`: true, now false. egui fills a slider's rail in the selection fill,
-    which blue 900 leaves unreadable on the rail.
-  `lib.rs` sets the dock's drop zone tint back to blue 700 at half alpha, which `from_egui` would
-  take from the selection fill.
+  theme's neutral surfaces and strokes in `init.rs` predate MCS and stay as they are. Data colours
+  (the plot series, the heatmap scale and its no-data grey) are not MCS and come from
+  `ui/results/plot.rs`.
+- **egui's own look for overlays** (`init.rs`). Every popup, menu, tooltip, combo list and
+  window keeps egui's frame from the theme: the window fill inside a 1 point gray 800
+  `window_stroke`, with `popup_shadow` (black at alpha 96, blur 8, offset (6, 10)) under a popup
+  or a menu and `window_shadow` under a window. The Editor's own overlays draw `Frame::popup` and
+  its dialogs `Frame::window`, never a border of their own. The selection is blue 700 under 1
+  point of (192, 222, 255), so a list's current item, selected text, a slider's trailing fill and
+  the outline of a focused text field are egui's. The focus outline is egui's too,
+  `widgets.active.bg_stroke`, 1 point of white: egui draws a focused button, checkbox, radio or
+  combo box in it, a pressed button shows it too, and the Editor's own controls paint the same
+  stroke through `widgets::focus_ring`.
 - **One palette rule: the meaning picks the hue, and the element picks the step.** No step outside
   this table without adding its row here.
 
   | Element | Step |
   | --- | --- |
-  | Tinted fill with text on it (chip, badge, current item, open control) | hue 900, text hue 200 |
+  | Tinted fill with text on it (chip, badge) | hue 900, text hue 200 |
   | Faint row tint (the highlighted line only) | hue 950 |
   | Solid fill (primary action, progress) | hue 700, text gray 50 |
-  | Line, bar, outline or icon in a hue (kind bar, focus outline, notice bar) | hue 500 |
+  | Line, bar, outline or icon in a hue (kind bar, a row's focus mark, notice icon) | hue 500 |
   | Status text straight on a panel | orange 500, red 500 (the theme's warn and error) |
   | Neutral chip | gray 800 fill, gray 100 text, gray 400 lead word or glyph |
-  | Neutral outline of a control | gray 700 |
-  | Dashed outline of an empty slot (blank, empty select, add button) | gray 500, word gray 400 |
+  | Neutral outline (a swatch) | gray 700 |
+  | Outline of an empty slot (blank, empty select or card) or add button | gray 800, 600 on hover |
   | Hairline (separator, guide, a region's border) | gray 800 |
-  | Region ground (a card, a section of the Sheet pane) | gray 900, the window fill |
-  | Overlay border (picker, menu, select list) | gray 600 |
+  | Region ground (a card) | gray 900, the window fill |
+  | Button, select, open control, current item | the theme's widget visuals and selection |
 
-- **Style: flat, framed regions, hairlines inside.** No shadow, gradient or animation. A card is a
-  region of gray 900 inside a 1 point gray 800 border, 12 points from the next, with its title row
-  at the top (the heading in the semibold face, the count as a small upper-case mono label) and
-  its add buttons in a footer under a hairline. Rows are split by gray 800 hairlines, and a block
-  is its indent and a 1 point gray 800 guide per level, with no tinted band. Metadata (line
-  numbers, fire counts, counts, titles of overlays and their group labels) is mono 11 in gray 400,
-  upper case for a title or a count. Sentences are 13 points, and the semibold face is for lead
-  words and the card heading alone.
+- **Style: flat, framed cards, hairlines inside.** No shadow of the Editor's own (egui's popups and
+  windows keep theirs), gradient or animation. A card is a region of gray 900 inside a 1 point gray
+  800 border, 12 points from the next, with its title row at the top (the heading as a `title_text`,
+  the count as a `caption`) and its add buttons in a footer under a hairline. Rows are split by gray
+  800 hairlines, and a block is its indent and a 1 point gray 800 guide per level, with no tinted
+  band. No label is in upper case. A title (a card, a section of the Sheet pane, an overlay, a
+  dialog) is `title_text`: the semibold face at the body size in gray 100, in sentence case.
+  Metadata (line numbers, fire counts, counts, table headers and the group labels of an overlay) is
+  `small_label` or `caption`: the proportional face at the theme's small size in gray 400. The mono
+  face is for a value shown as typed or as code alone: a number in a field or a chip, a formula, and
+  the WGSL and TOML views. Sentences are 13 points, and the semibold face is for lead words and
+  titles.
 - **The Card pane's components** (`ui/editor/sheet/widgets.rs`, one function each, no call site
-  passes a colour). Keyboard focus is a 1.5 point blue 500 outline on every custom control, and
-  the row that holds it marks its gutter with a 2 point blue 500 line under the line number.
-  - Chip, 20 high: a result blue 900 under blue 200, a result its line cannot use red 900 under
-    red 200 and struck through, every other chip gray 800 under gray 100 with a gray 400 lead word
-    or slider mark, a number in the mono face, "any state" in italics. Hover outlines it in its
-    text colour, and an open picker turns any chip blue 900 inside a blue 500 outline.
-  - Blank: gray 500 dashes around its word in gray 400, solid on hover with the word gray 200,
-    blue 900 while open. The optional "for each ..." is quiet (gray 700 dashes, weak word) until
-    its line is hovered or focused.
-  - Inline select: gray 700 outline, gray 400 on hover, blue 500 while open, dashed while empty.
-    Condition arrow: a 14 point chevron box in gray 700, gray 400 on hover, blue 500 while open,
-    its hit area the row's height. Text control ("always", "for each ...", "+"): weak text, a gray
-    700 outline on hover or while open.
-  - Line menu button: weak dots in a fixed column, the theme's hover fill, blue 900 while open.
-    Add button: dashed gray 500 with the kind's 6 point square, solid on hover, blue 500 while
-    open. A note's button: gray 700 outline, gray 400 on hover.
-  - Overlay (picker, line menu, add menus, select list): the theme's window fill inside gray 600,
-    opaque from its first frame, a small upper-case title and group labels with a hairline. An
-    item is a full-width row, gray 800 under the pointer or the keyboard focus, blue 900 with a
-    check and blue 200 words when current, weak with its reason as a tooltip when it cannot apply.
+  passes a colour). They look as egui's stock widgets do, as the buttons of the Playback, Parameters
+  and Sweep tabs: `paint_button` paints a control the Editor allocates itself (to keep the widget id
+  that opens or focuses it) in the theme's widget visuals of its state, the fill, outline,
+  expansion, square corners and padding of egui's `Button`, and a control that needs no id of its
+  own is an egui `Button`. Keyboard focus is the theme's active outline (1 point of white), and
+  the row that holds it marks its gutter with a 2 point blue 500 line under the line number. A
+  control whose popup is open takes the look of a selected button: the selection fill and text
+  colour. The add buttons, blanks and empty selects follow the empty-slot rule below instead.
+  - Chip, 20 high: a button in egui's frame that keeps its own fill, a result blue 900 under blue
+    200, a result its line cannot use red 900 under red 200 and struck through, every other chip
+    gray 800 under gray 100 with a gray 400 lead word or slider mark, a number in the mono face,
+    "any state" in italics. Hover, focus and an open picker follow the button, but a red chip
+    keeps its colours while its picker is open, inside the selection's outline.
+  - Blank: its word weak inside a 1 point gray 800 outline (`slot_outline`), gray 600 on hover
+    with the word in the text colour, selected while open. The optional "for each …" is its weak
+    word alone, with no outline, until its line is hovered or focused. Nothing is dashed.
+  - Inline select: egui's combo box look, the button frame with its words and chevron in the
+    widget text colour and `widgets.open` while its list is open, and an empty slot's outline and
+    weak words while empty. Condition arrow: a frameless button, a chevron with egui's button frame
+    under the pointer, on focus and while open, its hit area the row's height. Text control
+    ("always", "for each", "+", the "×" of a row): the same frameless button with weak words.
+  - Line menu button: the same frameless button with weak dots, in a fixed column. Add button:
+    weak words inside the empty slot's gray 800 outline, after the kind's 6 point square on a card,
+    gray 600 with the words in the text colour on hover or while its menu is open. A note's button
+    and the segmented toggle (Lines, Diagram) are egui's `Button`, small and selectable.
+  - Overlay (picker, line menu, add menus, select list): egui's popup frame (`Frame::popup`),
+    opaque from its first frame, its title and group labels each with a hairline. An
+    item is a full-width row in the theme's hover fill under the pointer or the keyboard focus,
+    the selection fill with a check and its words in the selection's text colour when current,
+    weak with its reason as a tooltip when it cannot apply.
     A state shows its swatch, a square of its own colour inside gray 700. Every overlay is `placed`:
     under its anchor, over it where it does not fit under it, and otherwise on the side with more
     room and as tall as that room. With less than `OVERLAY_MIN_ROOM` (240 points) on both sides it
@@ -125,42 +134,43 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     scroll area of its own. Escape closes an overlay and returns the focus to the control that
     opened it (`escape_to_anchor`, or `CardPicker::show` for a card's picker).
   - Tooltip of a focusable control in sheet mode, of a button of the Editor's header and of a sheet
-    button in the world: `FocusTooltip::on_hover_or_focus_text`, which shows the tooltip under the
-    pointer and while the keyboard holds the control's focus, never while a popup is open. The focus
+    button in the world: `FocusTooltip::on_hover_or_focus_text`, or `on_hover_or_focus_ui` for the
+    "?" help of a heading, which shows the tooltip under the pointer and while the keyboard holds
+    the control's focus, never while a popup is open. A "?" opens no panel on a click. The focus
     counts as the keyboard's while the last press was a key (`key_pressed_last`, kept in egui temp
     data), so a control focused after a click shows none. The focus tooltip senses hover alone and
     is not interactable, as egui's own tooltip of plain text, so a click under it reaches the
     control there. A label, a hover-only mark and an item inside an open overlay keep
     `on_hover_text`.
   - Dialog (`dialog_frame`, `dialog_title`, `dialog_buttons`, the New model, New parameter,
-    Rebuild model, conversion and unsaved changes dialogs): the theme's window fill inside gray
-    600 with 12 points of margin, a small upper-case mono title with a gray 800 hairline under it
+    Rebuild model, conversion and unsaved changes dialogs): egui's window frame (`Frame::window`)
+    with 12 points of margin, its title (`title_text`) with a gray 800 hairline under it
     across the dialog, and the buttons in one row at the bottom right, the primary last (blue 700,
     or red 900 under red 200 for Rebuild). Enter presses the primary unless another button took
     the key or the dialog opened on that frame, and Escape closes through `Modal`. `dialog_title`
     marks the dialog's AccessKit node modal and makes the title a heading (`heading_caption`, a
     `caption` of role `Heading` named by its words as written). A list of
-    choices is `choice_row`s: full-width radio buttons with a weak description under the name,
-    gray 800 under the pointer or the focus, blue 900 with a check and blue 200 words when chosen,
-    as an overlay's current item (`list_row_fill` and `paint_list_row_marks` paint both). A list
+    choices is `choice_row`s: full-width radio buttons with a weak description under the name, the
+    theme's hover fill under the pointer or the focus, the selection fill with a check and its
+    words in the selection's text colour when chosen, as an overlay's current item (`list_row_fill`
+    and `paint_list_row_marks` paint both). A list
     that can outgrow the window scrolls in `dialog_list`, which keeps the buttons in view.
-  - Notice (`Notice`, `notice_ui` for information): a 2 point bar and an icon in the hue of its
-    kind at step 500 before the text in the text colour, one label: blue and an information icon
-    for information, orange and a triangle for a warning, red and an exclamation mark for an
-    error. Small buttons follow the text, and weak notes sit under it inside the row. Every
-    message of the Editor is one, in the status area under the panes or, for a converted copy's
-    banner, under the header. Segmented
-    toggle (Lines, Diagram): weak while off, the text colour over a 2 point blue 500 line while on.
+  - Notice (`Notice`, `notice_ui` for information): an icon in the hue of its kind at step 500
+    before the text in the text colour, one label, with no bar at its left: blue and an
+    information icon for information, orange and a triangle for a warning, red and an exclamation
+    mark for an error. Small buttons follow the text, and weak notes sit under it inside the row.
+    Every message of the Editor is one, in the status area under the panes or, for a converted
+    copy's banner, under the header.
   The theme in `init.rs` is unchanged by the Card pane. The primary action is blue 700, never the
   prototype's orange.
 - **The Sheet pane's sections** (`ui/editor/sheet/sheet_pane/layout.rs` over the components of
-  `widgets.rs`). Each section is a region (`widgets::region`, as a card is), `REGION_GAP` 12 from
-  the next, its title a small upper-case mono label with a hairline to its "?" at the right edge
-  (`widgets::region_title`), its "+ Add ..." button the last row inside it, dashed
+  `widgets.rs`). Each section stands on the pane's own ground with no frame, `REGION_GAP` 12 from
+  the next, its title a `title_text` with a hairline to its "?" at the right edge
+  (`widgets::region_title`), its "+ Add ..." button the last row inside it
   (`widgets::add_row_button` with no kind). Form rows put every label of a section in one column and
   its fields in the next, number fields right-aligned (`commit_number`), a hint weak and a refused
   field's message red under its field. Tables (properties, parameters, plotted measures, buttons,
-  events) have a header row of small upper-case mono labels, a gray 800 hairline under it and under
+  events) have a header row of `caption`s, a gray 800 hairline under it and under
   each row, the theme's hover fill under the row under the pointer, and the delete button, a weak
   "×" text control, in a right-aligned last column. A table's columns give up width in an order
   its function's doc states, a long select or chip ends in an ellipsis with its words as the
@@ -173,8 +183,8 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   `AddButton::for_kind`). The Diagram's boxes take the same bar. Everywhere else a hue still means
   a state: blue the primary action and a result, orange a warning, red a failure.
 - **Swatches of the Sheet pane** (`ui/editor/sheet/widgets.rs`). A swatch button is a 14 point
-  square of the state's own colour inside gray 700, gray 100 while hovered, blue 500 while its
-  picker is open, and the focus outline while focused. A swatch beside a state's name
+  square of the state's own colour inside gray 700, the theme's hover outline while hovered, the
+  selection's outline while its picker is open, and the focus outline while focused. A swatch beside a state's name
   (`swatch_ui`) is the chip's 9 point square inside gray 700. "Choose a colour" offers
   the twelve `henad_graph::sheet::edit::PALETTE_COLORS`, named by `COLOR_NAMES` (Black, Dark grey,
   Grey, White, Red, Orange, Yellow, Brown, Green, Dark green, Blue and Purple). They are data

@@ -2,7 +2,7 @@
 
 use henad_core::metadata::TimeUnit;
 
-use super::card::{BLANK_TEXT, DrawKind, rate_unit_word};
+use super::card::{DrawKind, rate_unit_word};
 use super::sentences::summary_word;
 use crate::sheet::document::{SheetLiteral, SummaryKind};
 
@@ -106,11 +106,11 @@ pub fn add_choose_row_name(prefix: &str) -> String {
     format!("{prefix}: add another row")
 }
 
-/// Returns an item of the picker of a new summary, such as "average of ..." or "count".
+/// Returns an item of the picker of a new summary, such as "average of …" or "count".
 pub fn summary_item(kind: SummaryKind) -> String {
     match kind {
         SummaryKind::Count => summary_word(kind).to_owned(),
-        _ => format!("{} of {BLANK_TEXT}", summary_word(kind)),
+        _ => format!("{} of …", summary_word(kind)),
     }
 }
 
@@ -145,7 +145,7 @@ pub const TYPE_TIMES: &str = "Type a non-negative integer, such as 4.";
 pub const PARAMETERS: &str = "Parameters";
 
 /// Last item of a picker of a number, which opens the New parameter dialog.
-pub const NEW_PARAMETER: &str = "New parameter...";
+pub const NEW_PARAMETER: &str = "New parameter…";
 
 /// Heading of the group of states in a picker of a state.
 pub const STATES: &str = "States";

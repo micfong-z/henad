@@ -4,7 +4,7 @@
 //! card: its frame, the line sentences and their parts, the comparisons, the conditions and "Choose when", blanks and
 //! their accessible names, pickers, add menus, result names, the notes under a line, "otherwise", the words and notes
 //! of rates and chances, the Lines help and the card's messages. Around the card: the sheet and its forms, the New
-//! model and New parameter dialogs, the top bar, the world tabs, the help popovers, the Diagram and the conversion to a
+//! model and New parameter dialogs, the top bar, the world tabs, the help tooltips, the Diagram and the conversion to a
 //! node graph. The comments of the sheet writer and every editor take their words from here.
 //!
 //! Terms the table uses:

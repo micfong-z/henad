@@ -165,8 +165,12 @@ pub fn new_model_modal(ctx: &Context, app: &mut AppState) {
                     chosen = index;
                 }
                 if choice.file_name.is_none() && dialog.chosen == index {
-                    ui.indent(("henad_new_model_choice", index), |ui| {
-                        world_question(ui, &mut dialog.made_of);
+                    ui.scope(|ui| {
+                        // The question stands under Blank by its indent alone, with no line at its left.
+                        ui.visuals_mut().indent_has_left_vline = false;
+                        ui.indent(("henad_new_model_choice", index), |ui| {
+                            world_question(ui, &mut dialog.made_of);
+                        });
                     });
                 }
             }
