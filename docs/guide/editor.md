@@ -128,6 +128,7 @@ A button's card runs its lines once when the button is pressed, and offers **+ C
 
 A new line's first blank opens its *picker*, which lists only what fits there, in groups.
 A picker opens as a framed list under its blank, titled with what it asks for, such as **Choose a value**, and a press on a filled chip opens it again.
+Where the window has no room for it under the blank, it opens above, and where neither side has room, it opens on the side with more room and scrolls.
 A number takes a typed number, a result of a line above, one of the cell's properties, a parameter, or **New parameter...**, which creates one in a dialog and puts it in the blank.
 A chance takes a number from 0 to 1 or a percent such as 30%, and refuses anything else as you type it.
 "is one of the numbers" takes a list, such as 2, 3, typed in one go.
@@ -136,7 +137,8 @@ A chance takes a number from 0 to 1 or a percent such as 30%, and refuses anythi
 
 After a choice the keyboard moves to the next blank of the line.
 An empty state blank opens by itself, as does the upper number of "is less than ... or more than ..." after the lower one.
-Press <kbd>Escape</kbd> to close a picker.
+Press <kbd>↓</kbd> and <kbd>↑</kbd> to move through the items of an open picker or menu, and <kbd>Escape</kbd> to close it and return to the control that opened it.
+A control's tooltip shows while the control has the keyboard focus, as well as under the pointer.
 
 A result takes a name from what it works out, such as "Alive neighbours" for a count of the Alive cells around me, and keeps following it until you rename it.
 
@@ -329,6 +331,7 @@ After it, a change that builds starts the world again from tick 0, and a notice 
 Once the world has left tick 0, the line under the panes reads **Preview runs at 256 × 256 cells. Press Apply to run the model at its own size.**
 A change that stops the sheet building leaves the world running the sheet as it was, and the line reads **The world shows the model before the last change. Fix the problems in red to update it.**
 After the first tick, a change of **Starts as** waits, and reads "Press Build in the Playback tab to see the change." under its property.
+The sheet's buttons sit under the sliders in the Parameters tab, each with a tooltip that says what it does, such as "Run once, every cell", as its row under **Buttons** shows.
 Press <span class="ui" markdown>:material-check: Apply</span> to install the model at its own size, and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the sheet as a model file.
 A model made from a starter keeps the starter's id, and a blank model takes the id its name gives, such as `harbour_seals` for Harbour seals.
 Where a model built into the app already holds that id, such as the example model Game of Life holds `game_of_life`, the new model takes `sheet_` before it.

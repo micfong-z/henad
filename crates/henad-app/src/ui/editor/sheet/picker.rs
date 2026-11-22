@@ -41,12 +41,12 @@ use henad_graph::sheet::sentence::{
 };
 
 use super::widgets::{
-    NumberUse, OVERLAY_PADDING, OverlayItem, PICKER_WIDTH, color32, message_ui, overlay, overlay_group, overlay_item,
-    overlay_title, set_name,
+    NumberUse, OVERLAY_PADDING, OverlayItem, PICKER_WIDTH, color32, escape_to_anchor, menu_group, menu_item,
+    message_ui, overlay, overlay_group, overlay_title, placed, set_name,
 };
 use super::{accessible_group, find_property, over_agents, properties_of};
 
-/// Tallest a picker grows in points before it scrolls.
+/// Tallest a long picker grows in points before it scrolls.
 const PICKER_HEIGHT: f32 = 420.0;
 
 /// Number of items past which a picker scrolls.
@@ -196,17 +196,8 @@ impl CardPicker {
             .id(popup_id)
             .open_memory(None)
             .close_behavior(PopupCloseBehavior::IgnoreClicks);
-        let shown = picker_overlay(ui, popup, &self.title, |ui| {
-            // A long picker scrolls. A short one takes its own height. A scroll area lags a frame behind it.
-            if self.groups.iter().map(|group| group.items.len()).sum::<usize>() > LONG_PICKER {
-                ScrollArea::vertical()
-                    .max_height(PICKER_HEIGHT)
-                    .show(ui, |ui| self.contents(ui, popup_id))
-                    .inner
-            } else {
-                self.contents(ui, popup_id)
-            }
-        });
+        let long = self.groups.iter().map(|group| group.items.len()).sum::<usize>() > LONG_PICKER;
+        let shown = picker_overlay(ui, popup, &self.title, long, |ui| self.contents(ui, popup_id));
         let Some((choice, rect)) = shown else {
             *open = false;
             return None;
@@ -238,7 +229,7 @@ impl CardPicker {
     /// Draws what the picker offers, and returns the choice made.
     fn contents(&self, ui: &mut Ui, popup_id: Id) -> Option<Choice> {
         let mut choice = None;
-        overlay_title(ui, &self.title);
+        let title = overlay_title(ui, &self.title).id;
         if let Some(lead) = &self.lead {
             ui.add(egui::Label::new(RichText::new(lead).weak()).wrap());
             ui.add_space(4.0);
@@ -269,7 +260,7 @@ impl CardPicker {
                 label: NEW_PARAMETER,
                 ..OverlayItem::default()
             };
-            if overlay_item(ui, &row).clicked() {
+            if menu_group(ui, title, |ui| menu_item(ui, &row)).clicked() {
                 choice = Some(Choice::NewParameter);
             }
         }
@@ -287,7 +278,7 @@ impl CardPicker {
                 label: remove,
                 ..OverlayItem::default()
             };
-            if overlay_item(ui, &row).clicked() {
+            if menu_group(ui, title, |ui| menu_item(ui, &row)).clicked() {
                 choice = Some(Choice::Remove);
             }
         }
@@ -320,22 +311,26 @@ impl ParameterPicker<'_> {
     /// The picker's open state lives under the anchor's id with "picker". A chip or a text control that anchors it
     /// then shows itself open.
     pub fn show(self, ui: &Ui, anchor: &Response) -> Option<Choice> {
+        let popup_id = anchor.id.with("picker");
+        let was_open = Popup::is_id_open(ui.ctx(), popup_id);
         let popup = Popup::from_toggle_button_response(anchor)
-            .id(anchor.id.with("picker"))
+            .id(popup_id)
             .close_behavior(PopupCloseBehavior::CloseOnClickOutside);
-        let (choice, _) = picker_overlay(ui, popup, self.title, |ui| {
+        let long = self.document.parameters.len() > LONG_PICKER;
+        let shown = picker_overlay(ui, popup, self.title, long, |ui| {
             let choice = self.contents(ui);
             if choice.is_some() {
                 ui.close();
             }
             choice
-        })?;
-        choice
+        });
+        escape_to_anchor(ui, anchor, popup_id, was_open);
+        shown?.0
     }
 
     /// Draws what the picker offers, and returns the choice made.
     fn contents(&self, ui: &mut Ui) -> Option<Choice> {
-        overlay_title(ui, self.title);
+        let title = overlay_title(ui, self.title).id;
         let parameters = PickerGroup {
             heading: PARAMETERS.to_owned(),
             items: parameter_items(self.document, self.number_use),
@@ -346,7 +341,7 @@ impl ParameterPicker<'_> {
             label: NEW_PARAMETER,
             ..OverlayItem::default()
         };
-        if overlay_item(ui, &row).clicked() {
+        if menu_group(ui, title, |ui| menu_item(ui, &row)).clicked() {
             choice = Some(Choice::NewParameter);
         }
         if self.number_box {
@@ -362,12 +357,32 @@ impl ParameterPicker<'_> {
 }
 
 /// Draws `popup` as a picker titled `title`: an overlay [`PICKER_WIDTH`] wide that holds `contents`, named as a dialog
-/// by its title. Returns what `contents` returns and the picker's rectangle, `None` while the popup is closed.
-fn picker_overlay<R>(ui: &Ui, popup: Popup<'_>, title: &str, contents: impl FnOnce(&mut Ui) -> R) -> Option<(R, Rect)> {
+/// by its title and [`placed`] beside its anchor. Returns what `contents` returns and the picker's rectangle, `None`
+/// while the popup is closed.
+///
+/// A `long` picker scrolls past [`PICKER_HEIGHT`], and any picker scrolls once it fills its room. A short picker takes
+/// its own height, since a scroll area lags a frame behind its contents.
+fn picker_overlay<R>(
+    ui: &Ui,
+    popup: Popup<'_>,
+    title: &str,
+    long: bool,
+    contents: impl FnOnce(&mut Ui) -> R,
+) -> Option<(R, Rect)> {
+    let (popup, room) = placed(ui.ctx(), popup);
+    // A picker as tall as its room in the frame before keeps scrolling. Without the scroll it would outgrow the room.
+    let fills = popup.get_expected_size().is_some_and(|size| size.y >= room - 0.5);
     let popup = popup.width(PICKER_WIDTH).frame(Frame::NONE).show(|ui| {
         overlay(ui, |ui| {
             ui.set_min_width(PICKER_WIDTH - 2.0 * OVERLAY_PADDING);
-            (contents(ui), ui.unique_id())
+            let inner = if long || fills {
+                let height = room - 2.0 * (OVERLAY_PADDING + 1.0);
+                let height = if long { height.min(PICKER_HEIGHT) } else { height };
+                ScrollArea::vertical().max_height(height).show(ui, contents).inner
+            } else {
+                contents(ui)
+            };
+            (inner, ui.unique_id())
         })
     })?;
     let (inner, id) = popup.inner;
@@ -375,28 +390,30 @@ fn picker_overlay<R>(ui: &Ui, popup: Popup<'_>, title: &str, contents: impl FnOn
     Some((inner, popup.response.rect))
 }
 
-/// Draws the groups of a picker that hold an item, each under its heading, and returns the choice of the item clicked.
-/// The item whose words are `current` takes the tinted fill and a check.
+/// Draws the groups of a picker that hold an item, each a menu under its heading, and returns the choice of the item
+/// clicked. The item whose words are `current` takes the tinted fill and a check.
 fn groups_ui(ui: &mut Ui, groups: &[PickerGroup], current: Option<&str>) -> Option<Choice> {
     let mut choice = None;
     for group in groups {
         if group.items.is_empty() {
             continue;
         }
-        overlay_group(ui, &group.heading);
-        for item in &group.items {
-            let row = OverlayItem {
-                label: &item.label,
-                name: item.name.as_deref(),
-                detail: item.detail.as_deref(),
-                described: true,
-                current: current == Some(item.label.as_str()),
-                swatch: item.swatch,
-            };
-            if overlay_item(ui, &row).clicked() {
-                choice = Some(item.choice.clone());
+        let heading = overlay_group(ui, &group.heading).id;
+        menu_group(ui, heading, |ui| {
+            for item in &group.items {
+                let row = OverlayItem {
+                    label: &item.label,
+                    name: item.name.as_deref(),
+                    detail: item.detail.as_deref(),
+                    described: true,
+                    current: current == Some(item.label.as_str()),
+                    swatch: item.swatch,
+                };
+                if menu_item(ui, &row).clicked() {
+                    choice = Some(item.choice.clone());
+                }
             }
-        }
+        });
     }
     choice
 }

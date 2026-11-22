@@ -1,6 +1,6 @@
 //! Tests of the Parameters tab's preview mode: a change rebuilds the preview at tick 0 with the value, or reaches the
 //! running preview at once for a live parameter, the value survives a rebuild after another sheet edit, Reset and
-//! Keep end the trial, and the selected model stays as it was.
+//! Keep end the trial, the selected model stays as it was, and a sheet's button says what it does.
 
 use henad_compute::entry::ModelEntry;
 use henad_core::params::ParamValue;
@@ -273,6 +273,25 @@ fn a_tried_value_shows_its_note_reset_keep_and_the_sheets_line() {
 
     let shown: Vec<String> = texts.into_iter().chain(sheet_texts).collect();
     assert_eq!(forbidden_words(&shown), Vec::new());
+}
+
+#[test]
+fn a_sheet_button_in_the_world_is_described_by_what_it_does() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    preview(&mut app, "sir.toml");
+    let descriptions = accessible_texts(
+        |ui| params_ui(ui, &mut app),
+        |node| {
+            if node.label() == Some("New outbreak") {
+                node.description()
+            } else {
+                None
+            }
+        },
+    );
+    assert_eq!(descriptions, ["Run once, every cell"]);
 }
 
 /// A tried float reaches the sheet's line and Keep as its shortest decimal form, and a kind a sheet parameter cannot

@@ -7,9 +7,11 @@ use crate::state::AppState;
 use crate::ui::editor::EditorModel;
 use crate::ui::editor::graph::world::param_with;
 use crate::ui::editor::preview::{SIZE_PARAMS, model_value};
+use crate::ui::editor::sheet::sheet_pane::button_does;
 use crate::ui::sweep::layout::add_button;
 use henad_compute::cpu::sim_thread::SimCommand;
 use henad_compute::entry::ModelEntry;
+use henad_core::action::ActionDescriptor;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use henad_graph::edit::EditCommand;
 use henad_graph::sheet::sentence::{KEEP, KEEP_TOOLTIP, RESET, RESTART_NOTICE, keep_name, reset_name, trying_value};
@@ -77,11 +79,33 @@ pub(super) fn preview_params_ui(ui: &mut egui::Ui, app: &mut AppState) {
     if !actions.is_empty() {
         ui.add_space(8.0);
         ui.separator();
-        if let Some(index) = action_buttons(ui, actions, app.has_simulation()) {
+        let descriptions = button_descriptions(app, actions);
+        if let Some(index) = action_buttons(ui, actions, app.has_simulation(), &descriptions) {
             app.send_command(SimCommand::Act(index));
             app.editor.preview.acted = true;
         }
     }
+}
+
+/// Returns what each of `actions` does, by the index of the action, while the preview runs the sheet the Editor holds:
+/// the words of the sheet's button with the action's id, as the Sheet pane's Buttons section shows them. Returns no
+/// description while it runs anything else.
+fn button_descriptions(app: &AppState, actions: &[ActionDescriptor]) -> Vec<Option<String>> {
+    let Some(sheet) = app.editor.model.sheet().filter(|_| app.previews_editor_sheet()) else {
+        return Vec::new();
+    };
+    let document = sheet.document();
+    actions
+        .iter()
+        .map(|action| {
+            document
+                .buttons
+                .iter()
+                .find(|button| button.id == action.id())
+                .map(|button| button_does(document, button))
+                .filter(|does| !does.is_empty())
+        })
+        .collect()
 }
 
 /// Returns whether the Editor holds the document the preview of `entry` runs: the sheet whose preview it is, or a

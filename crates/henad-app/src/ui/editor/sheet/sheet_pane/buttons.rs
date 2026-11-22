@@ -30,7 +30,7 @@ use crate::ui::editor::sheet::{find_property, properties_of};
 /// every cell" or "Set To food and To home to 0 everywhere".
 ///
 /// Steps one after another that set properties to the same value everywhere read as one.
-fn button_does(document: &SheetDocument, button: &SheetButton) -> String {
+pub(crate) fn button_does(document: &SheetDocument, button: &SheetButton) -> String {
     let sentences = Sentences::new(document);
     let name_of = |id: &str| find_property(document, id).map_or_else(|| id.to_owned(), |known| known.name.clone());
     let mut does: Vec<String> = Vec::new();

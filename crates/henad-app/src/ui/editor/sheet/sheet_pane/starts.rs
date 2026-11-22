@@ -27,6 +27,7 @@ use super::{
     FIELD_WIDTH, NumberField, NumberTarget, PaneState, Pending, PropertyForm, StartSlot, select, select_width,
 };
 use crate::ui::editor::sheet::picker::{Choice, ParameterPicker};
+use crate::ui::editor::sheet::widgets::FocusTooltip as _;
 use crate::ui::editor::sheet::widgets::{
     CHIP_HEIGHT, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, chip_within, color32, commit_number,
     field_message, forget_field, message_ui, new_parameter_modal, parameter_names, swatch_ui, text_control,
@@ -168,7 +169,7 @@ fn property_name_ui(ui: &mut Ui, property: &SheetProperty) -> Response {
     let button = if elided { button.truncate() } else { button.wrap() };
     let response = add_button(ui, true, button, &edit_property_heading(&property.name));
     if elided {
-        response.on_hover_text(&property.name)
+        response.on_hover_or_focus_text(&property.name)
     } else {
         response
     }

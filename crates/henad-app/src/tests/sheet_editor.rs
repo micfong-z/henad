@@ -24,7 +24,7 @@ use henad_graph::sheet::document::{
     StartsAs,
 };
 use henad_graph::sheet::sentence::{
-    A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE, STALE_WORLD_NOTICE, STARTER_CHOICES,
+    A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CLOSE_HELP, CREATE, NEW_MODEL, STALE_WORLD_NOTICE, STARTER_CHOICES,
 };
 use henad_graph::sheet::{ParsedSheet, starters};
 
@@ -611,6 +611,26 @@ fn new_model_opens_a_dialog_and_create_opens_the_chosen_sheet() {
     harness.press(egui::Key::Escape, egui::Modifiers::NONE);
     harness.settle();
     assert!(harness.app.editor.new_model.is_none());
+}
+
+#[test]
+fn the_new_model_dialog_is_modal_and_headed_by_its_title() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.click(NEW_MODEL);
+    let nodes = harness.settle();
+    let dialog = nodes
+        .iter()
+        .find(|node| node.role == egui::accesskit::Role::Dialog && node.label == NEW_MODEL)
+        .expect("the New model dialog");
+    assert!(dialog.modal, "the dialog makes the app behind it inert");
+    assert!(
+        nodes.iter().any(|node| {
+            node.role == egui::accesskit::Role::Heading && node.label == NEW_MODEL && node.dialog == NEW_MODEL
+        }),
+        "the dialog's title is a heading inside it"
+    );
 }
 
 #[test]

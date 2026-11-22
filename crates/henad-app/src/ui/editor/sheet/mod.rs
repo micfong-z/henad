@@ -27,6 +27,7 @@ pub mod widgets;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
+use widgets::FocusTooltip as _;
 
 use egui::{
     Button, CentralPanel, Color32, Frame, Key, Margin, Panel, RichText, ScrollArea, TextEdit, TextStyle, UiBuilder,
@@ -535,7 +536,7 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let lines = widgets::toggle_label(ui, LINES_VIEW, !sheet.diagram);
                 widgets::segment_rule(ui);
-                let toggle = widgets::toggle_label(ui, DIAGRAM, sheet.diagram).on_hover_text(DIAGRAM_TOOLTIP);
+                let toggle = widgets::toggle_label(ui, DIAGRAM, sheet.diagram).on_hover_or_focus_text(DIAGRAM_TOOLTIP);
                 if toggle.clicked() || (lines.clicked() && sheet.diagram) {
                     sheet.diagram = !sheet.diagram;
                     sheet.card.close();
@@ -639,7 +640,7 @@ fn name_row_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &NameRow<'_>, 
         Button::new(format!("{MDI_UNDO} {UNDO}")).frame_when_inactive(false),
         UNDO,
     )
-    .on_hover_text(UNDO_TOOLTIP);
+    .on_hover_or_focus_text(UNDO_TOOLTIP);
     if undo.clicked() {
         sheet.undo(past_start);
     }
@@ -649,7 +650,7 @@ fn name_row_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &NameRow<'_>, 
         Button::new(format!("{MDI_REDO} {REDO}")).frame_when_inactive(false),
         REDO,
     )
-    .on_hover_text(REDO_TOOLTIP);
+    .on_hover_or_focus_text(REDO_TOOLTIP);
     if redo.clicked() {
         sheet.redo(past_start);
     }
@@ -703,7 +704,7 @@ fn name_button_ui(ui: &mut egui::Ui, name: &str, trailing: f32) -> egui::Respons
         )
     })
     .inner
-    .on_hover_text(tooltip)
+    .on_hover_or_focus_text(&tooltip)
 }
 
 /// Returns `document` with no name, no purpose and no property holding a start.
@@ -803,11 +804,16 @@ pub fn accessible_group(ctx: &egui::Context, id: egui::Id, role: egui::accesskit
     ctx.accesskit_node_builder(id, |node| {
         node.set_role(role);
         node.set_label(name);
-        node.set_bounds(egui::accesskit::Rect {
-            x0: rect.min.x.into(),
-            y0: rect.min.y.into(),
-            x1: rect.max.x.into(),
-            y1: rect.max.y.into(),
-        });
+        node.set_bounds(accessible_bounds(rect));
     });
+}
+
+/// Returns `rect` as the bounds of an accessible node.
+pub fn accessible_bounds(rect: egui::Rect) -> egui::accesskit::Rect {
+    egui::accesskit::Rect {
+        x0: rect.min.x.into(),
+        y0: rect.min.y.into(),
+        x1: rect.max.x.into(),
+        y1: rect.max.y.into(),
+    }
 }

@@ -15,6 +15,7 @@ pub(crate) use values::{display_value, sheet_number};
 use crate::icons::material_design_icons::{MDI_ALERT, MDI_INFORMATION, MDI_RESTART};
 use crate::state::AppState;
 use crate::ui::banner;
+use crate::ui::editor::sheet::widgets::FocusTooltip as _;
 use henad_compute::cpu::sim_thread::SimCommand;
 use henad_core::action::ActionDescriptor;
 use henad_core::params::ParamDescriptor;
@@ -124,7 +125,7 @@ fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
 
     ui.add_space(8.0);
     ui.separator();
-    if let Some(index) = action_buttons(ui, &actions, loaded) {
+    if let Some(index) = action_buttons(ui, &actions, loaded, &[]) {
         app.send_command(SimCommand::Act(index));
         app.mark_opened_run_modified();
     }
@@ -133,18 +134,30 @@ fn actions_ui(ui: &mut egui::Ui, app: &mut AppState) {
 }
 
 /// Draws a button per action of `actions`, enabled while `enabled` holds, and returns the index of the one pressed.
-fn action_buttons(ui: &mut egui::Ui, actions: &[ActionDescriptor], enabled: bool) -> Option<usize> {
+///
+/// `descriptions` holds what each action does, by the index of the action, `None` or missing for an action with no
+/// description. A description is the button's tooltip and its accessible description.
+fn action_buttons(
+    ui: &mut egui::Ui,
+    actions: &[ActionDescriptor],
+    enabled: bool,
+    descriptions: &[Option<String>],
+) -> Option<usize> {
     let mut pressed = None;
     ui.horizontal_wrapped(|ui| {
         for (index, action) in actions.iter().enumerate() {
-            if ui
+            let mut button = ui
                 .add_enabled(enabled, egui::Button::new(action.label()))
                 .on_disabled_hover_text(format!(
                     "Press {MDI_RESTART}\u{a0}Build to run this model, then {}",
                     action.label().to_lowercase()
-                ))
-                .clicked()
-            {
+                ));
+            if let Some(does) = descriptions.get(index).and_then(Option::as_deref) {
+                ui.ctx()
+                    .accesskit_node_builder(button.id, |node| node.set_description(does));
+                button = button.on_hover_or_focus_text(does);
+            }
+            if button.clicked() {
                 pressed = Some(index);
             }
         }

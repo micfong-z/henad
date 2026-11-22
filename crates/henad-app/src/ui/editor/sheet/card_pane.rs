@@ -81,11 +81,11 @@ use super::picker::{
 };
 use super::sheet_pane::SheetTrial;
 use super::widgets::{
-    ARROW_WIDTH, DialogOutcome, KIND_BAR_WIDTH, NewParameterDialog, NumberUse, OverlayItem, REGION_GAP, add_row_button,
-    arrow_control, blank_shapes, blank_ui, caption, chip_with_id, dashed_rect, hairline, kind_bar, menu_button,
-    message_ui, new_parameter_modal, note_button, notice_ui, overlay, overlay_group, overlay_item, overlay_items,
-    overlay_title, parameter_names, refusal_text, region, select_control, select_list, set_name, small_label,
-    text_control,
+    ARROW_WIDTH, DialogOutcome, FocusTooltip as _, KIND_BAR_WIDTH, NewParameterDialog, NumberUse, OverlayItem,
+    REGION_GAP, add_row_button, arrow_control, blank_shapes, blank_ui, caption, chip_with_id, dashed_rect,
+    escape_to_anchor, hairline, kind_bar, menu_button, menu_group, menu_item, message_ui, new_parameter_modal,
+    note_button, notice_ui, overlay, overlay_group, overlay_items, overlay_title, parameter_names, placed,
+    refusal_text, region, select_control, select_list, set_name, small_label, text_control,
 };
 use super::{LineFires, SheetEditor, accessible_group, find_property, over_agents, properties_of};
 use crate::init::semibold_font;
@@ -914,31 +914,24 @@ fn add_inside_ui(
     );
     let open = Popup::is_id_open(row.ctx(), menu_id);
     let response = add_row_button(&mut row, &label, &label, None, open);
-    let chosen = Popup::menu(&response)
-        .id(menu_id)
-        .frame(Frame::NONE)
+    let (popup, _) = placed(row.ctx(), Popup::menu(&response).id(menu_id).frame(Frame::NONE));
+    let chosen = popup
         .show(|ui| {
-            let menu = overlay(ui, |ui| {
-                ui.scope(|ui| {
-                    overlay_title(ui, &title);
-                    let chosen = overlay_items(ui, |ui| {
-                        let mut chosen = None;
-                        for &button in groups {
-                            overlay_group(ui, button.group());
-                            if let Some(item) = add_items_ui(ui, button, agents, states, block.in_repeat) {
-                                chosen = Some(item);
-                            }
+            menu_dialog(ui, &title, |ui, _| {
+                overlay_items(ui, |ui| {
+                    let mut chosen = None;
+                    for &button in groups {
+                        let group = overlay_group(ui, button.group()).id;
+                        if let Some(item) = add_items_ui(ui, group, button, agents, states, block.in_repeat) {
+                            chosen = Some(item);
                         }
-                        chosen
-                    });
-                    (chosen, ui.unique_id())
+                    }
+                    chosen
                 })
-            });
-            let (chosen, menu_id) = menu.inner;
-            accessible_group(ui.ctx(), menu_id, Role::Dialog, &title, menu.response.rect);
-            chosen
+            })
         })
         .and_then(|popup| popup.inner);
+    escape_to_anchor(&row, &response, menu_id, open);
     let rect = Rect::from_min_max(
         pos2(left, top),
         pos2(
@@ -1119,21 +1112,19 @@ fn add_buttons_ui(
             let menu_id = id.with("menu");
             let open = Popup::is_id_open(ui.ctx(), menu_id);
             let response = add_row_button(ui, button.label(), button.label(), Some(*button), open)
-                .on_hover_text(button.tooltip_for(agents));
-            let chosen = Popup::menu(&response)
-                .id(menu_id)
-                .frame(Frame::NONE)
+                .on_hover_or_focus_text(button.tooltip_for(agents));
+            let (popup, _) = placed(ui.ctx(), Popup::menu(&response).id(menu_id).frame(Frame::NONE));
+            let chosen = popup
                 .show(|ui| {
-                    overlay(ui, |ui| {
-                        add_menu_ui(
-                            ui,
-                            *button,
-                            agents,
-                            states.as_ref().map(|(new, old)| (new.as_str(), old.as_str())),
-                        )
-                    })
+                    add_menu_ui(
+                        ui,
+                        *button,
+                        agents,
+                        states.as_ref().map(|(new, old)| (new.as_str(), old.as_str())),
+                    )
                 })
                 .and_then(|popup| popup.inner);
+            escape_to_anchor(ui, &response, menu_id, open);
             if let Some(item) = chosen {
                 pending.push(add_line_edit(card_id.clone(), None, item, every));
             }
@@ -1141,50 +1132,86 @@ fn add_buttons_ui(
     });
 }
 
+/// Draws `add` inside the overlay of a menu titled `title`, with `title` as its heading, and returns what `add`
+/// returns. `add` takes the id of the heading.
+///
+/// The overlay is a group of role `Dialog` named `title`.
+fn menu_dialog<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui, Id) -> R) -> R {
+    let menu = overlay(ui, |ui| {
+        ui.scope(|ui| {
+            let heading = overlay_title(ui, title).id;
+            (add(ui, heading), ui.unique_id())
+        })
+    });
+    let (inner, id) = menu.inner;
+    accessible_group(ui.ctx(), id, Role::Dialog, title, menu.response.rect);
+    inner
+}
+
 /// Draws the menu of the add button `button`, on a card over agents when `agents` holds: its heading, and each item
 /// with its pattern in grey under it. Returns the item chosen.
 ///
 /// The pattern is painted, so it stays out of the accessibility tree and the item is named by its label alone.
 fn add_menu_ui(ui: &mut Ui, button: AddButton, agents: bool, states: Option<(&str, &str)>) -> Option<AddItem> {
-    overlay_title(ui, button.heading_for(agents));
-    overlay_items(ui, |ui| add_items_ui(ui, button, agents, states, false))
+    menu_dialog(ui, button.heading_for(agents), |ui, heading| {
+        overlay_items(ui, |ui| add_items_ui(ui, heading, button, agents, states, false))
+    })
+}
+
+/// Returns the heading of the group of an add menu that `item` opens, `None` for an item that opens none.
+fn opens_group(item: AddItem) -> Option<&'static str> {
+    match item {
+        AddItem::WithChance => Some(SHARED_DRAW_GROUP),
+        AddItem::RandomNumber => Some(RANDOM_VALUE_GROUP),
+        _ => None,
+    }
 }
 
 /// Draws each item of the menu of the add button `button`, on a card over agents when `agents` holds, with its pattern
 /// in grey under it, and returns the item chosen.
 ///
-/// Inside a Repeat (`in_repeat`), an item whose line looks around, counts or picks a cell is weak, with
-/// [`LOOK_IN_REPEAT`] as its tooltip, and adds nothing.
+/// The items until the first group of their own form a menu labelled by the node `label`, and each later group a menu
+/// labelled by its heading. Inside a Repeat (`in_repeat`), an item whose line looks around, counts or picks a cell is
+/// weak, with [`LOOK_IN_REPEAT`] as its tooltip, and adds nothing.
 fn add_items_ui(
     ui: &mut Ui,
+    label: Id,
     button: AddButton,
     agents: bool,
     states: Option<(&str, &str)>,
     in_repeat: bool,
 ) -> Option<AddItem> {
     let mut chosen = None;
-    for item in button.items_for(agents) {
-        let group = match item {
-            AddItem::WithChance => Some(SHARED_DRAW_GROUP),
-            AddItem::RandomNumber => Some(RANDOM_VALUE_GROUP),
-            _ => None,
-        };
-        if let Some(group) = group {
-            overlay_group(ui, group);
+    let mut label = label;
+    let mut rest = button.items_for(agents);
+    while let Some(first) = rest.first() {
+        let end = rest
+            .iter()
+            .skip(1)
+            .position(|item| opens_group(*item).is_some())
+            .map_or(rest.len(), |index| index + 1);
+        let (group, tail) = rest.split_at(end);
+        rest = tail;
+        if let Some(heading) = opens_group(*first) {
+            label = overlay_group(ui, heading).id;
         }
-        let pattern = item.pattern(states);
-        let row = OverlayItem {
-            label: item.label(),
-            detail: Some(&pattern),
-            ..OverlayItem::default()
-        };
-        let refused = in_repeat && looks_in_place(new_line(*item, "").kind);
-        let response = ui.add_enabled_ui(!refused, |ui| overlay_item(ui, &row)).inner;
-        if refused {
-            response.on_disabled_hover_text(LOOK_IN_REPEAT);
-        } else if response.clicked() {
-            chosen = Some(*item);
-        }
+        menu_group(ui, label, |ui| {
+            for item in group {
+                let pattern = item.pattern(states);
+                let row = OverlayItem {
+                    label: item.label(),
+                    detail: Some(&pattern),
+                    ..OverlayItem::default()
+                };
+                let refused = in_repeat && looks_in_place(new_line(*item, "").kind);
+                let response = ui.add_enabled_ui(!refused, |ui| menu_item(ui, &row)).inner;
+                if refused {
+                    response.on_disabled_hover_text(LOOK_IN_REPEAT);
+                } else if response.clicked() {
+                    chosen = Some(*item);
+                }
+            }
+        });
     }
     chosen
 }
@@ -1958,7 +1985,9 @@ fn part_ui(
             };
             select_control(ui, id, select_words(*select, &words), &name, words.is_empty())
         }
-        SentencePart::Always => text_control(ui, id, ALWAYS, &name, SENTENCE_ROW).on_hover_text(ALWAYS_TOOLTIP),
+        SentencePart::Always => {
+            text_control(ui, id, ALWAYS, &name, SENTENCE_ROW).on_hover_or_focus_text(ALWAYS_TOOLTIP)
+        }
         SentencePart::Otherwise(lines) => lead_word_ui(
             ui,
             &otherwise_words(lines),
@@ -1975,7 +2004,7 @@ fn part_ui(
             if let Some(shape) = shape {
                 gathered.for_each_shapes.push((shape, response.rect));
             }
-            response.on_hover_text(for_each_optional_tooltip(*draw))
+            response.on_hover_or_focus_text(&for_each_optional_tooltip(*draw))
         }
         SentencePart::ForEach(_) => text_control(ui, id, FOR_EACH_WORDS, &name, SENTENCE_ROW),
         _ => return,
@@ -2011,7 +2040,7 @@ fn chip_part_ui(
     let shown = draft_chip(drawing, state, chip);
     let response = chip_with_id(ui, id, &shown, red.is_some(), swatch);
     let response = match red {
-        Some(tooltip) => response.on_hover_text(tooltip.as_str()),
+        Some(tooltip) => response.on_hover_or_focus_text(tooltip.as_str()),
         None => response,
     };
     if let ChipKind::Result(result) = &shown.kind
@@ -2148,7 +2177,7 @@ fn result_name_ui(ui: &mut Ui, drawing: &PartDrawing<'_>, name: &str, state: &mu
         lead: "",
         name: name.to_owned(),
     };
-    let response = chip_with_id(ui, Some(id), &chip, false, None).on_hover_text(rename_line(&line.word));
+    let response = chip_with_id(ui, Some(id), &chip, false, None).on_hover_or_focus_text(&rename_line(&line.word));
     set_name(ui, response.id, &rename_result_name(&line.prefix, name));
     if response.clicked() {
         state.renaming = Some(Renaming {
@@ -2171,7 +2200,7 @@ fn lead_word_ui(ui: &mut Ui, words: &str, tooltip: &str, lines: &[String], gathe
         dotted: true,
         ..Words::plain(ui)
     };
-    let response = words_ui(ui, words, &look, Sense::click()).on_hover_text(tooltip);
+    let response = words_ui(ui, words, &look, Sense::click()).on_hover_or_focus_text(tooltip);
     ui.ctx().accesskit_node_builder(response.id, |node| {
         node.set_label(words);
         node.set_description(tooltip);
@@ -2382,7 +2411,7 @@ fn condition_arrow_ui(
     let target = PlaceTarget::Slot("condition".to_owned());
     let id = state.control_id(&line.id, &target, 2);
     let name = condition_arrow_name(&line.prefix);
-    let response = arrow_control(ui, id, &name, SENTENCE_ROW).on_hover_text(CONDITION_ARROW_TOOLTIP);
+    let response = arrow_control(ui, id, &name, SENTENCE_ROW).on_hover_or_focus_text(CONDITION_ARROW_TOOLTIP);
     gathered.focused |= response.has_focus();
     let popup_id = id.with("picker");
     let was_open = Popup::is_id_open(ui.ctx(), popup_id);
@@ -2767,8 +2796,8 @@ enum LineTool {
 /// Delete.
 /// Returns the response of its button. The button fills the place `ui` gives it.
 ///
-/// Move up and Move down stay in the menu where the outline keeps the line in place, weak, with the reason as their
-/// tooltip.
+/// The tools form a menu labelled by the button. Move up and Move down stay in the menu where the outline keeps the
+/// line in place, weak, with the reason as their tooltip.
 fn line_menu_ui(
     ui: &Ui,
     document: &SheetDocument,
@@ -2782,11 +2811,17 @@ fn line_menu_ui(
     let popup_id = id.with("popup");
     let response = menu_button(ui, id, popup_id, &line_actions_name(&line.prefix), ui.max_rect());
     let includes_me = line_data.include_me == Some(true);
-    let chosen = Popup::menu(&response)
-        .id(popup_id)
-        .frame(Frame::NONE)
-        .show(|ui| overlay(ui, |ui| line_tools_ui(ui, document, relations, line, line_data)))
+    let button = response.id;
+    let was_open = Popup::is_id_open(ui.ctx(), popup_id);
+    let (popup, _) = placed(ui.ctx(), Popup::menu(&response).id(popup_id).frame(Frame::NONE));
+    let chosen = popup
+        .show(|ui| {
+            overlay(ui, |ui| {
+                menu_group(ui, button, |ui| line_tools_ui(ui, document, relations, line, line_data))
+            })
+        })
         .and_then(|popup| popup.inner);
+    escape_to_anchor(ui, &response, popup_id, was_open);
     let edit = |edit: SheetEdit| CardEdit::commands(vec![edit], After::Stay);
     let line_id = line.id.clone();
     match chosen {
@@ -2845,7 +2880,7 @@ fn line_tools_ui(
             label: &words,
             ..OverlayItem::default()
         };
-        let response = ui.add_enabled_ui(refusal.is_none(), |ui| overlay_item(ui, &row)).inner;
+        let response = ui.add_enabled_ui(refusal.is_none(), |ui| menu_item(ui, &row)).inner;
         if let Some(refusal) = refusal {
             response.on_disabled_hover_text(refusal);
         } else if response.clicked() {
@@ -2888,7 +2923,7 @@ fn line_tools_ui(
         label: &words,
         ..OverlayItem::default()
     };
-    let delete = overlay_item(ui, &row);
+    let delete = menu_item(ui, &row);
     let delete = if line_data.kind == LineKind::When {
         delete.on_hover_text(DELETE_WHEN_TOOLTIP)
     } else {

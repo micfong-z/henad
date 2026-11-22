@@ -26,6 +26,7 @@ use super::{
     FormKind, GROUND_ID, NumberField, NumberTarget, PARAMETER_NAME_WIDTH, PaneState, Pending, form_buttons,
     form_heading, form_name_field, number_field, properties_of, property_form_or_add, property_table, select,
 };
+use crate::ui::editor::sheet::widgets::FocusTooltip as _;
 use crate::ui::editor::sheet::widgets::{
     NumberUse, OverlayItem, add_row_button, commit_field, commit_number, field_message, message_ui, name_taken,
     set_name,
@@ -269,7 +270,7 @@ fn marks_row(
             marks_words(property.marks),
             &items,
         );
-        response.on_hover_text(MARKS_TOOLTIP);
+        response.on_hover_or_focus_text(MARKS_TOOLTIP);
         let marks = chosen
             .and_then(|index| choices.get(index).copied())
             .unwrap_or(property.marks);

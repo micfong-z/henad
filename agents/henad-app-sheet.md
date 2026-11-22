@@ -393,6 +393,7 @@ in the tree and holding its words through `assert_controls_hold_their_words`, se
 About modal with AccessKit on:
 `new_model_opens_a_dialog_and_create_opens_the_chosen_sheet` (the dialog role, the three radios in
 order, Name following the starter, a typed name kept, Create, the three lines, Cancel and Escape),
+`the_new_model_dialog_is_modal_and_headed_by_its_title`,
 `enter_in_the_name_field_creates_the_model` and
 `new_node_graph_lists_the_six_graph_starters_from_the_header_and_the_file_menu` (a submenu's label
 ends with " ⏵", which the harness strips). `the_empty_editor_names_every_way_in` holds

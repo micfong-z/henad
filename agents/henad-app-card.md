@@ -23,11 +23,16 @@ adds the card (`AddCard`, then `AddLine`, one edit). `card_ui` computes the card
 line. After each line, `closing_blocks` gives the blocks that close there (after the last line
 inside them, or after an empty When or Repeat), inner blocks first, and `add_inside_ui` draws each
 one's row: a dashed `add_row_button` `add_inside_label` at the block's inner indent, a bar in the
-block line's hue. Its `Popup::menu` is an `overlay`, a group of role `Dialog` named
-`add_inside_name`, with that title and, for each group of `add_inside_groups`
+block line's hue. Its `Popup::menu` is a `menu_dialog` (an `overlay`, a group of role `Dialog`
+named by its title, the title a heading) named `add_inside_name`, with, for each group of
+`add_inside_groups`
 (`AddButton::ADD_INSIDE_ORDER`, or the Change group alone on a card that runs once, which only a
 written file can give a When), the `AddButton::group` label and `add_items_ui`'s items, and an item
-runs `AddLine` with `inside` set to the When. The groups, and the items of each add button's menu,
+runs `AddLine` with `inside` set to the When. `add_items_ui` puts the items of one add button in a
+`menu_group` labelled by the node it is passed (the group label here, the title in an add
+button's menu), and each later group that `opens_group` heads ("Or a yes or no that several lines
+share", "Or a random value") in a `menu_group` of its own. The groups, and the items of each add
+button's menu,
 sit in `widgets::overlay_items`, a scroll area as tall as the window leaves under the title, so the
 24 items of a card over agents stay in reach of the wheel in a short window.
 
@@ -114,12 +119,15 @@ list's picker for one item past the end. `CardLine::control` returns each contro
 and name, which the label-in-name tests read. Hovering or focusing a result chip or "otherwise"
 highlights the lines it names on the next frame. Notes are `NOTE_SIZE` 11.5 in their three colours,
 a note's button a `note_button`. The add buttons (`add_buttons_ui`) are dashed `add_row_button`s,
-each with a square of its group's `kind_hue`, so they read as the legend of the bars. Every popup of
-the pane takes `Frame::NONE` and draws its contents in an `overlay`: titles and group labels are
-`caption`s, items `overlay_item`s (a picker's current value marked by `CardPicker::current`, the
-chip's name, and a state's swatch from `PickerItem::swatch`, a select's current option by its
-words, its list drawn by `widgets::select_list`, which the Sheet pane's selects share). The line
-menu's Move up and Move down stay listed where `can_move` refuses, disabled with
+each with a square of its group's `kind_hue`, so they read as the legend of the bars, and each
+menu is a `menu_dialog` named `AddButton::heading_for`. Every popup of the pane takes
+`Frame::NONE` and draws its contents in an `overlay`: titles are headings (`overlay_title`), group
+labels `caption`s, a picker's or a menu's items `menu_item`s in `menu_group`s and a select's
+options `overlay_item`s (a picker's current value marked by `CardPicker::current`, the chip's name,
+and a state's swatch from `PickerItem::swatch`, a select's current option by its words, its list
+drawn by `widgets::select_list`, which the Sheet pane's selects share). The line
+menu's tools are one `menu_group` labelled by the menu's button. Its Move up and Move down stay
+listed where `can_move` refuses, disabled with
 `MOVE_UP_FIRST` or `MOVE_DOWN_LAST` as their tooltip. The pane's header draws Lines and Diagram as
 the two segments of a toggle (`toggle_label`), each a selected or unselected button on the keyboard
 path that Space or Enter presses (`both_segments_of_the_card_toggle_take_the_focus_and_a_key`).
@@ -128,8 +136,10 @@ path that Space or Enter presses (`both_segments_of_the_card_toggle_take_the_foc
 due to open (`CardState::open_next`), and takes the focus for `CardState::focus_next`. A picker's
 open state lives in egui memory under the control's id with "picker". `CardPicker::show` opens on a
 click of its anchor and stays open on a second one, closes on a choice, on Escape (the focus back on
-the anchor) or on a click outside both the picker and the anchor, and scrolls past `LONG_PICKER`
-items (a short picker takes its own height, which a scroll area lags behind). Each item is a
+the anchor) or on a click outside both the picker and the anchor. `picker_overlay` places it with
+`widgets::placed` and scrolls a picker past `LONG_PICKER` items at `PICKER_HEIGHT` at most, or one
+that filled its room in the frame before (a short picker takes its own height, which a scroll area
+lags behind). Each item is a
 frameless button named by its label alone, or by `name` when that differs (the "otherwise" item),
 with grey `detail` under it. `picker_for(context, want, property, ground, filled, typed, draw)`
 builds the picker of a place from its `Blank`: states (`shared_state_name` when two properties share
@@ -283,6 +293,26 @@ every menu, picker, select and help opened, every control's name holding its vis
 `a_single_blank_given_a_list_says_choose_is_one_of`, `a_chance_of_1_5_is_refused_in_the_field`,
 `chips_and_pickers_name_the_property_when_two_share_a_state_name`,
 `the_line_menu_renames_a_result_and_deletes_a_line`,
+`add_menus_line_menus_and_pickers_hold_menu_items_in_menus` (each item a `MenuItem` in its named
+menu, a titled overlay's heading, through `Node::menu`),
+`arrow_keys_move_round_an_open_menu_and_escape_returns_to_its_button` (an add menu, the line menu
+and "Choose when", each settled once open, as the rows come from the frame before),
+`a_focused_item_scrolls_into_its_picker_and_the_card_stays_put` (↑ to the last item of "Choose
+when" over the list under the panes and in a scrolled picker, through `last_item_by_key`),
+`escape_returns_the_focus_from_a_select_and_a_help_popover`,
+`the_number_box_keeps_the_arrow_keys_and_its_use_button_passes_them_to_the_items` (through
+`focus_is_an_item_of`),
+`a_tooltip_shows_on_keyboard_focus_but_not_while_a_menu_is_open` (an add button focused by Escape,
+then by a click), `the_new_model_button_shows_its_tooltip_on_keyboard_focus` (reached by Tab),
+`a_click_on_a_control_under_a_focus_tooltip_reaches_the_control` (a window 1000 points wide, where
+the tooltip of "+ Chance" covers part of "+ When, for several lines"),
+`a_picker_opens_below_or_above_its_anchor_and_scrolls_where_neither_fits` ("Choose when" in three
+window heights through `choose_when_in_window`, and the "+ Chance" menu above its button),
+`no_name_in_choose_when_or_a_line_menu_holds_another` (no menu item's name holds
+another's, case aside, in "Choose when" of a change and of a new When and in the line menu, through
+`names_holding_others`. The add menus hold "Become, with chance" beside "With chance", the colour
+picker Grey beside Dark grey, and a result picker can hold user names such as "Alive neighbours 2"
+beside "Alive neighbours"),
 `focus_moves_to_the_next_blank_and_only_state_blanks_open_by_themselves` (through
 `Harness::focused`, the focused node's name),
 `a_chance_result_is_named_happens_until_its_chance_names_it`,

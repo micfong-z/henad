@@ -55,7 +55,7 @@ use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
 use crate::ui::params::sheet_number;
 use crate::ui::sweep::layout::{add_button, filled_button};
 use preview::{PREVIEW_WAITS, PreviewState};
-use sheet::widgets::{DialogButton, DialogButtonKind, Notice, NoticeKind};
+use sheet::widgets::{DialogButton, DialogButtonKind, FocusTooltip as _, Notice, NoticeKind};
 
 /// Text the Editor shows on an adapter that cannot run compute shaders.
 pub const NO_COMPUTE: &str =
@@ -1026,7 +1026,7 @@ fn file_buttons(ui: &mut egui::Ui, empty: bool, request: &mut Option<EditorReque
         Button::new(format!("{MDI_FILE_DOCUMENT_PLUS_OUTLINE} {NEW_MODEL_BUTTON}")),
         NEW_MODEL_BUTTON,
     )
-    .on_hover_text("Start new model");
+    .on_hover_or_focus_text("Start new model");
     if model.clicked() {
         *request = Some(EditorRequest::NewModel);
     }
@@ -1036,7 +1036,7 @@ fn file_buttons(ui: &mut egui::Ui, empty: bool, request: &mut Option<EditorReque
         Button::new(format!("{MDI_FILE_PLUS_OUTLINE} New grid rule")),
         "New grid rule",
     )
-    .on_hover_text("Replace text with Game of Life rule");
+    .on_hover_or_focus_text("Replace text with Game of Life rule");
     if new.clicked() {
         *request = Some(EditorRequest::NewGridRule);
     }
@@ -1049,7 +1049,7 @@ fn file_buttons(ui: &mut egui::Ui, empty: bool, request: &mut Option<EditorReque
         })
         .response;
     graph.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, NEW_NODE_GRAPH));
-    graph.on_hover_text("Start node graph from example");
+    graph.on_hover_or_focus_text("Start node graph from example");
     sheet::widgets::vertical_hairline(ui, ui.spacing().interact_size.y);
     let open = add_button(
         ui,
@@ -1057,7 +1057,7 @@ fn file_buttons(ui: &mut egui::Ui, empty: bool, request: &mut Option<EditorReque
         Button::new(format!("{MDI_FOLDER_OPEN_OUTLINE} Open model")),
         "Open model",
     )
-    .on_hover_text("Replace model with TOML model file");
+    .on_hover_or_focus_text("Replace model with TOML model file");
     if open.clicked() {
         *request = Some(EditorRequest::OpenModel);
     }
@@ -1067,7 +1067,7 @@ fn file_buttons(ui: &mut egui::Ui, empty: bool, request: &mut Option<EditorReque
         Button::new(format!("{MDI_TRAY_ARROW_DOWN} Save model")),
         "Save model",
     )
-    .on_hover_text("Save model to TOML model file")
+    .on_hover_or_focus_text("Save model to TOML model file")
     .on_disabled_hover_text(EMPTY_EDITOR);
     if save.clicked() {
         *request = Some(EditorRequest::SaveModel);
@@ -1085,7 +1085,7 @@ fn apply_button(ui: &mut egui::Ui, compute: bool, empty: bool, text: String, req
         None
     };
     let apply = add_button(ui, refusal.is_none(), filled_button(text), "Apply")
-        .on_hover_text("Check model and install it")
+        .on_hover_or_focus_text("Check model and install it")
         .on_disabled_hover_text(refusal.unwrap_or_default());
     if apply.clicked() {
         *request = Some(EditorRequest::Apply);

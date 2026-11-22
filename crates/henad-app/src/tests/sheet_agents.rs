@@ -425,7 +425,7 @@ fn a_share_kept_picker_offers_only_parameters_from_0_to_1() {
         harness
             .settle()
             .into_iter()
-            .filter(|node| node.dialog == "Choose a number" && node.role == Role::Button)
+            .filter(|node| node.dialog == "Choose a number" && node.role == Role::MenuItem)
             .map(|node| node.label)
             .collect()
     };

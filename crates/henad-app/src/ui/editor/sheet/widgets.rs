@@ -8,8 +8,8 @@
 
 use egui::{
     Button, Color32, CornerRadius, FontId, Frame, Id, Key, Margin, Modal, Painter, Popup, PopupCloseBehavior, Pos2,
-    Rect, Response, RichText, Sense, Shape, Stroke, StrokeKind, TextEdit, TextStyle, Ui, Vec2, WidgetInfo, WidgetType,
-    pos2, vec2,
+    Rect, RectAlign, Response, RichText, Sense, Shape, Stroke, StrokeKind, TextEdit, TextStyle, Ui, Vec2, WidgetInfo,
+    WidgetType, pos2, vec2,
 };
 use henad_graph::sheet::document::{ParameterType, SheetDocument, SheetLiteral};
 use henad_graph::sheet::edit::{IdSpace, PALETTE_COLORS, SheetEdit, SheetEditError, is_reserved_name};
@@ -26,7 +26,7 @@ use henad_graph::sheet::sentence::{
 };
 use henad_graph::value::Color;
 
-use super::accessible_group;
+use super::{accessible_bounds, accessible_group};
 use crate::icons::material_design_icons::{
     MDI_ALERT, MDI_ALERT_CIRCLE, MDI_CHECK, MDI_CHEVRON_DOWN, MDI_CIRCLE_MEDIUM, MDI_DOTS_HORIZONTAL, MDI_INFORMATION,
     MDI_TUNE_VERTICAL,
@@ -56,9 +56,15 @@ pub const OVERLAY_PADDING: f32 = 6.0;
 /// Height in points of an item of an overlay with no grey words under it.
 const OVERLAY_ROW: f32 = 22.0;
 
-/// Space in points an overlay whose items scroll leaves between its frame and an edge of the window. The popup's area
-/// keeps the overlay inside the window, against its other edge.
-const OVERLAY_SCREEN_GAP: f32 = 8.0;
+/// Space in points an overlay leaves between its frame and an edge of the window.
+pub const OVERLAY_SCREEN_GAP: f32 = 8.0;
+
+/// Least height in points that a side of its anchor offers an overlay that fits on neither side. With less room on both
+/// sides, the overlay takes the window's height from its top.
+const OVERLAY_MIN_ROOM: f32 = 240.0;
+
+/// Key in egui temp data, with an overlay's id, of the most height in points the overlay takes.
+const OVERLAY_ROOM: &str = "henad_overlay_room";
 
 /// Width in points of the column at the left of an overlay's items that holds the check of the current value.
 const MARK_COLUMN: f32 = 16.0;
@@ -68,6 +74,12 @@ pub const SMALL_LABEL: f32 = 11.0;
 
 /// Size in points of the grey words under an item of an overlay.
 const OVERLAY_DETAIL: f32 = 11.5;
+
+/// Key in egui temp data of the rows of the overlay being drawn, and with an overlay's id of the rows it drew last.
+const OVERLAY_ROWS: &str = "henad_overlay_rows";
+
+/// Key in egui temp data of whether the last press was a key rather than a pointer button.
+const KEY_PRESSED_LAST: &str = "henad_key_pressed_last";
 
 /// Side in points of the square of a kind's hue on an add button.
 const ADD_SQUARE: f32 = 6.0;
@@ -153,14 +165,33 @@ pub fn caption(ui: &mut Ui, text: &str) -> Response {
     label
 }
 
+/// Adds `text` as the heading of an overlay or a dialog, a [`caption`] whose accessible node is a heading named `text`
+/// as written, and returns its response.
+pub fn heading_caption(ui: &mut Ui, text: &str) -> Response {
+    let label = caption(ui, text);
+    ui.ctx().accesskit_node_builder(label.id, |node| {
+        node.set_role(egui::accesskit::Role::Heading);
+        node.set_label(text);
+    });
+    label
+}
+
 /// Draws `add` inside the frame of an overlay, a menu or a picker: the theme's window fill inside a 1 point gray 600
 /// border, with no shadow, and returns what `add` returns.
 ///
 /// egui fades an area in over its first frames. The overlay sets the opacity back to whole, so the text under it never
-/// shows through. The overlay's popup takes [`Frame::NONE`].
+/// shows through. The overlay's popup takes [`Frame::NONE`]. The down and up arrow keys move the keyboard focus through
+/// the overlay's rows ([`move_through_rows`]).
 pub fn overlay<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.set_opacity(1.0);
-    Frame::NONE
+    let drawn = ui.id().with(OVERLAY_ROWS);
+    move_through_rows(ui, drawn);
+    let drawing = Id::new(OVERLAY_ROWS);
+    let outer = ui.data_mut(|data| {
+        data.get_temp_mut_or_default::<Option<Vec<Id>>>(drawing)
+            .replace(Vec::new())
+    });
+    let inner = Frame::NONE
         .fill(ui.visuals().window_fill)
         .stroke(Stroke::new(1.0, mcs::GRAY_600))
         .inner_margin(Margin::same(OVERLAY_PADDING as i8))
@@ -168,18 +199,185 @@ pub fn overlay<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
             ui.spacing_mut().item_spacing.y = 0.0;
             add(ui)
         })
-        .inner
+        .inner;
+    let rows = ui.data_mut(|data| std::mem::replace(data.get_temp_mut_or_default::<Option<Vec<Id>>>(drawing), outer));
+    ui.data_mut(|data| data.insert_temp(drawn, rows.unwrap_or_default()));
+    inner
 }
 
-/// Draws `add`, the items of an overlay under its title, in a vertical scroll area as tall as the window leaves for
-/// them, and returns what `add` returns. A short list takes its own height and shows no scroll bar.
+/// Moves the keyboard focus through the rows an overlay drew in the frame before, kept under `drawn`, when the down or
+/// the up arrow key is pressed. The focus moves to the next row or the one before, round from the last row to the
+/// first and back, and from outside the overlay, or from a button of the overlay other than a row, into its first or
+/// its last row.
 ///
-/// The overlay then fits in the window, and the wheel brings its last item into view.
+/// A text field of the overlay keeps the keys while it holds the focus. The keys move nothing else in that frame.
+fn move_through_rows(ui: &Ui, drawn: Id) {
+    let rows: Vec<Id> = ui.data(|data| data.get_temp(drawn)).unwrap_or_default();
+    let Some(last) = rows.len().checked_sub(1) else {
+        return;
+    };
+    let (down, up) = ui.input(|input| {
+        let plain = input.modifiers.is_none();
+        (
+            plain && input.key_pressed(Key::ArrowDown),
+            plain && input.key_pressed(Key::ArrowUp),
+        )
+    });
+    if down == up {
+        return;
+    }
+    let focused = ui.memory(|memory| memory.focused());
+    let index = focused.and_then(|id| rows.iter().position(|row| *row == id));
+    // A text field moves its cursor with the keys. Every text field stores its state under its id.
+    let field_inside = |id: Id| {
+        TextEdit::load_state(ui.ctx(), id).is_some()
+            && ui
+                .ctx()
+                .read_response(id)
+                .is_some_and(|response| response.layer_id == ui.layer_id())
+    };
+    if index.is_none() && focused.is_some_and(field_inside) {
+        return;
+    }
+    let target = match (index, down) {
+        (Some(index), true) if index < last => index + 1,
+        (Some(index), false) if index > 0 => index - 1,
+        (Some(_) | None, true) => 0,
+        (Some(_) | None, false) => last,
+    };
+    ui.memory_mut(|memory| {
+        memory.request_focus(rows[target]);
+        memory.move_focus(egui::FocusDirection::None);
+    });
+}
+
+/// A tooltip of a control that shows while the keyboard holds the control's focus, as well as under the pointer.
+pub trait FocusTooltip {
+    /// Shows `text` as the control's tooltip under the pointer, as `on_hover_text` does, and while the control holds
+    /// the keyboard focus. Returns the control's response.
+    ///
+    /// The focus counts as the keyboard's while the last press was a key, so a control that takes the focus after a
+    /// click shows no tooltip. No tooltip shows while a popup is open.
+    fn on_hover_or_focus_text(self, text: &str) -> Self;
+}
+
+impl FocusTooltip for Response {
+    fn on_hover_or_focus_text(self, text: &str) -> Self {
+        // Read on every call, focused or not. The key that moves the focus is pressed a frame before the control holds
+        // the focus.
+        let key_pressed_last = key_pressed_last(&self.ctx);
+        if !self.has_focus() || !key_pressed_last || Popup::is_any_open(&self.ctx) {
+            return self.on_hover_text(text);
+        }
+        // The area takes no click, as egui's own tooltip of plain text does. A click under it reaches the control there.
+        Popup::from_response(&self)
+            .id(self.id.with("henad_focus_tooltip"))
+            .kind(egui::PopupKind::Tooltip)
+            .gap(4.0)
+            .sense(Sense::hover())
+            .interactable(false)
+            .show(|ui| {
+                ui.style_mut().interaction.selectable_labels = false;
+                ui.set_max_width(ui.spacing().tooltip_width);
+                ui.label(text);
+            });
+        self
+    }
+}
+
+/// Returns whether the last press, in this frame or an earlier one, was a key rather than a pointer button.
+fn key_pressed_last(ctx: &egui::Context) -> bool {
+    let latest = ctx.input(|input| {
+        input.events.iter().rev().find_map(|event| match event {
+            egui::Event::Key { pressed: true, .. } => Some(true),
+            egui::Event::PointerButton { pressed: true, .. } => Some(false),
+            _ => None,
+        })
+    });
+    ctx.data_mut(|data| {
+        let last = data.get_temp_mut_or_default::<bool>(Id::new(KEY_PRESSED_LAST));
+        if let Some(latest) = latest {
+            *last = latest;
+        }
+        *last
+    })
+}
+
+/// Puts the keyboard focus back on `anchor` when Escape closed its popup `popup_id` in this frame. `was_open` holds
+/// whether the popup was open before the frame drew it.
+pub fn escape_to_anchor(ui: &Ui, anchor: &Response, popup_id: Id, was_open: bool) {
+    if was_open && !Popup::is_id_open(ui.ctx(), popup_id) && ui.input(|input| input.key_pressed(Key::Escape)) {
+        anchor.request_focus();
+    }
+}
+
+/// Place of an overlay.
+enum OverlaySide {
+    /// Under its anchor.
+    Below,
+    /// Over its anchor.
+    Above,
+    /// At the top of the window, over its anchor.
+    WindowTop,
+}
+
+/// Returns `popup` placed beside its anchor, and the most height in points the popup takes there.
+///
+/// The popup opens under its anchor, over it where it does not fit under it, and otherwise on the side with more room,
+/// as tall as that room, its items scrolling. When neither side has [`OVERLAY_MIN_ROOM`] points, the popup opens at
+/// the top of the window and takes the window's height. The popup fits by its height in the frame before. In its first
+/// frame it opens under its anchor with the window's height as its room. The room is kept for [`overlay_room`].
+pub fn placed<'a>(ctx: &egui::Context, popup: Popup<'a>) -> (Popup<'a>, f32) {
+    let window = ctx.content_rect().shrink(OVERLAY_SCREEN_GAP);
+    let Some(anchor) = popup.get_anchor_rect() else {
+        return (popup, window.height());
+    };
+    let below = window.bottom() - anchor.bottom();
+    let above = anchor.top() - window.top();
+    let (side, room) = match popup.get_expected_size().map(|size| size.y) {
+        None => (OverlaySide::Below, window.height()),
+        Some(height) if height <= below => (OverlaySide::Below, below),
+        Some(height) if height <= above => (OverlaySide::Above, above),
+        Some(_) if below.max(above) < OVERLAY_MIN_ROOM => (OverlaySide::WindowTop, window.height()),
+        Some(_) if above > below => (OverlaySide::Above, above),
+        Some(_) => (OverlaySide::Below, below),
+    };
+    let popup = match side {
+        OverlaySide::Below => popup
+            .align(RectAlign::BOTTOM_START)
+            .align_alternatives(&[RectAlign::BOTTOM_END]),
+        OverlaySide::Above => popup
+            .align(RectAlign::TOP_START)
+            .align_alternatives(&[RectAlign::TOP_END]),
+        // Under a line along the top of the window, which the popup then covers down to the bottom.
+        OverlaySide::WindowTop => popup
+            .anchor(Rect::from_x_y_ranges(anchor.x_range(), window.top()..=window.top()))
+            .align(RectAlign::BOTTOM_START)
+            .align_alternatives(&[RectAlign::BOTTOM_END]),
+    };
+    let id = popup.get_id().with(OVERLAY_ROOM);
+    ctx.data_mut(|data| data.insert_temp(id, room));
+    (popup, room)
+}
+
+/// Returns the most height in points the overlay `ui` draws in takes, as [`placed`] set it, or the window's height for
+/// an overlay that was not placed.
+pub fn overlay_room(ui: &Ui) -> f32 {
+    let id = ui.layer_id().id.with(OVERLAY_ROOM);
+    ui.data(|data| data.get_temp(id))
+        .unwrap_or_else(|| ui.ctx().content_rect().shrink(OVERLAY_SCREEN_GAP).height())
+}
+
+/// Draws `add`, the items of an overlay under its title, in a vertical scroll area as tall as the overlay's room leaves
+/// for them ([`overlay_room`]), and returns what `add` returns. A short list takes its own height and shows no scroll
+/// bar.
+///
+/// The overlay then fits in its room, and the wheel brings its last item into view.
 pub fn overlay_items<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    // The title above the cursor, and the overlay's padding and border at both ends, take the rest of the window.
+    // The title above the cursor, and the overlay's padding and border at both ends, take the rest of the room.
     let above = ui.cursor().top() - ui.max_rect().top() + OVERLAY_PADDING + 1.0;
     let below = OVERLAY_PADDING + 1.0;
-    let room = (ui.ctx().content_rect().height() - OVERLAY_SCREEN_GAP - above - below).max(3.0 * OVERLAY_ROW);
+    let room = (overlay_room(ui) - above - below).max(3.0 * OVERLAY_ROW);
     // The popup's area holds the size of its first frame as the room it offers. The scroll area takes `room`
     // whatever the area offers, and shrinks to a shorter list.
     egui::ScrollArea::vertical()
@@ -189,22 +387,52 @@ pub fn overlay_items<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
-/// Draws the title of an overlay as a small upper-case mono label, with a hairline under it across the overlay.
-pub fn overlay_title(ui: &mut Ui, title: &str) {
+/// Draws the title of an overlay as a heading in small upper-case mono, with a hairline under it across the overlay,
+/// and returns the heading's response.
+pub fn overlay_title(ui: &mut Ui, title: &str) -> Response {
     ui.add_space(2.0);
-    caption(ui, title);
+    let heading = heading_caption(ui, title);
     ui.add_space(4.0);
     overlay_rule(ui);
+    heading
 }
 
 /// Draws the label of a group of an overlay's items as a small upper-case mono label, with a hairline above it across
-/// the overlay.
-pub fn overlay_group(ui: &mut Ui, label: &str) {
+/// the overlay, and returns the label's response.
+pub fn overlay_group(ui: &mut Ui, label: &str) -> Response {
     ui.add_space(4.0);
     overlay_rule(ui);
     ui.add_space(4.0);
-    caption(ui, label);
+    let caption = caption(ui, label);
     ui.add_space(2.0);
+    caption
+}
+
+/// Draws `add`, a group of the items of a menu or a picker, in a child `Ui` whose accessible node is a menu labelled by
+/// the node `label`, and returns what `add` returns.
+///
+/// `label` is the group's label from [`overlay_group`], or for a group without one the overlay's title from
+/// [`overlay_title`] or the button that opens the overlay. The menu takes its name from that node and holds no name of
+/// its own.
+pub fn menu_group<R>(ui: &mut Ui, label: Id, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let group = ui.scope(|ui| (add(ui), ui.unique_id()));
+    let (inner, id) = group.inner;
+    let rect = group.response.rect;
+    ui.ctx().accesskit_node_builder(id, |node| {
+        node.set_role(egui::accesskit::Role::Menu);
+        node.push_labelled_by(label.accesskit_id());
+        node.set_bounds(accessible_bounds(rect));
+    });
+    inner
+}
+
+/// Adds `item` as a row of a menu or a picker, an [`overlay_item`] of role `MenuItem`, and returns its response. A
+/// [`menu_group`] holds it.
+pub fn menu_item(ui: &mut Ui, item: &OverlayItem<'_>) -> Response {
+    let response = overlay_item(ui, item);
+    ui.ctx()
+        .accesskit_node_builder(response.id, |node| node.set_role(egui::accesskit::Role::MenuItem));
+    response
 }
 
 /// Draws a hairline across an overlay, through its padding at both sides.
@@ -236,7 +464,9 @@ pub struct OverlayItem<'a> {
 ///
 /// The row takes the gray 800 fill and the theme's hover text under the pointer and under keyboard focus, and the focus
 /// outline inside its edge while it holds the focus. A current value fills blue 900 with its words in blue 200 after a check.
-/// Inside a disabled `Ui` the words are weak and the row takes no hover and no click.
+/// Inside a disabled `Ui` the words are weak and the row takes no hover and no click. An enabled row is one of the rows
+/// that the down and up arrow keys move through, and a row that gains the focus outside its scroll area's view scrolls
+/// into view.
 pub fn overlay_item(ui: &mut Ui, item: &OverlayItem<'_>) -> Response {
     let enabled = ui.is_enabled();
     let body = TextStyle::Body.resolve(ui.style());
@@ -264,6 +494,18 @@ pub fn overlay_item(ui: &mut Ui, item: &OverlayItem<'_>) -> Response {
     let response = ui.interact(row, id, Sense::click());
     let name = item.name.unwrap_or(item.label);
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, name));
+    if enabled {
+        ui.data_mut(|data| {
+            if let Some(rows) = data.get_temp_mut_or_default::<Option<Vec<Id>>>(Id::new(OVERLAY_ROWS)) {
+                rows.push(response.id);
+            }
+        });
+    }
+    // Only a row its overlay's scroll area hides scrolls. A row in view would scroll the pane under the overlay.
+    let clip = ui.clip_rect();
+    if response.gained_focus() && (response.rect.top() < clip.top() || response.rect.bottom() > clip.bottom()) {
+        response.scroll_to_me(None);
+    }
     if let Some(detail) = item.detail.filter(|_| item.described) {
         ui.ctx()
             .accesskit_node_builder(response.id, |node| node.set_description(detail));
@@ -402,7 +644,7 @@ pub fn select_within(ui: &mut Ui, id: Option<Id>, words: &str, name: &str, empty
     let width = frame + text.size().x;
     let (rect, response) = allocate_control(ui, id, vec2(width, CHIP_HEIGHT));
     let response = if text.elided {
-        response.on_hover_text(words)
+        response.on_hover_or_focus_text(words)
     } else {
         response
     };
@@ -454,29 +696,34 @@ pub fn select_within(ui: &mut Ui, id: Option<Id>, words: &str, name: &str, empty
 ///
 /// A click on `anchor` opens and closes the list, and a choice or a click outside closes it. The list is an overlay.
 pub fn select_list(ui: &Ui, anchor: &Response, popup_id: Id, items: &[OverlayItem<'_>]) -> Option<usize> {
+    let was_open = Popup::is_id_open(ui.ctx(), popup_id);
     if anchor.clicked() {
         Popup::toggle_id(ui.ctx(), popup_id);
     }
-    let popup = Popup::from_response(anchor)
-        .id(popup_id)
-        .open_memory(None)
-        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
-        .frame(Frame::NONE)
-        .show(|ui| {
-            overlay(ui, |ui| {
-                let mut chosen = None;
-                for (index, item) in items.iter().enumerate() {
-                    if overlay_item(ui, item).clicked() {
-                        chosen = Some(index);
-                    }
+    let (popup, _) = placed(
+        ui.ctx(),
+        Popup::from_response(anchor)
+            .id(popup_id)
+            .open_memory(None)
+            .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+            .frame(Frame::NONE),
+    );
+    let popup = popup.show(|ui| {
+        overlay(ui, |ui| {
+            let mut chosen = None;
+            for (index, item) in items.iter().enumerate() {
+                if overlay_item(ui, item).clicked() {
+                    chosen = Some(index);
                 }
-                if chosen.is_some() {
-                    ui.close();
-                }
-                chosen
-            })
-        })?;
-    popup.inner
+            }
+            if chosen.is_some() {
+                ui.close();
+            }
+            chosen
+        })
+    });
+    escape_to_anchor(ui, anchor, popup_id, was_open);
+    popup?.inner
 }
 
 /// Adds the chevron box after a condition word, named `name` under the widget id `id`, and returns its response.
@@ -897,15 +1144,18 @@ pub fn dialog_list<R>(ui: &mut Ui, below: f32, add: impl FnOnce(&mut Ui) -> R) -
         .inner
 }
 
-/// Starts a dialog `width` points wide named `name` with the role of a dialog, and draws its title: `title` as a small
-/// upper-case mono label with a gray 800 hairline under it across the dialog.
+/// Starts a modal dialog `width` points wide named `name` with the role of a dialog, and draws its title: `title` as a
+/// heading in small upper-case mono with a gray 800 hairline under it across the dialog.
+///
+/// The dialog is marked modal. The `Modal` that draws it blocks the input to the app behind it.
 pub fn dialog_title(ui: &mut Ui, name: &str, title: &str, width: f32) {
     ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
         node.set_role(egui::accesskit::Role::Dialog);
         node.set_label(name);
+        node.set_modal();
     });
     ui.set_width(width);
-    caption(ui, title);
+    heading_caption(ui, title);
     ui.add_space(4.0);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
     let across = rect.x_range().expand(f32::from(DIALOG_MARGIN));
@@ -1199,7 +1449,7 @@ pub fn chip_within(
     let width = frame + name.size().x;
     let (rect, response) = allocate_control(ui, id, vec2(width, CHIP_HEIGHT));
     let response = if elided {
-        response.on_hover_text(chip.text())
+        response.on_hover_or_focus_text(&chip.text())
     } else {
         response
     };
@@ -1661,35 +1911,41 @@ pub fn color_name(color: Color) -> &'static str {
 pub fn color_button(ui: &mut Ui, name: &str, color: Color) -> Option<Color> {
     let id = ui.next_auto_id();
     let popup_id = id.with("picker");
-    let response = swatch_button(ui, color32(color), name, Popup::is_id_open(ui.ctx(), popup_id));
-    let popup = Popup::from_toggle_button_response(&response)
-        .id(popup_id)
-        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
-        .frame(Frame::NONE)
-        .show(|ui| {
-            overlay(ui, |ui| {
-                overlay_title(ui, CHOOSE_A_COLOR);
-                ui.add_space(6.0);
-                let mut chosen = None;
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                    ui.set_max_width(6.0 * (SWATCH_SIDE + 8.0));
-                    for (palette, name) in PALETTE_COLORS.iter().zip(COLOR_NAMES) {
-                        if swatch_button(ui, color32(*palette), name, false)
-                            .on_hover_text(name)
-                            .clicked()
-                        {
-                            chosen = Some(*palette);
-                        }
+    let was_open = Popup::is_id_open(ui.ctx(), popup_id);
+    let response = swatch_button(ui, color32(color), name, was_open);
+    let (popup, _) = placed(
+        ui.ctx(),
+        Popup::from_toggle_button_response(&response)
+            .id(popup_id)
+            .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+            .frame(Frame::NONE),
+    );
+    let popup = popup.show(|ui| {
+        overlay(ui, |ui| {
+            overlay_title(ui, CHOOSE_A_COLOR);
+            ui.add_space(6.0);
+            let mut chosen = None;
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                ui.set_max_width(6.0 * (SWATCH_SIDE + 8.0));
+                for (palette, name) in PALETTE_COLORS.iter().zip(COLOR_NAMES) {
+                    if swatch_button(ui, color32(*palette), name, false)
+                        .on_hover_text(name)
+                        .clicked()
+                    {
+                        chosen = Some(*palette);
                     }
-                });
-                ui.add_space(2.0);
-                if chosen.is_some() {
-                    ui.close();
                 }
-                (chosen, ui.unique_id())
-            })
-        })?;
+            });
+            ui.add_space(2.0);
+            if chosen.is_some() {
+                ui.close();
+            }
+            (chosen, ui.unique_id())
+        })
+    });
+    escape_to_anchor(ui, &response, popup_id, was_open);
+    let popup = popup?;
     let (chosen, id) = popup.inner;
     accessible_group(
         ui.ctx(),

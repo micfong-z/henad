@@ -245,7 +245,11 @@ stay as they are, and once another model is selected the tab draws that model fo
 The mode draws the loaded entry's parameters but the hidden ones and `preview::SIZE_PARAMS` (the
 sizes in front of a graph's own), each slider at its tried value or `loaded_values`, through the
 shared `value_widget`, then the entry's actions (`action_buttons`, enabled while a run exists,
-pressed into the preview) and no Seed row, schedule or notice. A move is a
+pressed into the preview) and no Seed row, schedule or notice. While the Editor holds the
+previewed sheet, each action whose id is a sheet button's takes that button's words
+(`button_descriptions` over `sheet_pane::button_does`, "Run once, every cell") as its tooltip and
+AccessKit description
+(`a_sheet_button_in_the_world_is_described_by_what_it_does`). A move is a
 `TrialChoice::Try` for `apply_trial`: `Preview::try_value` records a `TriedValue` (id, value and
 the value the model keeps, `preview::model_value`: the sheet parameter's value or the graph's
 default, typed as the descriptor) and drops it when the two are equal. A live parameter then goes

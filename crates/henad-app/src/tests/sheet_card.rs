@@ -11,8 +11,9 @@ use henad_graph::sheet::ParsedSheet;
 use henad_graph::sheet::document::{SheetChip, SheetDocument, SheetLiteral, SheetValue, Slot};
 use henad_graph::sheet::sentence::{
     ADD_AT_END_NOTE, ADD_BUTTON, ADD_PARAMETER, ADD_PROPERTY, AddButton, BUTTON_NAME_FIELD, CHANCE_OUT_OF_RANGE,
-    CHOOSE_WHEN, COLOR_CELLS_BY, DONE, DRAW_NEW_NUMBERS, LIST_HINT, LIST_IN_ONE_NUMBER, NEW_PARAMETER, NOTHING_INSIDE,
-    NUMBER_BOX_HINT, REMOVE_FROM_LIST, TYPE_ONE_NUMBER, add_inside_label, add_inside_name, run_once,
+    CHOOSE_WHEN, COLOR_CELLS_BY, CONDITIONS, DONE, DRAW_NEW_NUMBERS, LIST_HINT, LIST_IN_ONE_NUMBER, NEW_PARAMETER,
+    NOTHING_INSIDE, NUMBER_BOX_HINT, REMOVE_FROM_LIST, SHARED_DRAW_GROUP, TYPE_ONE_NUMBER, add_inside_label,
+    add_inside_name, run_once,
 };
 
 use henad_graph::sheet::sentence::{Blank, DrawKind, Sentences};
@@ -25,6 +26,7 @@ use crate::tests::panes::{
     text_and_code, type_and_enter, type_into,
 };
 use crate::tests::support::{Harness, SIR_CHANCE, align_with_starter, edited, starter_text};
+use crate::ui::editor::sheet::widgets::{OVERLAY_PADDING, OVERLAY_SCREEN_GAP};
 
 /// Chooses `item` in the select named `select`, after recording what its open list shows.
 fn choose_seen(harness: &mut Harness, seen: &mut Seen, select: &str, item: &str) {
@@ -406,6 +408,377 @@ fn the_line_menu_renames_a_result_and_deletes_a_line() {
     assert!(
         matches!(condition_right(&harness, "l2").value(), Some(SheetValue::Literal(_))),
         "the number stays"
+    );
+}
+
+/// Asserts that a settled frame shows each item of `items`, an item and the name of its menu, as a menu item inside
+/// that menu, and, when `dialog` names one, inside that dialog under a heading of the same name.
+fn assert_menu_items(harness: &mut Harness, dialog: Option<&str>, items: &[(&str, &str)]) {
+    let nodes = harness.settle();
+    if let Some(dialog) = dialog {
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.role == Role::Heading && node.label == dialog && node.dialog == dialog),
+            "{dialog} is headed by its title"
+        );
+    }
+    for (item, menu) in items {
+        let found = nodes
+            .iter()
+            .find(|node| node.label == *item && node.bounds.is_some())
+            .unwrap_or_else(|| panic!("{item} is shown"));
+        assert_eq!(found.role, Role::MenuItem, "{item} is a menu item");
+        assert_eq!(found.menu, *menu, "{item} is in the menu {menu}");
+        if let Some(dialog) = dialog {
+            assert_eq!(found.dialog, dialog, "{item} is inside {dialog}");
+        }
+    }
+}
+
+#[test]
+fn add_menus_line_menus_and_pickers_hold_menu_items_in_menus() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "game_of_life.toml");
+    click(&mut harness, AddButton::Chance.label());
+    let heading = AddButton::Chance.heading();
+    assert_menu_items(
+        &mut harness,
+        Some(heading),
+        &[
+            ("Become, with chance", heading),
+            ("Become, at a rate", heading),
+            ("With chance", SHARED_DRAW_GROUP),
+            ("At a rate", SHARED_DRAW_GROUP),
+        ],
+    );
+    harness.press(Key::Escape, Modifiers::NONE);
+    click(&mut harness, "Line 1 actions");
+    assert_menu_items(
+        &mut harness,
+        None,
+        &[("Rename line 1", "Line 1 actions"), ("Delete line 1", "Line 1 actions")],
+    );
+    harness.press(Key::Escape, Modifiers::NONE);
+    click(&mut harness, "Line 2: change the kind of condition");
+    assert_menu_items(
+        &mut harness,
+        Some(CHOOSE_WHEN),
+        &[
+            ("when ... is ...", CONDITIONS),
+            ("when ... is at least ...", CONDITIONS),
+            ("with chance ...", CONDITIONS),
+        ],
+    );
+}
+
+/// Returns each pair of menu items of the open overlay or menu named `name` in which the first item's name holds the
+/// second item's name, case aside.
+fn names_holding_others(harness: &mut Harness, name: &str) -> Vec<(String, String)> {
+    let names: Vec<String> = harness
+        .settle()
+        .into_iter()
+        .filter(|node| node.role == Role::MenuItem && (node.dialog == name || node.menu == name))
+        .map(|node| node.label.to_lowercase())
+        .collect();
+    assert!(names.len() > 1, "{name} shows its menu items: {names:?}");
+    names
+        .iter()
+        .flat_map(|holder| {
+            names
+                .iter()
+                .filter(move |held| *held != holder && holder.contains(held.as_str()))
+                .map(move |held| (holder.clone(), held.clone()))
+        })
+        .collect()
+}
+
+#[test]
+fn no_name_in_choose_when_or_a_line_menu_holds_another() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    let mut seen = Seen::default();
+    open_starter(&mut harness, "game_of_life.toml");
+    click(&mut harness, "Line 2: change the kind of condition");
+    assert_eq!(names_holding_others(&mut harness, CHOOSE_WHEN), Vec::new());
+    harness.press(Key::Escape, Modifiers::NONE);
+    click(&mut harness, "Line 1 actions");
+    assert_eq!(names_holding_others(&mut harness, "Line 1 actions"), Vec::new());
+    harness.press(Key::Escape, Modifiers::NONE);
+    add(&mut harness, &mut seen, AddButton::When, "When");
+    assert!(is_open(&mut harness, CHOOSE_WHEN), "the new When's condition opens");
+    assert_eq!(names_holding_others(&mut harness, CHOOSE_WHEN), Vec::new());
+}
+
+/// Opens "Choose when" on line 2 of Game of Life in a window `height` points high, and returns the bounds of the arrow
+/// that opens it and of the picker.
+fn choose_when_in_window(height: f32) -> Option<(egui::Rect, egui::Rect)> {
+    let mut harness = Harness::new()?;
+    harness.screen = egui::vec2(1400.0, height);
+    open_starter(&mut harness, "game_of_life.toml");
+    let arrow = "Line 2: change the kind of condition";
+    let anchor = bounds_of(&harness.settle(), Role::Button, arrow);
+    click(&mut harness, arrow);
+    let picker = bounds_of(&harness.settle(), Role::Dialog, CHOOSE_WHEN);
+    Some((anchor, picker))
+}
+
+/// Opens the menu of "+ Chance" of Game of Life in a window `height` points high, and returns the bounds of the button
+/// and of the menu.
+fn chance_menu_in_window(height: f32) -> Option<(egui::Rect, egui::Rect)> {
+    let mut harness = Harness::new()?;
+    harness.screen = egui::vec2(1400.0, height);
+    open_starter(&mut harness, "game_of_life.toml");
+    let button = AddButton::Chance.label();
+    let anchor = bounds_of(&harness.settle(), Role::Button, button);
+    click(&mut harness, button);
+    let menu = bounds_of(&harness.settle(), Role::Dialog, AddButton::Chance.heading());
+    Some((anchor, menu))
+}
+
+#[test]
+fn a_picker_opens_below_or_above_its_anchor_and_scrolls_where_neither_fits() {
+    let Some((anchor, picker)) = choose_when_in_window(1000.0) else {
+        return;
+    };
+    assert_eq!(picker.top(), anchor.bottom(), "below the arrow, where it fits");
+    let natural = picker.height();
+    // On neither side does it fit. Below has more room, 240 points or more, and the picker takes that room.
+    let height = anchor.bottom() + natural - 8.0;
+    let (_, picker) = choose_when_in_window(height).expect("a device");
+    assert!(height - OVERLAY_SCREEN_GAP - anchor.bottom() >= 240.0);
+    assert_eq!(
+        picker.top(),
+        anchor.bottom(),
+        "below the arrow, the side with more room"
+    );
+    assert_eq!(
+        picker.bottom(),
+        height - OVERLAY_SCREEN_GAP,
+        "as tall as the room below"
+    );
+    // Neither side has 240 points. The picker takes the window's height from its top.
+    let height = anchor.bottom() + 200.0;
+    let (_, picker) = choose_when_in_window(height).expect("a device");
+    assert_eq!(picker.top(), OVERLAY_SCREEN_GAP, "at the top of the window");
+    assert!(
+        picker.bottom() <= height - OVERLAY_SCREEN_GAP,
+        "inside the window: {picker:?}"
+    );
+    // A menu that does not fit below its button but fits above it opens above it. The menu's dialog is the area
+    // inside its frame.
+    let frame = OVERLAY_PADDING + 1.0;
+    let (anchor, menu) = chance_menu_in_window(1000.0).expect("a device");
+    assert_eq!(menu.top() - frame, anchor.bottom(), "below the button, where it fits");
+    let height = anchor.bottom() + menu.height() + frame;
+    let (anchor, menu) = chance_menu_in_window(height).expect("a device");
+    assert_eq!(menu.bottom() + frame, anchor.top(), "above the button");
+}
+
+/// Opens "Choose when" on line 2 of Game of Life in a window `height` points high, presses ↑ to focus its last item,
+/// and returns the bounds of the arrow before and after, of the picker and of the focused item.
+fn last_item_by_key(height: f32) -> Option<[egui::Rect; 4]> {
+    let mut harness = Harness::new()?;
+    harness.screen = egui::vec2(1400.0, height);
+    open_starter(&mut harness, "game_of_life.toml");
+    let arrow = "Line 2: change the kind of condition";
+    let before = bounds_of(&harness.settle(), Role::Button, arrow);
+    click(&mut harness, arrow);
+    harness.settle();
+    harness.press(Key::ArrowUp, Modifiers::NONE);
+    let nodes = harness.settle();
+    assert_eq!(harness.focused, "at rate ... per ...", "↑ moves to the last item");
+    let item = nodes
+        .iter()
+        .find(|node| node.label == harness.focused)
+        .and_then(|node| node.bounds)
+        .expect("the focused item");
+    let picker = bounds_of(&nodes, Role::Dialog, CHOOSE_WHEN);
+    let after = bounds_of(&nodes, Role::Button, arrow);
+    Some([before, after, picker, item])
+}
+
+#[test]
+fn a_focused_item_scrolls_into_its_picker_and_the_card_stays_put() {
+    let Some([before, _, picker, _]) = last_item_by_key(1000.0) else {
+        return;
+    };
+    let natural = picker.height();
+    // The picker fits under the arrow and runs over the list under the panes. The card under it stays put.
+    let height = before.bottom() + natural + 20.0;
+    let [before, after, picker, item] = last_item_by_key(height).expect("a device");
+    assert_eq!(before, after, "the card stays put");
+    assert!(picker.contains_rect(item));
+    // The picker scrolls on the side with more room, and brings the item into view.
+    let height = before.bottom() + natural - 8.0;
+    let [before, after, picker, item] = last_item_by_key(height).expect("a device");
+    assert_eq!(before, after, "the card stays put");
+    assert!(picker.contains(item.center()), "{item:?} shows in {picker:?}");
+}
+
+#[test]
+fn escape_returns_the_focus_from_a_select_and_a_help_popover() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "game_of_life.toml");
+    click(&mut harness, "Edges");
+    harness.settle();
+    harness.press(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(harness.focused, "Wrap around", "↓ moves into the select's list");
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert_eq!(harness.focused, "Edges");
+    click(&mut harness, "Help: World");
+    harness.settle();
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert_eq!(harness.focused, "Help: World");
+}
+
+#[test]
+fn arrow_keys_move_round_an_open_menu_and_escape_returns_to_its_button() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "game_of_life.toml");
+    let button = AddButton::Chance.label();
+    click(&mut harness, button);
+    harness.settle();
+    let items = ["Become, with chance", "Become, at a rate", "With chance", "At a rate"];
+    for item in items.iter().chain(&items[..1]) {
+        harness.press(Key::ArrowDown, Modifiers::NONE);
+        assert_eq!(harness.focused, *item, "ArrowDown moves to {item}");
+    }
+    harness.press(Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(harness.focused, "At a rate", "ArrowUp moves round to the last item");
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert!(!is_open(&mut harness, AddButton::Chance.heading()));
+    assert_eq!(harness.focused, button, "Escape returns the focus to the button");
+
+    click(&mut harness, "Line 1 actions");
+    harness.settle();
+    harness.press(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(harness.focused, "Rename line 1");
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert_eq!(harness.focused, "Line 1 actions");
+
+    let arrow = "Line 2: change the kind of condition";
+    click(&mut harness, arrow);
+    harness.settle();
+    harness.press(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(harness.focused, "always");
+    harness.press(Key::ArrowUp, Modifiers::NONE);
+    harness.press(Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(harness.focused, "always", "the keys stay inside the picker");
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert!(!is_open(&mut harness, CHOOSE_WHEN));
+    assert_eq!(harness.focused, arrow);
+}
+
+/// Returns whether the node that holds the keyboard focus in a settled frame is a menu item of the open picker
+/// titled `dialog`.
+fn focus_is_an_item_of(harness: &mut Harness, dialog: &str) -> bool {
+    let nodes = harness.settle();
+    nodes
+        .iter()
+        .any(|node| node.label == harness.focused && node.role == Role::MenuItem && node.dialog == dialog)
+}
+
+#[test]
+fn the_number_box_keeps_the_arrow_keys_and_its_use_button_passes_them_to_the_items() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "game_of_life.toml");
+    let picker = "Choose a number";
+    for key in [Key::ArrowDown, Key::ArrowUp] {
+        click_on_line(&mut harness, "Line 2", "3");
+        assert!(is_open(&mut harness, picker));
+        assert_eq!(harness.focused, NUMBER_BOX_HINT, "the Number box takes the focus");
+        harness.press(key, Modifiers::NONE);
+        assert_eq!(harness.focused, NUMBER_BOX_HINT, "{key:?} moves the text cursor");
+        harness.press(Key::Tab, Modifiers::NONE);
+        assert_eq!(harness.focused, "Use");
+        harness.press(key, Modifiers::NONE);
+        assert!(
+            focus_is_an_item_of(&mut harness, picker),
+            "{key:?} on Use moves to an item of the picker, not to {}",
+            harness.focused
+        );
+        harness.press(Key::Escape, Modifiers::NONE);
+        assert!(!is_open(&mut harness, picker));
+    }
+}
+
+#[test]
+fn a_tooltip_shows_on_keyboard_focus_but_not_while_a_menu_is_open() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "game_of_life.toml");
+    let button = AddButton::Chance.label();
+    let tooltip = AddButton::Chance.tooltip();
+    click(&mut harness, button);
+    harness.settle();
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert_eq!(harness.focused, button);
+    assert!(shows(&mut harness, tooltip), "the focused button shows its tooltip");
+    harness.press(Key::Enter, Modifiers::NONE);
+    assert!(is_open(&mut harness, AddButton::Chance.heading()));
+    assert!(!shows(&mut harness, tooltip), "an open menu hides the tooltip");
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert!(shows(&mut harness, tooltip));
+    // A press of the pointer ends the keyboard's turn. The button keeps the focus and shows no tooltip.
+    click(&mut harness, button);
+    click(&mut harness, button);
+    assert!(!is_open(&mut harness, AddButton::Chance.heading()));
+    assert_eq!(harness.focused, button);
+    assert!(!shows(&mut harness, tooltip), "the pointer's focus shows no tooltip");
+}
+
+#[test]
+fn the_new_model_button_shows_its_tooltip_on_keyboard_focus() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "game_of_life.toml");
+    for _ in 0..40 {
+        if harness.focused == "New model" {
+            break;
+        }
+        harness.press(Key::Tab, Modifiers::NONE);
+    }
+    assert_eq!(harness.focused, "New model", "Tab reaches New model");
+    assert!(shows(&mut harness, "Start new model"));
+}
+
+#[test]
+fn a_click_on_a_control_under_a_focus_tooltip_reaches_the_control() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    // In a window this narrow, "+ When, for several lines" wraps under "+ Chance", and the tooltip of "+ Chance"
+    // covers part of it.
+    harness.screen = egui::vec2(1000.0, 1000.0);
+    open_starter(&mut harness, "game_of_life.toml");
+    let button = AddButton::Chance.label();
+    click(&mut harness, button);
+    harness.settle();
+    harness.press(Key::Escape, Modifiers::NONE);
+    let nodes = harness.settle();
+    let tooltip = nodes
+        .iter()
+        .find(|node| node.value == AddButton::Chance.tooltip())
+        .and_then(|node| node.bounds)
+        .expect("the tooltip of the focused button");
+    let under = bounds_of(&nodes, Role::Button, AddButton::When.label()).intersect(tooltip);
+    assert!(under.is_positive(), "the tooltip covers part of the When button");
+    harness.click_at(under.center());
+    assert!(
+        is_open(&mut harness, AddButton::When.heading()),
+        "the click opens the menu of the button under the tooltip"
     );
 }
 

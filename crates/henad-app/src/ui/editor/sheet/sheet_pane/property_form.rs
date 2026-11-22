@@ -29,6 +29,7 @@ use super::{
     DELETE_WIDTH, EditRun, FormKind, FormState, Pending, PropertyForm, STATE_FIELD_WIDTH, form_buttons, form_heading,
     form_name_field,
 };
+use crate::ui::editor::sheet::widgets::FocusTooltip as _;
 use crate::ui::editor::sheet::widgets::{color_button, color_name, message_ui, name_taken, set_name};
 use crate::ui::editor::sheet::{find_property, properties_of};
 use crate::ui::sweep::layout::destructive_button;
@@ -60,7 +61,7 @@ pub(super) fn property_form(
         for kind in form_kinds(document, form) {
             let radio = ui.radio_value(&mut form.kind, kind, kind_words(kind));
             if kind == PropertyType::WholeNumber {
-                radio.on_hover_text(INTEGER_KIND_TOOLTIP);
+                radio.on_hover_or_focus_text(INTEGER_KIND_TOOLTIP);
             }
         }
     });

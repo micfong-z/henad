@@ -100,17 +100,46 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     opaque from its first frame, a small upper-case title and group labels with a hairline. An
     item is a full-width row, gray 800 under the pointer or the keyboard focus, blue 900 with a
     check and blue 200 words when current, weak with its reason as a tooltip when it cannot apply.
-    A state shows its swatch, a square of its own colour inside gray 700. An add menu's items scroll
-    under its title in a scroll area as tall as the window leaves (`overlay_items`). A picker of
+    A state shows its swatch, a square of its own colour inside gray 700. Every overlay is `placed`:
+    under its anchor, over it where it does not fit under it, and otherwise on the side with more
+    room and as tall as that room. With less than `OVERLAY_MIN_ROOM` (240 points) on both sides it
+    opens at the top of the window and takes the window's height. The fit uses the overlay's height
+    in the frame before, and its room (`overlay_room`) stays in egui temp data under its id, inside
+    `OVERLAY_SCREEN_GAP` of the window's edges. An add menu's items scroll under its title in a
+    scroll area as tall as the room leaves (`overlay_items`). A picker of
     either pane is `widgets::PICKER_WIDTH` (300 points) wide at least, its words wrapping at that
     width, so pickers open as wide as each other. A select's list and a menu take their content's
-    width.
+    width. In the AccessKit tree a picker or an add menu is a group of role `Dialog` named by its
+    title, and its title a heading (`overlay_title`). The items of a picker or a menu are
+    `menu_item`s, role `MenuItem`, inside `menu_group`s, role `Menu`, each labelled through
+    `labelled_by` by its group's label, by the overlay's title for a group with no label, or by the
+    button that opens a menu with no title, the line menu. A select's options stay buttons.
+    ArrowDown and ArrowUp move the keyboard focus through an overlay's enabled rows
+    (`move_through_rows`, over the rows `overlay_item` recorded in the frame before): to the next or
+    the one before, round at either end, and from outside the overlay into its first or its last
+    row. A text field of the overlay that holds the focus keeps the keys, the Number box included
+    (`TextEdit::load_state` tells a field from a button). From a button of the overlay other than a
+    row, such as Use beside the Number box, the keys move into the first or the last row, as from
+    outside. A row that gains the focus outside its overlay's clip rect scrolls into view. A row
+    in view does not call `scroll_to_me`, which would scroll the pane under an overlay that has no
+    scroll area of its own. Escape closes an overlay and returns the focus to the control that
+    opened it (`escape_to_anchor`, or `CardPicker::show` for a card's picker).
+  - Tooltip of a focusable control in sheet mode, of a button of the Editor's header and of a sheet
+    button in the world: `FocusTooltip::on_hover_or_focus_text`, which shows the tooltip under the
+    pointer and while the keyboard holds the control's focus, never while a popup is open. The focus
+    counts as the keyboard's while the last press was a key (`key_pressed_last`, kept in egui temp
+    data), so a control focused after a click shows none. The focus tooltip senses hover alone and
+    is not interactable, as egui's own tooltip of plain text, so a click under it reaches the
+    control there. A label, a hover-only mark and an item inside an open overlay keep
+    `on_hover_text`.
   - Dialog (`dialog_frame`, `dialog_title`, `dialog_buttons`, the New model, New parameter,
     Rebuild model, conversion and unsaved changes dialogs): the theme's window fill inside gray
     600 with 12 points of margin, a small upper-case mono title with a gray 800 hairline under it
     across the dialog, and the buttons in one row at the bottom right, the primary last (blue 700,
     or red 900 under red 200 for Rebuild). Enter presses the primary unless another button took
-    the key or the dialog opened on that frame, and Escape closes through `Modal`. A list of
+    the key or the dialog opened on that frame, and Escape closes through `Modal`. `dialog_title`
+    marks the dialog's AccessKit node modal and makes the title a heading (`heading_caption`, a
+    `caption` of role `Heading` named by its words as written). A list of
     choices is `choice_row`s: full-width radio buttons with a weak description under the name,
     gray 800 under the pointer or the focus, blue 900 with a check and blue 200 words when chosen,
     as an overlay's current item (`list_row_fill` and `paint_list_row_marks` paint both). A list

@@ -10,10 +10,12 @@ dialog of `henad-app-sheet.md`), New grid rule, New node graph (`NEW_NODE_GRAPH`
 too, a menu of henad-graph's `starters()` then `agent_starters()`, labelled by each starter's model
 name), a vertical hairline, Open model and Save model, wrapping in a narrow tab, then Apply at the
 right end as the one primary button (`filled_button`, blue 700), then the code view, the graph
-editor or the sheet editor. Apply is drawn last, so the keyboard path keeps its order. The header's
-second row (`name_row`) holds the model's name (`model_name`) in the body colour, the dot of
-`widgets::unsaved_mark` while `is_unsaved` holds, and the file's name in the weak colour when it is
-not the name. A sheet's row is `sheet::name_row`, with the rename button, Undo, Redo and the menu
+editor or the sheet editor. Apply is drawn last, so the keyboard path keeps its order. Each of
+these buttons shows its tooltip under the pointer and on keyboard focus
+(`FocusTooltip::on_hover_or_focus_text`, `agents/ui.md`). The header's second row (`name_row`)
+holds the model's name (`model_name`) in the body colour, the dot of `widgets::unsaved_mark` while
+`is_unsaved` holds, and the file's name in the weak colour when it is not the name. A sheet's row
+is `sheet::name_row`, with the rename button, Undo, Redo and the menu
 of the model's actions (`henad-app-sheet.md`). A graph keeps Undo and Redo in its canvas toolbar.
 The File menu holds New model, New grid rule, New node graph, Open model and Save model, and the
 Model tab New model beside New grid rule and Edit model. Every site that loads a model into the

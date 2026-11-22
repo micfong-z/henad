@@ -43,7 +43,9 @@ use super::widgets::{
 };
 use super::{SheetEditor, all_properties, properties_of};
 use crate::init::semibold_font;
+use crate::ui::editor::sheet::widgets::FocusTooltip as _;
 use crate::ui::sweep::layout::filled_button;
+pub(crate) use buttons::button_does;
 use buttons::buttons;
 use colors::colors;
 use layout::{Form, ITEM_GAP, line, section, text_cell, text_width};
@@ -645,7 +647,7 @@ fn world(ui: &mut Ui, document: &SheetDocument, pane: &PaneState, pending: &mut 
             ..OverlayItem::default()
         });
         let (response, chosen) = select(ui, "henad_sheet_edges", EDGES_LABEL, words, &items);
-        response.on_hover_text(tooltip);
+        response.on_hover_or_focus_text(tooltip);
         if let Some((edges, _)) = chosen.and_then(|index| options.get(index))
             && *edges != world.edges
         {

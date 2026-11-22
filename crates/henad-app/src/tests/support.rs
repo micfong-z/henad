@@ -664,8 +664,13 @@ pub struct Node {
     pub bounds: Option<egui::Rect>,
     /// Whether the node is disabled.
     pub disabled: bool,
+    /// Whether the node is a modal dialog, which makes the app behind it inert.
+    pub modal: bool,
     /// Accessible name of the nearest dialog that holds the node, empty for a node in no dialog.
     pub dialog: String,
+    /// Name of the nearest menu that holds the node, taken from the node that labels the menu, empty for a node in no
+    /// menu.
+    pub menu: String,
 }
 
 /// Returns the accessible nodes of `update`, each with the name of the nearest dialog that holds it.
@@ -686,17 +691,43 @@ fn nodes_of(update: &egui::accesskit::TreeUpdate) -> Vec<Node> {
             .find_map(|ancestor| dialogs.get(&ancestor))
             .map_or_else(String::new, |label| (*label).to_owned())
     };
+    let texts: std::collections::HashMap<egui::accesskit::NodeId, &str> = update
+        .nodes
+        .iter()
+        .map(|(id, node)| (*id, node.label().or(node.value()).unwrap_or_default()))
+        .collect();
+    let menus: std::collections::HashMap<egui::accesskit::NodeId, &str> = update
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.role() == egui::accesskit::Role::Menu)
+        .map(|(id, node)| {
+            let name = node.label().unwrap_or_else(|| {
+                node.labelled_by()
+                    .first()
+                    .and_then(|label| texts.get(label).copied())
+                    .unwrap_or_default()
+            });
+            (*id, name)
+        })
+        .collect();
+    let menu_of = |id: egui::accesskit::NodeId| {
+        std::iter::successors(parents.get(&id).copied(), |id| parents.get(id).copied())
+            .find_map(|ancestor| menus.get(&ancestor))
+            .map_or_else(String::new, |name| (*name).to_owned())
+    };
     update
         .nodes
         .iter()
         .map(|(id, node)| Node {
             dialog: dialog_of(*id),
+            menu: menu_of(*id),
             // A submenu's button ends with its arrow.
             label: node.label().unwrap_or_default().trim_end_matches(" ⏵").to_owned(),
             value: node.value().unwrap_or_default().to_owned(),
             description: node.description().unwrap_or_default().to_owned(),
             role: node.role(),
             disabled: node.is_disabled(),
+            modal: node.is_modal(),
             bounds: node.bounds().map(bounds),
         })
         .collect()
