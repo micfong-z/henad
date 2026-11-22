@@ -546,6 +546,36 @@ fn two_states_with_one_constant_name_are_refused() {
     assert!(problems[0].1.message.contains("reserved word"), "{problems:#?}");
 }
 
+/// A state labelled `run_id` or `tick` is refused at its table, since exported stats or sweep results write columns of
+/// those names before the stats of the states. `time` and a label in another case are labels of their own.
+#[test]
+fn a_state_labelled_as_a_column_before_the_stats_is_refused() {
+    let labelled = |label: &str| {
+        let mut rule = GridRule::life();
+        let constant = label.to_uppercase();
+        rule.states[0].label = label.to_owned();
+        rule.step = rule.step.replace("DEAD", &constant);
+        rule
+    };
+    for label in ["run_id", "tick"] {
+        let problems = labelled(label)
+            .check_declarations()
+            .err()
+            .unwrap_or_else(|| panic!("a state labelled {label} passed"));
+        assert_eq!(problems.len(), 1, "{problems:#?}");
+        assert_eq!(problems[0].0, Some(RuleDeclaration::State(0)));
+        assert_eq!(
+            problems[0].1.message,
+            format!("state label '{label}' is reserved for the '{label}' column of exported stats or sweep results")
+        );
+    }
+    for label in ["time", "Tick", "Run_id"] {
+        labelled(label)
+            .compile()
+            .unwrap_or_else(|problems| panic!("{label}: {problems:#?}"));
+    }
+}
+
 /// The `Params` block naga lays out holds a 4-byte field per parameter at the offsets the engine writes, and the
 /// bytes the engine writes hold each value in its field.
 #[test]

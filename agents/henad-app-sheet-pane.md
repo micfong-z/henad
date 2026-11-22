@@ -87,13 +87,15 @@ name mints, a refused `ChangeId` leaving the old id), the number at the start (`
 and at most (`AGENT_MAX_NAME`, `AGENT_MAX_TOOLTIP`), each an integer with `integer_up_to`
 (1 to the most, which is 1 to `MAX_AGENTS`, a smaller most lowering the count with it), then the
 table and the refusal. Ground: `GROUND_EMPTY` or the table, then per Number property `marks_row`
-(`MARKS_LABEL`, a select named `marks_name` of `MARKS_NONE`, `MARKS_LARGEST`, `MARKS_ADD_UP`, one
+(`MARKS_LABEL`, with `MARKS_TOOLTIP` on the label and the select, stating the bound of Add up
+(`the_marks_rule_shows_the_bound_of_add_up_on_hover`), a select named `marks_name` of
+`MARKS_NONE`, `MARKS_LARGEST`, `MARKS_ADD_UP`, one
 `SetMarks`, a share of 1 put in when the share is blank, and while marked `KEPT_LEAD` a
 `number_field` named from `kept_place` in `NumberUse::Share`, from 0 to 1 with `KEPT_OUT_OF_RANGE`
 whether typed in the field or in its parameter chip's Number box, and a new parameter made there
-in 0 to 1 (the checker refuses any other share or parameter range), `KEPT_TAIL`,
+in 0 to 1 (the checker warns at any other share or parameter range), `KEPT_TAIL`,
 `a_share_kept_through_its_parameter_chip_stays_from_0_to_1`,
-`a_share_kept_parameter_widened_past_1_is_an_error`) and per States property `blocked_row`
+`a_share_kept_parameter_widened_past_1_warns`) and per States property `blocked_row`
 (`blocked_lead`, a box per state named `blocked_state_name`, `SetBlocked`). Events:
 `EVENTS_EMPTY`, each name a `commit_field` named `event_name_name` with the two checks, × named
 `delete_event_name`, and `EventForm` (`NEW_EVENT`, `EVENT_NAME_FIELD`, Done or

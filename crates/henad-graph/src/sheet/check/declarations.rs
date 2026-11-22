@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::lines::{Context, Draw, ValueType, line_number, value_draws, value_rates};
 use super::{Checker, Place, Thing};
+use crate::check::RESERVED_STAT_LABELS;
 use crate::ids::is_id;
 use crate::limits::{MAX_AGENTS, MAX_GRID_SIDE, MAX_WORLD_SIDE};
 use crate::sheet::SHEET_VERSION;
@@ -14,7 +15,7 @@ use crate::sheet::document::{
 };
 use crate::sheet::format_number;
 use crate::sheet::limits::MAX_SHEET_ID_BYTES;
-use crate::sheet::sentence::{ANY_STATE_ID, Blank, ONE_AGENT_KIND, SHEET_EMPTY};
+use crate::sheet::sentence::{ANY_STATE_ID, Blank, ONE_AGENT_KIND, SHEET_EMPTY, measure_name_reserved};
 
 /// Ids a sheet item cannot take: the words of a formula, the parts of a result and the chips of mine.
 pub(crate) const RESERVED_IDS: [&str; 9] = [
@@ -329,7 +330,7 @@ fn check_property<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, th
             Some(ValueType::Number),
             None,
         );
-        checker.kept_range(&property.kept_per_tick, &context);
+        checker.kept_range(property, &context);
     }
     check_start(checker, property, thing, place);
 }
@@ -450,12 +451,17 @@ fn check_parameters(checker: &mut Checker<'_>) {
     }
 }
 
-/// Checks every measure: what it counts or reads, and over which kind of thing.
+/// Checks every measure: its name, what it counts or reads, and over which kind of thing.
+///
+/// A measure's name is the label of its stat, so it cannot be one of [`RESERVED_STAT_LABELS`].
 fn check_measures(checker: &mut Checker<'_>) {
     let document = checker.document;
     for (index, measure) in document.measures.iter().enumerate() {
         let place = Place::Measure(index);
         let id = measure.id.as_str();
+        if RESERVED_STAT_LABELS.contains(&measure.name.as_str()) {
+            checker.error(measure_name_reserved(&measure.name), &place);
+        }
         if measure.rule == MeasureRule::EventCount {
             match measure.event.as_deref() {
                 Some(event) if checker.events.contains(event) => {}

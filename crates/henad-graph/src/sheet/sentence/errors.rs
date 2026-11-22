@@ -2,7 +2,7 @@
 
 use super::grammar::{number_list, plural, upper_first, word_list};
 
-// Errors on a rate in a button's card or inside a Repeat, and on a second agent kind
+// Errors on a rate in a button's card or inside a Repeat, on a second agent kind and on a measure's name
 
 /// Error on a rate in the card of a button.
 pub const RATE_IN_BUTTON_CARD: &str = "A button's card has no duration. Use a chance instead of a rate.";
@@ -12,6 +12,14 @@ pub const RATE_IN_REPEAT: &str = "a rate cannot be used inside a Repeat";
 
 /// Error on a second kind of agent.
 pub const ONE_AGENT_KIND: &str = "Only one kind of agent per model is supported in this version.";
+
+/// Returns the error on a measure named `name`, a column that exported stats or sweep results write before the
+/// measures.
+///
+/// For example "The measure name time is reserved for the time column of exported stats or sweep results."
+pub fn measure_name_reserved(name: &str) -> String {
+    format!("The measure name {name} is reserved for the {name} column of exported stats or sweep results.")
+}
 
 // Errors on the lines and worlds a sheet can hold that this version cannot run yet
 

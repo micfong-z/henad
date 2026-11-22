@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use henad_core::params::ParamKind;
 
-use super::Checker;
+use super::{Checker, RESERVED_STAT_LABELS};
 use crate::document::{Domain, LaneRole, PassStage, Topology, World};
 use crate::ids::{NodeId, is_id, is_model_id, is_port_segment};
 use crate::limits::{
@@ -562,6 +562,15 @@ fn check_stats(checker: &mut Checker<'_>) {
     for (index, stat) in document.stats.iter().enumerate() {
         let place = places.get(index).cloned();
         check_label(checker, "a stat label", &stat.label, place.clone());
+        if RESERVED_STAT_LABELS.contains(&stat.label.as_str()) {
+            checker.error(
+                format!(
+                    "the stat label '{0}' is reserved for the '{0}' column of exported stats or sweep results",
+                    stat.label
+                ),
+                place.clone(),
+            );
+        }
         if !seen.insert(stat.label.as_str()) {
             checker.error(format!("the file declares the stat '{}' twice", stat.label), place);
         }

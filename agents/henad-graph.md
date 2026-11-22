@@ -194,8 +194,10 @@ host, every other pass on the GPU), configuration (`config.rs`), inputs, rates, 
 across regions, puts, host types, and warns of unreached nodes. `bounds.rs` warns when a Repeat's
 `count` can pass `max`. `cost.rs` sums costs bottom-up with saturating `u64`, functions first in
 call order with Kahn's algorithm, so no step recurses on a hostile file. `passes.rs` holds the
-rules across a pass and across passes, and `declarations.rs` the tables. Every pass needs a
-`domain`, stats passes included, since library 1 has no domain-free reducer. `schedule.rs` orders
+rules across a pass and across passes, and `declarations.rs` the tables. A stat cannot take a
+label of `RESERVED_STAT_LABELS` (`run_id`, `tick`, `time`, compared exactly), the columns that
+exported stats or `series.csv` write before the stats. Every pass needs a `domain`, stats passes
+included, since library 1 has no domain-free reducer. `schedule.rs` orders
 the top of each pass (a region stands for its body) and splits it as the host does into prelude,
 element and post: a node that runs per element and reads a reducer's result of its own pass is an
 error at the input that reads it (`ir-spec.md` section 6.1, reducers end a map pass), and tick-rate

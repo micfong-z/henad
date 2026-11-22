@@ -277,7 +277,9 @@ types an unsuffixed literal falls back to.
   sides up to `MAX_GRID_SIDE`, `MAX_STATES`, `MAX_PARAMS`, parameter ids outside WGSL's reserved
   words, `width`, `height`, `seed`, `tick`, the grid's two and `henad_`, a default within its
   bounds, a positive finite step, choice options that `check_choice_options` passes, percent on
-  an f32 alone, one constant per state outside the template's names and WGSL's reserved words,
+  an f32 alone, no state labelled `run_id` or `tick` (`RESERVED_STATE_LABELS`, compared exactly,
+  the columns exported stats and `series.csv` write before the stats; a rule has no time scale and
+  writes no `time`), one constant per state outside the template's names and WGSL's reserved words,
   an f32 `initial`, one state without a share). Then the text (`MAX_STEP_BYTES`, a line break
   only naga reads, as in the directive check, a template name
   or a `henad_` name declared again, a WGSL predeclared name
@@ -326,6 +328,7 @@ types an unsuffixed literal falls back to.
   `shared_writes_and_barriers_are_refused`, `oversized_arrays_and_text_are_refused`,
   `a_call_chain_past_the_work_limit_is_refused`, `a_param_named_seed_is_refused`,
   `a_parameter_its_kind_cannot_hold_is_refused`, `two_states_with_one_constant_name_are_refused`,
+  `a_state_labelled_as_a_column_before_the_stats_is_refused`,
   `the_params_block_matches_the_naga_layout`, `a_grid_rule_binds_at_most_five_storage_buffers`,
   `a_result_past_the_last_state_is_clamped`, `a_random_rule_draws_a_fresh_stream_each_tick`
   (each tick's Alive count against the stream recomputed on the CPU),

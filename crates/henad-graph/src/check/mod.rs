@@ -30,6 +30,12 @@ use crate::types::{Rate, ValueType};
 use crate::value::InputValue;
 use view::{BodyView, BodyViews, Owner};
 
+/// Stat labels a model cannot take: the names of the columns that exported stats or sweep results write before the
+/// stats, the run id of a sweep's series, the tick, and the time of a model with a time scale.
+///
+/// A label is compared with them exactly, so `Time` is a label of its own.
+pub(crate) const RESERVED_STAT_LABELS: [&str; 3] = ["run_id", "tick", "time"];
+
 /// Result of checking a graph file.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]

@@ -36,6 +36,12 @@ pub(crate) const STEP_SIGNATURE: &str = "fn step_cell(cell: u32, rng: ptr<functi
 /// Engine buffer the rule's text reads, the uniform of its parameters.
 const PARAMS_BUFFER: &str = "params";
 
+/// State labels a rule cannot take, compared exactly: the names of the columns that exported stats or a sweep's
+/// `series.csv` write before the stats. The stat of each state takes the state's label as its column's name.
+///
+/// A rule has no time scale, so no `time` column comes before its stats.
+const RESERVED_STATE_LABELS: [&str; 2] = ["run_id", "tick"];
+
 /// State constants, parameter fields and initial shares that the declarations of a rule fix for its template and its
 /// hooks.
 #[derive(Debug)]
@@ -97,6 +103,12 @@ pub(crate) fn check_declarations(rule: &GridRule) -> Result<Declared, Vec<Declar
         };
         if let Some(message) = control_message(&format!("the label of state {index}"), &state.label) {
             problem(message);
+        }
+        if RESERVED_STATE_LABELS.contains(&state.label.as_str()) {
+            problem(format!(
+                "state label '{0}' is reserved for the '{0}' column of exported stats or sweep results",
+                state.label
+            ));
         }
         let (constant, refusal) = state_constant(&state.label);
         if let Some(message) = refusal {

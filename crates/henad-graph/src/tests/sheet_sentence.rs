@@ -458,6 +458,11 @@ fn every_wording_table_entry_equals_the_final_words() {
             sentence::add_up_limit_note(5_000_000, "ant", "1", "5000000", "To home", "65536"),
         ),
         (
+            "Up to 5000000 ants can each leave a worked-out amount on one cell. A cell of To home adds up at most \
+             65536 in a tick and starts again from 0 past it.",
+            sentence::add_up_worked_out_note(5_000_000, "ant", "To home", "65536"),
+        ),
+        (
             "Each time round of line 1 steers from my Level at the start of the tick, and the steers add up.",
             sentence::steer_in_repeat_note(1, "Level"),
         ),
@@ -647,6 +652,10 @@ fn every_wording_table_entry_equals_the_final_words() {
         (
             "Only one kind of agent per model is supported in this version.",
             fixed(sentence::ONE_AGENT_KIND),
+        ),
+        (
+            "The measure name time is reserved for the time column of exported stats or sweep results.",
+            sentence::measure_name_reserved("time"),
         ),
         ("Repeat is not supported yet.", fixed(sentence::NOT_YET_REPEAT)),
         (
@@ -1303,6 +1312,24 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
             "A button called Clear already exists.",
             sentence::button_name_taken("Clear"),
         ),
+        // Warnings on a share kept each tick outside 0 to 1.
+        (
+            "Each tick multiplies To food by 5, a share greater than 1, so its marks grow every tick.",
+            sentence::kept_outside_note("To food", "5", true),
+        ),
+        (
+            "Each tick multiplies To food by -0.5, a share less than 0.",
+            sentence::kept_outside_note("To food", "-0.5", false),
+        ),
+        (
+            "Trail kept per tick has a Max of 2, a share greater than 1. Each tick multiplies To food by it, so its \
+             marks can grow every tick.",
+            sentence::kept_limits_outside_note("Trail kept per tick", "To food", "2", true),
+        ),
+        (
+            "Trail kept per tick has a Min of -1, a share less than 0. Each tick multiplies To food by it.",
+            sentence::kept_limits_outside_note("Trail kept per tick", "To food", "-1", false),
+        ),
     ]);
     entries
 }
@@ -1793,6 +1820,7 @@ const FIXED_WORDING: &[&str] = &[
     sentence::WALLS_SENTENCE,
     sentence::WRAP_TOOLTIP,
     sentence::SHEET_EMPTY,
+    sentence::MARKS_TOOLTIP,
     sentence::STATES_KIND_DESCRIPTION,
     sentence::NUMBER_KIND_DESCRIPTION,
     sentence::STATE_NAMES_REPEATED,
@@ -1812,6 +1840,17 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
     let mut texts: Vec<String> = FIXED_WORDING.iter().map(|text| (*text).to_owned()).collect();
     texts.push(sentence::help_dialog_name(sentence::LINES_HELP_HEADING));
     texts.push(sentence::name_reserved("Count"));
+    texts.push(sentence::measure_name_reserved("tick"));
+    texts.push(sentence::add_up_worked_out_note(70_000, "ant", "To home", "65536"));
+    for grows in [true, false] {
+        texts.push(sentence::kept_outside_note("To food", "5", grows));
+        texts.push(sentence::kept_limits_outside_note(
+            "Trail kept per tick",
+            "To food",
+            "2",
+            grows,
+        ));
+    }
     texts.push(sentence::empty_field("Health", "a chance"));
     for section in SheetSection::ALL {
         texts.push(sentence::help_dialog_name(section.heading()));

@@ -6,16 +6,16 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use henad_core::diagnostic::DiagnosticSeverity;
 use henad_core::explore::fingerprint::fnv1a64;
 
-use super::sheet_support::{SHEET_HOSTILE, edited_sheet, sheets};
+use super::sheet_support::{SHEET_HOSTILE, VALUES, edited_sheet, sheets};
 use super::support::{mutations, without_each_key};
 use crate::sheet::check::SheetDiagnostic;
 use crate::sheet::limits::MAX_FORMULA_DEPTH;
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{
-    ARROW_COMPARED_WITH_NUMBER, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, KEPT_OUT_OF_RANGE, NOT_RUN_TICK,
-    RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD, SHARE_LIMITS_OUTSIDE,
+    ARROW_COMPARED_WITH_NUMBER, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, NOT_RUN_TICK, RATE_BELOW_ZERO,
+    RATE_IN_BUTTON_CARD,
 };
-use crate::sheet::{ParsedSheet, SheetFile, check};
+use crate::sheet::{ParsedSheet, SheetFile, check, sentence};
 
 /// Kind of a diagnostic a mutation must produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -522,24 +522,136 @@ fn a_chance_parameter_ranging_past_1_is_an_error() {
     assert_reported(&text, Expected::Error, RATE_BELOW_ZERO, "[card.line.l3]");
 }
 
+/// A measure named `run_id`, `tick` or `time` is an error at its table, since exported stats or sweep results write
+/// columns of those names. A name in another case is a name of its own.
+#[test]
+fn a_measure_named_run_id_tick_or_time_is_an_error() {
+    let named = |name: &str| {
+        edited_sheet(
+            "sir.toml",
+            &[(
+                "id = \"infected\"\nname = \"Infected\"\ncolor",
+                &format!("id = \"infected\"\nname = \"{name}\"\ncolor"),
+            )],
+        )
+    };
+    for name in ["run_id", "tick", "time"] {
+        assert_reported(
+            &named(name),
+            Expected::Error,
+            &sentence::measure_name_reserved(name),
+            "[[measure]]\nid = \"infected\"",
+        );
+    }
+    for name in ["Time", "Tick", "time spent"] {
+        let report = ParsedSheet::parse(&named(name)).expect("the sheet reads").check();
+        assert!(!report.has_errors(), "{name}: {:?}", report.diagnostics);
+    }
+}
+
+/// An any or all summary of a value that is not yes or no is an error at the summary's own line, over cells and over
+/// agents, and whether or not a line reads it.
+#[test]
+fn an_any_or_all_of_a_value_that_is_not_yes_or_no_is_an_error_at_its_line() {
+    let values = VALUES.replace(
+        "summary = \"any\", value = { their = \"flag\" }",
+        "summary = \"any\", value = { their = \"level\" }",
+    );
+    assert_ne!(values, VALUES);
+    assert_reported(
+        &values,
+        Expected::Error,
+        "expected yes or no in a slot, got a number",
+        "[card.line.l2]",
+    );
+    let values = VALUES.replace(
+        "summary = \"all\", value = { their = \"flag\" }",
+        "summary = \"all\", value = { their = \"level\" }",
+    );
+    assert_reported(
+        &values,
+        Expected::Error,
+        "expected yes or no in a slot, got a number",
+        "[card.line.l2]",
+    );
+    // A summary of the boids that no line reads.
+    let boids = edited_sheet(
+        "boids.toml",
+        &[(
+            "  { id = \"centre\",",
+            "  { id = \"any_moving\", name = \"any moving\", summary = \"any\", value = { their = \"velocity\" } },\n  \
+             { id = \"centre\",",
+        )],
+    );
+    let error = assert_reported(
+        &boids,
+        Expected::Error,
+        "expected yes or no in a slot, got an arrow",
+        "[card.line.l1]",
+    );
+    assert_eq!(error.line.as_deref(), Some("l1"));
+    let report = ParsedSheet::parse(&boids).expect("the sheet reads").check();
+    assert_eq!(report.errors().count(), 1, "{:?}", report.diagnostics);
+    // A yes or no summed up by any and all stays clean.
+    let report = ParsedSheet::parse(VALUES).expect("the sheet reads").check();
+    assert!(!report.has_errors(), "{:?}", report.diagnostics);
+}
+
 /// The trail kept each tick on the ants' To food, as the starter writes it.
 const TO_FOOD_KEPT: &str = "id = \"to_food\"\nname = \"To food\"\ntype = \"number\"\nmarks = \"largest\"\nkept_per_tick = { param = \"trail_kept_per_tick\" }";
 
+/// A share kept each tick outside 0 to 1 is a warning at its property, as a number and as the range of its parameter.
+/// The lowering multiplies the marks by the share as it is, and the warning says so.
 #[test]
-fn a_share_kept_outside_0_to_1_is_an_error() {
+fn a_share_kept_outside_0_to_1_warns() {
     let kept = |share: &str| {
         let edited = TO_FOOD_KEPT.replace("{ param = \"trail_kept_per_tick\" }", share);
         edited_sheet("ants.toml", &[(TO_FOOD_KEPT, &edited)])
     };
-    for share in ["5", "-0.1", "{ percent = 150 }"] {
-        assert_reported(&kept(share), Expected::Error, KEPT_OUT_OF_RANGE, "[[ground.property]]");
+    for (share, words, grows) in [
+        ("5", "5", true),
+        ("-0.1", "-0.1", false),
+        ("{ percent = 150 }", "150%", true),
+    ] {
+        let text = kept(share);
+        assert_reported(
+            &text,
+            Expected::Warning,
+            &sentence::kept_outside_note("To food", words, grows),
+            "[[ground.property]]\nid = \"to_food\"",
+        );
+        let report = ParsedSheet::parse(&text).expect("the sheet reads").check();
+        assert!(!report.has_errors(), "{share}: {:?}", report.diagnostics);
+        SheetFile::parse(&text).unwrap_or_else(|error| panic!("{share} lowers: {error}"));
     }
     for share in ["1", "0", "{ percent = 99 }"] {
         let report = ParsedSheet::parse(&kept(share)).expect("the sheet reads").check();
         assert!(report.diagnostics.is_empty(), "{share}: {:?}", report.diagnostics);
     }
-    let text = edited_sheet("ants.toml", &[("max = 1\ndefault = 0.999", "max = 2\ndefault = 0.999")]);
-    assert_reported(&text, Expected::Error, SHARE_LIMITS_OUTSIDE, "[[ground.property]]");
+    // The parameter is the share of both trails, and each warns.
+    for (edit, limit, grows) in [
+        (("max = 1\ndefault = 0.999", "max = 2\ndefault = 0.999"), "2", true),
+        (
+            (
+                "min = 0.9\nmax = 1\ndefault = 0.999",
+                "min = -1\nmax = 1\ndefault = 0.999",
+            ),
+            "-1",
+            false,
+        ),
+    ] {
+        let text = edited_sheet("ants.toml", &[edit]);
+        for (property, table) in [("To food", "id = \"to_food\""), ("To home", "id = \"to_home\"")] {
+            assert_reported(
+                &text,
+                Expected::Warning,
+                &sentence::kept_limits_outside_note("Trail kept per tick", property, limit, grows),
+                &format!("[[ground.property]]\n{table}"),
+            );
+        }
+        let report = ParsedSheet::parse(&text).expect("the sheet reads").check();
+        assert!(!report.has_errors(), "{limit}: {:?}", report.diagnostics);
+    }
 }
 
 /// Reads `text`, checks it and walks the report and the relations of every card. A panic fails the test with the text.

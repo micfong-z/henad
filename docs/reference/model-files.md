@@ -84,6 +84,7 @@ The states are numbered from 0 in the order of their tables.
 
 A state's constant is its label in upper snake case, made of the label's ASCII letters and digits: `Dead` gives `DEAD`, and `Infected cells` gives `INFECTED_CELLS`.
 Two states that give the same constant are refused, as is a constant that starts with a digit, names something the template declares, or is a reserved word of WGSL.
+A state cannot be labelled `run_id` or `tick`, since `--export-stats` and a sweep's `series.csv` write columns of those names before the stats.
 
 At tick 0 the engine seeds the cells on the CPU from the run's seed, one draw per cell in row order.
 The states with an `initial` share take their shares of the cells in the order of their tables, and the first state without one takes the rest.
@@ -124,6 +125,7 @@ The parameter with a `tick_unit` is the model's tick length, as a sheet with rat
 It is an `f32` with a `min` above 0 and `hidden = true`, and a file sets `tick_unit` on one parameter at most.
 A month is 30.44 days and a year 365.25 days.
 `--export-stats`, a sweep's `series.csv` and the app's Export tab write a `time` column after `tick`, the tick times the run's tick length, and `--params --json` names the unit under `time`.
+A graph's stat cannot be labelled `run_id`, `tick` or `time`, and a sheet's measure cannot take any of those names, since an export or a sweep's `series.csv` writes columns of those names before the stats.
 A tick length is a parameter like any other in the code identity and the schema, and a sweep over it, such as `--vary tick_length=0.25:1:0.25`, compares one model at several tick lengths.
 The app leaves a hidden parameter out of its Parameters tab and offers it in the Sweep tab, and its tick counter and plots read in the unit of one tick.
 Neither key changes the code of a file that leaves both out.
@@ -428,8 +430,10 @@ Between a change inside a Repeat and a change of the same property outside it, o
 
 The agents can walk on a ground of cells, one per unit of the world.
 A ground property holds states painted at the start, or a number that agents mark with Leave, keeping the largest mark or adding the marks up, and that fades by its share kept per tick, from 0 to 1.
+Each tick multiplies the property by its share as it is, so a share outside 0 to 1, or a parameter whose range leaves 0 to 1, shows a warning at the property.
 A property that adds up its marks rounds each mark to a multiple of 2^-16, so a mark below 2^-17 adds nothing, and one cell adds up at most 65536 in a tick and starts again from 0 past it.
 A Leave of a number or a parameter on such a property warns at its line when the kind's `max_count` agents, all on one cell, can leave more than that in a tick.
+A Leave of any other amount is worked out as the model runs and has no bound, and it warns at its line when `max_count` is 65536 or more.
 A card can pick the open cell around an agent with the most or least of a ground property, or one at random, look at the cell here or ahead, read a property of a place, move to a place, leave a mark and record an event that a measure counts.
 Cells in a blocked state of the ground are not open.
 The first Move to whose condition holds decides, and an agent whose place there is not open stays where it is.

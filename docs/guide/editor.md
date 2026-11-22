@@ -97,6 +97,7 @@ Each state takes a colour, and a few usual names take their usual colour as you 
 The value on the sheet is the one the model keeps.
 **Measures** plots a number worked out from every cell each tick: tick **Plot** beside a state to plot how many cells are in it.
 An average keeps the name it was given, such as "Average of Food", in step with its property: renaming Food to Energy renames it "Average of Energy", and the column of the results with it, until you rename the measure yourself.
+A measure cannot be named run_id, tick or time, the names of the first columns of exported stats and sweep results.
 **Colours** chooses the property that colours the cells in the Viewport.
 **Buttons** adds a button beside the world, either to start again or to run its own short card of lines once on every cell.
 
@@ -249,6 +250,7 @@ A world of agents runs a card over its kind of agent, such as "Each tick, every 
 - **+ Calculate** works out a number, chooses the first of several values whose condition holds, or gives one value for each state of a property.
 - **+ Change** adds a Become, a Set, a Steer of a number or an arrow by a value or towards it, a Keep between that holds a number or an arrow's length inside two bounds, a Move by an arrow or to a cell, a Leave that marks the ground, and a Record that counts an event.
   A ground property whose marks add up takes at most 65536 on one cell in a tick, and a Leave of a fixed amount that the most agents on one cell can take past that shows a warning under its line.
+  A Leave of a worked-out amount shows a warning once the most agents of the kind reach 65536, since nothing bounds the amount.
 - **+ Repeat...** adds a Repeat line, whose lines run that many times each tick.
   Its number of times takes an integer parameter, and **New parameter...** there makes one.
   Each time round reads the world as it was at the start of the tick, and the moves and steers inside it add up.

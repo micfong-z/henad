@@ -96,6 +96,22 @@ pub fn add_up_limit_note(count: u32, thing: &str, amount: &str, total: &str, pro
     )
 }
 
+/// Returns the warning under a Leave of an amount worked out as the model runs, on a ground property that adds up its
+/// marks.
+///
+/// `count` agents of the kind `thing` can all stand on one cell, and a cell of `property` adds up at most `limit` in a
+/// tick.
+///
+/// For example "Up to 5000000 ants can each leave a worked-out amount on one cell. A cell of To home adds up at most
+/// 65536 in a tick and starts again from 0 past it."
+pub fn add_up_worked_out_note(count: u32, thing: &str, property: &str, limit: &str) -> String {
+    format!(
+        "Up to {count} {} can each leave a worked-out amount on one cell. A cell of {property} adds up at most \
+         {limit} in a tick and starts again from 0 past it.",
+        plural(thing)
+    )
+}
+
 /// Returns the note under a draw whose value is the count `count`, where `each` is the count's words after "for each".
 ///
 /// For example "Infected neighbours is a count, not a rate. Did you mean a rate for each infected neighbour?"

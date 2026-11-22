@@ -19,9 +19,10 @@ use henad_graph::sheet::sentence::{
     BY_HEADING_NOTE, CANCEL, COLOR_AGENTS_BY, COLOR_GROUND_BY, COUNT_AGENTS_MEASURE, CREATE_PARAMETER, DONE,
     EVENT_NAME_FIELD, EVENT_NAME_MISSING, EVENTS_EMPTY, GROUND_EMPTY, HEADING_START, KEPT_OUT_OF_RANGE, NEW_PARAMETER,
     NUMBER_KIND, PAINTED, SHARE_LIMITS_OUTSIDE, START_AGAIN_FOR, STATES_KIND, YES_NO_KIND, add_property_name,
-    blocked_state_name, count_agents_measure, event_name_taken, integer_up_to, marks_name, run_once, value_field_name,
+    blocked_state_name, count_agents_measure, event_name_taken, integer_up_to, kept_limits_outside_note, marks_name,
+    run_once, value_field_name,
 };
-use henad_graph::sheet::sentence::{MARKS_ADD_UP, MARKS_LARGEST, MARKS_NONE};
+use henad_graph::sheet::sentence::{MARKS_ADD_UP, MARKS_LARGEST, MARKS_NONE, MARKS_TOOLTIP};
 
 use crate::state::default_values;
 use crate::tests::panes::{
@@ -353,6 +354,25 @@ fn enter_in_picker(harness: &mut Harness, dialog: &str, text: &str) {
     harness.settle();
 }
 
+/// The marks rule of a ground property shows the bound of Add up in its tooltip under the pointer.
+#[test]
+fn the_marks_rule_shows_the_bound_of_add_up_on_hover() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    harness.open_sheet(&starter_document("ants.toml").to_text().expect("the starter writes"));
+    let marks = harness.find(&marks_name("To food"));
+    harness.frame(vec![egui::Event::PointerMoved(marks)]);
+    for _ in 0..60 {
+        harness.frame(Vec::new());
+    }
+    assert!(
+        shows_or_notice(&mut harness, MARKS_TOOLTIP),
+        "{:?}",
+        harness.accessible_texts()
+    );
+}
+
 /// The share kept each tick refuses a number outside 0 to 1 typed in the picker of its parameter chip, and a new
 /// parameter made there starts in 0 to 1 and refuses a range outside it.
 #[test]
@@ -441,7 +461,13 @@ fn a_share_kept_picker_offers_only_parameters_from_0_to_1() {
 
     // The parameter the field holds, widened past 1, leaves the picker too, which still takes a number.
     enter_into(&mut harness, &value_field_name("Trail kept per tick"), "5");
-    assert!(sheet(&harness).has_errors());
+    let widened = sheet(&harness)
+        .document()
+        .parameters
+        .iter()
+        .find(|parameter| parameter.name == "Trail kept per tick")
+        .map(|parameter| parameter.max);
+    assert_eq!(widened, Some(5.0));
     let items = offered(&mut harness);
     assert!(!items.iter().any(|item| item == "Trail kept per tick"), "{items:?}");
     enter_in_picker(&mut harness, "Choose a number", "0.5");
@@ -452,9 +478,9 @@ fn a_share_kept_picker_offers_only_parameters_from_0_to_1() {
 }
 
 /// A value typed for the parameter of the share kept each tick widens the parameter's range past 1, and the sheet
-/// names the error.
+/// shows a warning for each trail that keeps that share and still builds.
 #[test]
-fn a_share_kept_parameter_widened_past_1_is_an_error() {
+fn a_share_kept_parameter_widened_past_1_warns() {
     let Some(mut harness) = Harness::tall() else {
         return;
     };
@@ -467,8 +493,11 @@ fn a_share_kept_parameter_widened_past_1_is_an_error() {
         .find(|parameter| parameter.name == "Trail kept per tick")
         .expect("the parameter");
     assert_eq!(kept.max, 5.0, "the typed value widens the range");
-    assert!(sheet(&harness).has_errors());
-    assert!(shows_or_notice(&mut harness, SHARE_LIMITS_OUTSIDE));
+    assert!(!sheet(&harness).has_errors());
+    for trail in ["To food", "To home"] {
+        let warning = kept_limits_outside_note("Trail kept per tick", trail, "5", true);
+        assert!(shows_or_notice(&mut harness, &warning), "{warning}");
+    }
 }
 
 #[test]

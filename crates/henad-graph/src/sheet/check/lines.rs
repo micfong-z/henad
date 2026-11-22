@@ -17,9 +17,8 @@ use crate::sheet::document::{
 use crate::sheet::edit::unit_in_text;
 use crate::sheet::limits::{ADD_UP_RESOLUTION_SHIFT, MAX_NESTING};
 use crate::sheet::sentence::{
-    self, ANY_STATE_ID, ARROW_COMPARED_WITH_NUMBER, Blank, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE,
-    KEPT_OUT_OF_RANGE, LineSelect, NOT_RUN_TICK, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD, RATE_IN_REPEAT,
-    SHARE_LIMITS_OUTSIDE,
+    self, ANY_STATE_ID, ARROW_COMPARED_WITH_NUMBER, Blank, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, LineSelect,
+    NOT_RUN_TICK, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD, RATE_IN_REPEAT,
 };
 use crate::sheet::writer::format_number;
 
@@ -964,9 +963,12 @@ impl<'a> Checker<'a> {
                 Some(SummaryKind::Count) => {}
                 Some(kind) => {
                     let want = if grid { Blank::NumberProperty } else { Blank::Value };
-                    // The largest and the smallest compare numbers.
-                    let expect =
-                        matches!(kind, SummaryKind::Largest | SummaryKind::Smallest).then_some(ValueType::Number);
+                    // The largest and the smallest compare numbers, and any and all join yes or no values.
+                    let expect = match kind {
+                        SummaryKind::Largest | SummaryKind::Smallest => Some(ValueType::Number),
+                        SummaryKind::Any | SummaryKind::All => Some(ValueType::YesNo),
+                        _ => None,
+                    };
                     self.slot(&summary.value, &looking, want, expect, None, state);
                 }
             }
@@ -1395,34 +1397,52 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Checks the range of the share of a mark kept each tick in `slot`: a literal share from 0 to 1, and a parameter
-    /// whose range stays from 0 to 1.
-    pub(super) fn kept_range(&mut self, slot: &Slot, context: &Context<'a>) {
-        match slot.value() {
-            Some(SheetValue::Literal(literal)) => {
-                if literal.number().is_some_and(|number| !(0.0..=1.0).contains(&number)) {
-                    self.error(KEPT_OUT_OF_RANGE, &context.place);
-                }
-            }
-            Some(SheetValue::Chip(SheetChip::Param(id))) => {
-                let outside = self
-                    .parameters
-                    .get(id.as_str())
-                    .is_some_and(|parameter| parameter.min < 0.0 || parameter.max > 1.0);
-                if outside {
-                    self.error(SHARE_LIMITS_OUTSIDE, &context.place);
-                }
-            }
-            _ => {}
+    /// Warns when the share of a mark kept each tick of `property` leaves 0 to 1: a literal share, or a parameter
+    /// whose Max is above 1 or whose Min is below 0.
+    ///
+    /// The lowering multiplies the property by the share as it is, and the warning says so. Above 1 the marks grow
+    /// every tick. A parameter whose range leaves 0 to 1 at both ends warns of its Max.
+    pub(super) fn kept_range(&mut self, property: &SheetProperty, context: &Context<'a>) {
+        let words = |number: f64| format_number(number).unwrap_or_else(|| number.to_string());
+        let message = match property.kept_per_tick.value() {
+            Some(SheetValue::Literal(literal)) => match literal.number() {
+                Some(number) if !(0.0..=1.0).contains(&number) => Some(sentence::kept_outside_note(
+                    &property.name,
+                    &sentence::literal_words(*literal),
+                    number > 1.0,
+                )),
+                _ => None,
+            },
+            Some(SheetValue::Chip(SheetChip::Param(id))) => self.parameters.get(id.as_str()).and_then(|parameter| {
+                let (limit, grows) = if parameter.max > 1.0 {
+                    (parameter.max, true)
+                } else if parameter.min < 0.0 {
+                    (parameter.min, false)
+                } else {
+                    return None;
+                };
+                Some(sentence::kept_limits_outside_note(
+                    &parameter.name,
+                    &property.name,
+                    &words(limit),
+                    grows,
+                ))
+            }),
+            _ => None,
+        };
+        if let Some(message) = message {
+            self.warning(message, &context.place);
         }
     }
 }
 
 impl Checker<'_> {
-    /// Warns when the Leave `line` on the ground property `id`, which adds up its marks, leaves a fixed amount that the
-    /// most agents of the card's kind, all on one cell, can take past what a cell adds up in a tick.
+    /// Warns when the Leave `line` on the ground property `id`, which adds up its marks, leaves an amount that the most
+    /// agents of the card's kind, all on one cell, can take past what a cell adds up in a tick.
     ///
-    /// A number or a parameter's largest value is a fixed amount. A worked-out amount has no bound to compare.
+    /// A number or a parameter's largest value is a fixed amount, and the warning compares their total with the limit.
+    /// Any other amount is worked out as the model runs and has no bound. It warns once the kind's `max_count` reaches
+    /// the limit.
     fn add_up_limit(&mut self, line: &SheetLine, id: &str, context: &Context<'_>) {
         let Some(property) = self.property_of(id, GROUND_ID) else {
             return;
@@ -1430,28 +1450,37 @@ impl Checker<'_> {
         if property.marks != Some(Marks::AddUp) {
             return;
         }
-        let amount = match line.amount.value() {
-            Some(SheetValue::Literal(literal)) => literal.number(),
-            Some(SheetValue::Chip(SheetChip::Param(parameter))) => {
-                self.parameters.get(parameter.as_str()).map(|parameter| parameter.max)
-            }
-            _ => None,
-        };
-        let Some(amount) = amount.map(f64::abs) else {
-            return;
-        };
         let Some(kind) = self.document.agents.iter().find(|kind| kind.id == context.thing) else {
             return;
         };
         let limit = 2f64.powi(32 - i32::from(ADD_UP_RESOLUTION_SHIFT));
+        let words = |number: f64| format_number(number).unwrap_or_else(|| number.to_string());
+        let thing = sentence::thing_word(self.document, &kind.id);
+        let fixed = match line.amount.value() {
+            None => return,
+            Some(SheetValue::Literal(literal)) => literal.number(),
+            Some(SheetValue::Chip(SheetChip::Param(parameter))) => {
+                self.parameters.get(parameter.as_str()).map(|parameter| parameter.max)
+            }
+            Some(_) => {
+                if f64::from(kind.max_count) >= limit {
+                    let message =
+                        sentence::add_up_worked_out_note(kind.max_count, &thing, &property.name, &words(limit));
+                    self.warning(message, &context.place);
+                }
+                return;
+            }
+        };
+        let Some(amount) = fixed.map(f64::abs) else {
+            return;
+        };
         let total = f64::from(kind.max_count) * amount;
         if total < limit {
             return;
         }
-        let words = |number: f64| format_number(number).unwrap_or_else(|| number.to_string());
         let message = sentence::add_up_limit_note(
             kind.max_count,
-            &sentence::thing_word(self.document, &kind.id),
+            &thing,
             &words(amount),
             &words(total),
             &property.name,

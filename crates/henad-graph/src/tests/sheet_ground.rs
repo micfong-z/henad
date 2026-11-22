@@ -13,6 +13,7 @@ use super::support::{built, context, device_for, params_of, torus};
 use crate::document::FieldCombine;
 use crate::host::{HostLanes, HostValue, HostWorld, RunContext};
 use crate::node::Node;
+use crate::sheet::limits::ADD_UP_RESOLUTION_SHIFT;
 use crate::sheet::{SheetFile, sentence};
 use crate::value::{ConfigValue, InputValue};
 
@@ -268,8 +269,7 @@ fn a_ground_property_that_adds_up_lowers_to_a_sum_and_runs() {
 }
 
 /// A Leave of a fixed amount on a ground property that adds up its marks warns at its line when the most agents of the
-/// kind, all on one cell, can leave more than a cell adds up in a tick, and not when they cannot. A worked-out amount
-/// has no bound to warn about.
+/// kind, all on one cell, can leave more than a cell adds up in a tick, and not when they cannot.
 #[test]
 fn a_fixed_mark_that_can_pass_what_a_cell_adds_up_warns_at_its_line() {
     let adding = sheet_text("ants.toml").replace("marks = \"largest\"", "marks = \"add_up\"");
@@ -284,17 +284,63 @@ fn a_fixed_mark_that_can_pass_what_a_cell_adds_up_warns_at_its_line() {
         "ground_property = \"to_home\"\namount = 1\n",
     );
     let file = lowered(&text);
-    let warnings: Vec<_> = file.warnings().iter().collect();
-    assert_eq!(warnings.len(), 1, "{warnings:#?}");
+    let warnings: Vec<_> = file
+        .warnings()
+        .iter()
+        .filter(|warning| placed_at(warning, &text).starts_with("[card.line.l3]"))
+        .collect();
+    assert_eq!(warnings.len(), 1, "{:#?}", file.warnings());
     assert_eq!(
         warnings[0].message,
         "Up to 5000000 ants can each leave 1 on one cell, 5000000 in all. A cell of To home adds up at most 65536 in a \
          tick and starts again from 0 past it."
     );
-    assert!(placed_at(warnings[0], &text).starts_with("[card.line.l3]"));
     let few = edited(&text, "max_count = 5000000", "max_count = 60000");
     assert!(lowered(&few).warnings().is_empty());
-    assert!(lowered(&adding).warnings().is_empty());
+}
+
+/// A Leave of an amount worked out as the model runs, on a ground property that adds up its marks, warns at its line
+/// when the kind's `max_count` reaches what a cell adds up in a tick, since nothing bounds the amount, and not below.
+#[test]
+fn a_worked_out_mark_warns_when_the_kind_can_reach_what_a_cell_adds_up() {
+    let adding = sheet_text("ants.toml").replace("marks = \"largest\"", "marks = \"add_up\"");
+    let file = lowered(&adding);
+    let warnings = file.warnings();
+    assert_eq!(warnings.len(), 2, "{warnings:#?}");
+    for (warning, (table, property)) in warnings
+        .iter()
+        .zip([("[card.line.l3]", "To home"), ("[card.line.l4]", "To food")])
+    {
+        assert_eq!(
+            warning.message,
+            sentence::add_up_worked_out_note(5_000_000, "ant", property, "65536")
+        );
+        assert!(placed_at(warning, &adding).starts_with(table), "{warning:?}");
+    }
+    let at_limit = edited(&adding, "max_count = 5000000", "max_count = 65536");
+    assert_eq!(lowered(&at_limit).warnings().len(), 2);
+    let below = edited(&adding, "max_count = 5000000", "max_count = 65535");
+    assert!(lowered(&below).warnings().is_empty());
+    let largest = sheet_text("ants.toml");
+    assert!(lowered(largest).warnings().is_empty());
+}
+
+/// The tooltip of the marks rule states the bound of Add up that the lowering writes: a resolution of 2^-16 and at
+/// most 2^16 on one cell in a tick.
+#[test]
+fn the_marks_tooltip_states_the_bound_of_add_up() {
+    let shift = ADD_UP_RESOLUTION_SHIFT;
+    let most = 1_u64 << (32 - u32::from(shift));
+    assert!(
+        sentence::MARKS_TOOLTIP.contains(&format!("at most {most} in a tick")),
+        "{}",
+        sentence::MARKS_TOOLTIP
+    );
+    assert!(
+        sentence::MARKS_TOOLTIP.contains(&format!("in steps of 2^−{shift}")),
+        "{}",
+        sentence::MARKS_TOOLTIP
+    );
 }
 
 /// Ants with a Repeat of 2 holding a Become: the Become's condition is an `or` accumulator of the Repeat, and the

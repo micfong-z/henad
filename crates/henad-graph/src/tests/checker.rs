@@ -617,6 +617,31 @@ in.value = "n1"
     );
 }
 
+/// A stat labelled `run_id`, `tick` or `time` is an error, since exported stats or sweep results write columns of those
+/// names. A label in another case is a label of its own.
+#[test]
+fn a_stat_labelled_run_id_tick_or_time_is_an_error() {
+    let labelled = |label: &str| {
+        format!(
+            "{KEEP_X}\n[[stat]]\nlabel = \"{label}\"\nfrom = \"n2.I\"\ncolor = [255, 0, 0]\n\n[[pass]]\nid = \
+             \"counts\"\nstage = \"stats\"\nkind = \"map\"\ndomain = \"cells\"\n\n[[pass.node]]\nid = \"n1\"\nop = \
+             \"lane.get\"\nconfig.lane = \"c\"\n\n[[pass.node]]\nid = \"n2\"\nop = \"stat.count_by\"\n\
+             config.category = \"health\"\nin.value = \"n1\"\n"
+        )
+    };
+    for label in ["Infected", "Time", "Tick", "Run_id"] {
+        assert_eq!(errors(&labelled(label)), Vec::<String>::new(), "{label}");
+    }
+    for label in ["run_id", "tick", "time"] {
+        assert_eq!(
+            errors(&labelled(label)),
+            [format!(
+                "the stat label '{label}' is reserved for the '{label}' column of exported stats or sweep results"
+            )]
+        );
+    }
+}
+
 #[test]
 fn stats_actions_and_reruns_are_checked() {
     let stats = r#"

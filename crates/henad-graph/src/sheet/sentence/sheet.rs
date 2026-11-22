@@ -806,8 +806,9 @@ pub const GROUND_EMPTY: &str =
 /// Label of how marks left on one cell in one tick combine.
 pub const MARKS_LABEL: &str = "Marks";
 
-/// Tooltip of [`MARKS_LABEL`].
-pub const MARKS_TOOLTIP: &str = "What a cell keeps when several agents leave marks on it in one tick.";
+/// Tooltip of [`MARKS_LABEL`], with the bound of [`MARKS_ADD_UP`].
+pub const MARKS_TOOLTIP: &str = "What a cell keeps when several agents leave marks on it in one tick. With Add up, a \
+                                 cell adds up at most 65536 in a tick, in steps of 2^−16.";
 
 /// Choice of [`MARKS_LABEL`] for a property agents leave nothing on.
 pub const MARKS_NONE: &str = "Not marked";
@@ -836,6 +837,35 @@ pub fn kept_place(property: &str) -> String {
 
 /// Message on a share kept each tick outside 0 to 1.
 pub const KEPT_OUT_OF_RANGE: &str = "Type a share from 0 to 1, such as 0.99.";
+
+/// Returns the warning on the share `share` kept each tick of the ground property `property`.
+///
+/// `share` is greater than 1 when `grows` holds, and less than 0 otherwise. Each tick multiplies the property by the
+/// share as it is. For example "Each tick multiplies To food by 5, a share greater than 1, so its marks grow every
+/// tick."
+pub fn kept_outside_note(property: &str, share: &str, grows: bool) -> String {
+    if grows {
+        format!("Each tick multiplies {property} by {share}, a share greater than 1, so its marks grow every tick.")
+    } else {
+        format!("Each tick multiplies {property} by {share}, a share less than 0.")
+    }
+}
+
+/// Returns the warning on the parameter `parameter` used as the share kept each tick of the ground property `property`.
+///
+/// `limit` is the parameter's Max, greater than 1, when `grows` holds, and its Min, less than 0, otherwise. For example
+/// "Trail kept per tick has a Max of 2, a share greater than 1. Each tick multiplies To food by it, so its marks can
+/// grow every tick."
+pub fn kept_limits_outside_note(parameter: &str, property: &str, limit: &str, grows: bool) -> String {
+    if grows {
+        format!(
+            "{parameter} has a Max of {limit}, a share greater than 1. Each tick multiplies {property} by it, so its \
+             marks can grow every tick."
+        )
+    } else {
+        format!("{parameter} has a Min of {limit}, a share less than 0. Each tick multiplies {property} by it.")
+    }
+}
 
 /// Returns the words before the states of `property` that agents cannot enter, such as "Agents cannot enter cells
 /// whose Ground is".
