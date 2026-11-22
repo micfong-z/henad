@@ -1,10 +1,15 @@
 //! Parameter values written as text, read and checked against their descriptors.
+//!
+//! [`parse_param`] and [`check_param`] apply every rule of a descriptor. A parameter in the
+//! [`ParamFormat::Percent`] format also reads text with a trailing `%`, as `2.5%` for `0.025`, and an `F32`
+//! parameter marked [`ParamDescriptor::integer`] rejects a value with a fractional part. [`parse_value`] and
+//! [`check_value`] apply the rules of the kind alone, and suit a value read back from results.
 
 use std::fmt;
 use std::num::{ParseFloatError, ParseIntError};
 use std::str::ParseBoolError;
 
-use crate::params::{ParamDescriptor, ParamKind, ParamValue};
+use crate::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 
 /// A parameter value that cannot be read, or does not fit its descriptor.
 ///
@@ -67,6 +72,16 @@ pub enum ValueError {
         /// Reason the descriptor rejects the value.
         source: Box<Self>,
     },
+    /// A value with a fractional part, for an `F32` parameter marked [`ParamDescriptor::integer`].
+    NotWhole {
+        /// Number as text.
+        value: String,
+    },
+    /// Text with a trailing `%` for a parameter that is not in the [`ParamFormat::Percent`] format.
+    UnexpectedPercent {
+        /// Text as given.
+        raw: String,
+    },
     /// A value passed to [`check_value`] whose kind differs from the descriptor's kind.
     WrongKind {
         /// Kind that the descriptor accepts.
@@ -116,6 +131,8 @@ impl fmt::Display for ValueError {
             Self::UnknownParam { id, .. } => write!(f, "unknown parameter '{id}'"),
             Self::BadOverride { raw } => write!(f, "invalid --set '{raw}', expected ID=VALUE"),
             Self::Param { id, .. } => write!(f, "parameter '{id}'"),
+            Self::NotWhole { value } => write!(f, "{value} is not an integer"),
+            Self::UnexpectedPercent { raw } => write!(f, "'{raw}' is a percentage, expected a plain number"),
             Self::WrongKind { expected, found, value } => {
                 let example = match expected {
                     ValueKind::F32 => "an f32 value such as 1.0f32",
@@ -159,6 +176,8 @@ pub fn parse_overrides(raw: &[String]) -> Result<Vec<(String, String)>, ValueErr
 
 /// Returns every descriptor's default value, with `overrides` applied in order by id.
 ///
+/// Each override is read by [`parse_param`].
+///
 /// # Errors
 ///
 /// Returns [`ValueError::UnknownParam`] for an id no descriptor has, and [`ValueError::Param`] for a
@@ -183,7 +202,7 @@ pub fn resolve_params(
                     .map(|descriptor| descriptor.id().to_owned())
                     .collect(),
             })?;
-        values[index] = parse_value(descriptors[index].kind(), raw).map_err(|error| ValueError::Param {
+        values[index] = parse_param(&descriptors[index], raw).map_err(|error| ValueError::Param {
             id: id.clone(),
             source: Box::new(error),
         })?;
@@ -192,15 +211,48 @@ pub fn resolve_params(
     Ok(values)
 }
 
+/// Reads `raw` as a value of the parameter `descriptor`, and checks it with [`check_param`].
+///
+/// A parameter in the [`ParamFormat::Percent`] format reads a number with a trailing `%` as that number divided by
+/// 100, so `2.5%` reads as `0.025` does, and reads a number without one as the fraction itself. For a choice, `raw` is
+/// read as an option name first, then as an option index.
+///
+/// # Errors
+///
+/// Returns [`ValueError::UnexpectedPercent`] for a number with a trailing `%` when the parameter is not a percentage,
+/// [`ValueError`] when `raw` cannot be parsed as the kind, and the error of [`check_param`] for a value it rejects.
+pub fn parse_param(descriptor: &ParamDescriptor, raw: &str) -> Result<ParamValue, ValueError> {
+    let kind = descriptor.kind();
+    let value = match (kind, raw.strip_suffix('%')) {
+        (ParamKind::F32 { .. }, Some(number)) if descriptor.format() == ParamFormat::Percent => {
+            ParamValue::F32(read_percent(raw, number.trim_end())?)
+        }
+        (ParamKind::F32 { .. } | ParamKind::U32 { .. }, Some(_)) => {
+            return Err(ValueError::UnexpectedPercent { raw: raw.to_owned() });
+        }
+        _ => read_value(kind, raw)?,
+    };
+    check_param(descriptor, &value)?;
+    Ok(value)
+}
+
 /// Reads `raw` as a value of `kind`, and checks it with [`check_value`].
 ///
-/// For a choice, `raw` is read as an option name first, then as an option index.
+/// For a choice, `raw` is read as an option name first, then as an option index. Note that the rules of a descriptor
+/// beyond its kind, a trailing `%` and a whole number, are left to [`parse_param`].
 ///
 /// # Errors
 ///
 /// Returns [`ValueError`] when `raw` cannot be parsed as the kind, or [`check_value`] rejects it.
 pub fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue, ValueError> {
-    let value = match kind {
+    let value = read_value(kind, raw)?;
+    check_value(kind, &value)?;
+    Ok(value)
+}
+
+/// Reads `raw` as a value of `kind`, without checking it against the bounds or options.
+fn read_value(kind: &ParamKind, raw: &str) -> Result<ParamValue, ValueError> {
+    Ok(match kind {
         ParamKind::F32 { .. } => ParamValue::F32(raw.parse().map_err(|source| ValueError::NotANumber {
             raw: raw.to_owned(),
             source,
@@ -223,12 +275,64 @@ pub fn parse_value(kind: &ParamKind, raw: &str) -> Result<ParamValue, ValueError
                 })?;
             ParamValue::Choice(index)
         }
-    };
-    check_value(kind, &value)?;
-    Ok(value)
+    })
+}
+
+/// Returns `number`, the text of percentage `raw` without its `%` sign, as a fraction.
+///
+/// The decimal exponent moves two places, so the fraction rounds to `f32` once, as the fraction written out would.
+fn read_percent(raw: &str, number: &str) -> Result<f32, ValueError> {
+    let percent: f32 = number.parse().map_err(|source| ValueError::NotANumber {
+        raw: raw.to_owned(),
+        source,
+    })?;
+    Ok(fraction_text(number)
+        .and_then(|text| text.parse().ok())
+        .unwrap_or(percent / 100.0))
+}
+
+/// Returns `percent` as a fraction, with the decimal exponent of its shortest text moved two places.
+///
+/// A range written in percent reaches the same `f64` as the range written as fractions.
+pub(crate) fn percent_fraction(percent: f64) -> f64 {
+    fraction_text(&percent.to_string())
+        .and_then(|text| text.parse().ok())
+        .unwrap_or(percent / 100.0)
+}
+
+/// Returns the decimal number `number` divided by 100, as text with its exponent lowered by two, or `None` for text
+/// whose exponent does not read.
+fn fraction_text(number: &str) -> Option<String> {
+    match number.find(['e', 'E']) {
+        Some(at) => {
+            let exponent: i32 = number[at + 1..].parse().ok()?;
+            Some(format!("{}e{}", &number[..at], exponent.checked_sub(2)?))
+        }
+        None => Some(format!("{number}e-2")),
+    }
+}
+
+/// Checks `value` against the type, bounds and options of `descriptor`, and against its [`integer`] mark.
+///
+/// # Errors
+///
+/// Returns the error of [`check_value`], and [`ValueError::NotWhole`] for a value with a fractional part when the
+/// parameter is marked [`integer`].
+///
+/// [`integer`]: ParamDescriptor::integer
+pub fn check_param(descriptor: &ParamDescriptor, value: &ParamValue) -> Result<(), ValueError> {
+    check_value(descriptor.kind(), value)?;
+    match value {
+        ParamValue::F32(number) if descriptor.is_integer() && number.fract() != 0.0 => Err(ValueError::NotWhole {
+            value: number.to_string(),
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// Checks `value` against the type, bounds and options of `kind`.
+///
+/// Note that the [`integer`](ParamDescriptor::integer) mark of a descriptor is left to [`check_param`].
 ///
 /// # Errors
 ///
@@ -316,7 +420,10 @@ fn plain_text(value: &ParamValue) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ValueError, ValueKind, check_value, format_value, parse_overrides, parse_value, resolve_params};
+    use super::{
+        ValueError, ValueKind, check_param, check_value, format_value, parse_overrides, parse_param, parse_value,
+        resolve_params,
+    };
     use crate::helpers::{bool_param, f32_param, u32_param};
     use crate::params::{ChoiceOptions, ParamDescriptor, ParamKind, ParamValue};
 
@@ -570,5 +677,117 @@ mod tests {
         let wrap = bool_param("wrap", "Wrap", true);
         let error = check_value(wrap.kind(), &ParamValue::Choice(0)).expect_err("a choice for a bool");
         assert_eq!(error.to_string(), "expected a bool value, got the choice 0");
+    }
+
+    /// A percentage reads with its `%` sign as the fraction written out does, and without it as the fraction itself.
+    #[test]
+    fn a_percentage_reads_with_or_without_its_sign() {
+        let share = f32_param("share", "Share", 0.01, 0.0, 1.0, None).percent();
+        for (text, fraction) in [
+            ("1%", "0.01"),
+            ("2.5%", "0.025"),
+            ("0.3%", "0.003"),
+            ("1e1%", "0.1"),
+            ("100%", "1"),
+            ("7 %", "0.07"),
+            ("0.025", "0.025"),
+        ] {
+            assert_eq!(
+                parse_param(&share, text),
+                parse_param(&share, fraction),
+                "{text} reads as {fraction}"
+            );
+        }
+        assert!(matches!(
+            parse_param(&share, "150%"),
+            Err(ValueError::OutOfRange { .. })
+        ));
+        let error = parse_param(&share, "half%").expect_err("not a number");
+        assert!(
+            matches!(&error, ValueError::NotANumber { raw, .. } if raw == "half%"),
+            "{error:?}"
+        );
+        assert!(
+            parse_value(share.kind(), "1%").is_err(),
+            "the kind alone does not know the format"
+        );
+    }
+
+    /// A percentage reads an exponent, a negative number and spaces before its sign, and refuses a sign alone or twice.
+    #[test]
+    fn a_percentage_reads_its_edge_cases() {
+        let shift = f32_param("shift", "Shift", 0.0, -1.0, 1.0, None).percent();
+        for (text, fraction) in [
+            ("1e2%", "1"),
+            ("-2.5%", "-0.025"),
+            ("-100%", "-1"),
+            ("33.3%", "0.333"),
+            ("0.1 %", "0.001"),
+        ] {
+            assert_eq!(parse_param(&shift, text), parse_param(&shift, fraction), "{text}");
+            assert!(parse_param(&shift, text).is_ok(), "{text}");
+        }
+        for text in ["%", "2.5%%", "e2%", "1e%"] {
+            let error = parse_param(&shift, text).expect_err("not a number");
+            assert!(
+                matches!(&error, ValueError::NotANumber { raw, .. } if raw == text),
+                "{text}: {error:?}"
+            );
+        }
+        assert!(matches!(
+            parse_param(&shift, "-101%"),
+            Err(ValueError::OutOfRange { .. })
+        ));
+    }
+
+    /// A `%` sign on a parameter that is not a percentage is refused, and `--set` names the parameter.
+    #[test]
+    fn a_percent_sign_on_a_plain_parameter_is_refused() {
+        for raw in ["num_agents=5%", "cohesion=50%"] {
+            let error = resolve(raw).expect_err("neither parameter is a percentage");
+            let id = raw.split('=').next().unwrap_or_default();
+            let value = raw.split('=').nth(1).unwrap_or_default();
+            assert_eq!(
+                message(&error),
+                format!("parameter '{id}': '{value}' is a percentage, expected a plain number")
+            );
+        }
+    }
+
+    /// A parameter marked integer rejects a fraction from text and from a value, and takes a whole number in either
+    /// form. The kind alone accepts the fraction.
+    #[test]
+    fn an_integer_parameter_rejects_a_fraction() {
+        let birth = f32_param("birth", "Birth", 3.0, -1.0, 8.0, Some(1.0)).integer();
+        assert!(birth.is_integer());
+        for (text, value) in [("-1", -1.0), ("3", 3.0), ("3.0", 3.0), ("8", 8.0)] {
+            assert_eq!(parse_param(&birth, text), Ok(ParamValue::F32(value)), "{text}");
+        }
+        assert_eq!(
+            parse_param(&birth, "2.5"),
+            Err(ValueError::NotWhole {
+                value: "2.5".to_owned()
+            })
+        );
+        assert_eq!(
+            check_param(&birth, &ParamValue::F32(-0.5)).map_err(|error| error.to_string()),
+            Err("-0.5 is not an integer".to_owned())
+        );
+        assert!(matches!(
+            check_param(&birth, &ParamValue::F32(9.0)),
+            Err(ValueError::OutOfRange { .. })
+        ));
+        assert_eq!(check_value(birth.kind(), &ParamValue::F32(2.5)), Ok(()));
+        let overrides = parse_overrides(&["birth=2.5".to_owned()]).expect("one pair");
+        let error = resolve_params(std::slice::from_ref(&birth), &overrides).expect_err("2.5 is not whole");
+        assert_eq!(message(&error), "parameter 'birth': 2.5 is not an integer");
+
+        let plain = f32_param("birth", "Birth", 3.0, -1.0, 8.0, Some(1.0));
+        assert!(!plain.is_integer());
+        assert_eq!(parse_param(&plain, "2.5"), Ok(ParamValue::F32(2.5)));
+        assert!(
+            !u32_param("size", "Size", 1, 0, 9).integer().is_integer(),
+            "only an f32 takes the mark"
+        );
     }
 }

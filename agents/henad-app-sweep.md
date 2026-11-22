@@ -13,7 +13,8 @@ for the swept entry: the Editor holds a model `EditorPanel::holds_unapplied` (ne
 since Apply, or refused) that the entry was not built from: a graph whose `code_hash` differs, or a
 sheet or grid rule whose text is not the entry's author text, or else its code.
 `draft/` is pure and unit-tested: a `SweepDraft` per model holds the builder's fields as typed,
-level text read by `LevelSpec::parse`, and converts to a `SweepSpec` (the Parameters panel values
+level text read by `LevelSpec::parse` (`1%` and `1%:5%:1%` for a percentage, as `--vary`
+reads them), and converts to a `SweepSpec` (the Parameters panel values
 fill every parameter it does not vary) and back, TOML through
 `henad_explore::spec_file::SpecFile`. "One at a time" writes one factorial block per varied
 parameter or action tick, each other varied parameter pinned to its panel value as a one-value
@@ -65,7 +66,12 @@ reserves before any note comes, the `Reveal` that opens a section and scrolls to
 `ISSUE_DELAY`, the time a focused text field holds back the issue of its text. `builder.rs`
 draws the Design, Actions, Replicates and seeds, Run length, Outputs and Execution sections, and
 `parameters.rs` the parameter rows, the values editor and the options menu, each writing the
-row's `--vary` text, a list without spaces. `SweepSession::start` refuses a sweep of the Editor's
+row's `--vary` text, a list without spaces. The values editor reads text in percent as its
+fractions (`RangeFields::of`, `EditorSegment::of`), and a switch of form writes the fractions
+(`the_editor_reads_percent_text_as_its_fractions`). The quick fills, the switches and the fields
+work from the row's descriptor: a `u32` or an `f32` marked integer (`takes_integers`) writes whole
+numbers (`number_text`, `quarter_step`), and its fields drag in whole steps
+(`an_integer_f32_fills_whole_numbers`). `SweepSession::start` refuses a sweep of the Editor's
 sheet (`editor_sheet_of`) on native when a
 config of its plan, or a search's fixed values, is past a work budget (`sheet_capacity_refusal`):
 the

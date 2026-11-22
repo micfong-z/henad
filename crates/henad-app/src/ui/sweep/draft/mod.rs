@@ -34,7 +34,7 @@ use henad_explore::search_run::SearchPlan;
 use crate::ui::results::labels::action_label;
 pub use levels::{
     batch_estimate, both_ends_fill, generation_estimate, kind_bounds, levels_example, number_text, parse_levels,
-    quarter_step, whole_range_text,
+    quarter_step, takes_integers, whole_range_text,
 };
 use levels::{default_levels_text, table_row_count};
 pub use messages::comparator_words;
@@ -677,6 +677,10 @@ impl LevelPreview {
                 max: bound_text(max),
             },
             &FactorDomain::WholeNumbers { min, max } => Self::Drawn {
+                min: bound_text(min as f64),
+                max: bound_text(max as f64),
+            },
+            &FactorDomain::IntegerF32 { min, max } => Self::Drawn {
                 min: bound_text(min as f64),
                 max: bound_text(max as f64),
             },
@@ -1560,6 +1564,25 @@ mod tests {
             }),
             "a range of any length reads, and the check caps what it lists"
         );
+        for text in ["1%:5%:1%", " 1% : 5% ", "1%,2.5%"] {
+            assert_eq!(
+                parse_levels(text).ok(),
+                LevelSpec::parse(text).ok(),
+                "{text} reads as --vary reads it"
+            );
+        }
+        assert_eq!(
+            parse_levels("1%:5%:1%"),
+            Ok(LevelSpec::PercentRange {
+                min: 1.0,
+                max: 5.0,
+                step: Some(1.0)
+            })
+        );
+        assert_eq!(
+            parse_levels("1%:5"),
+            Err("'1%:5' has % after some parts only. Enter % after every part or no part.".to_owned())
+        );
     }
 
     #[test]
@@ -1845,6 +1868,34 @@ mod tests {
             values.iter().all(|value| value.ends_with('%')),
             "a percentage reads as one: {values:?}"
         );
+    }
+
+    /// A percentage's values field reads `1%` and `1%:3%:1%` as the fractions they stand for, as `--vary` does, and
+    /// a `%` on another parameter is an issue on that row.
+    #[test]
+    fn a_percentage_takes_its_sign_in_the_values_field() {
+        let entry = sir();
+        let schema = entry.schema();
+        let initial = entry.param_index("initial_infected_pct").expect("SIR declares it");
+        let previews = |text: &str| {
+            let mut draft = SweepDraft::new(&schema);
+            draft.factors[initial].vary = true;
+            draft.factors[initial].levels_text = text.to_owned();
+            assert!(draft.check(&schema, &panel_values(&entry)).is_ok(), "{text}");
+            draft.level_previews(&schema).0[initial].clone()
+        };
+        assert_eq!(previews("1%, 2%, 3%"), previews("0.01, 0.02, 0.03"));
+        assert_eq!(previews("1%:3%:1%"), previews("0.01:0.03:0.01"));
+
+        let mut draft = SweepDraft::new(&schema);
+        draft.factors[INFECTION_RATE].vary = true;
+        draft.factors[INFECTION_RATE].levels_text = "10%, 20%".to_owned();
+        let issues = draft
+            .check(&schema, &panel_values(&entry))
+            .expect_err("the infection rate is not a percentage");
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].site, DraftSite::Factor(INFECTION_RATE));
+        assert_eq!(issues[0].message, "'10%' is a percentage, but this parameter is not");
     }
 
     #[test]
@@ -2599,7 +2650,7 @@ mod tests {
             "the editor and the Plan read the range as typed"
         );
         assert_eq!(EditorSegment::of("1:5000000", true), EditorSegment::Drawn);
-        let width = schema.params[0].kind();
+        let width = &schema.params[0];
         assert_eq!(
             segment_text(EditorSegment::Drawn, "100:3000000", width),
             "100:3000000",
@@ -2689,7 +2740,7 @@ mod tests {
     fn an_integer_levels_example_resolves_as_vary_text() {
         for (min, max) in [(1, 2), (0, 1), (5, 5), (0, 100), (1, 7)] {
             let descriptor = henad_core::helpers::u32_param("count", "Count", min, min, max);
-            let example = super::levels_example(descriptor.kind());
+            let example = super::levels_example(&descriptor);
             let factor = FactorSpec {
                 target: henad_core::explore::factor::FactorTarget::Param("count".to_owned()),
                 levels: LevelSpec::parse(&example).expect("the example parses"),

@@ -25,7 +25,9 @@ refused command changes nothing, and its message (capitalised, with a full stop)
 `GraphStatus` whose `warning` makes it a warning notice. A copy's "Copied N nodes." is a note
 (`GraphStatus::note`), an information notice. `world.rs` leaves a hidden parameter out, and its
 world table and parameter defaults set `clamp_existing_to_range(false)`, so a value the file holds
-outside a range is drawn as it is and left to the checker.
+outside a range is drawn as it is and left to the checker. The fields of an `f32` marked integer
+drag in whole steps, and a typed fraction is rounded (`f32_field`), since the file reader refuses
+a fraction beside `integer = true`.
 `refresh` checks again, rebuilds `issues` and reopens the first pass when the open one is gone.
 The *code revision* counts changes of `GraphFile::code`'s hash, which `refresh` compares, so a
 `Move` or Arrange changes the revision and not the code revision. `preview_key` and the `program`

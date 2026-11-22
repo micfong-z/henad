@@ -426,7 +426,14 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
         _ => anyhow!(error),
     })?;
 
-    let file = files.iter().find(|file| file.id() == entry.id());
+    // Files are in the order of their paths, and the file that runs is the one declaring the entry's id.
+    let model_file = args
+        .model_file
+        .iter()
+        .zip(&files)
+        .find(|(_, file)| file.id() == entry.id())
+        .map(|(path, file)| (path.as_path(), file));
+    let file = model_file.map(|(_, file)| file);
     // A file whose model does not run could be the one the user meant to run, under a familiar id such as `sir`.
     if !args.json {
         let paths = args.model_file.iter().zip(&files);
@@ -444,7 +451,7 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
         Mode::Params => print!("{}", params_text(entry)),
         Mode::Explore => {
             let provenance = provenance(host, arguments);
-            return explore::run(args, entry, file, gpu_ctx.as_ref(), spec, provenance);
+            return explore::run(args, entry, model_file, gpu_ctx.as_ref(), spec, provenance);
         }
         Mode::Single(run) => return run_single(entry, file, args, run, gpu_ctx.as_ref(), runtime).map(|()| 0),
         // Each of these returned above.
@@ -605,8 +612,9 @@ fn params_text(entry: &ModelEntry) -> String {
         };
         // A hidden parameter is kept off the Parameters panel, and `--set` and a sweep reach it as any other.
         let hidden = if desc.is_hidden() { " hidden" } else { "" };
+        let integer = if desc.is_integer() { " integer" } else { "" };
         text.push_str(&format!(
-            "  index={index} id={id} {kind} apply={apply}{format}{hidden} label=\"{label}\"\n"
+            "  index={index} id={id} {kind} apply={apply}{format}{hidden}{integer} label=\"{label}\"\n"
         ));
     }
     text

@@ -9,7 +9,7 @@ use henad_compute::entry::{ModelEntry, ModelSet};
 use henad_compute::simulation::{RunSetup, SetupError};
 use henad_core::action::{ActionDescriptor, Schedule, Scheduled};
 use henad_core::explore::fingerprint::schema_hash;
-use henad_core::explore::value::check_value;
+use henad_core::explore::value::check_param;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 
 use super::{AppState, setup_message};
@@ -271,7 +271,7 @@ pub fn remap_values(
             if *value == previous_descriptor.kind().default_value() {
                 return descriptor.kind().default_value();
             }
-            carry_value(previous_descriptor.kind(), value, descriptor.kind()).unwrap_or_else(|| {
+            carry_value(previous_descriptor.kind(), value, descriptor).unwrap_or_else(|| {
                 defaulted += 1;
                 descriptor.kind().default_value()
             })
@@ -280,11 +280,11 @@ pub fn remap_values(
     RemappedValues { values, defaulted }
 }
 
-/// Returns `value`, a value of a parameter of kind `previous`, as a value of a parameter of kind `current`, or `None`
-/// when `current` rejects it.
+/// Returns `value`, a value of a parameter of kind `previous`, as a value of the parameter `current`, or `None` when
+/// `current` rejects it.
 ///
 /// A choice keeps the name of its option, at that option's index in `current`.
-fn carry_value(previous: &ParamKind, value: &ParamValue, current: &ParamKind) -> Option<ParamValue> {
+fn carry_value(previous: &ParamKind, value: &ParamValue, current: &ParamDescriptor) -> Option<ParamValue> {
     if let (
         ParamKind::Choice {
             options: previous_options,
@@ -295,12 +295,12 @@ fn carry_value(previous: &ParamKind, value: &ParamValue, current: &ParamKind) ->
             options: current_options,
             ..
         },
-    ) = (previous, value, current)
+    ) = (previous, value, current.kind())
     {
         let name = previous_options.get(*index)?;
         return current_options.position(name).map(ParamValue::Choice);
     }
-    check_value(current, value).is_ok().then(|| value.clone())
+    check_param(current, value).is_ok().then(|| value.clone())
 }
 
 /// Returns the entries of `schedule` carried to `actions` by action id, each at the index of its action, with the

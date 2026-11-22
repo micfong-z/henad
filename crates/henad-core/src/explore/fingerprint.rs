@@ -15,7 +15,8 @@ pub use crate::fnv::{Fnv1a64, fnv1a64};
 /// Returns the hash of a model's parameter ids, kinds, bounds, defaults and options, its stat labels and its action
 /// ids.
 ///
-/// Labels shown in the UI, colours, slider steps, display formats and whether a parameter is hidden are left out.
+/// Labels shown in the UI, colours, slider steps, display formats and whether a parameter is hidden are left out. An
+/// `F32` parameter marked [`integer`](crate::params::ParamDescriptor::integer) hashes as a kind of its own.
 pub fn schema_hash(schema: &ModelSchema<'_>) -> u64 {
     let mut hasher = Fnv1a64::new();
     hasher.write_str("henad.schema.1");
@@ -25,7 +26,7 @@ pub fn schema_hash(schema: &ModelSchema<'_>) -> u64 {
         hasher.write_str(param.id());
         match param.kind() {
             ParamKind::F32 { min, max, default, .. } => {
-                hasher.write(&[0]);
+                hasher.write(&[if param.is_integer() { 4 } else { 0 }]);
                 for number in [min, max, default] {
                     hasher.write_u64(u64::from(number.to_bits()));
                 }
@@ -247,7 +248,8 @@ fn write_factor(hasher: &mut Fnv1a64, factor: &FactorSpec) {
             hasher.write_str(name);
         }
     }
-    match &factor.levels {
+    // A range in percent plans the levels of the range of its fractions, and hashes as that range.
+    match &factor.levels.to_fractions() {
         LevelSpec::Values(values) => {
             hasher.write(&[0]);
             hasher.write_u64(values.len() as u64);
@@ -255,7 +257,7 @@ fn write_factor(hasher: &mut Fnv1a64, factor: &FactorSpec) {
                 hasher.write_str(value);
             }
         }
-        &LevelSpec::Range { min, max, step } => {
+        &(LevelSpec::Range { min, max, step } | LevelSpec::PercentRange { min, max, step }) => {
             hasher.write(&[1]);
             hasher.write_f64(min);
             hasher.write_f64(max);
@@ -554,5 +556,46 @@ mod tests {
             PatternAxis::bounded("Infected:argmax", 0.0, 50.0, 20),
         );
         assert_ne!(search_hash(0x1234, 2, &automatic), search_hash(0x1234, 2, &bounded));
+    }
+
+    /// A parameter marked integer hashes apart from the same `f32` unmarked, and an unmarked model keeps its hash.
+    #[test]
+    fn an_integer_parameter_hashes_apart_from_a_plain_one() {
+        let plain = params();
+        let mut integer = params();
+        integer[0] = f32_param("infection_rate", "Infection rate", 0.0, -2.0, 8.0, Some(1.0)).integer();
+        let mut unmarked = params();
+        unmarked[0] = f32_param("infection_rate", "Infection rate", 0.0, -2.0, 8.0, Some(1.0));
+        assert_ne!(schema_hash(&schema(&integer)), schema_hash(&schema(&unmarked)));
+        assert_ne!(schema_hash(&schema(&integer)), schema_hash(&schema(&plain)));
+        let mut marked_u32 = params();
+        marked_u32[1] = marked_u32[1].clone().integer();
+        assert_eq!(
+            schema_hash(&schema(&marked_u32)),
+            schema_hash(&schema(&plain)),
+            "a u32 ignores the mark"
+        );
+    }
+
+    /// A search over a range written in percent hashes as the same range written as fractions, which plans the same
+    /// levels.
+    #[test]
+    fn a_percent_range_hashes_as_its_fractions() {
+        let mut fractions = pattern_search(
+            PatternAxis::automatic("Infected:max", 32),
+            PatternAxis::automatic("Infected:argmax", 20),
+        );
+        let mut percents = fractions.clone();
+        fractions.space[0].levels = LevelSpec::Range {
+            min: 0.003,
+            max: 0.05,
+            step: Some(0.001),
+        };
+        percents.space[0].levels = LevelSpec::PercentRange {
+            min: 0.3,
+            max: 5.0,
+            step: Some(0.1),
+        };
+        assert_eq!(search_hash(1, 2, &percents), search_hash(1, 2, &fractions));
     }
 }

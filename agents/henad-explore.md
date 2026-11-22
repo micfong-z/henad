@@ -20,13 +20,20 @@ when it can. A dry run stops after the probes. `spec_file.rs` is the TOML form o
 does, as do `henad_cli::run`, the app's entry points and `assert_set_conforms`, and the test
 helpers `support::sweep` and `sweep_with` install it before each sweep. Every table is
 `deny_unknown_fields`. A param value stays the text `--set` takes, and a spec file and a command
-line hand `parse_value` the same text. A `table` block's `file` is
+line hand `parse_param` the same text, `1%` included. A `range` table holds numbers, and
+`FactorTable::from` writes a `PercentRange` as its fractions. `run_spec`, `plan_spec`,
+`SweepRun::start`, `resume_directory` and `SearchPlan::new` first pass the spec through
+`sweep::with_fractions` (`sweep/percent.rs`), which writes a percentage's fixed values, listed values
+and ranges in percent as fractions, so the manifest's spec and the search hash hold `0.01` for `1%`
+(`a_search_in_percent_resumes_from_the_fractions`). `argv`, `spec_source` and a design table keep
+the text as written, and text that does not read stays for the plan to reject. A `table` block's `file` is
 read relative to the spec file, and only a table design's. A path that is absolute or holds `.` or
 `..` is refused (`SpecFileError::TablePath`). The manifest's copy of the spec carries the table
 inline as `table_text`, and the writer emits `design_seed` for a sampled design alone. `specs/`
 holds real spec files and a design table. The docs include each spec by `--8<--` region and the
 table whole, and a test plans the specs. `schema.rs` (`schema_json`) is the `--params --json`
-object, also embedded in the manifest. `cursor.rs` (`RunCursor`) owns one CPU run from its build
+object, also embedded in the manifest. An `f32` marked integer adds `"integer": true`, and no other
+parameter writes the key. `cursor.rs` (`RunCursor`) owns one CPU run from its build
 to its `RunOutcome`. `advance(max_steps)` steps it a slice at a time and takes every sample due on
 the way, `prepare_view` then `stats()`. It fires tick 0's actions before the first step and each
 later tick's after the step that reaches it (`Fire::AfterStep`), through `Schedule::run_due`. The

@@ -556,17 +556,24 @@ fn levels_summary(text: &str, count: Option<LevelCount>, search: bool) -> String
             values.first().map_or("", String::as_str),
             values.last().map_or("", String::as_str)
         ),
-        LevelSpec::Range { min, max, step: None } if search => format!("any value from {min} to {max}"),
-        LevelSpec::Range { min, max, step: None } => format!("{min} to {max}, drawn"),
-        LevelSpec::Range {
-            min,
-            max,
-            step: Some(_),
-        } => match count {
-            Some(LevelCount::Listed(count)) => format!("{min} to {max}, {count} {}", plural(count as u64, "value")),
-            _ => format!("{min} to {max}"),
-        },
+        LevelSpec::Range { min, max, step } => range_summary(&min.to_string(), &max.to_string(), step, count, search),
+        LevelSpec::PercentRange { min, max, step } => {
+            range_summary(&format!("{min}%"), &format!("{max}%"), step, count, search)
+        }
         LevelSpec::All => "all options".to_owned(),
+    }
+}
+
+/// Returns a short text of the range from `min` to `max`, `count` values when counted, for a search when `search` is
+/// set.
+fn range_summary(min: &str, max: &str, step: Option<f64>, count: Option<LevelCount>, search: bool) -> String {
+    match (step, count) {
+        (None, _) if search => format!("any value from {min} to {max}"),
+        (None, _) => format!("{min} to {max}, drawn"),
+        (Some(_), Some(LevelCount::Listed(count))) => {
+            format!("{min} to {max}, {count} {}", plural(count as u64, "value"))
+        }
+        (Some(_), _) => format!("{min} to {max}"),
     }
 }
 

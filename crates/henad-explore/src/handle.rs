@@ -291,7 +291,8 @@ impl SweepRun {
     /// [`GpuContext::with_runtime_info`] attaches it.
     ///
     /// Planning happens before this returns. The probe build and the runs happen after it, on native on the
-    /// sweep's own thread and in a browser in [`Self::update`].
+    /// sweep's own thread and in a browser in [`Self::update`]. A value or range of a percentage written in percent,
+    /// as in `1%`, is planned and recorded in the manifest as its fraction.
     ///
     /// # Errors
     ///
@@ -305,6 +306,7 @@ impl SweepRun {
         output: SweepOutput,
         options: SweepRunOptions,
     ) -> Result<Self, SweepStartError> {
+        let spec = crate::sweep::with_fractions(spec, entry.param_descriptors());
         let planned = plan_for_start(&entry, &spec)?;
         match &output {
             SweepOutput::Memory => {}
@@ -361,6 +363,7 @@ impl SweepRun {
         let spec = SpecFile::from_json(&manifest.spec)
             .and_then(SpecFile::into_spec)
             .map_err(SweepStartError::Spec)?;
+        let spec = crate::sweep::with_fractions(spec, entry.param_descriptors());
         let planned = plan_for_start(&entry, &spec)?;
         let shard = manifest.shard.to_shard().ok_or(SweepStartError::Shard)?;
         let options = SweepRunOptions {

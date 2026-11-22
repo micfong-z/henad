@@ -16,7 +16,7 @@ pub(super) fn value_widget(
     match (descriptor.kind(), value) {
         (ParamKind::F32 { min, max, step, .. }, ParamValue::F32(number)) => {
             let before = *number;
-            let mut slider = f32_slider(number, *min, *max, *step).text(text);
+            let mut slider = f32_slider(number, *min, *max, parameter_slider_step(descriptor, *step)).text(text);
             if descriptor.format() == ParamFormat::Percent {
                 slider = as_percent(slider, *step);
             }
@@ -59,6 +59,18 @@ fn f32_slider(value: &mut f32, min: f32, max: f32, step: Option<f32>) -> egui::S
     match step {
         Some(step) => slider.step_by(decimal_value(step)),
         None => slider,
+    }
+}
+
+/// Returns the step of the slider of parameter `descriptor`, whose kind declares `step`.
+///
+/// An `f32` marked integer steps by its own step rounded to a whole number, or by 1, so the slider holds whole numbers
+/// alone.
+fn parameter_slider_step(descriptor: &ParamDescriptor, step: Option<f32>) -> Option<f32> {
+    if descriptor.is_integer() {
+        Some(step.map_or(1.0, |step| step.round().max(1.0)))
+    } else {
+        step
     }
 }
 
@@ -130,8 +142,8 @@ fn with_hint(response: egui::Response, hint: Option<&str>) -> egui::Response {
 
 #[cfg(test)]
 mod tests {
-    use henad_core::explore::value::parse_value;
-    use henad_core::helpers::u32_param;
+    use henad_core::explore::value::{check_param, parse_value};
+    use henad_core::helpers::{f32_param, u32_param};
     use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
     use henad_models::example_models;
 
@@ -267,6 +279,18 @@ mod tests {
             matches!(value, ParamValue::U32(stepped) if stepped > start),
             "{value:?} after a step up from {start}"
         );
+    }
+
+    /// The slider of an `f32` marked integer with no step of its own steps by 1, and holds whole numbers alone.
+    #[test]
+    fn an_integer_slider_steps_by_whole_numbers() {
+        let descriptor = f32_param("offset", "Offset", 0.0, -3.0, 3.0, None).integer();
+        let context = egui::Context::default();
+        let mut value = ParamValue::F32(0.0);
+        draw_value(&context, &descriptor, &mut value, &[egui::Key::Tab]);
+        assert!(draw_value(&context, &descriptor, &mut value, &[egui::Key::ArrowRight]));
+        assert_eq!(value, ParamValue::F32(1.0));
+        assert_eq!(check_param(&descriptor, &value), Ok(()));
     }
 
     #[test]

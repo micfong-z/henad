@@ -5,18 +5,22 @@
 //! or a table with `--design`. A spec file describes the whole sweep instead, and conflicts with every flag that
 //! changes a result. A spec file with a `[search]` table runs a search. Flags cannot describe a search.
 
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context as _, Result, bail};
 
 use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
 use henad_core::explore::spec::SweepSpec;
 use henad_explore::handle::SweepOutput;
-use henad_explore::merge::merge;
+use henad_explore::merge::{MergeError, merge};
 use henad_explore::model_file::ModelFile;
-use henad_explore::output::manifest::ResultCounts;
+use henad_explore::output::MANIFEST_FILE;
+use henad_explore::output::manifest::{Manifest, ResultCounts};
+use henad_explore::output::resume::ResumeError;
 use henad_explore::probe::ShortfallWords;
 use henad_explore::spec_file::LoadedSpec;
-use henad_explore::sweep::{Provenance, SweepEnd, SweepOptions, plan_spec, run_spec};
+use henad_explore::sweep::{ExploreError, Provenance, SweepEnd, SweepOptions, plan_spec, run_spec};
 
 use crate::json_report;
 use crate::{Args, SOME_RUNS_NOT_OK};
@@ -30,8 +34,9 @@ use report::{Reporter, WarningPrinter, merge_text};
 
 /// Runs a sweep of `entry` from the flags or `spec`, and returns the exit status.
 ///
-/// `file` is the model file that `entry` came from, if any. The configs of a sheet past the device, and the candidates
-/// a search draws past it, are then refused in the sheet's lines, as a single run of the sheet is.
+/// `model_file` is the path and the model file that `entry` came from, if any. The configs of a sheet past the device,
+/// and the candidates a search draws past it, are then refused in the sheet's lines, as a single run of the sheet is. A
+/// resume refused for changed model code then names the file.
 ///
 /// The status is success when every run is `ok`, and [`SOME_RUNS_NOT_OK`] when the sweep ran to its end with some
 /// run in another status.
@@ -43,13 +48,13 @@ use report::{Reporter, WarningPrinter, merge_text};
 pub fn run(
     args: &Args,
     entry: &ModelEntry,
-    file: Option<&ModelFile>,
+    model_file: Option<(&Path, &ModelFile)>,
     gpu: Option<&GpuContext>,
     spec: Option<LoadedSpec>,
     provenance: Provenance,
 ) -> Result<u8> {
     let (sweep, mut options) = sweep_and_options(args, entry, spec, provenance)?;
-    if let Some(sheet) = file.and_then(ModelFile::sheet) {
+    if let Some(sheet) = model_file.and_then(|(_, file)| file.sheet()) {
         let sheet = sheet.clone();
         options.shortfall_words = Some(ShortfallWords::new(move |entry, params, limits| {
             sheet.shortfalls(entry, params, limits)
@@ -59,17 +64,35 @@ pub fn run(
         eprintln!("!!! warning: debug build. Runs will step slowly and timings will be unreliable. Use --release !!!");
     }
     let mut reporter = Reporter::new(entry.name(), args, options.spec_source.path.is_some());
+    let path = model_file.map(|(path, _)| path);
     let report = match &args.explore.out {
         _ if args.explore.dry_run => {
-            plan_spec(entry, gpu, &sweep, args.explore.out.as_deref(), &options, &mut reporter)?
+            plan_spec(entry, gpu, &sweep, args.explore.out.as_deref(), &options, &mut reporter)
+                .map_err(|error| changed_file_context(error, path))?
         }
         Some(output_dir) => {
             let output = SweepOutput::Directory(output_dir.clone());
-            run_spec(entry, gpu, &sweep, output, &options, &mut reporter)?.report
+            run_spec(entry, gpu, &sweep, output, &options, &mut reporter)
+                .map_err(|error| changed_file_context(error, path))?
+                .report
         }
         None => bail!("a sweep needs an output directory unless it is a dry run"),
     };
     exit_status(report.end, &report.counts)
+}
+
+/// Returns `error` as an error of the command, with a first line naming the model file at `path` when the error is a
+/// resume refused for the changed code of the model that file holds.
+fn changed_file_context(error: ExploreError, path: Option<&Path>) -> anyhow::Error {
+    let changed_code = matches!(error, ExploreError::Resume(ResumeError::CodeChanged { .. }));
+    let error = anyhow::Error::new(error);
+    match path {
+        Some(path) if changed_code => error.context(format!(
+            "model file '{}' holds different code from the runs in the directory",
+            path.display()
+        )),
+        _ => error,
+    }
 }
 
 /// Returns the sweep the flags or `spec` describe, and its options.
@@ -121,7 +144,17 @@ fn sweep_and_options(
 /// Returns an error when the directories cannot be merged.
 pub fn merge_shards(args: &Args) -> Result<u8> {
     let output_dir = args.explore.out.as_deref().context("--merge requires --out")?;
-    let report = merge(&args.explore.merge, output_dir, &mut WarningPrinter { json: args.json })?;
+    let report = merge(&args.explore.merge, output_dir, &mut WarningPrinter { json: args.json }).map_err(|error| {
+        let context = match &error {
+            MergeError::CodeChanged { dir, lower_dir, .. } => changed_files_text(lower_dir, dir),
+            _ => None,
+        };
+        let error = anyhow::Error::new(error);
+        match context {
+            Some(context) => error.context(context),
+            None => error,
+        }
+    })?;
     if args.json {
         json_report::emit(&json_report::explore_merge(&report, args.explore.merge.len()));
     } else {
@@ -133,6 +166,48 @@ pub fn merge_shards(args: &Args) -> Result<u8> {
     } else {
         Ok(SOME_RUNS_NOT_OK)
     }
+}
+
+/// Returns the paths that the command line recorded in the manifest of `dir` gives with `--model-file`, or no path
+/// when the manifest cannot be read.
+fn recorded_model_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(manifest) = Manifest::read(&dir.join(MANIFEST_FILE)) else {
+        return Vec::new();
+    };
+    let mut arguments = manifest.argv.iter();
+    let mut paths = Vec::new();
+    while let Some(argument) = arguments.next() {
+        if argument == "--model-file" {
+            paths.extend(arguments.next().map(PathBuf::from));
+        } else if let Some(path) = argument.strip_prefix("--model-file=") {
+            paths.push(PathBuf::from(path));
+        }
+    }
+    paths
+}
+
+/// Returns a line naming the model files that the shards in `lower_dir` and `dir` ran, for a merge refused because the
+/// two ran different model code, or `None` when neither ran a model file.
+fn changed_files_text(lower_dir: &Path, dir: &Path) -> Option<String> {
+    let (lower, other) = (recorded_model_files(lower_dir), recorded_model_files(dir));
+    let ran = |dir: &Path, paths: &[PathBuf]| format!("'{}' ran with {}", dir.display(), model_file_words(paths));
+    match (lower.is_empty(), other.is_empty()) {
+        (true, true) => None,
+        _ if lower == other => Some(format!(
+            "the shards ran different versions of {}",
+            model_file_words(&lower)
+        )),
+        (false, false) => Some(format!("{}, and {}", ran(lower_dir, &lower), ran(dir, &other))),
+        (false, true) => Some(ran(lower_dir, &lower)),
+        (true, false) => Some(ran(dir, &other)),
+    }
+}
+
+/// Returns `paths` as `model file 'a'` or `model files 'a', 'b'`.
+fn model_file_words(paths: &[PathBuf]) -> String {
+    let quoted: Vec<String> = paths.iter().map(|path| format!("'{}'", path.display())).collect();
+    let noun = if paths.len() == 1 { "model file" } else { "model files" };
+    format!("{noun} {}", quoted.join(", "))
 }
 
 /// Returns the exit status of a sweep or search that ended as `end` with `counts` rows written.

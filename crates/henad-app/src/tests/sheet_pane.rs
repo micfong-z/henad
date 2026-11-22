@@ -20,8 +20,8 @@ use henad_graph::sheet::sentence::{
     NEW_PARAMETER_HEADING, NUMBER_KIND, PARAMETER_NAME_MISSING, PLOT, PLOT_EMPTY, PLOTTED, PROPERTY_NAME_MISSING, REDO,
     RESTART_NOTICE, SHADE, SHADE_ENDS_EQUAL, SHEET_EMPTY, START_AGAIN_FOR, START_AGAIN_TO_SEE, STATES_KIND,
     TICK_LENGTH_NOT_POSITIVE, TYPE_A_CHANCE, TYPE_ONE_NUMBER, UNDO, USE_A_PARAMETER, WALLS_SENTENCE, WORLD_EMPTY,
-    WORLD_QUESTION, add_row_name, model_name_button, name_reserved, parameter_max_name, run_once, start_again_for,
-    value_slider_name, world_side_out_of_range,
+    WORLD_QUESTION, add_row_name, model_name_button, name_reserved, parameter_max_name, run_once,
+    sheet_parameter_name_field, start_again_for, value_slider_name, world_side_out_of_range,
 };
 use henad_graph::sheet::starters;
 
@@ -38,7 +38,7 @@ use crate::tests::support::{
 use crate::ui::dock::Layout;
 use crate::ui::editor::preview::PreviewState;
 use crate::ui::editor::sheet::new_model::create_blank_model;
-use crate::ui::editor::sheet::sheet_pane::slider_step;
+use crate::ui::editor::sheet::sheet_pane::{parameter_step, slider_step};
 use crate::ui::editor::sheet::widgets::{NewParameterDialog, NumberUse, default_max};
 use crate::ui::editor::sheet::{CARD_PANE, SHEET_PANE};
 
@@ -861,6 +861,37 @@ fn parameters_edit_on_the_sheet_by_the_rules_of_the_page() {
     assert_eq!(slider_step(10.0), 0.05);
     assert_eq!(slider_step(5.0), 0.02);
     assert_eq!(slider_step(0.001), 5e-6);
+}
+
+/// The value slider of a whole number steps by whole numbers, so an arrow key keeps its default an integer.
+#[test]
+fn a_whole_number_slider_steps_by_integers() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "random_walk.toml");
+    let steps = |harness: &Harness| {
+        sheet(harness)
+            .document()
+            .parameters
+            .iter()
+            .find(|parameter| parameter.name == "Steps per tick")
+            .expect("the random walk has Steps per tick")
+            .clone()
+    };
+    assert_eq!(steps(&harness).parameter_type, ParameterType::WholeNumber);
+    assert_eq!(parameter_step(&steps(&harness)), 1.0, "0 to 16 slides in steps of 1");
+    click(&mut harness, &sheet_parameter_name_field("Steps per tick"));
+    harness.press(Key::Tab, Modifiers::NONE);
+    harness.settle();
+    assert_eq!(harness.focused, value_slider_name("Steps per tick"));
+    harness.press(Key::ArrowRight, Modifiers::NONE);
+    harness.settle();
+    assert_eq!(
+        steps(&harness).default,
+        5.0,
+        "an arrow key steps the default from 4 to 5"
+    );
 }
 
 #[test]

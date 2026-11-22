@@ -63,7 +63,13 @@ All four readers take the slice, an index and a fallback, and return the fallbac
 `.percent()` sets a parameter's `format` to `ParamFormat::Percent`, for a fraction shown as a percentage.
 The stored value stays a fraction in `0..=1`, and only the Parameters tab scales it.
 Virus Spread Chance holds `0.025` and shows as 2.5%.
-`--set` accepts the fraction too, and `--params` marks the parameter `format=percent`.
+`--set` accepts `2.5%` or the fraction, and `--params` marks the parameter `format=percent`.
+A `%` sign on a parameter without `.percent()` is refused.
+
+`.integer()` marks an `f32` parameter as taking whole numbers alone, for a count that can go below 0.
+`--set` and a sweep's listed values refuse a value with a fractional part, and a sampled design or a search draws whole numbers.
+Its minimum, maximum, default and step are whole numbers, and `--params` marks it `integer`.
+A count from 0 up is a `u32` parameter instead.
 
 ## Live against reload
 

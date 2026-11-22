@@ -93,6 +93,14 @@ property refused at `[world]` in the sheet's words, with no "lane" either) and
 sheet's code, a graph prints itself, a grid rule is refused, the flag's conflicts).
 `a_model_file_error_points_at_its_line` and the two sheet tests run without a device, apart from the
 sheet's run, and the others skip without one. Keep them.
+A resume refused with `ResumeError::CodeChanged` for a model from a `--model-file` gets a first line
+naming the file (`changed_file_context` in `explore/mod.rs`), and a merge refused with
+`MergeError::CodeChanged` one naming the `--model-file` paths each shard's manifest records in
+`argv` (`changed_files_text`). The library's messages stay as the causes below it.
+`a_whole_number_below_zero_takes_whole_values_alone` and
+`a_percentage_takes_a_percent_sign_in_levels` hold the integer mark and the `%` levels on sheets,
+and `the_integer_key_marks_an_f32_and_refuses_anything_else` the `integer` key of a grid rule, of
+the graph `--print-lowered` prints, and its refusals.
 `--export` calls `prepare_view` before it writes, and `--export-stats` before each sample, as a
 publish would.
 `explore/` is the sweep mode: `mod.rs` runs a sweep or a merge, `args.rs` holds `ExploreArgs`,
@@ -123,8 +131,9 @@ batch size, the objective or the axes, the space and the search seed, and `--jso
 `--params --json` (`json_report::params`) prints `schema_json` with a `kind` of `params`.
 `scripts/bench_matrix.py` parses the text `--params` prints, and that text is unchanged.
 `params_text` writes the bare word ` hidden` after `apply` and `format` for a hidden parameter
-alone, so no golden line moves. `tests/model_file.rs` checks it, `time` and a `--vary` dry run
-over the tick length on `sir_rates.toml`, read from henad-models' fixtures.
+alone, and ` integer` after it for an `f32` marked integer, so no golden line moves.
+`tests/model_file.rs` checks it, `time` and a `--vary` dry run over the tick length on
+`sir_rates.toml`, read from henad-models' fixtures.
 `tests/golden.rs` compares `--list`, `--params` and `--params --json` byte for byte with what
 0.2.0 printed, recorded in `tests/golden/` by the procedure in its `README.md`. Keep them.
 `build.rs` calls `henad_build::stamp_commit`, as henad-app's does, and the `CliOptions` host

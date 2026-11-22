@@ -150,7 +150,7 @@ fn world_table_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequ
     }
 }
 
-/// Returns `descriptor` with `label` and `kind`, its id, apply, format and hidden flag kept.
+/// Returns `descriptor` with `label` and `kind`, its id, apply, format, hidden flag and integer mark kept.
 pub(crate) fn param_with(descriptor: &ParamDescriptor, label: &str, kind: ParamKind) -> ParamDescriptor {
     let mut changed = ParamDescriptor::new(descriptor.id().to_owned(), label.to_owned(), kind);
     if descriptor.apply() == ParamApply::OnReload {
@@ -162,7 +162,20 @@ pub(crate) fn param_with(descriptor: &ParamDescriptor, label: &str, kind: ParamK
     if descriptor.is_hidden() {
         changed = changed.hidden();
     }
+    if descriptor.is_integer() {
+        changed = changed.integer();
+    }
     changed
+}
+
+/// Returns the field of a bound or the default of an `f32` parameter, dragged in whole steps when `whole` is set.
+fn f32_field(value: &mut f32, whole: bool) -> DragValue<'_> {
+    let field = DragValue::new(value);
+    if whole {
+        field.speed(0.1).fixed_decimals(0)
+    } else {
+        field.speed(0.01)
+    }
 }
 
 /// Draws each parameter's id, label and range, and the form that adds one.
@@ -197,23 +210,26 @@ fn params_ui(ui: &mut Ui, graph: &GraphEditor, requests: &mut Vec<GraphRequest>)
             let mut kind = graph.shown_param(param).kind().clone();
             let changed = match &mut kind {
                 ParamKind::F32 { min, max, default, .. } => {
+                    let whole = param.is_integer();
                     let mut changed = false;
                     ui.horizontal(|ui| {
                         ui.label("Range");
-                        changed |= ui.add(DragValue::new(min).speed(0.01)).changed();
-                        changed |= ui.add(DragValue::new(max).speed(0.01)).changed();
+                        changed |= ui.add(f32_field(min, whole)).changed();
+                        changed |= ui.add(f32_field(max, whole)).changed();
                     });
                     ui.horizontal(|ui| {
                         ui.label("Default");
+                        let range = *min..=*max;
                         changed |= ui
-                            .add(
-                                DragValue::new(default)
-                                    .speed(0.01)
-                                    .range(*min..=*max)
-                                    .clamp_existing_to_range(false),
-                            )
+                            .add(f32_field(default, whole).range(range).clamp_existing_to_range(false))
                             .changed();
                     });
+                    // A typed value of a parameter marked integer is rounded, as the file reader refuses a fraction.
+                    if whole && changed {
+                        for value in [min, max, default] {
+                            *value = value.round();
+                        }
+                    }
                     changed
                 }
                 ParamKind::U32 { min, max, default } => {

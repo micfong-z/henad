@@ -52,7 +52,7 @@ use layout::{Form, ITEM_GAP, line, section, text_cell, text_width};
 use measures::measures;
 use parameters::parameters;
 #[cfg(test)]
-pub use parameters::slider_step;
+pub use parameters::{parameter_step, slider_step};
 use property_form::default_color;
 #[cfg(test)]
 pub use starts::starts_text;

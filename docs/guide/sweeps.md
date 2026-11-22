@@ -57,6 +57,9 @@ A range is written `min:max:step` and includes both ends.
 Henad computes each value from its position, as `min + i * step`.
 Rounding errors do not build up along the range, and `0:1:0.1` gives eleven values with the last one exactly 1.
 An integer parameter can leave out the step, and then steps by 1.
+A parameter that `--params` marks `format=percent` takes a range or a value with a `%` sign after it, as in `--vary initial_infected=1%:5%:1%`, which gives the values of `0.01:0.05:0.01`.
+A range puts the sign after every part or after none, and a `%` sign on any other parameter is an error naming the parameter.
+`runs.csv` and the manifest's copy of the spec hold the fractions.
 
 A list takes the values separated by commas, written the way `--set` takes them:
 
@@ -131,6 +134,7 @@ A random design picks among them with equal chances.
 A Latin hypercube gives each stratum the lowest value it covers, and takes each value equally often, to within one config.
 The values a parameter takes then depend on the number of configs alone, and the design seed only decides which configs take them.
 An integer range with no step is the set of every integer in it, such as `--vary initial_outbreak_size=1:50` for Virus on a Network.
+A parameter that `--params` marks `integer`, such as a sheet's whole number that can go below 0, takes the same set, so a sampled design or a search draws whole numbers alone.
 
 The draws come from a **design seed**, and the plan prints it beside the block:
 
@@ -642,6 +646,7 @@ A resume warns when Henad's build or the model's build differs from a build that
 An uncommitted edit to a kernel counts as a different build, since its source hash changes.
 A model composed at run time is stricter, and a resume of such a model under other code is rejected.
 The error names the code that the folder's runs ran and the code that resumes.
+When the model comes from a `--model-file`, the error opens with a line naming that file.
 A runtime model's code is identified by the hash of its text.
 Start a new folder for the edited model, or undo the edit.
 A [model file](#sweeping-a-model-file) resumes with the same `--model-file`.
@@ -698,6 +703,7 @@ It interleaves `runs.csv` and `series.csv` back into run order, rebuilds `summar
 The merged CSV files are the same as those of the sweep run in one piece, apart from the timing columns.
 A merge warns when the shards ran different builds of Henad or of the model.
 It rejects shards of a model composed at run time that ran different code, as a resume does.
+The error then opens with the `--model-file` paths that each shard's command line gave.
 
 Build every shard, and every later resume, from one commit with `--locked`.
 Cargo then builds from the committed `Cargo.lock` and fails rather than change it.

@@ -29,7 +29,9 @@ the ground). The `[[stat]]` tables keep the measures' order across the two measu
 States property with state ids as variant names and state names as labels, a lane per property, `u8`
 for states, `f32` for Number, `i32` for Whole number, `bool` for Yes/No, the first state as a
 category lane's `initial`, then `[[param]]` per parameter, `u32` for a Whole number from 0, `f32`
-otherwise, step 1 for a Whole number with none), then the passes in stack order: `start_cells`
+otherwise, step 1 for a Whole number with none, and a Whole number with a negative minimum marked
+`integer()`, its minimum, maximum, default and step whole or the parameter refused), then the passes
+in stack order: `start_cells`
 (`start.rs`), `tick_<card>` or `tick_cells` with no card (`card.rs`, a grid runs exactly one tick
 pass, so a second card that runs each tick over the cells is an error), `colours` (`colors.rs`, no
 pass when the rule is `by_state` on the first States property, `view.color` through the category for

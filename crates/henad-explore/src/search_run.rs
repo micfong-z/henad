@@ -81,12 +81,16 @@ pub struct SearchPlan {
 impl SearchPlan {
     /// Checks the search of `spec` against `schema`, and resolves its space.
     ///
+    /// A value or range of a percentage written in percent, as in `1%`, is read and hashed as its fraction, so the
+    /// search hash is the same whichever way a value is written.
+    ///
     /// # Errors
     ///
     /// Returns [`SearchPlanError`] for a spec with no search or with blocks, search settings or a space that the search
     /// rejects, fixed values or actions that the model rejects, a batch of more than [`MAX_RUNS`] runs, or a budget
     /// whose runs overflow a 64-bit count.
     pub fn new(spec: &SweepSpec, schema: &ModelSchema<'_>) -> Result<Self, SearchPlanError> {
+        let spec = &crate::sweep::with_fractions(spec.clone(), schema.params);
         let search = spec.search.as_ref().ok_or(SearchPlanError::NotASearch)?;
         if !spec.blocks.is_empty() {
             return Err(SearchPlanError::Blocks);

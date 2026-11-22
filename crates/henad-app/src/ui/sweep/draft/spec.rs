@@ -6,7 +6,7 @@ use henad_core::explore::plan::ModelSchema;
 use henad_core::explore::seed::SeedScheme;
 use henad_core::explore::spec::{BlockSpec, MeasureSettings, RunSettings, SeedSettings, SweepSpec};
 use henad_core::explore::stop::{Comparison, StopSpec};
-use henad_core::explore::value::{format_value, parse_value};
+use henad_core::explore::value::{format_value, parse_param};
 use henad_core::params::ParamValue;
 use henad_explore::exec::Concurrency;
 use henad_explore::spec_file::{ExecutionTable, LoadedSpec, SpecFile};
@@ -512,5 +512,5 @@ pub(super) fn param_index(schema: &ModelSchema<'_>, id: &str) -> Result<usize, S
 }
 
 pub(super) fn read_value(schema: &ModelSchema<'_>, index: usize, text: &str) -> Result<ParamValue, String> {
-    parse_value(schema.params[index].kind(), text).map_err(|error| describe_error(&error))
+    parse_param(&schema.params[index], text).map_err(|error| describe_error(&error))
 }

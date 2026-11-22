@@ -350,15 +350,15 @@ pub(crate) fn factor_text(factor: &FactorSpec) -> String {
         FactorTarget::Param(id) => id.clone(),
         FactorTarget::Action(name) => format!("{ACTION_COLUMN_PREFIX}{name}"),
     };
-    match &factor.levels {
-        LevelSpec::Values(values) => format!("{target} in {}", values.join(", ")),
-        LevelSpec::Range { min, max, step: None } => format!("{target} from {min} to {max}"),
-        LevelSpec::Range {
-            min,
-            max,
-            step: Some(step),
-        } => format!("{target} from {min} to {max} in steps of {step}"),
-        LevelSpec::All => format!("{target}, all values"),
+    let (min, max, step, unit) = match &factor.levels {
+        LevelSpec::Values(values) => return format!("{target} in {}", values.join(", ")),
+        LevelSpec::All => return format!("{target}, all values"),
+        &LevelSpec::Range { min, max, step } => (min, max, step, ""),
+        &LevelSpec::PercentRange { min, max, step } => (min, max, step, "%"),
+    };
+    match step {
+        None => format!("{target} from {min}{unit} to {max}{unit}"),
+        Some(step) => format!("{target} from {min}{unit} to {max}{unit} in steps of {step}{unit}"),
     }
 }
 

@@ -231,7 +231,11 @@ pub(super) fn category(property: &SheetProperty) -> Category {
 }
 
 /// Returns the descriptor of `parameter`, `None` for a value its type cannot hold.
+///
+/// A Whole number with a negative minimum is an `f32` marked [`ParamDescriptor::integer`], with a step of 1 unless the
+/// sheet gives one. Its minimum, maximum, default and step are whole numbers.
 fn descriptor(parameter: &SheetParameter) -> Option<ParamDescriptor> {
+    let integer = parameter.parameter_type == ParameterType::WholeNumber;
     let kind = if parameter_type(parameter) == ValueType::U32 {
         let whole =
             |value: f64| (value.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&value)).then_some(value as u32);
@@ -243,7 +247,7 @@ fn descriptor(parameter: &SheetParameter) -> Option<ParamDescriptor> {
     } else {
         let float = |value: f64| {
             let narrowed = value as f32;
-            narrowed.is_finite().then_some(narrowed)
+            (narrowed.is_finite() && (!integer || narrowed.fract() == 0.0)).then_some(narrowed)
         };
         ParamKind::F32 {
             min: float(parameter.min)?,
@@ -251,12 +255,15 @@ fn descriptor(parameter: &SheetParameter) -> Option<ParamDescriptor> {
             default: float(parameter.default)?,
             step: match parameter.step {
                 Some(step) => Some(float(step)?),
-                None if parameter.parameter_type == ParameterType::WholeNumber => Some(1.0),
+                None if integer => Some(1.0),
                 None => None,
             },
         }
     };
-    let descriptor = ParamDescriptor::new(parameter.id.clone(), parameter.name.clone(), kind);
+    let mut descriptor = ParamDescriptor::new(parameter.id.clone(), parameter.name.clone(), kind);
+    if integer {
+        descriptor = descriptor.integer();
+    }
     Some(match parameter.format {
         Some(ParameterFormat::Percent) => descriptor.percent(),
         None => descriptor,

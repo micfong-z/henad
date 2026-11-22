@@ -19,7 +19,7 @@ pub(super) fn node_place(scope: &Scope, node: NodeId) -> String {
     format!("node {node} in {scope}")
 }
 
-/// Returns `descriptor` under the id `id`, its label, kind, apply and format kept.
+/// Returns `descriptor` under the id `id`, its label, kind, apply, format, hidden flag and integer mark kept.
 fn renamed_param(descriptor: &ParamDescriptor, id: &str) -> ParamDescriptor {
     let mut renamed = ParamDescriptor::new(id.to_owned(), descriptor.label().to_owned(), descriptor.kind().clone());
     if descriptor.apply() == ParamApply::OnReload {
@@ -30,6 +30,9 @@ fn renamed_param(descriptor: &ParamDescriptor, id: &str) -> ParamDescriptor {
     }
     if descriptor.is_hidden() {
         renamed = renamed.hidden();
+    }
+    if descriptor.is_integer() {
+        renamed = renamed.integer();
     }
     renamed
 }

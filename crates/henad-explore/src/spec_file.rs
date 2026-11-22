@@ -1,9 +1,10 @@
 //! Spec files, the TOML form of a sweep spec.
 //!
 //! Every table rejects an unknown key. A parameter value is kept as the text that `--set` and `--vary` accept, so a
-//! spec file and a command line pass [`parse_value`] the same text.
+//! spec file and a command line pass [`parse_param`] the same text, `1%` for a percentage included. A `range` table
+//! holds numbers, and a range over a percentage takes its fractions there.
 //!
-//! [`parse_value`]: henad_core::explore::value::parse_value
+//! [`parse_param`]: henad_core::explore::value::parse_param
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -444,7 +445,8 @@ impl FactorTable {
 }
 
 impl From<&FactorSpec> for FactorTable {
-    /// Writes each value as [`SpecValue::from_text`] converts it.
+    /// Writes each value as [`SpecValue::from_text`] converts it, and a range in percent as the range of its
+    /// fractions.
     fn from(factor: &FactorSpec) -> Self {
         let (param, action) = match &factor.target {
             FactorTarget::Param(id) => (Some(id.clone()), None),
@@ -457,11 +459,14 @@ impl From<&FactorSpec> for FactorTable {
             range: None,
             levels: None,
         };
-        match &factor.levels {
+        // A range table holds numbers, and a range in percent is written as its fractions.
+        match factor.levels.to_fractions() {
             LevelSpec::Values(values) => {
                 table.values = Some(values.iter().map(|value| SpecValue::from_text(value)).collect());
             }
-            &LevelSpec::Range { min, max, step } => table.range = Some(RangeTable { min, max, step }),
+            LevelSpec::Range { min, max, step } | LevelSpec::PercentRange { min, max, step } => {
+                table.range = Some(RangeTable { min, max, step });
+            }
             LevelSpec::All => table.levels = Some(LevelsKeyword::All),
         }
         table

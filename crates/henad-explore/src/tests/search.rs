@@ -621,6 +621,51 @@ fn a_search_resume_names_a_changed_model() {
     );
 }
 
+/// A search over a percentage hashes and records its values written in percent as their fractions, so a resume
+/// that writes them the other way keeps every run.
+#[test]
+fn a_search_in_percent_resumes_from_the_fractions() {
+    let sir = entry("sir", None);
+    let scratch = ScratchDir::new("search-percent");
+    let written = |levels: &[&str]| {
+        let mut spec = search_spec(SearchAlgorithm::Random, 6);
+        if let Some(search) = &mut spec.search {
+            search.space[1] = FactorSpec::param("initial_infected_pct", values(levels));
+        }
+        spec
+    };
+    let (percent, fractions) = (written(&["1%", "2.5%"]), written(&["0.01", "0.025"]));
+    let hash = |spec: &SweepSpec| {
+        SearchPlan::new(spec, &sir.schema())
+            .expect("a valid search")
+            .search_hash()
+    };
+    assert_eq!(hash(&percent), hash(&fractions));
+
+    sweep(&sir, None, &percent, scratch.path(), lane_count(1));
+    let manifest = Manifest::read(&scratch.path().join(MANIFEST_FILE)).expect("the manifest reads back");
+    let space = SpecFile::from_json(&manifest.spec)
+        .and_then(SpecFile::into_spec)
+        .expect("the manifest holds a spec")
+        .search
+        .expect("a search")
+        .space;
+    assert_eq!(space[1].levels, values(&["0.01", "0.025"]));
+    let report = sweep_with(
+        &sir,
+        None,
+        &fractions,
+        scratch.path(),
+        &sweep_options(true),
+        &mut NoProgress,
+    )
+    .expect("the fractions resume the search");
+    assert_eq!(
+        (report.end, report.outline.skipped),
+        (SweepEnd::Complete, report.counts.rows)
+    );
+}
+
 #[test]
 fn a_search_resume_refuses_changed_code() {
     let rule = ModelCode::new("test-rule/1", "sir");

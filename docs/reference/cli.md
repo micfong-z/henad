@@ -61,7 +61,9 @@ With two files or more and no spec, `MODEL` is required, and a command line with
 The flags that run a sweep have [their own table](#sweep-flags).
 
 `--set` accepts a number for a `u32` or `f32` parameter, `true` or `false` for a `bool`, and an option's name or index for a `choice`, as in `--set network=Geometric`.
-A parameter that `--params` marks `format=percent` still accepts a fraction, and `--set virus_spread_chance=0.1` sets it to 10%.
+A parameter that `--params` marks `format=percent` accepts a value with a `%` sign or a fraction, so `--set virus_spread_chance=10%` and `--set virus_spread_chance=0.1` both set it to 10%.
+A `%` sign on any other parameter is refused with the parameter's id.
+A parameter that `--params` marks `integer`, such as a sheet's whole number that can go below 0, is an `f32` that takes whole numbers alone, and `--set` refuses a value with a fractional part.
 A parameter that `--params` marks `hidden`, such as a model file's tick length, is reached by `--set`, `--vary` and a spec file as any other parameter is.
 The app leaves such a parameter off its Parameters tab, and its Sweep tab still varies it.
 
@@ -634,7 +636,7 @@ The 95% confidence interval for the mean is `mean ± t * sd / sqrt(n)`, where `t
 | `status` | `running` until the sweep ends, then `complete`, `aborted` for a sweep stopped before its last run, `failed` for a sweep or merge that an error ended outside any run, or `incomplete` for a sweep that lost its GPU device or a merge that lacks some runs |
 | `engine` | The [build](#builds) of Henad that wrote the manifest last, under the name `henad` |
 | `model` | Id, name, backend, schema hash, the schema [`--params --json`](#parameters-as-json) prints, `replays_exactly`, whether two builds of the model on one seed step through identical states, and for a model composed at run time `code`, its `format`, its hash as `fnv1a64` and its canonical `text` |
-| `spec` | The sweep in the form of a spec file, flags included, with a design table's text under `table_text` |
+| `spec` | The sweep in the form of a spec file, flags included, with a design table's text under `table_text`. A percentage's value or range written with a `%` sign is recorded as its fraction |
 | `spec_source` | Path and text of the spec file, and the path and hash of each design table it reads. `path` and `toml` are `null` for a sweep from flags, and `tables` lists its `--design` file |
 | `argv` | The command line |
 | `plan` | Plan hash, results fingerprint, the counts of configs, replicates and runs, and the design, config count and design seed of each block |
@@ -1156,6 +1158,7 @@ A sweep has its own JSON lines, listed under [its progress](#progress).
 
 A parameter object holds its `index`, `id`, `label`, `kind` (`f32`, `u32`, `bool` or `choice`), `apply` (`live` or `reload`), `format` (`plain` or `percent`) and `default`.
 A hidden parameter adds `"hidden": true`, and a shown one writes no `hidden` field.
+An `f32` that takes whole numbers alone adds `"integer": true`, and no other parameter writes the field.
 A number adds `min` and `max`, and an `f32` adds `step` when it declares a step.
 A `choice` adds its `options`, writes its `default` as an option name, and adds `default_index`.
 Without `--json`, `--params` prints the text it always has.

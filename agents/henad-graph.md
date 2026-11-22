@@ -235,6 +235,11 @@ of 0 or below, and a time scale naming no parameter. `RenameParam` renames the t
 parameter, `renamed_param` keeps `hidden`, and `RemoveParam` drops the time scale with its tick
 length. henad-app's World pane rebuilds a descriptor for `SetParam` in `world.rs`'s `param_with`,
 which keeps `hidden` too. A new descriptor flag goes into both copiers.
+**Whole numbers**. A `[[param]]` table of an `f32`, in a graph file or a grid rule, takes
+`integer = true` for `ParamDescriptor::integer` (a sheet's Whole number with a negative minimum
+lowers to one). The reader refuses the key on another kind, and a `min`, `max`, `default` or
+`step` with a fractional part beside it. `write_param` writes it only for a marked `f32`, so every file without
+one keeps its code, and both copiers keep the mark.
 `GridProgram` and `AgentProgram` copy `document.time` to `EntryDeclarations.time`, so a
 manifest's replayed text and an expert copy keep their time axis. `src/tests/time_scale.rs` holds
 the round trip, the refusals and the entry. The three rates fixtures in henad-models set both

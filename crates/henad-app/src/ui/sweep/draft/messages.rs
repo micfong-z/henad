@@ -20,6 +20,9 @@ pub(super) fn level_spec_message(error: &LevelSpecError) -> String {
     match error {
         LevelSpecError::NotANumber { part, .. } => format!("'{}' is not a number", part.trim()),
         LevelSpecError::BadRange { range } => format!("'{range}' is not a range. Enter min:max:step or min:max."),
+        LevelSpecError::MixedPercent { range } => {
+            format!("'{range}' has % after some parts only. Enter % after every part or no part.")
+        }
     }
 }
 
@@ -106,6 +109,8 @@ pub(super) fn value_message(error: &ValueError) -> String {
         ValueError::NotAnInteger { raw, .. } => format!("'{raw}' is not an integer"),
         ValueError::NotABool { raw, .. } => format!("'{raw}' is not true or false"),
         ValueError::OutOfRange { value, min, max } => format!("{value} is outside the range {min} to {max}"),
+        ValueError::NotWhole { value } => format!("{value} is not an integer"),
+        ValueError::UnexpectedPercent { raw } => format!("'{raw}' is a percentage, but this parameter is not"),
         ValueError::UnknownOption { raw, options } => format!("'{raw}' is not one of {}", options.join(", ")),
         ValueError::Param { source, .. } => value_message(source),
         ValueError::UnknownParam { .. } | ValueError::BadOverride { .. } | ValueError::WrongKind { .. } => {

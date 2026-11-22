@@ -119,6 +119,13 @@ fn a_resume_with_an_edited_model_file_is_refused() {
     assert!(message.contains("different model code"), "{message}");
     assert!(message.contains(&code_hash(&life_rule())), "{message}");
     assert!(message.contains(&code_hash(&edited_life_rule())), "{message}");
+    assert!(
+        message
+            .lines()
+            .any(|line| line
+                == format!("Error: model file '{edited}' holds different code from the runs in the directory")),
+        "the first line of the error names the model file: {message}"
+    );
     assert_eq!(run_count(&dir), 2, "the refused resume runs nothing");
     assert_eq!(
         std::fs::read(dir.join("manifest.json")).expect("the manifest is kept"),
@@ -166,6 +173,13 @@ fn a_merge_of_shards_with_different_model_files_is_refused() {
     let message = stderr(&refused);
     assert!(message.contains("ran different model code"), "{message}");
     assert!(message.contains(&code_hash(&edited_life_rule())), "{message}");
+    assert!(
+        message.lines().any(|line| line
+            == format!(
+                "Error: '{first}' ran with model file '{original}', and '{other}' ran with model file '{edited}'"
+            )),
+        "the first line of the error names the model files the shards ran: {message}"
+    );
     assert!(!refused_dir.exists(), "the refused merge writes nothing");
 }
 
@@ -846,6 +860,274 @@ space = [{ param = "num_agents", values = [100, 70000] }]
         }
     }
     assert!(refused > 0 && refused < 6, "both values are drawn: {text}");
+}
+
+/// Returns the Game of Life sheet with a whole number `birth` from -1 to 8, the count of neighbours at which a dead cell
+/// comes alive.
+fn life_sheet_with_birth() -> String {
+    let text = std::fs::read_to_string(life_sheet()).expect("the sheet starter is in the repository");
+    let parameter = "[[parameter]]\nid = \"birth\"\nname = \"Birth\"\ntype = \"whole_number\"\nmin = -1\nmax = 8\n\
+                     default = 3\n\n[[measure]]";
+    let edited = text.replacen("[[measure]]", parameter, 1).replace(
+        "left = { result = \"l1\" }\nright = 3\n",
+        "left = { result = \"l1\" }\nright = { param = \"birth\" }\n",
+    );
+    assert_eq!(
+        edited.matches("param = \"birth\"").count(),
+        1,
+        "line l2 reads the parameter"
+    );
+    edited
+}
+
+/// A sheet's whole number with a negative minimum takes whole values alone: `--set` refuses a fraction and names the
+/// parameter, a range with no step lists every whole number, and a Latin hypercube draws whole numbers into
+/// `runs.csv`.
+#[test]
+fn a_whole_number_below_zero_takes_whole_values_alone() {
+    if !has_device() {
+        return;
+    }
+    let scratch = Scratch::new("whole-number");
+    let sheet = scratch.write("birth.toml", &life_sheet_with_birth());
+    let small = ["--set", "grid_width=16", "--set", "grid_height=16"];
+
+    let json: Value = serde_json::from_str(&stdout(&run_ok(&["--model-file", &sheet, "--params", "--json"])))
+        .expect("one line of JSON");
+    let birth = json["params"]
+        .as_array()
+        .and_then(|params| params.iter().find(|param| param["id"] == "birth"))
+        .expect("the sheet declares birth");
+    assert_eq!(
+        (&birth["kind"], &birth["integer"]),
+        (&Value::from("f32"), &Value::from(true)),
+        "{birth}"
+    );
+    let text = stdout(&run_ok(&["--model-file", &sheet, "--params"]));
+    assert!(
+        text.lines()
+            .any(|line| line.contains("id=birth kind=f32") && line.contains(" integer ")),
+        "{text}"
+    );
+
+    // The graph the sheet lowers to writes the mark, and reads back with the sheet's schema.
+    let lowered = stdout(&run_ok(&["--model-file", &sheet, "--print-lowered"]));
+    assert!(lowered.contains("step = 1.0\ninteger = true\n"), "{lowered}");
+    let graph = scratch.write("birth_graph.toml", &lowered);
+    let graph_json: Value = serde_json::from_str(&stdout(&run_ok(&["--model-file", &graph, "--params", "--json"])))
+        .expect("one line of JSON");
+    assert_eq!(graph_json["schema_hash"], json["schema_hash"], "{graph_json}");
+    assert_eq!(graph_json["params"][3]["integer"], true, "{graph_json}");
+
+    let refused = run(&[
+        &["--model-file", &sheet, "--steps", "1", "--set", "birth=2.5"][..],
+        &small,
+    ]
+    .concat());
+    assert!(!refused.status.success());
+    let message = stderr(&refused);
+    assert!(
+        message.contains("--set birth") && message.contains("2.5 is not an integer"),
+        "{message}"
+    );
+    run_ok(
+        &[
+            &["--model-file", &sheet, "--steps", "1", "--set", "birth=-1"][..],
+            &small,
+        ]
+        .concat(),
+    );
+
+    let planned = stdout(&run_ok(
+        &[
+            &[
+                "--model-file",
+                &sheet,
+                "--steps",
+                "1",
+                "--vary",
+                "birth=-1:8",
+                "--dry-run",
+            ][..],
+            &small,
+        ]
+        .concat(),
+    ));
+    assert!(
+        planned.contains("10 configs"),
+        "every whole number from -1 to 8: {planned}"
+    );
+
+    let dir = scratch.path("sampled");
+    let out = argument(&dir);
+    let sampled = [
+        "--model-file",
+        &sheet,
+        "--steps",
+        "1",
+        "--vary",
+        "birth=-1:8",
+        "--sample",
+        "lhs:10",
+        "--out",
+        &out,
+    ];
+    run_ok(&[&sampled[..], &small].concat());
+    let runs = std::fs::read_to_string(dir.join("runs.csv")).expect("runs.csv is written");
+    let header = runs.lines().next().expect("a header").to_owned();
+    let mut values = column(&runs, &header, "birth");
+    values.sort_by(f64::total_cmp);
+    assert_eq!(values, (-1..=8).map(f64::from).collect::<Vec<_>>(), "{runs}");
+    assert_eq!(manifest(&dir)["model"]["schema"]["params"][3]["integer"], true);
+}
+
+/// The `integer` key marks an `f32` of a grid rule as it does a graph's, and a graph file refuses it on a `u32` or
+/// beside a fraction, at the table of the parameter.
+#[test]
+fn the_integer_key_marks_an_f32_and_refuses_anything_else() {
+    if !has_device() {
+        return;
+    }
+    let scratch = Scratch::new("integer-key");
+    let rule = life_rule();
+    let offset = "[[param]]\nid = \"offset\"\nkind = \"f32\"\nmin = -2\nmax = 2\ndefault = 0\ninteger = true\n\n";
+    let first_param = rule.find("[[param]]").expect("the rule declares a parameter");
+    let marked_rule = scratch.write(
+        "rule.toml",
+        &format!("{}{offset}{}", &rule[..first_param], &rule[first_param..]),
+    );
+    let json: Value = serde_json::from_str(&stdout(&run_ok(&["--model-file", &marked_rule, "--params", "--json"])))
+        .expect("one line of JSON");
+    let param = json["params"]
+        .as_array()
+        .and_then(|params| params.iter().find(|param| param["id"] == "offset"))
+        .expect("the rule declares offset");
+    assert_eq!(param["integer"], true, "{param}");
+
+    let sheet = scratch.write("birth.toml", &life_sheet_with_birth());
+    let lowered = stdout(&run_ok(&["--model-file", &sheet, "--print-lowered"]));
+    let marked = "kind = \"f32\"\nmin = -1.0\nmax = 8.0\ndefault = 3.0\nstep = 1.0\ninteger = true\n";
+    assert!(lowered.contains(marked), "{lowered}");
+    for (name, table, message) in [
+        (
+            "fraction.toml",
+            "kind = \"f32\"\nmin = -1.5\nmax = 8.0\ndefault = 3.0\nstep = 1.0\ninteger = true\n",
+            "error: parameter 'birth' sets `integer`, expected integers for `min`, `max`, `default` and `step`",
+        ),
+        (
+            "step.toml",
+            "kind = \"f32\"\nmin = -1.0\nmax = 8.0\ndefault = 3.0\nstep = 0.5\ninteger = true\n",
+            "error: parameter 'birth' sets `integer`, expected integers for `min`, `max`, `default` and `step`",
+        ),
+        (
+            "u32.toml",
+            "kind = \"u32\"\nmin = 0\nmax = 8\ndefault = 3\ninteger = true\n",
+            "error: parameter 'birth' of this kind must not set `integer`",
+        ),
+    ] {
+        let graph = scratch.write(name, &lowered.replace(marked, table));
+        let refused = run(&["--model-file", &graph, "--params"]);
+        assert!(!refused.status.success());
+        let output = stderr(&refused);
+        assert!(
+            output.contains(&format!("{name}:")) && output.contains(message),
+            "{output}"
+        );
+    }
+}
+
+/// A percentage takes `%` in `--vary` values and ranges, as the fraction does, and a `%` on another parameter is refused
+/// with its id.
+#[test]
+fn a_percentage_takes_a_percent_sign_in_levels() {
+    if !has_device() {
+        return;
+    }
+    let model_file = sir_sheet();
+    let plan = |levels: &str| {
+        run(&[
+            "--model-file",
+            &model_file,
+            "--set",
+            "grid_width=16",
+            "--set",
+            "grid_height=16",
+            "--vary",
+            levels,
+            "--dry-run",
+        ])
+    };
+    for levels in [
+        "initial_infected=1%,2%,3%",
+        "initial_infected=1%:3%:1%",
+        "initial_infected=0.01:0.03:0.01",
+    ] {
+        let planned = plan(levels);
+        assert!(planned.status.success(), "{levels}: {}", stderr(&planned));
+        assert!(stdout(&planned).contains("3 configs"), "{levels}: {}", stdout(&planned));
+    }
+    let refused = plan("infection_rate=10%:30%:10%");
+    assert!(!refused.status.success());
+    let message = stderr(&refused);
+    assert!(
+        message.contains("parameter 'infection_rate'") && message.contains("is a percentage, expected a plain number"),
+        "{message}"
+    );
+
+    // A sweep records fractions alone. `runs.csv` holds the values, and the manifest's spec holds fractions instead
+    // of the percent text.
+    let scratch = Scratch::new("percent-levels");
+    let dir = scratch.path("sweep");
+    run_ok(&[
+        "--model-file",
+        &model_file,
+        "--set",
+        "grid_width=16",
+        "--set",
+        "grid_height=16",
+        "--set",
+        "infection_rate=0.5",
+        "--set",
+        "initial_infected=0.3%",
+        "--vary",
+        "recovery_rate=0.1,0.2",
+        "--steps",
+        "2",
+        "--out",
+        &argument(&dir),
+    ]);
+    let runs = std::fs::read_to_string(dir.join("runs.csv")).expect("runs.csv is written");
+    let column = runs
+        .lines()
+        .next()
+        .and_then(|header| header.split(',').position(|name| name == "initial_infected"))
+        .expect("runs.csv has a column per parameter");
+    assert!(
+        runs.lines()
+            .skip(1)
+            .all(|line| line.split(',').nth(column) == Some("0.003")),
+        "{runs}"
+    );
+    assert_eq!(manifest(&dir)["spec"]["set"]["initial_infected"], 0.003);
+    let listed = scratch.path("listed");
+    run_ok(&[
+        "--model-file",
+        &model_file,
+        "--set",
+        "grid_width=16",
+        "--set",
+        "grid_height=16",
+        "--vary",
+        "initial_infected=0.3%,1%",
+        "--steps",
+        "2",
+        "--out",
+        &argument(&listed),
+    ]);
+    assert_eq!(
+        manifest(&listed)["spec"]["block"][0]["factors"][0]["values"],
+        serde_json::json!([0.003, 0.01])
+    );
 }
 
 /// An export whose path is a model file of the command line is refused before anything runs, and the model file is

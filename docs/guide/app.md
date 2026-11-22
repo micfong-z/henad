@@ -532,6 +532,8 @@ The field takes values the way `henad-cli --vary` does:
 | `0.1:0.5`       | Every value between 0.1 and 0.5, for a sampled design to draw from |
 | `all`           | Every option of a checkbox or a dropdown                           |
 
+A parameter shown as a percentage takes its values with or without the `%` sign, as in `1%, 2%` or `1%:5%:1%`, and `0.01, 0.02` gives the same values.
+A `%` sign on any other parameter is an error on its row.
 Outside a sampled design, an integer range or a range of ticks can leave out its step, as in `1:5`, and then steps by 1.
 The line under the field lists the values, as in **5 values: 0.1, 0.2, 0.3, 0.4, 0.5**, and shows the first three and the last of a longer list.
 A newly ticked field starts empty, and its line reads **Enter values** with an example, as in **Enter values, such as 0:1:0.2**.
@@ -541,6 +543,7 @@ In the editor, **Values**, **Range** and **Range to draw from** pick a list, a r
 Only **Latin hypercube** and **Uniform random** enable **Range to draw from**.
 <span class="ui" markdown>Whole range</span>, <span class="ui" markdown>Both ends</span>, <span class="ui" markdown>Around current</span> and <span class="ui" markdown>Current value</span> fill in the whole range, its two ends, half, one and one and a half times the parameter's value in the <span class="ui" markdown>:material-tune: Parameters</span> tab, or that value alone.
 The editor writes into the field as you edit, and writes a list without spaces, as in `1,16384`.
+For an integer parameter, including a sheet's whole number that can go below 0, the fills and the fields round to integers.
 A checkbox or dropdown parameter takes a menu of its options instead of the field, and writes `all` or the options ticked.
 The menu's button reads **All options**, or lists the ticked options.
 

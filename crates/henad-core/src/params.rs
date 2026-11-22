@@ -16,6 +16,7 @@ pub struct ParamDescriptor {
     apply: ParamApply,
     format: ParamFormat,
     hidden: bool,
+    integer: bool,
 }
 
 /// Display format of a parameter value. The stored value is the same either way.
@@ -53,6 +54,7 @@ impl ParamDescriptor {
             apply: ParamApply::Live,
             format: ParamFormat::Plain,
             hidden: false,
+            integer: false,
         }
     }
 
@@ -102,6 +104,16 @@ impl ParamDescriptor {
         self
     }
 
+    /// Marks an `F32` parameter as taking whole numbers only. Every other kind ignores the mark.
+    ///
+    /// [`crate::explore::value::check_param`] then rejects a value with a fractional part, and a sampled design or a
+    /// search draws whole numbers only. The minimum, maximum, default and step are whole numbers themselves. A
+    /// sheet's whole number with a negative minimum is one such parameter.
+    pub fn integer(mut self) -> Self {
+        self.integer = true;
+        self
+    }
+
     /// Returns whether an edit reaches a running state.
     pub fn is_live(&self) -> bool {
         self.apply == ParamApply::Live
@@ -110,6 +122,13 @@ impl ParamDescriptor {
     /// Returns whether the parameter is hidden from the Parameters panel.
     pub fn is_hidden(&self) -> bool {
         self.hidden
+    }
+
+    /// Returns whether the parameter is an `F32` marked by [`Self::integer`] to take whole numbers only.
+    ///
+    /// Note that a `U32` takes whole numbers by its kind, and returns `false` here.
+    pub fn is_integer(&self) -> bool {
+        self.integer && matches!(self.kind, ParamKind::F32 { .. })
     }
 }
 

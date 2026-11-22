@@ -23,7 +23,7 @@ use henad_compute::entry::ModelEntry;
 use henad_compute::simulation::RunSetup;
 use henad_core::action::Schedule;
 use henad_core::diagnostic::CodeDiagnostic;
-use henad_core::explore::value::check_value;
+use henad_core::explore::value::check_param;
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use web_time::Instant;
 
@@ -302,7 +302,7 @@ fn with_tried(entry: &ModelEntry, values: &mut [ParamValue], tried: &[TriedValue
             continue;
         }
         if let Some(tried) = tried.iter().find(|tried| tried.id == descriptor.id())
-            && check_value(descriptor.kind(), &tried.value).is_ok()
+            && check_param(descriptor, &tried.value).is_ok()
         {
             value.clone_from(&tried.value);
         }

@@ -38,8 +38,9 @@ and a browser keeps eframe's one key per origin. `ui/` has one file per panel or
 `time_axis.rs` holds the time axis the Charts tab, the Results tab's Series view and Playback
 share. The Parameters tab, the Export tab and the Editor live in directories, `params/`, `export/`
 and `editor/`. The Parameters tab's `mod.rs` draws the panel, its action buttons and its notice,
-`values.rs` the widget and text of one value (`value_widget`, `display_value`, `sheet_number`),
-`seed.rs` the Seed row, `schedule.rs` the scheduled actions and `trial.rs` the preview mode. The Export
+`values.rs` the widget and text of one value (`value_widget`, `display_value`, `sheet_number`;
+an `f32` marked integer slides in whole steps, `parameter_slider_step`), `seed.rs` the Seed row,
+`schedule.rs` the scheduled actions and `trial.rs` the preview mode. The Export
 tab's `mod.rs` draws the tab and writes the stat series and final state, `image.rs` captures the
 viewport and `metadata.rs` builds the run details. Save stats (`history_csv`) and Record
 (`start_recording`, `Recording::start`) give the `StatsWriter` the tick length of `loaded_time`,

@@ -53,11 +53,13 @@ henad-compute instantiates no model outside its own tests.
 hidden `__with_code` gives a test's entry a runtime source labelled with its id.
 `grid_init_rng` and `agent_init_rng` hold the default-seed rule the CPU engines and the GPU ports
 share. `simulation.rs` is the programmatic API over an entry. `RunSetup`
-(`ModelEntry::setup`) holds values by id, a seed and scheduled actions, each checked when set
-(`set` through `check_value`, `set_text` through `parse_value`, `from_parts` and `from_replay`
-for positional values). `RunSetup::build` fires tick 0's actions before it returns, and a
-`Simulation` fires each later tick's after the step that reaches it (`Fire::AfterStep`), testing
-the schedule once per stretch. On native a CPU `Simulation` runs each call's model code inside
+(`ModelEntry::setup`) holds values by id, a seed and scheduled actions, each checked when set (`set`
+through `check_param`, `set_text` through `parse_param`, `from_parts` and `from_replay` for
+positional values, and `Simulation::set_param` through `check_param`), so a percentage takes `2.5%`
+and an `f32` marked integer refuses a fraction. `RunSetup::build` fires tick 0's actions before it
+returns, and a `Simulation` fires each later tick's after the step that reaches it
+(`Fire::AfterStep`), testing the schedule once per stretch. On native a CPU `Simulation` runs each
+call's model code inside
 one `rayon::scope` (`run_sampled` once for the whole call, its callback inside it, hence the
 `WasmNotSend` bounds), and a GPU one runs on the calling thread inside `catching_on`. A refused
 scheduled action is a `Fault`. A `Simulation` keeps the message of the first fault a call

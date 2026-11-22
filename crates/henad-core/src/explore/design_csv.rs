@@ -7,7 +7,7 @@ use std::fmt;
 
 use crate::explore::factor::{Factor, FactorDomain, FactorLevel, FactorSlot};
 use crate::explore::spec::{ACTION_COLUMN_PREFIX, ActionSpec};
-use crate::explore::value::{ValueError, parse_value};
+use crate::explore::value::{ValueError, parse_param};
 use crate::export::csv::{CsvError, parse_records};
 use crate::params::ParamDescriptor;
 
@@ -111,7 +111,7 @@ fn table_level(
     params: &[ParamDescriptor],
 ) -> Result<FactorLevel, DesignTableValueError> {
     match slot {
-        FactorSlot::Param(index) => parse_value(params[index].kind(), field)
+        FactorSlot::Param(index) => parse_param(&params[index], field)
             .map(FactorLevel::Param)
             .map_err(DesignTableValueError::Param),
         FactorSlot::Action(_) => field

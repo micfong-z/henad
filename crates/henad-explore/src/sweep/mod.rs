@@ -37,11 +37,13 @@ use crate::spec_file::{DesignTableFile, ExecutionTable, SpecFile};
 
 mod error;
 mod manifest;
+mod percent;
 mod prepare;
 
 pub use error::ExploreError;
 use manifest::unidentified_model_advice;
 pub(crate) use manifest::{ManifestParts, build_warnings, finish_manifest, running_manifest};
+pub(crate) use percent::with_fractions;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use prepare::executor;
 pub(crate) use prepare::{PreparedStart, SweepInputs, SweepPreparation, announce, sized_layout};
@@ -447,7 +449,8 @@ pub struct SweepRecord {
 /// [`RuntimeInfo`](henad_compute::runtime_info::RuntimeInfo). A context acquired here carries it, and a host's own
 /// context carries it once built with [`GpuContext::with_runtime_info`]. A bare [`SweepSpec`] carries no execution
 /// settings. [`LoadedSpec`](crate::spec_file::LoadedSpec) keeps a spec file's `[execution]` table for
-/// [`SweepOptions::apply_execution`].
+/// [`SweepOptions::apply_execution`]. A value or range of a percentage written in percent, as in `1%`, is planned and
+/// recorded in the manifest as its fraction.
 ///
 /// With `options.resume`, a directory holding runs of the same plan keeps the runs that its
 /// [`ResumeScan`](crate::output::resume::ResumeScan) keeps, and the sweep runs the rest. Both tables then list every
@@ -469,6 +472,7 @@ pub fn run_spec(
     options: &SweepOptions,
     progress: &mut dyn Progress,
 ) -> Result<SweepRecord, ExploreError> {
+    let spec = &with_fractions(spec.clone(), model.param_descriptors());
     let (planned, device) = plan_then_acquire(model, gpu, spec, crate::device::acquire_headless)?;
     let gpu = device.as_deref();
     let runtime = ManifestRuntime::new(gpu.and_then(GpuContext::runtime_info));
@@ -577,6 +581,7 @@ pub fn plan_spec(
 ) -> Result<SweepReport, ExploreError> {
     use crate::search_run::SearchPreparation;
 
+    let spec = &with_fractions(spec.clone(), model.param_descriptors());
     let (planned, device) = plan_then_acquire(model, gpu, spec, crate::device::acquire_headless)?;
     let gpu = device.as_deref();
     let runtime = ManifestRuntime::new(gpu.and_then(GpuContext::runtime_info));

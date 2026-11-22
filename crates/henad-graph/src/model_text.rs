@@ -295,8 +295,9 @@ pub(crate) fn color_hex(color: &Color) -> String {
 
 /// Appends the keys of `param`'s `[[param]]` table to `text`, each on a line of its own.
 ///
-/// `hidden = true` is written only for a hidden parameter, and a shown one writes no `hidden` key. A graph file's tick
-/// length adds its `tick_unit` after these keys.
+/// `hidden = true` is written only for a hidden parameter, and a shown one writes no `hidden` key. `integer = true` is
+/// written only for an `f32` marked [`ParamDescriptor::integer`]. A graph file's tick length adds its `tick_unit` after
+/// these keys.
 pub fn write_param(text: &mut String, param: &ParamDescriptor) {
     text.push_str(&format!("id = {}\n", toml_string(param.id())));
     text.push_str(&format!("label = {}\n", toml_string(param.label())));
@@ -311,6 +312,9 @@ pub fn write_param(text: &mut String, param: &ParamDescriptor) {
             text.push_str(&format!("min = {min:?}\nmax = {max:?}\ndefault = {default:?}\n"));
             if let Some(step) = step {
                 text.push_str(&format!("step = {step:?}\n"));
+            }
+            if param.is_integer() {
+                text.push_str("integer = true\n");
             }
         }
         ParamKind::U32 { min, max, default } => {
@@ -351,6 +355,8 @@ pub struct ParamTable {
     default: toml::Value,
     #[serde(default)]
     step: Option<f64>,
+    #[serde(default)]
+    integer: Option<bool>,
     #[serde(default)]
     options: Option<Vec<String>>,
     #[serde(default)]
@@ -430,7 +436,29 @@ impl ParamTable {
     }
 
     /// Returns the descriptor the table declares from every key but `hidden` and `tick_unit`.
+    /// Checks that the `min`, `max`, `default` and `step` of an `f32` parameter that sets `integer = true` are whole
+    /// numbers. A key left out, or a value that is not a number, is left to the reader of that key.
+    ///
+    /// # Errors
+    ///
+    /// Returns the message naming the parameter when a value has a fractional part.
+    fn check_whole(&self) -> Result<(), String> {
+        if self.kind != ParamKindName::F32 || self.integer != Some(true) {
+            return Ok(());
+        }
+        let fractional = |value: &toml::Value| matches!(value, toml::Value::Float(number) if number.fract() != 0.0);
+        let values = [self.min.as_ref(), self.max.as_ref(), Some(&self.default)];
+        if values.into_iter().flatten().any(fractional) || self.step.is_some_and(|step| step.fract() != 0.0) {
+            return Err(format!(
+                "parameter '{}' sets `integer`, expected integers for `min`, `max`, `default` and `step`",
+                self.id
+            ));
+        }
+        Ok(())
+    }
+
     fn into_kind_descriptor(self) -> Result<ParamDescriptor, String> {
+        self.check_whole()?;
         let id = self.id;
         let label = self.label.unwrap_or_else(|| id.clone());
         let unused = |key: &str, present: bool| {
@@ -440,6 +468,7 @@ impl ParamTable {
                 Ok(())
             }
         };
+        unused("integer", self.integer.is_some() && self.kind != ParamKindName::F32)?;
         let kind = match self.kind {
             ParamKindName::F32 => {
                 unused("options", self.options.is_some())?;
@@ -519,7 +548,10 @@ impl ParamTable {
                 }
             }
         };
-        let descriptor = ParamDescriptor::new(id, label, kind);
+        let mut descriptor = ParamDescriptor::new(id, label, kind);
+        if self.integer == Some(true) {
+            descriptor = descriptor.integer();
+        }
         Ok(match self.format {
             Some(FormatName::Percent) => descriptor.percent(),
             Some(FormatName::Plain) | None => descriptor,

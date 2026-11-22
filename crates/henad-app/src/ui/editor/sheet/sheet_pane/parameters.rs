@@ -3,7 +3,7 @@
 
 use egui::accesskit::Action;
 use egui::{Id, Key, Label, RichText, Slider, Ui};
-use henad_graph::sheet::document::{SheetDocument, SheetLiteral, SheetParameter};
+use henad_graph::sheet::document::{ParameterType, SheetDocument, SheetLiteral, SheetParameter};
 use henad_graph::sheet::edit::{SheetEdit, SheetItem};
 use henad_graph::sheet::format_number;
 use henad_graph::sheet::sentence::{
@@ -22,6 +22,16 @@ use crate::ui::editor::sheet::widgets::{
     NewParameterDialog, NumberUse, caption, caption_width, commit_field, commit_number, message_ui, name_taken,
     set_name, suggestion_field,
 };
+
+/// Returns the step of the value slider of `parameter`: [`slider_step`] of its range, and at least 1 for a whole number.
+pub fn parameter_step(parameter: &SheetParameter) -> f64 {
+    let step = slider_step(parameter.max - parameter.min);
+    if parameter.parameter_type == ParameterType::WholeNumber {
+        step.max(1.0).round()
+    } else {
+        step
+    }
+}
 
 /// Returns the step of a slider over `range`: about a 200th of it, rounded down to 1, 2 or 5 times a power of ten.
 pub fn slider_step(range: f64) -> f64 {
@@ -396,7 +406,7 @@ fn value_slider(
             ui.spacing_mut().slider_width = width;
             ui.add(
                 Slider::new(&mut value, parameter.min..=parameter.max)
-                    .step_by(slider_step(parameter.max - parameter.min))
+                    .step_by(parameter_step(parameter))
                     .show_value(false),
             )
         })

@@ -10,8 +10,8 @@ use std::num::ParseFloatError;
 use crate::explore::design::DesignKind;
 use crate::explore::plan::Config;
 use crate::explore::spec::ActionSpec;
-use crate::explore::value::{ValueError, check_value, parse_value};
-use crate::params::{ParamDescriptor, ParamKind, ParamValue};
+use crate::explore::value::{ValueError, check_param, parse_param, percent_fraction};
+use crate::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 
 /// Maximum number of levels in one factor.
 pub const MAX_LEVELS: u64 = 1 << 24;
@@ -22,7 +22,7 @@ const ROUNDING: f64 = 1e-9;
 /// Levels of a factor, as a spec writes them.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LevelSpec {
-    /// Values in the text form that [`parse_value`] accepts, or ticks for an action.
+    /// Values in the text form that [`parse_param`] accepts, or ticks for an action.
     ///
     /// A plan trims the spaces around each value before it reads it.
     Values(Vec<String>),
@@ -38,6 +38,19 @@ pub enum LevelSpec {
         /// Distance between two consecutive values.
         step: Option<f64>,
     },
+    /// Every value from `min` to `max` percent inclusive, `step` percent apart, for a parameter in the
+    /// [`ParamFormat::Percent`] format.
+    ///
+    /// A plan reads it as the [`Self::Range`] of the same numbers divided by 100, so `1%:5%:1%` plans as
+    /// `0.01:0.05:0.01` does.
+    PercentRange {
+        /// Lowest value of the range, in percent.
+        min: f64,
+        /// Highest value the range can reach, in percent.
+        max: f64,
+        /// Distance between two consecutive values, in percent.
+        step: Option<f64>,
+    },
     /// Every value of a `Bool` or `Choice` parameter.
     All,
 }
@@ -45,12 +58,13 @@ pub enum LevelSpec {
 impl LevelSpec {
     /// Reads levels as `--vary` writes them: `all`, a range `min:max:step` or `min:max`, or a list `v1,v2,...`.
     ///
-    /// Spaces around the text, a listed value or a part of a range are ignored. The model checks the levels when
-    /// the sweep is planned.
+    /// Spaces around the text, a listed value or a part of a range are ignored. A range with a `%` sign after every
+    /// part, as in `1%:5%:1%`, is a [`Self::PercentRange`]. The model checks the levels when the sweep is planned.
     ///
     /// # Errors
     ///
-    /// Returns [`LevelSpecError`] for a range with other than two or three parts, or a part that is not a number.
+    /// Returns [`LevelSpecError`] for a range with other than two or three parts, a part that is not a number, or a
+    /// `%` sign after some parts of a range but not all.
     pub fn parse(text: &str) -> Result<Self, LevelSpecError> {
         let text = text.trim();
         if text == "all" {
@@ -61,26 +75,55 @@ impl LevelSpec {
                 text.split(',').map(|value| value.trim().to_owned()).collect(),
             ));
         }
-        let number = |part: &str| {
-            part.trim().parse::<f64>().map_err(|source| LevelSpecError::NotANumber {
-                part: part.to_owned(),
-                range: text.to_owned(),
-                source,
-            })
-        };
-        match text.split(':').collect::<Vec<_>>().as_slice() {
-            [min, max] => Ok(Self::Range {
-                min: number(min)?,
-                max: number(max)?,
-                step: None,
-            }),
-            [min, max, step] => Ok(Self::Range {
-                min: number(min)?,
-                max: number(max)?,
-                step: Some(number(step)?),
-            }),
-            _ => Err(LevelSpecError::BadRange { range: text.to_owned() }),
+        let parts: Vec<&str> = text.split(':').collect();
+        if !matches!(parts.len(), 2 | 3) {
+            return Err(LevelSpecError::BadRange { range: text.to_owned() });
         }
+        let percents = parts.iter().filter(|part| part.trim().ends_with('%')).count();
+        if percents != 0 && percents != parts.len() {
+            return Err(LevelSpecError::MixedPercent { range: text.to_owned() });
+        }
+        let numbers = parts
+            .iter()
+            .map(|part| {
+                let trimmed = part.trim();
+                let number = trimmed.strip_suffix('%').map_or(trimmed, str::trim_end);
+                number.parse::<f64>().map_err(|source| LevelSpecError::NotANumber {
+                    part: (*part).to_owned(),
+                    range: text.to_owned(),
+                    source,
+                })
+            })
+            .collect::<Result<Vec<f64>, _>>()?;
+        let (min, max, step) = (numbers[0], numbers[1], numbers.get(2).copied());
+        Ok(if percents == 0 {
+            Self::Range { min, max, step }
+        } else {
+            Self::PercentRange { min, max, step }
+        })
+    }
+
+    /// Returns the levels with a [`Self::PercentRange`] written as the [`Self::Range`] of its fractions, and any
+    /// other levels unchanged.
+    ///
+    /// A spec file writes a range in percent this way, and a plan reads both forms to the same levels.
+    pub fn to_fractions(&self) -> Self {
+        match *self {
+            Self::PercentRange { min, max, step } => Self::Range {
+                min: percent_fraction(min),
+                max: percent_fraction(max),
+                step: step.map(percent_fraction),
+            },
+            _ => self.clone(),
+        }
+    }
+}
+
+/// Returns the range `min:max:step` as `--vary` writes it, with `suffix` after each part.
+fn range_text(min: f64, max: f64, step: Option<f64>, suffix: &str) -> String {
+    match step {
+        Some(step) => format!("{min}{suffix}:{max}{suffix}:{step}{suffix}"),
+        None => format!("{min}{suffix}:{max}{suffix}"),
     }
 }
 
@@ -101,6 +144,11 @@ pub enum LevelSpecError {
         /// Range as written, after trimming.
         range: String,
     },
+    /// A range with a `%` sign after some of its parts but not all.
+    MixedPercent {
+        /// Range as written, after trimming.
+        range: String,
+    },
 }
 
 impl fmt::Display for LevelSpecError {
@@ -108,6 +156,12 @@ impl fmt::Display for LevelSpecError {
         match self {
             Self::NotANumber { part, range, .. } => write!(f, "'{part}' in range '{range}' is not a number"),
             Self::BadRange { range } => write!(f, "invalid range '{range}', expected MIN:MAX:STEP or MIN:MAX"),
+            Self::MixedPercent { range } => {
+                write!(
+                    f,
+                    "invalid range '{range}', expected a % sign after every part or no part"
+                )
+            }
         }
     }
 }
@@ -116,7 +170,7 @@ impl std::error::Error for LevelSpecError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::NotANumber { source, .. } => Some(source),
-            Self::BadRange { .. } => None,
+            Self::BadRange { .. } | Self::MixedPercent { .. } => None,
         }
     }
 }
@@ -168,7 +222,9 @@ impl FactorSpec {
     /// Resolves the target against `params` and `actions`, and checks every level against the target.
     ///
     /// In a random or Latin hypercube design, a range with no step stands for every value from `min` to `max`.
-    /// Everywhere else the factor lists its levels.
+    /// Everywhere else the factor lists its levels. A parameter marked [`ParamDescriptor::integer`] reads its range
+    /// as a `U32` parameter does: whole ends and steps, a step of 1 when none is given, and whole numbers alone in a
+    /// sampled design.
     ///
     /// # Errors
     ///
@@ -207,11 +263,29 @@ impl FactorSpec {
                         known: params.iter().map(|descriptor| descriptor.id().to_owned()).collect(),
                     });
                 };
-                let kind = params[index].kind();
+                let descriptor = &params[index];
                 let domain = match &self.levels {
-                    LevelSpec::Values(raw) => FactorDomain::Levels(parsed_levels(id, kind, raw)?),
-                    &LevelSpec::Range { min, max, step } => range_domain(id, kind, min, max, step, sampled)?,
-                    LevelSpec::All => FactorDomain::Levels(every_level(id, kind)?),
+                    LevelSpec::Values(raw) => FactorDomain::Levels(parsed_levels(descriptor, raw)?),
+                    &LevelSpec::Range { min, max, step } => range_domain(descriptor, min, max, step, sampled)?,
+                    &LevelSpec::PercentRange { min, max, step } if descriptor.format() == ParamFormat::Percent => {
+                        let fraction = step.map(percent_fraction);
+                        range_domain(
+                            descriptor,
+                            percent_fraction(min),
+                            percent_fraction(max),
+                            fraction,
+                            sampled,
+                        )?
+                    }
+                    &LevelSpec::PercentRange { min, max, step } => {
+                        return Err(FactorError::Level {
+                            id: id.clone(),
+                            source: ValueError::UnexpectedPercent {
+                                raw: range_text(min, max, step, "%"),
+                            },
+                        });
+                    }
+                    LevelSpec::All => FactorDomain::Levels(every_level(id, descriptor.kind())?),
                 };
                 Ok(Factor {
                     slot: FactorSlot::Param(index),
@@ -231,6 +305,12 @@ impl FactorSpec {
                         let min = whole_tick(name, min)?;
                         let max = whole_tick(name, max)?;
                         whole_domain(&self.target, min, max, step, sampled, FactorLevel::Tick)?
+                    }
+                    &LevelSpec::PercentRange { min, max, step } => {
+                        return Err(FactorError::BadTick {
+                            name: name.clone(),
+                            raw: range_text(min, max, step, "%"),
+                        });
                     }
                     LevelSpec::All => {
                         return Err(FactorError::AllOverNumber {
@@ -284,6 +364,27 @@ pub enum FactorDomain {
         /// Highest whole number a draw can take.
         max: u64,
     },
+    /// Every whole number from `min` to `max` inclusive, as the value of an `F32` parameter marked
+    /// [`ParamDescriptor::integer`], for a sampled design to draw from.
+    IntegerF32 {
+        /// Lowest whole number a draw can take.
+        min: i64,
+        /// Highest whole number a draw can take.
+        max: i64,
+    },
+}
+
+impl FactorDomain {
+    /// Returns the level of the whole number `offset` places above `min`, in the domain
+    /// [`FactorDomain::IntegerF32`] starting at `min`.
+    pub(crate) fn integer_f32_level(min: i64, offset: u64) -> FactorLevel {
+        FactorLevel::Param(ParamValue::F32((i128::from(min) + i128::from(offset)) as f32))
+    }
+
+    /// Returns the number of whole numbers from `min` to `max`, less one, for `min` not above `max`.
+    pub(crate) fn integer_span(min: i64, max: i64) -> u64 {
+        (i128::from(max) - i128::from(min)) as u64
+    }
 }
 
 /// A factor resolved against a model's parameters and a spec's actions, with every level checked.
@@ -300,7 +401,9 @@ impl Factor {
     pub fn levels(&self) -> Option<&[FactorLevel]> {
         match &self.domain {
             FactorDomain::Levels(levels) => Some(levels),
-            FactorDomain::Continuous { .. } | FactorDomain::WholeNumbers { .. } => None,
+            FactorDomain::Continuous { .. } | FactorDomain::WholeNumbers { .. } | FactorDomain::IntegerF32 { .. } => {
+                None
+            }
         }
     }
 
@@ -504,7 +607,8 @@ pub fn inclusive_steps(min: f64, max: f64, step: f64) -> Result<Vec<f64>, RangeE
         .collect())
 }
 
-fn parsed_levels(id: &str, kind: &ParamKind, raw: &[String]) -> Result<Vec<FactorLevel>, FactorError> {
+fn parsed_levels(descriptor: &ParamDescriptor, raw: &[String]) -> Result<Vec<FactorLevel>, FactorError> {
+    let id = descriptor.id();
     if raw.is_empty() {
         return Err(FactorError::NoLevels {
             target: FactorTarget::Param(id.to_owned()),
@@ -512,7 +616,7 @@ fn parsed_levels(id: &str, kind: &ParamKind, raw: &[String]) -> Result<Vec<Facto
     }
     raw.iter()
         .map(|text| {
-            parse_value(kind, text.trim())
+            parse_param(descriptor, text.trim())
                 .map(FactorLevel::Param)
                 .map_err(|source| FactorError::Level {
                     id: id.to_owned(),
@@ -543,19 +647,24 @@ fn tick_levels(name: &str, raw: &[String]) -> Result<Vec<FactorLevel>, FactorErr
 }
 
 fn range_domain(
-    id: &str,
-    kind: &ParamKind,
+    descriptor: &ParamDescriptor,
     min: f64,
     max: f64,
     step: Option<f64>,
     sampled: bool,
 ) -> Result<FactorDomain, FactorError> {
+    let id = descriptor.id();
     let target = FactorTarget::Param(id.to_owned());
-    match *kind {
+    match *descriptor.kind() {
+        ParamKind::F32 { .. } if descriptor.is_integer() => {
+            let min = integer_end(descriptor, min)?;
+            let max = integer_end(descriptor, max)?;
+            integer_domain(&target, min, max, step, sampled)
+        }
         ParamKind::F32 { .. } => {
             // Every value lies between the two ends, and rounding to f32 keeps that order.
             for end in [min, max] {
-                check_value(kind, &ParamValue::F32(end as f32)).map_err(|source| FactorError::Level {
+                check_param(descriptor, &ParamValue::F32(end as f32)).map_err(|source| FactorError::Level {
                     id: id.to_owned(),
                     source,
                 })?;
@@ -631,6 +740,52 @@ fn whole_domain(
         return Ok(FactorDomain::WholeNumbers { min, max });
     }
     levels_by_step(min, max, step.map_or(1, |step| step as u64), &level).map_err(range_error)
+}
+
+/// Returns the whole numbers from `min` to `max` inclusive, `step` apart, as levels of an `F32` parameter marked
+/// integer.
+///
+/// A sampled design with no step takes the whole range instead.
+fn integer_domain(
+    target: &FactorTarget,
+    min: i64,
+    max: i64,
+    step: Option<f64>,
+    sampled: bool,
+) -> Result<FactorDomain, FactorError> {
+    if min > max {
+        return Err(FactorError::Range {
+            target: target.clone(),
+            source: RangeError::Reversed {
+                min: min as f64,
+                max: max as f64,
+            },
+        });
+    }
+    if sampled && step.is_none() {
+        return Ok(FactorDomain::IntegerF32 { min, max });
+    }
+    let span = FactorDomain::integer_span(min, max);
+    whole_domain(target, 0, span, step, false, |offset| {
+        FactorDomain::integer_f32_level(min, offset)
+    })
+}
+
+/// Returns `value`, an end of a range over the `F32` parameter `descriptor` marked integer, as a whole number.
+///
+/// An end past the range of `i64` is clamped to it.
+fn integer_end(descriptor: &ParamDescriptor, value: f64) -> Result<i64, FactorError> {
+    if !value.is_finite() || value.fract() != 0.0 {
+        return Err(FactorError::NotWhole {
+            target: FactorTarget::Param(descriptor.id().to_owned()),
+            value,
+        });
+    }
+    check_param(descriptor, &ParamValue::F32(value as f32)).map_err(|source| FactorError::Level {
+        id: descriptor.id().to_owned(),
+        source,
+    })?;
+    Ok(value as i64)
 }
 
 /// Returns `min + i * step` for every `i` up to the last value not past `max`, each made a level by `level`.
@@ -720,6 +875,8 @@ mod tests {
             u32_param("size", "Size", 10, 1, 100),
             bool_param("wrap", "Wrap", true),
             choice_param("neighborhood", "Neighborhood", NEIGHBORHOODS, 0),
+            f32_param("share", "Share", 0.01, 0.0, 1.0, None).percent(),
+            f32_param("offset", "Offset", 3.0, -4.0, 8.0, Some(1.0)).integer(),
         ]
     }
 
@@ -928,7 +1085,7 @@ mod tests {
         let error = levels("speed", LevelSpec::All).expect_err("no such parameter");
         assert_eq!(
             error.to_string(),
-            "unknown parameter 'speed', expected one of rate, size, wrap, neighborhood"
+            "unknown parameter 'speed', expected one of rate, size, wrap, neighborhood, share, offset"
         );
     }
 
@@ -1055,5 +1212,123 @@ mod tests {
             domain(FactorSpec::param("rate", range(0.5, 1.5, None))),
             Err(FactorError::Level { .. })
         ));
+    }
+
+    /// Returns the message of `error` followed by each source's message, joined by ": ".
+    fn message(error: &dyn std::error::Error) -> String {
+        let mut text = error.to_string();
+        let mut source = error.source();
+        while let Some(inner) = source {
+            text = format!("{text}: {inner}");
+            source = inner.source();
+        }
+        text
+    }
+
+    /// A range written in percent plans the levels of the same range written as fractions, and only a percentage
+    /// takes one.
+    #[test]
+    fn a_percent_range_plans_as_the_range_of_its_fractions() {
+        let percent = |min, max, step| LevelSpec::PercentRange { min, max, step };
+        assert_eq!(LevelSpec::parse("1%:5%:1%"), Ok(percent(1.0, 5.0, Some(1.0))));
+        assert_eq!(LevelSpec::parse(" 0.5 % : 2.5% "), Ok(percent(0.5, 2.5, None)));
+        assert_eq!(
+            LevelSpec::parse("1%:5:1%").map_err(|error| error.to_string()),
+            Err("invalid range '1%:5:1%', expected a % sign after every part or no part".to_owned())
+        );
+        assert!(matches!(
+            LevelSpec::parse("1%:x%"),
+            Err(LevelSpecError::NotANumber { part, .. }) if part == "x%"
+        ));
+        assert_eq!(
+            levels("share", percent(1.0, 5.0, Some(1.0))),
+            levels("share", range(0.01, 0.05, Some(0.01)))
+        );
+        assert_eq!(
+            levels("share", percent(0.3, 0.9, Some(0.3))),
+            levels("share", range(0.003, 0.009, Some(0.003)))
+        );
+        let uneven = levels("share", percent(1.0, 5.0, Some(1.5)));
+        assert_eq!(uneven, levels("share", range(0.01, 0.05, Some(0.015))));
+        assert_eq!(
+            uneven.map(|levels| levels.len()),
+            Ok(3),
+            "a step that does not divide stops short of the end"
+        );
+        let listed = |raw: &[&str]| LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect());
+        assert_eq!(
+            levels("share", listed(&["1%", "2.5%", "0.05"])),
+            levels("share", listed(&["0.01", "0.025", "0.05"]))
+        );
+        let sampled = DesignKind::LatinHypercube { samples: 4 };
+        assert_eq!(
+            resolve(&FactorSpec::param("share", percent(1.0, 5.0, None)), &sampled).map(|factor| factor.domain),
+            Ok(FactorDomain::Continuous { min: 0.01, max: 0.05 })
+        );
+
+        let error = levels("rate", percent(1.0, 5.0, Some(1.0))).expect_err("rate is not a percentage");
+        assert_eq!(
+            message(&error),
+            "parameter 'rate': '1%:5%:1%' is a percentage, expected a plain number"
+        );
+        let error = levels("size", listed(&["5%"])).expect_err("size is not a percentage");
+        assert_eq!(
+            message(&error),
+            "parameter 'size': '5%' is a percentage, expected a plain number"
+        );
+        assert!(matches!(
+            ticks(percent(1.0, 5.0, None)),
+            Err(FactorError::BadTick { raw, .. }) if raw == "1%:5%"
+        ));
+    }
+
+    /// A parameter marked integer takes whole levels: listed, stepped by 1 or by a whole step, and drawn from the
+    /// whole numbers alone in a sampled design. A fraction is refused wherever it is typed.
+    #[test]
+    fn an_integer_parameter_takes_whole_levels() {
+        let whole = |values: &[f32]| values.iter().map(|&value| ParamValue::F32(value)).collect::<Vec<_>>();
+        assert_eq!(
+            levels("offset", range(-2.0, 2.0, None)),
+            Ok(whole(&[-2.0, -1.0, 0.0, 1.0, 2.0]))
+        );
+        assert_eq!(
+            levels("offset", range(-4.0, 8.0, Some(4.0))),
+            Ok(whole(&[-4.0, 0.0, 4.0, 8.0]))
+        );
+        let listed = LevelSpec::Values(vec!["-3".to_owned(), "7".to_owned()]);
+        assert_eq!(levels("offset", listed), Ok(whole(&[-3.0, 7.0])));
+
+        for spec in [range(-1.5, 2.0, None), range(-1.0, 2.0, Some(0.5))] {
+            let error = levels("offset", spec.clone()).expect_err("not whole");
+            assert!(matches!(error, FactorError::NotWhole { .. }), "{spec:?} gave {error:?}");
+        }
+        let error = levels("offset", LevelSpec::Values(vec!["2.5".to_owned()])).expect_err("not whole");
+        assert_eq!(message(&error), "parameter 'offset': 2.5 is not an integer");
+        assert!(matches!(
+            levels("offset", range(-5.0, 2.0, None)),
+            Err(FactorError::Level { .. })
+        ));
+        assert!(matches!(
+            levels("offset", range(2.0, -2.0, None)),
+            Err(FactorError::Range {
+                source: RangeError::Reversed { .. },
+                ..
+            })
+        ));
+
+        let sampled = DesignKind::Random { samples: 4 };
+        let domain =
+            |spec: LevelSpec| resolve(&FactorSpec::param("offset", spec), &sampled).map(|factor| factor.domain);
+        assert_eq!(
+            domain(range(-4.0, 8.0, None)),
+            Ok(FactorDomain::IntegerF32 { min: -4, max: 8 })
+        );
+        assert_eq!(
+            domain(range(-4.0, 4.0, Some(4.0))),
+            Ok(FactorDomain::Levels(
+                whole(&[-4.0, 0.0, 4.0]).into_iter().map(FactorLevel::Param).collect()
+            )),
+            "a stepped range stays a list"
+        );
     }
 }

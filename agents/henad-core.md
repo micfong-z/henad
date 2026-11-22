@@ -91,6 +91,10 @@ with, rounded once (0.1 puts tick 3 at 0.3), falling back to the binary product 
 `ParamDescriptor::hidden()` and `is_hidden()` are a display flag beside `on_reload()` and
 `percent()`, marking a parameter for a host to keep off its panel. `--set` and a sweep reach it.
 `schema_hash` leaves the flag out (`a_hidden_parameter_hashes_like_a_shown_one`).
+`ParamDescriptor::integer()` marks an `f32` as taking whole numbers alone, and `is_integer()` holds
+only for a marked `f32` (a `u32` ignores the mark). A sheet's Whole number with a negative minimum
+is one. `schema_hash` hashes a marked `f32` under the kind tag 4 in place of 0, so every unmarked
+model keeps its hash (`an_integer_parameter_hashes_apart_from_a_plain_one`).
 `binding::named_buffer_target` is `buffer_target` for a binding name built at run time.
 `Network` keeps its adjacency rows in compressed sparse row (CSR) form with slack, beside an edge
 list the view draws. A full row relocates to the end, the engine repacks after a tick once
@@ -100,10 +104,16 @@ change. `repack`, `should_repack`, `rebuild`, `set_directed` and the raw `spawn`
 `#[doc(hidden)]`, since the engine calls them and a model goes through `Nodes`.
 `explore/` holds the parts of a sweep that need no engine, and builds on wasm like the rest of the
 crate. `value.rs` reads a param value written as text and checks it against its descriptor
-(`parse_value`, `resolve_params`, `parse_overrides`), and `format_value` writes one back. `--set`
-goes through it. A choice reads an option's name before its index, and `helpers::choice_param`
-panics on an option name that reads as an unsigned integer, appears twice, holds a comma or a
-colon, or is `all`, since `--vary` level text could not list it. `spec.rs` is a
+(`parse_param`, `check_param`, `resolve_params`, `parse_overrides`), and `format_value` writes one
+back. `--set`, a level, a design table, `RunSetup::set`, `Simulation::set_param` and the app's
+Sweep tab go through `parse_param` and `check_param`: a percentage reads `2.5%` by moving the
+decimal exponent two places (so `0.3%` and `0.003` read to the same `f32`), a `%` on any other
+number is `ValueError::UnexpectedPercent`, and a marked `f32` with a fractional part is
+`ValueError::NotWhole`. Text is refused, never rounded, and the app's sliders and quick fills write
+whole numbers themselves. `parse_value` and `check_value` take a kind alone, and stay for values
+read back from results. A choice reads an option's name before its index, and
+`helpers::choice_param` panics on an option name that reads as an unsigned integer, appears twice,
+holds a comma or a colon, or is `all`, since `--vary` level text could not list it. `spec.rs` is a
 sweep as written, a `SweepSpec` of `BlockSpec`s with its
 `RunSettings`, `MeasureSettings`, `SeedSettings` and `ActionSpec`s. `SweepSpec::plan` (`plan.rs`)
 checks it against a `ModelSchema` and lists every `Config`, its param values and one tick per
@@ -118,7 +128,14 @@ past the last tick is only a `PlanWarning`. `Plan::schedule` orders a config's a
 by tick, then by spec order, and a `Shard` (`I/N`) takes the runs with `run_id % N == I`.
 `factor.rs` resolves a factor over a param or an action's tick (`FactorTarget`) from a list, an
 inclusive range or `all`, and `LevelSpec::parse` reads the level text of `--vary`. It and a plan
-ignore the spaces around each listed value.
+ignore the spaces around each listed value. A range with `%` after every part is a
+`LevelSpec::PercentRange` in percent, and a `%` on some parts alone is
+`LevelSpecError::MixedPercent`. A plan reads it through `to_fractions` as the `Range` of its
+fractions, the search hash hashes it the same way and a spec file writes it so, and only a
+percentage takes one. A marked `f32` reads a range as a `u32` does (whole ends and steps, step 1 by
+default), lists `f32` levels, and a sampled design or a search draws from
+`FactorDomain::IntegerF32` (`i64` ends): whole numbers alone, by construction, so nothing is
+rounded after a draw.
 `inclusive_steps` computes value `i` as `min + i * step` and never accumulates, and a sampled
 design takes a range with no step as a whole `FactorDomain`. `design.rs` combines a block's
 factors under a `DesignKind`: `Factorial` (the first factor slowest, the last fastest), `Zip`,
@@ -154,10 +171,15 @@ model's schema hash to the value 0.2.0 recorded, through the procedure in
 simulation rebuilds it, and `Plan::replay(run_id)` builds one from a plan. `plan_hash` leaves out
 the replicate count and the timeout, and a resume can change both. Unlike `DefaultHasher`,
 FNV-1a is stable across Rust releases. `export/csv.rs` formats and escapes CSV fields and reads
-RFC 4180 records back, and `StatColumns` (`export/stats_csv.rs`) is the column layout
-`StatsWriter` fixes from the first sample. `StatsWriter::tick_length` adds a `time` column after
-`tick`, `TimeScale::time_at` of each sample's tick. A sweep fixes its `series.csv` columns, reducer
-bindings and stop column with the same type.
+RFC 4180 records back, and `StatColumns` (`export/stats_csv.rs`) is the column layout `StatsWriter`
+fixes from the first sample. `StatColumns::plan` stops a debug build at a column named `run_id`
+or `tick` exactly, naming the stat, since those headers come before the stats.
+`StatsWriter::tick_length` adds a `time` column after `tick`, `TimeScale::time_at` of each sample's
+tick, and only then does the writer stop a debug build at a stat column named `time`, as
+`series_csv::header_line` does in henad-explore. A model without a time scale writes no `time`
+column, and a grid rule can label a state `time`. The sheet and graph checkers refuse all three
+names and the grid rule checker the first two, so the assertions are for a compiled model. A sweep
+fixes its `series.csv` columns, reducer bindings and stop column with the same type.
 `explore/search/` holds the searches, pure and seeded like the designs. `mod.rs` is the ask/tell
 `Searcher` trait. `ask(max)` returns up to `max` `Candidate`s, each an id, a `Genome`, a
 `replicate_offset` and a `CandidateOrigin`, and `tell` takes their `Evaluation`s sorted by

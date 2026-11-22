@@ -44,9 +44,18 @@ pub(crate) fn stat_column_names(columns: &StatColumns) -> Vec<String> {
 /// Returns the header line of `series.csv` for the stat layout `columns`, with its line ending.
 ///
 /// `timed` adds the `time` column after the ids.
+///
+/// # Panics
+///
+/// Panics in a debug build when `timed` is set and a stat column is named `time`.
 pub(crate) fn header_line(columns: &StatColumns, timed: bool) -> String {
     let mut line = SERIES_ID_COLUMNS.join(",");
     if timed {
+        debug_assert!(
+            (0..columns.len()).all(|column| columns.name(column) != SERIES_TIME_COLUMN),
+            "stat '{SERIES_TIME_COLUMN}' writes the column '{SERIES_TIME_COLUMN}', a name reserved for a column \
+             before the stats"
+        );
         line.push(',');
         line.push_str(SERIES_TIME_COLUMN);
     }
@@ -211,6 +220,21 @@ mod tests {
         assert_eq!(lines[0], "run_id,tick,time,Infected");
         assert_eq!(&lines[1..4], ["0,0,0,3", "0,3,0.3,3", "0,6,0.6,3"]);
         assert_eq!(&lines[4..], ["1,0,0,3", "1,3,0.75,3", "1,6,1.5,3"]);
+    }
+
+    /// A stat named `time` writes its own column in a `series.csv` without a `time` column.
+    #[test]
+    fn a_stat_named_time_plans_without_a_time_column() {
+        let columns = StatColumns::plan(&[stat("time", 3.0, COLOR)]);
+        assert_eq!(header_line(&columns, false), "run_id,tick,time\n");
+    }
+
+    /// A stat named `time` repeats the header of the `time` column, and a debug build stops at the header.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "stat 'time' writes the column 'time'")]
+    fn a_stat_named_time_stops_a_debug_build_with_a_time_column() {
+        header_line(&StatColumns::plan(&[stat("time", 3.0, COLOR)]), true);
     }
 
     /// A time scale naming no `f32` parameter adds no `time` column, to the header a resume checks and to the stats

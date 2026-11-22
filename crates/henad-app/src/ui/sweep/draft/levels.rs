@@ -26,7 +26,7 @@ impl SweepDraft {
         let missing = || match descriptor.kind() {
             ParamKind::Bool { .. } | ParamKind::Choice { .. } => "Select at least one option".to_owned(),
             _ if self.draws_ranges() => format!("Enter values, such as {}", whole_range_text(descriptor.kind())),
-            _ => format!("Enter values, such as {}", levels_example(descriptor.kind())),
+            _ => format!("Enter values, such as {}", levels_example(descriptor)),
         };
         let levels = row_levels(&self.factors[index].levels_text, self.draws_ranges(), missing)?;
         self.resolve(&FactorSpec::param(descriptor.id(), levels), schema, actions)
@@ -92,35 +92,42 @@ pub(super) fn default_levels_text(kind: &ParamKind) -> String {
     }
 }
 
-/// Returns an example of the values a parameter of `kind` takes, as a hint and in the note of an empty row.
+/// Returns an example of the values parameter `descriptor` takes, as a hint and in the note of an empty row.
 ///
 /// The example's range steps by about a quarter of the parameter's range, rounded to 1, 2 or 5 times a power of ten,
 /// and to a whole number for an integer parameter.
-pub fn levels_example(kind: &ParamKind) -> String {
+pub fn levels_example(descriptor: &ParamDescriptor) -> String {
+    let kind = descriptor.kind();
     if matches!(kind, ParamKind::Bool { .. } | ParamKind::Choice { .. }) {
         return "all".to_owned();
     }
     let (min, max) = kind_bounds(kind);
-    match quarter_step(kind, min, max).filter(|_| max > min) {
+    match quarter_step(descriptor, min, max).filter(|_| max > min) {
         Some(step) => format!(
             "{}:{}:{}",
-            number_text(kind, min),
-            number_text(kind, max),
-            number_text(kind, step)
+            number_text(descriptor, min),
+            number_text(descriptor, max),
+            number_text(descriptor, step)
         ),
-        None => both_ends_fill(kind),
+        None => both_ends_fill(descriptor),
     }
 }
 
-/// Returns about a quarter of the range from `min` to `max` of a parameter of `kind`, rounded to 1, 2 or 5 times a
+/// Returns whether parameter `descriptor` takes integers alone: a `u32`, or an `f32` marked integer.
+pub fn takes_integers(descriptor: &ParamDescriptor) -> bool {
+    matches!(descriptor.kind(), ParamKind::U32 { .. }) || descriptor.is_integer()
+}
+
+/// Returns about a quarter of the range from `min` to `max` of parameter `descriptor`, rounded to 1, 2 or 5 times a
 /// power of ten, and to a whole number of at least 1 for an integer parameter.
 ///
 /// Returns `None` for a step that is not finite and positive.
-pub fn quarter_step(kind: &ParamKind, min: f64, max: f64) -> Option<f64> {
+pub fn quarter_step(descriptor: &ParamDescriptor, min: f64, max: f64) -> Option<f64> {
     let step = round_step((max - min) / 4.0);
-    let step = match kind {
-        ParamKind::U32 { .. } => step.round().max(1.0),
-        _ => step,
+    let step = if takes_integers(descriptor) {
+        step.round().max(1.0)
+    } else {
+        step
     };
     (step.is_finite() && step > 0.0).then_some(step)
 }
@@ -134,16 +141,19 @@ pub fn kind_bounds(kind: &ParamKind) -> (f64, f64) {
     }
 }
 
-/// Returns the quick fill of a parameter's minimum and maximum only.
-pub fn both_ends_fill(kind: &ParamKind) -> String {
-    let (low, high) = kind_bounds(kind);
-    format!("{},{}", number_text(kind, low), number_text(kind, high))
+/// Returns the quick fill of the minimum and maximum of parameter `descriptor` only.
+pub fn both_ends_fill(descriptor: &ParamDescriptor) -> String {
+    let (low, high) = kind_bounds(descriptor.kind());
+    format!("{},{}", number_text(descriptor, low), number_text(descriptor, high))
 }
 
-/// Returns `number` as a value of a parameter of `kind` is written: to the precision of an `f32`, or whole.
-pub fn number_text(kind: &ParamKind, number: f64) -> String {
-    match kind {
+/// Returns `number` as a value of parameter `descriptor` is written: to the precision of an `f32`, or rounded to a
+/// whole number for an integer parameter.
+pub fn number_text(descriptor: &ParamDescriptor, number: f64) -> String {
+    match descriptor.kind() {
         ParamKind::U32 { .. } => format!("{}", number.round().max(0.0) as u64),
+        // Adding 0 turns a rounded -0 into 0.
+        ParamKind::F32 { .. } if descriptor.is_integer() => format!("{}", (number.round() + 0.0) as f32),
         _ => format!("{}", number as f32),
     }
 }
@@ -184,8 +194,8 @@ pub(super) fn row_levels(
     }
     let levels = parse_levels(text).map_err(|message| (IssueKind::Invalid, message))?;
     let enumerated = match levels {
-        LevelSpec::Range { step: None, .. } => !draws_ranges,
-        LevelSpec::Range { step: Some(_), .. } => true,
+        LevelSpec::Range { step: None, .. } | LevelSpec::PercentRange { step: None, .. } => !draws_ranges,
+        LevelSpec::Range { step: Some(_), .. } | LevelSpec::PercentRange { step: Some(_), .. } => true,
         LevelSpec::Values(_) | LevelSpec::All => false,
     };
     match level_estimate(&levels) {
@@ -304,6 +314,12 @@ pub fn levels_text(levels: &LevelSpec) -> String {
             step: Some(step),
         } => format!("{min}:{max}:{step}"),
         LevelSpec::Range { min, max, step: None } => format!("{min}:{max}"),
+        LevelSpec::PercentRange {
+            min,
+            max,
+            step: Some(step),
+        } => format!("{min}%:{max}%:{step}%"),
+        LevelSpec::PercentRange { min, max, step: None } => format!("{min}%:{max}%"),
         LevelSpec::All => "all".to_owned(),
     }
 }
@@ -312,7 +328,7 @@ pub fn levels_text(levels: &LevelSpec) -> String {
 pub(super) fn level_estimate(levels: &LevelSpec) -> u64 {
     match levels {
         LevelSpec::Values(values) => values.len() as u64,
-        LevelSpec::Range { min, max, step } => {
+        LevelSpec::Range { min, max, step } | LevelSpec::PercentRange { min, max, step } => {
             let span = (max - min) / step.unwrap_or(1.0);
             if span.is_finite() && span >= 0.0 {
                 (span as u64).saturating_add(1)

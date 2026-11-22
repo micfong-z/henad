@@ -17,7 +17,7 @@ use std::ops::ControlFlow;
 use henad_core::action::Fire;
 use henad_core::action::{RefusedActions, Schedule, Scheduled};
 use henad_core::explore::replay::Replay;
-use henad_core::explore::value::{ValueError, check_value, parse_value};
+use henad_core::explore::value::{ValueError, check_param, parse_param};
 use henad_core::export::state as state_export;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
@@ -70,7 +70,7 @@ impl RunSetup {
     pub fn set(mut self, id: &str, value: impl Into<ParamValue>) -> Result<Self, SetupError> {
         let value = value.into();
         let index = param_index(&self.entry, id)?;
-        check_value(self.entry.param_descriptors()[index].kind(), &value).map_err(|error| param_error(id, error))?;
+        check_param(&self.entry.param_descriptors()[index], &value).map_err(|error| param_error(id, error))?;
         self.values[index] = value;
         Ok(self)
     }
@@ -85,7 +85,7 @@ impl RunSetup {
     pub fn set_text(mut self, id: &str, text: &str) -> Result<Self, SetupError> {
         let index = param_index(&self.entry, id)?;
         let value =
-            parse_value(self.entry.param_descriptors()[index].kind(), text).map_err(|error| param_error(id, error))?;
+            parse_param(&self.entry.param_descriptors()[index], text).map_err(|error| param_error(id, error))?;
         self.values[index] = value;
         Ok(self)
     }
@@ -154,7 +154,7 @@ impl RunSetup {
             });
         }
         for (descriptor, value) in descriptors.iter().zip(values) {
-            check_value(descriptor.kind(), value).map_err(|error| param_error(descriptor.id(), error))?;
+            check_param(descriptor, value).map_err(|error| param_error(descriptor.id(), error))?;
         }
         let actions = entry.action_descriptors();
         for scheduled in schedule.entries() {
@@ -639,7 +639,7 @@ impl Simulation {
         let value = value.into();
         let index = param_index(&self.setup.entry, id)?;
         let descriptor = &self.setup.entry.param_descriptors()[index];
-        check_value(descriptor.kind(), &value).map_err(|error| param_error(id, error))?;
+        check_param(descriptor, &value).map_err(|error| param_error(id, error))?;
         self.check_earlier_fault()?;
         // The state rejects a reload-only index itself, from the descriptors it was built with.
         let accepted = match &mut self.engine {

@@ -96,6 +96,12 @@ enum Part {
     BucketTotal,
 }
 
+/// Names of the columns that `--export-stats` or `series.csv` write before the stat columns of every model.
+const LEADING_COLUMNS: [&str; 2] = ["run_id", "tick"];
+
+/// Name of the column that a model with a time scale writes after `tick`.
+const TIME_COLUMN: &str = "time";
+
 /// Column layout of a stat series, planned from one sample.
 ///
 /// A scalar series is one column, a vector is three (`.x`, `.y` and `.magnitude`), and a histogram
@@ -107,6 +113,11 @@ pub struct StatColumns {
 
 impl StatColumns {
     /// Derives the column layout from the sample `stats`.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build when a column is named `run_id` or `tick`, the names of columns written before the
+    /// stats. A model file with such a stat is refused by its checker first.
     pub fn plan(stats: &[StatEntry]) -> Self {
         let mut columns = Vec::new();
         for (series, entry) in stats.iter().enumerate() {
@@ -145,6 +156,16 @@ impl StatColumns {
                     push(Some("total"), Part::BucketTotal);
                 }
             }
+        }
+        if let Some(column) = columns
+            .iter()
+            .find(|column| LEADING_COLUMNS.contains(&column.name.as_str()))
+        {
+            debug_assert!(
+                false,
+                "stat '{}' writes the column '{}', a name reserved for a column before the stats",
+                column.label, column.name
+            );
         }
         Self { columns }
     }
@@ -259,6 +280,11 @@ impl<W: Write> StatsWriter<W> {
     ///
     /// The first call fixes the column layout and writes the header.
     ///
+    /// # Panics
+    ///
+    /// Panics in a debug build when a writer with a `time` column plans a stat column named `time`, and as
+    /// [`StatColumns::plan`] does.
+    ///
     /// # Errors
     ///
     /// Returns [`StatsWriteError::Io`] when a write fails, and [`StatsWriteError::Shape`] when `stats` does not fit
@@ -270,7 +296,12 @@ impl<W: Write> StatsWriter<W> {
             let planned = StatColumns::plan(stats);
             write!(self.out, "tick")?;
             if self.tick_length.is_some() {
-                write!(self.out, ",time")?;
+                debug_assert!(
+                    planned.columns.iter().all(|column| column.name != TIME_COLUMN),
+                    "stat '{TIME_COLUMN}' writes the column '{TIME_COLUMN}', a name reserved for a column before \
+                     the stats"
+                );
+                write!(self.out, ",{TIME_COLUMN}")?;
             }
             for column in &planned.columns {
                 write!(self.out, ",{}", column.header)?;
@@ -383,6 +414,56 @@ mod tests {
         writer.finish().expect("finish should succeed");
         let csv = String::from_utf8(buf).expect("output should be utf8");
         assert_eq!(csv, "tick,time,Alive\n0,0,1\n3,0.3,1\n10,1,1\n");
+    }
+
+    /// A stat named `time` repeats the header of the `time` column, and a debug build stops at the writer's header,
+    /// naming the stat.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "stat 'time' writes the column 'time'")]
+    fn a_stat_named_time_stops_a_debug_build_with_a_time_column() {
+        let mut writer = StatsWriter::new(Vec::new()).tick_length(0.5);
+        writer
+            .push(0, &[scalar("Alive", 1.0), scalar("time", 2.0)])
+            .expect("the header panics before the push returns");
+    }
+
+    /// A model without a time scale writes no `time` column, so a stat named `time` writes its column as any other.
+    #[test]
+    fn a_stat_named_time_plans_without_a_time_column() {
+        let csv = render(&[(0, vec![scalar("time", 2.0)])]);
+        assert_eq!(csv, "tick,time\n0,2\n");
+    }
+
+    /// A stat named `tick` repeats the first column, and a debug build stops at the plan.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "stat 'tick' writes the column 'tick'")]
+    fn a_stat_named_tick_stops_a_debug_build() {
+        render(&[(0, vec![scalar("tick", 1.0)])]);
+    }
+
+    /// A stat named `run_id` repeats the first column of `series.csv`, and a debug build stops at the plan.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "stat 'run_id' writes the column 'run_id'")]
+    fn a_stat_named_run_id_stops_a_debug_build() {
+        StatColumns::plan(&[scalar("run_id", 1.0)]);
+    }
+
+    /// Only a whole column name clashes: a vector named `tick` writes `tick.x`, `tick.y` and `tick.magnitude`, and a
+    /// stat whose name differs in case writes its own column.
+    #[test]
+    fn a_column_that_only_starts_with_a_reserved_name_plans() {
+        let mut writer = StatsWriter::new(Vec::new()).tick_length(1.0);
+        let stats = [
+            vec2("tick", 1.0, 0.0),
+            vec2("time", 1.0, 0.0),
+            scalar("Time", 1.0),
+            scalar("ticks", 1.0),
+        ];
+        writer.push(0, &stats).expect("push should succeed");
+        assert_eq!(StatColumns::plan(&stats).len(), 8);
     }
 
     #[test]
