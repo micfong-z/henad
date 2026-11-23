@@ -134,7 +134,9 @@ the value, Min, Max, Unit and ×, on one line or two by the section's width. The
 with `PARAMETER_NAME_MISSING` or `parameter_name_taken` in `PaneState::parameter_message`),
 `value_slider` (an egui `Slider` named `value_slider_name`, step `parameter_step`: `slider_step`,
 about a 200th of the range rounded down to 1, 2 or 5 times a power of ten, and at least 1 for a
-Whole number, `a_whole_number_slider_steps_by_integers`. A drag holds its value in temp data and
+Whole number, `a_whole_number_slider_steps_by_integers`, snapped by `params::snapped` as the
+Parameters tab's sliders are, so a drag or a key never passes the maximum,
+`a_value_slider_stops_at_its_maximum_off_its_steps`. A drag holds its value in temp data and
 commits once when let go, a click, an arrow key or an AccessKit increment, decrement or set value at
 once. egui rounds a default off the steps as it draws and reports it as `changed`. Only a clicked
 or released slider, an arrow key on the focused slider or an AccessKit request commits, and an

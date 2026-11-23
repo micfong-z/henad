@@ -23,6 +23,7 @@ use crate::ui::editor::sheet::widgets::{
     NewParameterDialog, NumberUse, caption, caption_width, commit_field, commit_number, message_ui, name_taken,
     set_name, suggestion_field,
 };
+use crate::ui::params::snapped;
 
 /// Returns the step of the value slider of `parameter`: [`slider_step`] of its range, and at least 1 for a whole number.
 pub fn parameter_step(parameter: &SheetParameter) -> f64 {
@@ -404,14 +405,17 @@ fn value_slider(
     if parameter.min.partial_cmp(&parameter.max) != Some(std::cmp::Ordering::Less) {
         return value;
     }
+    let (min, max, step) = (parameter.min, parameter.max, parameter_step(parameter));
     let response = ui
         .scope(|ui| {
             ui.spacing_mut().slider_width = width;
-            ui.add(
-                Slider::new(&mut value, parameter.min..=parameter.max)
-                    .step_by(parameter_step(parameter))
-                    .show_value(false),
-            )
+            let slider = Slider::from_get_set(min..=max, |edited| {
+                if let Some(edited) = edited {
+                    value = snapped(edited, min, max, step);
+                }
+                value
+            });
+            ui.add(slider.step_by(step).show_value(false))
         })
         .inner;
     set_name(ui, response.id, &value_slider_name(&parameter.name));

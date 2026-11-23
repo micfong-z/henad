@@ -137,6 +137,7 @@ Footprint (GPU only)
 This tab shows the parameters of the selected model, and you can change them using the sliders or text boxes.
 A parameter that is either on or off shows as a checkbox, and one with a fixed set of options shows as a dropdown.
 Some parameters, such as chances, are shown as percentages, and you can type a value with or without the `%` sign.
+A slider with a step snaps to the steps counted from its minimum and never goes past either end, and a typed minimum or maximum stays as typed.
 A model file can hide a parameter, such as the length of one tick in a model with a [time scale](../reference/model-files.md#time-scale).
 A hidden parameter gets no slider here, and the <span class="ui" markdown>:material-flask-outline: Sweep</span> tab still varies it.
 

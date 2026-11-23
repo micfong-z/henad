@@ -101,7 +101,7 @@ One table per parameter, at most 64, in the vocabulary of [`--params --json`](cl
 | `kind` | `"f32"`, `"u32"`, `"bool"` or `"choice"` |
 | `min`, `max` | Bounds of an `f32` or a `u32`, both included |
 | `default` | Value at the start: a number, `true` or `false`, or a choice's option name |
-| `step` | Step of an `f32`'s slider in the app. Optional |
+| `step` | Step of an `f32`'s slider in the app, counted from `min`. The slider never passes `max`, and a typed `min` or `max` stays as typed. Optional |
 | `integer` | `true` makes an `f32` take whole numbers alone: `--set` refuses a fraction, and a sampled design or a search draws whole numbers. `min`, `max`, `default` and `step` are whole numbers then. Written only when `true` |
 | `options` | Option names of a `choice`, as a list of strings |
 | `format` | `"percent"` to show an `f32` fraction as a percentage, or `"plain"`. `"plain"` when left out |

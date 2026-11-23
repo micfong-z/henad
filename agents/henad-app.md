@@ -47,8 +47,16 @@ frame whose Tab does not wrap takes one pass (`focus::tests`, `every_tab_stop_ha
 Parameters tab, the Export tab and the Editor live in directories, `params/`, `export/` and
 `editor/`. The Parameters tab's `mod.rs` draws the panel, its action buttons and its notice,
 `values.rs` the widget and text of one value (`value_widget`, `display_value`, `sheet_number`;
-an `f32` marked integer slides in whole steps, `parameter_slider_step`), `seed.rs` the Seed row,
-`schedule.rs` the scheduled actions and `trial.rs` the preview mode. The Export
+an `f32` marked integer slides in whole steps, `parameter_slider_step`). An `f32` slider snaps
+through `snapped`: the steps start at the minimum, a maximum off them is a step of its own, and no
+value leaves the range. egui snaps a typed number from the minimum before the slider's setter sees
+it, so the slider's parser keeps the number as typed for the setter, and a typed minimum or maximum
+stays as typed (`a_slider_keeps_its_ends_and_never_leaves_its_range`, the values `--set` and a
+sweep accept). A drag or a key reaches the setter on egui's steps already, and `snapped` only holds
+it inside the range, so a maximum less than half a step past the last step is reached by typing
+alone. The parser reads text such as "NaN" or "inf" as no number, and the value stays as it was.
+`--set` refuses such text too. `seed.rs` draws the Seed row, `schedule.rs` the scheduled actions
+and `trial.rs` the preview mode. The Export
 tab's `mod.rs` draws the tab and writes the stat series and final state, `image.rs` captures the
 viewport and `metadata.rs` builds the run details. Save stats (`history_csv`) and Record
 (`start_recording`, `Recording::start`) give the `StatsWriter` the tick length of `loaded_time`,

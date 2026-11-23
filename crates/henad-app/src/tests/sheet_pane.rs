@@ -21,15 +21,15 @@ use henad_graph::sheet::sentence::{
     RESTART_NOTICE, SHADE, SHADE_ENDS_EQUAL, SHEET_EMPTY, START_AGAIN_FOR, START_AGAIN_TO_SEE, STATES_KIND,
     TICK_LENGTH_NOT_POSITIVE, TYPE_A_CHANCE, TYPE_ONE_NUMBER, UNDO, USE_A_PARAMETER, WALLS_SENTENCE, WORLD_EMPTY,
     WORLD_QUESTION, add_row_name, model_name_button, name_reserved, parameter_max_name, run_once,
-    sheet_parameter_name_field, start_again_for, value_slider_name, world_side_out_of_range,
+    sheet_parameter_name_field, start_again_for, value_field_name, value_slider_name, world_side_out_of_range,
 };
 use henad_graph::sheet::starters;
 
 use crate::state::PreviewRun;
 use crate::tests::panes::{
     Seen, add_property, add_states_property, apply_sheet_edit, assert_control_holds, assert_no_forbidden_word,
-    build_life_sections, center_of, choose, click, enter_into, field_value, open_starter, picker_labels, picker_offers,
-    sheet, sheet_mut, shows_or_notice, starter_document, text, type_and_enter, type_into,
+    build_life_sections, center_of, choose, click, enter_into, field_value, named, open_starter, picker_labels,
+    picker_offers, sheet, sheet_mut, shows_or_notice, starter_document, text, type_and_enter, type_into,
 };
 use crate::tests::support::{
     Harness, TALL_SCREEN, align_with_starter, settle_preview, starter_text, tick_zero_stat, wait_for_snapshot,
@@ -891,6 +891,80 @@ fn a_whole_number_slider_steps_by_integers() {
         steps(&harness).default,
         5.0,
         "an arrow key steps the default from 4 to 5"
+    );
+}
+
+/// The value slider never steps past its maximum where the maximum lies off its steps: 1 to 10000 slides in steps of
+/// 20 from 1. A drag to its right end shows 10000 while held, and an arrow key from the last step lands on 10000.
+#[test]
+fn a_value_slider_stops_at_its_maximum_off_its_steps() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "game_of_life.toml");
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::AddParameter {
+            name: "Side".to_owned(),
+            parameter_type: ParameterType::Number,
+            min: 1.0,
+            max: 10_000.0,
+            default: 9981.0,
+            unit: None,
+        },
+    );
+    let side = |harness: &Harness| {
+        sheet(harness)
+            .document()
+            .parameters
+            .iter()
+            .find(|parameter| parameter.name == "Side")
+            .expect("the parameter Side")
+            .clone()
+    };
+    assert_eq!(parameter_step(&side(&harness)), 20.0);
+    let slider = center_of(&mut harness, &value_slider_name("Side"));
+    let end = named(&mut harness, &value_slider_name("Side"))[0]
+        .bounds
+        .expect("bounds")
+        .right_center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos: end,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    harness.frame(vec![egui::Event::PointerMoved(slider)]);
+    harness.frame(vec![egui::Event::PointerMoved(end), press(true)]);
+    harness.frame(vec![egui::Event::PointerMoved(end + egui::vec2(40.0, 0.0))]);
+    assert_eq!(
+        field_value(&mut harness, &value_field_name("Side")),
+        "10000",
+        "the slider held at its right end"
+    );
+    harness.frame(vec![press(false)]);
+    harness.settle();
+    assert_eq!(side(&harness).default, 10_000.0, "the drag ends at the maximum");
+    sheet_mut(&mut harness).undo(false);
+    harness.settle();
+    assert_eq!(side(&harness).default, 9981.0);
+    click(&mut harness, &sheet_parameter_name_field("Side"));
+    harness.press(Key::Tab, Modifiers::NONE);
+    harness.settle();
+    assert_eq!(harness.focused, value_slider_name("Side"));
+    harness.press(Key::ArrowRight, Modifiers::NONE);
+    harness.settle();
+    assert_eq!(
+        side(&harness).default,
+        10_000.0,
+        "an arrow key from 9981 stops at the maximum"
+    );
+    harness.press(Key::ArrowLeft, Modifiers::NONE);
+    harness.settle();
+    assert_eq!(
+        side(&harness).default,
+        9981.0,
+        "an arrow key from the maximum lands on the last step"
     );
 }
 

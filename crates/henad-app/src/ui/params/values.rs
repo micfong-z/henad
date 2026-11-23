@@ -1,6 +1,9 @@
 //! Widgets and text of one parameter value: the slider, checkbox or list of each kind, a fraction shown as a
 //! percentage, and the number a sheet parameter holds.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use henad_core::explore::value::format_value;
 use henad_core::params::{ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 
@@ -16,10 +19,8 @@ pub(super) fn value_widget(
     match (descriptor.kind(), value) {
         (ParamKind::F32 { min, max, step, .. }, ParamValue::F32(number)) => {
             let before = *number;
-            let mut slider = f32_slider(number, *min, *max, parameter_slider_step(descriptor, *step)).text(text);
-            if descriptor.format() == ParamFormat::Percent {
-                slider = as_percent(slider, *step);
-            }
+            let percent = (descriptor.format() == ParamFormat::Percent).then(|| percent_decimals(*step));
+            let slider = f32_slider(number, *min, *max, parameter_slider_step(descriptor, *step), percent).text(text);
             with_hint(ui.add(slider), hint);
             *number != before
         }
@@ -43,23 +44,88 @@ pub(super) fn value_widget(
     }
 }
 
-/// Returns a slider over `value` from `min` to `max`, snapping to `step`.
+/// Returns a slider over `value` from `min` to `max` that snaps to `step` by [`snapped`]. With `percent`, the slider
+/// shows and reads its fraction as a percentage with `percent` decimals.
 ///
 /// Note that the slider snaps `value` only when the user edits it. Drawing it leaves a value set by a spec or an
-/// opened run as it is.
-fn f32_slider(value: &mut f32, min: f32, max: f32, step: Option<f32>) -> egui::Slider<'_> {
-    let range = decimal_value(min)..=decimal_value(max);
-    let slider = egui::Slider::from_get_set(range, move |edited| {
+/// opened run as it is. egui snaps a drag or an arrow key to the steps from `min` before [`snapped`] sees it, so a
+/// maximum less than half a step past the last step is reached by typing alone.
+fn f32_slider(value: &mut f32, min: f32, max: f32, step: Option<f32>, percent: Option<usize>) -> egui::Slider<'_> {
+    let (low, high) = (decimal_value(min), decimal_value(max));
+    let step = step.map(decimal_value);
+    // egui snaps a typed number to the steps from the minimum before the setter sees it, past a maximum off those
+    // steps too. The parser keeps the number as typed for the setter.
+    let typed: Rc<Cell<Option<f64>>> = Rc::default();
+    let parsed = Rc::clone(&typed);
+    let slider = egui::Slider::from_get_set(low..=high, move |edited| {
         if let Some(edited) = edited {
-            *value = edited as f32;
+            let edited = typed.take().unwrap_or(edited);
+            *value = match step {
+                Some(step) => snapped(edited, low, high, step),
+                None => edited.max(low).min(high),
+            } as f32;
         }
         f64::from(*value)
     })
-    .clamping(egui::SliderClamping::Edits);
-    match step {
-        Some(step) => slider.step_by(decimal_value(step)),
+    .clamping(egui::SliderClamping::Edits)
+    .custom_parser(move |text| {
+        let number = if percent.is_some() {
+            read_percent(text)
+        } else {
+            read_number(text)
+        };
+        parsed.set(number);
+        number
+    });
+    let slider = match step {
+        Some(step) => slider.step_by(step),
+        None => slider,
+    };
+    match percent {
+        Some(decimals) => slider.custom_formatter(move |value, _| percent_text(value, decimals)),
         None => slider,
     }
+}
+
+/// Returns `value` inside `min` to `max`, snapped to the nearest of the values a whole number of `step`s above `min`
+/// and of `max`.
+///
+/// A slider's steps start at its minimum. A maximum off those steps is a step of its own, so a value never snaps past
+/// the maximum, and the minimum and the maximum stay as they are.
+pub(crate) fn snapped(value: f64, min: f64, max: f64, step: f64) -> f64 {
+    let value = value.max(min).min(max);
+    if step.is_nan() || step <= 0.0 {
+        return value;
+    }
+    let stepped = min + ((value - min) / step).round() * step;
+    if stepped > max || max - value <= (value - stepped).abs() {
+        max
+    } else {
+        stepped
+    }
+}
+
+/// Returns the number typed as `text`, as egui's value box reads it: spaces left out and the minus sign U+2212 read as
+/// a hyphen. Returns `None` for text that reads as no finite number, such as "NaN" or "inf". The value then stays as
+/// it was.
+fn read_number(text: &str) -> Option<f64> {
+    let text: String = text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .map(|character| if character == '\u{2212}' { '-' } else { character })
+        .collect();
+    text.parse().ok().filter(|number: &f64| number.is_finite())
+}
+
+/// Returns the fraction typed as `text`, a percentage with or without its "%", `None` for text that reads as no
+/// finite number.
+fn read_percent(text: &str) -> Option<f64> {
+    let number = text.trim().trim_end_matches('%').trim_end();
+    number
+        .parse::<f64>()
+        .ok()
+        .filter(|percent| percent.is_finite())
+        .map(|percent| percent / 100.0)
 }
 
 /// Returns the step of the slider of parameter `descriptor`, whose kind declares `step`.
@@ -108,17 +174,6 @@ fn percent_text(fraction: f64, decimals: usize) -> String {
     format!("{:.decimals$}%", fraction * 100.0)
 }
 
-/// Returns `slider` showing and reading its fraction as a percentage.
-fn as_percent(slider: egui::Slider<'_>, step: Option<f32>) -> egui::Slider<'_> {
-    let decimals = percent_decimals(step);
-    slider
-        .custom_formatter(move |value, _| percent_text(value, decimals))
-        .custom_parser(|text| {
-            let number = text.trim().trim_end_matches('%').trim_end();
-            number.parse::<f64>().ok().map(|percent| percent / 100.0)
-        })
-}
-
 /// Returns the smallest number of decimals that shows each step as a distinct percentage.
 fn percent_decimals(step: Option<f32>) -> usize {
     let Some(step) = step else {
@@ -147,7 +202,7 @@ mod tests {
     use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
     use henad_models::example_models;
 
-    use super::{decimal_value, display_value, f32_slider, percent_decimals, value_widget};
+    use super::{decimal_value, display_value, f32_slider, percent_decimals, snapped, value_widget};
 
     /// Returns the input of a frame in which each of `keys` is pressed.
     fn key_presses(keys: &[egui::Key]) -> egui::RawInput {
@@ -176,7 +231,7 @@ mod tests {
         let input = key_presses(keys);
         let mut changed = false;
         let output = context.run_ui(input, |ui| {
-            let response = ui.add(f32_slider(value, min, max, step));
+            let response = ui.add(f32_slider(value, min, max, step, None));
             // A request resets the focus lock that keeps the arrow keys on the slider.
             if !response.has_focus() {
                 response.request_focus();
@@ -249,7 +304,17 @@ mod tests {
         value: &mut ParamValue,
         keys: &[egui::Key],
     ) -> bool {
-        let input = key_presses(keys);
+        draw_value_with(context, descriptor, value, key_presses(keys))
+    }
+
+    /// Draws the widget of `descriptor` over `value` for one frame of `context` with `input`, and returns whether it
+    /// reports a change.
+    fn draw_value_with(
+        context: &egui::Context,
+        descriptor: &ParamDescriptor,
+        value: &mut ParamValue,
+        input: egui::RawInput,
+    ) -> bool {
         let mut changed = false;
         let output = context.run_ui(input, |ui| {
             changed = value_widget(ui, descriptor, value, egui::RichText::new(descriptor.label()), None);
@@ -312,6 +377,137 @@ mod tests {
             parse_value(descriptor.kind(), "0.05"),
             "0.04 and one step is 0.05"
         );
+    }
+
+    /// The steps start at the minimum, the maximum is a step of its own, and nothing snaps outside the range.
+    #[test]
+    fn a_value_snaps_to_the_steps_from_the_minimum_or_to_the_maximum() {
+        let cases = [
+            // World Width: 1 to 10000 in steps of 50, the last step 9951.
+            (
+                (1.0, 10_000.0, 50.0),
+                [(10_000.0, 10_000.0), (1.0, 1.0), (9990.0, 10_000.0), (9970.0, 9951.0)],
+            ),
+            (
+                (1.0, 10_000.0, 50.0),
+                [(10_001.0, 10_000.0), (0.0, 1.0), (500.0, 501.0), (-7.0, 1.0)],
+            ),
+            // A last step 0.1 short of the maximum.
+            ((0.0, 1.0, 0.3), [(1.0, 1.0), (0.96, 1.0), (0.93, 0.9), (0.4, 0.3)]),
+            // Whole numbers from -3 to 4 in steps of 2.
+            ((-3.0, 4.0, 2.0), [(4.0, 4.0), (3.6, 4.0), (3.4, 3.0), (-3.0, -3.0)]),
+        ];
+        for ((min, max, step), values) in cases {
+            for (value, expected) in values {
+                let shown = snapped(value, min, max, step);
+                assert!(
+                    (shown - expected).abs() < 1e-9,
+                    "{value} in {min} to {max} by {step} snaps to {shown}"
+                );
+                assert!((min..=max).contains(&shown), "{shown} lies in {min} to {max}");
+            }
+        }
+    }
+
+    /// Returns `value` after `text` is typed into the value box of the slider of `descriptor` over it, and Enter
+    /// pressed.
+    fn typed_value(descriptor: &ParamDescriptor, value: ParamValue, text: &str) -> ParamValue {
+        let context = egui::Context::default();
+        let mut value = value;
+        // Tab focuses the slider, and a second Tab its value box with its text selected.
+        draw_value(&context, descriptor, &mut value, &[egui::Key::Tab]);
+        draw_value(&context, descriptor, &mut value, &[egui::Key::Tab]);
+        let typed = egui::RawInput {
+            events: vec![egui::Event::Text(text.to_owned())],
+            ..egui::RawInput::default()
+        };
+        draw_value_with(&context, descriptor, &mut value, typed);
+        draw_value(&context, descriptor, &mut value, &[egui::Key::Enter]);
+        draw_value(&context, descriptor, &mut value, &[]);
+        value
+    }
+
+    /// Returns `value` after the slider of `descriptor` over it takes the focus and `key` is pressed.
+    fn keyed_value(descriptor: &ParamDescriptor, value: ParamValue, key: egui::Key) -> ParamValue {
+        let context = egui::Context::default();
+        let mut value = value;
+        draw_value(&context, descriptor, &mut value, &[egui::Key::Tab]);
+        draw_value(&context, descriptor, &mut value, &[key]);
+        value
+    }
+
+    /// A typed minimum or maximum stays as typed, and neither a typed value nor a key leaves the range, where the
+    /// maximum lies off the steps from the minimum: World Width, a share whose last step falls short of 1, an integer
+    /// with a negative minimum, a percentage and a step longer than the range. Text that reads as no finite number
+    /// leaves the value as it was.
+    #[test]
+    fn a_slider_keeps_its_ends_and_never_leaves_its_range() {
+        let models = example_models();
+        let world_width = models
+            .get("boids")
+            .expect("boids is registered")
+            .param_descriptors()
+            .iter()
+            .find(|descriptor| descriptor.id() == "world_width")
+            .expect("boids declares a world width")
+            .clone();
+        let share = f32_param("share", "Share", 0.0, 0.0, 1.0, Some(0.3));
+        let offset = f32_param("offset", "Offset", 0.0, -3.0, 4.0, Some(2.0)).integer();
+        let percent = f32_param("infected", "Infected", 0.01, 0.0, 1.0, Some(0.001)).percent();
+        let wide = f32_param("wide", "Wide", 0.0, 0.0, 1.0, Some(5.0));
+        let cases = [
+            (&world_width, 1000.0, "10000", 10_000.0),
+            (&world_width, 1000.0, "1", 1.0),
+            (&world_width, 1000.0, "9990", 10_000.0),
+            (&world_width, 1000.0, "9970", 9951.0),
+            (&world_width, 1000.0, "20000", 10_000.0),
+            (&share, 0.0, "1", 1.0),
+            (&share, 0.0, "0.96", 1.0),
+            (&share, 0.0, "0.93", 0.9),
+            (&offset, 0.0, "4", 4.0),
+            (&offset, 0.0, "-3", -3.0),
+            (&offset, 0.0, "\u{2212}3", -3.0),
+            (&offset, 0.0, "-2.6", -3.0),
+            (&percent, 0.01, "100%", 1.0),
+            (&percent, 0.01, "0%", 0.0),
+            (&wide, 0.0, "1", 1.0),
+            (&wide, 0.0, "0.6", 1.0),
+            (&wide, 1.0, "0.4", 0.0),
+            (&world_width, 1000.0, "NaN", 1000.0),
+            (&world_width, 1000.0, "inf", 1000.0),
+            (&world_width, 1000.0, "-inf", 1000.0),
+            (&percent, 0.01, "nan%", 0.01),
+        ];
+        for (descriptor, start, text, expected) in cases {
+            let value = typed_value(descriptor, ParamValue::F32(start), text);
+            assert_eq!(value, ParamValue::F32(expected), "{} typed {text}", descriptor.id());
+            assert_eq!(
+                check_param(descriptor, &value),
+                Ok(()),
+                "{} typed {text}",
+                descriptor.id()
+            );
+        }
+        let keys = [
+            (&world_width, 9951.0, egui::Key::ArrowRight, 10_000.0),
+            (&world_width, 10_000.0, egui::Key::ArrowLeft, 9951.0),
+            (&offset, 3.0, egui::Key::ArrowRight, 4.0),
+        ];
+        for (descriptor, start, key, expected) in keys {
+            let value = keyed_value(descriptor, ParamValue::F32(start), key);
+            assert_eq!(
+                value,
+                ParamValue::F32(expected),
+                "{} {key:?} from {start}",
+                descriptor.id()
+            );
+            assert_eq!(
+                check_param(descriptor, &value),
+                Ok(()),
+                "{} {key:?} from {start}",
+                descriptor.id()
+            );
+        }
     }
 
     #[test]

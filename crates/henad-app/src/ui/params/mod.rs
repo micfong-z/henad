@@ -10,7 +10,7 @@ pub use seed::{INVALID_SEED, parse_seed};
 pub(crate) use seed::{draw_seed, seed_field_width};
 #[cfg(test)]
 pub(crate) use trial::{TrialChoice, apply_trial};
-pub(crate) use values::{display_value, sheet_number};
+pub(crate) use values::{display_value, sheet_number, snapped};
 
 use crate::icons::material_design_icons::{MDI_ALERT, MDI_INFORMATION, MDI_RESTART};
 use crate::state::AppState;
