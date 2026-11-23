@@ -1028,6 +1028,10 @@ The [Game of Life page](game-of-life.md#running-it) shows the template's `src/li
       --global-warmup 500 --steps 2000
     ```
 
+    A run this size measures speed alone.
+    The trails reach about 300 cells at the defaults, and no ant brings food home across a world of 4,472.
+    [Larger worlds](../../reference/models.md#larger-worlds) lists the settings that make a large world forage.
+
 === "Browser"
 
     ``` bash

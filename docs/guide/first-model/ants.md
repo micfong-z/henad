@@ -880,6 +880,10 @@ then insert our model next to the other models in `models()`:
       --steps 1000
     ```
 
+    A run this size measures speed alone.
+    The trails reach about 300 cells at the defaults, and no ant brings food home across a world of 4,472.
+    [Larger worlds](../../reference/models.md#larger-worlds) lists the settings that make a large world forage.
+
 === "Browser"
 
     ``` bash

@@ -52,6 +52,16 @@ henad_core::actions! {
 /// field. The RNG is seeded per chunk per tick instead of drawn per call.
 ///
 /// The reference's biased neighbour tie-break is reproduced as it is (see `step::advect_agent`).
+///
+/// The reference's constants fix the model's scale in cells. An ant senses only the eight cells around it, and the
+/// nest and the food source are single cells 0.75 of the world apart on each axis. A trail spreads one cell per
+/// deposit, cut by `update_cutdown` on a row or column step and by `update_cutdown` to the power of the square root
+/// of 2 on a diagonal one. It decays by `evaporation` each tick and is zero below
+/// [`LOW_PHEROMONE`](field::LOW_PHEROMONE). A trail laid with `reward` reaches
+/// `ln(reward / LOW_PHEROMONE) / -ln(update_cutdown)` row steps, 306 at the defaults. Only a delivery renews the trail
+/// home, and until the first one its reach shrinks by `ln(evaporation) / ln(update_cutdown)` steps each tick. Once the
+/// trail home stops short of the food, ants carrying food cannot find the nest, and the tie-break carries them up and
+/// to the left, past the food. At the defaults this happens in worlds wider than about 290 cells.
 #[derive(Debug)]
 pub struct AntsModel;
 

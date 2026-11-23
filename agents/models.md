@@ -223,6 +223,35 @@ steers by the average, no group), and the ants' deliveries, at most 1000 by tick
 delivers nothing by tick 2000 at seed 2, so the lower edge sits at tick 3000; the planted error
 picks the least To food as the Food way). Keep these files.
 
+`ants`, `gpu_ants`, the starter `ants.toml` and the tutorial's foraging model keep krABMaga's
+constants, and they stop delivering food in large worlds. That is the model's design, and the
+cross-engine ports and the consistency fixtures follow the same declaration, so do not "fix" it in
+one port. An ant senses its eight neighbours alone, and the nest and the food are single cells 0.75
+of the world apart on each axis. A trail grows one cell per deposit, cut by `update_cutdown` (to the
+power sqrt 2 on a diagonal), fades by `evaporation` a tick and is zero below `LOW_PHEROMONE`
+(1e-14). It reaches `ln(reward / 1e-14) / -ln(update_cutdown)` row steps, 306 at the defaults or 216
+diagonal steps, and the nest's trail, fed only by the tick-0 reward until the first delivery,
+shrinks by `ln(evaporation) / ln(update_cutdown)` steps a tick (one per 105). Once it misses the
+food, carrying ants are blind and the reproduced tie-break (first neighbour visited kept with
+2/(k+1)) drifts them up-left, past the food into the corner. Searching ants drift towards the food
+at 1/9 cell a tick per axis. At 2000 ants over 20000 ticks `gpu_ants` delivers 72182 at a side of
+200, 55812 at 250, 8941 at 275, 1693 at 300, 16 at 325, 8 at 350 and none from 400, its first
+carrying ant sampled at ticks 1000, 3000, 10500 at 200, 400, 1000 and none by 20000 at 2000. The CPU
+model and the starter meet the same thresholds. 5M ants change neither: at a side of 400 the total
+pheromone at tick 500 is 306.57 at 2000 ants and 306.58 at 5M, every merge is a `max`, and nothing
+wraps. At a side of 1000, by tick 12000, every carrying ant has no to-home pheromone in its 3x3 and
+85% sit beyond the food in the top-left corner box. What works (in `docs/reference/models.md` under
+Larger worlds): `update_cutdown = 0.99` (3207 cells), `evaporation = 1` (at 0.999 and the default
+momentum a side of 2000 delivers nothing, the trail having shrunk by the first find at tick 23000,
+and with `momentum = 0.99` it delivers from 11750) and `momentum = 0.99` (first find at 1000 moves
+from tick 10500 to 2750). With all three 2000 ants deliver from tick 4000 at 1000 and 11750 at 2000,
+5M ants from 6500 at 2000 (3.7M deliveries by 15000), and `update_cutdown = 0.995` (off the 0.01
+step, `--set` only) brings 2000 ants' first delivery at 4000 to tick 35000. 5M ants at 1000 with
+`update_cutdown = 0.99` alone make 4.6M deliveries by tick 14000. The ants sheet differs: it fades
+with no floor, lays the full amount on a diagonal and breaks ties uniformly, so it delivers at 300
+and 400 (35789 and 17111 by tick 20000) but finds no food by 20000 at 700, where `momentum = 0.99`
+brings the first find to tick 2000.
+
 ## Adding a new model
 
 A user's model lives in a project made from `templates/model-project`, and the guide's pages under
