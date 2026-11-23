@@ -1163,7 +1163,16 @@ impl Emitter<'_> {
             Operation::Unary { op, a } => {
                 let a = self.slot(block, *a, node);
                 let_out!(match op {
-                    UnaryOp::Abs => format!("abs({a})"),
+                    // Through FXC, Direct3D's older shader compiler (`d3dcompiler_47.dll`), `abs` of a negative zero
+                    // stays negative on WARP. Clearing the sign bit returns the catalogue's positive zero on every
+                    // device.
+                    UnaryOp::Abs => match Self::type_of(block, out) {
+                        Some(WgslType::F32) => format!("bitcast<f32>(bitcast<u32>({a}) & 0x7fffffffu)"),
+                        Some(WgslType::Vec2F) => {
+                            format!("bitcast<vec2<f32>>(bitcast<vec2<u32>>({a}) & vec2<u32>(0x7fffffffu))")
+                        }
+                        _ => format!("abs({a})"),
+                    },
                     UnaryOp::Ceil => format!("ceil({a})"),
                     UnaryOp::Trunc => format!("trunc({a})"),
                     UnaryOp::Round => format!("round({a})"),

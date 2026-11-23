@@ -168,7 +168,9 @@ is about not undoing them.
   flush into `counters`, and every test that stepped a sheet with fire counts died on Windows. On
   dx12, wgpu compiles HLSL with FXC (`d3dcompiler_47.dll`), Direct3D's older compiler, unless it can
   load `dxcompiler.dll`, which no user has by default. Through DXC the same shaders run. Every barrier
-  henad-graph's compiler writes now sits at the top level of `main`.
+  henad-graph's compiler writes now sits at the top level of `main`. The same FXC path returns a
+  negative zero for `abs(-0.0)` on WARP, and the compiler writes a float `math.abs` as a clear of
+  the sign bit.
 - **Uniform layouts and a model's binding slots are generated.** The `build.rs` of henad-compute,
   henad-models and henad-app runs henad-build's `ShaderBuild` over that crate's shaders, and
   `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as

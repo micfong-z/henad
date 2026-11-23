@@ -29,7 +29,9 @@ as `var`s, a grid count is unrolled over its stencil through `henad_at` (`offset
 `henad::space`), and a draw calls `draw_core`. naga refuses an integer division by a constant 0, so
 `by_constant_zero` writes a `math.div` component over a constant 0 as the dividend's component and
 a `math.rem` by a constant 0 as 0, the catalogue's results
-(`an_integer_division_by_a_constant_zero_runs_as_the_host_does` in `gpu_cases.rs`). Each shader goes
+(`an_integer_division_by_a_constant_zero_runs_as_the_host_does` in `gpu_cases.rs`). A `math.abs` of
+an `f32` or a `vec2<f32>` clears the sign bit through `bitcast`, since `abs(-0.0)` through FXC is
+negative on WARP (`agents/gpu-traps.md`). Each shader goes
 through `compose_wgsl` with `DRAW_WGSL`, and a problem there is a compiler fault, placed on the node
 whose `NodeRange` holds its span. A text past `compose::MAX_FILE_BYTES` (1 MiB) is checked first
 and refused as a problem of the file, placed on the pass whose ranges hold the most bytes
