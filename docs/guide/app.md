@@ -41,7 +41,7 @@ An app built on Henad shows its own name there, and adds a **Built on** row with
 | <span class="ui" markdown>:material-chart-box-outline: Results</span>    | Plots and runs of a sweep or search     |
 | <span class="ui" markdown>:material-table: Statistics</span>             | Latest value of each stat               |
 | <span class="ui" markdown>:material-chart-line: Charts</span>            | Statistics history and plots            |
-| <span class="ui" markdown>:material-application-export: Export</span>    | Writing results to a file               |
+| <span class="ui" markdown>:material-export: Export</span>                | Writing results to a file               |
 | <span class="ui" markdown>:material-gauge: Performance</span>            | Performance metrics                     |
 | <span class="ui" markdown>:material-chip: System</span>                  | Backend information                     |
 
@@ -140,6 +140,7 @@ Some parameters, such as chances, are shown as percentages, and you can type a v
 A slider with a step snaps to the steps counted from its minimum and never goes past either end, and a typed minimum or maximum stays as typed.
 A model file can hide a parameter, such as the length of one tick in a model with a [time scale](../reference/model-files.md#time-scale).
 A hidden parameter gets no slider here, and the <span class="ui" markdown>:material-flask-outline: Sweep</span> tab still varies it.
+While the preview of a model in the [Editor](#editor-tab) is loaded, the tab shows the preview's parameters instead, and a value moved there is [tried in the preview](editor.md#running-a-sheet) without changing the model.
 
 <figure markdown="span">
   ![The Parameters panel for Ant Foraging on the GPU](../assets/app/params.png){ width="370" }
@@ -418,9 +419,9 @@ Tick **Unlimited history** to keep every snapshot instead, which can be helpful 
 Be aware that memory usage will increase as a result.
 Check the <span class="ui" markdown>:material-gauge: Performance</span> tab frequently to ensure Henad is not accidentally using too much memory.
 
-## :material-application-export: Export tab
+## :material-export: Export tab
 
-The <span class="ui" markdown>:material-application-export: Export</span> tab writes relevant results to files.
+The <span class="ui" markdown>:material-export: Export</span> tab writes relevant results to files.
 
 ### Statistics
 
@@ -463,7 +464,7 @@ The file records the value a live edit set but not the tick it was set at, and r
 ## :material-flask-outline: Sweep tab
 
 The <span class="ui" markdown>:material-flask-outline: Sweep</span> tab runs a [parameter sweep](sweeps.md): many runs of the model selected in the <span class="ui" markdown>:material-cog-outline: Model</span> tab, over several parameter values and seeds.
-It sits behind the <span class="ui" markdown>:material-cube-outline: Viewport</span> tab, together with <span class="ui" markdown>:material-chart-box-outline: Results</span>.
+It sits behind the <span class="ui" markdown>:material-cube-outline: Viewport</span> tab in the default layout, and behind the <span class="ui" markdown>:material-code-braces: Editor</span> in the Editor layout, together with <span class="ui" markdown>:material-chart-box-outline: Results</span> in both.
 A model in the <span class="ui" markdown>:material-code-braces: Editor</span> tab is swept once <span class="ui" markdown>:material-check: Apply</span> installs it as it reads.
 Until then the line under the Sweep tab's header reads **Model in the Editor tab is not applied. Press Apply there to sweep it.**
 A sweep started here writes the same four files as `henad-cli --out`.
@@ -848,7 +849,7 @@ Pattern Space Exploration
   With an automatic range, the grid appears once the initial samples finish.
   A filled cell is coloured by its hits on a log scale, given above the grid, and an empty cell is grey.
   An evaluation with an output outside the axes lands in an edge cell, and a warning counts those evaluations, as in **12 evaluations outside the axes, counted in the edge cells**.
-  Hover over a cell to read its ranges and its hits, and click a filled cell to select the first run of its exemplar.
+  Hover over a cell to read its ranges and its hits, and click a filled cell to select the first run of the first candidate that landed in it.
   A grid of more than 65,536 cells is not drawn.
 
 The other four views treat each candidate as a configuration, and name it **Candidate** instead of **Config**.
@@ -1072,7 +1073,7 @@ When a model opens in it, from <span class="ui" markdown>:material-file-document
 Select it in the View menu to open it in the layout that shows, to the right of the <span class="ui" markdown>:material-cube-outline: Viewport</span> in the default layout.
 
 The Editor's header holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-graph-outline: New node graph</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, with <span class="ui" markdown>:material-check: Apply</span> at the right end, over a row that names the model.
-Under the panes, the Editor lists its messages, each with a bar and an icon: blue for information, orange for a warning and red for an error.
+Under the panes, the Editor lists its messages, each with an icon in the colour of its kind: blue for information, orange for a warning and red for an error.
 
 ### Sheets
 

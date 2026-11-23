@@ -33,7 +33,7 @@ Untick **Open models in the Editor layout** in the View menu to open the Editor 
 
 The Editor's header holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-graph-outline: New node graph</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, and <span class="ui" markdown>:material-check: Apply</span> at the right end.
 The row under it shows the model's name, a dot while the model holds changes you have not saved, and the name of its file.
-For a sheet, the row also holds <span class="ui" markdown>:material-undo: Undo</span>, <span class="ui" markdown>:material-redo: Redo</span> and the **Model actions** menu.
+For a sheet, the row also holds <span class="ui" markdown>:material-undo: Undo</span>, <span class="ui" markdown>:material-redo: Redo</span> and the **Model actions** menu, shown as <span class="ui" markdown>:material-dots-horizontal:</span>.
 
 Under the panes, the Editor lists its messages: the state of the preview, the outcome of the last open, save or Apply, and each problem.
 Each message starts with an icon in the colour of its kind, blue for information, orange for a warning and red for an error.
@@ -61,7 +61,7 @@ Under **Start from** it lists **Blank**, then eight starters, each with a line o
 While **Blank** is chosen, **What is the world made of?** under it picks **Cells on a grid** or **Agents in open space**.
 **Name** follows the choice until you type in it, and <span class="ui">Create</span> or <kbd>Enter</kbd> opens the model.
 
-![The New model dialog with Forest fire chosen under Start from, between the grid starters and the agent starters, and its name in the Name field](../assets/app/editor-new-model.png){ width="446" }
+![The New model dialog with Forest fire, the last of the grid starters, chosen under Start from, and its name in the Name field](../assets/app/editor-new-model.png){ width="446" }
 
 A sheet opens in two panes beside each other.
 **Sheet** lists what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.
@@ -76,7 +76,7 @@ A click on the name renames the model.
 
 ### The Sheet pane
 
-The pane holds one section for each part of the model, its title over a rule that runs to its question mark at the right end.
+The pane holds one section for each part of the model, its title followed by a rule that runs to its question mark at the right end.
 A section that lists several things, such as the properties under **Cells** or the **Parameters**, lists them in a table under a row of column headings, and a button at its end adds one more, such as **+ Add parameter**.
 A field applies what you type when you press <kbd>Enter</kbd> or move away from it, and <kbd>Escape</kbd> puts back what the sheet holds.
 In the purpose, <kbd>Enter</kbd> starts a new line, and <kbd>Escape</kbd> applies what you typed.
@@ -343,6 +343,10 @@ Once the world has left tick 0, the line under the panes reads **Preview runs at
 A change that stops the sheet building leaves the world running the sheet as it was, and the line reads **The world shows the model before the last change. Fix the problems in red to update it.**
 After the first tick, a change of **Starts as** waits, and reads "Press Build in the Playback tab to see the change." under its property.
 The sheet's buttons sit under the sliders in the Parameters tab, each with a tooltip that says what it does, such as "Run once, every cell", as its row under **Buttons** shows.
+While the preview is loaded, the Parameters tab shows the sheet's parameters, without the sizes the preview sets itself, the **Seed** field or the scheduled actions.
+Moving a slider tries the value in the preview and leaves the sheet as it is, and a value that only a build reads starts the world again from tick 0.
+A note under the slider then reads "Trying this value. The model keeps 0.3.", and the parameter's row on the sheet reads "The world is trying 0.5. The model keeps 0.3."
+<span class="ui">Reset</span> under the slider returns to the value the sheet keeps, and <span class="ui">Keep</span> makes the tried value the sheet's own, widening its range to hold it, as one step of Undo.
 Press <span class="ui" markdown>:material-check: Apply</span> to install the model at its own size, and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the sheet as a model file.
 A model made from a starter keeps the starter's id, and a blank model takes the id its name gives, such as `harbour_seals` for Harbour seals.
 Where a model built into the app already holds that id, such as the example model Game of Life holds `game_of_life`, the new model takes `sheet_` before it.
@@ -384,7 +388,7 @@ The Diagram is read-only: edit the lines to change it, and press **Lines** to re
 ### Converting to a node graph
 
 A sheet can be copied to a node graph, the form Henad runs, for edits the card cannot write.
-Choose **Convert to node graph** from the "Model actions" menu after Redo, or press **Edit as node graph** beside the Diagram.
+Choose **Convert to node graph** from the **Model actions** menu, <span class="ui" markdown>:material-dots-horizontal:</span> after Redo, or press **Edit as node graph** at the top of the Diagram.
 A dialog says what the conversion does, and **Convert** makes the copy.
 Both controls are disabled while the card holds a problem or a line that does not run yet, and their tooltip says which.
 
@@ -435,18 +439,19 @@ A tick pass runs once per tick for every cell or agent, an init pass seeds the c
 
 On the canvas, a node computes a value from its inputs, and a wire carries a value from an output to an input.
 Right-click empty canvas to add a node, or drop a wire on empty canvas to add a node that takes it.
-Right-click a node's header for its menu: Frame, Copy, Inputs (bind an input to a parameter, set a constant or clear it), Settings, View in viewport, Move into region, Move out of region and Delete.
+Right-click a node's header for its menu: Frame, Copy, Inputs (bind an input to a parameter, set a constant or clear it), Settings, View in viewport, Add statistic in a stats pass, Move into region, Move out of region and Delete.
 A click selects a node, <kbd>Delete</kbd> removes the selection, and <kbd>Cmd</kbd>+<kbd>Z</kbd> (<kbd>Ctrl</kbd>+<kbd>Z</kbd> outside macOS) undoes an edit.
 The toolbar above the canvas holds Undo, Redo, Copy, Delete, Repeat, Function, Arrange and Frame all.
 
 ### The preview
 
 The Editor runs the graph as a *preview* in the Viewport while you edit it.
-A preview is the model at a small size: each side of the grid at most 256 cells, or at most 16384 agents in a world of the model's own size, with every parameter at its default.
+A preview is the model at a small size: each side of the grid at most 256 cells, or at most 16384 agents in a world of the model's own size, with every parameter at its default until you try another value.
 After each edit that leaves the graph valid, the preview builds again and starts from tick 0 once you pause for a moment.
 Moving a node, or pressing Arrange, changes no code and leaves the preview running.
 The list under the canvas reads **Preview runs at 256 × 256 cells from tick 0. Press Apply to run the model at its own size.**, or the number of agents, and the Playback tab names the preview.
-The sizes in the world panel and the values in the Parameters tab are left as they are.
+The sizes in the world panel are left as they are.
+The Parameters tab tries a value in the preview as it does for a [sheet](#running-a-sheet), and <span class="ui">Keep</span> makes the tried value the parameter's default.
 
 The preview takes the Viewport only when nothing runs, when the run is still at tick 0, or when the run is a preview.
 A run past tick 0 keeps going, and the Editor reads **Preview waits for the running model.** until the run ends.
@@ -595,7 +600,7 @@ A fault that no edit of the text can fix, such as a lost device or a device out 
 Press <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the Editor's text as written, comments included.
 A sheet is saved in its canonical form, with each line's sentence as a comment above its table.
 A node graph is saved in its canonical form, with the canvas layout in its `[editor]` table.
-The desktop app asks where to save, and suggests the name of the file you opened or the rule's id.
+The desktop app asks where to save, and suggests the name of the file you opened or the model's id.
 A browser downloads the file.
 
 Press <span class="ui" markdown>:material-folder-open-outline: Open model</span> to read a `.toml` model file into the Editor.
@@ -613,15 +618,17 @@ A heavy step on a large grid can still take long enough per tick to lose the GPU
   CPU models cannot be written as a model file.
 - The card writes the lines of a world of cells and of a world of agents.
   A formula of more than one operation, a condition on a Steer, Keep between or Move, the "only those whose" filter of a look at agents, a summary's own name and an arrow's start are written in the model file.
-- A step has no initialisation of its own.
+- A grid rule's step has no initialisation of its own.
   The states' `initial` shares seed the grid at tick 0.
-- A grid rule or a graph model reads its parameters when it is built.
+- A grid rule reads its parameters when it is built.
   An edited parameter applies after <span class="ui" markdown>:material-restart: Build</span>.
-- The Editor has no syntax highlighting, and checks the text only when you press Apply.
-- The text is not kept when the app closes.
+  A graph model or a sheet takes an edited parameter on the next tick, unless its build reads the parameter, as a start does.
+- A grid rule's text has no syntax highlighting, and the Editor checks it only when you press Apply.
+- The model in the Editor is not kept when the app closes.
   Save it first.
 - The shaders of the compiled GPU models cannot be edited here.
-- A results folder of a grid rule cannot rebuild the rule in the app.
+- A results folder of a model file does not install its model in the app.
+  <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> in the Results tab opens it in the Editor, and Apply installs it.
 - A GPU model runs many ticks per frame, so a small preview can reach the end of its run within a second.
 - A grid rule or a graph model needs a GPU with compute support.
   On a device without it, the Editor reads **Grid rules and graph models are unavailable on this device. They need a GPU with compute support.**
