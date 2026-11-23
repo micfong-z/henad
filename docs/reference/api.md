@@ -6,7 +6,7 @@ icon: material/api
 
 # API reference
 
-Henad publishes eight crates to crates.io, all at one version.
+Henad publishes nine crates to crates.io, all at one version.
 Each crate's API documentation is on docs.rs.
 
 ## Which crate to depend on
@@ -16,7 +16,7 @@ Every item a model, a host or a test needs has a path in `henad`, and the guides
 The code they include from the example models is the exception, since henad-models sits below the facade and refers to `henad_core` and `henad_compute`.
 The [template](../guide/your-project.md) depends on these two Henad crates.
 
-The other six are the crates `henad` re-exports.
+The other seven are the crates `henad` re-exports.
 A program never needs to name them, and their paths can change between releases, while the facade paths stay the same.
 
 | Crate | Documentation | Holds |

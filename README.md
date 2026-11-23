@@ -44,7 +44,7 @@ The video's two scale chapters, one million boids and five million ants, were re
 Use any device with a CPU and optionally a GPU, and any OS that can build [wgpu](https://github.com/gfx-rs/wgpu).
 
 > [!warning]
-> CPU models run noticably slower on WASM. GPU models appear to have similar performance compared to native builds.
+> CPU models run noticeably slower on WASM. GPU models appear to have similar performance compared to native builds.
 >
 > Consider running Henad natively for maximum performance.
 
@@ -87,6 +87,12 @@ The script requires the dated nightly the repository pins, with `rust-src`:
 ```bash
 rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" --profile minimal \
   --component rust-src,clippy --target wasm32-unknown-unknown
+```
+
+It also requires [Trunk](https://github.com/trunk-rs/trunk), at the release the repository pins:
+
+```bash
+cargo install --locked trunk --version "$(cat templates/model-project/scripts/trunk-version)"
 ```
 
 ## Your own models

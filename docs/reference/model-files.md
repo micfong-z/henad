@@ -221,7 +221,8 @@ The checks run when the file is loaded, before anything is built, and each probl
 | `f16` and `f64` | A step keeps to the capabilities of the WebGPU baseline. Browsers offer no more |
 
 A problem in the template has no line in the file.
-Neither has a problem with the rule as a whole, such as a missing state, or one naga finds after composing, such as an `f64` value. Each names the file alone.
+Neither has a problem with the rule as a whole, such as a missing state, or one naga finds after composing, such as an `f64` value.
+Each names the file alone.
 The template's problems come from a step that does not fit it, such as a `step_cell` with another signature, and a note then shows the signature the engine calls.
 
 ## Limits
@@ -237,7 +238,8 @@ The template's problems come from a step that does not fit it, such as a `step_c
 | One value or constant | 8192 bytes |
 | One call of `step_cell` | 65536 expressions and statements, counting the body of a called function once per call |
 
-The byte limits are WGSL's own limits. A browser enforces them.
+The byte limits are WGSL's own limits.
+A browser enforces them.
 The step of `life_rule.toml` costs under 2048 of the 65536.
 
 A rule binds at most five storage buffers in each pass, within the WebGPU baseline of eight.

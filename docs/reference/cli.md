@@ -16,7 +16,7 @@ A project with its own models can [host the same command line](#hosting-the-comm
 !!! info "Henad 0.3"
 
     This page describes Henad 0.3.
-    `--model-file` and model files arrive in Henad 0.4.
+    `--model-file`, `--print-lowered`, values with a `%` sign, the `integer` and `hidden` marks and the `time` column arrive in Henad 0.4.
 
 ```text
 henad-cli [OPTIONS] [MODEL]
@@ -196,7 +196,7 @@ Each problem prints at its place in the file, as `PATH:LINE:COLUMN: error: MESSA
 Error: cannot load model file 'life_rule.toml'
 
 Caused by:
-    life_rule.toml:39:5: error: loops are not allowed in a grid rule. Without them a step's work is bounded
+    life_rule.toml:39:5: error: loops are not allowed in a grid rule. Step functions must be bounded
 ```
 
 A sweep of a grid rule records the file's canonical text in the manifest as `model.code`, and a sweep of a graph or a sheet the graph's semantic text, and each session records the code's hash as the `code_hash` of its [`model_source`](#builds).
@@ -308,7 +308,7 @@ The guide describes [the spec file](../guide/sweeps.md#spec-files).
 |---|---|---|
 | `v1,v2,...` | `network=Random,Geometric` | Each value in the list, written as `--set` accepts it |
 | `min:max:step` | `infection_rate=0.1:0.5:0.1` | `min`, `min + step`, `min + 2 * step` and so on, up to and including `max` |
-| `min:max` | `infection_rate=0.05:0.95` | Under `--sample`, every value from `min` to `max`. Elsewhere, the integers from `min` to `max` for a `u32` parameter or an action tick, and rejected for an `f32` |
+| `min:max` | `infection_rate=0.05:0.95` | Under `--sample`, every value from `min` to `max`. Elsewhere, the integers from `min` to `max` for a `u32` parameter, an `f32` that takes whole numbers alone or an action tick, and rejected for any other `f32` |
 | `all` | `directed=all` | Every value of a `bool` or `choice` parameter |
 
 Spaces around the levels and around each listed value are ignored.
@@ -316,8 +316,10 @@ Value `i` of a range is `min + i * step`, computed from `i` alone.
 Rounding errors do not build up along the range, and `0:1:0.1` gives 11 values ending at exactly 1.
 A range stops at the last value not past `max`, and a last value within rounding error of `max` is `max` itself.
 A `u32` range can leave out its step and then steps by 1, as in `initial_outbreak_size=1:5`.
-An `f32` range needs a step, except under `--sample`.
+So can the range of an `f32` that takes whole numbers alone, whose ends and step are whole numbers.
+Any other `f32` range needs a step, except under `--sample`.
 A range over a `bool` or `choice` parameter is rejected, and so is `all` over a number.
+A percentage parameter's range carries a `%` sign on every part or on none, as in `initial_infected_pct=1%:5%:1%`, and a range with the sign on some parts alone is rejected.
 
 The levels of an action are whole ticks from 0.
 `action.NAME` refers to an action that `--act` adds.
@@ -346,6 +348,7 @@ An `f32` range with no step takes the value `min + (stratum + u) / N * (max - mi
 The value is computed in 64 bits, then rounded to `f32` and clamped to the range.
 A factor with `m` values takes the value at index `stratum * m / N`, rounded down and counted from 0, and each value then appears in `N / m` configs, rounded down or up.
 That covers a list, `all`, a stepped range and an integer range with no step.
+A range with no step over an `f32` that takes whole numbers alone is an integer range here, and in a random design and a search too.
 
 A random design draws every value of every config on its own.
 An `f32` range with no step takes `min + u * (max - min)`, and a factor with `m` values takes each of them with chance `1 / m`.
@@ -371,9 +374,10 @@ Each of these rejects it, with an error that states the cause:
 
 - a parameter id that the model does not have, with the valid ids listed in the error
 - a value outside the parameter's range, or a `choice` value that matches no option
+- a fraction for an `f32` that takes whole numbers alone, or a `%` sign on a parameter that is not a percentage
 - a parameter fixed with `--set` and varied too, or varied twice
 - `--zip` over levels of different lengths
-- an `f32` range with no step, outside `--sample`
+- an `f32` range with no step, outside `--sample`, unless the `f32` takes whole numbers alone
 - a sampled design with no samples or no factors, or a factor with an empty list of `values`
 - a design table with a column that matches no parameter or action, a column that appears twice, a row whose width differs from the header, a value that its column rejects, or no rows
 - an action the model does not declare, two actions that share a name, or `--vary action.NAME` for an action no `--act` adds
@@ -635,7 +639,7 @@ The 95% confidence interval for the mean is `mean ± t * sd / sqrt(n)`, where `t
 | `mode` | `sweep`, or `search` for a [search](#search-tables) |
 | `status` | `running` until the sweep ends, then `complete`, `aborted` for a sweep stopped before its last run, `failed` for a sweep or merge that an error ended outside any run, or `incomplete` for a sweep that lost its GPU device or a merge that lacks some runs |
 | `engine` | The [build](#builds) of Henad that wrote the manifest last, under the name `henad` |
-| `model` | Id, name, backend, schema hash, the schema [`--params --json`](#parameters-as-json) prints, `replays_exactly`, whether two builds of the model on one seed step through identical states, and for a model composed at run time `code`, its `format`, its hash as `fnv1a64` and its canonical `text` |
+| `model` | Id, name, backend, schema hash, the schema [`--params --json`](#parameters-as-json) prints, `replays_exactly`, whether two builds of the model on one seed step through identical states, for a model composed at run time `code`, its `format`, its hash as `fnv1a64` and its canonical `text`, and for a sheet `author`, [the sheet's text](model-files.md#the-sheet-in-a-results-folder) in the same form |
 | `spec` | The sweep in the form of a spec file, flags included, with a design table's text under `table_text`. A percentage's value or range written with a `%` sign is recorded as its fraction |
 | `spec_source` | Path and text of the spec file, and the path and hash of each design table it reads. `path` and `toml` are `null` for a sweep from flags, and `tables` lists its `--design` file |
 | `argv` | The command line |
@@ -699,7 +703,8 @@ The first resume by a later Henad writes that build into the session.
 A directory with no results starts a fresh sweep.
 
 The resume reads the manifest first.
-It rejects a directory that another process is [writing to](#output-directory), a directory of another model, and a directory whose plan hash, model schema hash or shard does not match the sweep.
+It rejects a directory that another process is [writing to](#output-directory), a directory of another model, and a directory whose plan hash, model schema hash, time scale or shard does not match the sweep.
+The time scale is the `time` that [`--params --json`](#parameters-as-json) prints, the unit of one tick and the tick-length parameter, and the schema hash leaves it out.
 The plan hash covers the model, the configs, the design seeds, the fixed values, the actions, the steps and warm-up, the sampling and series cadence, the stop condition, the reducers, and the seed root and scheme.
 It leaves out the replicate count and the timeout, and a resume can change both settings.
 A model composed at run time also has to run the code of every session that wrote runs, by the rule under [Builds](#builds).
@@ -738,7 +743,7 @@ Every shard plans the whole sweep, and needs the same command line or spec as th
 
 `--merge DIR... --out DIR` joins shard directories into a new directory.
 It takes no model, and no `--model-file`.
-It rejects inputs that differ in plan hash, schema hash, replicate count, shard count or columns, and two inputs that hold the same shard.
+It rejects inputs that differ in plan hash, schema hash, time scale, replicate count, shard count or columns, and two inputs that hold the same shard.
 It also rejects two shards whose sessions ran different model code, where either code is runtime code, by the rule under [Builds](#builds), and compares the code before the plan hash, as a resume does.
 It also rejects a row whose `run_id` is not `config_id * reps + rep` at the replicate count of its manifest.
 A resume that raises a shard's replicate count and ends before renumbering the shard's rows leaves such rows, and resuming that shard again renumbers them.
@@ -890,7 +895,7 @@ Each of these rejects it, along with the checks of a sweep's fixed values and ac
 A candidate's **genome** holds one gene from 0 to 1 per factor of `space`, in order.
 A range with no step is an ordered gene, and anything else is a categorical gene.
 Gene `u` of an `f32` range decodes to `min + u * (max - min)`, rounded to `f32` and clamped to the range.
-Gene `u` of an integer range decodes to `min + floor(u * (max - min + 1))`, and gene `u` of `m` listed levels to level `floor(u * m)`, each capped at the last value.
+Gene `u` of an integer range, the range of an `f32` that takes whole numbers alone included, decodes to `min + floor(u * (max - min + 1))`, and gene `u` of `m` listed levels to level `floor(u * m)`, each capped at the last value.
 Two genomes share a **config** when every gene decodes to the same value.
 
 A mutation changes each gene with some chance: `mutation_rate` for the genetic algorithm, and every gene for hill climbing and Pattern Space Exploration.
@@ -1108,7 +1113,7 @@ Every run held is read back as it ended, failed and timed-out runs included, and
 A run that came out differently would change every batch after it, and `--retry-failed` is rejected.
 A search runs whole, and `--shard` is rejected too.
 
-The resume rejects a directory of another model, a directory whose search hash, model schema hash or column layout differs, a sweep's directory, and a `runs.csv` with runs out of order or with a run whose key differs from the requested run.
+The resume rejects a directory of another model, a directory whose search hash, model schema hash, time scale or column layout differs, a sweep's directory, and a `runs.csv` with runs out of order or with a run whose key differs from the requested run.
 A model composed at run time also has to run the code that the folder's runs ran, as a [sweep's resume](#resuming) requires.
 Every run held is checked against its key before any table is written, and a rejected resume leaves the directory as it was.
 The search hash covers the plan hash of the fixed values and actions, the replicate count, the algorithm, the budget, the batch size, the objective, the space and the algorithm's settings.

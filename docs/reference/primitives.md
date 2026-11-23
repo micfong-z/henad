@@ -565,8 +565,8 @@ Op codes come from the generated bindings.
 Integer results must match exactly, and so must [`random_float`](#random_float).
 Other float results are compared against a tolerance, because WGSL evaluates float `%` through a division where Rust implements an exact fmod.
 
-Parity covers the pure functions only.
-The generators are excluded, along with anything that has no twin.
+Parity covers the pure functions, `pcg_hash` and `pcg4d` included.
+The `next_*` forms advance a different generator in each language and are excluded, along with anything that has no twin.
 
 On a machine with no adapter the test skips silently.
 Set `HENAD_REQUIRE_GPU=1` to turn that skip into a failure.
@@ -597,7 +597,8 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 - **Dynamic populations of agents.** An agent model's agents are neither created nor removed mid-run.
   A network model can add and remove nodes through `Nodes::spawn` and `Nodes::retire`.
 - **Non-uniform activation.** Every agent steps every tick. A model wanting less carries its own phase counter.
-- **Dynamic evaluation.** Both backends compile ahead of time.
+- **Dynamic evaluation.** A model cannot build new code as it runs.
+  A compiled model compiles ahead of time, and a [model file](model-files.md) compiles when it is loaded.
 
 A primitive is written when two real models need it.
 Anything with one call site stays in that model.
