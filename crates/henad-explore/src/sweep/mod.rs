@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use web_time::Instant;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(doc, not(target_arch = "wasm32")))]
 use henad_compute::entry::ModelEntry;
 #[cfg(not(target_arch = "wasm32"))]
 use henad_compute::gpu::GpuContext;
@@ -31,7 +31,9 @@ use crate::output::manifest::{
 use crate::output::memory::SweepFiles;
 use crate::probe::ShortfallWords;
 #[cfg(not(target_arch = "wasm32"))]
-use crate::progress::{Progress, ProgressEvent};
+use crate::progress::Progress;
+#[cfg(any(doc, not(target_arch = "wasm32")))]
+use crate::progress::ProgressEvent;
 use crate::search_run::{SearchOutline, SearchPlan};
 use crate::spec_file::{DesignTableFile, ExecutionTable, SpecFile};
 
