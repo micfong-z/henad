@@ -33,9 +33,11 @@ See [Benchmarks](https://micfong-z.github.io/henad/benchmarks/) for more details
 
 ## Screenshots
 
-<img width="100%" alt="gif recording" src="https://github.com/user-attachments/assets/f22d7ac9-5369-4daa-95c2-c79d903338f1" />
+<img width="100%" alt="An SIR epidemic written as a sheet in the Editor, applied and run, then run again at a lower infection rate" src="https://github.com/user-attachments/assets/f435c6cc-d5cc-49db-bf05-1d09b9eeca19" />
 
-https://github.com/user-attachments/assets/75ab824a-3700-48fb-aca0-1ba06575ee1f
+https://github.com/user-attachments/assets/ddbd26b1-b366-4ba2-b463-910d8200d65c
+
+The video's two scale chapters, one million boids and five million ants, were recorded on an RTX 5090.
 
 ## Running Henad
 
