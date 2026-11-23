@@ -217,10 +217,13 @@ each in the evaluator's programs and refuses one that names no output of a tick 
 which runs per iteration, and an output of another type than `bool`. A probe of a pass that `enabled
 = false` turns off keeps its word and builds no tally. In the step that runs its pass, after the
 element's instructions, `if (params.henad_count_fires != 0u && <output>)` adds 1 to the probe's slot
-of `var<workgroup> henad_fire_tally`. `main` zeroes the slots before a barrier, and after a barrier
-at its end the invocation `slot % 256` adds each non-zero slot to word `fire_base + i` of
-`counters`, both inside `if (params.henad_count_fires != 0u)` at the top level of `main`. The flag
-is a uniform, so the branch is uniform and a step outside the counted step pays one test.
+of `var<workgroup> henad_fire_tally`. WGSL zeroes the slots at the start of each workgroup. At the
+end of `main` a barrier at its top level comes first, then inside `if (params.henad_count_fires !=
+0u)` the invocation `slot % 256` adds each non-zero slot to word `fire_base + i` of `counters`. A
+probed step pays the barrier on every step, and a step outside the counted step pays one test
+besides. A barrier inside the counting block would be in uniform control flow, since the flag is a
+uniform, but WARP crashes while it compiles the flush's storage atomics after it from FXC
+(`agents/gpu-traps.md`).
 `henad_count_fires` (`MemberSource::CountFires`, `Dispatch::counting`) comes from
 `GridPassCtx::counting` or `AgentRun::counting`. The counts follow the reduce tallies: on a grid at
 the reduce shader's counters (at least 1), the spec's `counters` growing by one word per probe, and
@@ -237,7 +240,7 @@ holds every starter probed on its `bool` outputs within 8 storage bindings, the 
 stepping as it does with no probe, and
 `every_probed_shader_keeps_its_barriers_in_uniform_control_flow` (those starters and every sheet
 starter and grid sheet fixture with `sheet_probes`: no early return, and each `workgroupBarrier()` at
-the top level of `main` or directly inside `if (params.henad_count_fires != 0u)`).
+the top level of `main`).
 
 **Lane buffers and packing** (`wgsl/pack.rs`). `LaneLayout` places each lane of a
 compiled graph in a lane buffer, one `LaneGroup` each, and the lane buffers come first among the

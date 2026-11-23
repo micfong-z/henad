@@ -155,7 +155,20 @@ is about not undoing them.
   hold the text, and henad-models'
   `every_probed_shader_keeps_its_barriers_in_uniform_control_flow` holds every barrier of the probed
   shaders (the graph starters, and the sheets as a model file compiles them) at the top level of
-  `main` or directly inside `if (params.henad_count_fires != 0u)`.
+  `main`.
+- **WARP crashes while it compiles a storage atomic after a barrier inside an `if` from FXC.**
+  Windows' software adapter (Microsoft Basic Render Driver, the adapter of CI's Windows runner)
+  compiles a compute pipeline at its first dispatch, and
+  `d3d10warp!ComputeShaderTransformer::ConstructLoadStoreSets` writes out of bounds when an atomic on
+  a storage buffer follows a `workgroupBarrier()` inside the same `if`. A barrier inside an `if`
+  with no storage atomic after it in the block compiles, and so do the atomics after a barrier at
+  the top level of `main`. The process dies with `STATUS_ACCESS_VIOLATION` (0xc0000005), with no
+  error and no panic, and a uniform condition does not help. The probe tallies of henad-graph once
+  held both their barriers inside `if (params.henad_count_fires != 0u)`, the second followed by the
+  flush into `counters`, and every test that stepped a sheet with fire counts died on Windows. On
+  dx12, wgpu compiles HLSL with FXC (`d3dcompiler_47.dll`), Direct3D's older compiler, unless it can
+  load `dxcompiler.dll`, which no user has by default. Through DXC the same shaders run. Every barrier
+  henad-graph's compiler writes now sits at the top level of `main`.
 - **Uniform layouts and a model's binding slots are generated.** The `build.rs` of henad-compute,
   henad-models and henad-app runs henad-build's `ShaderBuild` over that crate's shaders, and
   `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as

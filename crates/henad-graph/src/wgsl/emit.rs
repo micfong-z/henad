@@ -1022,29 +1022,19 @@ impl Emitter<'_> {
         }
     }
 
-    /// Returns the lines of `main` that zero the workgroup array `henad_fire_tally` under the counting block, before a
-    /// barrier, with `local` the invocation's index in its workgroup of `size`.
-    fn fire_zero_lines(&self, local: &str, size: u32) -> String {
-        let fired = self.fire_slots.len();
-        if fired == 0 {
-            return String::new();
-        }
-        // A barrier needs uniform control flow, and the flag is a uniform, the same for every invocation.
-        format!(
-            "    if (params.henad_count_fires != 0u) {{\n        for (var henad_f = {local}; henad_f < {fired}u; \
-             henad_f = henad_f + {size}u) {{\n            atomicStore(&henad_fire_tally[henad_f], 0u);\n        \
-             }}\n        workgroupBarrier();\n    }}\n"
-        )
-    }
-
     /// Returns the lines at the end of `main` that add each non-zero slot of `henad_fire_tally` to its probe's word of
     /// `counters` under the counting block, one global atomic per slot per workgroup, with `local` the invocation's
     /// index in its workgroup of `size`.
+    ///
+    /// The lines open with a barrier at the top level of `main`, outside the counting block. WGSL zeroes workgroup
+    /// memory at the start of each workgroup, so the tally needs no zeroing of its own.
     fn fire_flush_lines(&self, local: &str, size: u32) -> String {
         if self.fire_slots.is_empty() {
             return String::new();
         }
-        let mut lines = String::from("    if (params.henad_count_fires != 0u) {\n        workgroupBarrier();\n");
+        // WARP, Direct3D 12's software adapter, crashes while it compiles a shader from FXC in which a storage atomic
+        // follows a barrier inside the same `if`, even an `if` whose condition is a uniform.
+        let mut lines = String::from("    workgroupBarrier();\n    if (params.henad_count_fires != 0u) {\n");
         for (slot, &index) in self.fire_slots.iter().enumerate() {
             lines.push_str(&format!(
                 "        if ({local} == {invocation}u) {{\n            let henad_fires_{slot} = \
@@ -2617,8 +2607,6 @@ impl Emitter<'_> {
                      atomicStore(&henad_counter_tally[henad_lid.x], 0u);\n    }}\n    workgroupBarrier();\n"
                 ));
             }
-            text.text
-                .push_str(&self.fire_zero_lines("henad_lid.x", LINEAR_WORKGROUP));
             match self.role {
                 Role::Reduce => {
                     if tallies > 0 {
@@ -2820,8 +2808,6 @@ impl Emitter<'_> {
                         "    if (henad_id.x == 0u && henad_id.y == 0u) {\n        henad_tick_out[0] = henad_tick + 1u;\n    }\n",
                     );
                 }
-                text.text
-                    .push_str(&self.fire_zero_lines("henad_local", WORKGROUP_SIZE * WORKGROUP_SIZE));
                 // The bounds check guards a block. An early return would leave the end of `main` in non-uniform
                 // control flow.
                 text.append(self.grid_cell_block(body));

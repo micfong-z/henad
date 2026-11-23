@@ -166,12 +166,15 @@ fn probed_shaders(file: &GraphFile, probes: &Probes, faults: Option<&FaultNames>
     }
 }
 
-/// Opening line of the one block other than `main` that may hold a workgroup barrier. Its condition reads a uniform,
-/// so the barrier stays in uniform control flow.
+/// Opening line of the block that flushes the fire tallies of a probed step.
 const COUNTING: &str = "if (params.henad_count_fires != 0u) {";
 
 /// Holds that `main` of `shader`, a shader of `name`, never returns early, and that each `workgroupBarrier()` sits at
-/// the top level of `main` or directly inside a [`COUNTING`] block there.
+/// the top level of `main`.
+///
+/// A barrier inside a [`COUNTING`] block would be in uniform control flow, since its condition reads a uniform. WARP,
+/// Direct3D 12's software adapter, still crashes while it compiles such a shader from FXC when the flush's storage
+/// atomics follow the barrier in the block.
 fn assert_uniform_barriers(name: &str, shader: &GeneratedShader) {
     let text = shader.text();
     let main = &text[text.find("fn main(").expect("a main")..];
@@ -185,12 +188,11 @@ fn assert_uniform_barriers(name: &str, shader: &GeneratedShader) {
     let mut open: Vec<&str> = Vec::new();
     for line in main.lines() {
         if line.contains("workgroupBarrier()") {
-            let uniform = match open.as_slice() {
-                [_] => true,
-                [_, block] => block.trim() == COUNTING,
-                _ => false,
-            };
-            assert!(uniform, "{name} {}: a barrier inside {open:?}\n{text}", shader.label());
+            assert!(
+                open.len() == 1,
+                "{name} {}: a barrier inside {open:?}\n{text}",
+                shader.label()
+            );
         }
         for character in line.chars() {
             match character {
@@ -204,9 +206,10 @@ fn assert_uniform_barriers(name: &str, shader: &GeneratedShader) {
     }
 }
 
-/// Every probed shader keeps its barriers in uniform control flow: the graph starters probed on every `bool` output of
-/// their tick passes, and every sheet starter and grid sheet fixture compiled as a model file compiles it, with the
-/// probes of its change lines. naga accepts a barrier after an early return, so only this check holds the rule.
+/// Every probed shader keeps its barriers in uniform control flow, at the top level of `main`: the graph starters
+/// probed on every `bool` output of their tick passes, and every sheet starter and grid sheet fixture compiled as a
+/// model file compiles it, with the probes of its change lines. naga accepts a barrier after an early return, so only
+/// this check holds the rule.
 #[test]
 fn every_probed_shader_keeps_its_barriers_in_uniform_control_flow() {
     let (mut barriers, mut counting) = (0, 0);
@@ -241,6 +244,6 @@ fn every_probed_shader_keeps_its_barriers_in_uniform_control_flow() {
     }
     assert!(
         barriers > 0 && counting > 0,
-        "the probed shaders hold barriers, some inside a counting block"
+        "the probed shaders hold barriers and counting blocks"
     );
 }
