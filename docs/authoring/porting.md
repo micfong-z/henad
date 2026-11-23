@@ -86,7 +86,7 @@ See [determinism and testing](determinism.md).
 ## Reuse the palette
 
 The colours end up living in two places, because the stats UI reads `PALETTE` while a display shader writes RGBA directly.
-Take them from the CPU model's `const` and pack them for the uniform instead of retyping them, the way `gpu_boids` builds its `packed_heading_palette`.
+Take them from the CPU model's `const` and pack them for the uniform instead of retyping them, the way `gpu_boids` packs `HEADING_PALETTE` into its step and action uniforms.
 
 A grid model's display shader bakes them into WGSL constants instead, and keeping those in agreement remains your responsibility.
 

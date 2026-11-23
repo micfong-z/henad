@@ -100,7 +100,8 @@ fn init(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64);
 `init` runs once, sequentially, on the current side of a freshly allocated grid.
 The `rng` argument is a plain `u64` xorshift state, advanced by the [random primitives](../reference/primitives.md#random).
 
-A GPU port of the model calls this same function to seed its buffers, which keeps tick 0 bit-identical between the two backends.
+A GPU port of the model seeds its buffers by calling this same function, or by repeating it draw for draw as the shipped ports do.
+Either way tick 0 comes out bit-identical between the two backends.
 See [porting a model to the GPU](porting.md).
 
 ## Left to the engine

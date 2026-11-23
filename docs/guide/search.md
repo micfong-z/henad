@@ -201,7 +201,7 @@ A smaller one lets the method react sooner.
 The candidates of a search depend on its seed, its settings and the results it is told, and on nothing else.
 Every table comes out the same byte for byte at any `--concurrent`, apart from the timing columns, and a second run of the spec gives the same search.
 The exceptions are those of a sweep.
-`gpu_boids` does not replay.
+A model that does not replay exactly, such as `gpu_boids` or the boids sheet, can give other results and other candidates.
 A run that times out ends wherever the clock caught it, and every candidate the search picks after it can change.
 
 A search of a GPU model steps its runs on [GPU tracks](sweeps.md#gpu-tracks), as a sweep does, in the CLI and the desktop app.

@@ -657,7 +657,7 @@ henad::params! {
 ```
 
 No `.on_reload()` this time.
-Every parameter of a GPU model applies on reload whatever we declare, because the GPU state rejects a live edit, and the engine marks the whole list accordingly.
+Every parameter of a `GpuGridModel` applies on reload whatever we declare, because its entry marks the whole list that way and the GPU state then rejects a live edit.
 
 Then we read the value where the grid is seeded:
 

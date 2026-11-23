@@ -57,7 +57,7 @@ A range is written `min:max:step` and includes both ends.
 Henad computes each value from its position, as `min + i * step`.
 Rounding errors do not build up along the range, and `0:1:0.1` gives eleven values with the last one exactly 1.
 An integer parameter can leave out the step, and then steps by 1.
-A parameter that `--params` marks `format=percent` takes a range or a value with a `%` sign after it, as in `--vary initial_infected=1%:5%:1%`, which gives the values of `0.01:0.05:0.01`.
+A parameter that `--params` marks `format=percent` takes a range or a value with a `%` sign after it, as in `--vary initial_infected_pct=1%:5%:1%`, which gives the values of `0.01:0.05:0.01`.
 A range puts the sign after every part or after none, and a `%` sign on any other parameter is an error naming the parameter.
 `runs.csv` and the manifest's copy of the spec hold the fractions.
 
@@ -563,9 +563,10 @@ All three CSV files come out the same byte for byte at any `--concurrent`, apart
 
 !!! note "GPU boids does not replay"
 
-    `gpu_boids` is the one model whose runs differ between two sweeps with the same settings.
+    `gpu_boids` is the one example model whose runs differ between two sweeps with the same settings.
     Its neighbour index leaves the order of the boids within a cell open, and the order changes from run to run.
     Its manifest records `replays_exactly` as `false`, and the app's Results tab notes beside a run that the opened run might differ from its row.
+    The boids sheet and node graph starter, and the bounded confidence sheet, do not replay either, as [results across devices](../reference/model-files.md#results-across-devices) describes.
 
 ### CPU lanes
 
@@ -746,7 +747,7 @@ target/release/henad-cli --merge sir-sweep/shard-* --out sir-sweep/merged
 
 ## Sweeping a model file
 
-A [model file](../reference/model-files.md) holds a GPU grid model as data, with the step of one cell written in WGSL, and runs without a build.
+A [model file](../reference/model-files.md) holds a model as data and runs without a build: a grid rule, with the step of one cell written in WGSL, a graph model or a sheet.
 `--model-file` loads one, and its model then sweeps like any other:
 
 ``` bash
@@ -761,7 +762,7 @@ A spec file names the model by the same id, and the command line passes the file
 A grid rule runs on the GPU, and its runs step on [GPU tracks](#gpu-tracks).
 
 The step is checked while the file is read, before anything runs.
-A problem stops the command with its place in the file, such as `life_rule.toml:39:5: error: loops are not allowed in a grid rule`.
+A problem stops the command with its place in the file, such as `life_rule.toml:39:5: error: loops are not allowed in a grid rule. Step functions must be bounded`.
 
 The manifest records the file's canonical text and the hash of that text, and a resume or a merge accepts only that code.
 Pass the same `--model-file` to every resume and to every shard.
@@ -798,7 +799,7 @@ Open the directory there with <span class="ui" markdown>:material-folder-open-ou
 cargo run --release --bin henad-app -- --open sir-sweep
 ```
 
-In its **Response** view, pick **Infected, max** as the **Output** to plot the mean peak against the infection rate, with a 95% confidence interval on each point.
+In its **Response** view, pick **Infected, maximum** as the **Output** to plot the mean peak against the infection rate, with a 95% confidence interval on each point.
 In its **Series** view, pick **Infected** as the **Stat** to draw the mean epidemic curve of each infection rate, with a band over the replicates.
 
 Any tool that reads CSV can load the results.

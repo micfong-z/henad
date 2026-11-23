@@ -165,6 +165,7 @@ A GPU model whose passes leave the order of their writes to the GPU, as atomic a
 Such a model declares `REPLAYS_EXACTLY = false`, as the example `gpu_boids` does.
 The entry's metadata carries the flag as `replays_exactly`, and a results folder records it.
 The testing kit skips the checks that compare two runs on one seed, and the app notes beside a run's Open button that its replay can drift.
+A sheet or a graph model of agents records the flag as `false` when a look at the agents around adds up floats or depends on the order of its visits, as [results across devices](../reference/model-files.md#results-across-devices) describes.
 Every other model replays a recorded run exactly.
 
 ## Next

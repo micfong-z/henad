@@ -381,7 +381,7 @@ parameters for gpu_foraging (Ant Foraging (GPU)):
 
 Both backends therefore take the same parameter vector, and a slider in the app means the same thing on either backend.
 Every entry says `apply=reload`, including the four parameters that the CPU model applies live.
-A GPU state rejects a live edit, and the engine marks the whole list accordingly.
+The entry of a `GpuAgentModel` marks the whole list that way, and its GPU state rejects a live edit.
 
 ### Sizes
 

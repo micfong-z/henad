@@ -118,7 +118,7 @@ Ants leaves it off, since ants read the field instead of each other.
 
 With it set, `cell_start` and `sorted` become bindable, and the resolved `HashGrid` geometry arrives in `Geometry::index` for the uniform block to carry onward.
 The engine fixes the hash grid from `index_cell_size` at construction.
-A GPU model accepts no live edit, and every parameter applies when the model is rebuilt.
+A `GpuAgentModel` accepts no live edit, and every parameter applies when the model is rebuilt.
 
 ## Parameters and geometry
 
@@ -146,6 +146,7 @@ Only the current side is seeded, since a double-buffered lane has its other side
 The engine reads the `@workgroup_size` of each shader's `main` when it builds the model.
 It rejects a pass shader that declares anything but `@workgroup_size(256)`, and a display shader whose `@workgroup_size(N, N)` differs from its `DisplaySpec::workgroup`.
 It also rejects a buffer label that is reserved or ends in `_in` or `_out`, since a binding of that name resolves to something other than the buffer.
+It rejects a `POS_BUFFER` or `COLOR_BUFFER` that is not `drawable`, a double-buffered buffer whose next side no step pass writes, and a pass that binds one side of a buffer both read-only and writable.
 
 The testing kit's `StatCount` check, given a device, catches a `stats` that returns fewer values than `STATS.len()`.
 

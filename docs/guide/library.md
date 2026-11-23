@@ -28,6 +28,7 @@ henad = { version = "0.3", features = ["example-models", "app"] }
 | `app` | The app, at `henad::app` |
 | `cli` | The command line, at `henad::cli`, on native targets |
 | `testing` | The [testing kit](../authoring/testing.md), at `henad::testing` |
+| `model-files` | [Model files](../reference/model-files.md): grid rules at `henad::rules`, and graph models and sheets at `henad::graph` |
 
 No feature is on by default, and no feature changes a result.
 A program with its own models starts from the [template](your-project.md) instead.
@@ -307,8 +308,8 @@ A program without its own models, such as the one above, needs no `build.rs`.
 The stamp hashes the files under the crate's `src` and its manifest.
 A file that a model reads at compile time, through `include_bytes!` or `include_str!`, belongs under `src`, where the hash sees it.
 
-henad-core and henad-build have no source hash.
-An edited copy of either crate, pulled in through `[patch]`, is treated as the release it patches, and a resume does not warn about it.
+henad-core, henad-build and henad-graph have no source hash.
+An edited copy of any of the three, pulled in through `[patch]`, is treated as the release it patches, and a resume does not warn about it.
 
 ## Next
 

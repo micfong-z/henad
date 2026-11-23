@@ -85,6 +85,7 @@ A grid rule's step is composed while the program runs, by `henad::rules::compose
 | `henad::rng` | The WGSL twins of the [random primitives](../reference/primitives.md#random) |
 | `henad::dims` | The `Dims` struct a grid model's display and reduce shaders read |
 | `henad::reduce_tree` | `block_sum`, the workgroup fold a reduce leaf repeats |
+| `henad::hash` | `walk_bounds`, `walk_cell` and their caps, for the walk over the neighbour index that a radius query takes |
 
 Most primitives here pair with a Rust function under `henad::authoring::primitives`, and a parity test pins each pair of pure functions together.
 [Authoring primitives](../reference/primitives.md) is the index.
