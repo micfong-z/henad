@@ -1,6 +1,15 @@
+# Every text file is checked out with LF line ends, Windows included. Sources embed WGSL and TOML files with
+# include_str!, and model text, hashes and tests compare that text byte for byte.
+* text=auto eol=lf
+
 # Reference output that tests compare byte for byte. Git keeps their line endings as committed.
 crates/henad-explore/tests/fixtures/** -text
 crates/henad-cli/tests/golden/** -text
 
 # Bash fails on a script with CRLF line ends. A Windows checkout writes them unless told otherwise.
 *.sh text eol=lf
+
+# Files committed with CRLF line ends, kept byte for byte. CI compares docs/license.html with a fresh render.
+docs/license.html -text
+crates/henad-app/assets/fonts/OFL.txt -text
+docs/assets/benchmarks/*.csv -text

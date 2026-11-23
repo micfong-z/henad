@@ -16,7 +16,8 @@ which `scripts/build_web.sh` and the `lint-web` stage source, refuses an inherit
 `scripts/ci.sh` runs the stages `lint`, `lint-web`, `test` and `web` (all four without an
 argument), with `--locked` once a lock exists, and `.github/workflows/ci.yml` runs them through
 `bash`, since a checkout from Windows keeps no executable bit, under `HENAD_REQUIRE_GPU=1` on
-lavapipe. `.gitattributes` keeps the scripts and the pins at LF line ends.
+lavapipe. `.gitattributes` checks every text file out at LF line ends, Windows included, so the
+embedded WGSL and the code hash do not depend on the system, and names the scripts and the pins as well.
 `scripts/install-lavapipe.sh` holds the Mesa and gfx-rs/ci-build pins, and Henad's own `test` job
 calls it. `.github/dependabot.yml` groups `henad` and `henad-build`. `README.md` holds the `fetch`,
 `rename`, `run` and `update` regions, `Cargo.toml` the `profile` region, and
