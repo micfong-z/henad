@@ -713,7 +713,7 @@ fn the_agent_sections_show_no_forbidden_word_in_any_state() {
     click(&mut harness, ADD_BUTTON);
     seen.look(&mut harness);
     click(&mut harness, CANCEL);
-    // The description of each help button holds its words, which the looks read.
+    // The description of each help holds its words, which the looks read.
     for starter in ["boids.toml", "bounded_confidence.toml", "ants.toml"] {
         let text = starter_document(starter).to_text().expect("the starter writes");
         harness.open_sheet(&text);

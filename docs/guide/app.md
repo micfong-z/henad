@@ -1086,7 +1086,7 @@ In a sentence, each chosen value is a chip: a result in blue, a state with its c
 An empty slot is a faint box that names what it wants, such as "old state".
 Hover over a result chip to highlight the line that works it out.
 Hover over "otherwise" to highlight the higher line and read which line wins when both apply.
-Hover over the help button beside a heading for a short explanation with an example.
+Hover over the question mark beside a heading for a short explanation with an example.
 The world stays in the Viewport, Playback, Pacing, Parameters and Charts tabs.
 
 A sheet starts at a small size in the Viewport, paused at tick 0 with the start drawn.

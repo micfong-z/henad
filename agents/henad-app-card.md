@@ -285,7 +285,7 @@ arrows blue, frames a gray 700 outline. A card's heading is in the semibold face
 `a_blank_model_builds_game_of_life_with_its_lines_and_equals_the_starter` and
 `a_blank_model_builds_the_chance_sir_with_its_lines_and_equals_the_sheet` (from Blank by accessible
 names, then `align_with_starter` and equal canonical text and lowered code, the words rule over
-every menu, picker, select and help opened, every control's name holding its visible words through
+every menu, picker and select opened, every control's name holding its visible words through
 `assert_controls_hold_their_words`, which also reads the note buttons and add rows of
 `card_buttons`, and Undo back to Blank and Redo to the end for Game of Life),
 `a_list_blank_takes_two_values` (with the skip note of a cleared blank),

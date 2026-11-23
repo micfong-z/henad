@@ -18,7 +18,7 @@ use egui::{Ui, UiBuilder, pos2, vec2};
 
 use henad_graph::sheet::sentence::REMOVE_ROW_LABEL;
 
-use crate::ui::editor::sheet::help::{Help, help_button};
+use crate::ui::editor::sheet::help::{Help, help_mark};
 use crate::ui::editor::sheet::widgets::{CHIP_HEIGHT, caption, field_message, region_title, text_control};
 use crate::ui::mcs;
 
@@ -59,7 +59,7 @@ pub(super) fn section(ui: &mut Ui, title: &str, help: Help, add: impl FnOnce(&mu
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = LINE_GAP;
-            region_title(ui, title, |ui| help_button(ui, help));
+            region_title(ui, title, |ui| help_mark(ui, help));
             ui.add_space(2.0);
             add(ui);
         });

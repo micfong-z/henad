@@ -823,8 +823,8 @@ fn every_line_of_the_life_starter_reads_its_sentence_by_accessible_name() {
         (egui::accesskit::Role::Button, "any state"),
         (egui::accesskit::Role::Button, "Clear line 1: choose when, now always"),
         (egui::accesskit::Role::ComboBox, "Line 2: comparison"),
-        (egui::accesskit::Role::Button, "Help: lines"),
-        (egui::accesskit::Role::Button, "Help: World"),
+        (egui::accesskit::Role::Label, "Help: lines"),
+        (egui::accesskit::Role::Label, "Help: World"),
     ] {
         assert!(named(role, label), "no {role:?} named {label}");
     }
@@ -1177,35 +1177,45 @@ fn a_help_shows_as_a_tooltip_under_the_pointer_and_a_click_opens_nothing() {
         !nodes.iter().any(|node| node.role == egui::accesskit::Role::Dialog),
         "a click opens no popover"
     );
-    let described = nodes
-        .iter()
-        .find(|node| node.label == "Help: World")
-        .map(|node| node.description.clone())
-        .unwrap_or_default();
-    assert!(
-        world_help_words().iter().all(|text| described.contains(text)),
-        "the button's description holds the help: {described}"
-    );
+    assert_ne!(harness.focused, "Help: World", "a click puts no focus on the help");
+    assert_eq!(world_help_description(&nodes), world_help_words().join(" "));
 }
 
 #[test]
-fn a_help_shows_its_tooltip_while_the_keyboard_holds_its_focus() {
+fn tab_never_lands_on_a_help_and_its_description_holds_the_help() {
     let Some(mut harness) = Harness::tall() else {
         return;
     };
     harness.open_sheet(starter_text("game_of_life.toml"));
-    for _ in 0..60 {
-        if harness.focused == "Help: World" {
+    harness.press(egui::Key::Tab, egui::Modifiers::NONE);
+    let first = harness.focused.clone();
+    assert!(!first.is_empty(), "Tab focuses a control");
+    let mut reached = vec![first.clone()];
+    for _ in 0..200 {
+        harness.press(egui::Key::Tab, egui::Modifiers::NONE);
+        if harness.focused == first {
             break;
         }
-        harness.press(egui::Key::Tab, egui::Modifiers::NONE);
+        reached.push(harness.focused.clone());
     }
-    assert_eq!(harness.focused, "Help: World", "Tab reaches the help");
-    assert_eq!(
-        world_help_shown(&mut harness),
-        world_help_words().len(),
-        "the focused help shows its words"
+    assert_eq!(harness.focused, first, "Tab comes round to {first}: {reached:?}");
+    assert!(
+        reached.iter().all(|name| !name.starts_with("Help:")),
+        "Tab lands on a help: {reached:?}"
     );
+    assert_eq!(world_help_shown(&mut harness), 0, "no help shows its words");
+    let nodes = harness.settle();
+    assert_eq!(world_help_description(&nodes), world_help_words().join(" "));
+}
+
+/// Returns the accessible description of the help of the World section among `nodes`.
+fn world_help_description(nodes: &[Node]) -> String {
+    let found: Vec<&Node> = nodes
+        .iter()
+        .filter(|node| node.role == egui::accesskit::Role::Label && node.label == "Help: World")
+        .collect();
+    assert_eq!(found.len(), 1, "one label is named Help: World: {found:?}");
+    found[0].description.clone()
 }
 
 #[test]
@@ -1222,7 +1232,7 @@ fn the_sheet_editor_never_shows_a_forbidden_word() {
             .document()
             .world
             .made_of;
-        // Each help button's description holds its words, which the look reads.
+        // Each help's description holds its words, which the look reads.
         assert!(
             henad_graph::sheet::sentence::SheetSection::shown(made_of)
                 .iter()

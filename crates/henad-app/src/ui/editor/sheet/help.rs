@@ -1,19 +1,17 @@
-//! The "?" help of the sheet editor: a small button beside a heading whose tooltip explains the heading in plain words.
+//! The "?" help of the sheet editor: a mark beside a heading whose tooltip explains the heading in plain words.
 //!
-//! The tooltip shows under the pointer and while the keyboard holds the button's focus, and holds the help's text and
-//! "Example:" with one example. A click opens nothing. Its words come from [`henad_graph::sheet::sentence`]: the help
-//! of each [`SheetSection`] and the Lines help beside the card, each with its own words for a world of agents where the
+//! The mark is a label. Its tooltip shows under the pointer and holds the help's text and "Example:" with one example.
+//! The mark takes no click and no keyboard focus. Its words come from [`henad_graph::sheet::sentence`]: the help of
+//! each [`SheetSection`] and the Lines help beside the card, each with its own words for a world of agents where the
 //! words for cells do not fit.
 
-use egui::{Button, Label, RichText, Ui};
+use egui::{AtomLayout, Frame, Label, RichText, Sense, Ui, WidgetInfo, WidgetType, vec2};
 use henad_graph::sheet::sentence::{
     HELP_EXAMPLE_LABEL, HELP_LINES_NAME, LINES_HELP, LINES_HELP_AGENTS, LINES_HELP_AGENTS_EXAMPLE, LINES_HELP_EXAMPLE,
     SheetSection, WORLD_HELP_AGENTS,
 };
 
-use super::widgets::FocusTooltip as _;
 use crate::icons::material_design_icons::MDI_HELP_CIRCLE_OUTLINE;
-use crate::ui::sweep::layout::add_button;
 
 /// Width in points at which the words of a help tooltip wrap.
 const HELP_WIDTH: f32 = 320.0;
@@ -52,7 +50,7 @@ impl Help {
         }
     }
 
-    /// Returns the accessible name of the help button, such as "Help: World" or "Help: lines".
+    /// Returns the accessible name of the help's mark, such as "Help: World" or "Help: lines".
     pub fn name(self) -> String {
         match self {
             Self::Section(section) => section.help_name(),
@@ -62,24 +60,25 @@ impl Help {
     }
 }
 
-/// Draws the "?" of `help`, a frameless button with egui's button frame under the pointer and on focus, whose tooltip,
-/// under the pointer or while the keyboard holds its focus, shows the text and "Example:" with the example in the weak
-/// colour, wrapping at [`HELP_WIDTH`].
+/// Draws the "?" of `help` in the weak colour, a label that senses the pointer alone, whose tooltip shows the text and
+/// "Example:" with the example in the weak colour, wrapping at [`HELP_WIDTH`].
 ///
-/// The button's accessible description holds the same words.
-pub fn help_button(ui: &mut Ui, help: Help) {
-    let button = add_button(
-        ui,
-        true,
-        Button::new(RichText::new(MDI_HELP_CIRCLE_OUTLINE).weak())
-            .frame_when_inactive(false)
-            .small(),
-        &help.name(),
-    );
+/// The icon sits inside the theme's horizontal button padding. The mark's accessible node is a label named by
+/// [`Help::name`], with the same words as its description.
+pub fn help_mark(ui: &mut Ui, help: Help) {
+    let mark = AtomLayout::new(RichText::new(MDI_HELP_CIRCLE_OUTLINE).weak())
+        .frame(Frame::new().inner_margin(vec2(ui.spacing().button_padding.x, 0.0)))
+        .sense(Sense::hover())
+        .show(ui)
+        .response;
+    mark.widget_info(|| WidgetInfo::new(WidgetType::Label));
     let description = format!("{} {HELP_EXAMPLE_LABEL} {}", help.text(), help.example());
-    ui.ctx()
-        .accesskit_node_builder(button.id, |node| node.set_description(description));
-    button.on_hover_or_focus_ui(|ui| {
+    ui.ctx().accesskit_node_builder(mark.id, |node| {
+        node.set_label(help.name());
+        node.set_description(description);
+    });
+    mark.on_hover_ui(|ui| {
+        ui.style_mut().interaction.selectable_labels = false;
         ui.set_max_width(HELP_WIDTH);
         ui.add(Label::new(help.text()).wrap());
         ui.add_space(4.0);

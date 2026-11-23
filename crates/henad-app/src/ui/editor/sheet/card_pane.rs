@@ -76,7 +76,7 @@ use super::card_lines::LineControl;
 pub use super::card_lines::{CardLine, LineNote, NoteColor, card_lines, draws_diagnostic};
 use super::card_lines::{NoteAction, button_of, select_words};
 use super::delete_question::{DeleteAnswer, DeleteQuestion};
-use super::help::{Help, help_button};
+use super::help::{Help, help_mark};
 use super::picker::{
     CalcDraft, CardPicker, Choice, DraftUpdate, LineContext, SelectOption, apply_choice, around_options,
     calculate_edit, choose_when, comparison_options, list_len, look_summary_options, looked_at_picker, mode_options,
@@ -723,7 +723,7 @@ fn title_bar_ui(ui: &mut Ui, heading: &str, count: Option<usize>, help: Option<H
                 |ui| {
                     ui.add(Label::new(title_text(ui, heading)));
                     if let Some(help) = help {
-                        help_button(ui, help);
+                        help_mark(ui, help);
                     }
                 },
                 |ui| {

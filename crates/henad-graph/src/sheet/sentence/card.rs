@@ -38,7 +38,7 @@ pub const LAW: &str = "Everyone reads the world as it was at the start of the ti
 /// Label of the add button of agent cards that adds a Repeat line.
 pub const REPEAT_BUTTON: &str = "+ Repeat…";
 
-/// Accessible name of the "?" beside the add buttons, which opens the Lines help.
+/// Accessible name of the "?" beside the title of a card that runs each tick, whose tooltip shows the Lines help.
 pub const HELP_LINES_NAME: &str = "Help: lines";
 
 /// Note above the add buttons once the card holds a When line.

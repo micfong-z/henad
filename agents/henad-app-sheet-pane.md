@@ -7,7 +7,7 @@ sections of a world of agents. The rest of the Sheet pane, what each section edi
 **Sections.** `section(ui, title, help, add)` draws on the pane's own ground with no frame, from
 the pane's left edge to `SECTION_END` 10 short of its right (the help clear of the divider's grab),
 `region_title` (the heading as a
-`title_text`, a hairline to the help button at the right edge), then `add`, its rows 4
+`title_text`, a hairline to the help's mark at the right edge), then `add`, its rows 4
 apart. `sheet_pane` puts `REGION_GAP` 12 between sections. A section's "+ Add ..." is its last row,
 the `widgets::add_row_button` with no kind, except "+ Add property" while the sheet holds no
 property, which stays the primary `filled_button`. A form inside a section (property, measure,

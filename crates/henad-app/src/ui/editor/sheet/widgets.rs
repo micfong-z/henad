@@ -273,10 +273,6 @@ pub trait FocusTooltip {
     /// The focus counts as the keyboard's while the last press was a key, so a control that takes the focus after a
     /// click shows no tooltip. No tooltip shows while a popup is open.
     fn on_hover_or_focus_text(self, text: &str) -> Self;
-
-    /// Shows what `add` draws as the control's tooltip under the pointer, as `on_hover_ui` does, and while the control
-    /// holds the keyboard focus, as [`Self::on_hover_or_focus_text`] does. Returns the control's response.
-    fn on_hover_or_focus_ui(self, add: impl FnOnce(&mut Ui)) -> Self;
 }
 
 impl FocusTooltip for Response {
@@ -287,17 +283,6 @@ impl FocusTooltip for Response {
         focus_tooltip(&self, |ui| {
             ui.label(text);
         });
-        self
-    }
-
-    fn on_hover_or_focus_ui(self, add: impl FnOnce(&mut Ui)) -> Self {
-        if !keyboard_tooltip(&self) {
-            return self.on_hover_ui(|ui| {
-                ui.style_mut().interaction.selectable_labels = false;
-                add(ui);
-            });
-        }
-        focus_tooltip(&self, add);
         self
     }
 }

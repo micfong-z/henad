@@ -272,21 +272,22 @@ parameter items (`parameter_items` of the field's `number_use`, as the card's pi
 `card_pane.rs` and `picker.rs` draw and edit the cards, which `agents/henad-app-card.md` describes.
 
 `help.rs` holds `Help` (`Section(SheetSection)`, `Lines`, and `AgentWorld` and `AgentLines` with the
-words of a world of agents) and `help_button`: a `MDI_HELP_CIRCLE_OUTLINE` button with egui's frame
-under the pointer and on focus alone, named `SheetSection::help_name` or `HELP_LINES_NAME` ("Help:
-World", "Help: lines"), whose tooltip (`FocusTooltip::on_hover_or_focus_ui`, under the pointer or on
-keyboard focus) holds the text and "Example:" with the example in the weak colour, wrapping at 320
-points. A click opens nothing. The button's accessible description holds the same words. `sheet_ui`
+words of a world of agents) and `help_mark`: the weak `MDI_HELP_CIRCLE_OUTLINE` as a label, an
+`AtomLayout` that senses hover alone inside the theme's horizontal button padding, with no frame
+under the pointer, no click and no keyboard focus. Its tooltip (`on_hover_ui`, under the pointer
+only) holds the text and "Example:" with the example in the weak colour, wrapping at 320 points. Its
+AccessKit node is a `Label` named `SheetSection::help_name` or `HELP_LINES_NAME` ("Help: World",
+"Help: lines"), and its description holds the same words. `sheet_ui`
 makes each pane a `Group` named "Sheet" or "Card" (`pane_group`), so "region" never reaches the
 tree.
 
 **Accessible names and the words rule**. Every chip is a button named by its
 text, blanks and selects by what they want and where ("Line 2: choose the old state", "Line 2:
-comparison"), every name holds its visible words, and a control with no words of its own (the help
-button) is named by what it does. Sheet mode never shows a word of `FORBIDDEN_WORDS`, in the Editor
-tab or in what a sheet puts in the world tabs (names, measures, buttons, the tick counter). The
-controls that open or create a node graph (New node graph) and the world tabs' own controls (Seed,
-Build) are exempt.
+comparison"), every name holds its visible words, and a control with no words of its own is named
+by what it does. The help's mark, a label with no words, is named by what it explains. Sheet mode
+never shows a word of `FORBIDDEN_WORDS`, in the Editor tab or in what a sheet puts in the world
+tabs (names, measures, buttons, the tick counter). The controls that open or create a node graph
+(New node graph) and the world tabs' own controls (Seed, Build) are exempt.
 
 Opening a sheet, the list under the panes, Apply of a sheet, its preview and the New model
 dialog are in `agents/henad-app-sheet-open.md`.
@@ -315,9 +316,9 @@ line), `a_result_used_above_its_line_is_red_with_its_tooltip`,
 `chips_name_the_property_when_two_share_a_state_name` ("Status Alive", swatch colours),
 `otherwise_carries_its_partner_as_a_description` (forest fire line 3),
 `every_line_of_the_life_starter_reads_its_sentence_by_accessible_name` (the four lines, the pane and
-list groups, chips, selects and help buttons),
-`a_help_shows_as_a_tooltip_under_the_pointer_and_a_click_opens_nothing`,
-`a_help_shows_its_tooltip_while_the_keyboard_holds_its_focus`,
+list groups, chips, selects and help marks),
+`a_help_shows_as_a_tooltip_under_the_pointer_and_a_click_opens_nothing` (and puts no focus on it),
+`tab_never_lands_on_a_help_and_its_description_holds_the_help` (Tab round the whole editor),
 `the_sheet_editor_never_shows_a_forbidden_word` (every starter, every help's words, a skipped and a
 red line, the New model dialog, the control that opens a node graph exempt),
 `every_accessible_name_holds_its_visible_words` (each control of a line, note button and add row in
@@ -393,4 +394,4 @@ ground, `marks = "add_up"` lowering to `combine = "sum"`),
 Food and Nest offered, the Food start lowering) and
 `the_agent_sections_show_no_forbidden_word_in_any_state` (at least 25 states, the agent starters,
 and the label-in-name check). `the_sheet_editor_never_shows_a_forbidden_word` reads the help of each
-section `SheetSection::shown` lists for the starter's world from its button's description.
+section `SheetSection::shown` lists for the starter's world from its mark's description.

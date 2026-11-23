@@ -136,14 +136,17 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     scroll area of its own. Escape closes an overlay and returns the focus to the control that
     opened it (`escape_to_anchor`, or `CardPicker::show` for a card's picker).
   - Tooltip of a focusable control in sheet mode, of a button of the Editor's header and of a sheet
-    button in the world: `FocusTooltip::on_hover_or_focus_text`, or `on_hover_or_focus_ui` for the
-    "?" help of a heading, which shows the tooltip under the pointer and while the keyboard holds
-    the control's focus, never while a popup is open. A "?" opens no panel on a click. The focus
+    button in the world: `FocusTooltip::on_hover_or_focus_text`, which shows the tooltip under the
+    pointer and while the keyboard holds the control's focus, never while a popup is open. The focus
     counts as the keyboard's while the last press was a key (`key_pressed_last`, kept in egui temp
     data), so a control focused after a click shows none. The focus tooltip senses hover alone and
     is not interactable, as egui's own tooltip of plain text, so a click under it reaches the
     control there. A label, a hover-only mark and an item inside an open overlay keep
     `on_hover_text`.
+  - "?" help of a heading (`help::help_mark`): a label that takes no click and no keyboard focus.
+    The weak `MDI_HELP_CIRCLE_OUTLINE` sits inside the theme's horizontal button padding and senses
+    hover alone, with no frame or fill under the pointer and the default cursor. Its tooltip
+    (`on_hover_ui`) shows under the pointer only.
   - Dialog (`dialog_frame`, `dialog_title`, `dialog_buttons`, the New model, New parameter, Rebuild
     model, conversion, unsaved changes, replace applied model and delete dialogs): egui's window
     frame (`Frame::window`) with 12 points of margin, its title (`title_text`) with a gray 800

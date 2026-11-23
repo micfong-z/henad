@@ -67,7 +67,7 @@ A sheet opens in two panes beside each other.
 **Sheet** lists what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.
 **Card** lists the lines every cell, or every agent, follows each tick, numbered from 1, each as a sentence such as "Become Alive from Dead, when Alive neighbours is 3".
 The world itself runs in the <span class="ui" markdown>:material-cube-outline: Viewport</span>, and the Playback, Pacing, Parameters and Charts tabs control it as they control any model.
-Each heading has a help button: hover over it, or move the keyboard focus to it, to read a short explanation and an example.
+Hover over the question mark beside each heading to read a short explanation and an example.
 
 ![The Editor holding a forest fire: the header with the name row, the Sheet pane, and the card, where line 5 starts with otherwise and a notice above the card says why](../assets/app/editor-sheet.png){ width="700" }
 
@@ -76,7 +76,7 @@ A click on the name renames the model.
 
 ### The Sheet pane
 
-The pane holds one section for each part of the model, its title over a rule that runs to its help button at the right end.
+The pane holds one section for each part of the model, its title over a rule that runs to its question mark at the right end.
 A section that lists several things, such as the properties under **Cells** or the **Parameters**, lists them in a table under a row of column headings, and a button at its end adds one more, such as **+ Add parameter**.
 A field applies what you type when you press <kbd>Enter</kbd> or move away from it, and <kbd>Escape</kbd> puts back what the sheet holds.
 In the purpose, <kbd>Enter</kbd> starts a new line, and <kbd>Escape</kbd> applies what you typed.
