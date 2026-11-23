@@ -120,6 +120,7 @@ impl HenadApp {
 
         setup_custom_fonts(&cc.egui_ctx);
         setup_custom_styles(&cc.egui_ctx);
+        ui::focus::install(&cc.egui_ctx);
 
         let AppOptions {
             models,

@@ -55,6 +55,7 @@ use super::program::{CompiledProgram, GraphProgram, LOADS};
 use super::undo_redo_keys;
 use crate::icons::material_design_icons::{MDI_DOTS_HORIZONTAL, MDI_REDO, MDI_UNDO};
 use crate::ui::dock::Layout;
+use crate::ui::focus;
 use crate::ui::sweep::layout::add_button;
 
 /// Heading of the pane that lists what the model holds.
@@ -508,25 +509,28 @@ pub fn sheet_ui(ui: &mut egui::Ui, sheet: &mut SheetEditor, shown: &SheetShown<'
     let width = ui.available_width();
     let pane_id = sheet_pane_id(shown.layout);
     let set = sheet_pane_width(ui.ctx(), pane_id, width);
-    let pane = Panel::left(pane_id)
-        .resizable(true)
-        .default_size(set)
-        .min_size(PANE_MIN_WIDTH)
-        .max_size((width - PANE_MIN_WIDTH).max(PANE_MIN_WIDTH))
-        .frame(Frame::NONE.inner_margin(Margin::symmetric(8, 4)))
-        .show(ui, |ui| {
-            ui.heading(SHEET_PANE);
-            // The pane keeps the width its divider gives it, and clips anything wider at its edge.
-            let rect = ui.available_rect_before_wrap();
-            let mut pane = ui.new_child(UiBuilder::new().max_rect(rect).layout(*ui.layout()));
-            pane.shrink_clip_rect(rect);
-            ScrollArea::vertical()
-                .id_salt("henad_sheet_pane_scroll")
-                .auto_shrink([false; 2])
-                .show(&mut pane, |ui| sheet_pane::sheet_pane(ui, sheet, past_start, trials));
-            ui.advance_cursor_after_rect(rect);
-            pane_group(ui, SHEET_PANE);
-        });
+    let ctx = ui.ctx().clone();
+    let pane = focus::without_focus_stop(&ctx, focus::panel_divider(pane_id), || {
+        Panel::left(pane_id)
+            .resizable(true)
+            .default_size(set)
+            .min_size(PANE_MIN_WIDTH)
+            .max_size((width - PANE_MIN_WIDTH).max(PANE_MIN_WIDTH))
+            .frame(Frame::NONE.inner_margin(Margin::symmetric(8, 4)))
+            .show(ui, |ui| {
+                ui.heading(SHEET_PANE);
+                // The pane keeps the width its divider gives it, and clips anything wider at its edge.
+                let rect = ui.available_rect_before_wrap();
+                let mut pane = ui.new_child(UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+                pane.shrink_clip_rect(rect);
+                ScrollArea::vertical()
+                    .id_salt("henad_sheet_pane_scroll")
+                    .auto_shrink([false; 2])
+                    .show(&mut pane, |ui| sheet_pane::sheet_pane(ui, sheet, past_start, trials));
+                ui.advance_cursor_after_rect(rect);
+                pane_group(ui, SHEET_PANE);
+            })
+    });
     keep_sheet_pane_share(ui.ctx(), pane_id, width, set, pane.response.rect.width());
     CentralPanel::no_frame().show(ui, |ui| {
         Frame::NONE.inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {

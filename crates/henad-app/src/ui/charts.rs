@@ -16,6 +16,12 @@ pub fn charts_ui(ui: &mut egui::Ui, app: &mut AppState) {
     });
 }
 
+/// Label of the History length slider, and accessible name of the slider and of its value box.
+const HISTORY_LENGTH: &str = "History length";
+
+/// Range in ticks of the History length slider.
+const HISTORY_RANGE: std::ops::RangeInclusive<usize> = 100..=1_000_000;
+
 /// Draws the Unlimited history checkbox and the History length slider.
 ///
 /// Unlimited history keeps the whole run for an export, and grows with the run.
@@ -23,14 +29,33 @@ fn history_controls(ui: &mut egui::Ui, app: &mut AppState) {
     let mut unlimited = app.history_capacity.is_none();
     let mut changed = ui.checkbox(&mut unlimited, "Unlimited history").changed();
 
+    // egui's slider names its value box through the label alone, and keeps the box's id inside. The box is drawn apart
+    // from the slider to take a name of its own.
     changed |= ui
-        .add_enabled(
-            !unlimited,
-            egui::Slider::new(&mut app.history_len, 100..=1_000_000)
-                .logarithmic(true)
-                .text("History length"),
-        )
-        .changed();
+        .add_enabled_ui(!unlimited, |ui| {
+            ui.horizontal(|ui| {
+                let slider = ui.add(
+                    egui::Slider::new(&mut app.history_len, HISTORY_RANGE)
+                        .logarithmic(true)
+                        .show_value(false),
+                );
+                let speed = app.history_len as f64 / 100.0;
+                let value = ui.add(
+                    egui::DragValue::new(&mut app.history_len)
+                        .range(HISTORY_RANGE)
+                        .speed(speed),
+                );
+                let label = ui.label(HISTORY_LENGTH);
+                for control in [&slider, &value] {
+                    ui.ctx()
+                        .accesskit_node_builder(control.id, |node| node.set_label(HISTORY_LENGTH));
+                    control.clone().labelled_by(label.id);
+                }
+                slider.changed() || value.changed()
+            })
+            .inner
+        })
+        .inner;
 
     if changed {
         app.history_capacity = (!unlimited).then_some(app.history_len);
@@ -214,7 +239,8 @@ mod tests {
     use henad_core::metadata::TimeUnit;
     use henad_core::view::{StatDescriptor, StatEntry, StatValue, StatsHistory};
 
-    use super::{single_sample_x_range, stat_points, stats_plot};
+    use super::{HISTORY_LENGTH, history_controls, single_sample_x_range, stat_points, stats_plot};
+    use crate::tests::support::{accessible_texts, gpu_only_app};
     use crate::ui::time_axis::RunTime;
 
     const HALF_DAY: RunTime = RunTime {
@@ -226,6 +252,30 @@ mod tests {
         unit: TimeUnit::Day,
         tick_length: 1.0,
     };
+
+    /// The History length slider and its value box each take the name of their label, whether or not Unlimited
+    /// history is set.
+    #[test]
+    fn the_history_length_slider_and_its_box_have_names() {
+        let Some(mut app) = gpu_only_app() else {
+            return;
+        };
+        for capacity in [Some(app.history_len), None] {
+            app.history_capacity = capacity;
+            let names = accessible_texts(
+                |ui| history_controls(ui, &mut app),
+                |node| {
+                    matches!(
+                        node.role(),
+                        egui::accesskit::Role::Slider | egui::accesskit::Role::SpinButton
+                    )
+                    .then(|| node.label().unwrap_or_default())
+                },
+            );
+            assert_eq!(names.len(), 2, "a slider and a box: {names:?}");
+            assert!(names.iter().all(|name| name == HISTORY_LENGTH), "{names:?}");
+        }
+    }
 
     /// Returns a history of one stat, Infected, holding `samples`, each a tick and its value.
     fn history(samples: &[(u64, f64)]) -> StatsHistory {

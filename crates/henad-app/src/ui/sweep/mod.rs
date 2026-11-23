@@ -38,6 +38,7 @@ use crate::icons::material_design_icons::MDI_FLASK_OUTLINE;
 use crate::state::{AppState, ModelPool, default_values, lookup_message};
 use crate::ui::dock::Tab;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
+use crate::ui::focus;
 use crate::ui::model::model_label;
 use crate::ui::plural;
 #[cfg(not(target_arch = "wasm32"))]
@@ -598,20 +599,23 @@ fn footer_panel(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
 /// Adds the Plan panel for a tab `tab_width` wide, with `add_contents` in it, while `plan_open` is set.
 fn plan_panel(ui: &mut egui::Ui, tab_width: f32, plan_open: &mut bool, add_contents: impl FnOnce(&mut egui::Ui)) {
     let max_width = (PLAN_PANEL_MAX_SHARE * tab_width).max(PLAN_PANEL_MIN_WIDTH);
-    Panel::right(PLAN_PANEL_ID)
-        .resizable(true)
-        .default_size(PLAN_PANEL_WIDTH)
-        .size_range(PLAN_PANEL_MIN_WIDTH..=max_width)
-        .frame(Frame::NONE.inner_margin(Margin {
-            left: 8,
-            ..Margin::ZERO
-        }))
-        .show_collapsible(ui, plan_open, |ui| {
-            ScrollArea::vertical()
-                .id_salt("henad_sweep_plan_scroll")
-                .auto_shrink([false; 2])
-                .show(ui, add_contents);
-        });
+    let ctx = ui.ctx().clone();
+    focus::without_focus_stop(&ctx, focus::panel_divider(Id::new(PLAN_PANEL_ID)), || {
+        Panel::right(PLAN_PANEL_ID)
+            .resizable(true)
+            .default_size(PLAN_PANEL_WIDTH)
+            .size_range(PLAN_PANEL_MIN_WIDTH..=max_width)
+            .frame(Frame::NONE.inner_margin(Margin {
+                left: 8,
+                ..Margin::ZERO
+            }))
+            .show_collapsible(ui, plan_open, |ui| {
+                ScrollArea::vertical()
+                    .id_salt("henad_sweep_plan_scroll")
+                    .auto_shrink([false; 2])
+                    .show(ui, add_contents);
+            });
+    });
 }
 
 /// Draws the tab while it builds a sweep: its header, footer, plan and form.

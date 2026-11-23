@@ -49,6 +49,10 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   `widgets.active.bg_stroke`, 1 point of white: egui draws a focused button, checkbox, radio or
   combo box in it, a pressed button shows it too, and the Editor's own controls paint the same
   stroke through `widgets::focus_ring`.
+- **Every stop of Tab has an accessible name.** A resizable `Panel` draws inside
+  `focus::without_focus_stop` with `focus::panel_divider` of its id, which takes its divider out of
+  the order, and Tab from the last widget moves on to the first (`focus::install`). The tab bars and
+  splitters of `egui_dock` are outside this rule.
 - **One palette rule: the meaning picks the hue, and the element picks the step.** No step outside
   this table without adding its row here.
 

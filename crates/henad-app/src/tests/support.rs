@@ -745,6 +745,7 @@ impl Harness {
             focused: String::new(),
         };
         harness.context.enable_accesskit();
+        crate::ui::focus::install(&harness.context);
         Some(harness)
     }
 

@@ -7,6 +7,7 @@ pub mod editor;
 pub mod export;
 pub mod fault;
 pub mod files;
+pub mod focus;
 pub mod mcs;
 pub mod menu_bar;
 pub mod model;

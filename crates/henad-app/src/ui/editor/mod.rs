@@ -52,6 +52,7 @@ use crate::icons::material_design_icons::{
 use crate::state::{AppState, PreviewRun};
 use crate::ui::dock::Tab;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
+use crate::ui::focus;
 use crate::ui::params::sheet_number;
 use crate::ui::sweep::layout::{add_button, filled_button};
 use preview::{PREVIEW_WAITS, PreviewState};
@@ -1197,25 +1198,29 @@ fn status_area_ui(
     past_start: bool,
     request: &mut Option<EditorRequest>,
 ) {
-    Panel::bottom("henad_editor_diagnostics")
-        .resizable(true)
-        .default_size(DIAGNOSTICS_HEIGHT)
-        .frame(Frame::NONE.inner_margin(Margin::symmetric(0, 4)))
-        .show(ui, |ui| {
-            ScrollArea::vertical()
-                .id_salt("henad_editor_diagnostics_scroll")
-                .auto_shrink([false; 2])
-                .show(ui, |ui| {
-                    file_status_ui(ui, panel, compute);
-                    if panel.model.graph().is_some() {
-                        graph_outcome_ui(ui, panel);
-                    } else if panel.model.sheet().is_some() {
-                        sheet_outcome_ui(ui, panel, past_start);
-                    } else {
-                        outcome_ui(ui, panel, request);
-                    }
-                });
-        });
+    let id = egui::Id::new("henad_editor_diagnostics");
+    let ctx = ui.ctx().clone();
+    focus::without_focus_stop(&ctx, focus::panel_divider(id), || {
+        Panel::bottom(id)
+            .resizable(true)
+            .default_size(DIAGNOSTICS_HEIGHT)
+            .frame(Frame::NONE.inner_margin(Margin::symmetric(0, 4)))
+            .show(ui, |ui| {
+                ScrollArea::vertical()
+                    .id_salt("henad_editor_diagnostics_scroll")
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        file_status_ui(ui, panel, compute);
+                        if panel.model.graph().is_some() {
+                            graph_outcome_ui(ui, panel);
+                        } else if panel.model.sheet().is_some() {
+                            sheet_outcome_ui(ui, panel, past_start);
+                        } else {
+                            outcome_ui(ui, panel, request);
+                        }
+                    });
+            });
+    });
 }
 
 /// Draws the outcome of the last Apply of a graph model, the message of the last refused edit, and every problem the

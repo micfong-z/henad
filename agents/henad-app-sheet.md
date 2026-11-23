@@ -321,6 +321,8 @@ line), `a_result_used_above_its_line_is_red_with_its_tooltip`,
 list groups, chips, selects and help marks),
 `a_help_shows_as_a_tooltip_under_the_pointer_and_a_click_opens_nothing` (and puts no focus on it),
 `tab_never_lands_on_a_help_and_its_description_holds_the_help` (Tab round the whole editor),
+`every_tab_stop_has_a_name` (Tab round Game of Life and Boids, each stop named, Tab from the last
+control onto the first, Shift+Tab over the dividers),
 `the_sheet_editor_never_shows_a_forbidden_word` (every starter, every help's words, a skipped and a
 red line, the New model dialog, the control that opens a node graph exempt),
 `every_accessible_name_holds_its_visible_words` (each control of a line, note button and add row in

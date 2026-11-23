@@ -50,6 +50,7 @@ use crate::icons::material_design_icons::{
     MDI_CHEVRON_RIGHT, MDI_CODE_BRACES, MDI_CONTENT_COPY, MDI_DELETE_OUTLINE, MDI_EYE_OFF_OUTLINE, MDI_EYE_OUTLINE,
     MDI_FIT_TO_SCREEN_OUTLINE, MDI_FUNCTION_VARIANT, MDI_REDO, MDI_REPEAT, MDI_SITEMAP_OUTLINE, MDI_UNDO,
 };
+use crate::ui::focus;
 use crate::ui::sweep::layout::add_button;
 use crate::ui::text::capitalize;
 
@@ -1436,37 +1437,44 @@ fn place_unplaced(builder: &mut GraphBuilder) {
 /// Draws the graph editor: the passes and the world beside the canvas, and the canvas's toolbar.
 pub fn graph_ui(ui: &mut egui::Ui, graph: &mut GraphEditor) {
     let mut requests = Vec::new();
-    Panel::left("henad_graph_sidebar")
-        .resizable(true)
-        .default_size(SIDEBAR_WIDTH)
-        .show(ui, |ui| {
-            ScrollArea::vertical()
-                .id_salt("henad_graph_sidebar_scroll")
-                .show(ui, |ui| {
-                    if !graph.shown_changes.is_empty() {
-                        changes::changes_ui(ui, graph, &mut requests);
+    let ctx = ui.ctx().clone();
+    let sidebar = egui::Id::new("henad_graph_sidebar");
+    focus::without_focus_stop(&ctx, focus::panel_divider(sidebar), || {
+        Panel::left(sidebar)
+            .resizable(true)
+            .default_size(SIDEBAR_WIDTH)
+            .show(ui, |ui| {
+                ScrollArea::vertical()
+                    .id_salt("henad_graph_sidebar_scroll")
+                    .show(ui, |ui| {
+                        if !graph.shown_changes.is_empty() {
+                            changes::changes_ui(ui, graph, &mut requests);
+                            ui.add_space(8.0);
+                        }
+                        passes::passes_ui(ui, graph, &mut requests);
                         ui.add_space(8.0);
-                    }
-                    passes::passes_ui(ui, graph, &mut requests);
-                    ui.add_space(8.0);
-                    functions::functions_ui(ui, graph, &mut requests);
-                    ui.add_space(8.0);
-                    world::world_ui(ui, graph, &mut requests);
-                    if let Some(origin) = graph.editor_region().model_origin() {
+                        functions::functions_ui(ui, graph, &mut requests);
                         ui.add_space(8.0);
-                        super::expert::origin_ui(ui, &origin, &graph.editor_region().notes());
-                    }
-                });
-        });
+                        world::world_ui(ui, graph, &mut requests);
+                        if let Some(origin) = graph.editor_region().model_origin() {
+                            ui.add_space(8.0);
+                            super::expert::origin_ui(ui, &origin, &graph.editor_region().notes());
+                        }
+                    });
+            })
+    });
     Panel::top("henad_graph_toolbar")
         .resizable(false)
         .frame(Frame::NONE.inner_margin(Margin::symmetric(4, 4)))
         .show(ui, |ui| toolbar_ui(ui, graph, &mut requests));
     if graph.show_wgsl {
-        Panel::right("henad_graph_wgsl")
-            .resizable(true)
-            .default_size(WGSL_WIDTH.min(ui.available_width() / 2.0))
-            .show(ui, |ui| wgsl_view::wgsl_ui(ui, graph));
+        let wgsl = egui::Id::new("henad_graph_wgsl");
+        focus::without_focus_stop(&ctx, focus::panel_divider(wgsl), || {
+            Panel::right(wgsl)
+                .resizable(true)
+                .default_size(WGSL_WIDTH.min(ui.available_width() / 2.0))
+                .show(ui, |ui| wgsl_view::wgsl_ui(ui, graph))
+        });
     }
     CentralPanel::no_frame().show(ui, |ui| {
         if graph.body(&graph.scope).is_none() {

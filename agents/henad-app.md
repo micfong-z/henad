@@ -36,8 +36,16 @@ and a browser keeps eframe's one key per origin. `ui/` has one file per panel or
 (`menu_bar.rs`, `model.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
 `charts.rs`, `performance.rs`, `system.rs`, `fault.rs`, `rebuild.rs`, `about.rs`), and
 `time_axis.rs` holds the time axis the Charts tab, the Results tab's Series view and Playback
-share. The Parameters tab, the Export tab and the Editor live in directories, `params/`, `export/`
-and `editor/`. The Parameters tab's `mod.rs` draws the panel, its action buttons and its notice,
+share. `focus.rs` holds the keyboard focus order: `without_focus_stop` takes the divider of each
+resizable panel (`panel_divider`, egui's id of the panel with "__resize") out of the order of Tab
+and Shift+Tab, as a divider has no name and no key moves it, and `install` adds `TabWraps`, an
+egui plugin that `HenadApp::new` and the tests' `Harness` install. Left to egui, Tab from the last
+widget leaves nothing focused in its frame, and the first widget takes the focus in the next frame.
+The plugin runs a second pass of that frame (`request_discard`), in which the first widget takes
+the focus. egui passes no input events to the second pass, so a key or a click counts once, and a
+frame whose Tab does not wrap takes one pass (`focus::tests`, `every_tab_stop_has_a_name`). The
+Parameters tab, the Export tab and the Editor live in directories, `params/`, `export/` and
+`editor/`. The Parameters tab's `mod.rs` draws the panel, its action buttons and its notice,
 `values.rs` the widget and text of one value (`value_widget`, `display_value`, `sheet_number`;
 an `f32` marked integer slides in whole steps, `parameter_slider_step`), `seed.rs` the Seed row,
 `schedule.rs` the scheduled actions and `trial.rs` the preview mode. The Export
@@ -302,7 +310,12 @@ the `time` column of `--export-stats`. The Charts tab plots every stat at `plot_
 the y range, and draws a series of one sample as `Points` of radius 3, since a `Line` of one point
 draws nothing. Its x range then spans the sample's tick to the next (`single_sample_x_range`).
 Otherwise egui_plot widens the zero-width range to the height of the y range. `tests/time_axis.rs` holds the app-level tests over henad-models'
-`sir_rates.toml` fixture (`support::sir_rates`). `playback.rs` draws the Run to tick row.
+`sir_rates.toml` fixture (`support::sir_rates`). Above the plot, the Charts tab's History length
+slider draws its value box apart, `DragValue` beside a `Slider` with no value, since egui's slider
+names its box only through `labelled_by` and keeps the box's id inside. Each takes the name
+`HISTORY_LENGTH` (`the_history_length_slider_and_its_box_have_names`). `playback.rs` draws the Run
+to tick row, its box named `RUN_TO_TICK` as well as labelled by it
+(`the_run_to_tick_box_has_a_name`).
 `AppState::run_to` rebuilds first for a tick behind the current one through `press_build` (a
 replay of the Editor's sheet preview while `build_replays_preview` holds), then sends
 `SimCommand::RunTo` and sets `run_to_target`. Run (`run_refusal`) is disabled while another model

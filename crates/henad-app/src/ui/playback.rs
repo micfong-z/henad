@@ -8,7 +8,7 @@ use crate::ui::results::table::INEXACT_REPLAY;
 use crate::ui::time_axis::{counter_text, elapsed_text};
 use crate::ui::{add_progress_bar, mcs};
 
-/// Sets `name` as the accessible name of the icon button `id`.
+/// Sets `name` as the accessible name of the control `id`, an icon button or a box beside its label.
 fn icon_name(ui: &egui::Ui, id: egui::Id, name: &str) {
     ui.ctx().accesskit_node_builder(id, |node| node.set_label(name));
 }
@@ -92,6 +92,9 @@ pub fn playback_ui(ui: &mut egui::Ui, app: &mut AppState) {
     opened_run_line(ui, app);
     preview_line(ui, app);
 }
+
+/// Label of the box of the tick that Run steps to, and the box's accessible name.
+const RUN_TO_TICK: &str = "Run to tick";
 
 /// Tooltip of Build while it replays the start of the Editor's sheet.
 pub const BUILD_SHEET_TOOLTIP: &str = "Start world again from tick 0, as it started before";
@@ -213,9 +216,11 @@ fn run_to_row(ui: &mut egui::Ui, app: &mut AppState, build_disabled_reason: Opti
     }
 
     ui.horizontal(|ui| {
-        let label = ui.label("Run to tick");
-        ui.add(egui::DragValue::new(&mut app.run_to_input))
+        let label = ui.label(RUN_TO_TICK);
+        let field = ui
+            .add(egui::DragValue::new(&mut app.run_to_input))
             .labelled_by(label.id);
+        icon_name(ui, field.id, RUN_TO_TICK);
         let run_disabled_reason = run_refusal(app, build_disabled_reason, current);
         let run = ui
             .add_enabled(
@@ -293,11 +298,24 @@ fn opened_run_warning(app: &AppState) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::opened_run_warning;
+    use super::{RUN_TO_TICK, opened_run_warning, playback_ui};
     use crate::options::AppOpening;
     use crate::state::{AppState, NO_SELECTED_MODEL, OpenAt};
-    use crate::tests::support::{gpu_only_app, replay};
+    use crate::tests::support::{accessible_texts, gpu_only_app, replay};
     use crate::ui::results::table::INEXACT_REPLAY;
+
+    /// The Run to tick box takes the name of its label.
+    #[test]
+    fn the_run_to_tick_box_has_a_name() {
+        let Some(mut app) = gpu_only_app() else {
+            return;
+        };
+        let names = accessible_texts(
+            |ui| playback_ui(ui, &mut app),
+            |node| (node.role() == egui::accesskit::Role::SpinButton).then(|| node.label().unwrap_or_default()),
+        );
+        assert_eq!(names, [RUN_TO_TICK]);
+    }
 
     #[test]
     fn build_is_refused_with_no_model_selected() {

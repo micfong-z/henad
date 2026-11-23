@@ -24,7 +24,7 @@ use henad_graph::sheet::document::{
     StartsAs,
 };
 use henad_graph::sheet::sentence::{
-    A_RANDOM_NUMBER, A_VALUE, BY_CHANCE, CANCEL, CREATE, NEW_MODEL, STALE_WORLD_NOTICE, STARTER_CHOICES,
+    A_RANDOM_NUMBER, A_VALUE, ADD_BUTTON, BY_CHANCE, CANCEL, CREATE, NEW_MODEL, STALE_WORLD_NOTICE, STARTER_CHOICES,
 };
 use henad_graph::sheet::{ParsedSheet, starters};
 
@@ -1181,17 +1181,14 @@ fn a_help_shows_as_a_tooltip_under_the_pointer_and_a_click_opens_nothing() {
     assert_eq!(world_help_description(&nodes), world_help_words().join(" "));
 }
 
-#[test]
-fn tab_never_lands_on_a_help_and_its_description_holds_the_help() {
-    let Some(mut harness) = Harness::tall() else {
-        return;
-    };
-    harness.open_sheet(starter_text("game_of_life.toml"));
+/// Presses Tab until the focus comes round to the control the first press focuses, and returns the name of each control
+/// reached on the way, from the first.
+fn tab_round(harness: &mut Harness) -> Vec<String> {
     harness.press(egui::Key::Tab, egui::Modifiers::NONE);
     let first = harness.focused.clone();
     assert!(!first.is_empty(), "Tab focuses a control");
     let mut reached = vec![first.clone()];
-    for _ in 0..200 {
+    for _ in 0..300 {
         harness.press(egui::Key::Tab, egui::Modifiers::NONE);
         if harness.focused == first {
             break;
@@ -1199,6 +1196,16 @@ fn tab_never_lands_on_a_help_and_its_description_holds_the_help() {
         reached.push(harness.focused.clone());
     }
     assert_eq!(harness.focused, first, "Tab comes round to {first}: {reached:?}");
+    reached
+}
+
+#[test]
+fn tab_never_lands_on_a_help_and_its_description_holds_the_help() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    let reached = tab_round(&mut harness);
     assert!(
         reached.iter().all(|name| !name.starts_with("Help:")),
         "Tab lands on a help: {reached:?}"
@@ -1206,6 +1213,44 @@ fn tab_never_lands_on_a_help_and_its_description_holds_the_help() {
     assert_eq!(world_help_shown(&mut harness), 0, "no help shows its words");
     let nodes = harness.settle();
     assert_eq!(world_help_description(&nodes), world_help_words().join(" "));
+}
+
+/// Every stop of Tab in the Editor has a name, on a grid and on agents. Tab and Shift+Tab pass over the dividers of the
+/// panes, and Tab from the last control goes straight to the first.
+#[test]
+fn every_tab_stop_has_a_name() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    for starter in ["game_of_life.toml", "boids.toml"] {
+        harness.open_sheet(starter_text(starter));
+        let reached = tab_round(&mut harness);
+        assert!(
+            reached.iter().all(|name| !name.is_empty()),
+            "{starter}: Tab lands on a control with no name: {reached:?}"
+        );
+        // Shift+Tab moves the focus a frame after its press. From the first control it comes round to the last.
+        harness.press(egui::Key::Tab, egui::Modifiers::SHIFT);
+        harness.settle();
+        assert_eq!(
+            Some(&harness.focused),
+            reached.last(),
+            "{starter}: Shift+Tab from {}",
+            reached[0]
+        );
+        for (from, back) in [("Purpose", "Model actions"), ("Lines", ADD_BUTTON)] {
+            for _ in 0..reached.len() {
+                if harness.focused == from {
+                    break;
+                }
+                harness.press(egui::Key::Tab, egui::Modifiers::NONE);
+            }
+            assert_eq!(harness.focused, from, "{starter}: Tab reaches {from}");
+            harness.press(egui::Key::Tab, egui::Modifiers::SHIFT);
+            harness.settle();
+            assert_eq!(harness.focused, back, "{starter}: Shift+Tab from {from}");
+        }
+    }
 }
 
 /// Returns the accessible description of the help of the World section among `nodes`.
