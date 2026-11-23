@@ -6,8 +6,8 @@ icon: material/clipboard-check-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s32-audit, based on 81278fc: fifteen unsigned [draft] fix commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: 81278fc
+state: "37-node-editor, fast-forwarded to redesign/s32-audit, based on c358a9a: fifteen unsigned [draft] fix commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: c358a9a
 delta_state: "committed on `37-node-editor` by fast-forward: fifteen `fix: redesign audit ... [draft]` commits and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -23,7 +23,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: fifteen `fix: redes
 
 ## State before
 
-`37-node-editor` at `81278fc` held S0 to S31, records #71 to #104, as 131 unsigned `[draft]` commits since `f4088d7`.
+`37-node-editor` at `c358a9a` held S0 to S31, records #71 to #104, as 131 unsigned `[draft]` commits since `79e6d1c`.
 Each milestone had passed its own review and the full check at its merge, and two baseline failures remained: `cargo deny` on RUSTSEC-2026-0370, 0371 and 0372, and the workspace test `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets`.
 No review had looked at the redesign as a whole, run the end-to-end list of plan S32, or run `python3 scripts/docs_rs.py` since record #66.
 
@@ -53,89 +53,89 @@ A test named in an outcome fails without its fix unless the outcome says otherwi
 
 | Id | Severity | Finding | Outcome |
 | --- | --- | --- | --- |
-| F1 | must fix | A result chip was treated as one value per element, so two changes inside a Repeat that test a Random number drawn inside it were judged unable to both apply. The card showed no "otherwise", and the transition rows fell back to hidden line id order. | Fixed in `c99d870`. `CardRelations::compare_test` returns no test for a result whose line sits inside a Repeat (the new `inside_repeat`, which `group_key` shares), so the lower line reads "otherwise" and the rows keep display order. Test `becomes_that_test_a_number_drawn_inside_a_repeat_keep_display_order`. |
-| F2 | should fix | Record #92 item 7 said the departure from round 1's "the first time it applies" shows only with carried values. Two plain chance lines inside a Repeat already apply at different times round, and no decision row records the any-time rule. | Docs fixed in `c99d870`: record #92 item 7, `docs/reference/model-files.md` and `agents/henad-graph-sheet-lower.md` now say the higher line wins whichever time round each held. The rule is unchanged and goes to the maintainer (decisions below). |
-| F4 | nit | A Keep between displayed above a Set clamped that Set's value, against the `motion.rs` module doc. | Fixed in `c99d870` by matching the doc and the topic file to the lowering: a Keep between holds the value after every Set of the property and after the Steers above it. Host test `a_keep_between_holds_the_value_after_every_set`, both orders. |
-| F5 | nit | Each Move to joined its open test into its condition, so a lower Move to moved the agent when a higher one held but its place was not open. | Fixed in `c99d870`. `write_moves` ends the chain at the first Move to whose condition holds, and a blocked place keeps the agent where it is. A single Move to lowers as before, so the ants' code is unchanged. Test `the_first_move_to_whose_condition_holds_decides` on `src/tests/sheets/move_to_first.toml`. The "otherwise" words for the lower Move to are not added (below). |
+| F1 | must fix | A result chip was treated as one value per element, so two changes inside a Repeat that test a Random number drawn inside it were judged unable to both apply. The card showed no "otherwise", and the transition rows fell back to hidden line id order. | Fixed in `b78947e`. `CardRelations::compare_test` returns no test for a result whose line sits inside a Repeat (the new `inside_repeat`, which `group_key` shares), so the lower line reads "otherwise" and the rows keep display order. Test `becomes_that_test_a_number_drawn_inside_a_repeat_keep_display_order`. |
+| F2 | should fix | Record #92 item 7 said the departure from round 1's "the first time it applies" shows only with carried values. Two plain chance lines inside a Repeat already apply at different times round, and no decision row records the any-time rule. | Docs fixed in `b78947e`: record #92 item 7, `docs/reference/model-files.md` and `agents/henad-graph-sheet-lower.md` now say the higher line wins whichever time round each held. The rule is unchanged and goes to the maintainer (decisions below). |
+| F4 | nit | A Keep between displayed above a Set clamped that Set's value, against the `motion.rs` module doc. | Fixed in `b78947e` by matching the doc and the topic file to the lowering: a Keep between holds the value after every Set of the property and after the Steers above it. Host test `a_keep_between_holds_the_value_after_every_set`, both orders. |
+| F5 | nit | Each Move to joined its open test into its condition, so a lower Move to moved the agent when a higher one held but its place was not open. | Fixed in `b78947e`. `write_moves` ends the chain at the first Move to whose condition holds, and a blocked place keeps the agent where it is. A single Move to lowers as before, so the ants' code is unchanged. Test `the_first_move_to_whose_condition_holds_decides` on `src/tests/sheets/move_to_first.toml`. The "otherwise" words for the lower Move to are not added (below). |
 
 #### Identity and provenance
 
 | Id | Severity | Finding | Outcome |
 | --- | --- | --- | --- |
-| L2-F1 | should fix | Reordering two Steers on one property changed the lowered graph and the code, so a sweep resume was refused, against the author file's identity table and `docs/reference/model-files.md`. | Fixed in `5653500`. `steered` adds the Steers between two Keep betweens in line id order. Test `reordering_steers_of_one_property_keeps_the_lowered_graph`. |
-| L2-F3 | should fix | Eight rows of the identity table had no test, the `rate_unit_from_tick` mark's place outside the code had none, and no sheet test asserted a schema hash. | Fixed in `5653500`: one test per missing row in `sheet_lower.rs`, through a `changes()` helper that asserts the code and the schema hash, and the existing identity tests now assert the schema hash too. |
-| L2-F4 | nit | The table's schema cell for a change of the time scale said "same", but a tick length change alters the hidden `tick_length` parameter and so the schema hash. | A test in `5653500` pins it: the length changes the schema hash, the unit alone keeps it. The design table is corrected outside the repository. |
-| L2-F5 | nit | `model-files.md` said a sheet's ids enter the code, and a measure's id does not. | Fixed in `5653500`. The reference names the ids that enter the code and lists a measure's id, a parameter's unit and its means outside it. Test `changing_a_measure_id_keeps_the_code_and_the_schema`. |
+| L2-F1 | should fix | Reordering two Steers on one property changed the lowered graph and the code, so a sweep resume was refused, against the author file's identity table and `docs/reference/model-files.md`. | Fixed in `b78947e`. `steered` adds the Steers between two Keep betweens in line id order. Test `reordering_steers_of_one_property_keeps_the_lowered_graph`. |
+| L2-F3 | should fix | Eight rows of the identity table had no test, the `rate_unit_from_tick` mark's place outside the code had none, and no sheet test asserted a schema hash. | Fixed in `b78947e`: one test per missing row in `sheet_lower.rs`, through a `changes()` helper that asserts the code and the schema hash, and the existing identity tests now assert the schema hash too. |
+| L2-F4 | nit | The table's schema cell for a change of the time scale said "same", but a tick length change alters the hidden `tick_length` parameter and so the schema hash. | A test in `b78947e` pins it: the length changes the schema hash, the unit alone keeps it. The design table is corrected outside the repository. |
+| L2-F5 | nit | `model-files.md` said a sheet's ids enter the code, and a measure's id does not. | Fixed in `b78947e`. The reference names the ids that enter the code and lists a measure's id, a parameter's unit and its means outside it. Test `changing_a_measure_id_keeps_the_code_and_the_schema`. |
 
 #### Determinism, keys and replay
 
 | Id | Severity | Finding | Outcome |
 | --- | --- | --- | --- |
-| D1 | nit | A press's draws depend on its button's place among the sheet's buttons, so adding a button above another changes that button's numbers while its lines keep their keys. | Documented in `5653500` in `model-files.md` and the lowering's topic file. Keying the phase on the action id is left to the maintainer, since it would change the action draws of every graph model. |
-| D2 | should fix | Compare runs compared measures exactly without checking whether the model replays exactly, so an unedited conversion of bounded confidence or boids reported a difference. | Fixed in `3757ca5`. `CompareOutcome::Inexact` with the sentence `runs_do_not_replay` when either entry's `replays_exactly` is false, and the guide and topic file corrected. Test `compare_runs_of_a_model_that_does_not_replay_exactly_names_no_first_difference`. Seen in the app's accessibility tree under the lock. |
-| D3 | should fix | An agent start on the ground with its state painted on two or more cells draws, but neither the checker nor the editor counted it as drawing, so it never took a key and its numbers followed the sheet id. | Fixed in `e9bf78c`. The checker warns "draws and holds no key" and the editor's `starts_draws` mints a key. Test `a_start_on_two_painted_cells_takes_a_key`. |
-| D4 | nit | Host against device lane equality covered five grid starters only: no SIRD competing draw, no press that draws, no agent sheet. | The grid half fixed in `b9f9660`: `every_grid_sheet_steps_alike_on_the_host_and_the_device` takes the SIRD sheet and presses New outbreak on host and device after tick 10. The agent half is not built (below). |
+| D1 | nit | A press's draws depend on its button's place among the sheet's buttons, so adding a button above another changes that button's numbers while its lines keep their keys. | Documented in `b78947e` in `model-files.md` and the lowering's topic file. Keying the phase on the action id is left to the maintainer, since it would change the action draws of every graph model. |
+| D2 | should fix | Compare runs compared measures exactly without checking whether the model replays exactly, so an unedited conversion of bounded confidence or boids reported a difference. | Fixed in `b78947e`. `CompareOutcome::Inexact` with the sentence `runs_do_not_replay` when either entry's `replays_exactly` is false, and the guide and topic file corrected. Test `compare_runs_of_a_model_that_does_not_replay_exactly_names_no_first_difference`. Seen in the app's accessibility tree under the lock. |
+| D3 | should fix | An agent start on the ground with its state painted on two or more cells draws, but neither the checker nor the editor counted it as drawing, so it never took a key and its numbers followed the sheet id. | Fixed in `b78947e`. The checker warns "draws and holds no key" and the editor's `starts_draws` mints a key. Test `a_start_on_two_painted_cells_takes_a_key`. |
+| D4 | nit | Host against device lane equality covered five grid starters only: no SIRD competing draw, no press that draws, no agent sheet. | The grid half fixed in `b78947e`: `every_grid_sheet_steps_alike_on_the_host_and_the_device` takes the SIRD sheet and presses New outbreak on host and device after tick 10. The agent half is not built (below). |
 
 #### GPU and performance
 
 | Id | Severity | Finding | Outcome |
 | --- | --- | --- | --- |
-| G1 | should fix | A chance below about 1e-6 per tick ran at the wrong probability on 24 bits, and a rate below about 3e-8 per tick never fired, while the card's note showed the intended chance. | The rate path fixed in `86dd774`. A rate the same for every element, with no "for each", takes its chance from a series below a hazard of 2^-10 and draws through a 32-bit threshold. Tests `a_small_rate_keeps_its_chance_in_the_threshold` (host) and `a_rate_below_the_resolution_of_a_float_draw_recovers_its_share` (device, SIR at 2048 by 2048, about 50 recoveries where there were none). The SIR starter's code changes with it. The other paths stay (below). |
-| G2 | should fix | No test held the barriers of the probed shaders in uniform control flow, though every sheet compiles with probes since S31. | Fixed in `6c90d49`. `every_probed_shader_keeps_its_barriers_in_uniform_control_flow` over the probed graph starters, every sheet starter and two grid fixtures. |
+| G1 | should fix | A chance below about 1e-6 per tick ran at the wrong probability on 24 bits, and a rate below about 3e-8 per tick never fired, while the card's note showed the intended chance. | The rate path fixed in `b78947e`. A rate the same for every element, with no "for each", takes its chance from a series below a hazard of 2^-10 and draws through a 32-bit threshold. Tests `a_small_rate_keeps_its_chance_in_the_threshold` (host) and `a_rate_below_the_resolution_of_a_float_draw_recovers_its_share` (device, SIR at 2048 by 2048, about 50 recoveries where there were none). The SIR starter's code changes with it. The other paths stay (below). |
+| G2 | should fix | No test held the barriers of the probed shaders in uniform control flow, though every sheet compiles with probes since S31. | Fixed in `b78947e`. `every_probed_shader_keeps_its_barriers_in_uniform_control_flow` over the probed graph starters, every sheet starter and two grid fixtures. |
 
 #### UI
 
 | Id | Severity | Finding | Outcome |
 | --- | --- | --- | --- |
-| UI-1 | should fix | A name that maps to a reserved id (Count, Grid width, Tick length) showed the library's raw message with the word "id". | Fixed in `1477555`. The forms refuse it first with `sentence::name_reserved` ("Henad uses the name Count itself. Choose another name."), and `widgets::refusal_text` never shows the id. Seen in the app. |
-| UI-2 | should fix | Cards over agents or the ground reused sentences that say "cells". | Fixed in `1477555`. Those sentences take the card's thing word, with new Lines and World help for agents. Test `the_notes_of_an_agent_card_name_its_agents`. |
-| UI-3 | should fix | In sheet mode, problems not drawn under a line were listed as "line:column message", a position in a text the author never sees. | Fixed in `1477555` with W4. |
-| UI-4 | should fix | The words-rule tests matched whole words only, so plurals got through, and the lowering's limit messages held "nodes", "lowers" and a line id. | Fixed in `1477555`. `sentence::is_forbidden_word` catches the usual endings, and the limit messages are new sentences with neither. |
-| UI-5 | nit | The work-budget messages ended in "... would fit." in place of an imperative. | Fixed in `1477555`, as "Use fewer birds." and the like. Record #87's quotes stay as written then. |
-| UI-6 | nit | Apply outcome and preview lines are app literals with words outside the wording table. | In part, in `1477555`: an unchanged Apply reads "Model unchanged.". The verifier found the rest free of forbidden words. |
-| UI-7 | nit | The New model tooltips said "from an example" though the dialog opens on Blank. | The tooltips fixed in `1477555`. Blank's description stays as gate section 10.13 words it. |
+| UI-1 | should fix | A name that maps to a reserved id (Count, Grid width, Tick length) showed the library's raw message with the word "id". | Fixed in `b78947e`. The forms refuse it first with `sentence::name_reserved` ("Henad uses the name Count itself. Choose another name."), and `widgets::refusal_text` never shows the id. Seen in the app. |
+| UI-2 | should fix | Cards over agents or the ground reused sentences that say "cells". | Fixed in `b78947e`. Those sentences take the card's thing word, with new Lines and World help for agents. Test `the_notes_of_an_agent_card_name_its_agents`. |
+| UI-3 | should fix | In sheet mode, problems not drawn under a line were listed as "line:column message", a position in a text the author never sees. | Fixed in `b78947e` with W4. |
+| UI-4 | should fix | The words-rule tests matched whole words only, so plurals got through, and the lowering's limit messages held "nodes", "lowers" and a line id. | Fixed in `b78947e`. `sentence::is_forbidden_word` catches the usual endings, and the limit messages are new sentences with neither. |
+| UI-5 | nit | The work-budget messages ended in "... would fit." in place of an imperative. | Fixed in `b78947e`, as "Use fewer birds." and the like. Record #87's quotes stay as written then. |
+| UI-6 | nit | Apply outcome and preview lines are app literals with words outside the wording table. | In part, in `b78947e`: an unchanged Apply reads "Model unchanged.". The verifier found the rest free of forbidden words. |
+| UI-7 | nit | The New model tooltips said "from an example" though the dialog opens on Blank. | The tooltips fixed in `b78947e`. Blank's description stays as gate section 10.13 words it. |
 
 #### Code and docs style
 
 | Id | Severity | Finding | Outcome |
 | --- | --- | --- | --- |
-| F1 | should fix | Source comments cited decision ids and unpublished plan and study documents. | Fixed in `87df8a9` across 16 files. |
-| F2 | should fix | Topic files carried about 147 plan and decision ids. | Fixed in `d19871c`. Ids from before the redesign stay. |
-| F3 | should fix | A stale paragraph in `agents/henad-explore.md` described an interim rate refusal and a later milestone. | Fixed in `d19871c`. |
-| F4 | nit | Comment lines added by the redesign ran past 120 columns. | Fixed in `87df8a9` for every such line `git blame` dates after `f4088d7`. The older ones stay (below). |
-| F5 | should fix | About 58 new doc comments opened with a headless "What/How/Where" clause. | Fixed in `87df8a9`: 59 rewritten. The 37 from before the redesign stay. |
-| F6 | should fix | Migrating to 0.4 had no step for the output writers' new arguments. | Fixed in `ed63ffb` with deps-2. |
-| F7 | should fix | The 0.4 CHANGELOG lines were long and used study jargon. | Fixed in `ed63ffb`: the redesign's lines cut to the names a user meets, the longest from 1998 characters to 640. |
-| F8 | nit | Five list items in the editor guide held two sentences on one line. | Fixed in `ed63ffb`. |
-| F9 | should fix | `docs/guide/sweeps.md` had two sections on the tick length. | Fixed in `ed63ffb`: one section, "Varying the tick length". |
-| F10 | nit | The landing page explained only the #48 records' unpublished citations. | Fixed in `ed63ffb`: `agent-record.md` explains the plan, gate and study ids of records #71 onward. |
-| F11 | nit | Some topic-file lines broke the hard wrap, and `agents/henad-graph-sheet.md` sat close to 40k. | Fixed in `d19871c`. The file is 39,728 bytes. |
-| F12 | nit | New identifiers used British spelling. | Fixed in `87df8a9`: `lower/colours.rs` is `colors.rs`, with `neighbor_count`, `uncolored`, `center_y` and others. Two pass names and one public variant stay (below). |
-| F13 | nit | `ChangeKind::Become` named its fields `from` and `to`. | Fixed in `87df8a9`: `old_state` and `new_state`. |
+| F1 | should fix | Source comments cited decision ids and unpublished plan and study documents. | Fixed in `b78947e` across 16 files. |
+| F2 | should fix | Topic files carried about 147 plan and decision ids. | Fixed in `b78947e`. Ids from before the redesign stay. |
+| F3 | should fix | A stale paragraph in `agents/henad-explore.md` described an interim rate refusal and a later milestone. | Fixed in `b78947e`. |
+| F4 | nit | Comment lines added by the redesign ran past 120 columns. | Fixed in `b78947e` for every such line `git blame` dates after `79e6d1c`. The older ones stay (below). |
+| F5 | should fix | About 58 new doc comments opened with a headless "What/How/Where" clause. | Fixed in `b78947e`: 59 rewritten. The 37 from before the redesign stay. |
+| F6 | should fix | Migrating to 0.4 had no step for the output writers' new arguments. | Fixed in `b78947e` with deps-2. |
+| F7 | should fix | The 0.4 CHANGELOG lines were long and used study jargon. | Fixed in `b78947e`: the redesign's lines cut to the names a user meets, the longest from 1998 characters to 640. |
+| F8 | nit | Five list items in the editor guide held two sentences on one line. | Fixed in `b78947e`. |
+| F9 | should fix | `docs/guide/sweeps.md` had two sections on the tick length. | Fixed in `b78947e`: one section, "Varying the tick length". |
+| F10 | nit | The landing page explained only the #48 records' unpublished citations. | Fixed in `b78947e`: `agent-record.md` explains the plan, gate and study ids of records #71 onward. |
+| F11 | nit | Some topic-file lines broke the hard wrap, and `agents/henad-graph-sheet.md` sat close to 40k. | Fixed in `b78947e`. The file is 39,728 bytes. |
+| F12 | nit | New identifiers used British spelling. | Fixed in `b78947e`: `lower/colours.rs` is `colors.rs`, with `neighbor_count`, `uncolored`, `center_y` and others. Two pass names and one public variant stay (below). |
+| F13 | nit | `ChangeKind::Become` named its fields `from` and `to`. | Fixed in `b78947e`: `old_state` and `new_state`. |
 | F14 | nit | Records break the one-sentence-per-line rule and order their extra sections two ways. | No record was changed. This record keeps one sentence per line and the heading "Benchmark commands left for the maintainer". |
 
 #### Dependencies and packaging
 
 | Id | Severity | Finding | Outcome |
 | --- | --- | --- | --- |
-| deps-1 | must fix | The docs.rs build of henad-explore failed on wasm32, since `SweepRun`'s doc linked the native-only `stop`. The line predates the redesign, and CI's docs job would have failed. | Fixed in `217fb5f`. `scripts/docs_rs.py --host` builds henad-explore, henad-graph and the facade on aarch64 and wasm32. |
-| deps-2 | should fix | Migrating to 0.4 lacked the output writers' new arguments. | Fixed in `ed63ffb`. |
-| deps-3 | nit | The `ManifestModel` migration step named `author` but not `code`. | Fixed in `ed63ffb`. |
-| deps-4 | nit | The crates.io and docs.rs texts described henad-graph as graph models only. | Fixed in `217fb5f`: the Cargo description, READMEs, crate doc, facade feature comment and `AGENTS.md` name sheets. |
-| deps-5 | nit | `agents/dependencies.md` gave one test module as the reason for henad-models' dev edge to henad-graph. | Fixed in `217fb5f`. |
-| deps-8 | nit | The facade's `henad::graph` named every public module of henad-graph but `normal`. | Fixed in `217fb5f`, with `henad::graph::normal::Origin` in `facade_paths.rs`. |
+| deps-1 | must fix | The docs.rs build of henad-explore failed on wasm32, since `SweepRun`'s doc linked the native-only `stop`. The line predates the redesign, and CI's docs job would have failed. | Fixed in `b78947e`. `scripts/docs_rs.py --host` builds henad-explore, henad-graph and the facade on aarch64 and wasm32. |
+| deps-2 | should fix | Migrating to 0.4 lacked the output writers' new arguments. | Fixed in `b78947e`. |
+| deps-3 | nit | The `ManifestModel` migration step named `author` but not `code`. | Fixed in `b78947e`. |
+| deps-4 | nit | The crates.io and docs.rs texts described henad-graph as graph models only. | Fixed in `b78947e`: the Cargo description, READMEs, crate doc, facade feature comment and `AGENTS.md` name sheets. |
+| deps-5 | nit | `agents/dependencies.md` gave one test module as the reason for henad-models' dev edge to henad-graph. | Fixed in `b78947e`. |
+| deps-8 | nit | The facade's `henad::graph` named every public module of henad-graph but `normal`. | Fixed in `b78947e`, with `henad::graph::normal::Origin` in `facade_paths.rs`. |
 
 #### Researcher walk-through
 
 | Id | Severity | Finding | Outcome |
 | --- | --- | --- | --- |
-| W1 | must fix | A sheet, which always runs on the GPU, could not play at a watchable speed: Pacing had no TPS cap for GPU models, and SIR on 100 by 100 ran 23,474 days in about 3 s. | Fixed in `9eab8e5`. The GPU runner keeps to `SetTargetTps` once `SetUncapped(false)` arrives, and the Pacing tab shows Unlimited TPS and Target TPS for GPU models and sheets. Test `a_capped_gpu_run_keeps_to_its_rate`. In the app, capped Play ran about 38 ticks in 4 s. |
-| W2 | must fix | On a GPU model, Run to tick charted only its start and end. | Fixed in `9eab8e5`. `Snapshot::run_to_samples` holds stats at up to 500 evenly spaced ticks, on the CPU and on native GPU, carried over a publish the app missed. Tests `a_run_to_a_tick_samples_its_stats_on_the_way` and `a_gpu_run_to_a_tick_samples_its_stats_on_the_way`. |
-| W3 | should fix | A second new model got no preview and gave no action to take, and its Apply needed Build. | In part, in `1477555`: the waiting preview reads "Preview waits for the running model. Press Offload in Playback to show this one.". The rest was decided in records #55 and #65. |
-| W4 | should fix | The sheet pane showed "21:1 a value is blank, where it wants a chance". | Fixed in `1477555`. Sheet mode lists the message alone, and the checker's error is `sentence::empty_field` ("Health has an empty field. Type a chance in it."). Test `an_empty_start_chance_names_its_property`. |
-| W8 | nit | The Charts legend was alphabetical. | Fixed in `1477555`: the legend follows the measures' order. |
-| W9 | nit | Play and Step were named only by their icon glyphs in the accessibility tree. | Fixed in `1477555`, and seen in the tree. |
-| W10 | nit | A state's Plot box wrapped away from its name. | Fixed in `1477555`, then again in `b1a3106` (end to end item 3). |
+| W1 | must fix | A sheet, which always runs on the GPU, could not play at a watchable speed: Pacing had no TPS cap for GPU models, and SIR on 100 by 100 ran 23,474 days in about 3 s. | Fixed in `b78947e`. The GPU runner keeps to `SetTargetTps` once `SetUncapped(false)` arrives, and the Pacing tab shows Unlimited TPS and Target TPS for GPU models and sheets. Test `a_capped_gpu_run_keeps_to_its_rate`. In the app, capped Play ran about 38 ticks in 4 s. |
+| W2 | must fix | On a GPU model, Run to tick charted only its start and end. | Fixed in `b78947e`. `Snapshot::run_to_samples` holds stats at up to 500 evenly spaced ticks, on the CPU and on native GPU, carried over a publish the app missed. Tests `a_run_to_a_tick_samples_its_stats_on_the_way` and `a_gpu_run_to_a_tick_samples_its_stats_on_the_way`. |
+| W3 | should fix | A second new model got no preview and gave no action to take, and its Apply needed Build. | In part, in `b78947e`: the waiting preview reads "Preview waits for the running model. Press Offload in Playback to show this one.". The rest was decided in records #55 and #65. |
+| W4 | should fix | The sheet pane showed "21:1 a value is blank, where it wants a chance". | Fixed in `b78947e`. Sheet mode lists the message alone, and the checker's error is `sentence::empty_field` ("Health has an empty field. Type a chance in it."). Test `an_empty_start_chance_names_its_property`. |
+| W8 | nit | The Charts legend was alphabetical. | Fixed in `b78947e`: the legend follows the measures' order. |
+| W9 | nit | Play and Step were named only by their icon glyphs in the accessibility tree. | Fixed in `b78947e`, and seen in the tree. |
+| W10 | nit | A state's Plot box wrapped away from its name. | Fixed in `b78947e`, then again in `b78947e` (end to end item 3). |
 
 ### Rejected findings
 
@@ -158,26 +158,26 @@ A test named in an outcome fails without its fix unless the outcome says otherwi
 
 ### End to end
 
-The full check ran in three foreground chunks at `ed63ffb` and again at `802a4b2`, after the two end-to-end fixes.
+The full check ran in three foreground chunks at `b78947e` and again at `b78947e`, after the two end-to-end fixes.
 Then `python3 scripts/docs_rs.py --host` and `uv run zensical build --clean`, which reports no issues and leaves no `--8<--` directive unresolved outside the records.
 
 | Item | Result |
 | --- | --- |
 | 1. The CLI runs the Game of Life sheet, and a broken copy prints the author line | Pass. 100 steps at 1024 by 1024. Two broken copies print `path:95:1` "the state alive has no property to belong to" and `path:83:1` "colour is no property of cells", with no node or pass. |
 | 2. Game of Life from Blank with a random start, Step and Play | Pass. Built through accessible names: Status, By chance 30%, Plot Alive and three lines. Step advanced 0, 1, 2, and Alive fell from about 3000 to 291 and held there from tick 12,156 to 25,170. The blinker and glider known answers pass in the full check, as D74 asks. |
-| 3. SIR with rates from Blank | Pass after `b1a3106`. The notes read the chances 0.259 and 0.451, "Up to 0.909 with 8" and a recovery chance of 0.0952. Playback reads "Tick 22 (22 days)", Apply reads "Model applied.", and Run to tick reaches "Tick 80 (80 days)". The browser screenshot shows the Day axis. |
+| 3. SIR with rates from Blank | Pass after `b78947e`. The notes read the chances 0.259 and 0.451, "Up to 0.909 with 8" and a recovery chance of 0.0952. Playback reads "Tick 22 (22 days)", Apply reads "Model applied.", and Run to tick reaches "Tick 80 (80 days)". The browser screenshot shows the Day axis. |
 | 4. The SIRD fixture's competing lines read "or", and its Dead share at a 7-day tick stays near one half | Pass. The added line reads "or become Dead from Infected, at rate 0.1 per day". A CLI sweep at `tick_length` 7 gives a Dead share of 0.5002 to 0.5007 over ticks 5 to 40 on 3 seeds. |
 | 5. Boids and ants open, run and take an edit | Pass. Separation 0.05 to 0.1 and Momentum 0.8 to 0.7, Apply, the Rebuild model dialog, Play. |
 | 6. Fire counts beside Game of Life's lines while playing | Pass. Lines 2 and 3 counted 662 and 656 at tick 38, then 56 and 56 once settled, kept after Pause. |
 | 7. A sweep over `tick_length`, a note edit resumes, a rate edit is refused, Results and Open in Editor | Pass. 8 runs. After the note edit `--resume` skipped all 8 and `--reps 3 --resume` ran 4 more. After the rate edit `--resume` was refused on "different model code". `series.csv` has its `time` column, `henad-app --open` showed 12 runs, and Open in Editor opened the sheet with the note. |
 | 8. Save, a fresh app, Convert, the HighLife edit, Show changes, Compare runs, Open original | Pass with two substitutions. Save and Open use native file dialogs the egui server cannot drive on a locked screen, so the starter in a freshly launched app stood in for the saved file. Line 2's Is constant went from 3 to 6 in place of the HighLife nodes, which the full check's tests cover. Show changes listed "Changed: Is (n2001)" under line 2, and Compare runs read "Game of Life (expert) first differs from Game of Life at tick 1: Alive is 11,318 against 22,455.". |
-| 9. A look-around covering the world names its line, and the device survives | Pass after `802a4b2`. Boids at 200 by 200 with 70,000 birds and Visual range 200 reads "Lines 1 and 2, Flockmates and Too close: looks at too many birds at 70,000 birds. Use a shorter distance or fewer birds." in the CLI and in the app, and the preview played afterwards. The on-device fault test `a_capped_fold_fault_names_the_author_line` passes in the full check. |
+| 9. A look-around covering the world names its line, and the device survives | Pass after `b78947e`. Boids at 200 by 200 with 70,000 birds and Visual range 200 reads "Lines 1 and 2, Flockmates and Too close: looks at too many birds at 70,000 birds. Use a shorter distance or fewer birds." in the CLI and in the app, and the preview played afterwards. The on-device fault test `a_capped_fold_fault_names_the_author_line` passes in the full check. |
 | 10. The web build, and a sheet in the browser | Pass. `./scripts/build_web.sh build` passes in the full check. Headless Chrome on WebGPU against `build_web.sh serve` ran New model, SIR epidemic, Create and Play to "Tick 182 (182 days)" at 30 TPS with the epidemic curve. The server was stopped. |
 
 Two items failed first, and each failure became a fix commit.
 
-- **`b1a3106` (item 3).** The W10 fix put each state's Plot group inside `horizontal_wrapped`, and egui wraps no nested group. In the narrow sheet pane "Plot Recovered" sat at x 1155, past the card pane's edge at 1057, so a click missed and SIR's Recovered could not be plotted. Each state now takes one row. Test `every_plot_box_of_three_states_stays_in_the_sheet_pane_and_takes_a_click`, and in the app the boxes end by x 912.
-- **`802a4b2` (item 9).** `SheetFile::shortfalls`, the cost mapping of S17, had no caller outside tests, so a sheet past the work budget named the lowered pass `boids_tick_bird_tick`. henad-cli's `run_single` now takes the `ModelFile` and uses the sheet's shortfalls, with no new crate edge. The app routes every shortfall through `AppState::entry_shortfalls`, which uses the Editor's sheet when its code hash equals the entry's, and the Parameters notice no longer doubles a reason's full stop. Tests `a_sheet_past_the_work_budget_is_refused_at_its_lines` (henad-cli) and `work_past_the_budget_on_a_sheet_names_its_lines_and_no_pass` (henad-app).
+- **`b78947e` (item 3).** The W10 fix put each state's Plot group inside `horizontal_wrapped`, and egui wraps no nested group. In the narrow sheet pane "Plot Recovered" sat at x 1155, past the card pane's edge at 1057, so a click missed and SIR's Recovered could not be plotted. Each state now takes one row. Test `every_plot_box_of_three_states_stays_in_the_sheet_pane_and_takes_a_click`, and in the app the boxes end by x 912.
+- **`b78947e` (item 9).** `SheetFile::shortfalls`, the cost mapping of S17, had no caller outside tests, so a sheet past the work budget named the lowered pass `boids_tick_bird_tick`. henad-cli's `run_single` now takes the `ModelFile` and uses the sheet's shortfalls, with no new crate edge. The app routes every shortfall through `AppState::entry_shortfalls`, which uses the Editor's sheet when its code hash equals the entry's, and the Parameters notice no longer doubles a reason's full stop. Tests `a_sheet_past_the_work_budget_is_refused_at_its_lines` (henad-cli) and `work_past_the_budget_on_a_sheet_names_its_lines_and_no_pass` (henad-app).
 
 The app ran under the lock of plan section 2.4, with `app.ron` moving the window to G15F1 (1600 by 960 at -1800, 60).
 The session's screen was locked, so every egui screenshot timed out, and the native items were driven and checked through the accessibility tree alone.
@@ -275,8 +275,8 @@ zensical.toml                                  nav entry for this record
 
 ## State after
 
-- `37-node-editor` holds the fifteen fix commits and this record after `81278fc`, fast-forwarded from `redesign/s32-audit`. `37-node-editor` had not moved since the branch started, so nothing was rebased.
-- The full check with `HENAD_REQUIRE_GPU=1` at `802a4b2` matches the baseline. Every step exits 0 but two, and both fail as the baseline does. `cargo deny` reports RUSTSEC-2026-0370, 0371 and 0372 and no other. The workspace tests pass 2,199 and fail one, `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets`, with no new failing name and no aborted test binary.
+- `37-node-editor` holds the fifteen fix commits and this record after `c358a9a`, fast-forwarded from `redesign/s32-audit`. `37-node-editor` had not moved since the branch started, so nothing was rebased.
+- The full check with `HENAD_REQUIRE_GPU=1` at `b78947e` matches the baseline. Every step exits 0 but two, and both fail as the baseline does. `cargo deny` reports RUSTSEC-2026-0370, 0371 and 0372 and no other. The workspace tests pass 2,199 and fail one, `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets`, with no new failing name and no aborted test binary.
 - clippy, the doc tests, the README program, `cargo doc`, the scripts' tests, the wasm32 checks and the web build pass.
 - `python3 scripts/docs_rs.py --host` and `uv run zensical build --clean` pass.
 - This record commit changes only the record, its nav entry and one CHANGELOG line, so the full check was not run again.
@@ -336,11 +336,11 @@ The audit also chose these in the maintainer's absence. None has a gate row yet.
 
 No benchmark was run.
 Run each set interleaved, round by round, on a cooled machine, as `agents/performance.md` asks.
-Every input below exists at `802a4b2`.
+Every input below exists at `b78947e`.
 Records #71, #73, #75 to #80, #82, #84 to #86, #88 to #90, #93 and #96 to #103 left none.
 G1 changes the SIR starter's code, so #91's and #94's SIR runs measure the threshold form.
 
-1. **#72 (workgroup counters).** Build a `f4088d7` worktree and the current henad-cli. Over 5 rounds run `--steps 2000 --reps 5 --json` on `gpu_boids`, `crates/henad-models/tests/fixtures/graphs/gpu_boids.toml` and `crates/henad-graph/starters/boids.toml`, then on `gpu_ants`, `gpu_ants.toml` and `starters/ants.toml` with `--set num_agents=1000000 --set world_width=1000 --set world_height=1000`, old binary against new, and compute the median ratio over the stock port with record #72's script. It needs about 12 GB free.
+1. **#72 (workgroup counters).** Build a `79e6d1c` worktree and the current henad-cli. Over 5 rounds run `--steps 2000 --reps 5 --json` on `gpu_boids`, `crates/henad-models/tests/fixtures/graphs/gpu_boids.toml` and `crates/henad-graph/starters/boids.toml`, then on `gpu_ants`, `gpu_ants.toml` and `starters/ants.toml` with `--set num_agents=1000000 --set world_width=1000 --set world_height=1000`, old binary against new, and compute the median ratio over the stock port with record #72's script. It needs about 12 GB free.
 2. **#74 (fire-count channel).** Build record #74's standalone `fire-count-bench` crate, which compiles the Game of Life graph starter plain and probed, and run `cargo run --release -- 4096` for 5 rounds at batch 1 and batch 64.
 3. **#81 and #83 (Game of Life sheet against its graph starter).**
    ```bash

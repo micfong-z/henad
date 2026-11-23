@@ -6,8 +6,8 @@ icon: material/tune-variant
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s24-preview-parameters at b4e57d4, where the merge rebase found the branch already on the tip: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: b4e57d4
+state: "37-node-editor, fast-forwarded to redesign/s24-preview-parameters at c1a336c, where the merge rebase found the branch already on the tip: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: c1a336c
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: live uniform parameters on GPU models [draft]`, `feat: parameters drive the preview [draft]`, `fix: s24 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -22,7 +22,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: live uniform
 
 ## State before
 
-- `37-node-editor` at `d4766e5` (S21 merged) when S24 started, and at `b4e57d4` (S20 and S16a merged) when it was rebased.
+- `37-node-editor` at `1a8b391` (S21 merged) when S24 started, and at `c1a336c` (S20 and S16a merged) when it was rebased.
 - Every GPU graph parameter was reload-only: `GridProgram::entry` and `AgentProgram::entry` marked the file's parameters `on_reload`, and both GPU engines returned `false` from `set_param`.
 - The Params tab drew the selected entry, and a preview was never the selection, so a slider moved during a preview reached nothing (`ui/params.rs`, recon `henad-app.md` section 1.4).
 - The preview built at each parameter's default (`preview_values`), and its sheet buttons sat disabled under the selected model's actions.
@@ -94,7 +94,7 @@ Under the lock of plan section 2.4, on the branch before the rebase, the window 
 After the rebase onto S16a the check was started again under the lock: New model and Create worked, then the window stopped painting (the macOS session would not bring it to the front, likely a locked screen overnight) and no screenshot could be taken.
 The app was quit, `app.ron` restored and the lock released.
 
-After the review fixes, checks 1 to 6 ran again on the rebased branch (on `b4e57d4`, with the review fixes) under the lock, the window placed on G15F1 at (-1800, 60), 1600 by 960.
+After the review fixes, checks 1 to 6 ran again on the rebased branch (on `c1a336c`, with the review fixes) under the lock, the window placed on G15F1 at (-1800, 60), 1600 by 960.
 The macOS session was locked, so the window drew no frame a screenshot could take, and every check was read from the accessibility tree through the egui MCP server, with no screenshots.
 The app still ran its frames and took the synthesized input.
 
@@ -200,12 +200,12 @@ crates/henad-models/src/tests/sheet_grid.rs        the SIR live rate on the devi
 - Tried values show in the tab and on the sheet in the wording table's words, and Reset and Keep end them.
 - An applied graph or sheet takes its live parameters from the Parameters tab's usual rows too, through `send_live_param`, now that the engine accepts them.
 - A sweep sets every value at build and sends no edit, so its runs are unchanged.
-- The branch is rebased on `b4e57d4` with S16a and S20; S16b, S29 and later milestones are the open neighbours.
+- The branch is rebased on `c1a336c` with S16a and S20; S16b, S29 and later milestones are the open neighbours.
 - `37-node-editor` holds the three unsigned commits, the feature, the engine change and the review's fixes, fast-forwarded with no merge-check fix.
 
 ### Merge check
 
-- The merge rebase onto `37-node-editor` found the branch already on its tip, `b4e57d4`, so no commit was replayed and no conflict arose.
+- The merge rebase onto `37-node-editor` found the branch already on its tip, `c1a336c`, so no commit was replayed and no conflict arose.
 - The full check then ran on the branch with `HENAD_REQUIRE_GPU=1`.
   Every step exits 0 but two, and both fail as the baseline does.
   `cargo deny` reports the baseline's three advisories, RUSTSEC-2026-0370, 0371 and 0372, and no other.

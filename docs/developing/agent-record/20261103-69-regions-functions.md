@@ -6,9 +6,9 @@ icon: material/vector-square
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor with E2 as ten unsigned [draft] commits after fc6c6e9 and one of review fixes; the E2 gate met through the egui MCP server on the native app; HENAD_REQUIRE_GPU=1 check.sh lines passing apart from cargo deny's three advisories, which master fails too, and the henad-models budget test of record #68, which fails since the A2 review"
-baseline_commit: 8abd853
-delta_state: "committed on `37-node-editor`: eleven unsigned commits after `fc6c6e9`, `76d0de1` to `4ec0f5e`, for the maintainer to reword and sign"
+state: "37-node-editor with E2 as ten unsigned [draft] commits after 10935f7 and one of review fixes; the E2 gate met through the egui MCP server on the native app; HENAD_REQUIRE_GPU=1 check.sh lines passing apart from cargo deny's three advisories, which master fails too, and the henad-models budget test of record #68, which fails since the A2 review"
+baseline_commit: 10935f7
+delta_state: "committed on `37-node-editor`: eleven unsigned commits after `10935f7`, `79e6d1c` to `79e6d1c`, for the maintainer to reword and sign"
 ---
 
 # Regions and functions in the graph editor
@@ -20,7 +20,7 @@ delta_state: "committed on `37-node-editor`: eleven unsigned commits after `fc6c
 
 ## State before
 
-Rounds 1 and 2 and A2 were committed on `37-node-editor` up to `8abd853`, records #61 to #68.
+Rounds 1 and 2 and A2 were committed on `37-node-editor` up to `10935f7`, records #61 to #68.
 The Editor's graph editor (E1, record #65) drew one canvas per pass, compiled grid graphs alone and listed grid starters alone.
 A2 (record #68) added the agent kinds, `fn.*`, `math.expr`, `grid.fold` and `agent.radius_fold`, and `AgentProgram`.
 henad-graph had no edit command for functions, and its `CheckReport` typed passes alone.
@@ -194,13 +194,13 @@ zensical.toml
 
 ## State after
 
-- `37-node-editor` holds E2 as ten unsigned `[draft]` commits after `fc6c6e9`, `76d0de1` to `14fade9`: four of step 1, rebased, and six of step 2, this record in the last, then `4ec0f5e` of review fixes.
+- `37-node-editor` holds E2 as ten unsigned `[draft]` commits after `10935f7`, `79e6d1c` to `79e6d1c`: four of step 1, rebased, and six of step 2, this record in the last, then `79e6d1c` of review fixes.
   The work ran in the worktree `37-e2`, which no longer exists. The round 3 audit (record #70) corrected this paragraph and the frontmatter.
 - After the review fixes, `cargo fmt`, clippy over henad-graph and henad-app with every target and feature, their `HENAD_REQUIRE_GPU=1` tests (henad-app 346, henad-graph 167 and the one test ignored for Metal's fast math in record #67) and doc tests, rustdoc with `-D warnings` and the wasm32 check of both pass.
   The full `check.sh` was not run again after the fixes.
 - `HENAD_REQUIRE_GPU=1`, every line of `check.sh` before `cargo deny` passes, and `cargo deny` fails on RUSTSEC-2026-0370, 0371 and 0372 alone (`zbus_names`, `zvariant`, `zvariant_derive` unmaintained; bans, licences and sources ok), as `master` does.
   By hand after it: clippy over the workspace, the doc tests, the README program, rustdoc with `-D warnings`, the scripts' tests and `./scripts/build_web.sh build` pass.
-  The tests of every workspace crate pass but henad-models' `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets`, which fails since the A2 review's walk charge (`f9b149f`), as record #68 reports. An earlier version of this paragraph called every test passing, which the round 3 audit reproduced as wrong.
+  The tests of every workspace crate pass but henad-models' `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets`, which fails since the A2 review's walk charge (`10935f7`), as record #68 reports. An earlier version of this paragraph called every test passing, which the round 3 audit reproduced as wrong.
 
 | Gate | Result |
 |---|---|

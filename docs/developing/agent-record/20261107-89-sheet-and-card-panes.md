@@ -6,8 +6,8 @@ icon: material/card-text-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s13b-sheet-card-panes after its merge rebase onto 717c3b5 (S17 and S23 merged): three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test, and the egui MCP checks were repeated on the rebased branch"
-baseline_commit: 2bed719
+state: "37-node-editor, fast-forwarded to redesign/s13b-sheet-card-panes after its merge rebase onto e48d33b (S17 and S23 merged): three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test, and the egui MCP checks were repeated on the rebased branch"
+baseline_commit: 33c9922
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: sentence parts for the card [draft]`, `feat: sheet and card panes with chips and help [draft]`, `fix: s13b review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -22,7 +22,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: sentence par
 
 ## State before
 
-- The branch was cut from `37-node-editor` at `2bed719`, with S13a (sheets in the app) merged.
+- The branch was cut from `37-node-editor` at `33c9922`, with S13a (sheets in the app) merged.
 - The Card pane drew each line as one plain label from `Sentences::line`, the Sheet pane drew its sections under plain headings, and every problem of the check sat in the list under the panes as `<line>:<column> <message>`.
 - `Sentences` wrote a line as a string only, so nothing could tell a chip from the words around it.
 - The baseline of the full check is the gate's: `cargo deny` fails on RUSTSEC-2026-0370, 0371 and 0372, and the workspace tests on `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets` alone.
@@ -153,7 +153,7 @@ Checks after the fixes: fmt, clippy with `-D warnings` over henad-app and henad-
 
 ### Merge check
 
-- The merge rebase onto `37-node-editor` at `717c3b5` brought in S17 (agent sheets) and S23 (conversion), and conflicted in the second commit only.
+- The merge rebase onto `37-node-editor` at `e48d33b` brought in S17 (agent sheets) and S23 (conversion), and conflicted in the second commit only.
   - `CHANGELOG.md` keeps both lines, S17's agent sheet lowering and S13b's sheet and card panes.
   - `crates/henad-app/src/tests/sheet_editor.rs` keeps both milestones' imports: S13b's `CardLine`, `LineNote` and `NoteColor` beside `card_lines`, and S17's `starter_choices` beside `new_model_modal`.
   - The other files S17 and S13b share (`agents/henad-app-sheet.md`, `agents/henad-graph-sheet.md`, `sheet/sentence.rs` and `src/tests/sheet_sentence.rs`) merged without a conflict.

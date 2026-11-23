@@ -9,7 +9,7 @@ The comments are left out of the comparison because they hold the sentences of t
 `check.py` is the author format's reference checker and writer, a Python script kept with the format's design outside this repository.
 The copy used has the SHA-256 `9879a44b6bb0472791fa27c9d8e7814620ed991d6ce11c46bfd8f700f720d02a` and ran under Python 3.15.0.
 
-Each file was written from the sheet of the same name as it stood at commit `dfab1fb`, before the Rust writer existed: `crates/henad-graph/sheets/game_of_life.toml`, and `sir.toml`, `boids.toml` and `ants.toml` in `crates/henad-graph/src/tests/sheets/`.
+Each file was written from the sheet of the same name as it stood at commit `ea28d50`, before the Rust writer existed: `crates/henad-graph/sheets/game_of_life.toml`, and `sir.toml`, `boids.toml` and `ants.toml` in `crates/henad-graph/src/tests/sheets/`.
 Each ran on a scratch copy outside the repository:
 
 ```sh
@@ -20,7 +20,7 @@ grep -v '^#' scratch/<name>.toml > golden/<name>.toml
 
 `--write` replaces the file with its canonical text.
 `grep -v '^#'` removes every line that starts with `#`, which in a canonical text are the generated comments alone.
-At `dfab1fb` the four sheets already equalled `check.py`'s output apart from their comments.
+At `ea28d50` the four sheets already equalled `check.py`'s output apart from their comments.
 The ants starter later took a note under its last line on its slower trail formation, which the format's example lacks, so the test drops every line's note before it writes the four sheets.
 The four starters later took the ids `sheet_game_of_life`, `sheet_sir`, `sheet_boids` and `sheet_ants`, and the test takes `sheet_` off each id before it writes, so the golden files keep the examples' ids.
 The four purposes and the ants starter's description of its trail strength were later reworded, and the new words were put into the golden files by hand.

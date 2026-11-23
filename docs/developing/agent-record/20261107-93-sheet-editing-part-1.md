@@ -6,8 +6,8 @@ icon: material/table-edit
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s16a-sheet-editing-1 after its merge rebase onto 8b235bd (S20 and S21 merged): three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: 7f6910b
+state: "37-node-editor, fast-forwarded to redesign/s16a-sheet-editing-1 after its merge rebase onto 4009ead (S20 and S21 merged): three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: b9753d6
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: edit world, time and cells, and start from blank [draft]`, `fix: s16a review findings [draft]`, `fix: s16a merge check [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -23,7 +23,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: edit world, 
 
 ## State before
 
-- `37-node-editor` at `7f6910b`, S18 merged, with S20 and S21 open beside S16a.
+- `37-node-editor` at `b9753d6`, S18 merged, with S20 and S21 open beside S16a.
 - The Sheet and Card panes drew a sheet read-only (S13a, S13b), and the edit commands of S12 had no caller in the app.
 - The New model dialog offered the three grid starters, and Blank was missing.
 - The words S16a shows were in `henad_graph::sheet::sentence` from S4, so the milestone adds only the refusal for a grid side past the limit.
@@ -234,11 +234,11 @@ It answers the open item the implementer left on `commit_field`.
 - The Sheet pane edits World, Time and Cells through `SheetEdit` commands, one edit per form or field commit, and Blank starts a model from nothing.
 - The preview follows D52: edits redraw the start until the first tick or a button press, then a changed start waits for Start again and other edits restart with the notice.
 - The tests of henad-graph and henad-app pass with `HENAD_REQUIRE_GPU=1`, clippy passes with `-D warnings`, and rustdoc and the wasm32 typecheck of both crates pass.
-- `37-node-editor` holds the three unsigned commits, the feature, the review's fixes and the merge check's fix, fast-forwarded after the merge rebase onto `8b235bd`.
+- `37-node-editor` holds the three unsigned commits, the feature, the review's fixes and the merge check's fix, fast-forwarded after the merge rebase onto `4009ead`.
 
 ### Merge check
 
-- The merge rebase onto `37-node-editor` at `8b235bd` brought in S21 (rates) and S20 (ground, picks and fused folds).
+- The merge rebase onto `37-node-editor` at `4009ead` brought in S21 (rates) and S20 (ground, picks and fused folds).
   The first commit conflicted in three files, and the second applied cleanly.
   - `CHANGELOG.md`: S21's two lines and S16a's line all kept.
   - `agents/henad-graph-sheet-edit.md`: the command list takes S16a's `SetPropertyType` and `PALETTE_COLORS` and S21's `ChangeToRate` and `ChangeToChance`, rewrapped to the file's width.

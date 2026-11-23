@@ -232,7 +232,7 @@ and `into_descriptor`, the grid rule's reader, refuses either at its table. The 
 one. `write_param` writes `hidden = true` only when set, and the writer adds `tick_unit` after the
 tick length's keys, so a file setting neither keeps its code.
 `graph_codes_are_unchanged_by_the_new_keys` in henad-models' `lowered_fixtures.rs` pins the
-starters', the corpus files' and the `tests/fixtures/lowered/round1/` files' hashes at `f4088d7`.
+starters', the corpus files' and the `tests/fixtures/lowered/round1/` files' hashes at `79e6d1c`.
 Keep it. `check_tick_length` refuses a tick length that is not an `f32`, not hidden, or has a `min`
 of 0 or below, and a time scale naming no parameter. `RenameParam` renames the time scale's
 parameter, `renamed_param` keeps `hidden`, and `RemoveParam` drops the time scale with its tick

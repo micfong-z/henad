@@ -6,8 +6,8 @@ icon: material/file-tree-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s22-card-structure on bdf64d4 with no rebase needed: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: bdf64d4
+state: "37-node-editor, fast-forwarded to redesign/s22-card-structure on d373ad4 with no rebase needed: three unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: d373ad4
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: when blocks, moves and otherwise on the card [draft]`, `docs: editor guide for sheets and cards [draft]`, `fix: s22 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -22,7 +22,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: when blocks,
 
 ## State before
 
-`37-node-editor` at `bdf64d4`, after S19 (card lines written with blanks, pickers and chips) and S26 (agents and the ground on the Sheet pane).
+`37-node-editor` at `d373ad4`, after S19 (card lines written with blanks, pickers and chips) and S26 (agents and the ground on the Sheet pane).
 The Card pane wrote the lines of a cells card at its end, but had no When button, no add row inside a block, and a line menu holding Rename and Delete alone.
 The wording table (S4) already held every word of the When blocks, the moves and the notes, and the edit commands (S12) already held `AddLine` inside a block, `MoveLine`, `DeleteLine`, `MoveConditionInto` and `DrawNewNumbers`.
 Nothing computed the gap, coverage, order or When notes.
@@ -116,11 +116,11 @@ The screen was unlocked, so every step has a screenshot (copies kept outside the
 The card writes When blocks, nests them, moves lines along the outline and folds a When into its lines, and the notes the final editor computes from the relations between lines show under their lines.
 The forest fire is rebuilt from Blank with "otherwise", and the Editor guide describes the sheet first.
 Rate lines (S25), agent lines (S28) and the Diagram (S27) are still absent.
-`37-node-editor` holds the three unsigned commits `b891941`, `03bfc2d` and `c6e4b77`, fast-forwarded with no merge-check fix.
+`37-node-editor` holds the three unsigned commits `1b727d0`, `1b727d0` and `1b727d0`, fast-forwarded with no merge-check fix.
 
 ### Merge check
 
-- The branch already sat on the tip of `37-node-editor` at `bdf64d4`, so the merge rebase replayed nothing and raised no conflict.
+- The branch already sat on the tip of `37-node-editor` at `d373ad4`, so the merge rebase replayed nothing and raised no conflict.
   The rebase brought in no henad-app change, so the UI check was not repeated.
 - The full check then ran on the branch with `HENAD_REQUIRE_GPU=1`.
   Every step exits 0 but two, and both fail as the baseline does.
@@ -139,7 +139,7 @@ Rate lines (S25), agent lines (S28) and the Diagram (S27) are still absent.
 
 ## Review
 
-A reviewer with a fresh context found one "should fix" and seven nits, and all eight were fixed in `c6e4b77` (`fix: s22 review findings [draft]`).
+A reviewer with a fresh context found one "should fix" and seven nits, and all eight were fixed in `1b727d0` (`fix: s22 review findings [draft]`).
 The label-in-name check `assert_controls_hold_their_words` now also reads every note button and add row through the test-only `card_pane::card_buttons`, and runs in the nested When test (before and after line 6, which covers "Move it into line 6") and in the fold-offer test, besides the forest fire.
 The three names that broke D112 were renamed, as the deviation above says.
 The "otherwise" notice now covers every card, a button's card included, and opens with the line prefix ("Clear line 2 now starts with otherwise. ..."), since `sentence::otherwise_notice` takes the prefix instead of a number.

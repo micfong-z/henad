@@ -6,8 +6,8 @@ icon: material/timer-sand
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s25-rates-in-card on 7ec4f90 with no rebase needed: two unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: 7ec4f90
+state: "37-node-editor, fast-forwarded to redesign/s25-rates-in-card on 1b727d0 with no rebase needed: two unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: 1b727d0
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: rate lines and time notices in the card [draft]`, `fix: s25 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -22,7 +22,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: rate lines a
 
 ## State before
 
-`37-node-editor` at `7ec4f90`, after S9 (the time axis), S21 (rates lowering) and S22 (card structure).
+`37-node-editor` at `1b727d0`, after S9 (the time axis), S21 (rates lowering) and S22 (card structure).
 The lowering ran rates, and `sheet::rates` held `rate_note`, `largest_count_chance`, `chance_note` and `count_as_draw`, while the wording table held every rate word.
 The edit commands held `ChangeToRate`, `ChangeToChance`, the tick's unit on a new rate (D83) and a unit chosen by hand.
 The card left the rate items out of every add menu, offered no "at rate" in "Choose when", had no options for a rate's unit select, and drew no rate note.
@@ -190,11 +190,11 @@ Under the lock of plan section 2.4, from the worktree, with the window on G15F1 
 
 The card writes and explains rate lines, and the rates SIR is built from Blank in the app.
 Agent lines (S28), the Diagram (S27) and fire counts beside each line (S31) are still absent.
-`37-node-editor` holds the two unsigned commits `81b5187` and `7268131`, fast-forwarded with no merge-check fix.
+`37-node-editor` holds the two unsigned commits `3bf6326` and `3bf6326`, fast-forwarded with no merge-check fix.
 
 ### Merge check
 
-- The branch already sat on the tip of `37-node-editor` at `7ec4f90`, so the merge rebase replayed nothing and raised no conflict.
+- The branch already sat on the tip of `37-node-editor` at `1b727d0`, so the merge rebase replayed nothing and raised no conflict.
   The rebase brought in no henad-app change, so the UI check was not repeated.
 - The full check then ran on the branch with `HENAD_REQUIRE_GPU=1`.
   Every step exits 0 but two, and both fail as the baseline does.

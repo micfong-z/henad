@@ -6,8 +6,8 @@ icon: material/layers-triple-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s7-grid-lowering, two unsigned [draft] commits and this record after 480305c; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: 480305c
+state: "37-node-editor, fast-forwarded to redesign/s7-grid-lowering, two unsigned [draft] commits and this record after 8ae998d; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: 8ae998d
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheet files and the grid lowering [draft]`, `fix: s7 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -22,7 +22,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheet files 
 
 ## State before
 
-- `37-node-editor` at `480305c` (S5 merged), with S12 planned beside S7.
+- `37-node-editor` at `8ae998d` (S5 merged), with S12 planned beside S7.
 - S1a's reader, S4's writer and wording table and S5's checker and `CardRelations` held a sheet from text to its skip warnings, and nothing turned a sheet into a graph.
 - The round 1 models existed as hand-lowered graphs in henad-models' `tests/fixtures/lowered/round1/`, stand-ins for a compiler that did not exist.
 - The baseline of the full check is the gate's: `cargo deny` fails on RUSTSEC-2026-0370, 0371 and 0372, and the workspace tests on `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets` alone.
@@ -153,8 +153,8 @@ crates/henad-graph/src/
 - Every other kind of line is refused at its table in the author's words until its milestone lowers it.
 - Checks run in the worktree: `cargo fmt --all -- --check`; `cargo clippy -p henad-graph --all-targets --all-features -- -D warnings -W clippy::all`; `cargo check --workspace --all-targets`; `HENAD_REQUIRE_GPU=1 cargo test -p henad-graph --all-targets --all-features` (328 passed, 1 ignored, after the review fix); `cargo test -p henad-graph --doc` (6 passed); `RUSTDOCFLAGS="-D warnings" cargo doc -p henad-graph --no-deps --all-features`; `cargo check -p henad-graph --all-features --lib --target wasm32-unknown-unknown`.
   The full check runs at the merge point.
-- The merge check found the branch already based on the tip of `37-node-editor` at `480305c`, so the rebase changed nothing and met no conflict.
-- The full check of plan section 2.3 ran on the branch at `ffe76b9`, with `HENAD_REQUIRE_GPU=1`.
+- The merge check found the branch already based on the tip of `37-node-editor` at `8ae998d`, so the rebase changed nothing and met no conflict.
+- The full check of plan section 2.3 ran on the branch at `d5091fb`, with `HENAD_REQUIRE_GPU=1`.
   Every step exits as the baseline does.
   The native and wasm32 typechecks, fmt, packaging, clippy, the doc tests, the README program, rustdoc, the scripts' tests and the web build exit 0.
   `cargo deny` exits 1 on RUSTSEC-2026-0370, 0371 and 0372, the baseline's three advisories.

@@ -6,8 +6,8 @@ icon: material/counter
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s8-fire-counts, two unsigned [draft] commits and this record after 15d8717; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: f4088d7
+state: "37-node-editor, fast-forwarded to redesign/s8-fire-counts, two unsigned [draft] commits and this record after c4250e8; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: 79e6d1c
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: fire-count channel in the GPU engines [draft]`, `fix: s8 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -25,7 +25,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: fire-count c
 
 ## State before
 
-`37-node-editor` at `98be226` held the gate (S0), the editor model enum (S6, record #71) and the workgroup counters (S3, record #72).
+`37-node-editor` at `b71de16` held the gate (S0), the editor model enum (S6, record #71) and the workgroup counters (S3, record #72).
 
 - A GPU engine had no way to count anything on one step alone. Its `counters` were the reduce tallies (grid) or the fault word, the tick, the document's counters and the reduce tallies (agents).
 - The grid engine cleared the whole readback before every reduce pass (`self.readback.encode_clear(encoder)`).
@@ -167,18 +167,18 @@ After the fix, `cargo fmt --check`, clippy with `-D warnings` over henad-compute
 
 ## State after
 
-- `redesign/s8-fire-counts` held two unsigned `[draft]` commits after `98be226`, the feature and the review fix, and after the rebase it holds them after `15d8717`.
+- `redesign/s8-fire-counts` held two unsigned `[draft]` commits after `b71de16`, the feature and the review fix, and after the rebase it holds them after `c4250e8`.
 - `cargo fmt --all -- --check` passes.
 - `cargo clippy -p henad-compute -p henad-graph -p henad-models -p henad --all-targets --all-features -- -D warnings -W clippy::all` passes.
 - `HENAD_REQUIRE_GPU=1 cargo test -p henad-compute -p henad-graph -p henad-models -p henad --all-targets --all-features --no-fail-fast`: henad-compute 240 passed, henad-graph 185 passed and 1 ignored, henad-models' library 161 passed, 1 ignored and 1 failed, `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets` as in the baseline, and every other test binary passes.
 - `cargo check --workspace --all-targets --all-features` passes.
 - The wasm32 typecheck of `./check.sh` over henad-core, henad-compute, henad-models, henad-graph, henad-explore and henad-app, and the facade's two, pass.
 - `RUSTDOCFLAGS="-D warnings" cargo doc -p henad-compute -p henad-graph -p henad --no-deps --all-features` and the doc tests of henad-compute and henad-graph pass.
-- The merge check first rebased the branch onto `37-node-editor` at `98be226`, its own base, and ran the full check on it.
+- The merge check first rebased the branch onto `37-node-editor` at `b71de16`, its own base, and ran the full check on it.
   Every step exited as the baseline does.
-  When the fast-forward was tried, S1a (record #73) had merged in the meantime and moved the tip to `15d8717`, so the branch was rebased again and the check repeated.
+  When the fast-forward was tried, S1a (record #73) had merged in the meantime and moved the tip to `c4250e8`, so the branch was rebased again and the check repeated.
   The second rebase met one conflict, in `CHANGELOG.md`'s Added list, resolved by keeping both lines, and auto-merged the module list of henad-graph's `src/tests/mod.rs` and the facade's `henad::runner` re-exports.
-- The full check of plan section 2.3 ran on the rebased branch at `1cdc81a`.
+- The full check of plan section 2.3 ran on the rebased branch at `356c06f`.
   Every step exits as the baseline does.
   The native and wasm32 typechecks, fmt, packaging, clippy, the doc tests, the README program, rustdoc, the scripts' tests and the web build exit 0.
   `cargo deny` exits 1 on RUSTSEC-2026-0370, 0371 and 0372, the baseline's three advisories.

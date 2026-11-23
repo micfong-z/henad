@@ -6,8 +6,8 @@ icon: material/expansion-card-variant
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "spec, engine, adapter and public constructors built, every check.sh step passing with HENAD_REQUIRE_GPU=1 apart from cargo deny's three zbus advisories, which stop the script as they did before this change, the interleaved benchmark gate met on an overnight run (median paired ratios 0.977 to 1.036), the review's five findings fixed, committed as drafts on top of e816b44"
-baseline_commit: e816b44
+state: "spec, engine, adapter and public constructors built, every check.sh step passing with HENAD_REQUIRE_GPU=1 apart from cargo deny's three zbus advisories, which stop the script as they did before this change, the interleaved benchmark gate met on an overnight run (median paired ratios 0.977 to 1.036), the review's five findings fixed, committed as drafts on top of bad936b"
+baseline_commit: bad936b
 delta_state: "two unsigned draft commits on `37-a1`, the milestone and its review fixes"
 ---
 
@@ -23,7 +23,7 @@ delta_state: "two unsigned draft commits on `37-a1`, the milestone and its revie
 
 ## State before
 
-`37-node-editor` at `e816b44`.
+`37-node-editor` at `bad936b`.
 The GPU grid engine already built from a `pub(crate)` `GpuGridSpec` (record #52).
 `GpuAgentState<M>` was generic over its model and read the consts at every use, and `BufferSpec`, `PassSpec` and `BindingDecl` hold `&'static` strings, which a model composed at run time cannot fill without leaking.
 Every step pass bound with one orientation, reads on the current side and writes on the next, and every action bound in place.
@@ -141,7 +141,7 @@ The two checks below came from code reading, and neither failure was reproduced 
   `assert_contracts` now refuses it.
   This changes behaviour for a hand-written model that only runs headless with such a buffer, which built before and now panics. The CHANGELOG marks it as breaking.
 - **`assert_no_conflict` undocumented on the adapter (low).**
-  At `e816b44` an in-place `pos_in` and `pos_out` built, and only the press failed.
+  At `bad936b` an in-place `pos_in` and `pos_out` built, and only the press failed.
   From `from_model` on, the build panics even if the action is never pressed.
   Only models that were already broken are affected, so the check stays, with the panic in the `# Panics` of `new_seeded` and a CHANGELOG clause.
   The old and new builds were not run side by side.
@@ -225,7 +225,7 @@ The interleaved benchmark half passes, with the results below.
 
 The runs below were made overnight on 2026-11-03, on an Apple M4 Pro with no cooling beyond its own, by an agent and not by the maintainer.
 The maintainer may repeat them with the commands that follow.
-The old binary is a release build of henad-cli at `e816b44`.
+The old binary is a release build of henad-cli at `bad936b`.
 The new one is a release build that an earlier agent of the same job made at 04:08 from the round 1 branch, A1 and its review fix included, and copied aside before the runs.
 That agent did not record its exact commit.
 Each model and size ran five rounds, old then new in each round, and each figure below is the median over rounds of the new round's median rep time over the old round's.
@@ -261,7 +261,7 @@ Check that at least 12 GB is free, since the old tree builds its own `target`.
 # Once, from the root of a checkout holding this change: an old tree at the base commit and both release binaries.
 NEW_TREE=$(git rev-parse --show-toplevel)
 BENCH=$(mktemp -d)
-git worktree add "$BENCH/old" e816b44
+git worktree add "$BENCH/old" bad936b
 (cd "$BENCH/old" && cargo build --release -p henad-cli)
 (cd "$NEW_TREE" && cargo build --release -p henad-cli)
 OLD=$BENCH/old/target/release/henad-cli
@@ -318,7 +318,7 @@ git worktree remove --force "$BENCH/old"
 
 - **A flaky test that predates this change.**
   `a_location_survives_a_panic_on_a_rayon_worker` in `henad-compute/src/fault.rs` fails often enough to stop `./check.sh`, and `a_site_recorded_on_the_thread_for_another_panic_is_not_taken` fails with it when the fault tests run alone.
-  The fault tests alone failed 145 of 200 runs at `e816b44` and 156 of 200 here, and the whole library 7 of 20 at `e816b44` and 10 of 20 here.
+  The fault tests alone failed 145 of 200 runs at `bad936b` and 156 of 200 here, and the whole library 7 of 20 at `bad936b` and 10 of 20 here.
   The two tests share rayon's global pool, and the second probably leaves a panic site or takes one from the first, which was not investigated further.
   The file is unchanged, and the test was left as it is. It needs its own fix before `./check.sh` can be relied on.
 - **`replays_exactly` is not in the spec.**

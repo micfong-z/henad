@@ -6,8 +6,8 @@ icon: material/counter
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s3-workgroup-counters, three unsigned [draft] commits and this record after 37ba4e2; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: f4088d7
+state: "37-node-editor, fast-forwarded to redesign/s3-workgroup-counters, three unsigned [draft] commits and this record after 6cdd292; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: 79e6d1c
 delta_state: "committed on `37-node-editor` by fast-forward: `ai: split the wgsl topic file out of henad-graph [draft]`, `feat: workgroup counters and no zero deposits [draft]`, `fix: s3 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -24,7 +24,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `ai: split the wgsl
 
 ## State before
 
-`37-node-editor` at `f4088d7` held rounds 1 to 3 of #37 and records #61 to #70.
+`37-node-editor` at `79e6d1c` held rounds 1 to 3 of #37 and records #61 to #70.
 In `crates/henad-graph/src/wgsl/emit.rs`:
 
 - `Operation::CounterAdd` wrote `atomicAdd(&counters[k], amount)` for every element, a zero amount included, so each agent of a step that counts issued one global atomic.
@@ -153,7 +153,7 @@ crates/henad-graph/src/
 
 ### Review
 
-The review of S3 raised four nits, and all four are fixed in `fix: s3 review findings [draft]` (`d978d99` after the rebase).
+The review of S3 raised four nits, and all four are fixed in `fix: s3 review findings [draft]` (`b71de16` after the rebase).
 
 - **Indentation inside the guarded blocks.** The grid step, the grid actions on its template, the grid reduce shader and the agents field update wrote their body one level shallower than the enclosing `if`.
   The reviewer suggested folding the bounds test into each pass's guard.
@@ -182,13 +182,13 @@ After the fixes, `cargo fmt --all -- --check` and `cargo clippy -p henad-graph -
 
 ## State after
 
-- `redesign/s3-workgroup-counters` held three unsigned `[draft]` commits after `f4088d7`, the third holding the review fixes, and after the rebase it holds them after `37ba4e2`.
+- `redesign/s3-workgroup-counters` held three unsigned `[draft]` commits after `79e6d1c`, the third holding the review fixes, and after the rebase it holds them after `6cdd292`.
 - `cargo fmt --all -- --check` passes.
 - `cargo clippy -p henad-graph -p henad-models --all-targets --all-features -- -D warnings -W clippy::all` passes.
 - `HENAD_REQUIRE_GPU=1 cargo test -p henad-graph -p henad-models --all-targets --all-features --no-fail-fast`: henad-graph 178 passed and 1 ignored (the Metal float Repeat gate), 179 passed after the review, henad-models' library 159 passed, 1 ignored and 1 failed, `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets` with the baseline's message (`boids.toml: 14816908000000 units in one submission`), and every other henad-models test binary passes.
   The parity gates `graph_ants_parity`, `graph_agent_parity`, `graph_grid_parity`, `graph_sir_parity` and `graph_agent_runs` pass but for that budget test.
 - `cargo check -p henad-graph --all-features --lib --target wasm32-unknown-unknown` and `RUSTDOCFLAGS="-D warnings" cargo doc -p henad-graph --no-deps --all-features` pass.
-- The merge check rebased the branch onto `37-node-editor` at `37ba4e2`, which held S6 (record #71), with no conflict, and ran the full check of plan section 2.3 on the rebased branch at `d978d99`.
+- The merge check rebased the branch onto `37-node-editor` at `6cdd292`, which held S6 (record #71), with no conflict, and ran the full check of plan section 2.3 on the rebased branch at `b71de16`.
   Every step exits as the baseline does.
   The native and wasm32 typechecks, fmt, packaging, clippy, the doc tests, the README program, rustdoc, the scripts' tests and the web build exit 0.
   `cargo deny` exits 1 on RUSTSEC-2026-0370, 0371 and 0372, the baseline's three advisories.
@@ -218,7 +218,7 @@ Close other work, let the machine cool, and check that at least 12 GB is free, s
 # Once, from the root of a checkout holding this change: an old tree at the base commit and both release binaries.
 NEW_TREE=$(git rev-parse --show-toplevel)
 BENCH=$(mktemp -d)
-git worktree add "$BENCH/old" f4088d7
+git worktree add "$BENCH/old" 79e6d1c
 (cd "$BENCH/old" && cargo build --release -p henad-cli)
 (cd "$NEW_TREE" && cargo build --release -p henad-cli)
 OLD=$BENCH/old/target/release/henad-cli

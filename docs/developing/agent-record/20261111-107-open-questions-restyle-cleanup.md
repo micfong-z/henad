@@ -6,14 +6,14 @@ icon: material/broom
 status: ai-generated
 model: "claude-fable-5-2 (Claude Code): design, analysis, decisions and review. Implementation, the cleanup findings and this record's draft by Opus subagents, one rewording job by a Sonnet subagent"
 issue: "#37"
-state: "37-node-editor at ebf79b5 and this record: 407 unsigned one-line commits after e69e00e, 660 after e816b44, nothing pushed. The final full check at ebf79b5 passed 16 of 16 steps with 2,276 tests. The commit messages are rewritten after this record, and one commit then remaps the hashes the records cite"
-baseline_commit: e69e00e
+state: "37-node-editor at 7e845bb and this record: 407 unsigned one-line commits after bd62a9c, 660 after bad936b, nothing pushed. The final full check at 7e845bb passed 16 of 16 steps with 2,276 tests. The commit messages are rewritten after this record, and one commit then remaps the hashes the records cite"
+baseline_commit: bd62a9c
 delta_state: "committed on `37-node-editor`: 402 commits by fast-forward from 28 branches, 5 commits made on the branch itself, and this record from `docs/record-107`, all unsigned"
 ---
 
 # Open questions, restyle and cleanup
 
-> Round 6 of the #37 redesign ran on 2026-11-10 and 2026-11-11 from `e69e00e`.
+> Round 6 of the #37 redesign ran on 2026-11-10 and 2026-11-11 from `bd62a9c`.
 > The maintainer asked the session to settle the remaining open questions at its own discretion, to restyle the Editor, to clean up the codebase, and to keep commit messages to six words.
 > Of 133 open questions, about 30 were fixed in code or docs, and each of the rest was left with a reason.
 > The Editor gained an Editor layout, and its card, Sheet pane, header, notices, dialogs and egui's overlays were restyled as framed regions with hairlines inside.
@@ -22,12 +22,12 @@ delta_state: "committed on `37-node-editor`: 402 commits by fast-forward from 28
 > An isolated full check with its own build directory then passed 16 of 16 steps with 2,257 tests.
 > Nothing was pushed, and every commit is unsigned.
 > A pixel comparison of 62 scenes of the Editor found no difference between the restyle and the tip after the app's cleanups.
-> The final full check at `ebf79b5` passed 16 of 16 steps with 2,276 tests, and the snapshot there is identical to its baseline outside the runs that do not replay.
+> The final full check at `7e845bb` passed 16 of 16 steps with 2,276 tests, and the snapshot there is identical to its baseline outside the runs that do not replay.
 > The commit messages are rewritten after this record is committed.
 
 ## State before
 
-`37-node-editor` at `e69e00e` held 253 unsigned `[draft]` commits after `e816b44`, the remote's head of the branch, and ended with record #106 and one docs commit after it.
+`37-node-editor` at `bd62a9c` held 253 unsigned `[draft]` commits after `bad936b`, the remote's head of the branch, and ended with record #106 and one docs commit after it.
 At the end of round 5 the full check passed every step, with 2,219 tests passing and the two float probes ignored, and the device tests passed on lavapipe in a local container.
 Record #106 left the push and the release work with the maintainer, the speed gaps and budget refusals of node models, three checks by eye, and the smaller calls of records #61 to #105 that had no options.
 Its own list named one wording fault: the "otherwise" tooltip of a line below two competing lines inside one Repeat.
@@ -55,10 +55,10 @@ The artifact of requests 3 and 5 sits outside the repository, and this record do
 
 Each package ran in its own git worktree on its own branch from `37-node-editor`, from a brief the session wrote, and the session fast-forwarded the branch after reading the package's report.
 28 branches merged that way.
-The session made 5 commits on `37-node-editor` itself: `24f8011`, `2c40e3a`, `01452ed`, `ab7557a` and `8720d78`.
+The session made 5 commits on `37-node-editor` itself: `bca71d3`, `d4a96cb`, `d4a96cb`, `d4a96cb` and `6662055`.
 Every commit of the round is one line and unsigned, by the maintainer's instruction, and none carries `[draft]`.
 New messages were held to six words counting the type.
-406 of the 407 keep to it, and `62fc18a` "fix: run to tick drives sheet preview" has seven.
+406 of the 407 keep to it, and `6662055` "fix: run to tick drives sheet preview" has seven.
 The 407 messages average 5.34 words, against the 4 the maintainer asked for.
 
 Read-only finders wrote 238 cleanup findings over 12 areas on 2026-11-10, and stopped early at the maintainer's request to save usage.
@@ -83,52 +83,52 @@ The calls are in the session's working notes, and this record adds no decision r
 
 | Package | Commits | First and last |
 | --- | --- | --- |
-| Tests and docs | 4 | `8d1b51d` to `159fbd2` |
-| Editor layout | 2 | `a6e032f`, `f569408` |
-| Cleanup wave 1: host evaluator and edit commands | 14 | `a217fe9` to `01fd8fb` |
-| Cleanup wave 1: WGSL compiler | 20 | `8546a7f` to `cc23319` |
-| Cleanup wave 1: GPU engines | 19 | `d73f102` to `2f8621a` |
-| Cleanup wave 1: henad-explore | 20 | `f7f4b6a` to `e0cad98` |
-| CHANGELOG of wave 1 | 1 | `24f8011` |
-| Cleanup wave 1: CPU runners and entries, henad-core, henad-build | 26 | `85089f1` to `c5219c7` |
-| Cleanup wave 1: graph document, reader, checker, catalogue | 19 | `493868c` to `15277fe` |
-| Card pane | 11 | `d752127` to `bf1e1fe` |
-| Wording fixes | 12 | `4b25440` to `aba1039` |
-| A fixture rename, `AGENTS.md`, a doc comment | 3 | `2c40e3a`, `01452ed`, `ab7557a` |
-| Sheet starter ids | 3 | `8cc48d4` to `f8d0103` |
-| App fixes | 9 | `e5001f0` to `1b30ca7` |
-| CI's web clippy | 1 | `8720d78` |
-| Ids of new models | 1 | `70459d0` |
-| Sheet pane | 1 | `f42626d` |
-| Cleanup wave 2: the four sheet areas of henad-graph | 69 | `f0197f7` to `5cf1d98` |
-| Test code outside henad-graph and henad-app | 23 | `6cdf762` to `caaebe5` |
-| Edit refusals | 2 | `10d0bcc`, `6370bcd` |
-| Header, notices, dialogs and theme | 10 | `eef1f53` to `db2fb43` |
-| henad-cli and the example models | 15 | `30b07da` to `652ed7f` |
-| No rate inside a Repeat | 2 | `98f6004`, `1f47743` |
-| henad-graph's test code | 24 | `063fb16` to `21ecdfc` |
-| Sweep and Results tabs | 16 | `4b3de47` to `a3270dd` |
-| App shell | 24 | `6961ebd` to `2f7c30a` |
-| The guide | 3 | `6934916` to `f5ff58c` |
-| The Editor's code | 26 | `b54c99a` to `06aa2fb` |
-| CHANGELOG | 1 | `4f4fead` |
-| henad-app's test code | 26 | `2b4f6e8` to `ebf79b5` |
+| Tests and docs | 4 | `bd62a9c` to `bd62a9c` |
+| Editor layout | 2 | `28845d0`, `28845d0` |
+| Cleanup wave 1: host evaluator and edit commands | 14 | `865cb39` to `865cb39` |
+| Cleanup wave 1: WGSL compiler | 20 | `865cb39` to `865cb39` |
+| Cleanup wave 1: GPU engines | 19 | `530e498` to `530e498` |
+| Cleanup wave 1: henad-explore | 20 | `bca71d3` to `bca71d3` |
+| CHANGELOG of wave 1 | 1 | `bca71d3` |
+| Cleanup wave 1: CPU runners and entries, henad-core, henad-build | 26 | `b8ec032` to `b8ec032` |
+| Cleanup wave 1: graph document, reader, checker, catalogue | 19 | `68ec09a` to `68ec09a` |
+| Card pane | 11 | `9e29fd8` to `9e29fd8` |
+| Wording fixes | 12 | `d4a96cb` to `d4a96cb` |
+| A fixture rename, `AGENTS.md`, a doc comment | 3 | `d4a96cb`, `d4a96cb`, `d4a96cb` |
+| Sheet starter ids | 3 | `6662055` to `6662055` |
+| App fixes | 9 | `6662055` to `6662055` |
+| CI's web clippy | 1 | `6662055` |
+| Ids of new models | 1 | `6662055` |
+| Sheet pane | 1 | `825eaf6` |
+| Cleanup wave 2: the four sheet areas of henad-graph | 69 | `01eed55` to `0e64f19` |
+| Test code outside henad-graph and henad-app | 23 | `bec8310` to `bec8310` |
+| Edit refusals | 2 | `091c468`, `091c468` |
+| Header, notices, dialogs and theme | 10 | `3102bbb` to `3102bbb` |
+| henad-cli and the example models | 15 | `29d0d27` to `29d0d27` |
+| No rate inside a Repeat | 2 | `d1edb54`, `d1edb54` |
+| henad-graph's test code | 24 | `b03b32d` to `b03b32d` |
+| Sweep and Results tabs | 16 | `43d1acb` to `43d1acb` |
+| App shell | 24 | `79d3b4c` to `79d3b4c` |
+| The guide | 3 | `a3ffa74` to `a3ffa74` |
+| The Editor's code | 26 | `59096ee` to `59096ee` |
+| CHANGELOG | 1 | `59096ee` |
+| henad-app's test code | 26 | `7e845bb` to `7e845bb` |
 
 The last two branches of wave 1 had no merge of their own.
 The card package's branch was rebased onto them, and its fast-forward brought them in.
 
 #### Tests and docs
 
-- `95e9170` qualifies the replay contract in `docs/reference/model-files.md` and `agents/gpu-traps.md`.
+- `bd62a9c` qualifies the replay contract in `docs/reference/model-files.md` and `agents/gpu-traps.md`.
   A sheet or graph on a grid replays exactly with one seed on one device.
   A model of agents does too, unless a look at the agents around adds up floats or depends on the order of its visits.
   The boids sheet and node graph starter and the bounded confidence sheet do not replay exactly.
   A test in `agent_wgsl.rs` holds `replays_exactly` false for those two sheets and true for every other agent sheet starter.
-- `72c65b3` adds `the_copies_of_the_test_sheets_equal_their_source`.
+- `bd62a9c` adds `the_copies_of_the_test_sheets_equal_their_source`.
   It holds the copies of `sir_chance.toml` and `sird.toml` in henad-models and henad-app equal to henad-graph's, byte for byte.
-- `159fbd2` adds `a_competing_group_with_a_rate_for_each_steps_alike_on_the_host_and_the_device` in henad-models.
-- `8d1b51d` fixes private-item doc links in henad-graph's `catalogue/state.rs` and `wgsl/agent_hooks.rs`.
-  `aba1039` of the wording package fixes the rest, in `sheet/mod.rs` and `sheet/relations.rs`.
+- `bd62a9c` adds `a_competing_group_with_a_rate_for_each_steps_alike_on_the_host_and_the_device` in henad-models.
+- `bd62a9c` fixes private-item doc links in henad-graph's `catalogue/state.rs` and `wgsl/agent_hooks.rs`.
+  `d4a96cb` of the wording package fixes the rest, in `sheet/mod.rs` and `sheet/relations.rs`.
 
 #### Editor layout
 
@@ -136,19 +136,19 @@ The View menu holds "Default layout" and "Editor layout", and a checkbox "Open m
 In the Editor layout the Editor takes 62.5 percent of the width, in front of Sweep and Results, and a right column holds the Viewport, then Playback and Pacing, then Charts, Parameters, Statistics and Model.
 Each layout keeps its own dock state for the session, and Reset layout resets the layout that shows.
 Tests in `ui/dock.rs` and `ui/menu_bar.rs` cover the switch, the checkbox and the reset.
-`f569408` describes the layouts in `docs/guide/app.md` and `docs/guide/editor.md`.
+`28845d0` describes the layouts in `docs/guide/app.md` and `docs/guide/editor.md`.
 The package's screenshots were taken in the live app on the built-in display.
 
 #### Cleanup wave 1
 
 Six branches, 118 commits: three over henad-graph outside its sheet folder, one over henad-compute's GPU engines, one over its CPU runners and entries with henad-core and henad-build, and one over henad-explore.
-Among them, `d73f102` and `7db8223` move the pass building and the press path the two GPU engines shared into `gpu/built_pass.rs` and `gpu/press.rs`.
-`c2be768` moves the host evaluator's program into `host/program.rs`, and `8c5dd04` moves the CPU runner's tests out of `cpu/sim_thread.rs` into `cpu/tests/`.
-`88c351b` takes the FNV-1a hasher out of sweep planning into `henad-core/src/fnv.rs`, and `4c6a2d7` makes henad-explore's `sweep.rs` a folder.
-`e6bc9cc` makes `GpuCommand` private, and `85089f1` merges the two public `StatSample` types into one.
+Among them, `530e498` and `530e498` move the pass building and the press path the two GPU engines shared into `gpu/built_pass.rs` and `gpu/press.rs`.
+`865cb39` moves the host evaluator's program into `host/program.rs`, and `b8ec032` moves the CPU runner's tests out of `cpu/sim_thread.rs` into `cpu/tests/`.
+`b8ec032` takes the FNV-1a hasher out of sweep planning into `henad-core/src/fnv.rs`, and `bca71d3` makes henad-explore's `sweep.rs` a folder.
+`530e498` makes `GpuCommand` private, and `b8ec032` merges the two public `StatSample` types into one.
 The CHANGELOG lists `GpuCommand` under Removed as a breaking change of the unreleased 0.4, and its `run_to_samples` line now names `henad::StatSample`.
 A full check after the first four branches, in the main checkout with its own build directory, passed all 14 steps of `./check.sh` with 2,235 tests passing.
-The snapshot after those four, and the snapshot at `01452ed` after all six, the card and the wording fixes, are identical to the snapshot at `e69e00e` outside the loose runs.
+The snapshot after those four, and the snapshot at `d4a96cb` after all six, the card and the wording fixes, are identical to the snapshot at `bd62a9c` outside the loose runs.
 
 #### Card pane
 
@@ -159,7 +159,7 @@ A result's name is drawn as its chip, and the alternatives of Choose and Dependi
 The add buttons sit in a footer, each with its kind's colour square.
 Chips, blanks, selects, menus and pickers share one palette, menus are opaque with hover, focus and current rows, and every control shows one focus outline.
 Lines and Diagram became a segmented toggle.
-henad-graph's `SentencePart` gained `Keyword` and `ResultName` in `ed6a257`, and the sentences hold the words `LINES_VIEW`, `MOVE_UP_FIRST` and `MOVE_DOWN_LAST` (`df78ec8`).
+henad-graph's `SentencePart` gained `Keyword` and `ResultName` in `9e29fd8`, and the sentences hold the words `LINES_VIEW`, `MOVE_UP_FIRST` and `MOVE_DOWN_LAST` (`9e29fd8`).
 `agents/ui.md` gained the palette table and the style rules, and the sheet wording moved to its own topic file.
 Every screenshot of this package was rendered offscreen from the app's own UI code.
 The machine's screen was locked.
@@ -168,25 +168,25 @@ The machine's screen was locked.
 
 Each fix came with a test in henad-graph or henad-app.
 
-- `4b25440`: a third "otherwise" sentence, for higher lines that compete inside one Repeat, where the first time round that fires decides between them.
+- `d4a96cb`: a third "otherwise" sentence, for higher lines that compete inside one Repeat, where the first time round that fires decides between them.
   Record #106 had listed the fault.
-- `9563a65`: four faults of the sheet's sentences.
+- `d4a96cb`: four faults of the sheet's sentences.
   A Count names its "only" test, a Set to a chance reads as a sentence, a kind's plural follows the rules of English with a short list of irregular plurals, and a formula names an unnamed Count by its automatic name.
   The sentence comments of `bounded_confidence.toml` and two test sheets changed with it.
-- `5d58a88`: the checker rejects a comparison of an arrow with a number, at its line.
-- `a4d6e1f`: a shortfall names the properties a packed buffer holds.
-- `4c72339`: an average measure with its automatic name follows a rename of its property.
-- `41607e7`: an edit that would keep a number that is not finite is rejected.
-- `b59fcab`: the fault of a look past its cap suggests a larger world or a shorter distance.
-- `c06bba1`: a parameter with no unit put into a rate takes the rate's unit, and one undo restores both.
-- `fd1f8cb`: the long-tick note reads "almost 1" where the chance rounds to 1.
-- `042d274`: Show changes guards on the hash of the sheet's code, so a note edit no longer blocks it.
+- `d4a96cb`: the checker rejects a comparison of an arrow with a number, at its line.
+- `d4a96cb`: a shortfall names the properties a packed buffer holds.
+- `d4a96cb`: an average measure with its automatic name follows a rename of its property.
+- `d4a96cb`: an edit that would keep a number that is not finite is rejected.
+- `d4a96cb`: the fault of a look past its cap suggests a larger world or a shorter distance.
+- `d4a96cb`: a parameter with no unit put into a rate takes the rate's unit, and one undo restores both.
+- `d4a96cb`: the long-tick note reads "almost 1" where the chance rounds to 1.
+- `d4a96cb`: Show changes guards on the hash of the sheet's code, so a note edit no longer blocks it.
 
 #### A fixture rename, `AGENTS.md` and a doc comment
 
-`2c40e3a` renames henad-explore's fixture `series-be338ec` to `series-without-time`, the results folder recorded before the `time` column that `result_set.rs` reads as history.
-`01452ed` corrects `AGENTS.md`: henad-cli runs a graph on a grid or of agents.
-`ab7557a` corrects a module doc of `wgsl/agents.rs` and a sentence of `agents/henad-graph.md`.
+`d4a96cb` renames henad-explore's fixture `series-be338ec` to `series-without-time`, the results folder recorded before the `time` column that `result_set.rs` reads as history.
+`d4a96cb` corrects `AGENTS.md`: henad-cli runs a graph on a grid or of agents.
+`d4a96cb` corrects a module doc of `wgsl/agents.rs` and a sentence of `agents/henad-graph.md`.
 
 #### Sheet starter ids
 
@@ -202,14 +202,14 @@ The package checked the change in the live app, on the built-in display.
 
 Each fix came with a test in `crates/henad-app/src/tests/` or the CLI's tests.
 
-- `e5001f0`: the Export tab writes the `time` column for a model with a time scale (`the_export_tab_writes_the_time_of_a_timed_model`).
-- `fe078e0`: a sweep of a sheet past a work budget is rejected in the sheet's lines, in the CLI and in the Sweep tab.
-- `6aeebfb`: the button form keeps the steps that set a property everywhere.
-- `0ad84e4`: "Model applied." clears on the next edit.
-- `5e39443`: the world panel keeps a value a file holds outside its range.
-- `62fc18a`: Run to tick drives a sheet's preview.
-- `b68511f`: the Model tab counts the parameters the Parameters tab shows.
-- `1b30ca7`: the Editor asks before New model, New grid rule, New node graph, Open model, Open in Editor or Edit model replaces a model with unsaved edits, with Cancel, Discard changes and Save model.
+- `6662055`: the Export tab writes the `time` column for a model with a time scale (`the_export_tab_writes_the_time_of_a_timed_model`).
+- `6662055`: a sweep of a sheet past a work budget is rejected in the sheet's lines, in the CLI and in the Sweep tab.
+- `6662055`: the button form keeps the steps that set a property everywhere.
+- `6662055`: "Model applied." clears on the next edit.
+- `6662055`: the world panel keeps a value a file holds outside its range.
+- `6662055`: Run to tick drives a sheet's preview.
+- `6662055`: the Model tab counts the parameters the Parameters tab shows.
+- `6662055`: the Editor asks before New model, New grid rule, New node graph, Open model, Open in Editor or Edit model replaces a model with unsaved edits, with Cancel, Discard changes and Save model.
   Apply saves nothing, and only Save model clears the unsaved state.
   There is no autosave.
 
@@ -217,8 +217,8 @@ The package checked four of the fixes in the live app, with a screenshot of each
 
 #### CI's web clippy and the ids of new models
 
-`8720d78` fixes the two failures of CI's web clippy step, described under [CI's web clippy step](#cis-web-clippy-step).
-`70459d0` keeps an id the Editor mints for a new model off every compiled model of the set.
+`6662055` fixes the two failures of CI's web clippy step, described under [CI's web clippy step](#cis-web-clippy-step).
+`6662055` keeps an id the Editor mints for a new model off every compiled model of the set.
 A Blank model named "Game of Life" gets `sheet_game_of_life`, and a new node graph `node_<name>`, with a number if that id is held.
 A file opened with an example's id still replaces the example on Apply, since the id is the file's.
 Four tests in the new `tests/model_ids.rs` cover it.
@@ -229,17 +229,17 @@ Sections became framed regions with small upper-case titles, one label column an
 Tables take header labels, hairlines and a hover row, add buttons are dashed, and selects and pickers are the card's overlays.
 Nothing draws past the pane's edge: a table's columns give up width in an order `agents/henad-app-sheet-pane.md` states, long values end in an ellipsis with a tooltip, and the last resort is a scroll inside that table.
 The pane was checked in the live app and offscreen, at 1,500 by 950 and 1,280 by 800 and with the pane dragged to 320 and 600 points.
-The implementer's commit was rejected by the permission system, and `f42626d` is the session's commit of that work, made after the maintainer's answer "commit it unsigned like the rest".
+The implementer's commit was rejected by the permission system, and `825eaf6` is the session's commit of that work, made after the maintainer's answer "commit it unsigned like the rest".
 It holds the whole package in one commit of 13 files.
 
 #### Cleanup wave 2
 
 Four branches over henad-graph's sheet folder, 69 commits: the wording, the document and checker, the lowering, and the edit commands with the conversion.
-`f0197f7` makes `sheet/sentence.rs`, 5,291 lines, a folder of `mod.rs` and eleven files, with every public path kept.
-`7956469` moves the fault words of a look into the WGSL compiler.
+`01eed55` makes `sheet/sentence.rs`, 5,291 lines, a folder of `mod.rs` and eleven files, with every public path kept.
+`01eed55` moves the fault words of a look into the WGSL compiler.
 The compiler no longer imports the sheet layer.
-`8695978` splits the lowering's `ground.rs` into `paint.rs`, `place.rs` and `shades.rs`, and `1c726b3` splits the edit commands into five files.
-`03f62c2` drops four unused wording entries, and `5ad61dc` two unreachable errors.
+`d7a5310` splits the lowering's `ground.rs` into `paint.rs`, `place.rs` and `shades.rs`, and `0e64f19` splits the edit commands into five files.
+`01eed55` drops four unused wording entries, and `d7a5310` two unreachable errors.
 The checker's and the agent lowering's notes became topic files of their own.
 The integration step reported 2,262 tests passing, and the snapshot after wave 2 is identical to the baseline.
 
@@ -252,9 +252,9 @@ The package reported the set of passing test names unchanged, 848 tests in the f
 #### Edit refusals and no rate inside a Repeat
 
 The cleanup of the edit commands reported two faults and left them for this package.
-`10d0bcc`: a new id for an item the sheet does not hold is rejected, where it changed nothing and returned success.
-`6370bcd`: Change to a rate is rejected on a card that runs once, as the card already does not offer it.
-`98f6004` and `1f47743` do the same for a line inside a Repeat: the card no longer offers Change to a rate there, and the command rejects it with "a rate cannot stand inside a Repeat".
+`091c468`: a new id for an item the sheet does not hold is rejected, where it changed nothing and returned success.
+`091c468`: Change to a rate is rejected on a card that runs once, as the card already does not offer it.
+`d1edb54` and `d1edb54` do the same for a line inside a Repeat: the card no longer offers Change to a rate there, and the command rejects it with "a rate cannot stand inside a Repeat".
 
 #### Header, notices, dialogs and theme
 
@@ -271,59 +271,59 @@ The header, notices, dialogs, menus and the other dock tabs were checked in the 
 
 #### henad-cli and the example models
 
-`30b07da` parses `--set`, `--vary`, `--stop` and `--reduce` once.
-`a7ea1fd` moves the seeding and packing helpers the GPU ports share into `henad-models/src/port.rs`.
-`a72dd45` splits henad-cli's `lib.rs` and `explore.rs` by concern, into `single.rs`, `model_file.rs` and an `explore/` folder.
-`9dda878` adds `henad_core::action::parse_entry`, and `Schedule::parse` and the sweep's `--act` call it.
+`29d0d27` parses `--set`, `--vary`, `--stop` and `--reduce` once.
+`29d0d27` moves the seeding and packing helpers the GPU ports share into `henad-models/src/port.rs`.
+`29d0d27` splits henad-cli's `lib.rs` and `explore.rs` by concern, into `single.rs`, `model_file.rs` and an `explore/` folder.
+`29d0d27` adds `henad_core::action::parse_entry`, and `Schedule::parse` and the sweep's `--act` call it.
 The package reported 68 CLI commands byte for byte equal with the build before, and its snapshot is identical to the baseline.
 
 #### henad-graph's test code
 
 24 commits, with 4,063 lines added and 4,970 removed.
 Shared helpers went to `src/tests/support.rs` and the new `src/tests/sheet_support.rs`.
-`7f942a0` splits the two longest test files, `sheet_edit.rs` and `sheet_lower.rs`, into five new files.
+`b03b32d` splits the two longest test files, `sheet_edit.rs` and `sheet_lower.rs`, into five new files.
 The package reported no test deleted and the set of test names unchanged.
 
 #### Sweep and Results tabs
 
-`4b3de47` renames `DraftMode` to `ExploreMode` and replaces the "sweep" and "search" strings passed around with it.
-`452243a` makes the four Results views share one rule for when to recompute.
-`2be65a1` and `a3270dd` make `ui/results/store.rs` and `ui/sweep/draft.rs` folders, as pure moves, and `5257851` gathers the text helpers the tabs share in `ui/text.rs`.
+`43d1acb` renames `DraftMode` to `ExploreMode` and replaces the "sweep" and "search" strings passed around with it.
+`43d1acb` makes the four Results views share one rule for when to recompute.
+`43d1acb` and `43d1acb` make `ui/results/store.rs` and `ui/sweep/draft.rs` folders, as pure moves, and `43d1acb` gathers the text helpers the tabs share in `ui/text.rs`.
 The package compared every user-visible string, old against new, in a test it then removed.
 
 #### App shell
 
-`6961ebd` shares one run teardown, `4156568` holds the GPU batch settings as one value, and `488eb1c` moves the snapshot intake from the frame loop into `AppState`, where a test calls it.
-`eafb8d0` and `f0a487a` split the Parameters panel and `AppState`'s methods by concern, into `ui/params/` and `state/*.rs`.
+`79d3b4c` shares one run teardown, `79d3b4c` holds the GPU batch settings as one value, and `79d3b4c` moves the snapshot intake from the frame loop into `AppState`, where a test calls it.
+`79d3b4c` and `79d3b4c` split the Parameters panel and `AppState`'s methods by concern, into `ui/params/` and `state/*.rs`.
 Three fixes came with it, each with a test.
-Density mode panicked on an empty agent population (`fe81c6a`).
-A whole-number slider wrapped negative above 2,147,483,647 (`140e684`).
-A chart of one sample, at tick 0, spread its x axis as wide as its largest stat, and now shows one tick (`cc2d08f`).
-`2f7c30a` makes the app ask before its window closes over unsaved edits, on native, with the dialog that guards a model's replacement.
+Density mode panicked on an empty agent population (`79d3b4c`).
+A whole-number slider wrapped negative above 2,147,483,647 (`79d3b4c`).
+A chart of one sample, at tick 0, spread its x axis as wide as its largest stat, and now shows one tick (`79d3b4c`).
+`79d3b4c` makes the app ask before its window closes over unsaved edits, on native, with the dialog that guards a model's replacement.
 
 #### The guide
 
 `docs/guide/app.md` and `docs/guide/editor.md` follow the restyled app.
 13 screenshots under `docs/assets/app/` were retaken and 4 added, from the live app on the virtual display.
 Eight Sweep and Results screenshots were kept: they differ only in the fill of selected toggles.
-`6934916` adds the wording table's missing row for `LOOK_IN_REPEAT`.
+`a3ffa74` adds the wording table's missing row for `LOOK_IN_REPEAT`.
 
 #### The Editor's code
 
-`b54c99a` fixes a fault the cleanup found.
+`59096ee` fixes a fault the cleanup found.
 A typed number in an agent line's times, strength, minimum, maximum, amount, length or distance, or inside a Choose row, opened the picker's Number box empty.
 The app's copy of the slot paths knew some of them, and henad-graph's new public `sheet::edit::slot_value` now reads every path.
 Eight tests in `sheet_agent_lines.rs`, one per kind of slot, hold the typed number in the Number box.
-`72e4ab9` makes the Sheet pane's and the card's pickers share their parts, and `b1f02f1` moves the kind colour into the component.
+`59096ee` makes the Sheet pane's and the card's pickers share their parts, and `59096ee` moves the kind colour into the component.
 No call site passes one.
-`66c78ae` makes the graph editor's quick-add use henad-graph's rules instead of its own copies, with `NodeDef::sink` and `ContextSet::allows` made public.
-`a7ddf3d` does the same for the card with `LineKind::works_out_result` and `LineKind::is_block`.
-`a0bf417` moves the line data out of `card_pane.rs` into `card_lines.rs`, and `06aa2fb` splits `sheet_pane.rs` from 3,503 lines to 798 and six new files beside `sheet_pane/agents.rs` and `sheet_pane/layout.rs`.
+`59096ee` makes the graph editor's quick-add use henad-graph's rules instead of its own copies, with `NodeDef::sink` and `ContextSet::allows` made public.
+`59096ee` does the same for the card with `LineKind::works_out_result` and `LineKind::is_block`.
+`59096ee` moves the line data out of `card_pane.rs` into `card_lines.rs`, and `59096ee` splits `sheet_pane.rs` from 3,503 lines to 798 and six new files beside `sheet_pane/agents.rs` and `sheet_pane/layout.rs`.
 Both splits move code and change only imports, paths and visibility.
 
 #### CHANGELOG
 
-`4f4fead` writes the round's lines into `CHANGELOG.md` from the packages' notes.
+`59096ee` writes the round's lines into `CHANGELOG.md` from the packages' notes.
 
 #### henad-app's test code
 
@@ -348,7 +348,7 @@ The session had set this up, and it was the session's mistake.
 An agent found it, every agent went back to a target directory inside its own worktree, and the briefs now forbid a shared one.
 
 The isolated full check then ran from 18:13 to 18:34 UTC, in one worktree with its own build directory.
-Its tree was `caaebe5` with the henad-cli package's 15 commits on top, before those commits were rebased once more and merged as `30b07da` to `652ed7f`.
+Its tree was `bec8310` with the henad-cli package's 15 commits on top, before those commits were rebased once more and merged as `29d0d27` to `29d0d27`.
 It ran every step of `./check.sh` and CI's two web clippy lines, 16 steps, with `HENAD_REQUIRE_GPU=1`.
 All 16 exit 0.
 The workspace tests pass 2,257 and ignore 2, the float probes, and none fail.
@@ -360,11 +360,11 @@ The packages merged after it come into the final full check.
 
 | Snapshot | Against | Result |
 | --- | --- | --- |
-| After the first four branches of wave 1 | `e69e00e` | Identical outside the loose runs |
-| `01452ed`, after wave 1, the card and the wording fixes | `e69e00e` | Identical outside the loose runs |
-| The sheet starter ids | `e69e00e` | 66 files differ, each the id or a hash that follows from it. Became the baseline |
+| After the first four branches of wave 1 | `bd62a9c` | Identical outside the loose runs |
+| `d4a96cb`, after wave 1, the card and the wording fixes | `bd62a9c` | Identical outside the loose runs |
+| The sheet starter ids | `bd62a9c` | 66 files differ, each the id or a hash that follows from it. Became the baseline |
 | After wave 2 | the baseline | Identical outside the loose runs |
-| `caaebe5` with the henad-cli package | the baseline | Identical outside the loose runs |
+| `bec8310` with the henad-cli package | the baseline | Identical outside the loose runs |
 
 The test cleanups change no code the snapshot runs.
 The app's cleanups change henad-app, and henad-graph only by the public items named under [The Editor's code](#the-editors-code).
@@ -382,7 +382,7 @@ Keyboard focus was seen offscreen only: the live app on the virtual display neve
 The three app cleanups were told to change nothing the app draws, and ran no app on screen.
 
 A pixel comparison then tested that claim.
-It rendered 62 scenes of the Editor offscreen at `db2fb43`, with the restyle complete and no app cleanup merged, and at `06aa2fb`, after the three app cleanups.
+It rendered 62 scenes of the Editor offscreen at `3102bbb`, with the restyle complete and no app cleanup merged, and at `59096ee`, after the three app cleanups.
 The scenes are the whole Editor for five sheets, the Card pane at 420 and 640 points, the Sheet pane at 320 and 600, pickers, selects, menus, dialogs, notices, keyboard focus, the graph editor's panels and a grid rule.
 All 62 are identical, pixel for pixel.
 The method was checked first: three renders of one tree were identical, and a planted change of one outline colour was caught, at 1,340 pixels.
@@ -395,13 +395,13 @@ CI's web clippy step, clippy on the pinned nightly with atomics for henad-app an
 It failed in two places the branch had introduced.
 `SimRunner` in `sim_runner.rs` met `clippy::large_enum_variant` on wasm32, and now carries an `expect` with its reason.
 `agent_hooks.rs` built an array from a tuple by hand, and now converts it with `into()`.
-`8720d78` fixes both, and both lines of the step pass in the isolated full check.
+`6662055` fixes both, and both lines of the step pass in the isolated full check.
 
 ### Edited tree
 
 ```
 AGENTS.md                                      cpu/tests/ among the test folders, henad-cli's model-file line, new topic files
-CHANGELOG.md                                   round 6's lines (24f8011, 4f4fead)
+CHANGELOG.md                                   round 6's lines (bca71d3, 59096ee)
 agents/
 ├── henad-app-graph-editor.md                  new, from henad-app-editor.md
 ├── henad-app-sheet-pane.md                    new: sections, form rows, tables, column order
@@ -435,7 +435,7 @@ crates/
 │               └── sheet/
 │                   ├── card_lines.rs          new: line data out of card_pane.rs
 │                   ├── card_pane.rs           framed cards, kind bars, chips
-│                   ├── sheet_pane.rs          798 lines, from 3,154 at e69e00e
+│                   ├── sheet_pane.rs          798 lines, from 3,154 at bd62a9c
 │                   ├── sheet_pane/            buttons, colors, layout, measures, parameters, property_form, starts new
 │                   └── widgets.rs             regions, hairlines, overlays, notices, kind_hue, kind_bar, add_row_button
 ├── henad-cli/
@@ -479,21 +479,21 @@ zensical.toml                                  nav entry for this record
 
 ## State after
 
-- `37-node-editor` at `ebf79b5` holds 407 commits after `e69e00e` and 660 after `e816b44`, and this record follows them.
+- `37-node-editor` at `7e845bb` holds 407 commits after `bd62a9c` and 660 after `bad936b`, and this record follows them.
 - Every commit is unsigned.
   The 407 of this round are one line with no `[draft]`, and the 253 before them still carry `[draft]`.
 - Nothing was pushed, tagged or opened as a PR.
-  The remote's `37-node-editor` is at `e816b44`.
-- The isolated full check passed 16 of 16 steps on the tree of `caaebe5` with the henad-cli package, with 2,257 tests passing, 2 ignored and none failing.
-  The final full check passed the same 16 steps at `ebf79b5`, with 2,276.
+  The remote's `37-node-editor` is at `bad936b`.
+- The isolated full check passed 16 of 16 steps on the tree of `bec8310` with the henad-cli package, with 2,257 tests passing, 2 ignored and none failing.
+  The final full check passed the same 16 steps at `7e845bb`, with 2,276.
 - This record changes only the record and its nav entry.
   `uv run zensical build` builds the site with it, and the scripts' tests pass.
 
-The final full check ran at `ebf79b5`, in a worktree with its own build directory and nothing else building into it.
+The final full check ran at `7e845bb`, in a worktree with its own build directory and nothing else building into it.
 All 16 steps exit 0: every step of `./check.sh` and CI's two web clippy lines, with `HENAD_REQUIRE_GPU=1`.
 The workspace tests pass 2,276 and ignore 2, the float probes, and none fail.
 The doc tests pass 43 and ignore 4, the README program's pass 2, and `cargo deny` reports no advisory.
-The snapshot at `ebf79b5` is identical to the baseline outside the five loose runs.
+The snapshot at `7e845bb` is identical to the baseline outside the five loose runs.
 
 The commit messages of the branch are rewritten after this record is committed, as the maintainer asked.
 A replay keeps each commit's tree, author, committer and dates and changes its subject alone.
@@ -590,10 +590,10 @@ Sizes: S under 50 lines, M a few hundred, L a subsystem, XL research or a new en
 
 - **The shared build directory.**
   For some hours agents built into one cargo target directory, the session's own mistake, described under [How it was checked](#how-it-was-checked).
-  The tree as merged up to `caaebe5` passed the isolated check, and the final full check at `ebf79b5` covers the packages merged after it.
+  The tree as merged up to `bec8310` passed the isolated check, and the final full check at `7e845bb` covers the packages merged after it.
 - **A rejected commit.**
   One agent's `git commit --no-gpg-sign` was rejected by the permission system.
-  The session did not make the commit for it, asked the maintainer, and committed `f42626d` after the answer.
+  The session did not make the commit for it, asked the maintainer, and committed `825eaf6` after the answer.
   That package's work is one commit of 13 files, against one concern per commit.
 - **The usage limit.**
   The session hit the usage limit once on 2026-11-11 and resumed.

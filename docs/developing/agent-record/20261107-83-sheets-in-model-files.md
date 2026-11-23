@@ -6,8 +6,8 @@ icon: material/file-document-check-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s11-sheet-model-files, rebased onto S12's record cf3ce8c: two unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: 31422d4
+state: "37-node-editor, fast-forwarded to redesign/s11-sheet-model-files, rebased onto S12's record a2b9dcf: two unsigned [draft] commits and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: d5091fb
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheets in model files, the CLI and the facade [draft]`, `fix: s11 review findings [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -21,7 +21,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheets in mo
 
 ## State before
 
-- The branch was cut from `37-node-editor` at `31422d4` (S7 merged). At the merge point it rebased onto the tip of `37-node-editor`, `cf3ce8c`, which holds S12.
+- The branch was cut from `37-node-editor` at `d5091fb` (S7 merged). At the merge point it rebased onto the tip of `37-node-editor`, `a2b9dcf`, which holds S12.
   S10 had not merged by then, so S11 merges before S10, against the order this record's issue 4 first assumed.
 - `SheetFile::parse` read, checked and lowered a grid sheet, and its `LineMap` named the line or part of the sheet behind each node of the lowered graph.
 - `ModelFile` read two kinds, `gpu_grid` and `graph`, and refused `sheet` with "this reader only reads 'gpu_grid' or 'graph'", so no host could run a sheet.
@@ -149,7 +149,7 @@ docs/reference/
 
 ### Merge check
 
-- The rebase onto `cf3ce8c` (S12) conflicted in four files, each resolved by keeping both milestones' text.
+- The rebase onto `a2b9dcf` (S12) conflicted in four files, each resolved by keeping both milestones' text.
   `CHANGELOG.md` keeps S12's sheet edit commands line and S11's line after it.
   `agents/facade-and-tutorial.md` names `keys` and `KIND_SHEET` in the `graph` sentence, and `SheetBuilder`, `SheetEdit`, `KeyStream`, `SheetTypes`, `GRAPH_KINDS` and `sheet_starters_build` in the `named_only` sentence, which ends "Keep them." as the review asked.
   The module doc of `crates/henad-graph/src/sheet/mod.rs` names `SheetFile::place_graph_diagnostic` and S12's `edit` module.

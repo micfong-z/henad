@@ -6,27 +6,27 @@ icon: material/source-branch
 status: ai-generated
 model: "Claude Code. Each package had an implementing agent and a reviewing agent, and this record's draft was an Opus subagent"
 issue: "#37"
-state: "37-node-editor at d95771ad and this record: 81 commits after 6141c2e3, the remote's head of the branch, and 933 after master's 4f1ea055. The full check passed 16 of 16 steps at 13205c3c with 2,452 tests, and the snapshot there keeps every deterministic model's statistics identical. The history is folded into 98 signed commits after this record, one more commit remaps the hashes the records cite, and the branch is force-pushed"
-baseline_commit: 6141c2e3
-delta_state: "committed on `37-node-editor`: 79 unsigned commits of eight packages, the maintainer's signed commit `f309fd29`, and this record, all folded after it"
+state: "37-node-editor at 46cb57d9 and this record: 81 commits after 15b0a082, the remote's head of the branch, and 933 after master's 4f1ea055. The full check passed 16 of 16 steps at 297a0ef5 with 2,452 tests, and the snapshot there keeps every deterministic model's statistics identical. The history is folded into 98 signed commits after this record, one more commit remaps the hashes the records cite, and the branch is force-pushed"
+baseline_commit: 15b0a082
+delta_state: "committed on `37-node-editor`: 79 unsigned commits of eight packages, the maintainer's signed commit `50cb653e`, and this record, all folded after it"
 ---
 
 # Editor look, decisions and the fold
 
 > The maintainer made five requests on 2026-11-22: take the recommended option of each decision record #108 left open, restyle the Editor in seven points, unframe the Sheet pane's sections, bring the Card pane's controls in line with the rest of the app, and fold the branch's commits into about 100.
-> The work ran from `6141c2e3`, the remote's head of the branch.
+> The work ran from `15b0a082`, the remote's head of the branch.
 > Five packages, each implemented by one agent and reviewed by another, took 15 decisions and nine points on the Editor's look in 74 commits.
 > Five more commits bumped `url` for a new advisory, folded the changelog's lines and retook 19 of the guide's 30 screenshots.
 > A snapshot of every model's output keeps every deterministic model's statistics identical.
 > Its 15 strict differences are two lock files, eight shaders of the ants models and five new shaders.
-> The full check passed 16 of 16 steps at `13205c3c` with 2,452 tests.
+> The full check passed 16 of 16 steps at `297a0ef5` with 2,452 tests.
 > A user meets egui's own frames and shadows again, help on hover, new dialogs before a replace and before a delete that empties formulas, the Editor on 70 percent of the window, percent values typed as "2.5%", and files rejected for names that clash with columns of the exported tables.
 > After this record, the 933 commits since master are folded into 98 signed commits and one that remaps the hashes the records cite, and the branch is force-pushed.
 
 ## State before
 
-`37-node-editor` at `6141c2e3` held 852 commits after master's `4f1ea055`, 44 of them signed.
-The maintainer had pushed it after record #108, and the remote's head of the branch was `6141c2e3`.
+`37-node-editor` at `15b0a082` held 852 commits after master's `4f1ea055`, 44 of them signed.
+The maintainer had pushed it after record #108, and the remote's head of the branch was `15b0a082`.
 At record #108 the full check passed 16 of 16 steps with 2,385 tests, and the snapshot of every model's output kept every deterministic model's statistics identical to its baseline.
 Record #108 left seven findings whole and several in part, each with its options and the reviewers' picks.
 
@@ -64,16 +64,16 @@ The packages that changed the UI rendered the Editor offscreen through a scratch
 
 | Package | Commits | Merged at |
 | --- | --- | --- |
-| Sheet checker: names that clash with columns, add-up marks, any and all, kept shares | 7 | `fe7e8329` |
-| Editor look | 18 | `8694d2a1` |
-| GPU counters and submission sizes | 13 | `783bba2a` |
-| Whole numbers, percent values, clock columns and the resume note | 19 | `85c9e948` |
-| The `url` advisory | 1 | `4b06fcc2` |
-| Editor behaviour: replacing, saving, deleting, the Apply line, parameter ids | 17 | `13205c3c` |
-| The changelog | 1 | `f3851adb` |
-| The guide's screenshots | 3 | `d95771ad` |
+| Sheet checker: names that clash with columns, add-up marks, any and all, kept shares | 7 | `b6c9d05b` |
+| Editor look | 18 | `270a7324` |
+| GPU counters and submission sizes | 13 | `516873db` |
+| Whole numbers, percent values, clock columns and the resume note | 19 | `1edb178b` |
+| The `url` advisory | 1 | `f565feac` |
+| Editor behaviour: replacing, saving, deleting, the Apply line, parameter ids | 17 | `297a0ef5` |
+| The changelog | 1 | `46cb57d9` |
+| The guide's screenshots | 3 | `46cb57d9` |
 
-`f309fd29`, the maintainer's own signed commit before the packages, rewrites the AI usage section of the contributing page.
+`50cb653e`, the maintainer's own signed commit before the packages, rewrites the AI usage section of the contributing page.
 The 79 commits of the packages are unsigned, by the maintainer's choice of 2026-11-21.
 Their subjects keep to six words and average 4.9.
 
@@ -198,8 +198,8 @@ Record #108's other items stand as it leaves them.
 
 #### The `url` advisory
 
-RUSTSEC-2026-0592 appeared against `url` 2.5.8 during the work, and a full check at `85c9e948` found it.
-`4b06fcc2` moves `Cargo.lock` to `url` 2.5.9 and `form_urlencoded` 1.2.3, and regenerates `docs/license.html`.
+RUSTSEC-2026-0592 appeared against `url` 2.5.8 during the work, and a full check at `1edb178b` found it.
+`f565feac` moves `Cargo.lock` to `url` 2.5.9 and `form_urlencoded` 1.2.3, and regenerates `docs/license.html`.
 
 #### Editor behaviour
 
@@ -227,13 +227,13 @@ RUSTSEC-2026-0592 appeared against `url` 2.5.8 during the work, and a full check
 
 #### The changelog
 
-`f3851adb` folds the `[Unreleased]` section of `CHANGELOG.md` as one change against 0.3.0, and a change to a feature new since 0.3.0 changes that feature's line.
+`46cb57d9` folds the `[Unreleased]` section of `CHANGELOG.md` as one change against 0.3.0, and a change to a feature new since 0.3.0 changes that feature's line.
 The "App theme" line goes, since the theme is back at the values of 0.3.0.
 
 #### The guide's screenshots
 
 The screenshots were rendered offscreen from the app's own UI code at 2 pixels per point.
-19 of the 30 under `docs/assets/app/` were replaced, `viewport-toolbar.png` last in `d95771ad`.
+19 of the 30 under `docs/assets/app/` were replaced, `viewport-toolbar.png` last in `46cb57d9`.
 11 were kept where only noise differed, such as another random draw or a widget moved by a pixel.
 The overview's caption reads about 40,000 ticks per second, where it read 30,000.
 
@@ -242,7 +242,7 @@ The overview's caption reads about 40,000 ticks per second, where it read 30,000
 #### The snapshot
 
 The snapshot runs 39 models and model files at a fixed seed for 64 steps, two sweeps and six error runs through `henad-cli`.
-At `13205c3c` it was compared with the snapshot at `b525bb2f`, the tip of record #108's work.
+At `297a0ef5` it was compared with the snapshot at `15b0a082`, the tip of record #108's work.
 Every deterministic model's statistics, parameter schemas and lowered sheets are identical.
 The five runs that never replay exactly, stock `gpu_boids`, the boids graph fixture and starter, and the boids and bounded confidence sheets, differ loosely as always.
 
@@ -285,14 +285,14 @@ A compiled model with a stat named `run_id` or `tick`, or `time` with a time sca
 #### Each package
 
 The briefs required each package to run the tests of every crate it touched with `HENAD_REQUIRE_GPU=1`, clippy with `-D warnings`, rustfmt, the wasm32 typecheck of each crate with web support, `cargo doc` with `-D warnings` where a string or a doc comment changed, and the snapshot against its branch point.
-The snapshot at `13205c3c` above covers every package that changed code.
+The snapshot at `297a0ef5` above covers every package that changed code.
 The GPU package timed its models before and after: the boids sheet's 200 steps took 603 ms before and 605 ms after, ants at 1M agents moved by less than 1 percent, and no timing moved by more than about 3 percent.
 
 #### The full check
 
 The full check ran every step of `./check.sh`.
-A run at `85c9e948` found the `url` advisory, fixed in `4b06fcc2`.
-At `13205c3c`, after every package that changed code, it passed 16 of 16 steps with 2,452 tests.
+A run at `1edb178b` found the `url` advisory, fixed in `f565feac`.
+At `297a0ef5`, after every package that changed code, it passed 16 of 16 steps with 2,452 tests.
 The four commits after it change `CHANGELOG.md`, the guide's screenshots and one caption.
 
 ### Edited tree
@@ -372,11 +372,11 @@ The 80 commits add six files and remove none.
 
 ## State after
 
-- `37-node-editor` at `d95771ad` holds 80 commits after `6141c2e3` and 932 after `4f1ea055`, and this record follows them.
-- `f309fd29` carries the maintainer's signature, and the 79 commits of the packages are unsigned.
-- The remote's `37-node-editor` is at `6141c2e3`.
+- `37-node-editor` at `46cb57d9` holds 80 commits after `15b0a082` and 932 after `4f1ea055`, and this record follows them.
+- `50cb653e` carries the maintainer's signature, and the 79 commits of the packages are unsigned.
+- The remote's `37-node-editor` is at `15b0a082`.
   Nothing after it was pushed before the fold.
-- The full check passed 16 of 16 steps at `13205c3c` with 2,452 tests, and the snapshot there keeps every deterministic model's statistics identical to the snapshot at `b525bb2f`.
+- The full check passed 16 of 16 steps at `297a0ef5` with 2,452 tests, and the snapshot there keeps every deterministic model's statistics identical to the snapshot at `15b0a082`.
 - This record changes only the record and its nav entry, and `uv run zensical build` builds the site with it.
 
 ### The fold of the history

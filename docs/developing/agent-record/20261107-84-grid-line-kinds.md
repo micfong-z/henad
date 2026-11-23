@@ -6,8 +6,8 @@ icon: material/dice-multiple-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s10-grid-line-kinds, rebased onto S11's record 03b34fa: two unsigned [draft] commits, a docs commit and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: cf3ce8c
+state: "37-node-editor, fast-forwarded to redesign/s10-grid-line-kinds, rebased onto S11's record 67da863: two unsigned [draft] commits, a docs commit and this record; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: a2b9dcf
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: lower chances, looks and choices in grid sheets [draft]`, `fix: s10 review findings [draft]`, `docs: formula depth limit of a sheet [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -22,8 +22,8 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: lower chance
 
 ## State before
 
-- `37-node-editor` at `31422d4` (S7 merged), with S11 planned beside S10.
-  The branch was rebased onto `cf3ce8c` (S12 merged) for the review fixes, since S12's slot path grammar is what the lowering's paths now follow.
+- `37-node-editor` at `d5091fb` (S7 merged), with S11 planned beside S10.
+  The branch was rebased onto `a2b9dcf` (S12 merged) for the review fixes, since S12's slot path grammar is what the lowering's paths now follow.
 - S7's lowering held starts, buttons, measures, colours, Counts, Yes or no lines, Becomes, Sets and When blocks, and refused chances, rates, Look around, Calculate, Choose, Depending on, Random number, Repeat and worlds of agents at their table in the author's words.
 - The forest fire waited as test data in `src/tests/sheets/` for its chances, and `starters()` returned Game of Life and Majority vote.
 - The baseline of the full check is the gate's: `cargo deny` fails on RUSTSEC-2026-0370, 0371 and 0372, and the workspace tests on `every_agent_corpus_file_at_its_largest_population_fits_the_work_budgets` alone.
@@ -184,7 +184,7 @@ crates/henad-graph/
 
 ### Merge check
 
-- The rebase onto `03b34fa` (S11) conflicted in three files, each resolved by keeping both milestones' text, as S11's record foresaw.
+- The rebase onto `67da863` (S11) conflicted in three files, each resolved by keeping both milestones' text, as S11's record foresaw.
   `CHANGELOG.md` keeps S10's rewritten sheet starters and sheet lowering lines, S11's sheets in model files line, then S10's line on every grid line kind.
   `agents/henad-graph-sheet.md` takes S10's text of the lowering tests paragraph, then S11's two sentences on the mapping tests.
   `crates/henad-graph/src/tests/sheet_lower.rs` keeps S11's mapping tests and S10's tests after them, and drops the `sheet` helper again in the review fix commit, since `sheet_document::sheet_text` replaces it.
@@ -230,7 +230,7 @@ The gate's section 8 changes S10's test strings to "otherwise (when line 2 does 
 
 ## Review
 
-A reviewer with a fresh context found three should-fix items and three nits, all fixed in `fix: s10 review findings [draft]` after a rebase onto `cf3ce8c`.
+A reviewer with a fresh context found three should-fix items and three nits, all fixed in `fix: s10 review findings [draft]` after a rebase onto `a2b9dcf`.
 S12 had merged meanwhile, and its `parse_path` numbers rows and items from 0 and names a summary by index, where S10's lowering numbered rows and items from 1 and named a summary by id.
 The lowering now follows S12's grammar (`items.0`, `row.0.condition`, `summaries.0.value`, `right.0` for a listed item, and `button.<id>.does.0` for a sheet node too), since nothing yet depended on the old paths and the draw keys they feed change code identity once sheets are saved.
 Keeping summaries by id would have kept a draw's key across a reorder of summaries, but the author format already accepts that a reorder of Choose rows moves their keys, and one grammar for the module outweighs it.

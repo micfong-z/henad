@@ -6,8 +6,8 @@ icon: material/file-document-edit-outline
 status: ai-generated
 model: claude-opus-5-5 (Claude Code)
 issue: "#37"
-state: "37-node-editor, fast-forwarded to redesign/s4-sheet-writer, five unsigned [draft] commits and this record after e5d5a67; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
-baseline_commit: 35b5735
+state: "37-node-editor, fast-forwarded to redesign/s4-sheet-writer, five unsigned [draft] commits and this record after 106a9e1; the full check with HENAD_REQUIRE_GPU=1 passes every step but cargo deny and the workspace tests, which fail as the baseline does, on its three advisories and its one budget test"
+baseline_commit: ca85d98
 delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheet wording table and sentences [draft]`, `feat: canonical sheet writer [draft]`, `fix: s4 comment wording [draft]`, `fix: s4 review findings [draft]`, `fix: s4 merge check [draft]` and this record, unsigned, for the maintainer to reword and sign"
 ---
 
@@ -24,7 +24,7 @@ delta_state: "committed on `37-node-editor` by fast-forward: `feat: sheet wordin
 
 ## State before
 
-- `37-node-editor` at `dfab1fb` when the milestone started, rebased onto `35b5735` (S15 merged) before the record.
+- `37-node-editor` at `ea28d50` when the milestone started, rebased onto `ca85d98` (S15 merged) before the record.
   S1a's reader read sheets into `SheetDocument`, and S1b's nine sheets (two starters, seven test sheets) held comments in the wording before the final editor ("Become Alive if Dead", "Clear (button), every cell once").
 - No Rust code wrote a sheet.
   The four sheets copied from the author format's examples were canonical by the reference writer, a Python script outside the repository, and S1b had made its four sheets canonical with the same script.
@@ -93,7 +93,7 @@ A state that another States property also names reads "Status Alive".
 
 Every sheet S1a and S1b committed was read and written back by the Rust writer.
 Only comments changed: the two starters and six of the seven test sheets, `random_walk.toml` already reading in the final words.
-The golden files under `crates/henad-graph/src/tests/golden/` hold the reference writer's output for Game of Life, SIR, boids and ants, run on scratch copies of the sheets at `dfab1fb`, with comment lines removed.
+The golden files under `crates/henad-graph/src/tests/golden/` hold the reference writer's output for Game of Life, SIR, boids and ants, run on scratch copies of the sheets at `ea28d50`, with comment lines removed.
 `golden/README.md` holds the script's SHA-256, the commands, the `grep -v '^#'` and the rules the files follow, written out in full, and lists where the Rust writer goes further than the script.
 
 ### Tests
@@ -172,29 +172,29 @@ crates/
 - **No "otherwise" in the comments.** S5 builds the rule in `relations.rs`, so the writer passes no partner and the vote's line 3, the forest fire's line 3 and the ants' line 16 lost the "Otherwise" their old comments held. The words exist (`otherwise_words`), `Sentences::line` takes the partners, and a test reads the vote and the forest fire with them passed in. S5 passes `relations::otherwise_of` into the writer's call, and `every_sheet_is_a_fixed_point` then asks it to rewrite those three comments.
 - **The wording table leaves out rows the gate marks "Not built"**: the run bar, speed and run to tick, the pauses, the world notes after the first tick and the facilitator. The banner and link line of the conversion take words from the expert design that the gate does not quote, so S27 adds them. The number rule of the rate notes stays S21's, and the note templates take numbers already formatted. The agent starters' descriptions are S26's.
 - **The wording test is named `every_wording_table_entry_equals_the_final_words`** and not after the gate's file, since tracked files name no gitignored file.
-- **The golden files come from the repository's sheets at `dfab1fb`**, not from the design folder's examples. S1a changed those copies (D81, D97, D98), so the Rust writer could not reproduce the originals. The reference writer left their tables unchanged, so the golden files differ from the committed text in comments alone.
+- **The golden files come from the repository's sheets at `ea28d50`**, not from the design folder's examples. S1a changed those copies (D81, D97, D98), so the Rust writer could not reproduce the originals. The reference writer left their tables unchanged, so the golden files differ from the committed text in comments alone.
 - **Two test files.** `sheet_sentence.rs` holds the wording table's tests beside the plan's `sheet_writer.rs`.
 - **The moved helpers are renamed** under AGENTS.md's naming rule: `key` to `push_key`, `strings` to `string_array`, `color` to `color_array`. `color_hex` is new, since the sheet writes colours as `"#RRGGBB"` and the graph as four bytes.
 - **Tests beyond the plan.** `unusual_values_read_back_to_the_same_document`, `a_number_that_is_not_finite_is_refused`, `every_readable_mutation_writes_text_that_reads_back`, `agent_lines_read_round_1_words_in_the_final_conventions`, `a_count_reads_in_the_singular_after_for_each` and `no_fixed_wording_entry_holds_a_forbidden_word`.
 - **Where the Rust writer departs from the reference writer**, in forms no example holds: a list of chips stays on one line (the script spreads it over lines), `items` holding a literal is one inline array, a key TOML cannot read bare is quoted, and a control character in a comment becomes a space. `golden/README.md` lists them.
 - **Word choices the final editor leaves open.** Agent neighbourhoods read "including me", as the 3 by 3 block does. A Calculate formula reads its operators as the final Calculate line's words, "to the power of" for `^`, with a call's parentheses left out. A When whose condition is always reads "When always:", which S5 makes an error.
-- **Rebased in the worktree.** S15 merged during the milestone. The rebase onto `35b5735` met two list conflicts in `tests/mod.rs` and one in the graph writer, where S15's `resolution` key met the helper rename.
+- **Rebased in the worktree.** S15 merged during the milestone. The rebase onto `ca85d98` met two list conflicts in `tests/mod.rs` and one in the graph writer, where S15's `resolution` key met the helper rename.
 - **A third commit**, `fix: s4 comment wording [draft]`, rewords five comments after a self-review, and a fourth, `fix: s4 review findings [draft]`, holds the review's fixes.
 - **The record is not committed here.** The orchestration asks for it in the design folder, numbered and committed at the merge step.
 
 ## State after
 
-- `redesign/s4-sheet-writer` holds four commits after `35b5735`.
+- `redesign/s4-sheet-writer` holds four commits after `ca85d98`.
 - A sheet reads and writes: `ParsedSheet::parse(text)?.document().to_text()` returns `text` for every committed sheet, and a hand-written sheet takes its canonical text.
 - `henad_graph::sheet::sentence` holds the sheet editor's words, and `Sentences` writes each line's sentence in them.
 - Checks run in the worktree on the rebased branch: `cargo fmt --all -- --check`, `cargo clippy -p henad-graph -p henad --all-targets --all-features -- -D warnings -W clippy::all`, `HENAD_REQUIRE_GPU=1 cargo test -p henad-graph --all-targets --all-features` (225 passed, 1 ignored), `cargo test -p henad-graph --doc`, `RUSTDOCFLAGS="-D warnings" cargo doc -p henad-graph --no-deps --all-features`, the facade's `facade_paths` test, `./scripts/check_packaging.sh`, and `cargo check --lib --target wasm32-unknown-unknown` for henad-graph with every feature and for the facade with and without them.
   The full check of section 2.3 runs at the merge point.
-- The merge check rebased the branch onto `37-node-editor` at `e5d5a67`, which had gained S2's time scale (record #77) since `35b5735`.
+- The merge check rebased the branch onto `37-node-editor` at `106a9e1`, which had gained S2's time scale (record #77) since `ca85d98`.
   The rebase met no textual conflict, but the build broke on one semantic conflict.
   S2's graph writer writes the tick length's `tick_unit` key through the old `key` helper, which S4 renames to `push_key` in `model_text.rs`.
   `fix: s4 merge check [draft]` renames that one call.
   S2's hidden flag and `tick_unit` key live in the graph file's `[[param]]` table, and the sheet keeps its own `[time]` table, which the sheet writer already writes, so nothing else of S2 reaches the sheet writer.
-- The full check of plan section 2.3 ran on the rebased branch at `a304761`.
+- The full check of plan section 2.3 ran on the rebased branch at `1fa6ed3`.
   Every step exits as the baseline does.
   The native and wasm32 typechecks, fmt, packaging, clippy, the doc tests, the README program, rustdoc, the scripts' tests and the web build exit 0.
   `cargo deny` exits 1 on RUSTSEC-2026-0370, 0371 and 0372, the baseline's three advisories.

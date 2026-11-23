@@ -6,15 +6,15 @@ icon: material/comment-text-outline
 status: ai-generated
 model: "Claude Code. Fable generated string candidates in 20 of 37 batches until the maintainer asked to stop, and every other agent ran on Opus, Sonnet or Haiku. The fix packages' implementers and reviewers and this record's draft were Opus subagents"
 issue: "#37"
-state: "37-node-editor at b525bb2f and this record: 166 one-line commits after 68447db5 and 829 after e816b444, nothing pushed. 26 commits of the string work are signed and the rest unsigned. The isolated full check passed at b7804e51 with 2,276 tests, at 82f6ca1c with 2,360 and at b525bb2f with 2,385. The snapshot at b525bb2f keeps every deterministic model's statistics identical to the baseline"
-baseline_commit: 68447db5
+state: "37-node-editor at 15b0a082 and this record: 166 one-line commits after 7e845bb3 and 829 after bad936ba, nothing pushed. 26 commits of the string work are signed and the rest unsigned. The isolated full check passed at eeecab4f with 2,276 tests, at 774744dc with 2,360 and at 15b0a082 with 2,385. The snapshot at 15b0a082 keeps every deterministic model's statistics identical to the baseline"
+baseline_commit: 7e845bb3
 delta_state: "committed on `37-node-editor`: 29 commits of the string work, 137 of nine fix packages, and this record"
 ---
 
 # Strings and audit fixes
 
 > The maintainer made two requests: every string a user reads, rewritten in standard UI wording, and an audit of the branch followed by fixes for what it found.
-> The work ran from 2026-11-20 to 2026-11-22 from `68447db5`.
+> The work ran from 2026-11-20 to 2026-11-22 from `7e845bb3`.
 > Six research reports and 337 pairs of the maintainer's own earlier edits fed a style guide.
 > About 4,500 strings and card sentences passed through several generators, a blind judge and a consistency pass, and the maintainer chose among the options on a review page.
 > Six packages applied the 898 picks, 892 of them the judge's defaults and 6 the maintainer's own choices, in 29 commits.
@@ -26,7 +26,7 @@ delta_state: "committed on `37-node-editor`: 29 commits of the string work, 137 
 
 ## State before
 
-`37-node-editor` at `68447db5` held 663 unsigned commits after `e816b444`, the remote's head of the branch.
+`37-node-editor` at `7e845bb3` held 663 unsigned commits after `bad936ba`, the remote's head of the branch.
 They ended with record #107, the commit that remapped the hashes the records cite after the rewrite of the commit messages, and the record of a check in a browser.
 At record #107 the final full check passed 16 of 16 steps with 2,276 tests, and the snapshot of every model's output was identical to its baseline outside the five runs that do not replay.
 The maintainer had edited a set of the app's strings by hand on 2026-09-29, in the parameter sweep work of #14.
@@ -132,14 +132,14 @@ Six packages applied the picks, in merge order.
 
 | Package | Picks | Commits |
 | --- | --- | --- |
-| Sheet text: the card law, rate notes, card notes, Sheet pane help, the conversion dialog, Compare runs and the starters' purposes | 120 | 6, `7b3c0fa2` to `5cfd00be` |
-| Sheet diagnostics: the checker, reader, writer, edit commands, lowering and conversion | 195 | 4, `43fda84a` to `02efb17e` |
-| The graph checker | 135 | 3, `e106d6a4` to `7dadd159` |
-| The node library's help, the graph's edit commands, reader, host evaluator and WGSL compiler | 176 | 5, `4f86a254` to `4b94f437` |
-| henad-build, henad-core, henad-compute, henad-explore with its testing kit, and henad-cli | 163 | 5, `fc610c9e` to `ed443a8b` |
-| henad-app and the web page | 109 | 4, `95494a6f` to `b7804e51` |
+| Sheet text: the card law, rate notes, card notes, Sheet pane help, the conversion dialog, Compare runs and the starters' purposes | 120 | 6, `eeecab4f` to `eeecab4f` |
+| Sheet diagnostics: the checker, reader, writer, edit commands, lowering and conversion | 195 | 4, `eeecab4f` to `eeecab4f` |
+| The graph checker | 135 | 3, `eeecab4f` to `eeecab4f` |
+| The node library's help, the graph's edit commands, reader, host evaluator and WGSL compiler | 176 | 5, `eeecab4f` to `eeecab4f` |
+| henad-build, henad-core, henad-compute, henad-explore with its testing kit, and henad-cli | 163 | 5, `eeecab4f` to `eeecab4f` |
+| henad-app and the web page | 109 | 4, `eeecab4f` to `eeecab4f` |
 
-Two test commits came between the last two: `f4fd6ad8` wraps an assert past 120 columns, and `2d0b19c1` updates the fault phases two app tests build.
+Two test commits came between the last two: `eeecab4f` wraps an assert past 120 columns, and `eeecab4f` updates the fault phases two app tests build.
 
 Every package applied each chosen text as given, in the source form of its literal, with its placeholders in their order.
 Two card sentences of the sheet text package are built by templates of the WGSL compiler, and the node library package changed them there.
@@ -160,15 +160,15 @@ The families of change:
 - The app writes "less than" and "greater than" in a sweep's stop rule, "Enter values", "Select a CSV file", "Concurrent runs", "Select model", the dialog title "Rebuild model?", and "−1" with a minus sign.
 
 The four golden sheets of henad-graph's reference writer hold the starters' purposes and the ants starter's description of its trail, and the new words went into them by hand.
-`5cfd00be` records in the golden files' README that the procedure's three commands, run on a copy of each edited file, return the file unchanged.
+`eeecab4f` records in the golden files' README that the procedure's three commands, run on a copy of each edited file, return the file unchanged.
 
 The commits of the app package and of the node library package were rejected by the permission system, and their work was left staged.
 The session committed it, under the maintainer's choice of local unsigned commits.
-The isolated full check then passed 16 of 16 steps at `b7804e51`, with 2,276 tests.
+The isolated full check then passed 16 of 16 steps at `eeecab4f`, with 2,276 tests.
 
 ### The audit
 
-The audit read `37-node-editor` at `68447db5` against `e816b444`.
+The audit read `37-node-editor` at `7e845bb3` against `bad936ba`.
 Fifteen finders ran: seven on correctness, two on the user's experience, and six that checked the redesign's plans and design documents item by item against the code.
 An adversarial verifier followed each finder, and one writer assembled the report.
 The finders were told not to read record #107 or its artifact, to check that work on their own.
@@ -208,162 +208,162 @@ Most need people, a screen, an idle machine or the maintainer, and the rest are 
 Of the 14 plan items, 12 were done in whole or in part.
 The count takes the 0.4 migration lines as done: they are in `CHANGELOG.md` under "Migrating to 0.4".
 It takes as left the toast for notices, and the rule that no item's name contains the name of another item.
-`f7a1bed6` tests that rule on two menus only.
+`15b0a082` tests that rule on two menus only.
 
 No fix implementer wrote its report, and several left their work staged or as patch files.
 Their reviewers rebuilt the lists of what was fixed and what was left from the patches, the changelog notes and the snapshots.
-Where the permission system rejected a commit, the session committed the reviewed work: `5147d1f3` of the sheet edits package, and `b58ba1b2`, `6f25b042` and `b525bb2f` of the accessibility package.
+Where the permission system rejected a commit, the session committed the reviewed work: `1d25aa6d` of the sheet edits package, and `15b0a082`, `15b0a082` and `15b0a082` of the accessibility package.
 
 | Package | Commits | First and last |
 | --- | --- | --- |
-| Sheet edits and the sheet checker | 20 | `3d38cf9d` to `e7a43a27` |
-| Sheet lowering | 15 | `d5becccd` to `a98e4d84` |
-| The Editor's panes and the replacement of a model | 16 | `cb54b126` to `3bb216fd` |
-| App state | 13 | `4473111d` to `c9d56a8f` |
-| henad-explore, henad-cli and the docs | 12 | `64f47f1f` to `fba97bb9` |
-| The runners | 10 | `20779bcf` to `0f1737fd` |
-| Graph models | 13 | `02a7cfdf` to `82f6ca1c` |
-| Editor UX | 27 | `39440ad8` to `893f1064` |
-| Accessibility | 11 | `b31710f7` to `b525bb2f` |
+| Sheet edits and the sheet checker | 20 | `1d25aa6d` to `1d25aa6d` |
+| Sheet lowering | 15 | `58a243a6` to `58a243a6` |
+| The Editor's panes and the replacement of a model | 16 | `068cc697` to `068cc697` |
+| App state | 13 | `bbdfa723` to `bbdfa723` |
+| henad-explore, henad-cli and the docs | 12 | `4bd010b0` to `4bd010b0` |
+| The runners | 10 | `a7075caa` to `a7075caa` |
+| Graph models | 13 | `774744dc` to `774744dc` |
+| Editor UX | 27 | `26aa24c2` to `26aa24c2` |
+| Accessibility | 11 | `15b0a082` to `15b0a082` |
 
-The isolated full check passed at `82f6ca1c`, after the first seven packages, with 2,360 tests.
+The isolated full check passed at `774744dc`, after the first seven packages, with 2,360 tests.
 
 #### Sheet edits and the sheet checker
 
-- `bbde2dc6`: AddLine inside a block that a file lists inside itself, or inside two blocks that list each other, returns.
+- `1d25aa6d`: AddLine inside a block that a file lists inside itself, or inside two blocks that list each other, returns.
   The walk up the blocks stops after as many blocks as the card has lines.
-- `8f60e55e`: an edit is rejected when its text would nest past the reader's 24 levels, with line tables counted at depth 5, or pass the sheet size limit.
+- `1d25aa6d`: an edit is rejected when its text would nest past the reader's 24 levels, with line tables counted at depth 5, or pass the sheet size limit.
   Every accepted edit reads back.
-- `3d38cf9d`: renaming a kind of agent is rejected when its tick card id would pass 48 bytes.
-- `95529378`: a world past 16,384 cells a side, or 10,000 for agents, and a population past 10,000,000 are errors at `[world]` and `[[agents]]` in the sheet's words, quoting the file's integer.
+- `1d25aa6d`: renaming a kind of agent is rejected when its tick card id would pass 48 bytes.
+- `1d25aa6d`: a world past 16,384 cells a side, or 10,000 for agents, and a population past 10,000,000 are errors at `[world]` and `[[agents]]` in the sheet's words, quoting the file's integer.
   They were errors at `[sheet]` in the graph's words.
-- `831270b1` and `8116f587`: the checker checks the value types of Set, Keep between and comparisons, at the line.
-  The review's `8116f587` lets an Arrow property take a place.
+- `1d25aa6d` and `1d25aa6d`: the checker checks the value types of Set, Keep between and comparisons, at the line.
+  The review's `1d25aa6d` lets an Arrow property take a place.
   The first version rejected it, though the lowering builds it.
-- `819e299e` and `59a083c7`: a missing value of a Depending on skips the line, a value keyed by no state is an error at the line, and a property with no states reports one error.
-- `0284a719`: a Calculate past 16 values in one chain of operations is an error at its line, "Group some of them in parentheses".
-- `cbbe340d`: a delete that empties a one of or none of list blanks its slot, and a hand-written `[]` reads as a blank.
+- `1d25aa6d` and `1d25aa6d`: a missing value of a Depending on skips the line, a value keyed by no state is an error at the line, and a property with no states reports one error.
+- `1d25aa6d`: a Calculate past 16 values in one chain of operations is an error at its line, "Group some of them in parentheses".
+- `1d25aa6d`: a delete that empties a one of or none of list blanks its slot, and a hand-written `[]` reads as a blank.
   A `none of []` line no longer fires every tick.
-- `5147d1f3`: a delete that empties a formula inside a slot, such as Trail falloff in the ants' Leave lines, blanks the slot for the card's picker.
-- `6a861dcd`, `44b34018` and `dbc52450`: a line that reads its own result gets its own note, "Uses its own result. Choose another value.", and its chip takes a tooltip of its own.
+- `1d25aa6d`: a delete that empties a formula inside a slot, such as Trail falloff in the ants' Leave lines, blanks the slot for the card's picker.
+- `1d25aa6d`, `1d25aa6d` and `1d25aa6d`: a line that reads its own result gets its own note, "Uses its own result. Choose another value.", and its chip takes a tooltip of its own.
   Notes name an unnamed result as its chip does: an unnamed Count by its automatic name, any other by its line.
   The review found the implementer's version still quoting a whole sentence, "Uses line 4 is yes, which is below this line".
-- `eaee283b`: Blank reads "An empty model to build on." in both worlds, and `54ac7aa3` adds an article to the skip notes of a select, "Not run yet: choose a unit of time".
+- `1d25aa6d`: Blank reads "An empty model to build on." in both worlds, and `1d25aa6d` adds an article to the skip notes of a select, "Not run yet: choose a unit of time".
 
 #### Sheet lowering
 
-- `a9807a6d`: a division in a Calculate whose divisor is 0 returns 0, per component for an arrow over an arrow.
-- `3c08005e`: in a world of agents with walls, a look at agents sees no one across an edge, and its offset and distance to them do not wrap.
-- `812adc36` and `c44ed383`: a look at agents that reads an earlier look, through other lines or through the When around a line it reads, takes a later fold of its own.
+- `58a243a6`: a division in a Calculate whose divisor is 0 returns 0, per component for an arrow over an arrow.
+- `58a243a6`: in a world of agents with walls, a look at agents sees no one across an edge, and its offset and distance to them do not wrap.
+- `58a243a6` and `58a243a6`: a look at agents that reads an earlier look, through other lines or through the When around a line it reads, takes a later fold of its own.
   Such a sheet builds, where it failed with a node cycle before.
   The review found the When case missing from the first fix.
-- `6584aec7`: a competing group of rates of parameters and numbers, with no "for each", keeps each share to 2^-32, through `rng.threshold` and one `rand.bits` draw.
-- `f531b734` and `93482704`: a Steer towards a value that a Calculate works out from an average, largest or smallest of no one adds nothing.
+- `58a243a6`: a competing group of rates of parameters and numbers, with no "for each", keeps each share to 2^-32, through `rng.threshold` and one `rand.bits` draw.
+- `58a243a6` and `58a243a6`: a Steer towards a value that a Calculate works out from an average, largest or smallest of no one adds nothing.
   The first fix also stopped a Choose with an explicit fallback, such as "average when count > 0, otherwise 0.5", from steering, and the review narrowed it.
-- `ea5e5c3a`: the checker warns at a Leave of a number or a parameter on a ground property that adds its marks up, when the kind's largest population on one cell can leave 65,536 or more in a tick.
+- `58a243a6`: the checker warns at a Leave of a number or a parameter on a ground property that adds its marks up, when the kind's largest population on one cell can leave 65,536 or more in a tick.
   The docs state the 2^-16 rounding and the wrap.
-- `d8c2d7e4`: a Move to below another Move to that can apply to the same agent reads "otherwise (when line N does not apply)".
-- `6139e37d`: a rate note under an "otherwise" line ends "This chance holds only when line N does not apply.", and the mean stay is left out where another Become of the property leaves the same state.
-- `d0884b19`: a note under a Steer towards inside a Repeat says that each time through the Repeat steers from the value at the start of the tick, and the steers add up.
-- `c319cedf`: a Steer's value takes the type of the property it steers, and a largest or smallest summary's value must be a number, both checked at the line.
-- `d5becccd`: a rate worked out per element with no "for each" takes the chance 0 at a hazard of 0 on every device.
+- `58a243a6`: a Move to below another Move to that can apply to the same agent reads "otherwise (when line N does not apply)".
+- `58a243a6`: a rate note under an "otherwise" line ends "This chance holds only when line N does not apply.", and the mean stay is left out where another Become of the property leaves the same state.
+- `58a243a6`: a note under a Steer towards inside a Repeat says that each time through the Repeat steers from the value at the start of the tick, and the steers add up.
+- `58a243a6`: a Steer's value takes the type of the property it steers, and a largest or smallest summary's value must be a number, both checked at the line.
+- `58a243a6`: a rate worked out per element with no "for each" takes the chance 0 at a hazard of 0 on every device.
 
 #### The Editor's panes and the replacement of a model
 
-- `cb54b126`: a sheet field left by a click on another control commits in the same frame as that control, and both edits are kept as one Undo step each.
-- `853d4ee5`: a parameter slider that only takes the keyboard focus edits nothing.
-- `e42ea147`: Escape in a one-line sheet field puts back the sheet's value.
-- `50e4e467` and `53dd3acc`: the share of the ground kept each tick stays from 0 to 1 when typed in its chip, and a share outside 0 to 1, as a number or through its parameter's range, is an error.
+- `068cc697`: a sheet field left by a click on another control commits in the same frame as that control, and both edits are kept as one Undo step each.
+- `068cc697`: a parameter slider that only takes the keyboard focus edits nothing.
+- `068cc697`: Escape in a one-line sheet field puts back the sheet's value.
+- `068cc697` and `068cc697`: the share of the ground kept each tick stays from 0 to 1 when typed in its chip, and a share outside 0 to 1, as a number or through its parameter's range, is an error.
   The review added the error on finding two paths the first fix left open.
-- `4615287a` and `0aeef831`: the state picker of a Become and of a count or look at agents on an agent card offers the agent's own states.
-  The first fix dropped the ground's states from a count over the cells around, and the review's `0aeef831` restores them.
-- `fbf4810d`: two state names swapped, or renamed in a chain, in the property form are kept.
-- `d13bcb1b`: a node graph copy whose sheet beside it holds an error reads as changed since the conversion, and its Open button opens that sheet.
-- `2e151fda`: converting a sheet again asks before it drops an edited copy beside it.
-- `c7094ec7` and `f19175c2`: a model edited while the Open model dialog is open asks before the picked file replaces it, and a save that reports after its model was replaced names no model.
-- `0a806b30` and `74a8b840`: Apply builds nothing while the Seed field holds no seed, and a run to a tick behind the current one that Build rejects leaves the run where it is.
-  The review's `74a8b840` stops the run to that tick from asking the runner again on every snapshot.
+- `068cc697` and `068cc697`: the state picker of a Become and of a count or look at agents on an agent card offers the agent's own states.
+  The first fix dropped the ground's states from a count over the cells around, and the review's `068cc697` restores them.
+- `068cc697`: two state names swapped, or renamed in a chain, in the property form are kept.
+- `068cc697`: a node graph copy whose sheet beside it holds an error reads as changed since the conversion, and its Open button opens that sheet.
+- `068cc697`: converting a sheet again asks before it drops an edited copy beside it.
+- `068cc697` and `068cc697`: a model edited while the Open model dialog is open asks before the picked file replaces it, and a save that reports after its model was replaced names no model.
+- `068cc697` and `068cc697`: Apply builds nothing while the Seed field holds no seed, and a run to a tick behind the current one that Build rejects leaves the run where it is.
+  The review's `068cc697` stops the run to that tick from asking the runner again on every snapshot.
 
 #### App state
 
-- `4473111d`: at the install of replaced model code, a value still at the old default takes the new default, and any other value is carried by id.
-- `c95cdfec`: a replacement whose parameters, stats or actions changed keeps the Sweep tab's draft, each row and each scheduled action by id.
-- `a8a198b2`: Apply over a run whose Rebuild or Build is disabled reads "Model build failed. Fix the problem below."
-- `4e955aa4`: Save recording names the file after the model recorded and the tick the recording stopped at.
-- `140c3c37`: Run beside a paused node graph preview says to press Apply in the Editor.
-- `c7fc3954`: model names that differ only in letter case count as the same name, and each shows its id.
-- `cf042a8a`: the Model tab's Identity rows gain Exact replay, with a cross and "Two runs with the same seed can differ." for a model that does not replay exactly.
-- `c1668c18`: in a browser, closing or reloading the tab over unsaved Editor edits makes the browser ask before it leaves the page.
-- `1abb36c0` and `c1e401ae`: a playing run, or a run to a tick, pauses while a modal dialog is open and goes on once it closes.
-- `cdc20f40`: Cmd+Q on macOS asks about unsaved Editor edits, as closing the window does.
+- `bbdfa723`: at the install of replaced model code, a value still at the old default takes the new default, and any other value is carried by id.
+- `bbdfa723`: a replacement whose parameters, stats or actions changed keeps the Sweep tab's draft, each row and each scheduled action by id.
+- `bbdfa723`: Apply over a run whose Rebuild or Build is disabled reads "Model build failed. Fix the problem below."
+- `bbdfa723`: Save recording names the file after the model recorded and the tick the recording stopped at.
+- `bbdfa723`: Run beside a paused node graph preview says to press Apply in the Editor.
+- `bbdfa723`: model names that differ only in letter case count as the same name, and each shows its id.
+- `bbdfa723`: the Model tab's Identity rows gain Exact replay, with a cross and "Two runs with the same seed can differ." for a model that does not replay exactly.
+- `bbdfa723`: in a browser, closing or reloading the tab over unsaved Editor edits makes the browser ask before it leaves the page.
+- `bbdfa723` and `bbdfa723`: a playing run, or a run to a tick, pauses while a modal dialog is open and goes on once it closes.
+- `bbdfa723`: Cmd+Q on macOS asks about unsaved Editor edits, as closing the window does.
   The app menu's Quit item, which quit past the dialog, is removed through objc2-app-kit, at versions the lock already held.
 
 #### henad-explore, henad-cli and the docs
 
-- `64f47f1f`: a search candidate the device cannot hold is never built.
+- `4bd010b0`: a search candidate the device cannot hold is never built.
   Its runs are recorded `refused`, with the reasons in the note in the sheet's words.
   Before, the candidate was built and ended `panicked`, with pass names and a Rust source path in its note.
-  `henad_explore::probe::ShortfallWords` words the reasons, and `f9b5c360` re-exports it from the facade.
-- `e5f2433c`: `--export` or `--export-stats` naming one of the `--model-file` paths is rejected before anything runs.
+  `henad_explore::probe::ShortfallWords` words the reasons, and `4bd010b0` re-exports it from the facade.
+- `4bd010b0`: `--export` or `--export-stats` naming one of the `--model-file` paths is rejected before anything runs.
   Before, the export overwrote the sheet.
-- `47f4f4db`: a `note:` on stderr names each model file whose model the command does not run.
-- `63d2f4f9` and `456f9e31`: a resume with no author text but the recorded code keeps the recorded sheet text, and a resume refusal reads "cannot resume the runs in the directory".
-- `2a47d824`, `41544555`, `5d12b4ce`, `eea60a99` and `fba97bb9`: the CLI reference on exports of model files, the Edit model line of the Editor guide, the private doc links that `cargo doc --document-private-items` reported, and a section "Limits of a graph model" in the model file reference.
+- `4bd010b0`: a `note:` on stderr names each model file whose model the command does not run.
+- `4bd010b0` and `4bd010b0`: a resume with no author text but the recorded code keeps the recorded sheet text, and a resume refusal reads "cannot resume the runs in the directory".
+- `4bd010b0`, `4bd010b0`, `4bd010b0`, `4bd010b0` and `4bd010b0`: the CLI reference on exports of model files, the Edit model line of the Editor guide, the private doc links that `cargo doc --document-private-items` reported, and a section "Limits of a graph model" in the model file reference.
 
 #### The runners
 
-- `fdef518c` and `ce295214`: a GPU snapshot goes out once its stats readback has landed, and its tick, stats, fire counts and display agree, capped or uncapped.
+- `a7075caa` and `a7075caa`: a GPU snapshot goes out once its stats readback has landed, and its tick, stats, fire counts and display agree, capped or uncapped.
   A capped batch that holds a whole 16 ms interval always ends in a snapshot, and at 1 to 60 ticks a second every tick is published.
   The adaptive batch size of a capped run times each batch to the end of its work.
-- `20779bcf`: the CPU runner's run-to samples prepare the view first, as a publish does.
+- `a7075caa`: the CPU runner's run-to samples prepare the view first, as a publish does.
   Before, the component stats of `team_assembly` in the Charts tab were stale.
-- `e96a7b47` and `ab771024`: a resume, and a merge of shards, reject a folder whose manifest records another time unit or tick-length parameter.
+- `a7075caa` and `a7075caa`: a resume, and a merge of shards, reject a folder whose manifest records another time unit or tick-length parameter.
   The schema hash leaves both out.
-- `8e8d5b28`: the refusal names a "tick-length parameter".
+- `a7075caa`: the refusal names a "tick-length parameter".
 
 #### Graph models
 
-- `02a7cfdf` and `06b773df`: messages with a count of 1 read "1 byte", "1 component", "1 argument", "1 error" and "1 value".
-- `2cab6396`: an integer division or remainder by a constant 0 builds and returns the documented result, where naga rejected it as a fault of the compiler.
-- `a4a0fcc7` and `31e565bd`: a field's `finish` is checked as the update runs it, its cost included, and each fault is reported at the file's tables.
+- `774744dc` and `774744dc`: messages with a count of 1 read "1 byte", "1 component", "1 argument", "1 error" and "1 value".
+- `774744dc`: an integer division or remainder by a constant 0 builds and returns the documented result, where naga rejected it as a fault of the compiler.
+- `774744dc` and `774744dc`: a field's `finish` is checked as the update runs it, its cost included, and each fault is reported at the file's tables.
   The update calls `finish` with a key of the field's own, and two fields that share a `finish` with a draw now draw different numbers.
-- `0887b471` and `362ba322`: a `carry` accumulator of a cell, a layer or an agent builds.
-- `5527be4c`: `space.delta` and `space.dist_sq` on the GPU reduce a difference between points more than a world and a half apart as the host does.
+- `774744dc` and `774744dc`: a `carry` accumulator of a cell, a layer or an agent builds.
+- `774744dc`: `space.delta` and `space.dist_sq` on the GPU reduce a difference between points more than a world and a half apart as the host does.
   `agent.radius_fold` still corrects a difference once on the GPU, and its semantics now say so.
-  The review's `dc1f795d` words the agents it misses as a world and a half or more away on an axis, where the first text said more than a world.
-- `e46fb633`: a chance that is a parameter or a typed number, with no count, draws through a 32-bit threshold, and a chance of 1 or more always holds.
-- `c95926a7`: every node of every graph starter has a place in the `[editor]` region, and no node lies over another.
+  The review's `774744dc` words the agents it misses as a world and a half or more away on an axis, where the first text said more than a world.
+- `774744dc`: a chance that is a parameter or a typed number, with no count, draws through a 32-bit threshold, and a chance of 1 or more always holds.
+- `774744dc`: every node of every graph starter has a place in the `[editor]` region, and no node lies over another.
 
 #### Editor UX
 
-- `39440ad8`: the add menus of the Card pane and a block's "+ Add inside" menu scroll inside the window.
-- `426ab077`: inside a Repeat the "+ Add inside" menu shows Count, Look around and Pick a cell greyed out, with the reason as the tooltip.
-- `afca0840` and `ca149b42`: a start's chance offers no rate parameter, and the parameter pickers of both panes leave out a parameter whose range the check rejects for that use.
-- `57678205`: a state picker with no state to offer names the section to add one under, Agents, Agents or Ground, or Cells.
-- `e608a064` and `c73a9495`: text that is no number in a Size field reads "Type a size from 1 to 16384 cells.", and a tick length of 0 or less is rejected with a message.
-- `bbbb7035`: a changed Starts as reads "Press Build in the Playback tab to see the change.", naming a control that exists.
-- `d98c9d79` and `3251ec11`: the New model dialog's list scrolls in a short window, and a long model name ends in an ellipsis with its full name as the tooltip.
-- `d10fa5ed` and `7edaaeae`: the preview line past tick 0 drops "Press Play", and while the sheet or graph holds an error, it warns that the world shows the model before the last change.
+- `26aa24c2`: the add menus of the Card pane and a block's "+ Add inside" menu scroll inside the window.
+- `26aa24c2`: inside a Repeat the "+ Add inside" menu shows Count, Look around and Pick a cell greyed out, with the reason as the tooltip.
+- `26aa24c2` and `26aa24c2`: a start's chance offers no rate parameter, and the parameter pickers of both panes leave out a parameter whose range the check rejects for that use.
+- `26aa24c2`: a state picker with no state to offer names the section to add one under, Agents, Agents or Ground, or Cells.
+- `26aa24c2` and `26aa24c2`: text that is no number in a Size field reads "Type a size from 1 to 16384 cells.", and a tick length of 0 or less is rejected with a message.
+- `26aa24c2`: a changed Starts as reads "Press Build in the Playback tab to see the change.", naming a control that exists.
+- `26aa24c2` and `26aa24c2`: the New model dialog's list scrolls in a short window, and a long model name ends in an ellipsis with its full name as the tooltip.
+- `26aa24c2` and `26aa24c2`: the preview line past tick 0 drops "Press Play", and while the sheet or graph holds an error, it warns that the world shows the model before the last change.
   The review took "your" out of both warnings, as the style guide asks.
-- `f3c21199` and `5dd742e7`: the Sweep tab warns while the Editor holds a model no Apply has installed and the swept model was not built from it.
-- `6d826566`: Frame all, and a new canvas, fit a graph down to zoom 0.1.
+- `26aa24c2` and `26aa24c2`: the Sweep tab warns while the Editor holds a model no Apply has installed and the swept model was not built from it.
+- `26aa24c2`: Frame all, and a new canvas, fit a graph down to zoom 0.1.
 
 #### Accessibility
 
-- `a6a014e2`: the pickers and menus of the sheet editor read as menus: a dialog named by its title, the title a heading, and each item a menu item in a group labelled by its heading.
-- `b31710f7`: the New model, New parameter, Rebuild model, conversion and unsaved changes dialogs are marked modal, with their title as a heading.
-- `364e1467`, `c8f7b640` and `b58ba1b2`: ↓ and ↑ move through an open overlay's items and wrap at both ends, and Escape returns the focus to the control that opened it.
+- `15b0a082`: the pickers and menus of the sheet editor read as menus: a dialog named by its title, the title a heading, and each item a menu item in a group labelled by its heading.
+- `15b0a082`: the New model, New parameter, Rebuild model, conversion and unsaved changes dialogs are marked modal, with their title as a heading.
+- `15b0a082`, `15b0a082` and `15b0a082`: ↓ and ↑ move through an open overlay's items and wrap at both ends, and Escape returns the focus to the control that opened it.
   The review found the keys escaping an open picker from its Use button, and only a text field now keeps them.
-- `59d9bf33`: an overlay opens under its control, above it where it does not fit, and otherwise on the side with more room, scrolling at that height.
-- `4802a51c`, `b58ba1b2` and `6f25b042`: a tooltip in sheet mode, and on the Editor's header buttons, also shows on keyboard focus, never while an overlay is open.
+- `15b0a082`: an overlay opens under its control, above it where it does not fit, and otherwise on the side with more room, scrolling at that height.
+- `15b0a082`, `15b0a082` and `15b0a082`: a tooltip in sheet mode, and on the Editor's header buttons, also shows on keyboard focus, never while an overlay is open.
   The review found the focus tooltip catching clicks meant for the control under it.
-- `61ff86a5`: a sheet's button beside the preview shows what it does as its tooltip and accessible description.
-- `b525bb2f` trims `agents/henad-app-sheet.md` back under 40,000 characters.
+- `15b0a082`: a sheet's button beside the preview shows what it does as its tooltip and accessible description.
+- `15b0a082` trims `agents/henad-app-sheet.md` back under 40,000 characters.
 
 ### Results that changed on purpose
 
 The snapshot runs 39 models and model files at a fixed seed for 64 steps, two sweeps and six error runs through `henad-cli`.
-At `b525bb2f` it was compared with the baseline in use since record #107, taken before this work.
+At `15b0a082` it was compared with the baseline in use since record #107, taken before this work.
 No file of a deterministic model's statistics differs.
 The five runs that never replay exactly, stock `gpu_boids`, the boids graph fixture and starter, and the boids and bounded confidence sheets, differ as always.
 
@@ -401,10 +401,10 @@ A results folder written before the change will not resume.
 #### The isolated full checks
 
 The isolated full check runs every step of `./check.sh` and CI's two web clippy lines, 16 steps, with `HENAD_REQUIRE_GPU=1`, in a worktree with its own build directory.
-It passed 16 of 16 steps at `b7804e51`, the end of the string work, with 2,276 tests.
-It passed again at `82f6ca1c`, after the first seven fix packages, with 2,360 tests.
+It passed 16 of 16 steps at `eeecab4f`, the end of the string work, with 2,276 tests.
+It passed again at `774744dc`, after the first seven fix packages, with 2,360 tests.
 The Editor UX and accessibility packages merged after it, each with its crate checks and a snapshot identical outside the loose runs.
-It passed 16 of 16 steps a third time at `b525bb2f`, after every package, with 2,385 tests.
+It passed 16 of 16 steps a third time at `15b0a082`, after every package, with 2,385 tests.
 
 #### Each package
 
@@ -484,14 +484,14 @@ No file was added, removed or renamed by the 166 commits.
 
 ## State after
 
-- `37-node-editor` at `b525bb2f` holds 166 commits after `68447db5` and 829 after `e816b444`, and this record follows them.
-- 26 commits of the string work, `22036047` to `b7804e51` without `5cfd00be`, carry the maintainer's signature from a rebase.
+- `37-node-editor` at `15b0a082` holds 166 commits after `7e845bb3` and 829 after `bad936ba`, and this record follows them.
+- 26 commits of the string work, `eeecab4f` to `eeecab4f` without `eeecab4f`, carry the maintainer's signature from a rebase.
   Every other commit is unsigned.
 - Nothing was pushed, tagged or opened as a PR.
-  The remote's `37-node-editor` is at `e816b444`.
-- The isolated full check passed 16 of 16 steps at `b7804e51` with 2,276 tests, at `82f6ca1c` with 2,360, and at `b525bb2f` with 2,385.
-- The snapshot at `b525bb2f` keeps every deterministic model's statistics identical to the baseline, and its 44 other differences are the ones listed above.
-- The packages' changelog lines are folded into `CHANGELOG.md` in `74d340eb` and `49c9f0c9`, after `b525bb2f`: a fix to a feature new since 0.3.0 changes that feature's line, a fix to what 0.3.0 shipped goes under Fixed, and the 0.4 migration lines go under "Migrating to 0.4".
+  The remote's `37-node-editor` is at `bad936ba`.
+- The isolated full check passed 16 of 16 steps at `eeecab4f` with 2,276 tests, at `774744dc` with 2,360, and at `15b0a082` with 2,385.
+- The snapshot at `15b0a082` keeps every deterministic model's statistics identical to the baseline, and its 44 other differences are the ones listed above.
+- The packages' changelog lines are folded into `CHANGELOG.md` in `15b0a082` and `15b0a082`, after `15b0a082`: a fix to a feature new since 0.3.0 changes that feature's line, a fix to what 0.3.0 shipped goes under Fixed, and the 0.4 migration lines go under "Migrating to 0.4".
 - This record changes only the record and its nav entry, and `uv run zensical build` builds the site with it.
 
 ## Issues found & future directions
@@ -586,7 +586,7 @@ No file was added, removed or renamed by the 166 commits.
 
 #### Smaller items
 
-- `c1668c18`, `1abb36c0` and `cdc20f40` warn in the wasm32 typecheck, until `68357827` drops a stale expectation.
+- `bbdfa723`, `bbdfa723` and `bbdfa723` warn in the wasm32 typecheck, until `bbdfa723` drops a stale expectation.
   It matters only when bisecting.
 - The add menus of a button card were not checked for Count, Look around and Pick a cell.
   The checker rejects them on a card that runs once.
@@ -643,7 +643,7 @@ No file was added, removed or renamed by the 166 commits.
   Later rebases ran with signing off.
 - **Commit messages** average 5.12 words, against the 4 the maintainer requested, and none passes six.
 - **Topic files near their limit.**
-  `agents/henad-app-sheet.md` held 40,020 characters before `b525bb2f` trimmed it to 39,943, and needs a split by subsystem before anything more goes in.
+  `agents/henad-app-sheet.md` held 40,020 characters before `15b0a082` trimmed it to 39,943, and needs a split by subsystem before anything more goes in.
   `agents/henad-app.md` holds 35,349.
 - **The push, the signing and the release** stay with the maintainer.
 
