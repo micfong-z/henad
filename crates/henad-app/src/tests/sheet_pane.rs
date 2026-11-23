@@ -1584,6 +1584,51 @@ fn a_starts_chance_offers_no_parameter_the_check_refuses_from_its_chip_or_use_a_
     }
 }
 
+/// The picker of a chance chip in the Cells table opens with its Number box focused, as the pickers of the card's chips
+/// do, so a number typed at once replaces the parameter. ↓ from the empty box moves to the first item.
+#[test]
+fn a_starts_chance_chip_opens_its_picker_with_the_number_box_focused() {
+    use crate::tests::panes::is_open;
+
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "sir.toml");
+    // The chip of row 1's parameter, the leftmost of its name: the card shows one too.
+    let chip = harness
+        .settle()
+        .into_iter()
+        .filter(|node| node.label == "Initial infected" && node.role == egui::accesskit::Role::Button)
+        .filter_map(|node| node.bounds)
+        .min_by(|first, second| first.left().total_cmp(&second.left()))
+        .expect("the chip of row 1");
+    // The box takes the focus each time the picker opens.
+    for _ in 0..2 {
+        harness.click_at(chip.center());
+        assert!(is_open(&mut harness, "Choose a chance"));
+        assert_eq!(
+            harness.focused,
+            NumberUse::Chance.box_hint(),
+            "the Number box takes the focus"
+        );
+        harness.press(Key::ArrowDown, Modifiers::NONE);
+        assert_eq!(harness.focused, "Initial infected", "↓ from the empty box");
+        harness.press(Key::Escape, Modifiers::NONE);
+        assert!(!is_open(&mut harness, "Choose a chance"));
+    }
+    harness.click_at(chip.center());
+    type_and_enter(&mut harness, "0.02");
+    let starts = sheet(&harness).document().cells.as_ref().expect("cells")[0]
+        .starts_as
+        .clone()
+        .expect("a start");
+    assert_eq!(
+        starts.rows[0].chance,
+        Slot::Filled(SheetValue::Literal(SheetLiteral::Number(0.02))),
+        "the typed chance replaces the parameter"
+    );
+}
+
 /// A delete that empties formulas the editor cannot write again asks first, and names the lines and the measures whose
 /// formulas it empties: the Parameters table's ×, Delete property and the line menu's Delete. Cancel and Escape keep
 /// the item, Delete deletes it, and Undo brings back the sheet as it was. A delete that the card can rebuild, of a

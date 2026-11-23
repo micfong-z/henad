@@ -266,8 +266,10 @@ which shows on the anchor as open, closing on a choice, a click outside or Escap
 card picker's shell (`picker_overlay`: an `overlay` `PICKER_WIDTH` wide named as a `Dialog` by its
 title), its `PickerItem`s, `Choice`s and group rows (`groups_ui`, empty groups left out), and its
 parameter items (`parameter_items` of the field's `number_use`, as the card's pickers offer), then
-"New parameter…" and a Number box 120 points wide named by its hint, its text kept under
-`ui.id()` with "henad_number_box".
+"New parameter…" and a Number box 120 points wide named by its hint, in the picker's footer. The
+box is the card picker's (`number_box_ui`, its text kept under the picker's id), focused as the
+picker opens and afresh each time it opens, and ↓ from the empty box moves to the first item
+(`a_starts_chance_chip_opens_its_picker_with_the_number_box_focused`).
 
 `card_pane.rs` and `picker.rs` draw and edit the cards, which `agents/henad-app-card.md` describes.
 

@@ -703,6 +703,71 @@ fn the_number_box_keeps_the_arrow_keys_and_its_use_button_passes_them_to_the_ite
     }
 }
 
+/// An empty Number box passes the arrow keys to the picker's items, down to the first and up to the last. Once it holds
+/// text, the keys move its text cursor.
+#[test]
+fn an_empty_number_box_passes_the_arrow_keys_to_the_items() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "game_of_life.toml");
+    let picker = "Choose a value";
+    for (key, item) in [(Key::ArrowDown, "Alive neighbours"), (Key::ArrowUp, NEW_PARAMETER)] {
+        click_on_line(&mut harness, "Line 2", "Alive neighbours");
+        assert!(is_open(&mut harness, picker));
+        assert_eq!(harness.focused, NUMBER_BOX_HINT, "the Number box takes the focus");
+        harness.press(key, Modifiers::NONE);
+        assert!(focus_is_an_item_of(&mut harness, picker), "{key:?} moves to an item");
+        assert_eq!(harness.focused, item, "{key:?} from the empty box");
+        harness.press(Key::Escape, Modifiers::NONE);
+        assert!(!is_open(&mut harness, picker));
+    }
+    click_on_line(&mut harness, "Line 2", "Alive neighbours");
+    harness.frame(vec![egui::Event::Text("4".to_owned())]);
+    for key in [Key::ArrowDown, Key::ArrowUp] {
+        harness.press(key, Modifiers::NONE);
+        assert_eq!(
+            harness.focused, NUMBER_BOX_HINT,
+            "{key:?} moves the text cursor of a box with text"
+        );
+    }
+    harness.press(Key::Escape, Modifiers::NONE);
+}
+
+/// A picker whose Number box comes last, the value left of a comparison, focuses the box on open too.
+#[test]
+fn a_picker_with_its_number_box_last_focuses_the_box() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "game_of_life.toml");
+    click_on_line(&mut harness, "Line 2", "Alive neighbours");
+    assert!(is_open(&mut harness, "Choose a value"));
+    assert_eq!(harness.focused, NUMBER_BOX_HINT, "the Number box takes the focus");
+    type_and_enter(&mut harness, "4");
+    assert_eq!(
+        line_text(&mut harness, "Line 2"),
+        "Become Alive from Dead, when 4 is 3",
+        "the typed number fills the value"
+    );
+
+    // A picker that scrolls keeps its focused box in view under its list.
+    open_starter(&mut harness, "ants.toml");
+    click_on_line(&mut harness, "Line 11", "Site reward");
+    let nodes = harness.settle();
+    assert_eq!(harness.focused, NUMBER_BOX_HINT, "the Number box takes the focus");
+    let picker = bounds_of(&nodes, Role::Dialog, "Choose a value");
+    let field = nodes
+        .iter()
+        .find(|node| node.role == Role::TextInput && node.label == NUMBER_BOX_HINT)
+        .and_then(|node| node.bounds)
+        .expect("the Number box");
+    assert!(
+        picker.contains_rect(field),
+        "the box {field:?} shows in the picker {picker:?}"
+    );
+}
+
 #[test]
 fn a_tooltip_shows_on_keyboard_focus_but_not_while_a_menu_is_open() {
     let Some(mut harness) = Harness::tall() else {

@@ -75,6 +75,9 @@ const OVERLAY_DETAIL: f32 = 11.5;
 /// Key in egui temp data of the rows of the overlay being drawn, and with an overlay's id of the rows it drew last.
 const OVERLAY_ROWS: &str = "henad_overlay_rows";
 
+/// Salt of the id under which a box of an overlay keeps whether it holds no text, below the box's id.
+const EMPTY_BOX: &str = "henad_overlay_empty_box";
+
 /// Key in egui temp data of whether the last press was a key rather than a pointer button.
 const KEY_PRESSED_LAST: &str = "henad_key_pressed_last";
 
@@ -224,7 +227,8 @@ pub fn overlay<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// first and back, and from outside the overlay, or from a button of the overlay other than a row, into its first or
 /// its last row.
 ///
-/// A text field of the overlay keeps the keys while it holds the focus. The keys move nothing else in that frame.
+/// A text field of the overlay keeps the keys while it holds the focus, unless it is a box marked empty by
+/// [`mark_empty_box`]. The keys move nothing else in that frame.
 fn move_through_rows(ui: &Ui, drawn: Id) {
     let rows: Vec<Id> = ui.data(|data| data.get_temp(drawn)).unwrap_or_default();
     let Some(last) = rows.len().checked_sub(1) else {
@@ -242,13 +246,15 @@ fn move_through_rows(ui: &Ui, drawn: Id) {
     }
     let focused = ui.memory(|memory| memory.focused());
     let index = focused.and_then(|id| rows.iter().position(|row| *row == id));
-    // A text field moves its cursor with the keys. Every text field stores its state under its id.
+    // A text field moves its cursor with the keys. Every text field stores its state under its id. An empty box has no
+    // text to move through, and passes the keys on to the rows.
     let field_inside = |id: Id| {
         TextEdit::load_state(ui.ctx(), id).is_some()
             && ui
                 .ctx()
                 .read_response(id)
                 .is_some_and(|response| response.layer_id == ui.layer_id())
+            && !ui.data(|data| data.get_temp(id.with(EMPTY_BOX))).unwrap_or(false)
     };
     if index.is_none() && focused.is_some_and(field_inside) {
         return;
@@ -263,6 +269,12 @@ fn move_through_rows(ui: &Ui, drawn: Id) {
         memory.request_focus(rows[target]);
         memory.move_focus(egui::FocusDirection::None);
     });
+}
+
+/// Marks the box `id` of an overlay as holding no text while `empty` is set. The down and up arrow keys then move from
+/// the box to the overlay's first or last row ([`overlay`]), as from a button of the overlay.
+pub fn mark_empty_box(ui: &Ui, id: Id, empty: bool) {
+    ui.data_mut(|data| data.insert_temp(id.with(EMPTY_BOX), empty));
 }
 
 /// A tooltip of a control that shows while the keyboard holds the control's focus, as well as under the pointer.

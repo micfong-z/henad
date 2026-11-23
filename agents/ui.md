@@ -117,7 +117,8 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     opens at the top of the window and takes the window's height. The fit uses the overlay's height
     in the frame before, and its room (`overlay_room`) stays in egui temp data under its id, inside
     `OVERLAY_SCREEN_GAP` of the window's edges. An add menu's items scroll under its title in a
-    scroll area as tall as the room leaves (`overlay_items`). A picker of
+    scroll area as tall as the room leaves (`overlay_items`). A picker that scrolls keeps a Number
+    box that comes last, and its Remove item, under its scroll area. A picker of
     either pane is `widgets::PICKER_WIDTH` (300 points) wide at least, its words wrapping at that
     width, so pickers open as wide as each other. A select's list and a menu take their content's
     width. In the AccessKit tree a picker or an add menu is a group of role `Dialog` named by its
@@ -129,8 +130,9 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     (`move_through_rows`, over the rows `overlay_item` recorded in the frame before): to the next or
     the one before, round at either end, and from outside the overlay into its first or its last
     row. A text field of the overlay that holds the focus keeps the keys, the Number box included
-    (`TextEdit::load_state` tells a field from a button). From a button of the overlay other than a
-    row, such as Use beside the Number box, the keys move into the first or the last row, as from
+    (`TextEdit::load_state` tells a field from a button). A picker's box that holds no text, marked
+    by `mark_empty_box`, passes them on. From such a box, or from a button of the overlay other than
+    a row, such as Use beside the Number box, the keys move into the first or the last row, as from
     outside. A row that gains the focus outside its overlay's clip rect scrolls into view. A row
     in view does not call `scroll_to_me`, which would scroll the pane under an overlay that has no
     scroll area of its own. Escape closes an overlay and returns the focus to the control that

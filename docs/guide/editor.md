@@ -140,6 +140,9 @@ A chance takes a number from 0 to 1 or a percent such as 30%, and refuses anythi
 After a choice the keyboard moves to the next blank of the line.
 An empty state blank opens by itself, as does the upper number of "is less than … or more than …" after the lower one.
 Press <kbd>↓</kbd> and <kbd>↑</kbd> to move through the items of an open picker or menu, and <kbd>Escape</kbd> to close it and return to the control that opened it.
+A picker with a box to type a number opens with the keyboard in the box, so a number can be typed at once, and in a long picker the box stays in view under the list.
+In an empty box <kbd>↓</kbd> and <kbd>↑</kbd> move to the first and the last item.
+Once the box holds a number they move the text cursor, and <kbd>Tab</kbd> moves on to **Use**, from where they reach the items.
 A control's tooltip shows while the control has the keyboard focus, as well as under the pointer.
 
 A result takes a name from what it works out, such as "Alive neighbours" for a count of the Alive cells around me, and keeps following it until you rename it.

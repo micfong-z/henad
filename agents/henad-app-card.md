@@ -145,13 +145,18 @@ a name, with the ground's states on a card over agents only where `ground` holds
 `ground` holds), "any state" first for an old state, the States or Number properties, or a number's
 groups (`number_picker`: "From lines above" with "line N: [sentence]" under each result, "This
 cell's properties" as "my Food" with "this cell's Food", "Parameters" with value and unit, "New
-parameter…", and the Number box first and focused, or last for the value left of a comparison and
-a "for each" count). A chance reads in `NumberUse::Chance` and a rate in `NumberUse::Rate`, which
-refuse a chance outside 0 to 1 and a negative rate in the box. A typed list in a box of one number
-adds `LIST_IN_ONE_NUMBER`. A list blank offers the list box (`LIST_GROUP`, `LIST_HINT`, "2, 3" in
-one go, `read_numbers`), a filled item `REMOVE_FROM_LIST`, a "for each" `for_each_lead` and
-`REMOVE_FOR_EACH`. The Number box opens on a typed number as typed (`typed_text`), and a refused
-text keeps the box focused. The boxes start afresh each time the picker opens.
+parameter…", and the Number box first, or last for the value left of a comparison and a "for
+each" count). The Number box takes the focus as its picker opens, first or last, as the Sheet
+pane's box does. A last box and the Remove item are the picker's footer (`CardPicker::footer`),
+which `picker_overlay` draws under the scroll area of a picker that scrolls, its height of the frame
+before kept under `FOOTER_HEIGHT_ID`, so the focused box stays in view
+(`a_picker_with_its_number_box_last_focuses_the_box`, ants' line 11). A chance
+reads in `NumberUse::Chance` and a rate in `NumberUse::Rate`, which refuse a chance outside 0 to 1
+and a negative rate in the box. A typed list in a box of one number adds `LIST_IN_ONE_NUMBER`. A
+list blank offers the list box (`LIST_GROUP`, `LIST_HINT`, "2, 3" in one go, `read_numbers`), a
+filled item `REMOVE_FROM_LIST`, a "for each" `for_each_lead` and `REMOVE_FOR_EACH`. The Number box
+opens on a typed number as typed (`typed_text`), and a refused text keeps the box focused. The
+boxes start afresh each time the picker opens.
 `LineContext::results_above` offers the results of lines above, a result inside a When only to the
 lines after it inside that When. `choose_when(context, otherwise)` lists the yes or no results as
 "when [name]", then "Conditions" or "Or a new condition" with `ConditionItem`s and their grey lines,
@@ -301,7 +306,8 @@ and "Choose when", each settled once open, as the rows come from the frame befor
 when" over the list under the panes and in a scrolled picker, through `last_item_by_key`),
 `escape_returns_the_focus_from_a_select`,
 `the_number_box_keeps_the_arrow_keys_and_its_use_button_passes_them_to_the_items` (through
-`focus_is_an_item_of`),
+`focus_is_an_item_of`), `an_empty_number_box_passes_the_arrow_keys_to_the_items` (a box last, ↓ to
+the first item and ↑ to the last, and a typed number keeps them in the box),
 `a_tooltip_shows_on_keyboard_focus_but_not_while_a_menu_is_open` (an add button focused by Escape,
 then by a click), `the_new_model_button_shows_its_tooltip_on_keyboard_focus` (reached by Tab),
 `a_click_on_a_control_under_a_focus_tooltip_reaches_the_control` (a window 1000 points wide, where

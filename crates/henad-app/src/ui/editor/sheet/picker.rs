@@ -11,6 +11,8 @@
 //! A *result above* a line is the result of a line higher on its card. A result worked out inside a When is open only
 //! to the lines after it inside that When.
 
+use std::cell::Cell;
+
 use egui::{Color32, Frame, Id, Key, Popup, PopupCloseBehavior, Rect, Response, RichText, ScrollArea, TextEdit, Ui};
 use henad_core::metadata::TimeUnit;
 use henad_graph::sheet::check::changes_property;
@@ -41,8 +43,8 @@ use henad_graph::sheet::sentence::{
 };
 
 use super::widgets::{
-    NumberUse, OVERLAY_PADDING, OverlayItem, PICKER_WIDTH, color32, escape_to_anchor, menu_group, menu_item,
-    message_ui, overlay, overlay_group, overlay_title, placed, set_name,
+    NumberUse, OVERLAY_PADDING, OverlayItem, PICKER_WIDTH, color32, escape_to_anchor, mark_empty_box, menu_group,
+    menu_item, message_ui, overlay, overlay_group, overlay_title, placed, set_name,
 };
 use super::{accessible_group, find_property, over_agents, properties_of};
 
@@ -55,8 +57,17 @@ const LONG_PICKER: usize = 12;
 /// Salt of the id the Number box's text is kept under, below the picker's id.
 const NUMBER_BOX_ID: &str = "henad_card_number_box";
 
+/// Width in points of the Number box of a card's picker.
+const CARD_BOX_WIDTH: f32 = 140.0;
+
+/// Width in points of the Number box of a picker of the Sheet pane.
+const PANE_BOX_WIDTH: f32 = 120.0;
+
 /// Salt of the id the list box's text is kept under, below the picker's id.
 const LIST_BOX_ID: &str = "henad_card_list_box";
+
+/// Salt of the id the height of a picker's footer is kept under, below the picker's own.
+const FOOTER_HEIGHT_ID: &str = "henad_picker_footer_height";
 
 /// Value a choice in a picker puts in its place.
 #[derive(Debug, Clone, PartialEq)]
@@ -136,7 +147,7 @@ pub struct PickerGroup {
 pub struct NumberBox {
     /// Range the box reads numbers in.
     pub number_use: NumberUse,
-    /// Whether the box comes first and takes the focus. Otherwise it comes last.
+    /// Whether the box comes first. Otherwise it comes last. Either way the box takes the focus when the picker opens.
     pub first: bool,
     /// Text the box shows when the picker opens, a typed number as it was typed.
     pub typed: String,
@@ -197,7 +208,15 @@ impl CardPicker {
             .open_memory(None)
             .close_behavior(PopupCloseBehavior::IgnoreClicks);
         let long = self.groups.iter().map(|group| group.items.len()).sum::<usize>() > LONG_PICKER;
-        let shown = picker_overlay(ui, popup, &self.title, long, |ui| self.contents(ui, popup_id));
+        let title = Cell::new(Id::NULL);
+        let shown = picker_overlay(
+            ui,
+            popup,
+            &self.title,
+            long,
+            |ui| self.contents(ui, popup_id, &title),
+            |ui| self.footer(ui, popup_id, title.get()),
+        );
         let Some((choice, rect)) = shown else {
             *open = false;
             return None;
@@ -226,10 +245,11 @@ impl CardPicker {
         choice
     }
 
-    /// Draws what the picker offers, and returns the choice made.
-    fn contents(&self, ui: &mut Ui, popup_id: Id) -> Option<Choice> {
+    /// Draws what the picker offers above its [footer](Self::footer), keeps the id of its title in `title`, and returns
+    /// the choice made.
+    fn contents(&self, ui: &mut Ui, popup_id: Id, title: &Cell<Id>) -> Option<Choice> {
         let mut choice = None;
-        let title = overlay_title(ui, &self.title).id;
+        title.set(overlay_title(ui, &self.title).id);
         // The first group label right under the title shares the title's hairline.
         let mut under_title = self.lead.is_none();
         if let Some(lead) = &self.lead {
@@ -240,7 +260,7 @@ impl CardPicker {
         if let Some(number_box) = self.number_box.as_ref().filter(|number_box| number_box.first) {
             offered = true;
             under_title = false;
-            if let Some(literal) = number_box_ui(ui, popup_id, number_box) {
+            if let Some(literal) = number_box_ui(ui, popup_id, number_box, CARD_BOX_WIDTH) {
                 choice = Some(Choice::Value(SheetValue::Literal(literal)));
             }
         }
@@ -255,7 +275,7 @@ impl CardPicker {
         if let Some(clicked) = groups_ui(ui, &self.groups, self.current.as_deref(), under_title) {
             choice = Some(clicked);
         }
-        if self.new_parameter || self.number_box.as_ref().is_some_and(|number_box| !number_box.first) {
+        if self.new_parameter || self.last_box().is_some() {
             ui.add_space(4.0);
         }
         if self.new_parameter {
@@ -264,19 +284,30 @@ impl CardPicker {
                 label: NEW_PARAMETER,
                 ..OverlayItem::default()
             };
-            if menu_group(ui, title, |ui| menu_item(ui, &row)).clicked() {
+            if menu_group(ui, title.get(), |ui| menu_item(ui, &row)).clicked() {
                 choice = Some(Choice::NewParameter);
             }
         }
-        if let Some(number_box) = self.number_box.as_ref().filter(|number_box| !number_box.first) {
-            offered = true;
+        offered |= self.last_box().is_some() || self.remove.is_some();
+        if !offered {
+            ui.add(egui::Label::new(RichText::new(self.empty).weak()).wrap());
+        }
+        choice
+    }
+
+    /// Draws the Number box that comes last and the last item ("Remove from list" or "Remove for each"), those the
+    /// picker offers, and returns the choice made. `title` is the id of the picker's title.
+    ///
+    /// The footer sits under the scroll area of a picker that scrolls, so the focused box stays in view.
+    fn footer(&self, ui: &mut Ui, popup_id: Id, title: Id) -> Option<Choice> {
+        let mut choice = None;
+        if let Some(number_box) = self.last_box() {
             ui.add_space(4.0);
-            if let Some(literal) = number_box_ui(ui, popup_id, number_box) {
+            if let Some(literal) = number_box_ui(ui, popup_id, number_box, CARD_BOX_WIDTH) {
                 choice = Some(Choice::Value(SheetValue::Literal(literal)));
             }
         }
         if let Some(remove) = self.remove {
-            offered = true;
             ui.add_space(4.0);
             let row = OverlayItem {
                 label: remove,
@@ -286,10 +317,12 @@ impl CardPicker {
                 choice = Some(Choice::Remove);
             }
         }
-        if !offered {
-            ui.add(egui::Label::new(RichText::new(self.empty).weak()).wrap());
-        }
         choice
+    }
+
+    /// The Number box of the picker when it comes last, `None` for a picker whose box comes first or that has none.
+    fn last_box(&self) -> Option<&NumberBox> {
+        self.number_box.as_ref().filter(|number_box| !number_box.first)
     }
 }
 
@@ -321,18 +354,35 @@ impl ParameterPicker<'_> {
             .id(popup_id)
             .close_behavior(PopupCloseBehavior::CloseOnClickOutside);
         let long = self.document.parameters.len() > LONG_PICKER;
-        let shown = picker_overlay(ui, popup, self.title, long, |ui| {
-            let choice = self.contents(ui);
+        let close_on = |ui: &mut Ui, choice: Option<Choice>| {
             if choice.is_some() {
                 ui.close();
             }
             choice
-        });
+        };
+        let shown = picker_overlay(
+            ui,
+            popup,
+            self.title,
+            long,
+            |ui| {
+                let choice = self.contents(ui);
+                close_on(ui, choice)
+            },
+            |ui| {
+                let choice = self.footer(ui, popup_id);
+                close_on(ui, choice)
+            },
+        );
         escape_to_anchor(ui, anchor, popup_id, was_open);
+        if !Popup::is_id_open(ui.ctx(), popup_id) {
+            // The box starts afresh, and takes the focus, when the picker opens again.
+            ui.data_mut(|data| data.remove::<BoxDraft>(popup_id.with(NUMBER_BOX_ID)));
+        }
         shown?.0
     }
 
-    /// Draws what the picker offers, and returns the choice made.
+    /// Draws what the picker offers above its [footer](Self::footer), and returns the choice made.
     fn contents(&self, ui: &mut Ui) -> Option<Choice> {
         let title = overlay_title(ui, self.title).id;
         let parameters = PickerGroup {
@@ -348,10 +398,23 @@ impl ParameterPicker<'_> {
         if menu_group(ui, title, |ui| menu_item(ui, &row)).clicked() {
             choice = Some(Choice::NewParameter);
         }
+        choice
+    }
+
+    /// Draws the Number box of the picker `popup_id`, where the picker has one, and returns the number typed.
+    ///
+    /// The footer sits under the scroll area of a picker that scrolls, so the focused box stays in view.
+    fn footer(&self, ui: &mut Ui, popup_id: Id) -> Option<Choice> {
+        let mut choice = None;
         if self.number_box {
             ui.add_space(6.0);
             ui.spacing_mut().item_spacing.y = 4.0;
-            if let Some(literal) = parameter_number_box(ui, self.number_use) {
+            let number_box = NumberBox {
+                number_use: self.number_use,
+                first: false,
+                typed: String::new(),
+            };
+            if let Some(literal) = number_box_ui(ui, popup_id, &number_box, PANE_BOX_WIDTH) {
                 choice = Some(Choice::Value(SheetValue::Literal(literal)));
             }
         }
@@ -360,38 +423,50 @@ impl ParameterPicker<'_> {
     }
 }
 
-/// Draws `popup` as a picker titled `title`: an overlay [`PICKER_WIDTH`] wide that holds `contents`, named as a dialog
-/// by its title and [`placed`] beside its anchor. Returns what `contents` returns and the picker's rectangle, `None`
-/// while the popup is closed.
+/// Draws `popup` as a picker titled `title`: an overlay [`PICKER_WIDTH`] wide that holds `contents` and then `footer`,
+/// named as a dialog by its title and [`placed`] beside its anchor. Returns the choice made in either and the picker's
+/// rectangle, `None` while the popup is closed.
 ///
 /// A `long` picker scrolls past [`PICKER_HEIGHT`], and any picker scrolls once it fills its room. A short picker takes
-/// its own height, since a scroll area lags a frame behind its contents.
-fn picker_overlay<R>(
+/// its own height, since a scroll area lags a frame behind its contents. In a picker that scrolls, `footer` stays
+/// under the scroll area.
+fn picker_overlay(
     ui: &Ui,
     popup: Popup<'_>,
     title: &str,
     long: bool,
-    contents: impl FnOnce(&mut Ui) -> R,
-) -> Option<(R, Rect)> {
+    contents: impl FnOnce(&mut Ui) -> Option<Choice>,
+    footer: impl FnOnce(&mut Ui) -> Option<Choice>,
+) -> Option<(Option<Choice>, Rect)> {
     let (popup, room) = placed(ui.ctx(), popup);
     // A picker as tall as its room in the frame before keeps scrolling. Without the scroll it would outgrow the room.
     let fills = popup.get_expected_size().is_some_and(|size| size.y >= room - 0.5);
     let popup = popup.width(PICKER_WIDTH).frame(Frame::NONE).show(|ui| {
         overlay(ui, |ui| {
             ui.set_min_width(PICKER_WIDTH - 2.0 * OVERLAY_PADDING);
-            let inner = if long || fills {
+            // The footer's height in the frame before leaves its room under the scroll area.
+            let footer_id = ui.id().with(FOOTER_HEIGHT_ID);
+            let footer_height: f32 = ui.data(|data| data.get_temp(footer_id)).unwrap_or_default();
+            let chosen = if long || fills {
                 let height = room - 2.0 * (OVERLAY_PADDING + 1.0);
                 let height = if long { height.min(PICKER_HEIGHT) } else { height };
-                ScrollArea::vertical().max_height(height).show(ui, contents).inner
+                ScrollArea::vertical()
+                    .max_height((height - footer_height).max(0.0))
+                    .show(ui, contents)
+                    .inner
             } else {
                 contents(ui)
             };
-            (inner, ui.unique_id())
+            let top = ui.min_rect().bottom();
+            let chosen = footer(ui).or(chosen);
+            let height = ui.min_rect().bottom() - top;
+            ui.data_mut(|data| data.insert_temp(footer_id, height));
+            (chosen, ui.unique_id())
         })
     })?;
-    let (inner, id) = popup.inner;
+    let (chosen, id) = popup.inner;
     accessible_group(ui.ctx(), id, egui::accesskit::Role::Dialog, title, popup.response.rect);
-    Some((inner, popup.response.rect))
+    Some((chosen, popup.response.rect))
 }
 
 /// Draws the groups of a picker that hold an item, each a menu under its heading, and returns the choice of the item
@@ -472,10 +547,13 @@ struct BoxDraft {
 
 /// Draws a box `width` points wide over `text`, named `name`, with the Use button beside it, and returns the box's
 /// response and whether Enter or Use submitted the text.
+///
+/// The box keeps the down and up arrow keys while it holds text. Empty, it passes them on to the picker's rows.
 fn typed_box_row(ui: &mut Ui, text: &mut String, name: &str, width: f32) -> (Response, bool) {
     ui.horizontal(|ui| {
         let field = ui.add(TextEdit::singleline(text).desired_width(width));
         set_name(ui, field.id, name);
+        mark_empty_box(ui, field.id, text.is_empty());
         let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
         let used = ui.button(USE_BUTTON).clicked();
         (field, used || entered)
@@ -483,11 +561,12 @@ fn typed_box_row(ui: &mut Ui, text: &mut String, name: &str, width: f32) -> (Res
     .inner
 }
 
-/// Draws the Number box of the picker `popup_id`, and returns the number typed once Enter or Use is pressed on text
-/// that reads in its range.
+/// Draws the Number box of the picker `popup_id`, `width` points wide, and returns the number typed once Enter or Use
+/// is pressed on text that reads in its range.
 ///
-/// A list such as "2, 3" says to choose "is one of" first.
-fn number_box_ui(ui: &mut Ui, popup_id: Id, number_box: &NumberBox) -> Option<SheetLiteral> {
+/// The box takes the focus in the first frame the picker shows it. A list such as "2, 3" says to choose "is one of"
+/// first.
+fn number_box_ui(ui: &mut Ui, popup_id: Id, number_box: &NumberBox, width: f32) -> Option<SheetLiteral> {
     let hint = number_box.number_use.box_hint();
     ui.weak(hint);
     let id = popup_id.with(NUMBER_BOX_ID);
@@ -498,8 +577,8 @@ fn number_box_ui(ui: &mut Ui, popup_id: Id, number_box: &NumberBox) -> Option<Sh
         draft.shown = true;
     }
     let mut typed = None;
-    let (field, submitted) = typed_box_row(ui, &mut draft.text, hint, 140.0);
-    if first_frame && number_box.first {
+    let (field, submitted) = typed_box_row(ui, &mut draft.text, hint, width);
+    if first_frame {
         field.request_focus();
     }
     if submitted {
@@ -516,31 +595,6 @@ fn number_box_ui(ui: &mut Ui, popup_id: Id, number_box: &NumberBox) -> Option<Sh
                 // The refused text stays in the box. The box keeps the focus for another try.
                 field.request_focus();
             }
-        }
-    }
-    for message in &draft.messages {
-        message_ui(ui, message);
-    }
-    ui.data_mut(|data| data.insert_temp(id, draft));
-    typed
-}
-
-/// Draws the Number box of a picker of the Sheet pane, and returns the number typed once Enter or Use is pressed on
-/// text that reads in the range of `number_use`.
-fn parameter_number_box(ui: &mut Ui, number_use: NumberUse) -> Option<SheetLiteral> {
-    let hint = number_use.box_hint();
-    ui.weak(hint);
-    let id = ui.id().with("henad_number_box");
-    let mut draft: BoxDraft = ui.data(|data| data.get_temp(id)).unwrap_or_default();
-    let mut typed = None;
-    let (_, submitted) = typed_box_row(ui, &mut draft.text, hint, 120.0);
-    if submitted {
-        match number_use.read(&draft.text) {
-            Ok(literal) => {
-                typed = Some(literal);
-                draft = BoxDraft::default();
-            }
-            Err(message) => draft.messages = vec![message],
         }
     }
     for message in &draft.messages {
