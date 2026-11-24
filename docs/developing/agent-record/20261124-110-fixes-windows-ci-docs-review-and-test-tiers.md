@@ -6,9 +6,9 @@ icon: material/timer-sand
 status: ai-generated
 model: "Claude Code. Agents made the fixes, the Windows investigation, the docs reviews and the style pass, and the session wrote this record"
 issue: "#37"
-state: "37-node-editor with the test tiers and this record on top of d3a8c75b, the remote's head of the branch. CI run 45270855758 passed every job at 82279934. Run 45301037979 at d3a8c75b failed one flaky test on Windows, which the pause in the shared accumulator fixes"
+state: "37-node-editor at 60381b71 and this record, all signed and pushed. The full tier passed every job at 3d10b924 (run 45312409897), and the quick tier passed in 8.9 minutes at 60381b71 (run 45368803075)"
 baseline_commit: 5b83271a
-delta_state: "committed on `37-node-editor`: 21 signed commits pushed up to `d3a8c75b`, then the shared accumulator's pause, the test tiers and this record"
+delta_state: "committed and pushed on `37-node-editor`: 27 signed commits after `5b83271a`, this record included"
 ---
 
 # Fixes, Windows CI, a docs review and test tiers
@@ -129,6 +129,12 @@ Per-test times from a nextest run on the Windows runner showed 21 tests of 60 se
   The quick tier's tests ran in 55 seconds on an M4 Pro after its build.
 - `./check.sh` still runs every test, and `./check.sh --quick` runs the quick tier's.
 
+The first quick run, at a threshold of 30 seconds, took 13.5 minutes, with Windows the slowest at 13.2.
+It also failed `a_playing_runner_publishes_the_stats_of_each_snapshots_own_tick` on macOS, which asked for five snapshots in half a second at 30 ticks a second and saw three on a busy runner.
+The test now waits for five snapshots, for at most 20 seconds, since it checks what each snapshot holds and not how fast they come.
+At the threshold of 20 seconds the quick run took 8.9 minutes: Windows 8.0, macOS 8.7 and Linux 6.0, with lint at 4.1.
+The full tier passed every job, Windows in 59.7 minutes and the downstream template in 30.6.
+
 ### Edited tree
 
 ```
@@ -172,9 +178,10 @@ zensical.toml                                  this record's entry
 
 ## State after
 
-`37-node-editor` holds the 21 signed commits up to `d3a8c75b` on the remote, then the shared accumulator's pause, the test tiers and this record, unsigned until the maintainer signs them.
-Run 45270855758 passed every job at `82279934`, and the full local check passed 16 of 16 steps with 2,465 tests at `0e69b2c0`, a commit of the folded history.
-The quick tier and the nightly run start once the tiers reach the remote, and the nightly run once they reach `master`.
+`37-node-editor` holds 27 signed commits after `5b83271a`, this record included, all pushed.
+The full tier passed every job at `3d10b924` (run 45312409897), and the quick tier passed in 8.9 minutes at `60381b71` (run 45368803075).
+The full local check passed 16 of 16 steps with 2,465 tests at `0e69b2c0`, a commit of the folded history.
+The nightly run starts once the tiers reach `master`.
 
 ## Issues found & future directions
 
