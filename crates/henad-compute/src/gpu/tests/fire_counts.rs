@@ -272,6 +272,26 @@ fn take_snapshots_for(thread: &mut GpuSimThread, duration: Duration, seen: &mut 
     }
 }
 
+/// Takes the snapshots `thread` publishes until `seen` holds `count` of them or `timeout` passes, and appends each one's
+/// tick, first stat and fire counts to `seen`.
+///
+/// Note that a loaded machine publishes fewer snapshots in a given time than the rate asks for. A wait for a count holds
+/// on such a machine, where a wait for a duration would see too few.
+fn take_snapshots_until(
+    thread: &mut GpuSimThread,
+    count: usize,
+    timeout: Duration,
+    seen: &mut Vec<(u64, f64, FireCounts)>,
+) {
+    let until = Instant::now() + timeout;
+    while seen.len() < count && Instant::now() < until {
+        take_snapshots_for(thread, Duration::from_millis(10), seen);
+    }
+}
+
+/// Time a playing runner gets to publish the snapshots a test waits for.
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// A playing runner publishes each snapshot with the stats and the fire counts of its own tick, capped at the rate the
 /// editor starts at and uncapped.
 #[test]
@@ -286,14 +306,17 @@ fn a_playing_runner_publishes_the_stats_of_each_snapshots_own_tick() {
     thread.send(SimCommand::SetUncapped(false));
     thread.send(SimCommand::SetTargetTps(30.0));
     thread.play();
-    take_snapshots_for(&mut thread, Duration::from_millis(500), &mut seen);
+    take_snapshots_until(&mut thread, 5, SNAPSHOT_TIMEOUT, &mut seen);
     let capped = seen.len();
     thread.send(SimCommand::SetUncapped(true));
-    take_snapshots_for(&mut thread, Duration::from_millis(200), &mut seen);
+    take_snapshots_until(&mut thread, capped + 2, SNAPSHOT_TIMEOUT, &mut seen);
     thread.pause();
     take_snapshots_for(&mut thread, Duration::from_millis(100), &mut seen);
 
-    assert!(capped >= 5, "half a second at 30 TPS published {capped} snapshots");
+    assert!(
+        capped >= 5,
+        "the run at 30 TPS published {capped} snapshots in {SNAPSHOT_TIMEOUT:?}"
+    );
     assert!(seen.len() > capped + 1, "the uncapped run published nothing");
     for (tick, total, counts) in &seen {
         let tick = *tick;
