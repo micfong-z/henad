@@ -135,7 +135,7 @@ pub enum GraphRequest {
     },
     /// Removes nodes of the open body.
     Delete(Vec<NodeId>),
-    /// Wraps nodes of the open pass in a new Repeat, placed around them as the canvas draws them.
+    /// Wraps nodes of the open body in a new Repeat, placed around them as the canvas draws them.
     WrapInRepeat(Vec<NodeId>),
     /// Places the nodes of the open body in layers from left to right.
     Arrange,
@@ -676,7 +676,7 @@ impl GraphEditor {
         }
     }
 
-    /// Wraps `nodes` of the open pass in a new Repeat, placed around them as the canvas draws them.
+    /// Wraps `nodes` of the open body in a new Repeat, placed around them as the canvas draws them.
     fn wrap(&mut self, nodes: Vec<NodeId>) {
         let bounds = self
             .canvases

@@ -76,9 +76,9 @@ impl SheetFile {
     /// # Errors
     ///
     /// Returns the errors of [`ParsedSheet::parse`], and [`SheetFileError::Invalid`] holding the errors of the sheet's
-    /// check, or when it has none the problems of its lowering: a world of agents and the line kinds this version does
-    /// not lower, each in the author's words, two draws with one key, a sheet past the node limits, and a lowered graph
-    /// that does not read. Each is placed at the table it is about.
+    /// check, or when it has none the problems of its lowering: the lines and settings this version does not lower,
+    /// each in the author's words, two draws with one key, a sheet past the node limits, and a lowered graph that does
+    /// not read. Each is placed at the table it is about.
     pub fn parse(text: &str) -> Result<Self, SheetFileError> {
         Self::parse_with(text, |_| {})
     }

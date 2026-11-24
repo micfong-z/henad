@@ -6,8 +6,8 @@ use super::case_files::case_file;
 use crate::GraphFile;
 use crate::catalogue::{CaseForm, ConfigPorts, KnownAnswer, NodeDef, definitions, lookup};
 
-/// Kinds of milestone G1, as the plan's table lists them.
-const G1_KINDS: [&str; 64] = [
+/// Every kind the catalogue defines, listed by hand.
+const LISTED_KINDS: [&str; 114] = [
     "ctx.index",
     "ctx.press_seed",
     "ctx.tick",
@@ -72,10 +72,6 @@ const G1_KINDS: [&str; 64] = [
     "stat.count_by",
     "view.color",
     "view.ramp",
-];
-
-/// Kinds of milestone A2, as the plan's table lists them, its vector and space kinds spelled out.
-const A2_KINDS: [&str; 52] = [
     "ctx.world",
     "ctx.grid",
     "ctx.cell_xy",
@@ -126,14 +122,11 @@ const A2_KINDS: [&str; 52] = [
     "fn.input",
     "fn.output",
     "fn.call",
-    "region.repeat",
-    "region.put",
 ];
 
 #[test]
-fn the_catalogue_holds_every_kind_of_milestones_g1_and_a2_and_no_other() {
-    // `region.repeat` and `region.put` sit in both lists, since A2 adds their use in agent models.
-    let listed: BTreeSet<&str> = G1_KINDS.into_iter().chain(A2_KINDS).collect();
+fn the_catalogue_holds_every_listed_kind_and_no_other() {
+    let listed: BTreeSet<&str> = LISTED_KINDS.into_iter().collect();
     let defined: BTreeSet<&str> = definitions().map(|def| def.id).collect();
     assert_eq!(listed, defined);
     assert_eq!(definitions().count(), defined.len(), "a kind is defined twice");

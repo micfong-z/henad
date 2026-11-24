@@ -47,7 +47,7 @@ pub enum SentencePart {
     /// The word "or" before a Become of a competing group below its highest line, with the numbers of the group's
     /// lines. [`competing_parts`](super::competing_parts) puts it in place.
     Competing(Vec<usize>),
-    /// The empty optional "for each ..." blank after a chance or a rate. Plain text leaves it out.
+    /// The empty optional "for each …" blank after a chance or a rate. Plain text leaves it out.
     ForEachBlank(DrawKind),
     /// The words "for each" of a chance or a rate whose "for each" is on, before its count.
     ForEach(DrawKind),

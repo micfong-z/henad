@@ -1,5 +1,5 @@
-//! Rules over the order the top of a pass runs in: reducers end a map pass (`ir-spec.md` section 6.1), and the
-//! `draw_order` of a pass agrees with its links (V17).
+//! Rules over the order the top of a pass runs in: reducers end a map pass, and the `draw_order` of a pass agrees with
+//! its links (V17).
 //!
 //! The *top* of a pass is its nodes outside every region. A region stands for its body here, so a link from a body
 //! node to a node at the top is a link of the region. A top node runs once before the elements when it reads only

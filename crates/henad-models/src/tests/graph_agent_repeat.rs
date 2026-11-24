@@ -1,5 +1,5 @@
-//! The Repeat tests of the plan's "Finite loops" section over agents, built through the model file and stepped on a
-//! device, each held to the host evaluator's run of the same passes.
+//! Repeat tests over agents, built through the model file and stepped on a device, each held to the host evaluator's
+//! run of the same passes.
 //!
 //! The graphs place agent `i` at the centre of cell `(i % 40, (i / 40) % 30)` of a 40 by 30 world, so each expected
 //! value has a closed form. The random walk starter is the corpus file of agents that takes a Repeat.

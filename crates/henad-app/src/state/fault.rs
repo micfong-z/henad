@@ -42,8 +42,8 @@ impl AppState {
     ///
     /// A fault of a run built from the code the Editor applied last, before the run passes tick 0, goes to the Editor
     /// instead, as the outcome of the edit, when an edit of the code can fix it ([`EditorPanel::claims`]). So does a
-    /// fault of the Editor's preview at any tick, while the Editor holds a graph to show it under. The fault of a
-    /// preview that outlived its graph goes to the modal.
+    /// fault of the Editor's preview at any tick, while the Editor holds a graph or a sheet to show it under. The fault
+    /// of a preview that outlived its model goes to the modal.
     ///
     /// On native the build thread returns the fault of a build in a later frame than the press that started it, and in
     /// a browser the device reports a shader it refuses after the build that created it.

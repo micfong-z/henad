@@ -1,4 +1,4 @@
-//! The Repeat tests of the plan's "Finite loops" section on a device, through the compiler's own shaders.
+//! Repeat tests on a device, through the compiler's own shaders.
 //!
 //! Most graphs are one of the host tests' bodies in a tick pass, since a model's init passes never run on the device.
 //! The device runs the pass's step shader once over lanes that start at their declared initial values, and the host

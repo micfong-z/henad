@@ -330,7 +330,8 @@ pub(super) static KINDS: &[NodeDef] = &[
     },
 ];
 
-pub(super) static A2_KINDS: &[NodeDef] = &[
+/// Kinds of the group that the palette lists after [`KINDS`].
+pub(super) static MORE_KINDS: &[NodeDef] = &[
     NodeDef {
         id: "rand.bits",
         label: "Random bits",

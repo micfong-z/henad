@@ -54,7 +54,7 @@ pub struct LineNote {
     pub description: Option<String>,
 }
 
-/// A control inside a line: a chip, a blank, a select, "always", "otherwise" or the optional "for each ..." blank.
+/// A control inside a line: a chip, a blank, a select, "always", "otherwise" or the optional "for each …" blank.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineControl {
     /// Words the control shows.

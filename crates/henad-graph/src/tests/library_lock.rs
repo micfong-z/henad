@@ -1,5 +1,6 @@
-//! The library lock: one line per definition and one per limit, generated from the catalogue and held to the committed
-//! file `library.lock` at the crate root.
+//! The library lock: one line per definition and one per limit of [`crate::limits`] other than `MAX_WORLD_SIDE`,
+//! `MAX_STORAGE_BINDINGS` and `MAX_PACKED_BUFFER_BYTES`, generated from the catalogue and held to the committed file
+//! `library.lock` at the crate root.
 //!
 //! The lock pins definitions, never implementations. A line hashes a definition's signature, its written semantics and
 //! its known-answer cases, and records its parity and cost. A changed or removed line fails the test, and so does an

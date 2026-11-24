@@ -793,7 +793,7 @@ fn an_edit_the_builder_takes_leaves_a_text_that_reads_back() {
 }
 
 #[test]
-fn every_outline_move_matches_the_prototype() {
+fn outline_moves_and_deletes_follow_the_when_blocks() {
     let mut builder = builder_of("game_of_life.toml");
     let add = |builder: &mut SheetBuilder, inside: Option<&str>, kind: LineKind| -> String {
         let made = add_line(builder, "cell_tick", inside, SheetLine::new(kind));

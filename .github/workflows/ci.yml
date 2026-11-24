@@ -47,7 +47,7 @@ jobs:
       - name: wasm typecheck
         run: cargo check --locked -p henad-core -p henad-compute -p henad-models -p henad-graph -p henad-explore -p henad-app --all-features --lib --target wasm32-unknown-unknown
 
-      # The facade with no feature and with all four, without atomics, as docs.rs builds it. henad-cli sits behind a
+      # The facade with no feature and with all five, without atomics, as docs.rs builds it. henad-cli sits behind a
       # native target gate and never joins.
       - name: Facade wasm typecheck
         run: |

@@ -1,5 +1,5 @@
 //! Folds over the cells around: the `grid.fold` nodes shared by a card's Count, Look around and Pick a cell lines
-//! over one neighbourhood (F1).
+//! over one neighbourhood.
 //!
 //! A *family* of neighbourhoods is walked by one stencil: the 8 cells around and the 3 by 3 block share the Moore
 //! stencil, and the 4 cells around take the von Neumann stencil. The first look of a family on a card writes a fold the

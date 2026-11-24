@@ -404,7 +404,7 @@ fn deliveries(ctx: &GpuContext, text: &str, label: &str, seed: u64) -> (f64, f64
 
 /// Band: by tick 2000 the ants deliver at most 1000 times, and by tick 3000 at least 500 times, on each seed, for the
 /// sheet and the hand-lowered file. Both forage at their defaults, 2000 ants from the nest, and both first need a
-/// trail. Round 1's hand-lowered ants deliver nothing by tick 2000 on one of the seeds, so no lower edge at tick 2000
+/// trail. The hand-lowered ants deliver nothing by tick 2000 on one of the seeds, so no lower edge at tick 2000
 /// catches an error that stops deliveries, and the band adds one at tick 3000.
 ///
 /// Procedure: the Deliveries statistic after ticks 2000 and 3000 at the defaults on seeds 1 to 3. The planted error

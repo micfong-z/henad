@@ -1,10 +1,10 @@
 //! The New model dialog: a sheet model started blank or from one of the sheet starters, under a name.
 //!
 //! "Start from" lists Blank, then the starters [`henad_graph::sheet::starters`] returns, grid and agent starters alike,
-//! each a selectable row with its one-line description under its name. Under Blank alone the dialog asks what the world is made of: cells on a grid
-//! or agents in open space. The Name field follows the chosen starter's name, or "Untitled model" for Blank, until the
-//! author types in it. Create opens the sheet in the Editor, and so does Enter in the Name field. Cancel, Escape and a
-//! click beside the dialog close it.
+//! each a selectable row with its one-line description under its name. Under Blank alone the dialog asks what the
+//! world is made of: cells on a grid or agents in open space. The Name field follows the chosen starter's name, or
+//! "Untitled model" for Blank, until the author types in it. Create opens the sheet in the Editor, and so does Enter in
+//! the Name field. Cancel, Escape and a click beside the dialog close it.
 //!
 //! A blank model is a world of 100 by 100 cells that wraps around, with no parameter and no card. A blank world of
 //! cells has no property. A blank world of agents holds 1000 agents called Agent, room for a million, each with a

@@ -73,10 +73,10 @@ pub enum PreviewState {
     Faulted(CodeDiagnostic),
 }
 
-/// Live preview of the Editor's graph model.
+/// Live preview of the Editor's graph model or sheet.
 #[derive(Debug, Default)]
 pub struct Preview {
-    /// Preview key of the graph the preview last took up, built or waiting.
+    /// Preview key of the graph or sheet the preview last took up, built or waiting.
     key: Option<[u64; 3]>,
     /// Time the waiting preview builds, `None` while none waits.
     due: Option<Instant>,

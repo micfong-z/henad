@@ -166,7 +166,7 @@ pub enum AddButton {
     Change,
     /// "+ When, for several lines".
     When,
-    /// "+ Repeat...", on a card over agents alone.
+    /// "+ Repeat…", on a card over agents alone.
     Repeat,
 }
 
@@ -430,7 +430,7 @@ pub enum AddItem {
     Leave,
     /// Record an event, under "+ Change" on a card over agents.
     Record,
-    /// Repeat, under "+ Repeat..." on a card over agents.
+    /// Repeat, under "+ Repeat…" on a card over agents.
     Repeat,
 }
 
@@ -588,7 +588,7 @@ pub const COMPARISONS: [CompareTest; 8] = [
 ///
 /// With a States property on the left, [`CompareTest::OneOf`] and [`CompareTest::NotOneOf`] read "is one of the
 /// states" and "is none of the states". [`CompareTest::Within`] reads "is within" before its tolerance, and
-/// [`CompareTest::Outside`] reads "is less than ... or more than ...".
+/// [`CompareTest::Outside`] reads "is less than … or more than …".
 pub fn comparison_words(test: CompareTest, of_states: bool) -> &'static str {
     match test {
         CompareTest::Is => "is",
@@ -706,17 +706,17 @@ pub fn otherwise_item_name(lines: &[usize]) -> String {
 pub enum ConditionItem {
     /// "always".
     Always,
-    /// "when ... is ...".
+    /// "when … is …".
     Is,
-    /// "when ... is at least ...".
+    /// "when … is at least …".
     AtLeast,
-    /// "when ... is at most ...".
+    /// "when … is at most …".
     AtMost,
-    /// "when ... is less than ... or more than ...".
+    /// "when … is less than … or more than …".
     Outside,
-    /// "with chance ...".
+    /// "with chance …".
     WithChance,
-    /// "at rate ... per ...".
+    /// "at rate … per …".
     AtRate,
 }
 
@@ -992,15 +992,15 @@ impl DrawKind {
     }
 }
 
-/// Words the optional "for each ..." blank shows.
+/// Words the optional "for each …" blank shows.
 pub const FOR_EACH_BLANK_WORDS: &str = "for each …";
 
-/// Returns the accessible name of the optional "for each ..." blank, such as "Line 2: for each, optional".
+/// Returns the accessible name of the optional "for each …" blank, such as "Line 2: for each, optional".
 pub fn for_each_optional_name(prefix: &str) -> String {
     format!("{prefix}: for each, optional")
 }
 
-/// Returns the tooltip of the optional "for each ..." blank: "Optional: make the rate grow with a count", or the same
+/// Returns the tooltip of the optional "for each …" blank: "Optional: make the rate grow with a count", or the same
 /// with "chance".
 pub fn for_each_optional_tooltip(draw: DrawKind) -> String {
     format!("Optional: make the {} grow with a count", draw.word())

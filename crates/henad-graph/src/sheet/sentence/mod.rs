@@ -13,7 +13,7 @@
 //!   Repeat counted after it. It differs from the number in the line's id.
 //! - A *line word* names a line inside a sentence: "line 2", or on a button's card "Clear line 1".
 //! - A *line prefix* starts an accessible name: "Line 2", or on a button's card "Clear line 1".
-//! - A *blank* is an empty slot, written `...` in a sentence written as plain text.
+//! - A *blank* is an empty slot, written `…` in a sentence written as plain text.
 //! - A *chip* is a chosen value in a sentence, such as a state, a parameter or a result.
 //!
 //! [`Sentences`] writes the sentence of a line and the heading of a card from a [`SheetDocument`]. The sentence comes

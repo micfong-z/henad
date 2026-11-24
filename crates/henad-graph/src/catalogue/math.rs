@@ -536,7 +536,8 @@ config.lane = "v"
 in.value = "n2.v"
 "#;
 
-pub(super) static A2_KINDS: &[NodeDef] = &[
+/// Kinds of the group that the palette lists after [`KINDS`].
+pub(super) static MORE_KINDS: &[NodeDef] = &[
     NodeDef {
         id: "math.neg",
         label: "Negate",

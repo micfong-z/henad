@@ -1636,7 +1636,7 @@ fn the_starters_read_the_final_sentences_with_their_otherwise() {
 }
 
 #[test]
-fn agent_lines_read_round_1_words_in_the_final_conventions() {
+fn the_agent_starters_read_their_sentences() {
     let ants = document("ants.toml");
     let sentences = card_sentences(&ants, 0, &[(16, &[11, 14])]);
     assert_eq!(
@@ -2351,7 +2351,7 @@ fn a_formula_inside_a_slot_places_no_value_and_no_operation() {
 }
 
 #[test]
-fn the_banner_of_a_copy_reads_as_the_expert_design_writes_it() {
+fn the_banners_of_a_converted_copy_name_its_sheet_date_and_edits() {
     assert_eq!(sentence::converted_date("2026-11-07"), "7 Nov 2026");
     assert_eq!(sentence::converted_date("2026-13-07"), "2026-13-07");
     assert_eq!(sentence::converted_date("today"), "today");

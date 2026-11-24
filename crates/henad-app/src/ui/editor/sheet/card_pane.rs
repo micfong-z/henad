@@ -9,7 +9,7 @@
 //! A line reads as its sentence from [`henad_graph::sheet::sentence`], drawn part by part: words with its lead words in
 //! the semibold face, a chosen value as a *chip* whose ground and border tell what it refers to, an empty slot as a
 //! *blank*, a select inside the line, the grey "always" and the muted "otherwise" words. A line inside a When
-//! or a Repeat is indented one step per level on a darker ground, with a guide down each level.
+//! or a Repeat is indented one step per level, with a guide down each level.
 //!
 //! A click on a blank or a chip opens its *picker* ([`super::picker`]), and a choice runs one edit of the sheet. A
 //! select lists its options, the grey "always" and the arrow after a condition word open "Choose when", and the add
@@ -26,7 +26,7 @@
 //! Count's state after its property, a Become's old state after its new state) and the empty upper number of a range
 //! after its lower number.
 //!
-//! A card over agents offers the lines of agents under the same add buttons, and "+ Repeat..." after them: looks
+//! A card over agents offers the lines of agents under the same add buttons, and "+ Repeat…" after them: looks
 //! at the agents within a distance with their summaries, picks and looks at cells of the ground, random numbers and
 //! directions, Choose and Depending on, Steer, Keep between, Move, Leave and Record. A summary of a look at agents
 //! names itself after what it sums up, and "+" after the summaries adds another. A problem the lowering finds in a
@@ -163,7 +163,7 @@ pub struct CardState {
     renaming: Option<Renaming>,
     /// Values chosen for each Calculate line whose formula is not written yet, by line id.
     drafts: BTreeMap<String, CalcDraft>,
-    /// Ids of the lines whose "is less than ... or more than ..." is being filled. The one-side offer waits on them.
+    /// Ids of the lines whose "is less than … or more than …" is being filled. The one-side offer waits on them.
     filling: BTreeSet<String>,
     /// New parameter dialog with the place it fills and whether it has been drawn, `None` while it is closed.
     new_parameter: Option<(PlaceRef, NewParameterDialog, bool)>,
@@ -476,7 +476,7 @@ fn update_filling(document: &SheetDocument, state: &mut CardState, line: &str, w
 }
 
 /// Returns whether each side of the range of `line`'s own condition is filled, `None` for a line whose condition is no
-/// "is less than ... or more than ...".
+/// "is less than … or more than …".
 fn range_sides(line: &SheetLine) -> Option<(bool, bool)> {
     match line.condition.value()? {
         SheetValue::Phrase(phrase) if phrase.kind == LineKind::Compare && phrase.test == Some(CompareTest::Outside) => {
@@ -840,14 +840,14 @@ fn bracket_ui(ui: &Ui, rows: &[Rect], bracket: &[usize]) {
     ));
 }
 
-/// A When block whose add row follows a line.
+/// A When or Repeat block whose add row follows a line.
 #[derive(Debug, Clone)]
 struct ClosingBlock {
-    /// Id of the When line.
+    /// Id of the block's line.
     id: String,
     /// Kind of the block's line, a When or a Repeat.
     kind: LineKind,
-    /// Number of the When line on its card.
+    /// Number of the block's line on its card.
     number: usize,
     /// Number of blocks around the lines inside the block.
     depth: usize,
@@ -1094,7 +1094,7 @@ pub fn card_buttons(
 // The add buttons
 
 /// Draws the add buttons under `card`, or under the heading of the card that runs each tick over `every` while there is
-/// none. A card that runs once offers "+ Change" alone, and a card over agents adds "+ Repeat...".
+/// none. A card that runs once offers "+ Change" alone, and a card over agents adds "+ Repeat…".
 ///
 /// Each button shows a square in the hue of the lines it adds. The buttons are the legend of the rows' bars.
 fn add_buttons_ui(
@@ -1538,7 +1538,7 @@ fn tries_path(line: &SheetLine) -> Option<String> {
 struct LineDrawing<'a> {
     /// Ids of the lines that a hovered or focused "otherwise" or result chip names.
     hovered: &'a mut Vec<String>,
-    /// Shape and place of each empty "for each ..." blank, painted once the line is known to be hovered or focused.
+    /// Shape and place of each empty "for each …" blank, painted once the line is known to be hovered or focused.
     for_each_shapes: Vec<(egui::layers::ShapeIdx, Rect)>,
     /// Whether a control of the line holds the keyboard focus.
     focused: bool,
@@ -1685,7 +1685,7 @@ fn line_ui(
     if focused {
         focus_mark(ui, rect);
     }
-    // The empty "for each ..." blank is quiet until its line is hovered or focused.
+    // The empty "for each …" blank is quiet until its line is hovered or focused.
     let quiet = !(focused || ui.rect_contains_pointer(rect));
     for (shape, blank) in gathered.for_each_shapes.drain(..) {
         ui.painter()
@@ -3049,7 +3049,7 @@ fn new_parameter_dialog(ui: &Ui, document: &SheetDocument, state: &mut CardState
         return;
     };
     if !*drawn {
-        // The click that chose "New parameter..." would land on the dialog's backdrop and close it.
+        // The click that chose "New parameter…" would land on the dialog's backdrop and close it.
         *drawn = true;
         ui.ctx().request_repaint();
         return;

@@ -1,6 +1,7 @@
 //! Tests of the graph canvas on a headless egui context with synthetic input: the canvas follows the document, every
-//! gesture reaches it as an edit command, the egui-snarl traps of record #62 stay guarded, and Frame all fits a wide
-//! converted sheet.
+//! gesture reaches it as an edit command, the egui-snarl traps stay guarded (a second wire into one input, a wire
+//! dropped without a callback, a removal while a wire is in flight, a stale selection by pin index), and Frame all
+//! fits a wide converted sheet.
 
 use egui::epaint::ClippedShape;
 use egui::{Event, Key, Modifiers, Pos2, Rect, Shape, vec2};

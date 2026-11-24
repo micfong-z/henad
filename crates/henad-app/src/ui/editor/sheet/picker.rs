@@ -3,7 +3,7 @@
 //!
 //! A *picker* lists only what fits its place, in groups under headings: the results of the lines above ("From lines
 //! above"), the thing's properties ("This cell's properties", "This bird's properties"), the parameters with "New
-//! parameter...", the states, or the properties of one kind. On a card over agents a value also takes the summaries of
+//! parameter…", the states, or the properties of one kind. On a card over agents a value also takes the summaries of
 //! the looks above, the cells picked above, "my new" values below the last change to a property, and new random
 //! values. A Number box takes a typed number, a list box several numbers at once. A group with no
 //! item is left out, and a picker with nothing to offer says what to make first.
@@ -87,7 +87,7 @@ pub enum Choice {
     Property(String),
     /// A form of condition from "Choose when".
     Condition(ConditionItem),
-    /// "New parameter...", the item that opens the New parameter dialog.
+    /// "New parameter…", the item that opens the New parameter dialog.
     NewParameter,
     /// Numbers typed in the list box.
     Numbers(Vec<SheetLiteral>),
@@ -162,7 +162,7 @@ pub struct CardPicker {
     pub lead: Option<String>,
     /// Groups of items. A group with no item is left out.
     pub groups: Vec<PickerGroup>,
-    /// Whether the picker offers "New parameter...".
+    /// Whether the picker offers "New parameter…".
     pub new_parameter: bool,
     /// The Number box, `None` for a picker with none.
     pub number_box: Option<NumberBox>,
@@ -326,7 +326,7 @@ impl CardPicker {
     }
 }
 
-/// A picker of the Sheet pane: the sheet's parameters, "New parameter..." and, for a number that takes one, a Number
+/// A picker of the Sheet pane: the sheet's parameters, "New parameter…" and, for a number that takes one, a Number
 /// box.
 #[derive(Debug, Clone)]
 pub struct ParameterPicker<'a> {
@@ -1158,7 +1158,7 @@ fn event_items(context: &LineContext<'_>) -> Vec<PickerItem> {
 }
 
 /// Returns the picker of a number titled `title`: the number results above, the thing's Number properties, the
-/// parameters with "New parameter...", and the Number box reading in `number_use`, first or last, showing `typed`.
+/// parameters with "New parameter…", and the Number box reading in `number_use`, first or last, showing `typed`.
 ///
 /// On a card over agents the results add the summaries and amounts above, the properties add the length of each
 /// arrow, and a random number between two values comes last. A number of times takes integer parameters alone, with
@@ -1292,7 +1292,7 @@ pub fn choose_when(context: &LineContext<'_>, otherwise: &[usize]) -> CardPicker
 
 /// Returns whether "Choose when" offers the form `item` on the line of `context`.
 ///
-/// A When cannot be always. "at rate ... per ..." is offered on a card that runs each tick. A button's card has no
+/// A When cannot be always. "at rate … per …" is offered on a card that runs each tick. A button's card has no
 /// duration and takes chances only.
 fn offers_condition(context: &LineContext<'_>, item: ConditionItem) -> bool {
     match item {

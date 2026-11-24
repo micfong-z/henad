@@ -544,7 +544,8 @@ pub fn register_network_model<N: NetworkModel>() -> ModelEntry {
 
 /// Returns an entry for the GPU grid model `M`.
 ///
-/// Every parameter applies on reload, since the GPU state accepts no live edit.
+/// Every parameter applies on reload. A live edit rewrites the uniform blocks alone, and a parameter of `M` can also
+/// feed [`GpuGridModel::dims`] or [`GpuGridModel::seed_buffers`].
 pub fn register_gpu_grid_model<M: GpuGridModel>() -> ModelEntry {
     let spec = Arc::new(GpuGridSpec::from_model::<M>());
     let declarations = EntryDeclarations {
@@ -570,7 +571,8 @@ pub fn register_gpu_grid_model<M: GpuGridModel>() -> ModelEntry {
 
 /// Returns an entry for the GPU agent model `M`.
 ///
-/// Every parameter applies on reload, since the GPU state accepts no live edit.
+/// Every parameter applies on reload. A live edit rewrites the uniform blocks alone, and a parameter of `M` can also
+/// feed [`GpuAgentModel::dims`] or [`GpuAgentModel::seed_buffers`].
 pub fn register_gpu_agent_model<M: GpuAgentModel>() -> ModelEntry {
     let spec = Arc::new(GpuAgentSpec::from_model::<M>());
     let declarations = EntryDeclarations {

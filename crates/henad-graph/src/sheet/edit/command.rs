@@ -368,7 +368,7 @@ pub enum SheetEdit {
         /// The form.
         item: ConditionItem,
     },
-    /// Replaces a condition "is less than ... or more than ..." with one side filled by the plain comparison it
+    /// Replaces a condition "is less than … or more than …" with one side filled by the plain comparison it
     /// means: "is less than" the lower number or "is more than" the upper number.
     UseOneSide {
         /// Id of the line.

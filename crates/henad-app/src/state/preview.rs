@@ -7,7 +7,7 @@ use henad_core::params::ParamValue;
 
 use super::AppState;
 
-/// Size of a preview of the Editor's graph model, as the live simulation runs it.
+/// Size of a preview of the Editor's graph model or sheet, as the live simulation runs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreviewRun {
     /// A grid model.
@@ -52,7 +52,7 @@ impl AppState {
         }
     }
 
-    /// Preview of the Editor's graph model that the live simulation runs or builds, `None` for any other run.
+    /// Preview of the Editor's graph model or sheet that the live simulation runs or builds, `None` for any other run.
     pub fn preview(&self) -> Option<PreviewRun> {
         self.preview
     }

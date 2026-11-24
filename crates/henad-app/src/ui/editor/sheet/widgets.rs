@@ -3,7 +3,7 @@
 //! of its dialogs live here too.
 //!
 //! A *picker* is a popover under its anchor that lists what a blank or a field can take, in groups under headings, with
-//! "New parameter..." and a box for a typed number. A group with no item is left out, and a picker with nothing to
+//! "New parameter…" and a box for a typed number. A group with no item is left out, and a picker with nothing to
 //! offer says what is missing. A typed number takes a trailing "%" as a percent ("30%" is 0.3).
 
 use egui::{
@@ -101,11 +101,12 @@ pub const KIND_BAR_WIDTH: f32 = 3.0;
 // 500, a neutral chip is gray 800 with gray 100 text, an empty slot a weak word inside a gray 800 outline, a hairline
 // gray 800, and an overlay egui's popup frame.
 
-/// Space in points between two framed regions.
+/// Space in points between two cards, and between two sections of the Sheet pane.
 pub const REGION_GAP: f32 = 12.0;
 
 /// Draws a framed region, gray 900 inside a 1 point gray 800 border, with `add` inside it across the width it is
-/// given, and returns what `add` returns. A card and each section of the Sheet pane is one.
+/// given, and returns what `add` returns. Each card is one, on the Card pane and in the Buttons section of the Sheet
+/// pane.
 ///
 /// The region adds no margin and no space between the rows `add` draws.
 pub fn region<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
@@ -126,8 +127,8 @@ pub fn hairline(ui: &mut Ui) {
     ui.painter().rect_filled(rect, CornerRadius::ZERO, mcs::GRAY_800);
 }
 
-/// Draws the title row of a region: `title` as a [`title_text`], then a hairline running to what `end` draws at the
-/// right edge, such as the region's help.
+/// Draws the title row of a section of the Sheet pane: `title` as a [`title_text`], then a hairline running to what
+/// `end` draws at the right edge, such as the section's help.
 pub fn region_title(ui: &mut Ui, title: &str, end: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
@@ -175,8 +176,8 @@ pub fn caption_width(ui: &Ui, text: &str) -> f32 {
         .x
 }
 
-/// Returns `text` as the title of a region, an overlay or a dialog: the semibold face at the body size in gray 100, as
-/// a card's heading.
+/// Returns `text` as the title of a card, a section of the Sheet pane, an overlay or a dialog: the semibold face at the
+/// body size in gray 100.
 pub fn title_text(ui: &Ui, text: &str) -> RichText {
     let size = TextStyle::Body.resolve(ui.style()).size;
     RichText::new(text)

@@ -181,7 +181,8 @@ summaries this way, so a rebuild mints the starters' ids.
 
 Tests sit in `src/tests/sheet_edit.rs`: the author format's three diffs built by commands from the
 sheets (the waning line through `AddParameter`, `SetParameter`, `AddLine` with the diff's key,
-`SetField` and `SetSlot`; two `MoveLine`; a `Rename`), `every_outline_move_matches_the_prototype`,
+`SetField` and `SetSlot`; two `MoveLine`; a `Rename`),
+`outline_moves_and_deletes_follow_the_when_blocks`,
 `a_rename_changes_one_name_and_the_comments_that_show_it`,
 `change_id_rewrites_every_reference_and_nothing_else` (a parameter, a property, a button and its
 card, a state and a parameter in formulas, each the old text with the quoted id replaced),

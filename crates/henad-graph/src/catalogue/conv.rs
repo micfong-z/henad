@@ -143,7 +143,8 @@ pub(super) static KINDS: &[NodeDef] = &[
 /// 2^64, the nearest `f64` to `u64::MAX`.
 const TWO_POW_64: f64 = 65_536.0 * 65_536.0 * 65_536.0 * 65_536.0;
 
-pub(super) static A2_KINDS: &[NodeDef] = &[
+/// Kinds of the group that the palette lists after [`KINDS`].
+pub(super) static MORE_KINDS: &[NodeDef] = &[
     NodeDef {
         id: "conv.to_f64",
         label: "To f64",

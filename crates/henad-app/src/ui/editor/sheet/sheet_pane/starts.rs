@@ -892,7 +892,7 @@ pub(super) fn number_field(
 }
 
 /// Takes `choice`, made in the picker of the number `target` that holds `current`: a parameter or a typed number goes
-/// into the target, and "New parameter..." opens the New parameter dialog.
+/// into the target, and "New parameter…" opens the New parameter dialog.
 fn pick_number(
     current: Option<&Slot>,
     target: NumberTarget,

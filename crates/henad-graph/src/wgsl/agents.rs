@@ -164,7 +164,8 @@ fn merged_lane(field: &str) -> String {
     format!("henad_merged_{field}")
 }
 
-/// Returns the key of the call in the update of the field `field`: the low 32 bits of FNV-1a 64 over the field's id.
+/// Returns the key of the call in the update of the field `field`: the low 32 bits of FNV-1a 64 over
+/// `henad_update/<field>`.
 ///
 /// A draw inside the `finish` composes its key with this one, so the updates of two fields that share a `finish` draw
 /// different numbers, and another field leaves the key alone.

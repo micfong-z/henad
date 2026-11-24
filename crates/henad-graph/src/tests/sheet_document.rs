@@ -257,7 +257,7 @@ fn starters_returns_the_grid_sheets_then_the_agent_sheets() {
 }
 
 #[test]
-fn the_sheets_written_from_round_1_read_their_values() {
+fn the_sheets_written_from_the_hand_lowered_models_read_their_values() {
     // Majority vote: "otherwise become A" from any state, always.
     let vote = read(sheet_text("vote.toml")).into_document();
     assert_eq!(line(&vote, "l1").around, Some(Around::Block3x3));
