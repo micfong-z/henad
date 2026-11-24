@@ -59,7 +59,8 @@ In the figures below, "over budget" indicates that the engine took longer than 1
 ## Lines of code
 
 How much each model costs to express, counting neither blanks nor comments.
-Read the column, not the row: Henad's files also declare parameters, statistics, actions and a palette, and NetLogo's hold the scenario setup as well as the rule.
+Each column compares the engines on one model.
+Henad's files also declare parameters, statistics, actions and a palette, and NetLogo's hold the scenario setup as well as the rule.
 
 --8<-- "docs/assets/benchmarks/tables/loc.snippet"
 

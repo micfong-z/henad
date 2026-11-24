@@ -7,7 +7,8 @@ icon: material/tune
 # Parameters
 
 Every slider in the app and every `--set` override in the CLI reads from a single declaration list on the model.
-You write the id, label, range and default together in one place, and both front ends work from those declarations, leaving no second list to keep in step.
+You write the id, label, range and default together in one place, and both front ends work from those declarations.
+There is no second list to keep in step.
 This page covers the declaration API, when an edit applies live, when it needs a rebuild, the way the indices compose, and the actions a model offers beside its parameters.
 
 ```rust
@@ -64,10 +65,10 @@ All four readers take the slice, an index and a fallback, and return the fallbac
 The stored value stays a fraction in `0..=1`, and only the Parameters tab scales it.
 Virus Spread Chance holds `0.025` and shows as 2.5%.
 `--set` accepts `2.5%` or the fraction, and `--params` marks the parameter `format=percent`.
-A `%` sign on a parameter without `.percent()` is refused.
+A `%` sign on a parameter without `.percent()` is rejected.
 
 `.integer()` marks an `f32` parameter as taking whole numbers alone, for a count that can go below 0.
-`--set` and a sweep's listed values refuse a value with a fractional part, and a sampled design or a search draws whole numbers.
+`--set` and a sweep's listed values reject a value with a fractional part, and a sampled design or a search draws whole numbers.
 Its minimum, maximum, default and step are whole numbers, and `--params` marks it `integer`.
 A count from 0 up is a `u32` parameter instead.
 
@@ -108,7 +109,7 @@ Matching an enum per cell or per agent would put the match inside the inner loop
 ```
 
 This is also the place for anything the kernel would otherwise recompute on every invocation.
-Boids precomputes squared ranges and half extents here, which leaves the neighbour loop with no per-neighbour setup.
+Boids precomputes squared ranges and half extents here, and its neighbour loop does no per-neighbour setup.
 
 A model with nothing to extract uses `type Params = ()` and an empty `from_params`.
 
@@ -146,10 +147,12 @@ The engine prepends the parameters that every model of a given topology needs.
     The node count keeps the id `num_agents` for the benchmark scripts, and the app labels it Number of Nodes.
 
 Your `from_params` receives its own 0-based slice, never the composed list.
-The split between the slices comes from the descriptor lengths rather than a hard-coded number, which keeps a model or a field layer from shifting the other's indices when it gains a parameter.
+The split between the slices comes from the descriptor lengths rather than a hard-coded number.
+A model or a field layer that gains a parameter therefore cannot shift the other's indices.
 
 Both GPU traits drop the prefix entirely.
-Nothing is prepended and the model spells its whole list out, letting a GPU port mirror the exact parameter order of the CPU model it is compared against.
+Nothing is prepended, and the model spells its whole list out.
+A GPU port can then mirror the exact parameter order of the CPU model it is compared against.
 In practice the two GPU agent ports reuse their counterpart's composed list verbatim, by calling `agent_model_param_descriptors`.
 The two GPU grid ports spell their lists out, with the same ids in the same order.
 

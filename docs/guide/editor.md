@@ -22,13 +22,13 @@ The app compiles each kind while it runs, in the official app and in a browser a
 The Editor is closed in the default layout.
 Opening a model in it, in any of the ways below, switches to the [Editor layout](app.md#layouts).
 There the Editor takes most of the window, and the <span class="ui" markdown>:material-cube-outline: Viewport</span>, Playback, Charts and Parameters tabs share a column on the right, so the run stays in view while you edit its model.
-Untick **Open models in the Editor layout** in the View menu to open the Editor in the layout that shows instead, in a panel of its own to the right of the Viewport in the default layout.
+Uncheck **Open models in the Editor layout** in the View menu to open the Editor in the layout that shows instead, in a panel of its own to the right of the Viewport in the default layout.
 
 - Press <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> in the <span class="ui" markdown>:material-cog-outline: Model</span> tab to open the Editor on the Life starter, Conway's Game of Life written as a grid rule.
 - Press <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab to open the Editor on the sheet, node graph or grid rule the selected model was built from.
   The button appears only for a model built from one of these, such as a model applied from the Editor.
 - Press <span class="ui" markdown>:material-file-document-plus-outline: New model</span> in the Editor or the Model tab to start a [sheet](#sheets), from Blank or from a starter such as Game of Life or Forest fire.
-- Press <span class="ui" markdown>:material-graph-outline: New node graph</span> in the Editor and pick an example to open it as a node graph: Game of Life, Vote or SIR Epidemic on a grid, or Boids Flocking, Ant Foraging or Random Walk of agents.
+- Press <span class="ui" markdown>:material-graph-outline: New node graph</span> in the Editor and select an example to open it as a node graph: Game of Life, Vote or SIR Epidemic on a grid, or Boids Flocking, Ant Foraging or Random Walk of agents.
 - In the menu bar, <span class="ui" markdown>:material-file-outline: File</span> holds New model, New grid rule, New node graph, Open model and Save model, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> toggles the Editor like any other tab and switches between the default layout and the Editor layout.
 
 The Editor's header holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-graph-outline: New node graph</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, and <span class="ui" markdown>:material-check: Apply</span> at the right end.
@@ -81,7 +81,7 @@ A section that lists several things, such as the properties under **Cells** or t
 A field applies what you type when you press <kbd>Enter</kbd> or move away from it, and <kbd>Escape</kbd> puts back what the sheet holds.
 In the purpose, <kbd>Enter</kbd> starts a new line, and <kbd>Escape</kbd> applies what you typed.
 
-**World** sets the size of the grid in cells, its edges, and how much time one tick stands for.
+**World** sets the size of the grid in cells, its edges, and the length of one tick.
 With **Wrap around**, the left edge joins the right edge and the top edge joins the bottom.
 With **Walls**, cells on an edge have fewer cells around them.
 **One tick is** reads "one step (no unit)" until you give a tick a length, such as 1 day.
@@ -96,7 +96,7 @@ Each state takes a colour, and a few usual names take their usual colour as you 
 **Parameters** lists the named numbers lines can use, each with its value, its range and an optional unit.
 The value on the sheet is the one the model keeps.
 A parameter named after a column of sweep results, such as Population, takes the id `population_2`, since `runs.csv` writes a `population` column of its own.
-**Measures** plots a number worked out from every cell each tick: tick **Plot** beside a state to plot how many cells are in it.
+**Measures** plots a number worked out from every cell: turn on **Plot** beside a state to plot how many cells are in it.
 An average keeps the name it was given, such as "Average of Food", in step with its property: renaming Food to Energy renames it "Average of Energy", and the column of the results with it, until you rename the measure yourself.
 A measure cannot be named run_id, tick or time, the names of the first columns of exported stats and sweep results.
 **Colours** chooses the property that colours the cells in the Viewport.
@@ -111,7 +111,7 @@ A line either works out a result, which lines below it can use, or changes one o
 A bar at the left of each line shows its kind by colour, as the square on each add button does: blue for a look around, purple for a chance, yellow for a yes or no, grey for a calculation, green for a change, and white for a When or a Repeat.
 Hover over the bar to read the kind.
 In a sentence, each chosen value is a *chip*: a result in blue, a state with its colour, a parameter with a slider mark, and "my" before a property in grey.
-An empty slot is a *blank*, a faint box that names what it wants, such as "state" or "old state".
+An empty slot is a *blank*, a faint box that names what goes in it, such as "state" or "old state".
 Hover over a result chip to highlight the line that works it out.
 
 The add buttons under the lines add a line at the end of the card, each from a menu with a pattern of the sentence under every item:
@@ -132,7 +132,7 @@ A new line's first blank opens its *picker*, which lists only what fits there, i
 A picker opens as a framed list under its blank, titled with what it asks for, such as **Choose a value**, and a press on a filled chip opens it again.
 Where the window has no room for it under the blank, it opens above, and where neither side has room, it opens on the side with more room and scrolls.
 A number takes a typed number, a result of a line above, one of the cell's properties, a parameter, or **New parameter…**, which creates one in a dialog and puts it in the blank.
-A chance takes a number from 0 to 1 or a percent such as 30%, and refuses anything else as you type it.
+A chance takes a number from 0 to 1 or a percent such as 30%, and rejects anything else as you type it.
 "is one of the numbers" takes a list, such as 2, 3, typed in one go.
 
 ![The card of a forest fire with a When block at line 6, its value chip open on the Choose a value picker, which lists Burning neighbours from line 1, my Cover, three parameters and New parameter, over a box to type a number](../assets/app/editor-picker.png){ width="536" }
@@ -180,9 +180,9 @@ Moving a line updates its "otherwise".
 
 ### Rates
 
-A chance holds once per tick, whatever a tick stands for.
+A chance holds once per tick, whatever the length of a tick.
 A rate holds per unit of time, such as 0.1 per day, and follows the length of one tick.
-Henad turns a rate into a chance per tick as 1 − e^(−rate × tick), with the tick counted in the rate's unit.
+A rate is converted to a chance per tick by 1 − e^(−rate × tick), with the tick counted in the rate's unit.
 A rate line runs only while one tick has a length, so a model of rates sets **One tick is** under World, such as 1 day.
 
 A new rate starts in the unit of one tick.
@@ -205,7 +205,7 @@ The note reads the values the world tries while a run of the sheet is loaded, an
 Hover over it to read how long a cell stays in its state on average at this tick length.
 The average stay is left out when another line can also take the cell out of that state.
 Under an "otherwise" line the note ends with the higher lines whose turn comes first, such as "This chance holds only when line 3 does not apply."
-A rate for each infected neighbour gives the chances for 1 and 2 of them, and adds a second note when the chance at the largest count passes one half, such as "Up to 0.909 with 8.", or "Almost 1 with 8." when it rounds to 1, since a shorter tick then follows the rate more closely.
+A rate for each infected neighbour gives the chances for 1 and 2 of them, and adds a second note when the chance at the largest count passes one half, such as "Up to 0.909 with 8.", or "Almost 1 with 8." when it rounds to 1, since a shorter tick then gives a more accurate result.
 Other notes ask about a rate that looks wrong:
 
 - A rate read per week from a parameter per day says "Infection rate is per day on the sheet, but this line reads it per week."
@@ -213,13 +213,14 @@ Other notes ask about a rate that looks wrong:
 - A fixed rate below a count of the state it leads to asks "Should this rate grow with the number of Infected neighbours?" and offers **Add for each infected neighbour**.
 
 Two rate lines that take a cell out of one state compete, as Recovered and Dead do out of Infected.
-The lower line starts with "or" in place of "otherwise", a thin bracket joins the lines, and one note under the higher line states the chance of leaving and each line's share.
-A cell leaves at the sum of the rates, and each line takes the share its rate gives it, whatever the order of the lines.
+The lower line starts with "or" instead of "otherwise", a thin bracket joins the lines, and one note under the higher line states the chance of leaving and each line's share.
+A cell leaves at the sum of the rates, split between the lines in proportion to each rate, whatever the order of the lines.
 
 A button's card has no duration, so it takes chances and no rate.
 Removing the unit of one tick leaves every rate line with "Not run yet: set how long one tick is, under World on the sheet".
-When the length of one tick changes, a notice under the Time line names the lines that use chances per tick, which do not follow the time scale.
-**Convert to a rate** in the line menu turns a typed chance into the rate that gives the same chance at the current tick, and **Convert to a chance** turns a typed rate back.
+When the length of one tick changes, a notice under the Time line names the lines that use chances per tick.
+Those chances do not change with the tick length.
+**Convert to a rate** in the line menu converts a typed chance to the rate that gives the same chance at the current tick, and **Convert to a chance** converts a typed rate back.
 
 ### When blocks
 
@@ -233,13 +234,13 @@ Once the card holds a When, a note above the add buttons says they add a line at
 
 A change added inside a When with no condition starts as "always".
 A Become there changes from the state named by the nearest When around it that tests "my [property] is [state]".
-A grey note under it says which condition it holds under, such as "Only when line 4 holds: my Status is Dead.", and **Choose when** reminds you that the When already has a condition.
+A grey note under it says which condition it holds under, such as "Only when line 4 holds: my Status is Dead.", and the **Choose when** picker says that the When already has a condition.
 A result inside a When is still worked out for every cell, and only the lines after it inside that When can use it.
 An empty When says "Nothing inside yet."
 
 ![A When on my Cover is Empty holding a When with chance 0.01, which holds a Become, each block ending with its add row](../assets/app/editor-when.png){ width="530" }
 
-Two offers fold a When that holds no more than its lines need:
+Two offers remove a When that its lines do not need:
 
 - A When whose test every line inside it already makes, as "When my Status is Dead" around Become lines from Dead, offers **Remove this When**.
 - A When around one change that holds always offers **Move it into line 5**, which moves the When's condition into the change and removes the When.
@@ -380,7 +381,7 @@ Inside a Repeat a Become counts the agents it changed, and every other change sh
 
 ### The Diagram
 
-Press **Diagram**, beside **Lines** after the Card heading, to draw each card as boxes and arrows in place of its lines.
+Press **Diagram**, beside **Lines** after the Card heading, to draw each card as boxes and arrows instead of its lines.
 Each line is a box with its sentence, the result it works out on its right, and on its left the results of lines above that it reads.
 An arrow runs from a result to every line that reads it, and a frame labelled "Inside line N" surrounds the lines inside each When.
 The Diagram is read-only: edit the lines to change it, and press **Lines** to return to them.
@@ -506,9 +507,9 @@ The function stays in the panel until you remove it.
 A random draw inside a function draws other numbers for each call, so a selection that draws numbers draws different ones once it becomes a function.
 Ungroup keeps the numbers the call drew.
 
-Press <span class="ui" markdown>:material-file-import-outline: Import function</span> and pick another model file to list its functions.
+Press <span class="ui" markdown>:material-file-import-outline: Import function</span> and select another model file to list its functions.
 Press Import beside one to copy it, and every function it calls, into this model, under the name in the field beside it.
-A name the model already uses, or the name of a function the imported one calls, is refused, so type another one.
+A name the model already uses, or the name of a function the imported one calls, is rejected, so type another one.
 The model file records the name of the file each imported function came from.
 An import copies the function alone, so a function that reads a lane or a category of the other model shows a problem until this model declares one with the same id.
 
@@ -525,7 +526,7 @@ Press <span class="ui" markdown>:material-code-braces: WGSL</span> in the canvas
 Each value is named after its node, so `n13_out` is the output of node n13.
 An init pass runs on the host when the model is built and has no WGSL.
 
-Right-click a node and pick an output under **View in viewport** to colour the preview by that value, one cell at a time.
+Right-click a node and select an output under **View in viewport** to colour the preview by that value, one cell at a time.
 A number goes through a colour ramp, a flag shows as the ramp's two ends, and a category shows in its own colours.
 The toolbar reads **Viewing n11.count of pass step**, and <span class="ui" markdown>:material-eye-off-outline: Stop viewing</span> returns to the model's own colours.
 Viewing changes nothing in the model file.
@@ -586,12 +587,12 @@ The line numbers are those of the gutter beside the code.
 Press a problem to move the cursor to it.
 The list holds the problems of the last Apply, and an edit since then shows its problems on the next one.
 
-The check refuses a step that could run without end or reach past its own cell.
-[What is refused](../reference/model-files.md#what-is-refused) lists each refusal, and [Limits](../reference/model-files.md#limits) the sizes a step has to keep within.
+The check rejects a step that could run without end or reach past its own cell.
+[What is rejected](../reference/model-files.md#what-is-rejected) lists each rejection, and [Limits](../reference/model-files.md#limits) the sizes a step has to keep within.
 
-The device can still refuse a rule that the check passed, as a browser's WebGPU can.
-When it refuses the rule as the rule is built, before the run passes tick 0, the Editor reads **Model build failed. Fix the problem below.** over the device's message, and the run is gone.
-The message appears a moment after the build starts, in place of **Model applied.**
+The device can still reject a rule that the check passed, as a browser's WebGPU can.
+When it rejects the rule as the rule is built, before the run passes tick 0, the Editor reads **Model build failed. Fix the problem below.** over the device's message, and the run is gone.
+The message appears a moment after the build starts, instead of **Model applied.**
 Fix the text and press Apply to build it again.
 A fault that no edit of the text can fix, such as a lost device or a device out of memory, opens the app's fault dialog instead.
 

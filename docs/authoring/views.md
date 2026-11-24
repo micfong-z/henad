@@ -18,7 +18,8 @@ pub const PALETTE: [[u8; 4]; 2] = [
 ```
 
 The palette is RGBA, with one entry per value a cell or an agent can carry.
-Cells and agents index the same table, which makes a cell value a palette index by construction and leaves no separate colour map to keep in step.
+Cells and agents index the same table.
+A cell value is a palette index by construction, and there is no separate colour map to keep in step.
 
 The same literal feeds the [stat descriptors](statistics.md).
 Take your stat colours from the palette and each chart line automatically matches the thing it counts.
@@ -69,8 +70,9 @@ The `agent_lanes!` macro accepts a `color = <lane>` line that specifies the lane
 color = has_food;
 ```
 
-Ants points it at a lane it already keeps, leaving no second lane to write.
-Boids derives a dedicated `color` lane from `heading_octant`, which gives eight cyclic hues, and a turning flock therefore shifts hue instead of jumping between colours.
+Ants points it at a lane it already keeps, and writes no second lane.
+Boids derives a dedicated `color` lane from `heading_octant`, and its eight octants take eight cyclic hues.
+A turning flock therefore shifts hue instead of jumping between colours.
 Colouring by speed was tried first, but it collapsed to a single colour once the flock settled at `min_speed`.
 
 A model that declares no colour lane draws its whole population in `PALETTE[0]`.

@@ -28,7 +28,7 @@ In [your own project](your-project.md), `cargo run --release` runs the project's
 !!! warning "Release mode"
 
     The debug build is slow, and the sim thread will not run at full speed.
-    Make sure that `--release` is used to build the release version.
+    Pass `--release` to build the release version.
 
 See the [app tour](app.md) for an introduction to the UI.
 

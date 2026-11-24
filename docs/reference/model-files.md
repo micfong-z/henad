@@ -19,7 +19,7 @@ Nothing is built with cargo.
 
 A model file holds data and WGSL alone, and runs no native code.
 The WGSL runs on the GPU inside the checks of naga and wgpu.
-The checks below refuse loops and bound the work of one cell, so every step ends.
+The checks below reject loops and bound the work of one cell, so every step ends.
 A heavy step on a large grid can still take long enough per tick to lose the GPU device, as [Limits](#limits) describes.
 
 !!! info "Henad 0.4"
@@ -41,7 +41,7 @@ At the same grid size, density and seed it steps through the same cells as the e
 ## The format
 
 A model file is one TOML file.
-Every table refuses a key it does not know, at the key's line.
+Every table rejects a key it does not know, at the key's line.
 Line ends can be `\n` or `\r\n`.
 
 ### Header
@@ -58,8 +58,8 @@ Line ends can be `\n` or `\r\n`.
 The name and the description hold no control character, such as a tab or an escape, and neither do a state's label, a parameter's label or an option name.
 
 The three header keys are read before anything else.
-A file of another format, version or kind is refused at that key, even when it holds keys this version does not know.
-A refused kind's message lists the three kinds this version reads.
+A file of another format, version or kind is rejected at that key, even when it holds keys this version does not know.
+A rejected kind's message lists the three kinds this version reads.
 
 ### `[grid]`
 
@@ -83,7 +83,7 @@ The states are numbered from 0 in the order of their tables.
 | `initial` | Id of an `f32` parameter whose value is the state's share of the cells at tick 0. Left out for one state at least |
 
 A state's constant is its label in upper snake case, made of the label's ASCII letters and digits: `Dead` gives `DEAD`, and `Infected cells` gives `INFECTED_CELLS`.
-Two states that give the same constant are refused, as is a constant that starts with a digit, names something the template declares, or is a reserved word of WGSL.
+Two states that give the same constant are rejected, as is a constant that starts with a digit, names something the template declares, or is a reserved word of WGSL.
 A state cannot be labelled `run_id` or `tick`, since `--export-stats` and a sweep's `series.csv` write columns of those names before the stats.
 
 At tick 0 the engine seeds the cells on the CPU from the run's seed, one draw per cell in row order.
@@ -102,16 +102,16 @@ One table per parameter, at most 64, in the vocabulary of [`--params --json`](cl
 | `min`, `max` | Bounds of an `f32` or a `u32`, both included |
 | `default` | Value at the start: a number, `true` or `false`, or a choice's option name |
 | `step` | Step of an `f32`'s slider in the app, counted from `min`. The slider never passes `max`, and a typed `min` or `max` stays as typed. Optional |
-| `integer` | `true` makes an `f32` take whole numbers alone: `--set` refuses a fraction, and a sampled design or a search draws whole numbers. `min`, `max`, `default` and `step` are whole numbers then. Written only when `true` |
+| `integer` | `true` makes an `f32` take whole numbers alone: `--set` rejects a fraction, and a sampled design or a search draws whole numbers. `min`, `max`, `default` and `step` are whole numbers then. Written only when `true` |
 | `options` | Option names of a `choice`, as a list of strings |
 | `format` | `"percent"` to show an `f32` fraction as a percentage, or `"plain"`. `"plain"` when left out |
 
-A key that does not fit the parameter's kind is refused, such as `step` or `integer` on a `u32`, or `options` on an `f32`.
+A key that does not fit the parameter's kind is rejected, such as `step` or `integer` on a `u32`, or `options` on an `f32`.
 The default has to lie within the bounds, and a choice's option names follow the rules of `choice_param`: no empty name, no name that reads as an index, no comma or colon in a name, no name `all`, and no name twice.
 A sweep's level text splits at a comma, reads a colon as a range and `all` as every option, and could not list such a name.
 An id cannot be `width`, `height`, `seed`, `tick`, `grid_width` or `grid_height`, start with `henad_`, or be a reserved word of WGSL.
 Every parameter of a grid rule applies when the model is built.
-A grid rule refuses the keys `hidden` and `tick_unit`, which only a graph file reads, at the table's line.
+A grid rule rejects the keys `hidden` and `tick_unit`, which only a graph file reads, at the table's line.
 
 #### Time scale
 
@@ -140,7 +140,7 @@ Neither key changes the code of a file that leaves both out.
 
 The step is a literal string, and the file holds its text as written.
 A problem in the step is then reported at its line in the file.
-A string with escapes is refused, as is a step that holds `'''`.
+A string with escapes is rejected, as is a step that holds `'''`.
 
 ### Code identity
 
@@ -149,7 +149,7 @@ Two files that differ only in comments outside the step, key order, blank lines 
 A change inside the step, a comment included, or to any value is a change of code.
 
 A sweep's manifest records the canonical text as `model.code`, with its hash.
-A [resume](cli.md#resuming), a [search resume](cli.md#resuming-a-search) and a [merge](cli.md#shards-and-merging) of a model file's model are refused when the code differs from the code the folder's runs ran.
+A [resume](cli.md#resuming), a [search resume](cli.md#resuming-a-search) and a [merge](cli.md#shards-and-merging) of a model file's model are rejected when the code differs from the code the folder's runs ran.
 
 ## The step
 
@@ -194,7 +194,7 @@ A run is the same on every replay with its seed.
 
 A line `#import henad::<module>::{a, b}` or `#import henad::<module>::item` imports from the [shared modules](../authoring/shaders.md#shared-wgsl).
 The modules `henad::rng` and `henad::space` hold most of what a step uses.
-An imported function that breaks a rule below is refused at the step's call to it.
+An imported function that breaks a rule below is rejected at the step's call to it.
 
 ### What the engine owns
 
@@ -202,11 +202,11 @@ The engine owns the rest of the model.
 It colours each cell by its state's colour, and counts the cells in each state, one stat per state named by the state's label.
 A grid rule declares no actions.
 
-## What is refused
+## What is rejected
 
 The checks run when the file is loaded, before anything is built, and each problem is reported at its line and column in the file when it has one.
 
-| Refused | Reason |
+| Rejected | Reason |
 |---|---|
 | `loop`, `for` and `while` | A step without loops does bounded work and always ends |
 | `@group`, `@binding` and any other resource binding | The engine binds every buffer the step uses |
@@ -262,7 +262,7 @@ A tick pass reads a field with `field.get` and deposits into it with `field.depo
 | `layers` | Names of the layers, `["value"]` when left out |
 | `static` | `true` for a field that only init passes write and that takes no deposits |
 | `combine` | Rule that merges the deposits of a field that is not static: `"max"` or `"sum"` |
-| `resolution` | Step that a `"sum"` counts deposits in, a power of two from 1 down to 2^-24 written as a number, such as `1.52587890625e-5` for 2^-16. Required with `"sum"`, and refused with any other rule |
+| `resolution` | Step that a `"sum"` counts deposits in, a power of two from 1 down to 2^-24 written as a number, such as `1.52587890625e-5` for 2^-16. Required with `"sum"`, and rejected with any other rule |
 | `finish` | Id of a function run on each cell after the merge, taking one `f32` input `value` and returning one `f32` output `value`. Optional |
 | `initial` | Value of every cell at the start. When left out, 0 or the category's first variant |
 
@@ -272,19 +272,20 @@ The update is a tick pass over cells on the GPU, so the `finish` and the functio
 The updates of two fields that share a `finish` draw different random numbers.
 With `"max"`, a cell becomes the larger of itself and its largest deposit.
 With `"sum"`, each deposit is rounded half to even to a whole number of resolutions, the numbers add up in one 32-bit word per cell, and the cell becomes itself plus the word times the resolution.
-Whole numbers add up in any order to the same word, so a run replays exactly on one device and the word on the device equals the word the host evaluator computes.
+Whole numbers add up in any order to the same word.
+A run replays exactly on one device, and the word on the device equals the word the host evaluator computes.
 A total under 2^24 resolutions merges exactly.
 
 The word wraps once a cell takes 2^32 times the resolution in one tick, 65536 at 2^-16.
-A deposit whose amount is a number or a parameter reaching that bound is refused when the file is checked, with the bound in the message.
+A deposit whose amount is a number or a parameter reaching that bound is rejected when the file is checked, with the bound in the message.
 Any other deposit is not checked against it, so a model whose cells can take that much in a tick needs a coarser resolution.
 
-A resolution that is not a power of two, such as 0.001, is refused at its line, with the nearest allowed value in the message.
+A resolution that is not a power of two, such as 0.001, is rejected at its line, with the nearest allowed value in the message.
 A power of two keeps the products of the deposit and the merge exact on every device, including one that compiles with fast math.
 
 ## Limits of a graph model
 
-A graph model is checked against these limits when the file is loaded, and a file past one is refused.
+A graph model is checked against these limits when the file is loaded, and a file past one is rejected.
 Each limit belongs to the node library version.
 [`henad_graph::limits`](https://docs.rs/henad-graph/latest/henad_graph/limits/) lists every one.
 
@@ -312,7 +313,7 @@ A function call costs one unit plus the function's cost, counted again at each c
 A `region.repeat` costs `1 + max × (body + 1)`, where `max` is its bound and `body` the cost of its body, so a Repeat of at most 100 around a body of 20 units costs 2101.
 A `grid.fold` costs `1 + positions × (body + 1)`, with one position for each neighbouring cell it reads, the centre included when `include_center` holds.
 An `agent.radius_fold` costs 8 units plus its body, counted once, since the number of agents it visits is known only as it runs.
-A pass that costs more than 65536 units is refused, and the message names its heaviest node.
+A pass that costs more than 65536 units is rejected, and the message names its heaviest node.
 
 ### Work of a run
 
@@ -328,9 +329,9 @@ Henad checks two budgets of work before it builds a model, at the model's parame
 | One submission to the GPU: 64 ticks of steps, with the display and stat passes, or the passes of one press | 600,000,000,000 |
 | One run on the host: the init passes at a build, or their rerun on a press | 4,000,000,000 |
 
-A model past either budget is refused before anything is built.
+A model past either budget is rejected before anything is built.
 A single run stops with an error, a sweep stops before its first run, and a search records each candidate past a budget as `refused`.
-A sheet's refusal names its lines, and a graph's names the heaviest pass.
+A sheet's rejection names its lines, and a graph's names the heaviest pass.
 
 Agents that gather visit more agents than an even spread puts in a walk.
 Henad therefore measures a model with an `agent.radius_fold` as it runs.
@@ -370,7 +371,7 @@ A whole number worked out from floats, such as a count of agents within a distan
 A file of kind `sheet` holds a sheet: the model in the order a reader meets it, with its world, its properties, its parameters, measures, colours and buttons, and a card of lines for each kind of thing.
 Henad reads the sheet, checks it, and lowers it to a graph model, which then builds and runs as a graph model does.
 This version lowers sheets on a grid, and sheets of one kind of agent in open space, described under [A sheet of agents](#a-sheet-of-agents).
-A line this version cannot lower yet is refused at its table with a message that says so.
+A line this version cannot lower yet is rejected at its table with a message that says so.
 
 `crates/henad-graph/sheets/game_of_life.toml` in Henad's repository is Conway's Game of Life as a sheet.
 The comment above each card is the card's heading, and the comment above each line is the sentence the line reads as.
@@ -386,10 +387,10 @@ A program reads one with `henad::rules::ModelFile::parse`, and `ModelFile::sheet
 ### The format of a sheet
 
 After the header, the `[sheet]` table holds the sheet's `version`, `1` in this version, its `id`, its `name`, an optional `purpose`, and `next_line`, the number the next new line takes.
-A sheet of a newer version is refused at its `version`.
+A sheet of a newer version is rejected at its `version`.
 The other tables follow in this order: `[world]`, `[time]`, the properties of each kind of thing (`[[cells.property]]` on a grid, an `[[agents]]` table with its `[[agents.property]]` tables in open space), `[[parameter]]`, `[[measure]]`, a colour rule for each kind of thing (`[color.cells]`, or `[color.<kind>]`), `[[button]]` and `[[card]]`.
 Each line of a card is a `[card.line.<id>]` table, its id `l` and a number unique in the file.
-Every table refuses a key it does not know, at the key's line.
+Every table rejects a key it does not know, at the key's line.
 
 ### Time and rates
 
@@ -399,9 +400,10 @@ Its default is the sheet's length, its `min` a hundredth of it and its `max` 30 
 A sweep varies it like any other parameter, and every tick length runs the same code with the same keys.
 
 A rate, `kind = "rate"`, holds a `rate`, its `rate_unit` and an optional `tries`, the count it is taken for each of.
-It stands as a line of its own, as the condition of a change or a When, or inside an all of, an any of or a none of.
+It can be a line of its own, the condition of a change or a When, or an item inside an all of, an any of or a none of.
 A rate `r` per unit holds within one tick with the chance 1 − e^(−r Δt), where Δt is one tick counted in the rate's unit, and for each of a count `n` with the chance 1 − e^(−r Δt n).
-A rate in another unit than the tick's is multiplied by the ratio of the two units, so a rate per week in a model of days is divided by 7.
+A rate in another unit than the tick's is multiplied by the ratio of the two units.
+A rate per week in a model of days is divided by 7.
 A value that reads only parameters and typed numbers is the same for every cell, and the host computes it once per build.
 Such a rate with no count keeps its chance to 2^-32, so a rate as small as 1e-8 per tick still holds at its own chance.
 A chance line or phrase whose chance is a parameter or a typed number, with no count, keeps its chance to 2^-32 too, and a chance of 1 always holds.
@@ -409,7 +411,7 @@ Every other rate and every other chance is resolved to 2^-24: a chance per tick 
 A rate for each of the cells around reads e^(−r Δt k) for each count `k` from a table the host computes, and the device computes no exponential.
 A rate worked out for each cell, or for each of a count of agents, takes one exponential per element.
 
-Two or more Become lines that leave one state of one property at a rate each, the rate standing as the condition or as an item of an all of, compete.
+Two or more Become lines that leave one state of one property at a rate each, with the rate as the condition or as an item of an all of, compete.
 A cell leaves with the chance of the sum of their rates, and each line takes the share its rate gives it, whatever the order of the lines.
 The share of the cells each line takes then follows the ratio of the rates at any tick length.
 A group whose rates read only parameters and typed numbers, with no count and nothing else in their conditions, keeps each share to 2^-32, as a lone rate with no count does.
@@ -442,7 +444,8 @@ Between a change inside a Repeat and a change of the same property outside it, o
 
 The agents can walk on a ground of cells, one per unit of the world.
 A ground property holds states painted at the start, or a number that agents mark with Leave, keeping the largest mark or adding the marks up, and that fades by its share kept per tick, from 0 to 1.
-Each tick multiplies the property by its share as it is, so a share outside 0 to 1, or a parameter whose range leaves 0 to 1, shows a warning at the property.
+Each tick multiplies the property by its share as it is.
+A share outside 0 to 1, or a parameter whose range leaves 0 to 1, shows a warning at the property.
 A property that adds up its marks rounds each mark to a multiple of 2^-16, so a mark below 2^-17 adds nothing, and one cell adds up at most 65536 in a tick and starts again from 0 past it.
 A Leave of a number or a parameter on such a property warns at its line when the kind's `max_count` agents, all on one cell, can leave more than that in a tick.
 A Leave of any other amount is worked out as the model runs and has no bound, and it warns at its line when `max_count` is 65536 or more.
@@ -463,17 +466,17 @@ In a world with walls a look at agents sees no one across an edge, and its offse
 The looks at agents of one card share one walk of the agents around each agent, at the largest of their distances, and the neighbour index takes its size from the largest distance as the parameters stand.
 A look past the most agents one agent can visit stops the run with a message that names the look's line, such as "line 1, Flockmates".
 A program asks `SheetFile::shortfalls` whether a population fits the work one run may take, and a model that does not fit is named the same way.
-A larger world spreads the same agents thinner and a look meets fewer of them, so a population refused in the declared world can fit in a wider and taller one.
+A larger world spreads the same agents thinner and a look meets fewer of them, so a population rejected in the declared world can fit in a wider and taller one.
 
-This version refuses a second kind of agent, walls around agents that move by an arrow, a blocked ground under agents that move by an arrow, the cell ahead of agents that move by an arrow, a start on a ground state painted larger than one cell, and Keep between, When, Repeat, Leave, Record and Move to inside a Repeat, each at its table.
+This version rejects a second kind of agent, walls around agents that move by an arrow, a blocked ground under agents that move by an arrow, the cell ahead of agents that move by an arrow, a start on a ground state painted larger than one cell, and Keep between, When, Repeat, Leave, Record and Move to inside a Repeat, each at its table.
 A card changes a property by Set or by Steer, and moves by an arrow or to a place.
-A line that changes a property the other way is refused with a message naming the line that came first.
+A line that changes a property the other way is rejected with a message naming the line that came first.
 
 ### Problems at their lines
 
 Every problem is reported at the table of the sheet it is about, and a line's problem at its `[card.line.<id>]` table.
 A warning keeps the model running, and a line with a blank slot is left out of the model with a warning that says what to fill in.
-A sheet with no property reads with a warning at `[world]`, and is refused at the same table with the same words when it builds.
+A sheet with no property reads with a warning at `[world]`, and is rejected at the same table with the same words when it builds.
 The lowered graph is checked as well, and a problem found there is placed at the table of the line its node was lowered from, or at `[sheet]` when no line owns the node.
 Such a problem carries no node or pass of the graph.
 Its message keeps the wording of the graph's checks, since it points to a fault in the lowering more than to a mistake in the sheet.
@@ -482,11 +485,11 @@ Its message keeps the wording of the graph's checks, since it points to a fault 
 ### Code identity of a sheet
 
 The code of a sheet is the code of the graph it lowers to, the graph's semantic text in the format `henad-graph/1`.
-A sweep's manifest records that text as `model.code`, so a results folder replays without reading the sheet.
+A sweep's manifest records that text as `model.code`, for a results folder to replay without reading the sheet.
 The sheet's name, the ids of its parameters, states, properties, cards, lines and buttons, the names of its states, parameters and measures, its parameter defaults, bounds and steps, its colours and the keys of its draws enter the code through the graph.
 A comment, a note, the `purpose`, a parameter's unit and meaning, a measure's id and the name of a result line stay outside it, and so does a new order of two lines that cannot change the result, such as two Steers of one property.
 The draws of a button's press also depend on the button's place among the sheet's buttons, so a button added or deleted above it changes the numbers its presses draw, while the keys of its lines stay the same.
-A [resume](cli.md#resuming) of a sheet's sweep is refused when the code differs, as for any model file.
+A [resume](cli.md#resuming) of a sheet's sweep is rejected when the code differs, as for any model file.
 
 ### A sheet converted to a graph model
 
@@ -496,7 +499,8 @@ It returns a new file of kind `graph` holding the graph the sheet lowers to, und
 Every node keeps its id and the key of its draws, so the graph model runs tick for tick like the sheet at one seed.
 
 The converted graph model has its own code.
-Its id, name and description enter its semantic text, so its code differs from the sheet's before any edit, and a sweep of it is a sweep of another model.
+Its id, name and description enter its semantic text.
+Its code differs from the sheet's before any edit, and a sweep of it is a sweep of another model.
 The `origin` record of its `[editor]` region names the sheet: `code` is the sheet's code, and `copy_code` the graph model's own code at conversion.
 `kind`, `model`, `name` and `file` name the sheet and its file, `hash` is the FNV-1a hash of the sheet's canonical text, and `converted` the date.
 The app lists the changes of a copy only while the sheet's code still hashes to `code`, so an edit of a note on the sheet leaves them listed.
@@ -522,7 +526,8 @@ The sheet's text stays outside the code, so a note or a comment edited between t
 The manifest then holds the sheet as the latest session ran it.
 A session that runs the same code with no sheet, such as the graph that `--print-lowered` prints, keeps the recorded sheet.
 A merge keeps the sheet text of the lowest shard that records one.
-A replay runs the graph that `model.code` records and never reads the sheet, so a folder still replays when a later Henad reads the sheet differently.
+A replay runs the graph that `model.code` records and never reads the sheet.
+A folder still replays when a later Henad reads the sheet differently.
 In the desktop app, <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> in the [Results tab](../guide/app.md#opening-results) opens the recorded sheet, and opens the recorded graph when the folder records no sheet.
 A program reads the text with `ResultSet::author`.
 A folder that a model file of another kind or a compiled model wrote leaves `model.author` out.

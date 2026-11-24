@@ -82,7 +82,7 @@ cargo install --locked trunk --version "$(cat scripts/trunk-version)"
 ```
 
 The web build's flags live in `.cargo/config.toml`.
-The script refuses to run while `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` is set, since either variable would replace them, and your own wasm-only flags go into that file.
+The script stops with an error while `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` is set, since either variable would replace them, and your own wasm-only flags go into that file.
 A host serving `dist/` has to send the `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers.
 Without them the app runs on one thread in Chrome, and does not start in a browser that blocks shared memory.
 A project site on GitHub Pages sits under `/<repo>/`, and builds with `scripts/build_web.sh build --release --public-url /<repo>/`.

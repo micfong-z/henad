@@ -14,9 +14,9 @@ Grids and agents each have a CPU trait and a GPU trait, and networks have a CPU 
 
 |  | CPU | GPU |
 |---|---|---|
-| **Grid** — cellular automata over `u8` cells | [`GridModel`](grid-models.md) | [`GpuGridModel`](gpu-grid-models.md) |
-| **Agents** — a population, optionally over a field | [`AgentModel`](agent-models.md) | [`GpuAgentModel`](gpu-agent-models.md) |
-| **Network** — nodes joined by edges | [`NetworkModel`](network-models.md) | |
+| **Grid** (cellular automata over `u8` cells) | [`GridModel`](grid-models.md) | [`GpuGridModel`](gpu-grid-models.md) |
+| **Agents** (a population, optionally over a field) | [`AgentModel`](agent-models.md) | [`GpuAgentModel`](gpu-agent-models.md) |
+| **Network** (nodes joined by edges) | [`NetworkModel`](network-models.md) | |
 
 Pick the topology first.
 A model holding one value per cell of a fixed lattice is a grid model.
@@ -26,12 +26,12 @@ If your state is a population whose members interact along edges that last from 
 Then pick the backend, and start on the CPU.
 A CPU model is ordinary Rust, so `dbg!` and a test work on it.
 The GPU version is WGSL plus a declared list of passes, and every GPU model in the repository was written after its CPU counterpart already worked.
-Each one starts from that counterpart's tick 0 bit for bit, which keeps the pair comparable.
+Each one starts from that counterpart's tick 0 bit for bit, to keep the pair comparable.
 [Porting a model to the GPU](porting.md) picks up from there.
 
-!!! note "`SimState` is not a sixth path"
+!!! note "`SimState` belongs to the runner"
 
-    `SimState` belongs to the runner, which drives a state through it.
+    The runner drives a state through `SimState`.
     Implement one of the five traits above and leave `SimState` to the engine.
 
 ## The five declarations

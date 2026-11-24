@@ -101,7 +101,7 @@ The files here are the GPU counterparts of the data structures in `henad-core`.
 
 :   A multi-level float sum over a population, for stats an `atomic<u32>` cannot hold.
     The model supplies only the leaf, and every level above it belongs to this file.
-    Levels pair in fixed order, which keeps the sum reproducible.
+    Levels pair in fixed order, to keep the sum reproducible.
 
 `readback.rs`
 
@@ -182,19 +182,19 @@ Everything else the device rejects falls to the scopes below.
 
 **Error scopes, around the build.**
 Left alone, wgpu's default handler panics on any error that no scope claims, and a bad uniform layout or an allocation the device has no memory for then ends the process.
-`gpu::fault::catching_on` wraps model construction in scopes for all three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as the floor under every path that no scope covers, egui's own rendering included.
+`gpu::fault::catching_on` wraps model construction in scopes for all three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as the fallback for every path that no scope covers, egui's own rendering included.
 
 Error scopes are **thread-local**, and a scope pushed on the UI thread never sees what a sim thread does.
 The uncaptured-error sink covers that asymmetry.
 
 **The panic catch, around the run loop.**
-The run loop is wrapped once at thread start, outside the loop, which keeps the catch off the per-tick path.
+The run loop is wrapped once at thread start, outside the loop, to keep the catch off the per-tick path.
 See [the CPU backend](cpu-backend.md#faults) for the global fallback that sits alongside the thread-local record.
 
 ## Traps already handled
 
 Each of these failed silently or misleadingly once.
-The notes record why the current shape is load-bearing.
+The notes record why the current shape has to stay.
 
 **A timestamp stamped on an empty compute pass is never written.**
 The symptom is a `start` of 0 and an absurd elapsed time, an absolute GPU tick around 4e14 ns.

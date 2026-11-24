@@ -52,7 +52,8 @@ pub struct Deposits {
 }
 ```
 
-An agent that writes one layer leaves the other layers at the combine's identity, which keeps every lane dense and saves each layer from needing its own agent list.
+An agent that writes one layer leaves the other layers at the combine's identity.
+Every lane stays dense, and no layer needs its own agent list.
 The lanes are allocated once for the population and reused every tick, and ants fills them from `run_deposit_pass`.
 
 ### Combining
@@ -89,7 +90,7 @@ This arm costs a pass over the agents and needs no per-worker grid.
 
 Between the two dense arms the choice is made at construction, from whether the shadow scratch fits a 256 MiB budget.
 Banded takes over per call, whenever there are more cells than deposits.
-Both judgements depend on things that vary with the machine, which puts a hard requirement on the arms: **all three must produce identical bits**.
+Both judgements vary with the machine, so all three arms must produce identical bits.
 Otherwise a model's results would depend on where it ran.
 A test pins each arm explicitly and checks that they agree, in both the dense and the sparse regime.
 
@@ -122,7 +123,7 @@ A `GridModel` you have already written and tested drops in underneath a populati
 
 A field declares its own parameters, and the engine appends them after the model's parameters.
 Both `from_params` calls receive their own 0-based slice, worked out from the descriptor lengths.
-A parameter added to the model therefore cannot shift the field's indices, and a parameter added to the field cannot shift the model's indices.
+A parameter added to the model or to the field therefore cannot shift the other's indices.
 
 For ants, the composed list looks like this:
 

@@ -37,7 +37,7 @@ ants/
 `agent_lanes!` emits one `Vec<T>` per lane, each reachable as a named field, so storage stays struct-of-arrays throughout.
 Lanes named `pos_x` and `pos_y` are required, because the engine builds both the neighbour index and the point view from them.
 
-Each lane is declared `dual` or `plain`, one decision per lane rather than one for the whole population.
+Each lane is declared `dual` or `plain`.
 
 `dual pos_x / next_pos_x`
 
@@ -82,11 +82,12 @@ These four types wire your model into the engine.
 :   A per-chunk reduction merged in chunk order, or `()` when there is nothing to count.
     `u32` and `u64` already implement it as a sum.
     Chunks merge in the order they were created, whatever order they complete in, and a tally therefore never depends on how rayon schedules the work.
-    The accumulated value survives across ticks, which ants relies on to count cumulative deliveries.
+    The accumulated value survives across ticks, and ants counts its cumulative deliveries this way.
 
 `Params`
 
-:   Hot parameters extracted once per tick, leaving the kernel with no enum matching to do.
+:   Hot parameters extracted once per tick.
+    The kernel then has no enum matching to do.
     See [parameters](parameters.md).
 
 ## The step pass

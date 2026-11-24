@@ -145,7 +145,7 @@ The entry's metadata is a `Structure::Network` carrying the chunk size, the node
 
 A GPU entry holds no device, and builds on the device that the host passes to `ModelEntry::build`.
 Built with no device, it returns a fault instead of a state.
-On a machine without a device the app and the command line leave the GPU models **out of the list entirely**, instead of listing them and letting them fail on selection.
+On a machine without a device the app and the command line leave the GPU models out of the list.
 
 A GPU entry also carries a capacity check.
 The app asks it whether the current parameters fit the device, and if they do not it disables Build with a reason instead of letting wgpu take the process down.

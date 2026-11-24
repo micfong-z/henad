@@ -6,7 +6,7 @@ icon: material/grid
 
 # Writing a CPU grid model
 
-In this tutorial we'll build Conway's Game of Life (Life) on the CPU from scratch, which automatically uses all available cores.
+In this tutorial we'll build Conway's Game of Life (Life) on the CPU from scratch, and it will automatically use all available cores.
 
 !!! info "Henad 0.3"
 
@@ -124,8 +124,8 @@ impl GridModel for LifeModel {
 }
 ```
 
-1. The ID is the model's handle, and you can run this model with `cargo run --release --bin my-model-cli -- [ID]`.
-   The example Game of Life already has `game_of_life`. A model set holds each ID once, and our ID differs so that both models can sit in one set, such as one that also holds `henad::models::example_models()`.
+1. The id is the model's handle, and you can run this model with `cargo run --release --bin my-model-cli -- [ID]`.
+   The example Game of Life already has `game_of_life`. A model set holds each id once, and our id differs so that both models can sit in one set, such as one that also holds `henad::models::example_models()`.
 2. The description shows up next to the model in the picker, so keep it to one line saying what the model actually is.
 
 ### Colours
@@ -227,7 +227,7 @@ Two associated items are required, but we won't implement them in this tutorial.
     ```
 
     Life needs none of this, because its rule reads no parameters at all: the one parameter we add [below](#parameters) is only read by `init`, once, when the grid is built.
-    So `type Params = ()` and an empty `from_params` are this model's finished form rather than a stub we are leaving for later.
+    So `type Params = ()` and an empty `from_params` are this model's finished form.
 
     The [Parameters](../../authoring/parameters.md#hot-parameters) page covers the mechanism in full.
 
@@ -295,7 +295,7 @@ For context, here is the template's `src/lib.rs` before our three lines join it:
 ```
 
 `register_grid_model` type-erases the model into a `ModelEntry`, and `models()` collects the entries into a `ModelSet`.
-A set rejects a second model whose ID it already holds.
+A set rejects a second model whose id it already holds.
 The name, description, parameters, stat series and topology are all read from the trait, so an entry carries nothing hand-written that could go wrong.
 [Model sets](../../authoring/model-sets.md) covers the set in full.
 
@@ -346,10 +346,10 @@ henad::params! {
 
 The macro generates two things: a `descriptors()` function returning the list in declaration order, and a `const` per entry holding that entry's index.
 
-`f32_param` takes the ID, the label the UI shows, then the default, the minimum, the maximum, and an optional slider step.
+`f32_param` takes the id, the label the UI shows, then the default, the minimum, the maximum, and an optional slider step.
 
 The `.on_reload()` marks the parameter as taking effect only on the next reload.
-Because `init` is the only code that looks at the density, dragging that slider on a running grid could achieve nothing.
+Because `init` is the only code that looks at the density, dragging that slider on a running grid would achieve nothing.
 This will affect its appearance in the UI.
 
 Next we forward the descriptors and read the value in `init`:
@@ -390,7 +390,8 @@ parameters for life (Game of Life):
 ## Statistics
 
 The statistics are the last missing piece.
-`STATS` declares the series once, and `stats` returns bare numbers in that same order, which keeps labels and colours in one place so that a series cannot end up mislabelled.
+`STATS` declares the series once, and `stats` returns bare numbers in that same order.
+Labels and colours live in one place, so a series cannot end up mislabelled.
 
 ``` rust title="src/life.rs"
     const STATS: &'static [StatDescriptor] = &[StatDescriptor::new("Alive", PALETTE[1])];
@@ -416,11 +417,11 @@ fn count_alive(cells: &[u8]) -> u64 {
 
 1. `STATS_CHUNK` is the number of cells per chunk in a reduction, 8192, shared by every model so that nobody has to pick a number.
 2. This closure maps one chunk, in parallel with every other chunk. It takes a range rather than a slice so that a caller can read several lanes per chunk.
-3. This is the fold, applied **in chunk order** rather than completion order. Counting integers would survive any order, but a float sum would not, and numbers that shift with rayon's scheduling are not reproducible.
+3. This is the fold, applied in chunk order rather than completion order. Counting integers would survive any order, but a float sum would not, and numbers that shift with rayon's scheduling are not reproducible.
 
 `reduce_chunks` and `STATS_CHUNK` come from the prelude as well.
 
-Before we move on, be aware that `stats` runs when a snapshot is published rather than on every tick, so this likely runs at a much lower frequency than `step_cell`.
+`stats` runs when a snapshot is published rather than on every tick, so it runs at a much lower frequency than `step_cell`.
 
 ## Testing
 
@@ -493,10 +494,10 @@ Here is everything we wrote on this page, gathered into one file.
 The listing above is stored in the repository at [`examples/tutorial/src/life.rs`](https://github.com/micfong-z/henad/blob/master/examples/tutorial/src/life.rs).
 
 The example model is at [`crates/henad-models/src/game_of_life.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/game_of_life.rs).
-It runs under its own ID, with a `pub` palette that its GPU port reuses.
+It runs under its own id, with a `pub` palette that its GPU port reuses.
 
-Notice that we only wrote **49** lines for the entire model (excluding imports and the test, and still a lot of lines only contain a single curly brace).
-The reason is everything the engine handled on our behalf:
+Notice that we only wrote 49 lines for the entire model (excluding imports and the test, and still a lot of lines only contain a single curly brace).
+The engine handled everything else on our behalf:
 
 - Grid allocation, the second buffer, and the pointer swap between them.
 - The parallel split, which passes rows to rayon, natively and on the web alike.

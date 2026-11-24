@@ -6,7 +6,7 @@ icon: material/flag-outline
 
 # App tour
 
-We will walk through the Henad UI and give you an overview of its features and how to use them.
+We will walk through the Henad UI tab by tab.
 Before we start, make sure you have [installed Henad](installation.md) and can [run it](running.md).
 
 <figure markdown="span">
@@ -16,7 +16,7 @@ Before we start, make sure you have [installed Henad](installation.md) and can [
 
 ## Overview
 
-Henad uses a docking UI powered by [egui_dock](https://github.com/anhosh/egui_dock).
+Henad uses a docking UI built with [egui_dock](https://github.com/anhosh/egui_dock).
 You can resize each panel, collapse or expand them, move them around, and even drag a tab into its own window.
 
 In the menu bar, <span class="ui" markdown>:material-view-dashboard-outline: View</span> lists all 13 tabs and highlights the open ones, and is the only way to reopen a tab you closed.
@@ -75,7 +75,7 @@ A tab you move or close in one stays moved or closed after a visit to the other.
 Henad forgets both when it quits.
 
 Henad switches to the Editor layout whenever a model opens in the Editor, whether from the File menu, the Model tab, the Results tab or the New model dialog.
-Untick **Open models in the Editor layout** under the two layouts to open the Editor in the layout that shows instead.
+Uncheck **Open models in the Editor layout** under the two layouts to open the Editor in the layout that shows instead.
 In the default layout it then opens to the right of the Viewport.
 Henad never switches back by itself, so select **Default layout** when you turn to sweeps.
 
@@ -89,8 +89,8 @@ The other layout keeps your changes.
 <figcaption>The ten default Henad models.</figcaption>
 </figure>
 
-Use the dropdown to pick a model.
-Picking a model also loads its default parameters, discarding parameters set in the <span class="ui" markdown>:material-tune: Parameters</span> tab.
+Use the dropdown to select a model.
+Selecting a model also loads its default parameters, discarding parameters set in the <span class="ui" markdown>:material-tune: Parameters</span> tab.
 
 The GPU model entries only appear when a suitable device is detected.
 When two models in the list share a name, such as the example Game of Life and a model applied from the Game of Life starter in the Editor, each shows its id after the name.
@@ -103,7 +103,7 @@ Under the dropdown, <span class="ui" markdown>:material-file-document-plus-outli
 
 ### Metadata
 
-Below the description, the panel displays auto-computed metadata about the model, which is useful for understanding its structure and resource requirements.
+Below the description, the panel shows metadata computed from the model, such as its structure and its resource requirements.
 
 <figure markdown="span">
   ![The Model panel for Ant Foraging on the GPU](../assets/app/model-metadata.png){ width="300" }
@@ -151,13 +151,13 @@ A parameter can either be **live** or **reload**.
 
 Live
 : Takes effect on the next tick.
-  This means that you can change it while the simulation is running, and see the effect immediately.
+  You can change it while the simulation is running, and see the effect immediately.
 
 Reload
 : Only read when the model is (re)built.
   They always carry a :material-restart: marker.
   Editing a reload parameter while a simulation is running will turn the label amber, with a **:material-alert: Reload needed** banner.
-  Nothing is lost, and nothing is applied until you press <span class="ui" markdown>:material-restart: Build</span>.
+  The edit applies when you press <span class="ui" markdown>:material-restart: Build</span>.
 
 <figure markdown="span">
   ![The Parameters panel showing the Reload needed banner](../assets/app/params-reload.png){ width="370" }
@@ -215,7 +215,7 @@ The buttons are disabled until the selected model is built.
 
 A button runs its action in the current run only.
 To run an action at a set tick on every build, add it to **Scheduled actions**, below the buttons.
-Pick the action in the dropdown, set the tick in the field after **at tick**, and press <span class="ui" markdown>:material-plus: Add</span>.
+Select the action in the dropdown, set the tick in the field after **at tick**, and press <span class="ui" markdown>:material-plus: Add</span>.
 The list is kept in tick order, and each entry reads like **Seed outbreak at tick 10**.
 <span class="ui" markdown>:material-delete-outline:</span> removes one entry, and <span class="ui" markdown>Clear schedule</span> removes them all.
 
@@ -226,8 +226,8 @@ The row `--export-stats` writes for tick 10 includes the action too.
 
 The list is read when the model is built, as the seed is.
 Changing it turns the heading amber and counts towards the **Reload needed** banner.
-Picking another model in the <span class="ui" markdown>:material-cog-outline: Model</span> tab clears the list.
-Picking the running model again brings back the parameters, seed and scheduled actions it runs with.
+Selecting another model in the <span class="ui" markdown>:material-cog-outline: Model</span> tab clears the list.
+Selecting the running model again brings back the parameters, seed and scheduled actions it runs with.
 
 ## :material-play-circle-outline: Playback tab
 
@@ -311,7 +311,7 @@ The controls below them differ for CPU and GPU models, which run in different wa
     ![Pacing for a CPU model](../assets/app/pacing-cpu.png){ width="370" }
 
     **Unlimited TPS** removes the speed cap and lets the sim thread run as fast as it can.
-    This is generally favorable as it delivers results quickly, but it can be difficult to see the visualization clearly at this speed.
+    Results come sooner, but the visualization can be hard to follow at this speed.
 
     **Target TPS** sets the maximum ticks per second.
 
@@ -372,8 +372,8 @@ A model with both a [field](../authoring/fields.md) and a population draws the f
 
 In **Sprites** mode, on a GPU that can draw edges, a network model adds two more checkboxes.
 **Edges** draws the edges between the nodes, under the nodes themselves.
-**Arrows** appears once **Edges** is ticked, and puts an arrowhead at the target end of each edge.
-It can only be ticked when the model's edges are directed.
+**Arrows** appears once **Edges** is checked, and puts an arrowhead at the target end of each edge.
+It can only be checked when the model's edges are directed.
 Without arrowheads, a directed edge fades towards its source.
 
 A node that the model has retired, such as a Team Assembly member left too long without a team, is hidden, and its edges are removed with it.
@@ -385,7 +385,8 @@ A node that the model has retired, such as a Team Assembly member left too long 
 <figcaption>Each stat is drawn in the colour the model declared for it.</figcaption>
 </figure>
 
-Models can register [statistics](../authoring/statistics.md) to be published every tick.
+Models can register [statistics](../authoring/statistics.md), and each published snapshot carries their values.
+A running model publishes a snapshot at most about 60 times a second, however fast it ticks.
 The latest values are shown in the <span class="ui" markdown>:material-table: Statistics</span> tab, and the historical data are plotted in the <span class="ui" markdown>:material-chart-line: Charts</span> tab.
 
 There are three types of statistics available:
@@ -409,19 +410,19 @@ The left axis always includes 0.
 A stat with one sample so far, as at tick 0, shows as a dot, and the axis then runs from that tick to the next.
 Each non-scalar stat is also plotted for the latest snapshot: an arrow from the origin for a vector, with a circle at its current magnitude, and a bar chart for a histogram.
 
-The charts are powered by [egui_plot](https://github.com/emilk/egui_plot).
+The charts are drawn with [egui_plot](https://github.com/emilk/egui_plot).
 Drag to pan, scroll to zoom, and click a legend entry to show/hide that series.
 
 **History length** sets how many snapshots are kept.
 Shrinking it deletes the oldest samples.
 
-Tick **Unlimited history** to keep every snapshot instead, which can be helpful for [exporting](#export-tab).
-Be aware that memory usage will increase as a result.
-Check the <span class="ui" markdown>:material-gauge: Performance</span> tab frequently to ensure Henad is not accidentally using too much memory.
+Turn on **Unlimited history** to keep every snapshot instead, for [exporting](#export-tab) a whole run.
+Memory use then grows with every snapshot.
+Watch it in the <span class="ui" markdown>:material-gauge: Performance</span> tab.
 
 ## :material-export: Export tab
 
-The <span class="ui" markdown>:material-export: Export</span> tab writes relevant results to files.
+The <span class="ui" markdown>:material-export: Export</span> tab writes results to files.
 
 ### Statistics
 
@@ -444,11 +445,11 @@ The file is named after the recorded model and the tick the recording stopped at
 
 <span class="ui" markdown>:material-tray-arrow-down: Save state</span> writes the current cells and agent positions as text, the same format as `henad-cli --export`.
 For a network model it also writes the edges, giving each endpoint as that node's row in the file, and leaves retired nodes out.
-Due to technical limitations, the current state of a GPU model cannot be exported.
+The current state of a GPU model cannot be exported.
 
 ### Viewport
 
-<span class="ui" markdown>:material-tray-arrow-down: Save image</span> writes the layers as a PNG at a specific resolution automatically determined by the engine.
+<span class="ui" markdown>:material-tray-arrow-down: Save image</span> writes the layers as a PNG at a resolution the engine sets.
 A network's edges follow the **Edges** and **Arrows** checkboxes in the <span class="ui" markdown>:material-cube-outline: Viewport</span> tab.
 
 ### Run details
@@ -479,7 +480,7 @@ The top of the tab holds **Sweep** and **Search**, the model's name, <span class
 **Sweep** runs every configuration of a design, and **Search** runs a [search](search.md) that picks its configurations as it goes.
 The line under them describes the mode.
 After a save or a load it reports the outcome instead, as in **Saved henad-sir-sweep.toml**, until you change a setting, press <span class="ui" markdown>:material-close:</span> or switch the mode.
-The model's name brings the <span class="ui" markdown>:material-cog-outline: Model</span> tab to the front, where another model can be picked.
+The model's name brings the <span class="ui" markdown>:material-cog-outline: Model</span> tab to the front, where another model can be selected.
 The bottom of the tab holds the run count and <span class="ui" markdown>:material-play: Start</span>, and stays in view while the settings scroll.
 
 The settings between them sit in sections: **Design**, **Parameters**, **Actions**, **Replicates and seeds**, **Run length**, **Outputs** and **Execution**.
@@ -517,14 +518,14 @@ Latin hypercube, Uniform random
 
 Design table
 : Runs the rows of a CSV file as configurations, as `--design` does.
-  Press <span class="ui" markdown>:material-file-delimited-outline: Load design CSV</span> to pick the file, <span class="ui" markdown>Replace</span> to pick another, and <span class="ui" markdown>Remove</span> to drop it.
+  Press <span class="ui" markdown>:material-file-delimited-outline: Load design CSV</span> to select the file, <span class="ui" markdown>Replace</span> to select another, and <span class="ui" markdown>Remove</span> to drop it.
   The row shows the file name and the number of rows, as in **sir-design.csv · 12 rows**.
   The line under the file lists the parameters that its columns set, and every other parameter keeps its <span class="ui" markdown>:material-tune: Parameters</span> tab value.
 
 ### Parameters to vary
 
 **Parameters** lists every parameter of the model, under a line that shows how to write the values for the selected design.
-Tick a parameter to vary it, and type its values into the field beside it.
+Select a parameter to vary it, and type its values into the field beside it.
 The field takes values the way `henad-cli --vary` does:
 
 | Text            | Values                                                             |
@@ -538,7 +539,7 @@ A parameter shown as a percentage takes its values with or without the `%` sign,
 A `%` sign on any other parameter is an error on its row.
 Outside a sampled design, an integer range or a range of ticks can leave out its step, as in `1:5`, and then steps by 1.
 The line under the field lists the values, as in **5 values: 0.1, 0.2, 0.3, 0.4, 0.5**, and shows the first three and the last of a longer list.
-A newly ticked field starts empty, and its line reads **Enter values** with an example, as in **Enter values, such as 0:1:0.2**.
+A newly selected parameter's field starts empty, and its line reads **Enter values** with an example, as in **Enter values, such as 0:1:0.2**.
 
 <span class="ui" markdown>:material-tune-vertical:</span> beside the field opens an editor for the same text.
 In the editor, **Values**, **Range** and **Range to draw from** pick a list, a range from **Minimum** to **Maximum** a **Step** apart, or a whole range for the design to draw from.
@@ -546,39 +547,39 @@ Only **Latin hypercube** and **Uniform random** enable **Range to draw from**.
 <span class="ui" markdown>Whole range</span>, <span class="ui" markdown>Both ends</span>, <span class="ui" markdown>Around current</span> and <span class="ui" markdown>Current value</span> fill in the whole range, its two ends, half, one and one and a half times the parameter's value in the <span class="ui" markdown>:material-tune: Parameters</span> tab, or that value alone.
 The editor writes into the field as you edit, and writes a list without spaces, as in `1,16384`.
 For an integer parameter, including a sheet's whole number that can go below 0, the fills and the fields round to integers.
-A checkbox or dropdown parameter takes a menu of its options instead of the field, and writes `all` or the options ticked.
-The menu's button reads **All options**, or lists the ticked options.
+A checkbox or dropdown parameter takes a menu of its options instead of the field, and writes `all` or the options checked.
+The menu's button reads **All options**, or lists the checked options.
 
 On a wide tab, a **Parameters tab** column shows each parameter's value in the <span class="ui" markdown>:material-tune: Parameters</span> tab.
-An unticked parameter keeps that value, and on a narrower tab its row shows it, as in **at 0.3**.
+An unchecked parameter keeps that value, and on a narrower tab its row shows it, as in **at 0.3**.
 With a design table, the table's columns set their parameters, and the checkboxes give way to the names.
 A parameter the table sets carries :material-table-column: and reads **From design table**.
 
 ### Actions, replicates and run length
 
-**Actions** fires one of the model's actions in every run.
-Press <span class="ui" markdown>:material-plus: Add action</span>, pick the action in the **Action** dropdown and set its **Tick**.
-Tick **Vary tick** to try the action at several ticks, typed into the text field that replaces the tick value, as a parameter's values are.
+**Actions** adds one of the model's actions to every run.
+Press <span class="ui" markdown>:material-plus: Add action</span>, select the action in the **Action** dropdown and set its **Tick**.
+Select **Vary tick** to try the action at several ticks, typed into the text field that replaces the tick value, as a parameter's values are.
 <span class="ui" markdown>:material-delete-outline:</span> removes the action.
 With a **Design table** that has a column for the action, the table sets its tick, and the Plan reads as in **Seed outbreak, tick from design table**.
-An action fires after the step that reaches its tick, as a [scheduled action](#scheduled-actions) does.
-An action due past the last tick of a run shows a warning, since it never fires there.
+An action runs after the step that reaches its tick, as a [scheduled action](#scheduled-actions) does.
+An action due past the last tick of a run shows a warning, since it never runs there.
 
 **Replicates** runs each configuration that many times, each time with its own seed, and the line beside it counts the runs, as in **15 × 3 = 45 runs**.
 Every seed is derived from **Root seed**, and <span class="ui" markdown>:material-dice-5:</span> fills in a random root.
-With **Common random numbers** ticked, replicate `r` starts from the same seed in every configuration, and less of the difference between two configurations is noise.
-Untick it to give every run its own seed, as `--independent-seeds` does.
+With **Common random numbers** checked, replicate `r` starts from the same seed in every configuration, and less of the difference between two configurations is noise.
+Uncheck it to give every run its own seed, as `--independent-seeds` does.
 The sweeps guide explains the [seed scheme](sweeps.md#replicates-and-seeds).
 
 **Steps** is the number of ticks each run measures, after **Warm-up** ticks that the outputs skip.
 The line beside **Steps** counts both, as in **1100 ticks per run**.
 At 0 steps, a run measures only the last tick of its warm-up.
 
-Tick **Stop when** to end a run at the first sample where a stat passes a threshold, as `--stop` does.
-Pick the **Stat**, the comparison and the threshold under **Condition**, and set **From tick** to the first tick at which the condition can end a run.
+Select **Stop when** to end a run at the first sample where a stat passes a threshold, as `--stop` does.
+Under **Condition**, select the **Stat** and the comparison and enter the threshold, then set **From tick** to the first tick at which the condition can end a run.
 The comparison dropdown shows each comparison in words, then its symbol: **less than** `<`, **at most** `<=`, **equal to** `==`, **not equal to** `!=`, **at least** `>=` and **greater than** `>`.
 The line under them spells the condition out, as in **Runs will end at the first sample where Infected is at most 0, from tick 0.**
-Tick **Timeout** to end a run once it has stepped for **Seconds per run**, 600 to begin with.
+Select **Timeout** to end a run once it has stepped for **Seconds per run**, 600 to begin with.
 The field takes 1 s or more, and a shorter timeout from a loaded spec file stays as written.
 With several GPU runs at once, a run's time is its share of the time the sweep spends on them, as the sweeps guide describes under [concurrency](sweeps.md#concurrency).
 The ticks a run reaches in that time depend on the machine, and a sweep with a timed-out run is not reproducible.
@@ -591,7 +592,7 @@ Reading stats takes time, most of all on the GPU, and a larger **Sample every** 
 The lines beside them count the samples of a run and the size of the series.
 
 **Final value, minimum, maximum and mean of every stat** records those four values of every stat for each run.
-<span class="ui" markdown>:material-plus: Add output</span> records one more value of a stat, picked in the row's two dropdowns.
+<span class="ui" markdown>:material-plus: Add output</span> records one more value of a stat, selected in the row's two dropdowns.
 The choices are **Final value**, **Minimum**, **Maximum**, **Mean**, **Tick of maximum**, **Tick of minimum**, **First tick crossing** a threshold, and **Mean over window** between two ticks.
 The line under the row shows its column name in `runs.csv`, as in **Written as Susceptible:argmax**.
 The sweeps guide describes each choice as a [reducer](sweeps.md#measuring-a-run).
@@ -603,8 +604,8 @@ A spec file loaded with `memory` or `gpu_memory` in its `[execution]` table adds
 The sweep then runs under those budgets, as `--memory` and `--gpu-memory` set them, and <span class="ui" markdown>:material-close:</span> beside them returns to the automatic budgets.
 
 **Results** keeps the results **In memory** until you save them, or writes them **In a folder** as the runs finish, as `--out` does.
-Picking **In a folder** opens a dialog to pick the folder, and the **Folder** field then holds its path.
-Canceling the dialog leaves the results in memory, and <span class="ui" markdown>:material-folder-outline: Select</span> picks another folder later.
+Selecting **In a folder** opens a dialog to select the folder, and the **Folder** field then holds its path.
+Canceling the dialog leaves the results in memory, and you can press <span class="ui" markdown>:material-folder-outline: Select</span> to change the folder later.
 The folder must not hold results already, and <span class="ui" markdown>:material-play: Start</span> stays disabled while it does.
 When those results are incomplete, <span class="ui" markdown>Open in Results</span> opens them in the <span class="ui" markdown>:material-chart-box-outline: Results</span> tab, where <span class="ui" markdown>:material-play: Resume sweep</span> finishes them.
 
@@ -626,7 +627,7 @@ On a narrow tab, the panel and its button give way to a **Plan** section at the 
 
 The bottom of the tab counts the runs, as in **45 runs: 15 configurations × 3 replicates, 1100 steps each**.
 While the sweep has a problem, the line shows the first problem instead, as in **Sweep not ready. Recovery Rate: '0.x' is not a number**, and each problem also shows under its row.
-Missing input, such as a ticked parameter with no values, is shown in the normal text colour with :material-pencil-outline:.
+Missing input, such as a checked parameter with no values, is shown in the normal text colour with :material-pencil-outline:.
 Input that the sweep rejects is shown in red with :material-alert:.
 While you type in a field, its line shows the form the text takes, as in **Format: 0.1, 0.2 or min:max:step**, and the problem shows once you leave the field or stop typing.
 
@@ -701,7 +702,7 @@ Under the bar, <span class="ui" markdown>:material-pencil-outline: Edit sweep</s
 
 <span class="ui" markdown>:material-pencil-outline: Edit sweep</span>
 : Returns to the settings of the sweep, ready to change and start again.
-  When another model was picked in the <span class="ui" markdown>:material-cog-outline: Model</span> tab meanwhile, the sweep's model is selected again, with the values the sweep held fixed.
+  When another model was selected in the <span class="ui" markdown>:material-cog-outline: Model</span> tab meanwhile, the sweep's model is selected again, with the values the sweep held fixed.
   The results stay in the <span class="ui" markdown>:material-chart-box-outline: Results</span> tab.
   After a sweep resumed from the Results tab, the button reads <span class="ui" markdown>New sweep</span>.
 
@@ -743,20 +744,20 @@ A spec with a `[search]` table opens in Search mode.
 </figure>
 
 In **Search** mode, **Parameters** picks the factors of the [search space](search.md#the-search-space).
-Tick a parameter to search over it.
+Select a parameter to search over it.
 Its field starts at the parameter's whole range, as in `0:1`, or at `all` for a checkbox or a dropdown.
 The field takes the same text as in a sweep, and a range with no step reads as in **Any value from 0 to 1**.
 The search selects from listed values, as in **3 values to select from: 0.1, 0.2, 0.5**, and the values editor offers **Range to search** instead of **Range to draw from**.
-In **Actions**, tick **Search tick** to let the search pick an action's tick from the range typed beside it.
+In **Actions**, select **Search tick** to let the search pick an action's tick from the range typed beside it.
 
 A **Search** section replaces **Design**.
 **Method** picks **Random search**, **Hill climbing**, **Genetic algorithm** or **Pattern Space Exploration**, and the line under it says what the method does.
-The tab keeps the settings of every method, and switching methods loses no settings.
+The tab keeps the settings of every method while you switch between methods.
 **Objective** picks the output that scores each configuration, and **Goal** picks **Maximize** or **Minimize**.
-**Across replicates** folds the replicates of a configuration into one value, their **Median** or their **Mean**.
+**Across replicates** combines the replicates of a configuration into one value, their **Median** or their **Mean**.
 The **Objective** list offers the outputs that the **Outputs** section records, then each stat's other common outputs under **Not recorded yet**.
 A vector stat is offered by its parts, as in **Average Velocity.x, maximum**.
-Picking one of those outputs adds it to **Outputs**, where its row reads **Used by Objective** and cannot be removed while the objective reads it.
+Selecting one of those outputs adds it to **Outputs**, where its row reads **Used by Objective** and cannot be removed while the objective reads it.
 When a loaded spec's objective is not among the recorded outputs, the problem shows under the field, beside <span class="ui" markdown>Add to Outputs</span>.
 Pattern Space Exploration has no objective.
 **Evaluations** is the budget, and a configuration run again counts again.
@@ -875,7 +876,7 @@ The first five configurations are drawn at the start, and at most ten are drawn 
 
 Failed runs are left out, and a run that stopped early adds nothing past its last tick.
 For a model with a [time scale](../reference/model-files.md#time-scale), the x axis reads in its unit, and the runs of each configuration sit at the times their own tick length gives, as the `time` column of `series.csv` does.
-Tick **Show runs** to draw every replicate as a thin line, and click a line to select its run.
+Select **Show runs** to draw every replicate as a thin line, and click a line to select its run.
 
 The app holds up to 256 MiB of series, or 64 MiB in a browser, and keeps the runs past that without their series.
 The view then reads like **Series loaded for 800 of 2000 runs**.
@@ -884,14 +885,14 @@ For a folder opened in the desktop app, <span class="ui" markdown>Load series</s
 ### Response
 
 <figure markdown="span">
-  ![The Response view plotting Infected, maximum against Recovery Rate, with one line per Infection Rate and whiskers at each point](../assets/app/results-response.png){ width="700" }
+  ![The Response view plotting Infected, maximum against Recovery Rate, with one line per Infection Rate and error bars at each point](../assets/app/results-response.png){ width="700" }
 <figcaption>The peak of Infected against Recovery Rate, one line per Infection Rate.</figcaption>
 </figure>
 
 The **Response** view plots an **Output** against the levels of the **X axis**, one point per level.
 A point is the mean of the output over every run at that level that did not fail, whatever the levels of the other axes.
 In a sweep of several blocks, such as a **One at a time** sweep, a point pools only the blocks that vary the **X axis**.
-**Error bars** draws whiskers for the **95% CI** of the mean or one **SD** either side, or **None**.
+**Error bars** draws the **95% CI** of the mean or one **SD** either side, or **None**.
 **Group by** draws one line for each level of a second axis.
 Every other axis gets a menu, such as **Recovery Rate at**, that holds it at one level instead of **Any**.
 
@@ -975,10 +976,10 @@ A second warning then reads **Model build is unidentified**, below any warning o
 ### Opening results
 
 <span class="ui" markdown>:material-folder-open-outline: Open results</span> reads the results of a sweep from its folder, written by `henad-cli --out` or by a sweep with its results **In a folder**.
-In a browser, choose `manifest.json` and `runs.csv` in the folder, and `series.csv` for the series.
-For the Search view of a search, choose `evaluations.csv`, `batches.csv` and, from a genetic algorithm, `generations.csv` as well.
+In a browser, select `manifest.json` and `runs.csv` in the folder, and `series.csv` for the series.
+For the Search view of a search, select `evaluations.csv`, `batches.csv` and, from a genetic algorithm, `generations.csv` as well.
 The files are identified by their contents, so a repeated download that a browser renamed, such as `runs (1).csv`, still opens.
-The tab reads **Reading results** while it reads the picked files.
+The tab reads **Reading results** while it reads the selected files.
 The desktop app can also open a folder at start:
 
 ``` bash
@@ -995,7 +996,7 @@ It keeps the memory budgets that the folder's manifest records, and a line under
 `henad-cli --resume` takes the concurrency and the memory budgets from its flags and its spec's `[execution]` table instead.
 For a search the button reads <span class="ui" markdown>:material-play: Resume search</span>, and it [replays the search](search.md#resuming-a-search) up to where it stopped before running the rest.
 The button is disabled when the folder's runs came from runtime code other than the model's code in this app.
-`henad-cli --resume` refuses such a folder as well.
+`henad-cli --resume` rejects such a folder as well.
 The progress shows in the <span class="ui" markdown>:material-flask-outline: Sweep</span> tab, and the folder is read again once the sweep ends.
 
 Results of a model built from a model file show <span class="ui" markdown>:material-pencil-outline: Open in Editor</span>.
@@ -1042,8 +1043,8 @@ UI
 
 !!! warning "FPS is unrelated to model performance"
 
-    Note that the FPS and the TPS are unrelated and each can be configured in different ways, as explained in the [:material-speedometer: Pacing tab](#pacing-tab).
-    The TPS is the true measure of how fast the simulation is running.
+    The FPS and the TPS are unrelated, and the [:material-speedometer: Pacing tab](#pacing-tab) describes the settings behind each.
+    The TPS measures how fast the simulation runs.
 
 ## :material-chip: System tab
 
@@ -1052,18 +1053,18 @@ UI
 <figcaption>Host, adapter and device limits information.</figcaption>
 </figure>
 
-Information in the <span class="ui" markdown>:material-chip: System</span> tab is generally technical and used for debugging purposes.
-It can also be used to check if the correct GPU adapter is being used, and if the device has enough resources to run a model.
+The <span class="ui" markdown>:material-chip: System</span> tab holds technical information for debugging.
+Use it to check which GPU adapter Henad uses, and whether the device has enough resources to run a model.
 
 The **Network edges** row shows whether the GPU can draw the edges of a network model.
 When it reads Unavailable, network models still run, but their edges are not drawn.
 
 A banner at the top appears when there are potential compatibility issues with the GPU, and can be one of the following:
 
-| Banner                                           | Issue                                                                   |
-| ------------------------------------------------ | ----------------------------------------------------------------------- |
-| :material-information: GPU performance uncertain | No discrete GPU was detected. This may or may not affect performance.   |
-| :material-alert: No GPU detected                 | Rendering uses a software rasteriser, and GPU models will be very slow. |
+| Banner                                           | Issue                                                                                         |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| :material-information: GPU performance uncertain | No discrete GPU was detected. The adapter might be an integrated GPU, a virtual GPU or a SoC. |
+| :material-alert: No GPU detected                 | Rendering uses a software rasteriser, and GPU models will be very slow.                       |
 
 ## :material-code-braces: Editor tab
 
@@ -1085,7 +1086,7 @@ The sheet opens in two panes.
 **Sheet** lists what every cell has and what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.
 **Card** lists the lines every cell, or every agent, follows each tick, numbered from 1, each as a sentence such as "Become Alive from Dead, when Alive neighbours is 3".
 In a sentence, each chosen value is a chip: a result in blue, a state with its colour, a parameter with a slider mark, and "my" before a property in grey.
-An empty slot is a faint box that names what it wants, such as "old state".
+An empty slot is a faint box that names what goes in it, such as "old state".
 Hover over a result chip to highlight the line that works it out.
 Hover over "otherwise" to highlight the higher line and read which line wins when both apply.
 Hover over the question mark beside a heading for a short explanation with an example.
@@ -1149,7 +1150,7 @@ In the <span class="ui" markdown>:material-chart-box-outline: Results</span> tab
 Henad checks a model's buffer sizes, texture dimensions and per-pass binding counts against the device before models are built.
 If a model cannot be built, <span class="ui" markdown>:material-restart: Build</span> is disabled, and the limits that were exceeded are shown in the <span class="ui" markdown>:material-tune: Parameters</span> tab's banner.
 
-At runtime, there are two possible errors that can occur:
+Two errors can occur at runtime:
 
 Model build failed
 : The GPU rejected the model while it was being constructed, or a kernel panicked during setup.
@@ -1181,9 +1182,9 @@ In a browser, a tick that never returns freezes the page.
 
 ## Browser-specific notes
 
-Although Henad is designed so that the web app runs identically to the native app, there are some differences due to the limitations of the web platform:
+The web app differs from the native app in these ways:
 
-- **GPU time/step** reads `N/A` due to backend limitations.
+- **GPU time/step** reads `N/A`.
 - **Layout budget** is capped at 6 ms, the time the simulation gets in each frame.
 - Device limits can be lower than in the native app as browsers may not expose the full capabilities of the GPU.
 - Append `?threads=N` to the URL to cap the worker pool.
@@ -1197,9 +1198,9 @@ Although Henad is designed so that the web app runs identically to the native ap
   <span class="ui" markdown>:material-tray-arrow-down: Save results</span> therefore stays after its downloads start.
 - A panic in a run of a sweep or search ends the page.
   The desktop app records such a run as failed and carries on.
-- The browser's WebGPU checks a grid rule again when the rule is built, and reports a rule it refuses a moment later.
+- The browser's WebGPU checks a grid rule again when the rule is built, and reports a rule it rejects a moment later.
   The <span class="ui" markdown>:material-code-braces: Editor</span> shows that report under **Model build failed.**
-- A browser cannot open a folder, and <span class="ui" markdown>:material-folder-open-outline: Open results</span> reads the files picked from a folder.
+- A browser cannot open a folder, and <span class="ui" markdown>:material-folder-open-outline: Open results</span> reads the files selected from a folder.
   <span class="ui" markdown>:material-play: Resume sweep</span>, <span class="ui" markdown>:material-play: Resume search</span> and <span class="ui" markdown>Load series</span> need the desktop app.
 - Boids, Ants and Virus on a Network call maths functions such as `sin` and `cos`.
   The web build computes them with its own maths library, and the desktop app with the system maths library, and the two libraries can round the last bit differently.

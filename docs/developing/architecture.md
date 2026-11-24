@@ -49,8 +49,8 @@ A shader imports a shared module with `#import henad::<module>`.
 Its `stamp_commit` records the commit a crate was built from, whether its sources differed from that commit, and a hash of the sources.
 
 **henad-compute** turns an authoring impl into something runnable.
-Its `cpu/` and `gpu/` halves are siblings rather than a base class and a specialisation, and they mirror each other file by file: each half has its own runner, its own engines and its own primitives.
-A file name shared across the halves always marks a counterpart, never a coincidence.
+Its `cpu/` and `gpu/` halves are siblings, and they mirror each other file by file: each half has its own runner, its own engines and its own primitives.
+A file name shared across the halves always marks a counterpart.
 Network models are the exception to the mirroring.
 They run on the CPU only, and their engine has no counterpart in `gpu/`.
 
@@ -161,7 +161,7 @@ Each axis is capped instead, and the display pass reads the cell at `texel * gri
 ## Failure handling
 
 wgpu treats any error that no error scope claims as fatal.
-Model construction therefore runs inside error scopes covering all three filters, and `GpuContext::new` installs an uncaptured-error handler as the floor under every path that no scope reaches, egui's own rendering included.
+Model construction therefore runs inside error scopes covering all three filters, and `GpuContext::new` installs an uncaptured-error handler as the fallback for every path that no scope reaches, egui's own rendering included.
 Error scopes are thread-local, and a scope pushed on the UI thread never sees what a sim thread does.
 The uncaptured-error handler covers that gap.
 
@@ -173,7 +173,7 @@ A parameter value written as text, through `--set`, a spec file or a design tabl
 The app's widgets cannot leave those bounds, but text reaches `init` with nothing else in the way, and a model sizes its buffers from the number it is given.
 
 A panicking kernel is caught as well.
-Both sim threads wrap the run loop in a panic catch once at thread start, outside the loop, which keeps the catch off the per-tick path.
+Both sim threads wrap the run loop in a panic catch once at thread start, outside the loop, to keep the catch off the per-tick path.
 
 ## Further reading
 

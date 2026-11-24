@@ -608,12 +608,12 @@ With `auto`, a model of 1,048,576 cells or agents or more gets a single track, s
 `--concurrent N` sets the number of tracks yourself, and `--gpu-memory` caps the bytes of GPU memory that the runs on the tracks hold together.
 A run starts only once it fits beside the runs already on the GPU.
 A run that fits beside no other run steps alone.
-The graphics API reports no total for a GPU's memory, and without `--gpu-memory` the largest buffer that the GPU allows acts as the cap.
+The graphics API reports no total for a GPU's memory, and without `--gpu-memory` the largest buffer that the GPU allows is the cap.
 A run that still finds the GPU out of memory waits for another run to finish, and the sweep runs one track fewer from then on.
 
 With several tracks, the time the sweep spends visiting them is split evenly between their runs.
 A run's `wall_ms`, its `steps_per_s` and its `--timeout` all count only that share.
-Pass `--concurrent 1` when the time of each run matters.
+Pass `--concurrent 1` when you need the time of each run.
 
 A fault in one run ends that run alone, and the other tracks carry on.
 A GPU error that Henad cannot trace to one run fails every run on a track at the time, and `--retry-failed` on a [resume](#resuming-a-sweep) runs them again.
@@ -646,10 +646,10 @@ A build records its commit, whether the sources differed from the commit, and a 
 A resume warns when Henad's build or the model's build differs from a build that a session recorded, and goes ahead.
 An uncommitted edit to a kernel counts as a different build, since its source hash changes.
 A model composed at run time is stricter, and a resume of such a model under other code is rejected.
-The error names the code that the folder's runs ran and the code that resumes.
+The error names the code that the directory's runs ran and the code that resumes.
 When the model comes from a `--model-file`, the error opens with a line naming that file.
 A runtime model's code is identified by the hash of its text.
-Start a new folder for the edited model, or undo the edit.
+Start a new directory for the edited model, or undo the edit.
 A [model file](#sweeping-a-model-file) resumes with the same `--model-file`.
 The [CLI reference](../reference/cli.md#builds) lists the fields and the rule that compares two builds.
 
@@ -786,8 +786,8 @@ A sheet edited only outside that code resumes, and any edit that changes the cod
 The manifest also records the sheet's text, and a resume records the text it ran.
 The sheet in the manifest is then the one the latest session read.
 Its code is the code of every earlier session.
-A resume from the graph the sheet lowers to, which has the same code and no sheet, keeps the sheet the folder recorded.
-In the desktop app, open the folder in the Results tab and press <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> to see the sheet again.
+A resume from the graph the sheet lowers to, which has the same code and no sheet, keeps the sheet the directory recorded.
+In the desktop app, open the directory in the Results tab and press <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> to see the sheet again.
 The Sweep tab sweeps a sheet once Apply in the Editor tab installs it, and an edit made since then waits for the next Apply.
 
 ## Reading the results

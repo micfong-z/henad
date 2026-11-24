@@ -29,7 +29,7 @@ cargo run -p henad-cli -- --list
 | `gpu_ants` | Ant Foraging (GPU) | Agents over a field | GPU |
 
 The four GPU entries appear only when wgpu finds an adapter with compute support.
-Each GPU port starts from its CPU counterpart's tick 0 bit for bit, which makes a comparison between the two backends fair.
+Each GPU port starts from its CPU counterpart's tick 0 bit for bit, for a fair comparison between the two backends.
 
 ## Parameters
 
@@ -64,7 +64,7 @@ The `randomise` action refills the grid at the `density` that the model was buil
 
 ### SIR Epidemic
 
-The classic SIR compartmental model on a 2D grid with a Moore neighbourhood.
+The SIR compartmental model on a 2D grid with a Moore neighbourhood.
 
 | Id | Kind | Default | Range |
 |---|---|---|---|
@@ -273,5 +273,6 @@ cargo run --release -p henad-cli -- boids \
   --steps 1000
 ```
 
-Keep the world area proportional to the agent count and the density holds constant, which leaves two runs at different scales comparable.
+Keep the world area proportional to the agent count and the density holds constant.
+Two runs at different scales are then comparable.
 Ant Foraging is the exception: its trails reach a fixed number of cells, and at constant density a large world times a colony that never brings food home (see [Larger worlds](#larger-worlds)).

@@ -62,8 +62,8 @@ The flags that run a sweep have [their own table](#sweep-flags).
 
 `--set` accepts a number for a `u32` or `f32` parameter, `true` or `false` for a `bool`, and an option's name or index for a `choice`, as in `--set network=Geometric`.
 A parameter that `--params` marks `format=percent` accepts a value with a `%` sign or a fraction, so `--set virus_spread_chance=10%` and `--set virus_spread_chance=0.1` both set it to 10%.
-A `%` sign on any other parameter is refused with the parameter's id.
-A parameter that `--params` marks `integer`, such as a sheet's whole number that can go below 0, is an `f32` that takes whole numbers alone, and `--set` refuses a value with a fractional part.
+A `%` sign on any other parameter is rejected with the parameter's id.
+A parameter that `--params` marks `integer`, such as a sheet's whole number that can go below 0, is an `f32` that takes whole numbers alone, and `--set` rejects a value with a fractional part.
 A parameter that `--params` marks `hidden`, such as a model file's tick length, is reached by `--set`, `--vary` and a spec file as any other parameter is.
 The app leaves such a parameter off its Parameters tab, and its Sweep tab still varies it.
 
@@ -109,8 +109,8 @@ With `--export-stats`, the row for a tick is sampled after that tick's actions.
 An id the model does not declare is rejected, and the error lists the ids that it declares.
 An action due after the tick the run stops on never fires, and the runner warns about it on stderr.
 
-Pin the worker count, which is how the cross-engine comparison separates its one-thread row from its all-cores row.
-It runs this twice, at `--threads 1` and `--threads 0`:
+Pin the worker count.
+The cross-engine comparison runs this command at `--threads 1` for its one-thread row and at `--threads 0` for its all-cores row:
 
 ```bash
 cargo run --release -p henad-cli -- boids --threads 1 --steps 100 --reps 5 --json
@@ -174,7 +174,7 @@ Each sample also pays for the preparation, and `--stats-every` spaces the sample
 A file of kind `graph`, a graph model on a grid or of agents, is read, checked and compiled to WGSL, and its warnings and errors print at their lines.
 A file of kind `sheet` is read, checked and lowered to a graph model, which then builds as a graph does, as [Sheets](#sheets) describes.
 Every mode takes it but `--merge`: a benchmark, `--export-stats`, `--list`, `--params`, and a sweep or search from flags or from `--spec`, `--dry-run` and `--resume` included.
-Every model file builds a GPU model, and `--export` refuses it, as it refuses every GPU model.
+Every model file builds a GPU model, and `--export` rejects it, as it rejects every GPU model.
 
 ```bash
 cargo run --release -p henad-cli -- life_rule \
@@ -184,7 +184,7 @@ cargo run --release -p henad-cli -- life_rule \
 The flag is repeatable, and two files cannot declare the same id.
 A file whose id names a model of the build replaces that model for the rest of the command line, and in text mode a note on stderr says so.
 A file whose model the command does not run, such as a sheet `sheet_sir` loaded beside the model id `sir`, gets a note on stderr in text mode as well.
-An `--export` or `--export-stats` path that names one of the model files is refused before anything runs, and the file is left as it was.
+An `--export` or `--export-stats` path that names one of the model files is rejected before anything runs, and the file is left as it was.
 `--list` then shows the file's model under that id, and `--params --json` adds the `origin` and `code_hash` of [its code](#parameters-as-json).
 
 The files and the spec are read before the GPU device is acquired, and the device is sized to the files' models as well as the build's.
@@ -232,7 +232,7 @@ A problem that the checks find in the lowered graph prints at the line table its
 `--print-lowered` prints that graph in its canonical text on stdout and exits, with the file's warnings on stderr.
 It takes exactly one `--model-file`, builds nothing and acquires no device.
 The text reads back as a model file of kind `graph` with the sheet's code.
-A graph file prints its own canonical text, and a grid rule is refused, since it builds as no graph.
+A graph file prints its own canonical text, and a grid rule is rejected, since it builds as no graph.
 
 ```bash
 cargo run --release -p henad-cli -- \
@@ -512,7 +512,7 @@ A model whose population is 1,048,576 or more gets one track.
 Either way the track count is capped by the number of runs.
 
 The GPU memory budget is `--gpu-memory`.
-Without it, the device's largest buffer acts as the budget, since wgpu reports no total for a device's memory.
+Without it, the budget is the device's largest buffer size, since wgpu reports no total for a device's memory.
 A run's demand is the bytes of the buffers and the display texture its model declares.
 A run is built once a track is free and its demand fits the budget beside the demand of the live runs.
 A run that fits beside no other run is built once no other run is live, and steps alone.
@@ -852,7 +852,7 @@ The keys of `objective` are these:
 |---|---|---|
 | `column` | | A reducer column of `runs.csv`, as in `Infected:max` |
 | `goal` | | `maximize` or `minimize` |
-| `aggregate` | `median` | `median` or `mean`, the rule that folds a candidate's replicate values into one value |
+| `aggregate` | `median` | `median` or `mean`, the rule that combines a candidate's replicate values into one value |
 
 An algorithm's settings go in a table named after it, and a table for any other algorithm is rejected.
 `[search.hill_climb]` and `[search.genetic]` can be left out, and a key left out takes its default.
@@ -1185,7 +1185,7 @@ The official binary is three lines over the same function, which its own crate e
 ```
 
 `run` takes a `CliOptions` and the command line, program name first, and returns the [exit status](#exit-status) as a `u8`.
-`std::process::ExitCode::from` turns it into a binary's exit code, and a host without its own `main`, such as a Python console script, passes the number on.
+`std::process::ExitCode::from` converts it to a binary's exit code, and a host without its own `main`, such as a Python console script, passes the number on.
 An error prints to stderr as `Error:` with its causes, and returns 1.
 
 `CliOptions::new(models, host)` takes the `ModelSet` that the command line offers and the host's `build_info!()`.

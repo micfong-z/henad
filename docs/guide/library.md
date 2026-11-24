@@ -238,7 +238,7 @@ A run's trajectory depends on its model, its values, its seed and its schedule.
 A rebuild on the same build of Henad and of the model, on the same platform, steps through the same states, and its stats at the run's last tick equal the run's last row in `series.csv`.
 A pause, the thread count or the number of runs stepping beside it never changes a run.
 
-Four things stand between a run and its rebuild:
+Four things can make a rebuild differ from its run:
 
 - **A model that does not replay exactly.**
   A GPU model whose passes leave the order of their writes to the device declares `REPLAYS_EXACTLY = false`.

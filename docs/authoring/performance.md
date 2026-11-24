@@ -16,7 +16,7 @@ Storage is struct-of-arrays throughout, so a population is `pos_x: Vec<f32>`, `p
 An array-of-structs `Vec<Agent>` would gather each agent's fields together and undo that layout.
 
 With lanes, a kernel's inner loop streams contiguous memory, and rayon can split a lane without splitting an agent.
-`agent_lanes!` emits one `Vec<T>` per lane for exactly this reason.
+`agent_lanes!` emits one `Vec<T>` per lane for this reason.
 
 A few shapes break the layout:
 
@@ -35,7 +35,8 @@ It has to be a fixed const rather than something derived from the thread count, 
 It also has to be small enough that a typical population still splits across every core.
 At 4096, 50k boids produced only 13 chunks and cost 20%.
 The default is 512.
-Boids overrides to 64, since a thousand agents would otherwise be two chunks and most of the pool would sit idle, and its kernel draws no random numbers so the seeding granularity costs it nothing.
+Boids overrides to 64, since a thousand agents would otherwise be two chunks and most of the pool would sit idle.
+Its kernel draws no random numbers, and the finer seeding costs it nothing.
 Ants overrides to 4096, its per-agent kernel being cheap enough that per-chunk overhead dominates.
 
 Neither of those numbers is a rule, and if your model has an unusual per-agent cost you should measure both ends.
@@ -44,9 +45,10 @@ Measure with the population you care about: a value that suits a million agents 
 ## Never scan every agent
 
 `henad::authoring::SpatialHash` is a flat counting-sort grid, rebuilt every tick from the agent positions.
-Declaring `type Index = SpatialHash` and calling `query_radius` is the single biggest lever for getting an agent model to scale, and boids only scaled in the first place once its naive neighbour search was replaced with this hash.
+Declaring `type Index = SpatialHash` and calling `query_radius` does more than anything else to make an agent model scale.
+Boids only scaled once its naive neighbour search was replaced with this hash.
 
-A kernel that needs the offsets to its neighbours, and not just their indices, should use `for_each_within` instead.
+A kernel that needs the offsets to its neighbours as well as their indices should use `for_each_within` instead.
 It walks the same cells in the same order, and passes the callback the two toroidal deltas and their squared length, which the range test computed anyway.
 Taking a list of indices back and recomputing the deltas from it measured 10% of the boids step.
 
@@ -60,13 +62,13 @@ Boids uses `for_each_within`, which needs no buffer at all.
 Toroidal wraparound is handled inside the query.
 Do not reintroduce an O(n²) neighbour loop, and do not filter the whole population by distance.
 
-`index_cell_size` is read every tick, which lets a live edit to whatever parameter sets the radius reach the index too.
+`index_cell_size` is read every tick, and a live edit to whatever parameter sets the radius reaches the index too.
 
 ## Hot parameters
 
 Extract your parameters once per tick into `Self::Params`, and never match a `ParamValue` enum inside a kernel.
 Precompute anything the kernel would otherwise redo on every invocation, such as squared radii, reciprocals and half extents.
-Boids does all three, which leaves its neighbour loop with no setup per neighbour.
+Boids does all three, and its neighbour loop has no setup per neighbour.
 
 See [parameters](parameters.md#hot-parameters).
 
@@ -74,7 +76,7 @@ See [parameters](parameters.md#hot-parameters).
 
 Dedicated machinery sits behind one write pattern only, many agents depositing into the same cell, and you use it through [`ScalarField`](fields.md#the-scatter).
 
-The cost is real, and which cost you pay depends on the shape of the call.
+What the scatter costs depends on the shape of the call.
 With more cells than deposits, which is the usual case for a field sized by the world, the banded arm merges each deposit once and touches each cell once.
 The dense arms cost either one private grid per worker or a counting sort over the whole population.
 A model that only needs each agent to write its own slot should use a `plain` lane instead and pay nothing.
@@ -88,7 +90,8 @@ The choice of strategy rests on measurement, so if you want to change it, re-run
 `stats` and `prepare_view` run on publish, at most about 60 times a second, while `step` runs as often as the model can tick.
 
 Anything a readout or a picture needs, but a step does not, belongs in `prepare_view`.
-Ants quantises its whole pheromone field there, which would be unaffordable per tick but is nearly free per snapshot.
+Ants quantises its whole pheromone field there.
+That work would be unaffordable per tick, and is nearly free per snapshot.
 
 ## Measuring it
 
@@ -122,7 +125,7 @@ Otherwise two runs at different scales are not comparable.
 
 - **Interleave old and new.** A machine drifts by up to 40% under sustained load, so two runs an hour apart are not comparable.
 - **Say what was measured.** State that the build was release mode and that the number is a `step()` counter rather than a frame rate.
-- **Prefer Game of Life for a refactor.** It draws no random numbers during a step and its output is bit-identical across refactors, which makes it the cleanest signal available.
+- **Prefer Game of Life for a refactor.** It draws no random numbers during a step, and its output stays bit-identical across refactors.
 - **Flag a surprising result as surprising.** A favourable number with no mechanism behind it usually turns out to be a measurement bug.
 
 ## On the GPU
@@ -135,7 +138,8 @@ The runner does the batching, and it sizes the batch adaptively against a wall-c
 
 **Memory traffic.** A GPU grid step is usually bandwidth-bound, and it wins through latency hiding instead of faster arithmetic.
 Bit-packing pays off in that regime.
-GPU Game of Life packs 32 cells per `u32` and evaluates the rule SWAR-style, which cuts the traffic by 32 for the same result.
+GPU Game of Life packs 32 cells per `u32` and evaluates the rule SWAR-style.
+The result is the same, and the traffic falls by a factor of 32.
 
 ## Next
 

@@ -7,7 +7,7 @@ icon: material/memory
 # The CPU backend
 
 `henad-compute/src/cpu/` turns a CPU authoring impl into something runnable.
-It is the sibling of [the GPU backend](gpu-backend.md) rather than a base for it, and the two backends mirror each other file by file.
+It is the sibling of [the GPU backend](gpu-backend.md), and the two backends mirror each other file by file.
 Reading one backend against the other is a quick way to learn both.
 
 ```text
@@ -33,7 +33,7 @@ Network models run on the CPU only, and none of the three has a counterpart in `
 ## The engines
 
 Each engine implements the whole of `SimState` for its trait.
-A model therefore never implements `SimState` itself, which keeps the runner interface out of the authoring surface.
+A model therefore never implements `SimState` itself, and the runner interface stays out of the authoring surface.
 
 `GridModelState<M>` owns a `CaField<M>` holding the `Grid2D<u8>`, the parameter store, the action seed and the tick counter.
 The field's step dispatches on `M::NEIGHBORHOOD` once, outside the row loop, so the choice costs no per-cell work.
@@ -168,7 +168,7 @@ The boids kernel draws no random numbers, and its chunk size changes no result.
 `ScatterGrid` handles the one write pattern the rest of the engine cannot express directly: many agents depositing into the same cell.
 Its three arms, and what picks between them, are covered in [fields](../authoring/fields.md#the-scatter).
 
-The property that matters inside this crate is the choice of arm, which comes from the worker count and the deposit count.
+Inside this crate, the choice of arm comes from the worker count and the deposit count.
 All three arms must therefore produce identical bits.
 Any divergence would make a model's results depend on the machine they ran on.
 A test pins each arm explicitly and compares them against a reference written the obvious way, in the dense regime and the sparse one.
@@ -335,7 +335,7 @@ An action draws from [its own stream](../authoring/parameters.md#actions), seede
 
 ## Faults
 
-The run loop is wrapped in a panic catch once, at thread start and outside the loop, which keeps the catch off the per-tick path.
+The run loop is wrapped in a panic catch once, at thread start and outside the loop, to keep the catch off the per-tick path.
 
 rayon catches a worker's panic itself and re-raises it on the caller with `resume_unwind`, and that re-raise does not run the panic hook a second time.
 `fault.rs` keeps a global fallback of recent panic sites alongside its thread-local record for exactly this case.

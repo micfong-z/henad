@@ -12,11 +12,11 @@ In this tutorial we'll build Conway's Game of Life (Life) on the GPU from scratc
 
     This page describes Henad 0.3.
 
-This page assumes you have worked through our [CPU Grid Model](game-of-life.md) tutorial first.
+This page assumes you have worked through our [CPU Grid model](game-of-life.md) tutorial first.
 We will reuse its palette, and use it as a cross-check for correctness.
 Every file on this page goes under `src/` in the same project, made from the template as [Your own project](../your-project.md) describes.
 
-You'll also need a machine with a GPU that wgpu can drive with compute support, which it reaches through Vulkan, Metal or DirectX 12.
+You'll also need a machine with a GPU that wgpu can drive with compute support, through Vulkan, Metal or DirectX 12.
 
 ## What we will write
 
@@ -50,7 +50,7 @@ Let's get started by creating `src/gpu_life/`, containing `mod.rs`, `step.wgsl`,
 ## Update rule `step.wgsl`
 
 Let's write down the update rule first, as we did on the CPU.
-See the [CPU Grid Model](game-of-life.md#update-rule-step_cell) tutorial for details on the rules.
+See the [CPU Grid model](game-of-life.md#update-rule-step_cell) tutorial for details on the rules.
 
 We will need a different representation of the grid, due to limits on storage buffer sizes, i.e. how much data we can easily store on the GPU.
 
@@ -59,7 +59,7 @@ We will need a different representation of the grid, due to limits on storage bu
 The trait's default is one `u32` per cell and one step invocation per cell, and for a first model that default might be fine on smaller scales.
 You can accept it and skip ahead to the [Bindings](#bindings), if you do not want to pack the cells into bits (yet).
 
-However, for practical reasons, it is best to have them packed into bits any way.
+However, for practical reasons, it is best to have them packed into bits anyway.
 A 100M-cell grid at one `u32` per cell is 400 MB per side, which blows the 128 MiB a storage binding is guaranteed on a baseline device (see [wgpu default limits](https://docs.rs/wgpu/latest/wgpu/struct.Limits.html#impl-Limits)).
 The same grid at one _bit_ per cell is 12.5 MB per side.
 
@@ -76,7 +76,8 @@ BITS    0 ...... 31 │ 0 ...... 31 │ ... │ 0 ........................... 31
 
     Packing changes data ownership.
     If the step still dispatched one invocation per cell, 32 invocations would share each output word, and every one of them would read-modify-write it, racing with the other 31.
-    Our step therefore dispatches one invocation per word, so each word has exactly one owner and is written with one plain store.
+    Our step therefore dispatches one invocation per word.
+    Each word then has exactly one owner and is written with one plain store.
 
 ### Bindings
 
@@ -244,9 +245,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 1. Every shader of a grid model declares the same square workgroup, and the trait's `WORKGROUP_SIZE` defaults to 16 to match it.
 2. The dispatch is rounded up to whole workgroups, so some invocations hang off the right and bottom edges of the grid. They leave before touching anything.
 3. The y half of the torus. Rows wrap with a plain modulo, since a row is a whole number of words.
-4. Here `sb3` goes missing. The weight-8 carry out of this column would be the fourth row of the table above, and the tree never computes it. Dropping it is sound because 8 is `1000` in binary, so a count of 8 leaves `sb1` clear and the rule below already rejects it.
-5. The rule collapses beautifully in bit-sliced form. A cell survives on a count of 2, binary `010`, and is born on 3, binary `011`. Both need `sb2 == 0` and `sb1 == 1`, and they differ only in `sb0`, where a set bit means born regardless and a clear bit needs the cell already alive. One expression for all 32 cells.
-6. One plain store, by the word's one owner. This is the line the ownership rule above protects.
+4. Here `sb3` goes missing. The weight-8 carry out of this column would be the fourth row of the table above, and the tree never computes it. Dropping it is sound, because a count of 8, binary `1000`, leaves `sb1` clear and the rule below already rejects it.
+5. In bit-sliced form the rule is one expression for all 32 cells. A cell survives on a count of 2, binary `010`, and is born on 3, binary `011`. Both need `sb2 == 0` and `sb1 == 1`, and they differ only in `sb0`, where a set bit means born regardless and a clear bit needs the cell already alive.
+6. One plain store, by the word's one owner. The ownership rule above protects this line.
 
 That is the whole rule.
 It compiles to a few dozen bitwise instructions per word, with no loop and no branch over the cells, and all 32 lanes are resolved at once.
@@ -289,12 +290,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 1. Shared WGSL ships with henad-core and can be reached with `#import henad::<module>`, resolved at build time. `henad::dims` holds the `Dims` struct that every grid model's display and reduce shaders read.
 2. Display and reduce bind `state` and their own `Dims` uniform, carrying the grid size and the texture size. Our step uniform never reaches them.
-3. The shader writes RGBA directly, so it carries its own copy of the two palette colours as WGSL constants. It is recommended to maintain consistency with the CPU palette.
-4. The pass dispatches one invocation per _texel_, never per cell. The texture is capped at 4096 a side, so a big grid is sampled, and `cell_at` reads the cell at `texel * grid / tex`. Nothing special happens if this cap is not reached.
+3. The shader writes RGBA directly, so it carries its own copy of the two palette colours as WGSL constants. They should match the CPU palette.
+4. The pass dispatches one invocation per _texel_. The texture is capped at 4096 a side, so a big grid is sampled, and `cell_at` reads the cell at `texel * grid / tex`. A side below the cap gets one texel per cell.
 
 !!! note "Why sample?"
 
-    One texel per cell would cap the grid at the device's maximum texture dimension and cost four bytes per cell, which at 16384^2^ is over a gigabyte of RGBA for something drawn into a panel roughly a thousand pixels wide.
+    One texel per cell would cap the grid at the device's maximum texture dimension and cost four bytes per cell.
+    At 16384^2^ that is over a gigabyte of RGBA for something drawn into a panel roughly a thousand pixels wide.
     The [GPU grid models](../../authoring/gpu-grid-models.md#display-is-a-sampled-view) page has the details.
 
 ## Statistics `reduce.wgsl`
@@ -347,7 +349,7 @@ fn main(
 1. One `u32` counter per series in `STATS`, which we declare in a moment. Life has one series, so this is a single atomic rather than an array.
 2. Workgroup memory, shared by the 256 invocations of one workgroup and nobody else.
 3. The bounds check is an `if` around the work rather than an early `return`. Every invocation in a workgroup has to reach both barriers, including the invocations hanging off the grid's ragged edge, and an early return would leave them stranded.
-4. Folding locally first means one global atomic per 256 cells instead of one per cell, which keeps the pass negligible at the grid sizes the engine targets.
+4. Folding locally first means one global atomic per 256 cells instead of one per cell. The pass is then negligible at the grid sizes the engine targets.
 
 ## Implementing `GpuGridModel`
 
@@ -403,7 +405,7 @@ impl GpuGridModel for GpuLifeModel {
 }
 ```
 
-1. The example port already uses the ID `gpu_game_of_life`. A model set holds each ID once, and our ID differs so that both models can sit in one set, such as one that also holds `henad::models::example_models()`.
+1. The example port already uses the id `gpu_game_of_life`. A model set holds each id once, and our id differs so that both models can sit in one set, such as one that also holds `henad::models::example_models()`.
 
 ### Colours
 
@@ -457,7 +459,7 @@ The template's `build.rs` is already in the project and runs henad-build over th
 
 It finds every `.wgsl` file under `src` itself, so a new shader needs no edit to the build file.
 Our three shaders are already part of it, with nothing to list.
-Each shader's path decides its names, so `gpu_life/step.wgsl` becomes `shader_bindings::gpu_life::step` and `GPU_LIFE_STEP`.
+Each shader's path decides its names: `gpu_life/step.wgsl` becomes `shader_bindings::gpu_life::step` and `GPU_LIFE_STEP`.
 The [shaders page](../../authoring/shaders.md#generated-from-the-wgsl) has the rules a path follows.
 
 `BindingDecl` comes from the prelude.
@@ -485,7 +487,7 @@ henad::params! {
 }
 ```
 
-`u32_param` takes the ID, the label the UI shows, then the default, the minimum and the maximum.
+`u32_param` takes the id, the label the UI shows, then the default, the minimum and the maximum.
 The range goes up to 16384 a side, well past the CPU model's 10000, because the packed layout makes such a grid affordable.
 
 Three functions then tell the engine how big everything is:
@@ -563,7 +565,7 @@ fn seed_random(width: u32, height: u32, density: f32, mut rng: u64) -> Vec<u32> 
 3. Only the storage differs. A live cell sets its bit in the containing word, and the padding bits at the end of a ragged row stay zero.
 
 Given identical parameters, the two backends therefore start from a bit-identical grid.
-We'll get real value out of that under [Testing](#testing).
+The test under [Testing](#testing) relies on that.
 
 ### Finishing up
 
@@ -605,7 +607,7 @@ and add a line to `models()`, next to the `insert` lines already there:
 ```
 
 The entry needs no device, and builds on whichever device the host passes it.
-On a machine with no usable adapter the app and the CLI leave the GPU models out of their lists, and a GPU model requested by ID is rejected with a message saying it needs a GPU.
+On a machine with no usable adapter the app and the CLI leave the GPU models out of their lists, and a GPU model requested by id is rejected with a message saying it needs a GPU.
 A GPU entry also carries a capacity check, so a grid too large for this device disables Build with a readable reason instead of crashing the process.
 
 With the entry in place, we can finally run the model.
@@ -628,7 +630,7 @@ Make sure that `--release` is present to reach full performance.
     ```
 
     Add `--set grid_width=8192 --set grid_height=8192` to see the model at scale, and `--global-warmup 1000` in front of `--steps`.
-    The warm-up runs untimed steps first, letting the GPU clocks ramp up and the first-use shader compilation get paid before anything is measured.
+    The warm-up runs untimed steps first, so the GPU clocks ramp up and the first-use shader compilation is over before anything is measured.
 
 === "Browser"
 
@@ -685,7 +687,8 @@ parameters for gpu_life (Game of Life (GPU)):
 
     On the CPU page density sat at index 2 in this list while `DENSITY` read 0, because the engine prepended width and height.
     Nothing is prepended here, so `DENSITY` reads 2 and the list says 2.
-    Spelling the list out ourselves also lets it match the CPU model's composed list exactly, so a slider in the app means the same thing on either backend.
+    Spelling the list out ourselves also lets it match the CPU model's composed list exactly.
+    A slider in the app then means the same thing on either backend.
 
 ## Testing
 
@@ -799,10 +802,10 @@ Here is everything we wrote on this page, gathered into four files.
     ```
 
 The listings above are stored in the repository at [`examples/tutorial/src/gpu_life/`](https://github.com/micfong-z/henad/tree/master/examples/tutorial/src/gpu_life/).
-The three shaders there are copies of the example port's shaders, at [`crates/henad-models/src/gpu_game_of_life/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/gpu_game_of_life), since a shader carries no model ID and what we wrote is the same file line for line.
+The three shaders there are copies of the example port's shaders, at [`crates/henad-models/src/gpu_game_of_life/`](https://github.com/micfong-z/henad/tree/master/crates/henad-models/src/gpu_game_of_life), since a shader carries no model id and what we wrote is the same file line for line.
 
 The example model is at [`crates/henad-models/src/gpu_game_of_life/mod.rs`](https://github.com/micfong-z/henad/blob/master/crates/henad-models/src/gpu_game_of_life/mod.rs).
-It runs under its own ID, and its tests pin the adder tree and the ragged wrap.
+It runs under its own id, and its tests pin the adder tree and the ragged wrap.
 
 ## Next
 

@@ -24,7 +24,7 @@ use henad::authoring::primitives::rng::{next_bits, random_float};
 Where a primitive exists in both languages, the names match.
 `henad::authoring::prelude` holds every Rust draw, and `Boundary`, `cell_index`, `offset_cell`, `dist_sq` and the three offset tables of the space helpers.
 A model imports the other space helpers from `henad::authoring::primitives::space`.
-Each entry below gives the Rust signature, and calls out the WGSL signature wherever it differs.
+Each entry below gives the Rust signature, and the WGSL signature wherever it differs.
 
 ## Index
 
@@ -219,7 +219,7 @@ See also: [`axis_delta`](#axis_delta).
 The offset tables and the two ways of walking them.
 Rust holds each table as a const slice, WGSL as an id plus an accessor.
 
-A grid rule, a GPU grid model declared as data in `henad::rules`, refuses loops and walks no table.
+A grid rule, a GPU grid model declared as data in `henad::rules`, rejects loops and walks no table.
 Its engine template declares `neighbor(dx, dy)`, the state of the cell `dx` east and `dy` south, and `moore_count(state)` and `von_neumann_count(state)`, the neighbours in `state` around the cell.
 
 ### `MOORE_ROW_MAJOR`
@@ -459,7 +459,7 @@ random_float(0, 1.0)          // 0.0
 random_float(u32::MAX, 1.0)   // strictly under 1.0
 ```
 
-24 bits is the f32 mantissa width, so every value the draw can produce is exact and the range really is half-open.
+24 bits is the f32 mantissa width, so every value the draw can produce is exact and the range is half-open.
 Both backends run the same form, and their results are bit-equal.
 
 See also: [`next_float`](#next_float), [`below`](#below), [`reservoir_accept`](#reservoir_accept).

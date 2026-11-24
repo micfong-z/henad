@@ -170,7 +170,7 @@ A broken release is yanked, and a patch release of all nine follows.
 The tag workflow never uploads.
 Trusted publishing from a tag, through `rust-lang/crates-io-auth-action`, stays an option should the step ever be automated.
 
-## What the tag build refuses
+## What the tag build rejects
 
 Three ways it stops rather than announcing something wrong:
 
@@ -179,12 +179,12 @@ Three ways it stops rather than announcing something wrong:
 - **The changelog has no section for the version.**
   The error lists the versions that the file does have.
 - **The section carries no date.**
-  `## [0.3.0]` with no date is a section still being written, not a release.
+  `## [0.3.0]` with no date is a section still being written.
   `## [Unreleased]` fails at the previous check, since the file then has no section for the version.
 
 A tag with a pre-release suffix, `v0.3.0-rc.1`, is marked as a pre-release on GitHub.
 A candidate tag needs the workspace, every requirement and a dated section at the candidate's version.
-A candidate tag is not a rehearsal of a release.
+A candidate tag drafts a GitHub release of its own, as a release tag does.
 
 ## What it does not do
 
@@ -237,7 +237,7 @@ A **patch release** goes from 0.x.y to 0.x.(y+1) and stays compatible, as Cargo'
   That covers the enums that the engine produces and hosts match on, such as `ProgressEvent`, `SweepEvent`, `SweepWarning`, `RunStatus`, `StopReason` and `ModelState`, and the output structs such as `SweepRecord`, `SweepReport`, `ResultCounts` and `Manifest`.
 - `#[non_exhaustive]` marks the types built through `new`: `SweepOptions`, `SweepRunOptions`, `BenchmarkSettings`, `TestDeviceRequest`, `SimulationViews` and `ModelMetadata`.
   So does each spec type behind `runtime-wgsl`, such as `GpuAgentSpec`, `GpuGridSpec`, `ShaderSpec` and `EntryDeclarations`, with `GpuBufferInfo` and `GpuPassInfo` in henad-core.
-  `SideTable` has a private field in place of the attribute.
+  `SideTable` has a private field instead of the attribute.
   A new hook of `AgentHooks` or `GridHooks` takes a default body.
   `#[non_exhaustive]` also marks the types that are lists by nature: the error enums `SetupError`, `ExportError`, `ModelSetError`, `ModelLookupError` and `ShaderBuildError`, `AppOpening`, `OpenAt`, `ModelCheck`, `SkipReason` and `Structure`.
   `ExploreError` and `SweepOutput` carry it as well, since their variants differ between targets.

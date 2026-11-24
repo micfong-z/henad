@@ -6,14 +6,14 @@ icon: material/chart-line
 
 # Statistics
 
-Every curve on the charts tab starts as a declaration on the model.
-You declare the series once as a const and then return bare values in the same order, which keeps the labels and the values from drifting apart.
+Every curve on the Charts tab starts as a declaration on the model.
+You declare the series once as a const and then return bare values in the same order, to keep the labels and the values from drifting apart.
 
 ```rust
 --8<-- "crates/henad-models/src/sir.rs:stat_descriptors"
 ```
 
-A descriptor is just a label and a colour, read back through `label()` and `color()`.
+A descriptor is a label and a colour, read back through `label()` and `color()`.
 `StatDescriptor::new` is a `const fn` over a `&'static str`, and `StatDescriptor::owned` takes a `String`, for a model whose declarations are read at run time.
 Take the colour from the model's own palette, and each chart line then keeps the same colour as the thing it counts.
 A stat cannot be labelled `tick`, the first column of the exported stats, `run_id`, the first column of `series.csv`, or `time` in a model with a time scale.
@@ -36,10 +36,11 @@ pub enum StatValue {
 }
 ```
 
-The stats panel shows each variant in full.
+The Statistics tab shows a `Scalar` and a `Vector2D` in full, and a `Histogram` as its total count.
 A whole `Scalar` shows without decimals, and a fractional `Scalar` shows up to three decimals.
 The history chart plots one number per series, so a `Vector2D` is charted as its magnitude and a `Histogram` as its total count.
-Boids reports average velocity as a `Vector2D`, which shows as a direction in the panel and doubles as a measure of flock coherence on the chart.
+Boids reports average velocity as a `Vector2D`.
+The Charts tab draws it as an arrow, and the history chart plots its magnitude as a measure of flock coherence.
 
 ## When it runs
 
@@ -62,7 +63,7 @@ To fold up a whole grid or population, run the reduction in chunks with `reduce_
 ```
 
 `reduce_chunks` takes a length rather than a slice, so a single closure can read several lanes per chunk.
-It folds the partials **in chunk order rather than completion order**.
+It folds the partials in chunk order rather than completion order.
 A float reduction folded in arrival order would depend on how rayon happened to schedule the work.
 The chunk size, `STATS_CHUNK`, is 8192.
 
