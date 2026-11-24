@@ -378,7 +378,7 @@ impl Loop {
     fn fire_due(&mut self) {
         self.fired_through = Some(self.state.tick());
         for refused in self.schedule.run_due(&mut *self.state) {
-            log::warn!("Model refused action '{}' at tick {}", refused.id, refused.tick);
+            log::warn!("Model rejected action '{}' at tick {}", refused.id, refused.tick);
         }
     }
 

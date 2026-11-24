@@ -889,7 +889,7 @@ fn fire_due(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &Schedule) 
     let tick = state.tick();
     let (last, refused) = submit_due(state, ctx, schedule, "henad_gpu_scheduled_action");
     for action in refused {
-        log::warn!("Model refused action '{}' at tick {tick}", action.id);
+        log::warn!("Model rejected action '{}' at tick {tick}", action.id);
     }
     last
 }
