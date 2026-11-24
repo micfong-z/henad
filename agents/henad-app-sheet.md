@@ -4,7 +4,7 @@
 in the Editor tab as its Sheet and Card panes, and holds the New model dialog. The code view and the
 expert mode are in `agents/henad-app-editor.md`, and the canvas in
 `agents/henad-app-graph-editor.md`. The Sheet pane edits every section, those of a world of agents
-included, and the Card pane writes the lines of a cells card (`agents/henad-app-card.md`). This file
+included, and the Card pane writes the lines of every card (`agents/henad-app-card.md`). This file
 holds the `SheetEditor`, its edits, the Sheet pane's sections and forms, the toolbar and undo, and
 `agents/henad-app-sheet-open.md` opening a sheet, its preview and the New model dialog.
 
@@ -14,14 +14,15 @@ keys), its canonical text (`text`, which Save model writes and Apply reads throu
 is placed in what Save writes), the `SheetFile` read, checked and lowered from it or the problems
 that stop it lowering (`lowering_problems`, `has_errors`), the load number from
 `program::LOADS` (shared, so a graph and a sheet never take one preview key), the compiled program,
-`built_starts` (each cells property's start when the preview was last built, set by `mark_built`
+`built_starts` (each property's start when the preview was last built, set by `mark_built`
 from `preview::build_preview`), the `notice` of the last edit and the pane's `PaneState`.
 `SheetEditor::new(document)` and every edit call `refresh`, which writes the canonical text, parses
 it again for the places, and parses it as a `SheetFile`. A document whose text does not write keeps
 an empty text and the writer's error. `preview_key` is `[load, 0, 0]`. `program` compiles
-`SheetFile::lowered` through `GraphProgram::compile` on first use, and passes each compiler problem
-through `SheetFile::place_graph_diagnostic`. `place` does the same for a problem of the run, which
-`EditorModel::place` calls for a sheet and passes through for any other model:
+`SheetFile::lowered` and the probes of `sheet_probes` through `GraphProgram::compile_with_probes`
+on first use, and passes each compiler problem through `SheetFile::place_graph_diagnostic`. `place`
+does the same for a problem of the run, which `EditorModel::place` calls for a sheet and passes
+through for any other model:
 `EditorPanel::show_fault` (a fault of the applied code before tick 0) and `show_preview_fault`
 (`Preview::show_problem`) both place their fault. A fault carries no node or pass, so it lands at
 `[sheet]`. `sheet_ui` draws the Sheet pane as a resizable `Panel::left` (`sheet_pane_id`, one id per
@@ -60,7 +61,7 @@ Purpose and World, and the children of `sheet_pane/` hold the other sections: `s
 Cells table, starts, chance rows, `number_field` and the New parameter dialog), `property_form.rs`,
 `parameters.rs`, `measures.rs`, `colors.rs`, `buttons.rs`, `agents.rs` and `layout.rs`. It draws
 `SheetSection::shown(made_of)` in order (`ALL` for cells, `AGENT_WORLD` with
-Agents, Ground and Events in place of Cells), each a `layout::section` (a region, its heading from
+Agents, Ground and Events in place of Cells), each a `layout::section` (no frame, its heading from
 `SheetSection::heading` as a `region_title` with its help), under `ui.push_id(PaneState::widgets)`,
 an id per sheet opened (`PaneState::new` takes the load number from `SheetEditor::new`, not the
 preview key, which changes on every edit). The field ids (`widgets.with(...)`,
@@ -101,13 +102,13 @@ chance draws each row on a line of its own (state select, `WITH_CHANCE`, the num
 `remove_row_name`), "+ Add row" named `add_row_name` (the first state no row draws), and `OTHERWISE`
 with its select. A new by-chance start draws the second state with an empty chance, otherwise the
 first. A Number start shows `every_starts_at` or `RANDOM_NUMBER_BETWEEN` .. `RANDOM_NUMBER_AND` (0
-and 1 to start). Each Starts as number (`start_number`) is a `commit_field` named
+and 1 to start). Each Starts as number (`start_number`) is a `commit_number` named
 `starts_field_name(place, ...)` showing `literal_words` (a percent as typed), with "Use a parameter"
 (a text control) beside it opening `CHOOSE_A_PARAMETER`. A parameter chip replaces the field and
 reopens `Blank::picker_title` with the Number box. A row's empty field empties the chance, text that
 does not read keeps the old value with `TYPE_A_CHANCE` or `TYPE_ONE_NUMBER`, and a chance outside 0
 to 1 `CHANCE_OUT_OF_RANGE`. `start_edit` changes the start as the builder holds it when the edit
-runs. "New parameter…" opens the New parameter dialog for that `StartTarget`, and Create runs
+runs. "New parameter…" opens the New parameter dialog for that `NumberTarget`, and Create runs
 `AddParameter` and the start's change as one edit, marked `starts_only` since only the start uses
 the parameter. Past the start it waits for Start again, as a chosen parameter does.
 
@@ -152,7 +153,7 @@ swaps, equal ends make Max one more, the value moves into the range) and Unit as
 edit runs, keeping `step` and `means`, and the slider's value moves into a range an earlier edit of
 the frame changed (`a_typed_number_and_a_click_in_one_frame_both_commit`). Every number field
 reads a percent. The trying line of the Parameters tab's preview mode sits under its parameter. "+
-Add parameter" opens the New parameter dialog with no `StartTarget` (1 in 0 to 10), and Create runs
+Add parameter" opens the New parameter dialog with no `NumberTarget` (1 in 0 to 10), and Create runs
 `AddParameter` alone. Measures: per States property its weak name and a form row per state (egui
 wraps no nested group, and a row of groups ran past a narrow pane) with a "Plot" box named
 `plot_state` of `state_label` ("Status Alive" when another property shares the state name), adding a
@@ -180,11 +181,11 @@ everywhere steps read-only as `button_does` words them (`set_steps`), checked by
 heading, each line's number and sentence from `card_lines`, or `BUTTON_CARD_EMPTY`).
 `ButtonForm::run_once` is `None`, neither radio chosen, for a button whose steps only set
 everywhere. `button_edit` adds with `AddButton` and `SetButtonSteps` (one property as `properties`,
-every property as `thing = "cells"`), renames and sets steps, and deletes and adds again a button
-whose kind changes. It keeps the set everywhere steps in their order in every case, the new kind's
-step in the place of the old one, and renames alone a button that only sets while no kind is chosen
-(`the_button_form_keeps_the_steps_that_set_a_property_everywhere`, `src/tests/sheet_agents.rs`). A
-refusal shows as the form's message (`FormKind` on `Pending`).
+every property as `thing`, the cells or the kind of agent), renames and sets steps, and deletes
+and adds again a button whose kind changes. It keeps the set everywhere steps in their order in
+every case, the new kind's step in the place of the old one, and renames alone a button that only
+sets while no kind is chosen (`the_button_form_keeps_the_steps_that_set_a_property_everywhere`,
+`src/tests/sheet_agents.rs`). A refusal shows as the form's message (`FormKind` on `Pending`).
 
 The name row (`name_row` over a `NameRow`, the second row of the Editor's header, which
 `agents/henad-app-editor.md` describes): the model name in the body colour as a button shown framed
@@ -223,20 +224,20 @@ the last frame), since a click on a suggestion takes the focus from the field fi
 `sheet_ui` and `sheet_pane` take the `SheetTrial`s (parameter id and tried value) that `editor_ui`
 reads through `sheet_trials` (`params::sheet_number`, which Keep uses too) while the sheet's preview
 runs, and a wrapped weak label under the tried parameter reads `sheet_trying_value` ("The world is
-trying 0.5. The model keeps 0.3."), wrapping at the clip rectangle's right edge, since the
-pane's content can be wider than the pane. `SheetEditor::keep_value` runs one
+trying 0.5. The model keeps 0.3."), wrapping at the row's right edge (`TableRow::below`).
+`SheetEditor::keep_value` runs one
 `SheetEdit::SetParameter` for the Parameters tab's Keep (range widened), one step of Undo, and
 refreshes the sheet with its load number kept, so the preview starts nothing again.
 `starts_text` reads a `ByChance` start as `BY_CHANCE`, and a `Value` start by its `value` slot: a
-state chip as `starts_all` of the state's name ("All Tree"), a `RandomNumber` phrase as
-`A_RANDOM_NUMBER`, and anything else as `A_VALUE`. `starts.state` belongs to `OnGround` alone. A
-painted, anywhere or on-ground start, which no grid sheet holds, reads as an empty cell, and a
-`set_everywhere` step, which no grid control writes, as the pane's own "Set everywhere".
+state chip as `starts_all` of the state's name ("All Tree"), a yes or no as "All Yes" or "All No",
+a `RandomNumber` phrase as `A_RANDOM_NUMBER`, and anything else as `A_VALUE`. `starts.state`
+belongs to `OnGround` alone. A painted, anywhere or on-ground start reads as `PAINTED`,
+`ANYWHERE_AT_RANDOM` or `on_ground_start`, and a Heading with no start as `HEADING_START`.
 
 `widgets.rs` holds what both panes share: `region`, `hairline`, `region_title`, `chip_with_id` and
 `chip_within`, `select_within` and `select_list`, `swatch_ui`, `text_control_width`, `blank_ui` and
-`blank_shapes` (moved from the card pane), `set_name` (the accessible name of a `TextEdit` or a
-`ComboBox`, set after the widget), `color32`, `commit_field` and the right-aligned `commit_number`
+`blank_shapes`, `set_name` (the accessible name of a widget, set after the widget), `color32`,
+`commit_field` and the right-aligned `commit_number`
 (a text field that commits on Enter or focus loss through a closure that returns the refusal
 message, and on Escape puts the value back and drops the draft and its message, `EscapeCancels`,
 while `commit_area`'s Escape commits as a click elsewhere does,
@@ -252,15 +253,13 @@ Number box), `color_button` (a swatch opening
 `CHOOSE_A_COLOR`, an
 overlay of the twelve `PALETTE_COLORS` named by `COLOR_NAMES`), `color_name` (the nearest palette
 name, for a starter's own colours), and the New parameter dialog:
-`NewParameterDialog::new(number_use, typed, unit)` starts from 0.1 in 0 to 1 for a chance, 1 in 0 to
-1 for a share, 1 in 0 to 10 otherwise, or from the typed number with Min at twice a negative one and
-Max at `default_max` (1, 2 or 5 times a power of ten about ten times it, at most 1 below 1 or for a
-chance or a share). Max and a
+`NewParameterDialog::new(number_use, typed, unit)` starts from 0.1 in 0 to 1 for a chance or a
+rate, 1 in 0 to 1 for a share, 1 in 0 to 10 otherwise, or from the typed number with Min at twice a
+negative one and Max at `default_max` (1, 2 or 5 times a power of ten about ten times it, at most 1
+below 1 or for a chance or a share). Max and a
 negative Min follow Default until typed. `parameter(taken)` runs the checks of the wording table in
-order, reading every field with a percent. The modal (`henad_new_parameter_modal`, a dialog of the
-`widgets.rs` kind below, where Enter creates) is a `Dialog`
-named `NEW_PARAMETER_HEADING`. A rate's starting values and its "per [unit]" Unit wait for the first
-rate blank.
+order, reading every field with a percent. The modal (`henad_new_parameter_modal`, a dialog as
+`agents/ui.md` describes, where Enter creates) is a `Dialog` named `NEW_PARAMETER_HEADING`.
 
 The Sheet pane's pickers ("Choose a parameter" and a parameter chip's picker) are
 `picker::ParameterPicker`: a `Popup` toggled by its anchor under the anchor's id with "picker",
@@ -332,7 +331,7 @@ the tree and holding its words through `assert_controls_hold_their_words`, selec
 `the_world_tabs_show_no_forbidden_word_from_a_sheet`, and over a `Harness` that draws the File menu,
 the Editor tab, the dialog, the unsaved changes and replace dialogs and the About modal with
 AccessKit on: `new_model_opens_a_dialog_and_create_opens_the_chosen_sheet` (the dialog role, the
-three radios in order, Name following the starter, a typed name kept, Create, the three lines,
+starters' radios in order, Name following the starter, a typed name kept, Create, the three lines,
 Cancel and Escape), `the_new_model_dialog_is_modal_and_headed_by_its_title`,
 `enter_in_the_name_field_creates_the_model` and
 `new_node_graph_lists_the_six_graph_starters_from_the_header_and_the_file_menu` (a submenu's label

@@ -64,8 +64,8 @@ the measure Total trail, and Undo after each delete). The tables and their order
 - Plotted measures (headed `PLOTTED`), buttons (`NAME_LABEL`, `BUTTON_DOES`) and events (no header):
   the words or the field take the room left over and give up width first.
 
-Every select of the pane is `select` (`select_within` at most as wide as its line, keyed by the salt
-of the `ComboBox` it replaced, over `select_list`), its options `OverlayItem`s with the current one
+Every select of the pane is `select` (`select_within` at most as wide as its line, keyed by a salt,
+over `select_list`), its options `OverlayItem`s with the current one
 marked and a state's swatch. The kind of a States property shows "States" over each state's swatch
 and name, the name wrapping under the swatch where the column has no room for both.
 
@@ -87,14 +87,15 @@ property)` read every kind and start ("Anywhere at random", `on_ground_start`, `
 `start_select` offers by kind: a state or By chance (with `PAINTED` as a selected entry that
 changes nothing while the start is painted), All Yes or All No, Anywhere at random or each state of
 a ground States property that `StartsAs::paints_single_cells` accepts, the predicate the lowering's
-`on_ground` uses, A value or A random number. No control paints, so a ground made on the pane offers
-no on-ground start, and choosing a state or By chance replaces a painted start until Undo. A Heading
-shows `HEADING_START`, an Arrow its start through `Sentences::slot`, and a painted start
-`painted_shapes` with no control.
+`on_ground` uses, A value or, for a Number, A random number. No control paints, so a ground made
+on the pane offers no on-ground start, and choosing a state or By chance replaces a painted start
+until Undo. A Heading shows `HEADING_START`, an Arrow its start through `Sentences::slot`, and a
+painted start `painted_shapes` with no control.
 The Number start's lead is `every_starts_at(thing_word)`. `NumberTarget` (`Start` or `Kept`) is what
-`number_field` (the old start field, taking a `NumberField` with an optional `limit` that also
-refuses an empty field), `pick_number` and the New parameter dialog fill. `changing_lines` adds
-Steer, Keep between, Leave on a ground property and a Move for the card's Position and Heading.
+`number_field` (the field of a Starts as number or a share kept, taking a `NumberField` with an
+optional `limit` that also refuses an empty field), `pick_number` and the New parameter dialog
+fill. `changing_lines` adds Steer, Keep between, Leave on a ground property and a Move for the
+card's Position and Heading.
 `sheet_pane/agents.rs` holds the three sections. Agents: the name (`AGENT_NAME_FIELD`,
 `rename_kind` renames and gives the kind the id its new name mints while its id is the one its old
 name mints, a refused `ChangeId` leaving the old id), the number at the start (`AGENT_COUNT_NAME`)

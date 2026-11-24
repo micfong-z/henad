@@ -92,7 +92,7 @@ lacks at the next build's values, a Seed field that does not parse, values the s
 reports the reason as `ApplyOutcome::BuildRefused`, which reads as a fault does ("Model build
 failed. Fix the problem below."). An outcome that would ask for a Rebuild or a Build that is
 disabled (`rebuild_refusal`, `build_refusal`) reads `BuildRefused` with the reason as well, the
-Rebuild model modal still open.
+Rebuild model modal still open (`an_apply_that_build_refuses_names_the_reason`).
 `settle_outcome` takes the reason the button gives now (`rebuild_refusal` while the modal is open,
 else `build_refusal`, read only for a `BuildRefused` outcome): it names a new reason, turns
 `AwaitingRebuild` or `Installed` once the reason is gone, is dropped once Build builds another
@@ -101,8 +101,8 @@ seed fixed (`a_refused_build_says_what_the_button_does_once_the_reason_is_gone`)
 replays the sheet's preview, which Playback enables whatever the refusal, Apply builds the applied
 model, so the line keeps the reason Apply meets and goes once it is gone, as `Installed` does then
 (`a_refused_build_line_keeps_its_reason_while_build_replays_the_preview`). `Faulted` is a
-fault of a build of the applied code, which leaves nothing loaded, and turns `Applied` the same way
-(`an_apply_that_build_refuses_names_the_reason`). `reset_simulation`, `open_run` and
+fault of a build of the applied code, which leaves nothing loaded, and turns `Applied` the same way.
+`reset_simulation`, `open_run` and
 `open_setup` refuse the sizes too, since the engine's own assert would end a browser's page, and
 `reset_simulation` refuses a Seed field that holds no seed, which would build at the last valid
 seed (`an_apply_while_the_seed_is_no_integer_builds_nothing`). `src/tests/editor.rs` holds
@@ -130,9 +130,9 @@ never by writing the document. `EditorModel::file_text` is the graph's canonical
 Save model and `save_name` read, so Apply runs the same path as a grid rule (`ModelFile::parse`,
 `entry`, `install_models`, the Rebuild model modal past tick 0, fault claiming). A grid graph
 installs as a GPU grid entry, and a graph of agents as a GPU agents entry, at its own size, and a
-shortfall of `Demand::shortfalls` (the submission budget included) is `ApplyOutcome::Faulted`, as
-for a grid rule. Apply also replaces a running preview at any tick: `runs_source` never holds for a
-preview, and `install`'s `settle_loaded` leaves a preview alone. `open_text` opens a file whose header reads
+shortfall of `Demand::shortfalls` (the submission budget included) is `ApplyOutcome::BuildRefused`,
+as for a grid rule. Apply also replaces a running preview at any tick: `runs_source` never holds for
+a preview, and `settle_loaded` leaves a preview alone. `open_text` opens a file whose header reads
 `kind = "graph"` and that `GraphFile::parse` reads on the canvas, and a graph that does not read in
 the code view, where Apply places its problems. `new_graph_model(app, file_name)` opens a starter,
 and Edit model opens a runtime entry whose code is `henad-graph/1` and records no sheet.
@@ -196,11 +196,10 @@ differs from `origin.copy_code` (counts from `changes_since_conversion`), `Origi
 code's hash differs from `origin.code`, or the counterpart or the sheet beside no longer lowers) and
 `NotFound`.
 `header_ui` draws it in a
-`Panel::top` under the header as an information notice with small buttons after its text, Open <name>
-(`EditorRequest::OpenOriginal`, `open_original_of`: a swap, or the sheet read from beside, errors
-included, which takes the copy as its counterpart) in every state but `NotFound`. The sheet's link
-line
-(`counterpart_copy`) sends `OpenCopy`. The graph side panel ends with `origin_ui` under
+`Panel::top` under the header as an information notice with small buttons after its text, Open
+<name> (`EditorRequest::OpenOriginal`, `open_original_of`: a swap, or the sheet read from beside,
+errors included, which takes the copy as its counterpart) in every state but `NotFound`. The sheet's
+link line (`counterpart_copy`) sends `OpenCopy`. The graph side panel ends with `origin_ui` under
 `FROM_AUTHOR_MODEL` (model, file, converted date, then each `[[editor.note]]` title and text, the
 sheet's purpose and each parameter's meaning) when the file records a `ModelOrigin`. Nodes
 added after conversion join no frame. The app draws and renames no frame, so a frame's title
@@ -238,13 +237,13 @@ copy dashed in the same data colour, with a vertical line at the first differenc
 `first_difference` compares the measures both runs hold by name, tick by tick, two non-numbers
 counting as equal, and `Comparison::outcome` turns a difference into `Inexact` when either entry's
 `metadata().replays_exactly` is false (bounded confidence and boids add floats in the order agents
-are found, so two runs at one seed differ). Each run sits in a `Side` whose drop stops it within `STOP_WAIT`, so closing,
-replacing or loading never joins a run's thread without a bound (`agents/sim-runner.md`).
-`EditorPanel::comparison` survives a swap to the sheet and is cleared by every load.
-`Comparison::key` holds the copy's load and code revision and the hash of the original's text when
-the runs started (`BannerKey`, `expert::current_copy_key`), and `header_ui` drops the comparison
-once the Editor shows that copy with another key. A placement keeps the code revision and the
-comparison.
+are found, so two runs at one seed differ). Each run sits in a `Side` whose drop stops it within
+`STOP_WAIT`, so closing, replacing or loading never joins a run's thread without a bound
+(`agents/sim-runner.md`). `EditorPanel::comparison` survives a swap to the sheet and is cleared by
+every load. `Comparison::key` holds the copy's load and code revision and the hash of the original's
+text when the runs started (`BannerKey`, `expert::current_copy_key`), and `header_ui` drops the
+comparison once the Editor shows that copy with another key. A placement keeps the code revision and
+the comparison.
 
 **Categories**. `world.rs`'s Categories section draws each variant's colour as the sheet's
 `color_button` (the twelve palette colours, named "Colour of waned: Purple" by `variant_color_name`
@@ -302,7 +301,7 @@ is painted whole.
 `ui/editor/preview.rs`: `EditorPanel::preview` (`Preview`), and `poll`/`poll_at`, which
 `HenadApp::logic` calls every frame after `report_fault`. They read the model only through
 `EditorModel::preview_source` and `preview_program`. A new preview key with no errors sets
-`due` to now plus `DEBOUNCE` (250 ms) and records `AppState::builds`; one with errors drops `due`
+`due` to now plus `DEBOUNCE` (250 ms) and records `AppState::builds`. One with errors drops `due`
 and leaves the running preview alone, and the status area then reads `STALE_PREVIEW`, or a sheet's
 `STALE_WORLD_NOTICE`, as a warning in place of the running line. Once due, a build counted since the
 edit (Build, Apply) drops the preview to `Idle`, `preview_can_load` false leaves it `Waiting`
@@ -321,9 +320,9 @@ not start has already offloaded it. `EditorPanel::load`, `load_graph` and `load_
 `preview_can_load` holds with nothing loaded and no build, with a preview loaded, or with a built
 run at tick 0 and no Rebuild model modal. A preview is never the selection: `selection_is_loaded`
 and `code_pending` are false, `select_model` does not restore its values, the next build's fields
-stay, and `settle_outcome` sees no loaded source, so "Model applied." becomes "Press Build to run
-it." behind a graph's preview, and is dropped behind a sheet's preview that Build replays. A code
-fault of a preview (any tick) goes to `Preview::show_problem` (`Faulted`, placed by
+stay, and `settle_outcome` sees no loaded source, so "Model applied." becomes "Model applied. Press
+Build to run it." behind a graph's preview, and is dropped behind a sheet's preview that Build
+replays. A code fault of a preview (any tick) goes to `Preview::show_problem` (`Faulted`, placed by
 `EditorModel::place`) through `show_fault` while `holds_preview_model` holds, and the modal keeps
 the rest, the fault of a preview that outlived its graph included. Playback's `preview_line` names
 the preview and its size, with the hover `preview_hover`: `PREVIEW_APPLY`, or `PREVIEW_ORPHANED`
@@ -352,20 +351,20 @@ canvas, two drags as two undo steps, a dragged world field, a world value outsid
 The `CanvasHarness` (a `GraphEditor` alone on a context, `over` an editor before any frame or `new`
 over an arranged starter, with `accessible_nodes`, `accessible` and `accessible_with_role`), `n`,
 `link`, `graph_editor_of` (an editor of a graph starter) and `bind_spread_rate` (SIR's new parameter
-bound to node 12) that the graph test files share sit in `src/tests/support.rs`. `src/tests/graph_regions.rs` holds
-the region tests (two halves in a frame, the Repeat button, nested frames, a drop into a frame with
-its blue stroke and Move out of region, the output half's drag, the bound from a constant count, an
-out-of-range bound left as it is, the Repeat controls, quick-add in a frame and in a radius fold),
-and `src/tests/graph_functions.rs` the function and expression tests (a call opens its function
-under a breadcrumb on a canvas of its own, a problem in a function, make and ungroup, an added
-output with its node, one undo per added port and per unplaced import, an import with its origin, a
-wrap in a function, `can_join`'s and `can_add`'s rules, the node menu of a radius fold, and the
-expression editor's rename and refused duplicate typed through egui). The harness arranges
-the starter first, since the starters' placement puts pins of neighbouring nodes on top of each
-other. In a test build each pin records its rectangle under `canvas::pin_key`. egui writes AccessKit
-bounds in a layer's own coordinates and ignores its transform, so `show_canvas` ends with
-`place_accessible_nodes`, which moves the bounds of every widget on egui-snarl's layer to the
-screen. Driving the canvas through the egui MCP server: a locator finds a widget on a node, and a
-drag between pins still takes raw positions. `click` and `drag` modifiers never reach
-`InputState::modifiers`, which egui-snarl reads, but a plain click selects anyway. Command with
-`scroll` zooms.
+bound to node 12) that the graph test files share sit in `src/tests/support.rs`.
+`src/tests/graph_regions.rs` holds the region tests (two halves in a frame, the Repeat button,
+nested frames, a drop into a frame with its blue stroke and Move out of region, the output half's
+drag, the bound from a constant count, an out-of-range bound left as it is, the Repeat controls,
+quick-add in a frame and in a radius fold), and `src/tests/graph_functions.rs` the function and
+expression tests (a call opens its function under a breadcrumb on a canvas of its own, a problem in
+a function, make and ungroup, an added output with its node, one undo per added port and per
+unplaced import, an import with its origin, a wrap in a function, `can_join`'s and `can_add`'s
+rules, the node menu of a radius fold, and the expression editor's rename and refused duplicate
+typed through egui). The harness arranges the starter first, since the starters' placement puts pins
+of neighbouring nodes on top of each other. In a test build each pin records its rectangle under
+`canvas::pin_key`. egui writes AccessKit bounds in a layer's own coordinates and ignores its
+transform, so `show_canvas` ends with `place_accessible_nodes`, which moves the bounds of every
+widget on egui-snarl's layer to the screen. Driving the canvas through the egui MCP server: a
+locator finds a widget on a node, and a drag between pins still takes raw positions. `click` and
+`drag` modifiers never reach `InputState::modifiers`, which egui-snarl reads, but a plain click
+selects anyway. Command with `scroll` zooms.

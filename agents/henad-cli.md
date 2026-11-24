@@ -12,13 +12,14 @@ returns clap's own code for `--help`, `--version` and a usage error. Argument pa
 text. `model_file.rs` reads `--model-file`, `single.rs` runs one configuration (`run_single`, the
 benchmark with its `Timings`, the two exports and `write_series`), and `explore/` runs sweeps.
 `Mode::Single` carries a `SingleRun` (`ExportStats` and `ExportFinal` with their paths, and
-`Benchmark`), which `run_single` matches with no catch-all, and every `match` on `Mode` in
-`run_args` names each variant.
+`Benchmark`), which `run_single` matches with no catch-all. In `run_args` the two `match`es on
+`Mode` that dispatch name each variant, and the one before `with_model_files` that checks an
+export's output path ends in `_ => {}`.
 `json_report.rs` builds every `--json` line, one function per `kind`. `main.rs` is three lines
-over `run` with `example_models()` and its `build_info!()`. henad-models is optional behind the default
-`example-models` feature, which the `[[bin]]` and the four integration tests that run it name in
-`required-features`, and `cargo build -p henad-cli --no-default-features` builds the library
-alone. Steps a state in a bare loop with no rendering, no
+over `run` with `example_models()` and its `build_info!()`. henad-models is optional behind the
+default `example-models` feature, which the `[[bin]]` and the four integration tests that run it
+name in `required-features`, and `cargo build -p henad-cli --no-default-features` builds the
+library alone. Steps a state in a bare loop with no rendering, no
 `SimThread` and no pacing, so a measurement times nothing but `step()`. `--act ID@TICK`
 (`henad_core::action::Schedule`) runs a declared action before the step at that tick. An action
 due from the end of warm-up up to, but not including, the tick the run stops on is timed with the
@@ -32,12 +33,13 @@ finishes, so a run killed part way has printed every repetition it finished. `--
 a time scale `export_stats` gives the `StatsWriter` the setup's tick length (`tick_length_in`),
 which adds the `time` column. The shared
 `params_by_id_json` and `scheduled_actions_json` sit in henad-explore's `output/details.rs`, for
-the CLI's summary and the app's run details. A GPU run steps through `gpu/stepping.rs` on a device
-from henad-explore's `acquire_headless`, sized to the `gpu_needs()` of the options' set with the
-model files in it. A set without a GPU model asks for no device, apart from `--info`, and prints
-no GPU note. The CLI resolves its positional id through that set's `ModelSet::lookup`, and
-refuses an id outside the set ("this build does not include model 'x' (try --list)") apart from
-a GPU model on a machine without a device. `--list` prints only the models this machine can run.
+the CLI's summary and the app's run details. A GPU run steps through henad-compute's
+`gpu/stepping.rs` on a device from henad-explore's `acquire_headless`, sized to the `gpu_needs()`
+of the options' set with the model files in it. A set without a GPU model asks for no device, apart
+from `--info`, and prints no GPU note. The CLI resolves its positional id through that set's
+`ModelSet::lookup`, and refuses an id outside the set
+("this build does not include model 'x' (try --list)") apart from a GPU model on a machine without
+a device. `--list` prints only the models this machine can run.
 The CLI never publishes and never lays out a network.
 `--model-file PATH` is repeatable, sits in `Args` outside `ExploreArgs`, and selects no mode.
 `check_output_path` runs first for `--export` and `--export-stats`, and refuses an output path
@@ -140,10 +142,10 @@ alone, and ` integer` after it for an `f32` marked integer, so no golden line mo
 build is the one the manifest records, the binary's `build_info!()` for `henad-cli`. The `info`
 line's `engine_version` reads `ENGINE_BUILD.version()`. Under `--json` each `SweepWarning` also
 prints as an `explore_warning` line (`json_report::explore_warning`), and so does the series
-rows warning, as `series_rows`. `existing_invocations_keep_their_mode` reads the command lines of `lib.rs`, which
-holds the crate doc, and of `docs/reference/cli.md`, and its floor is the 13 documented lines
-that are not sweeps. `tests/json_lines.rs` runs the binary and holds each `--json` line kind to
-the fields `benchmarks/protocol.md` and `docs/reference/cli.md` list, `explore_progress` aside,
-which a quick sweep never sends and a unit test checks. Keep them.
-The four test crates share `tests/support/mod.rs` through `mod support;`: `Scratch`, `run`,
-`run_ok`, `stdout`, `stderr` and `manifest`.
+rows warning, as `series_rows`. `existing_invocations_keep_their_mode` reads the command lines of
+`lib.rs`, which holds the crate doc, and of `docs/reference/cli.md`, and its floor is the 13
+documented lines that are not sweeps. `tests/json_lines.rs` runs the binary and holds each `--json`
+line kind to the fields `benchmarks/protocol.md` and `docs/reference/cli.md` list,
+`explore_progress` aside, which a quick sweep never sends and a unit test checks. Keep them.
+The four test crates share `tests/support/mod.rs` through `mod support;`: `Scratch`, `argument`,
+`run`, `run_ok`, `stdout`, `stderr` and `manifest`.

@@ -23,13 +23,14 @@ helpers `support::sweep` and `sweep_with` install it before each sweep. Every ta
 line hand `parse_param` the same text, `1%` included. A `range` table holds numbers, and
 `FactorTable::from` writes a `PercentRange` as its fractions. `run_spec`, `plan_spec`,
 `SweepRun::start`, `resume_directory` and `SearchPlan::new` first pass the spec through
-`sweep::with_fractions` (`sweep/percent.rs`), which writes a percentage's fixed values, listed values
-and ranges in percent as fractions, so the manifest's spec and the search hash hold `0.01` for `1%`
-(`a_search_in_percent_resumes_from_the_fractions`). `argv`, `spec_source` and a design table keep
-the text as written, and text that does not read stays for the plan to reject. A `table` block's `file` is
-read relative to the spec file, and only a table design's. A path that is absolute or holds `.` or
-`..` is refused (`SpecFileError::TablePath`). The manifest's copy of the spec carries the table
-inline as `table_text`, and the writer emits `design_seed` for a sampled design alone. `specs/`
+`sweep::with_fractions` (`sweep/percent.rs`), which writes a percentage's fixed values, listed
+values and ranges in percent as fractions, so the manifest's spec and the search hash hold `0.01`
+for `1%` (`a_search_in_percent_resumes_from_the_fractions`). `argv`, `spec_source` and a design
+table keep the text as written, and text that does not read stays for the plan to reject. A `table`
+block's `file` is read relative to the spec file, and only a table design's. A path that is
+absolute or holds `.` or `..` is refused (`SpecFileError::TablePath`). The manifest's copy of the
+spec carries the table inline as `table_text`, and the writer emits `design_seed` for a sampled
+design alone. `specs/`
 holds real spec files and a design table. The docs include each spec by `--8<--` region and the
 table whole, and a test plans the specs. `schema.rs` (`schema_json`) is the `--params --json`
 object, also embedded in the manifest. An `f32` marked integer adds `"integer": true`, and no other
@@ -111,9 +112,9 @@ interleaves series segments by run id. `record_ends` follows the CSV grammar (`R
 quote inside an unquoted field fails its record instead of hiding the records after it.
 `output/resume.rs` (`ResumeScan`) accepts a directory only with the same model id, plan hash,
 schema hash and shard, and no more replicates than the sweep runs. It keeps `ok`, `non_finite`
-and, without `--retry-failed`, failed runs, always reruns a `timed_out` one, renumbers kept runs when the
-replicate count rises, and repairs the tables by truncation or by a rewrite. A rewrite stages both
-tables as `*.staged`, marks them complete with `tables.staged`, then renames both, and
+and, without `--retry-failed`, failed runs, always reruns a `timed_out` one, renumbers kept runs
+when the replicate count rises, and repairs the tables by truncation or by a rewrite. A rewrite
+stages both tables as `*.staged`, marks them complete with `tables.staged`, then renames both, and
 `OutputDir::open` finishes a rename a process left part done. `merge.rs` joins shard directories
 of one plan, replicate count and shard count, merges both tables by run id, rebuilds the summary
 and records the inputs in `merged_shards`. It credits the last session of a `running` or `failed`
@@ -198,7 +199,7 @@ whole text to `GraphFile::parse` for `graph`, to henad-graph's `SheetFile::parse
 check, lower) and to `GridRuleFile::parse` otherwise (a missing `kind` then reports as a missing
 key). `GraphFile::parse` holds a graph to henad-graph's `MAX_FILE_BYTES` (1 MiB) and the sheet
 reader holds a sheet to `sheet::limits::MAX_SHEET_BYTES` (1 MiB,
-`a_sheet_is_held_to_its_size_limit`), and a grid rule reads as it did before G1
+`a_sheet_is_held_to_its_size_limit`), and a grid rule is held to no size limit
 (`only_a_graph_is_held_to_the_graph_size_limit`).
 `GraphFileError` maps onto `Toml` and `Format`, and `SheetFileError` onto `Toml`, `Format` and
 `ModelFileError::Sheet` (the sheet checker's or the lowering's errors, `Invalid`). The enum forwards
@@ -226,8 +227,8 @@ grid sheet with no property lowers to a graph with no lane and no pass, whose er
 words, so `entry` returns the sheet's own `SHEET_EMPTY` warning, raised to an error at `[world]`,
 before `graph_entry` runs
 (`a_sheet_with_no_property_is_refused_in_its_own_words`). `ModelFileError::Unsupported` stays in
-the enum and no kind returns it. `GridRuleFile`, a grid rule as one TOML file, behaves as
-`ModelFile` did before the enum. `GridRuleFile::parse` reads line ends as `\n` and maps every span
+the enum and no kind returns it. `GridRuleFile` is a grid rule as one TOML file.
+`GridRuleFile::parse` reads line ends as `\n` and maps every span
 back to the text as passed (`LineEnds`, which henad-graph's `model_text` holds with `ModelHeader`,
 `toml_string`, `ParamTable` and `write_param`). It reads the header keys first through `ModelHeader`
 with the kinds `["gpu_grid"]`, ignoring the rest, so a later version or another kind reads as one
@@ -243,7 +244,7 @@ fixed order, one form per value, the step verbatim), `code` (a `ModelCode` of
 `GridRule::CODE_FORMAT` over the canonical text) and `entry`, which runs
 `GridRule::check_declarations` and places each problem at its table or key, then compiles and places
 each problem of the step at its file line by the string's start offset. `ModelFileError` is `Toml`,
-`Format`, `Rule`, `Graph` or `Unsupported`, each of `CodeDiagnostic`s.
+`Format`, `Rule`, `Graph`, `Sheet` or `Unsupported`, each of `CodeDiagnostic`s.
 `specs/models/` holds the example model files, which the spec tests, reading the top level of
 `specs/`, leave alone.
 `docs/reference/model-files.md` includes `life_rule.toml` whole, and henad-cli's model file tests
@@ -268,11 +269,11 @@ version), `a_sheet_warning_comes_back_placed_at_its_line`,
 raised by `gpu::limits::raise`. An adapter below the baseline, as a GL adapter can be, gets
 `DeviceError::BelowBaseline`, and the CLI then runs CPU models only. It is native only. `pollster`
 blocks on the request, and a browser cannot block. The crate is in the wasm typecheck with
-henad-core, henad-compute and henad-models.
+henad-core, henad-compute, henad-models, henad-graph and henad-app.
 Native-only code sits behind `#[cfg(not(target_arch = "wasm32"))]`. `handle.rs` (`SweepRun`) is a
-host's handle on a sweep, with one API on native and in a browser, described under "Sim runs off
-the UI thread". `SweepRun::start` plans the spec before it returns, and a browser refuses a GPU
-model with `SweepStartError::GpuNeedsNative`. The `gpu` a host passes to `start` or
+host's handle on a sweep, with one API on native and in a browser, described in
+`agents/sim-runner.md`. `SweepRun::start` plans the spec before it returns, and a browser refuses a
+GPU model with `SweepStartError::GpuNeedsNative`. The `gpu` a host passes to `start` or
 `resume_directory` is a device it shares with the sweep, `FaultSink` included. Handed none for a
 GPU model, the sweep thread acquires a device sized to the entry's `GpuNeeds` through
 `acquire_headless`, builds the entry it was handed on it (`sweep_device`), and records that device

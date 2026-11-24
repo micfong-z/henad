@@ -49,7 +49,7 @@ palette). `hooks.rs` holds `GraphHooks`.
 `rerun` evaluates each action pass's block first, so a fault refuses the press, then reruns the
 init passes of `runs` on fresh lanes. A tick pass in an action's `runs` is refused, since a press
 runs its reruns on the host. A problem the compiler finds names its pass and node and is placed on
-the node's table, or the pass's (`place`). Graphs of agents are A2's.
+the node's table, or the pass's (`place`). A graph of agents is rejected, naming `AgentProgram`.
 
 **The WGSL compiler over agents** (`wgsl/agents.rs`, `wgsl/agent_hooks.rs`). `AgentProgram::compile`
 checks the file, then `compile_parts` adds a lane `henad_merged_<field>` and a tick pass
@@ -59,8 +59,9 @@ takes deposits and has a `finish`, after the last tick pass where the reader sor
 document through its canonical text (`GraphFile::from_normalised`, which skips the two size limits
 of `parse`, since the inlined node limit bounds that text and it can pass 1 MiB for a far smaller
 file), since the written report has no types for copies. The update's call takes the key
-`update_call_key`, FNV-1a over the field's id, so two fields that share a `finish` with a draw draw
-apart (`the_updates_of_two_fields_that_share_a_finish_draw_apart`). That check is not clean for a
+`update_call_key`, the low 32 bits of FNV-1a 64 over `henad_update/<field>`, so two fields
+that share a `finish` with a draw draw apart
+(`the_updates_of_two_fields_that_share_a_finish_draw_apart`). That check is not clean for a
 valid model: the merged lanes and the update passes break the agents topology's own rules, in errors
 that name no pass. Only its errors in an update pass refuse the build, through `update_problem`: an
 error at the field's table, "the field ... cannot run its `finish` ... in its update over cells",
@@ -241,8 +242,8 @@ written as two `cat.transition` rows, every tick for 50 ticks and after 64 steps
 holds every starter probed on its `bool` outputs within 8 storage bindings, the SIR starter
 stepping as it does with no probe, and
 `every_probed_shader_keeps_its_barriers_in_uniform_control_flow` (those starters and every sheet
-starter and grid sheet fixture with `sheet_probes`: no early return, and each `workgroupBarrier()` at
-the top level of `main`).
+starter and grid sheet fixture with `sheet_probes`: no early return, and each `workgroupBarrier()`
+at the top level of `main`).
 
 **Lane buffers and packing** (`wgsl/pack.rs`). `LaneLayout` places each lane of a
 compiled graph in a lane buffer, one `LaneGroup` each, and the lane buffers come first among the
@@ -284,9 +285,11 @@ segment, never by buffer index. henad-graph's
 `gpu_cases.rs` and `gpu_repeat.rs` build and read a case's lane buffers through
 `support::lane_buffers` and `support::lane_words`, both over `compiled.layout`, and
 `sheet_agents.rs` reads a lane through `AgentProgram::lane_buffer`. Tests: `tests/packing.rs` (the
-ants and boids starters with one more Number property and `sheets/three_strains.toml` with one more,
+ants and boids sheet starters with one more Number property and
+`tests/sheets/three_strains.toml` with one more,
 each past 8 unpacked, within 8 packed and built on `baseline_test_device`; the same texts on two
 compiles and a build on both devices; the ants with a Number, a Whole number and an Arrow more (an
 `i32` and a `vec2<f32>` lane packed at non-zero offsets) and the three strains with one more, each
-equal to its unpacked twin after 20 ticks and a press of Reset colony, through the thread-local
+equal to its unpacked twin after 20 ticks, the ants after a press of Reset colony too, through
+the thread-local
 `pack::UNPACKED` switch), and the layout's unit tests in `pack.rs`.

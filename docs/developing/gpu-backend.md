@@ -12,7 +12,8 @@ icon: material/expansion-card
 gpu/
   grid_engine.rs    GpuGridState<M>      GpuGridModel  -> SimState + GpuSimState, over GpuGridEngine
   grid_spec.rs      GpuGridSpec          a grid model's declarations, held as values
-  agent_engine.rs   GpuAgentState<M>     GpuAgentModel -> SimState + GpuSimState
+  agent_engine.rs   GpuAgentState<M>     GpuAgentModel -> SimState + GpuSimState, over GpuAgentEngine
+  agent_spec.rs     GpuAgentSpec         an agent model's declarations, held as values
   primitives/       spatial_hash, prefix_scan, reduce, readback, dispatch, pipeline
   grid_dims.wgsl    an entry point that brings henad::dims into the generated bindings, for Dims
   view/             display.rs (a texture layer), agents.rs (lane buffers drawn in place)
@@ -67,10 +68,13 @@ A host refers to it as `henad::runner::GpuSimState`.
 | `begin_stats_readback` | Starts the async readback, right after the submission |
 | `poll_stats_readback` | Completes a pending readback, and waits for it when `block` is set |
 | `stats_readback_pending` | Whether a readback has started and not completed |
+| `read_fault` | Reads back a fault the model's shaders recorded and reports it, blocking on the GPU |
 | `view` | The layers the UI draws, cloned into every snapshot |
+| `fire_counts` | The fire counts of the latest completed readback, with the tick they counted |
+| `read_buffer` | The current side of one buffer as raw words, for a parity test or an export |
 
-Ping-ponged buffers are handled through a parity index plus two pre-built bind groups per side, flipped per tick, so no bind group is rebuilt while stepping.
-A buffer written in place gets one side, and `sides()` returns that same buffer twice.
+Ping-ponged buffers are handled through a parity index plus a pre-built bind group per side for each pass, flipped per tick, so no bind group is rebuilt while stepping.
+A buffer written in place gets one side, and `Sides::pick` returns that side at either parity.
 
 The engines bind a pass's buffers by the names its shader declares.
 henad-build reads each entry point's `@group(0)` declarations from the shader's own lines, in `binding_lines.rs`.

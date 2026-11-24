@@ -290,11 +290,11 @@ sentence case, widget names, tense, tooltips, the square corners and the Micfong
   is how a UI change is confirmed to render. Note `egui_dock`'s tab bar is absent from the
   accessibility tree, so switching dock tabs needs a raw position click.
 - **A test-only module goes under a `tests/` directory in `src/`, never beside production modules.**
-  `henad-compute/src/gpu/tests/`, `henad-compute/src/cpu/tests/`, `henad-graph/src/tests/`,
-  `henad-models/src/tests/` and `henad-app/src/tests/` hold any test module too big to inline, and
-  henad-compute's `gpu/tests/` and henad-graph's each hold a `support.rs` (the headless device) as
-  well, as henad-app's holds the model and helpers its tests of replaced code share and
-  henad-models' the entries, runs and readers its tests share, so each `mod.rs` lists exactly one
+  `henad-build/src/tests/`, `henad-core/src/explore/search/tests/`, `henad-compute/src/cpu/tests/`,
+  `henad-compute/src/gpu/tests/`, `henad-graph/src/tests/`, `henad-models/src/tests/`,
+  `henad-explore/src/tests/` and `henad-app/src/tests/` hold any test module too big to inline, and
+  each holds a `support.rs` of the helpers its tests share (the headless device in henad-compute's
+  `gpu/tests/` and henad-graph's), so each parent module lists exactly one
   `#[cfg(test)] mod tests;` rather than interleaving test modules with real ones.
   An inline `#[cfg(test)] mod tests` at the bottom of the file it tests is still the default and is
   unaffected. Every other crate's tests take their device from
@@ -339,14 +339,15 @@ rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" 
 ```
 
 `./check.sh` runs every line above but the install, and skips `cargo deny` where cargo-deny is not
-installed. CI runs further jobs (`package`, `msrv`, `features`, `lint`, `docs` and `downstream`),
-which `agents/ci-and-release.md` describes with how to run each by hand.
+installed. CI runs further jobs (`package`, `msrv`, `features`, `lint`, `ports`, `docs` and
+`downstream`), which `agents/ci-and-release.md` describes with how to run each by hand.
 
 Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`
 Run desktop app: `cargo run -p henad-app` (`-- --open DIR` opens a folder a sweep wrote in the
 Results tab)
-Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `Trunk.toml` + `index.html`)
+Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `Trunk.toml` +
+`index.html`)
 Run a graph model file: `cargo run --release -p henad-cli -- --model-file
 crates/henad-graph/starters/sir.toml --steps 100` (prints its warnings and errors at their lines,
 and runs a graph on a grid or of agents)
@@ -373,7 +374,8 @@ skipped unless named with `--models`; `--dry-run` to see the matrix)
 Sweep every installed engine across the cross-engine ladder: `uv run --project scripts
 scripts/compare_bench.py` (`--dry-run` for the matrix, `--smoke` for one small point each); gate the
 ports first with `scripts/validate_ports.py`, plot with `scripts/plot_compare.py`
-Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` builds without serving)
+Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` builds without
+serving)
 Build the docs as docs.rs does: `python3 scripts/docs_rs.py` (crate names to narrow it, `--host` on
 a machine that is no x86_64 Linux)
 Preview a release's notes: `python3 scripts/changelog_section.py 0.1.0` (what the tag build puts in
@@ -423,23 +425,23 @@ the same line. The release checklist's native check on that nightly finds one th
 the tutorial's `tests/snippets.rs` holds the template's line to the tutorial's.
 
 Two rules no lint enforces. Every public type of henad-core, henad-compute, henad-models,
-henad-graph, henad-explore and henad-app implements `Debug`. A type that holds a closure, a trait object, a
-model's associated types or a whole graph writes its own impl ending in `finish_non_exhaustive`, as
-`ModelEntry`, `Network` and the engine states do. So does a type holding a payload, such as cells,
-lanes, positions or a shader's source, and it prints sizes and labels in their place, as `Grid2D`,
-`PassSpec` and `PointSnapshot` do. `cargo clippy -- -W missing_debug_implementations`
-lists the types that lack one. henad-app's `state` and `ui` modules are private, and their types
-are left out. And an exported macro names its support items through its crate's `#[doc(hidden)]`
-`__macro_support` module, never through an internal path such as `$crate::cpu::primitives`, and
-names prelude items by their `::core` or `::std` path, as `agent_lanes!` does, so it expands in a
-crate that has shadowed them.
+henad-graph, henad-explore and henad-app implements `Debug`. A type that holds a closure, a trait
+object, a model's associated types or a whole graph writes its own impl ending in
+`finish_non_exhaustive`, as `ModelEntry`, `Network` and the engine states do. So does a type holding
+a payload, such as cells, lanes, positions or a shader's source, and it prints sizes and labels in
+their place, as `Grid2D`, `PassSpec` and `PointSnapshot` do. `cargo clippy -- -W
+missing_debug_implementations` lists the types that lack one. henad-app's `state` and `ui` modules
+are private, and their types are left out. And an exported macro names its support items through its
+crate's `#[doc(hidden)]` `__macro_support` module, never through an internal path such as
+`$crate::cpu::primitives`, and names prelude items by their `::core` or `::std` path, as
+`agent_lanes!` does, so it expands in a crate that has shadowed them.
 
 ## Architecture
 
 The workspace has 9 crates, and the tutorial crate beside them:
 
 ```
-henad-core ─┬─ henad-build      (build dependency of every crate with WGSL or a stamp)
+henad-core ─┬─ henad-build      (build dependency of every crate with shader bindings or a stamp)
             └─ henad-compute ─┬─ henad-models
                               └─ henad-graph ── henad-explore ─┬─ henad-cli
                                                                └─ henad-app

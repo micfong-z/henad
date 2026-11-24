@@ -6,10 +6,10 @@ toolbar are in `agents/henad-app-sheet.md`, and the New model dialog in
 `agents/henad-app-sheet-open.md`. The card writes the lines of a card over `cells`, rates included,
 and of a card over agents (**Agent lines** below).
 
-**Drawing.** `card_pane(ui, sheet, past_start, trials)` collects every `CardEdit` of a frame in draw
-order and runs each through `run_card_edit`, as the Sheet pane does, so a rename field that loses
-the focus to a note's button keeps its name. It draws the notices (`notice_ui`) and every card in
-file order with the body text at `SENTENCE_SIZE` 13, `REGION_GAP` 12 apart, each in
+**Drawing.** `card_pane(ui, sheet, past_start, trials, fires)` collects every `CardEdit` of a frame
+in draw order and runs each through `run_card_edit`, as the Sheet pane does, so a rename field that
+loses the focus to a note's button keeps its name. It draws the notices (`notice_ui`) and every card
+in file order with the body text at `SENTENCE_SIZE` 13, `REGION_GAP` 12 apart, each in
 `widgets::region` (gray 900 inside a gray 800 hairline): `title_bar_ui` (`Sentences::card_heading`
 in the semibold face in gray 100, the Lines help on a card that runs every tick, `line_count` at the
 right as a `caption`, a hairline), on a card that runs every tick `law_ui` (`LAW` at 12 in gray 400
@@ -209,7 +209,7 @@ opens a field named `rename_field_name` under the line: Enter or leaving it keep
 Escape cancels, and a taken name shows `result_name_taken` with the field focused again.
 
 **Rates**. The notes read `CardDrawing::values`: `rates::parameter_defaults` with each
-`SheetTrial` of the Params tab in its place while a run of the sheet is loaded. After the
+`SheetTrial` of the Parameters tab in its place while a run of the sheet is loaded. After the
 count-as-draw offer, `card_notes` adds `rates::rate_note` in grey with its `mean_stay` as the
 label's hover text and AccessKit description, and its `long_tick` as a second grey note
 (`long_tick_note`, "Up to 0.909 with 8. This tick is long ..."), or `rates::chance_note`, then the
@@ -227,9 +227,9 @@ its edit changes the length or unit of one tick. `card_lines` gives each lower l
 `SentencePart::Competing`, drawn by `lead_word_ui` as "otherwise" is), `CardLine::competing` (the
 group's other ids, highlighted on hover or focus) and `competing_tooltip` with the group's old
 state. `card_ui` collects each row's rect from `line_ui` and `bracket_ui` paints a gray 500 bracket
-for each group in the pane's margin, `BRACKET_OFFSET` left of the rows, where no wrapped text
-reaches (`brackets`, `competing_brackets` in tests). The group note sits under the highest line,
-where `rate_note` puts it. The Sheet pane's Time notice is in `agents/henad-app-sheet.md`.
+for each group in the gutter (`brackets`, `competing_brackets` in tests). The group note sits under
+the highest line, where `rate_note` puts it. The Sheet pane's Time notice is in
+`agents/henad-app-sheet.md`.
 
 **Focus**. After `AddLine`, the new line's first blank opens. After a choice,
 `next_control` finds the control after the edited place (or, for a place whose form changed, the
@@ -283,8 +283,9 @@ its boxes and inner frames, with a connector from the When's box. The drawing is
 painter and holds no widget. It is one accessible node of role `Image` named `diagram_name`
 ("Diagram of the card's 3 lines, read-only"). Colours: boxes gray 900 with a gray 600 stroke and a
 gray 800 header, a bar at a box's left in its line's `kind_hue` (`DiagramBox::group`), results and
-arrows blue, frames a gray 700 outline. A card's heading is in the semibold face with its count as a
-`caption`, as on the card. The toggle is the Diagram segment beside Lines, egui's selectable button.
+their arrows blue, frames a gray 700 outline. A card's heading is in the semibold face with its
+count as a `caption`, as on the card. The toggle is the Diagram segment beside Lines, egui's
+selectable button.
 
 `src/tests/sheet_card.rs` holds
 `a_blank_model_builds_game_of_life_with_its_lines_and_equals_the_starter` and
@@ -349,8 +350,9 @@ chance" on a typed rate, none on New outbreak's typed chance),
 `change_to_a_rate_and_back_keeps_the_chance_per_tick` (with the Time notice),
 `the_long_tick_note_shows_at_one_day_and_leaves_at_a_quarter_day` and
 `removing_the_time_unit_marks_the_rate_lines_and_a_rate_unit_sets_it_again` (the tick notice and the
-mismatch warning) and `a_parameter_put_into_a_rate_takes_its_unit_and_one_undo_restores_both`. A label's AccessKit node holds a `TextRun` child with its text, so the tests
-count nodes other than text runs.
+mismatch warning) and `a_parameter_put_into_a_rate_takes_its_unit_and_one_undo_restores_both`. A
+label's AccessKit node holds a `TextRun` child with its text, so the tests count nodes other than
+text runs.
 
 **Agent lines**. Every card is editable. A card is over agents when its `every` is not
 `cells`, and the pane passes that as `agents` to `AddButton::items_for`, `tooltip_for` and
@@ -395,7 +397,8 @@ the line (`last_change_above`), the same rule as the checker's skip. `lengths` o
 number, and for a value a random direction, phrases with blank values) under `OR_A_NEW_VALUE`
 before the parameters, since a long picker scrolls. `fits_property(kind, agents, property)` is the
 property table: Steer a Number or an Arrow, Keep between a number or an Arrow, Set on agents
-anything but States, Position and Heading, any other a States property. `Blank::GroundProperty`
+anything but States, Position and Heading, Set on cells a number, any other a States property.
+`Blank::GroundProperty`
 lists Number properties of the ground (`ground_number_items`), `Blank::Event` the events
 (`event_items`, `Choice::Event`), `Blank::Times` integer parameters alone, with no results and no
 properties since `repeat_count` lowers nothing else (`NumberUse::Times`, an integer from 0,

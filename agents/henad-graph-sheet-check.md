@@ -30,7 +30,8 @@ Errors (file-level, technical messages in the graph checker's style): version, t
 `l<digits>`, and in the item namespace `grid_width`, `grid_height`, `num_agents`, `world_width`,
 `world_height`, `tick_length` and `henad_*`, for a kind of thing `cells` and `ground`, for a state
 `any_state`), a Look around's summary ids (grammar, length, the reserved words and `l<digits>`, one
-id per line), the namespaces of author-format section 2.2, line ids (form, below `next_line`, one
+id per line), an id held twice in one namespace (items, kinds of thing, buttons or cards), line
+ids (form, below `next_line`, one
 card, one list, reachable, listed ids held), lines on a non-block kind, the world's kinds, the
 world's sides and a kind's `max_count` against `crate::limits` (`MAX_GRID_SIDE` for cells,
 `MAX_WORLD_SIDE` for agents, `MAX_AGENTS`) at `[world]` and `[[agents]]`, so the graph checker's
@@ -56,8 +57,8 @@ both types are known, and only what the lowering refuses too), formulas, keys he
 Count, Look around and Pick a cell inside a Repeat (`LOOK_IN_REPEAT`) or a run-once card,
 `RATE_IN_BUTTON_CARD`, a rate inside a Repeat (`RATE_IN_REPEAT`), and the ranges from the wording
 table (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on literals, a percent divided by 100,
-`CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters). Agent-only fields with no editor words
-yet (a Steer or Move mode, a pick rule, `which`, an event, `agent_kind`, `include_me`) are errors
+`CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters). Agent-only fields (a Steer or Move
+mode, a pick rule, `which`, `agent_kind`, `include_me`) are errors
 when absent. Warnings that keep the line running: a draw with no key, two result lines with one
 name, `SHEET_EMPTY` at `[world]` for a grid sheet with no cells property, a ground property's share
 kept each tick outside 0 to 1 (`Checker::kept_range`: `kept_outside_note` on a literal,
@@ -90,8 +91,8 @@ with no value for a state of its property (a new state included), each missing v
 of another type is one error for the whole line. `changes_property` is the rule of `my_new`, public
 for the card's picker.
 
-**Tests.** Checker tests sit in `src/tests/sheet_mutation.rs` (the 25 cases of the author format's
-mutation run, one test each on a committed sheet edited in the test, each asserting error, warning
+**Tests.** Checker tests sit in `src/tests/sheet_mutation.rs` (25 cases, one test per rule, each
+on a committed sheet edited in the test, each asserting error, warning
 or skip and its table; the rate in a run-once card; the chance and rate ranges;
 `the_sheet_checker_never_panics_on_the_mutation_corpus`, whose edits each sheet draws from its own
 seed, so a sheet added to the corpus leaves the others' edits alone) and `src/tests/sheet_check.rs`

@@ -11,8 +11,8 @@ public fields. `node.rs` holds `Node`, `NodeBody` (`node`, `region_members`, `re
 `ConfigValue`, `PortRef` and `MemberName`. `types.rs` holds `ValueType` and `Rate`, and `ids.rs`
 holds `NodeId` and the grammars `is_id` and `is_port_segment`. `keys.rs` holds `KeyStream`, the
 stream of draw keys the graph and sheet builders share (`agents/henad-graph-edit.md`).
-`limits.rs` holds the limits of
-`ir-spec.md` section 13 as the plan changes them. `model_text.rs` holds what every kind of model
+`limits.rs` holds the limits of an untrusted graph file at node library 1.
+`model_text.rs` holds what every kind of model
 file shares (`ModelHeader`, `HeaderProblem`, `read_header`, `LineEnds`, `toml_string`, `ParamTable`,
 `write_param`), and henad-explore's `model_file.rs` reads them from here. It also holds the
 crate-private text helpers both writers use: `push_key`, `string_array`, `multiline_array`,
@@ -61,11 +61,12 @@ each stably, and moves their `Places` with them, so `document.passes[i].body.nod
 **The `in` walk.** TOML stores `in.init.position` as nested tables, and `{ param = "x" }` under a
 port is a value. The walk reads the first segment and descends by a fixed table
 (`config_port_depth`): `init` and `case` one more segment, `rule` two, every other name none. A
-`fn.call` descends nowhere, since its interface ports are bare and one can be named `init`. An
+`fn.call` or a `math.expr` descends nowhere, since their ports are bare and one can be named
+`init`. An
 accumulator named `param` or `u32` therefore reads correctly, and a test holds that.
 
 **The canonical writer.** `GraphFile::to_toml` is `semantic_text` plus the region's text. Rules
-kept from `ir-spec.md` section 10: `runs = []` is written, an optional key without a default is
+of the text: `runs = []` is written, an optional key without a default is
 not, `draw_order` only when non-empty, colours as four bytes, `u64` as lowercase `0x`, floats in
 `{:?}` form. `write_node` reads the node's definition: config keys in definition order with their
 defaults filled (`effective_config`), then inputs in `resolved_inputs` order (fixed ports, then
@@ -78,8 +79,8 @@ one text. `normal_config` writes a `U64Text` value as lowercase hexadecimal and 
 unwritten when absent, since a float `min` identity has no literal form. `normal_link` writes a
 link bare when it names the only output of a node outside every region around the reader, and
 keeps the port of a region read from its body (inner outputs). `normal_stat_source` does the same
-for `[[stat]] from`. `respellings_of_the_life_starter_write_one_text` holds the four respellings the
-round 1 audit found. Because a canonical text holds bare links, `AddVariant` and `RemoveVariant`
+for `[[stat]] from`. `respellings_of_the_life_starter_write_one_text` holds five respellings of the
+Game of Life starter. Because a canonical text holds bare links, `AddVariant` and `RemoveVariant`
 first name the variant on a bare link to a `stat.count_by` over a one-variant category
 (`name_bare_counter_links`), which would otherwise name nothing or hide a reference.
 
@@ -95,9 +96,9 @@ the app's quick-add share), an optional `Domain`, `Effect`s (`NodeDef::sink` nam
 function body holds), `Backends`,
 `Parity`, `NodeCost` and `KnownAnswer`s. `resolved_inputs`, `resolved_outputs` and
 `resolved_inner_outputs` expand a node's ports, and the writer, the checker and every later
-consumer read ports through them. The kinds of G1 and A2 are all in: 114. A kind with no row in
-`node-catalogue.md` has its definition written here, with WGSL's integer rules and the NaN
-behaviour stated, and the definitions say a shader may assume no NaN or infinity. A float to
+consumer read ports through them. The catalogue holds 114 kinds, all at library 1. Each kind's
+`semantics` is its written definition, with WGSL's integer rules and the NaN behaviour stated where
+they apply, and the definitions say a shader may assume no NaN or infinity. A float to
 integer conversion follows WGSL, which naga emits as a clamp before the cast: `conv.to_u32` from an
 `f32` tops out at 4294967040 (`0x4f7fffff`) and `conv.to_i32` at 2147483520 (`0x4effffff`), the
 largest `f32` values the target holds, and the host form clamps the same way
@@ -126,11 +127,11 @@ on the device, the test asks for more than 300.
 
 **Draws** (`draw.rs`). `key_word(key, phase, seed)`, `draw_bits(k, element, tick, iteration,
 sub_draw)` and `press_word(seed, press)`, with `GRAPH_DEFAULT_SEED` and `GRAPH_SEED_SALT`. The
-core is `draw_core`, `pcg4d2`: `pcg4d(pcg4d([k, e, t, (i << 4) | (s >> 2)]))[s & 3]`, with `i`
-0 outside every region and `pcg4d` the JCGT function, which henad-core's random primitives hold
-(`rng::pcg4d` and `henad::rng::pcg4d`). `draw.rs` re-exports it and `draw.wgsl` imports it. It is
-the one core that passed every walk of the PractRand gate, which failed both candidates, and is
-the settled core of library 1. A grid rule's `rng` starts from the same two rounds.
+core is `draw_core`, two rounds of `pcg4d`: `pcg4d(pcg4d([k, e, t, (i << 4) | (s >> 2)]))[s & 3]`,
+with `i` 0 outside every region and `pcg4d` the JCGT function, which henad-core's random primitives
+hold (`rng::pcg4d` and `henad::rng::pcg4d`). `draw.rs` re-exports it and `draw.wgsl` imports it. It
+is the one core that passed every walk of the PractRand gate in record #61, and is the settled core
+of library 1. A grid rule's `rng` starts from the same two rounds.
 `the_draw_core_keeps_its_words` pins its words, since the `rand.*` case words and their lock
 lines are drawn from them. Phase
 words: `PHASE_INIT` 0, `PHASE_TICK` 1 (view and stats too, which draw nothing), and
@@ -144,7 +145,8 @@ action, and `i` the loop's `henad_iteration_n<id>`.
 
 **The host evaluator** (`host/`). `HostEvaluator::new(&GraphFile)` checks the file (errors give
 `HostError::Checked`) and compiles every pass once (`compile.rs`) into a `Program`
-(`program.rs`), which the WGSL compiler reads too. A pass the host cannot run compiles to an error that `run_pass` returns, and only an init pass or a rerun pass with one
+(`program.rs`), which the WGSL compiler reads too. A pass the host cannot run compiles to an error
+that `run_pass` returns, and only an init pass or a rerun pass with one
 refuses the whole file. `init(world, params, seed)` runs the enabled init passes in stack order
 on the init stream (`grid_init_rng` or `agent_init_rng`, continuing across passes) and returns
 `HostLanes`. `rerun(action, press, ..., stream)` runs the init passes of the action's `runs` in
@@ -203,7 +205,7 @@ exported stats or `series.csv` write before the stats, and a parameter no id of
 `domain`, stats passes included, since library 1 has no domain-free reducer. `schedule.rs` orders
 the top of each pass (a region stands for its body) and splits it as the host does into prelude,
 element and post: a node that runs per element and reads a reducer's result of its own pass is an
-error at the input that reads it (`ir-spec.md` section 6.1, reducers end a map pass), and tick-rate
+error at the input that reads it (reducers end a map pass), and tick-rate
 arithmetic after a reducer is allowed. `stat.counter` is ready after the elements too
 (`NodeDef::is_ready_after_elements`): the host learns a counter from the readback, so the total and
 values computed from it alone run in the post block, and an element read of one is that error,
@@ -213,7 +215,8 @@ in init, tick and action passes only, never in a view or stats pass or a region 
 a node carry its pass and node id. Function bodies, normalised passes and the agent rules are below.
 
 **The library lock.** `library.lock` at the crate root, one line per definition (hashes of the
-signature's `Debug`, the semantics and the cases' `Debug`, parity, cost) and one per limit.
+signature's `Debug`, the semantics and the cases' `Debug`, parity, cost) and one per limit but
+`MAX_WORLD_SIDE`, `MAX_STORAGE_BINDINGS` and `MAX_PACKED_BUFFER_BYTES`.
 `the_library_lock_matches_the_catalogue` fails on a kind without cases and on any line that
 differs. `HENAD_WRITE_LIBRARY_LOCK=1` writes it. Renaming a catalogue field moves every signature
 hash. The test prints the corpus files that use each kind (`--nocapture`), which is the "Used by"
@@ -241,8 +244,8 @@ which keeps `hidden` too. A new descriptor flag goes into both copiers.
 **Whole numbers**. A `[[param]]` table of an `f32`, in a graph file or a grid rule, takes
 `integer = true` for `ParamDescriptor::integer` (a sheet's Whole number with a negative minimum
 lowers to one). The reader refuses the key on another kind, and a `min`, `max`, `default` or
-`step` with a fractional part beside it. `write_param` writes it only for a marked `f32`, so every file without
-one keeps its code, and both copiers keep the mark.
+`step` with a fractional part beside it. `write_param` writes it only for a marked `f32`, so every
+file without one keeps its code, and both copiers keep the mark.
 `GridProgram` and `AgentProgram` copy `document.time` to `EntryDeclarations.time`, so a
 manifest's replayed text and an expert copy keep their time axis. `src/tests/time_scale.rs` holds
 the round trip, the refusals and the entry. The three rates fixtures in henad-models set both
@@ -284,8 +287,8 @@ each shader's text there.
 `partials` and `agent_colors` read back), and a grid stats case that sums floats on the grid, with a
 `partials` buffer of one float per lane per 16 by 16 block summed on the host, and again as an
 agents world of one agent per cell. It also fails on a kind with a WGSL form outside init passes
-whose own cases never ran on the device (`vec.from_angle` had a host case alone until the round 3
-audit). `CaseValue::NearVec2F` compares a `vec2f` per component within a tolerance. `support.rs`'s device raises `max_storage_buffers_per_shader_stage` to 16,
+whose own cases never ran on the device. `CaseValue::NearVec2F` compares a `vec2f` per component
+within a tolerance. `support.rs`'s device raises `max_storage_buffers_per_shader_stage` to 16,
 since a radius fold case binds 9. `gpu_repeat.rs` runs `host.rs`'s Repeat
 bodies (`CARRIED`, `chained()`, `TWO_DRAWS`, `NESTED_DRAW`, `pub(super)` there) in a tick pass,
 once through the step shader on the device and once through `run_pass`: the integer half of
@@ -298,15 +301,16 @@ device and no gate.
 `a_repeat_runs_in_stats_view_and_action_passes_on_the_device` holds a Repeat with a per-cell count
 in the other map passes to the host: the statistics finished from the device's tallies, every
 cell's colour and the action's lane.
-`corpus.rs` reads the starters through `starters()` and, at run time, the graphs in
-`crates/henad-models/tests/fixtures/graphs/`, since a packaged crate has no path out of itself.
+`corpus.rs` reads the starters through `starters()` and `agent_starters()`, and at run time the
+graphs in `crates/henad-models/tests/fixtures/graphs/`, since a packaged crate has no path out of
+itself.
 `two_spellings_of_one_graph_hash_alike`, `a_canonical_text_reads_back_to_itself` and
 `moving_a_node_changes_the_text_and_leaves_the_hash` are the gate of the file format, and
 `the_reader_and_checker_never_panic_on_the_mutation_corpus` and
 `a_hostile_region_tree_or_call_graph_is_reported_without_a_panic` the gate of the checker. Keep
 them.
 
-**Agent models, milestone A2 on the host.** The kinds of A2's row sit in `catalogue/space.rs`
+**Agent models on the host.** The kinds agent models add sit in `catalogue/space.rs`
 (world, vector and space kinds), `fields.rs` (`lane.get_at`, fields, counters, `stat.sum`,
 `stat.mean`, `stat.counter`), `folds.rs` (`grid.fold`, `agent.radius_fold`, `stencil_offsets`),
 `functions.rs` (`fn.*`) and the `A2_KINDS` tables of `math.rs`, `conv.rs` and `random.rs`.
@@ -319,7 +323,7 @@ and `OwnCell` is never written and required in a pass over agents. `PassCase` ga
 agents header over a world of `width` by `height`), `deposits` and the counters before and after,
 and a lane id of a case may be a field layer `<field>.<layer>`.
 
-**Fields that add up** (row D). `FieldCombine` is `Copy` and `Eq`, so a sum holds its resolution as
+**Fields that add up**. `FieldCombine` is `Copy` and `Eq`, so a sum holds its resolution as
 an exponent: `FieldCombine::Sum { resolution_shift }`, the resolution 2^-k for k from 0 to
 `MAX_RESOLUTION_SHIFT` (24), `resolution()` its `f32`, `deposit_scale()` 2^k and `wrap_bound()` 2^32
 times the resolution. All three take the exponent from one private helper capped at 24, so a
@@ -396,8 +400,7 @@ of 8192 from `+0.0`. `stream.float` draws `next_float` on the stage's stream.
 
 **The agent corpus.** `boids.toml` writes its steering as one `math.expr`, and `ants.toml` its
 neighbour pick (`best_neighbour`, holding the `grid.fold`), its two moves (`move_if_passable`) and
-its delivery (`math.expr`) apart, so `walk` holds 37 nodes, down from the corpus file's 62. A host
-run of every pass equals the corpus files' form on the same lanes. The ants' lane `reward` is
+its delivery (`math.expr`) apart, so `walk` holds 37 nodes. The ants' lane `reward` is
 `reward_held`, since the parameter `reward` takes that id. `gpu_boids.toml` and `gpu_ants.toml` sit
 in henad-models' fixtures. henad-models' `graph_agent_corpus.rs` holds every agent file's init to
 the stock `GpuBoids` and `GpuAnts` seed buffers (the random walk to its init written out) at three

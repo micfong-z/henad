@@ -1,8 +1,9 @@
 # henad-graph: sheet edit commands
 
 **`henad_graph::sheet::edit`**: the commands every edit of the sheet editor runs on a
-`SheetDocument`. `agents/henad-graph-sheet.md` holds the document, its modules and the checker the
-commands leave meaning to, and `agents/henad-graph-edit.md` holds `KeyStream`.
+`SheetDocument`. `agents/henad-graph-sheet.md` holds the document and its modules,
+`agents/henad-graph-sheet-check.md` the checker the commands leave meaning to, and
+`agents/henad-graph-edit.md` holds `KeyStream`.
 
 Files: `mod.rs` holds `SheetBuilder` and `Draft` with `run`, `finish`, the keys and the lookups,
 `command.rs` `SheetEdit`, `SheetItem`, `LineField` and `SheetEditError`, `declarations.rs` the
@@ -45,7 +46,7 @@ States property of the ground kept from agents or let in, held once); and the li
 `DrawNewNumbers`, `ChangeToRate` and `ChangeToChance`, and for a look at agents `AddSummary` (a
 summary of a kind with its value blank, refused on a line that looks at no agents) and
 `DeleteSummary` (refused on the last summary, its users' slots cleared through `Target::Summary`).
-"Remove this When" is `DeleteLine` on the When, and "Add for each" is `SetSlot` of `tries`.
+"Remove this When" is `DeleteLine` on the When, and "Add for each [count]" is `SetSlot` of `tries`.
 
 Ids: `mint_id(name, space, is_taken)` lower-cases the name, turns each run of other characters than
 `a-z0-9` into one `_`, puts `x` before a leading digit (and mints `x` for a name with no letter or
@@ -67,8 +68,8 @@ grows past it, so a deleted number never comes back. After a command, every line
 draws gets a key no other draw holds (a template's own key is kept when free), and every start it
 set that draws (by chance, anywhere, a value that draws, on the ground when its state is painted on
 two or more cells, `starts_draws`) or shares its key gets one; a start on the ground counts as set
-when the ground's start is. A line keeps its key while an edit takes its draw away
-(`a_start_on_two_painted_cells_takes_a_key`).
+when the ground's start is (`a_start_on_two_painted_cells_takes_a_key`). A line keeps its key while
+an edit takes its draw away.
 
 References (`references.rs`): `change_references(document, target, Rename(id) | Clear)` walks every
 slot, list, item, branch, summary, row, line field, formula (`rewrite_formula`, the formula parser's
@@ -83,10 +84,10 @@ deleted property, a button step naming a deleted property or card); a start's `o
 state chip `value` falls back to the first remaining state of the property, and an `on_ground`
 start's `state` to the first remaining state of its ground property. A deleted property clears its
 states' references first. A deleted line's result chips turn blank: the user is skipped, never
-refused. Most blanks in a card line are skips, but a blank outside the card lines (a start's chance
-or value, `kept_per_tick`, an `on_ground` start's property) and a few agent line fields (a Record's
-event, some agent slots) are checker errors after a delete. A deleted When or Repeat leaves its
-lines one level up in its place, a deleted card takes its lines, and a deleted button takes the
+refused. Most blanks in a card line are skips, a Record's event among them, but a blank outside the
+card lines (a start's chance or value, `kept_per_tick`, an `on_ground` start's property) is a
+checker error after a delete. A deleted When or Repeat leaves its lines one level up in its place, a
+deleted card takes its lines, and a deleted button takes the
 cards that run once that no other button runs. An agent kind is not deleted. A `[ground]` table
 comes with the first ground property `AddProperty` adds, and a delete that leaves it with no
 property and no blocked state removes it.
@@ -172,8 +173,9 @@ included), and a following summary takes its automatic name, unique within the l
 summaries, held by id before the edit with the same automatic name, take theirs first, and an edited
 summary that reaches another's name takes " 2". A summary whose name changes or that has no id takes
 the id `mint_id` gives its name, unique within the line, and `count_summary` for a reserved id such
-as `count`. `change_references` with `Target::Summary` rewrites every `part` and formula reference
-(`l1.centre`) in two passes, each old id first to a free `henad_summary_N`, so a new id equal to
+as `count`. `rename_summaries` rewrites every `part` and formula reference (`l1.centre`) through
+`change_references` with `Target::Summary` in two passes, each old id first to
+`henad_summary_<index>` (`RESERVED_PREFIX`, which no minted summary id takes), so a new id equal to
 another summary's old id renames no reference twice. Every committed look at agents names its
 summaries this way, so a rebuild mints the starters' ids.
 

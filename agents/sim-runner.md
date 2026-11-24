@@ -66,8 +66,9 @@ the step that reaches a sample tick, and calls `prepare_view` first as a publish
 such as `team_assembly` computes stats there. The GPU loop cuts a batch at each sample tick and
 reads the stats back blocking, publishing from there once `RUN_TO_PUBLISH_INTERVAL` has passed. In
 a browser the readback cannot block, so a GPU run-to samples nothing and publishes as before.
-`a_run_to_a_tick_samples_its_stats_on_the_way` and `a_gpu_run_to_a_tick_samples_its_stats_on_the_way`
-pin both, and `a_run_to_a_tick_prepares_the_view_of_each_sample` the CPU loop's prepare.
+`a_run_to_a_tick_samples_its_stats_on_the_way` and
+`a_gpu_run_to_a_tick_samples_its_stats_on_the_way` pin both, and
+`a_run_to_a_tick_prepares_the_view_of_each_sample` the CPU loop's prepare.
 
 The GPU loop starts uncapped and keeps to `SetTargetTps` once `SetUncapped(false)` arrives, as the
 CPU loop does. A capped batch holds the steps of one 16 ms snapshot interval at the rate, at least
@@ -102,11 +103,12 @@ A sweep started from the app runs off the UI thread as well, through
 `SweepControl` holds or ends every run between two slices of steps. In a browser it wraps a
 `runner::Driver<PumpedSweep>`, and `HenadApp::logic` pumps it each frame through
 `ui::sweep::update` and `SweepRun::update`. Either way the host reads `SweepEvent`s from an
-`mpsc` channel that loses none (`Planned`, each `RunFinished` in plan order, a search's
-`SearchBatchTold` with an `Arc<SearchUpdate>` after each batch's runs, then one `Finished` with the
-`SweepRecord`, or `Failed`), and a `SweepProgress` where the latest write wins. The `wake`
-callback of `SweepRunOptions` runs after each event, and an idle UI then repaints to collect it.
-Dropping the handle aborts the sweep, and on native waits for the thread to write its files.
+`mpsc` channel that loses none (`Planned`, a `Warned` per warning, each `RunFinished` in plan
+order, a search's `SearchBatchTold` with an `Arc<SearchUpdate>` after each batch's runs, then one
+`Finished` with the `SweepRecord`, or `Failed`), and a `SweepProgress` where the latest write
+wins. The `wake` callback of `SweepRunOptions` runs after each event, and an idle UI then
+repaints to collect it. Dropping the handle aborts the sweep, and on native waits for the thread
+to write its files.
 `SweepRun::stop(timeout)` aborts and waits at most `timeout`, and leaves a thread held in a step
 detached. `SweepRunOptions::build_pool` (native) names the pool the probes and a GPU model's run
 builds run in (`SweepOptions::in_build_pool`, `Executor::with_build_pool`), and a CPU model's runs
@@ -125,7 +127,7 @@ A GPU engine with a fire range counts the last step of each `encode_steps` call,
 needs no change for it. The runner cuts a batch into chunks of at most `MAX_STEPS_PER_SUBMISSION`
 and at each tick an action is due, so each chunk's last step counts, and a snapshot's passes follow
 the batch's last chunk. `Snapshot.fire_counts` then reads the step that reached the snapshot's
-tick. Flat out that is one counting step in 64. At the editor's 1 to 60 ticks per second every
+tick. Flat out that is one counting step in 64. At a capped rate of 1 to 60 ticks per second every
 step counts and every tick publishes.
 
 The UI thread only ever reads the latest snapshot (`snapshot.rs`) and never touches the live
@@ -134,7 +136,7 @@ The UI thread only ever reads the latest snapshot (`snapshot.rs`) and never touc
 instead means the next publish allocates. A view borrows its palette from the state, and a CPU
 snapshot owns a copy, refilled into the recycled `Vec` like the cells and the lanes.
 
-`build_snapshot` calls `SimState::prepare_view` first, which is where a model turns state into
+`build_snapshot` calls `SimState::prepare_view` first, the hook in which a model turns state into
 something drawable — ants quantises its `f32` pheromone field into palette indices there. That
 runs on publish, not every tick, so anything a view needs but a step doesn't belongs in
 `prepare_view` rather than in `step`.

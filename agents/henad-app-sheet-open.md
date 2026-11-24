@@ -21,7 +21,7 @@ report lacks, each an error or a warning notice (`NoticeKind::of`) of the messag
 and column point into the sheet's text, which sheet mode never shows. A waiting preview reads the
 sheet's `PREVIEW_WAITS`, which names Offload. A problem of a line the card shows sits under it on
 the card. `save_name` suggests `<sheet id>.toml` for a sheet with no file name,
-errors or not. Apply is unchanged: `ModelFile::parse(...).and_then(|file| file.entry())` installs
+errors or not. Apply's `ModelFile::parse(...).and_then(|file| file.entry())` installs
 the lowered graph's entry, whose source records the sheet's canonical text as its author text, and
 `edit_model` reopens an applied sheet's entry as that sheet unless the Editor applied it. A note
 edit leaves the source equal: Apply reads `Unchanged`, rebuilds nothing, and replaces the set's
@@ -50,7 +50,7 @@ model.", and Apply builds the sheet at its own size
 `AppState::runs_editor_sheet` holds for the sheet's preview or the source the Editor applied, and
 Playback's `tick_counter` then reads `henad_graph::sheet::sentence::tick_counter` ("Tick 4 (a tick
 is one step of time)", or "Tick 4 (4 days)" through `time_axis::elapsed_text` once the entry has a
-time scale). No autosave and no Facilitator panel.
+time scale). Nothing saves a sheet on its own.
 
 **The New model dialog** (`new_model.rs`). `NewModelDialog` sits in
 `EditorPanel::new_model` while open: the `StarterChoice`s (`starter_choices`: every sheet starter,
@@ -72,7 +72,7 @@ and a refused one keeps the starter's name with the reason as the file status), 
 under the id `new_model_id` gives (`agents/henad-app-editor.md`) with no file name and brings the
 Editor to the front. The world question of the dialog shows only
 under Blank, and Blank is offered first. `starter_choices` puts Blank first (`file_name`
-`None`, "Untitled model" as its name), and the world question (`WORLD_QUESTION`, `CELLS_ON_A_GRID`
+`None`, "Blank" as its name), and the world question (`WORLD_QUESTION`, `CELLS_ON_A_GRID`
 or `AGENTS_IN_OPEN_SPACE` into `made_of`) shows under Blank while it is chosen. `create_blank_model`
 loads `blank_model(name)`: 100 by 100 cells that wrap, the id minted from the name (or
 `untitled_model`, and `open_blank` passes it through `new_model_id`), no property, parameter or

@@ -53,11 +53,11 @@ gives an action's tick as fixed, varied or taken from the design table's `action
 no table, and every site that tells a held parameter from a set one reads it.
 Save spec (`to_toml`) writes through `henad_explore::spec_file::LoadedSpec::to_toml`, with the
 draft's execution table. It also refuses what the loader would, a reversed window or a threshold
-that is not finite, and reads its own TOML back as a check. The draft keeps a loaded spec's `[execution]`
-`memory` and `gpu_memory` (`memory_budget`, `gpu_memory_budget`). Save spec writes them back,
-Start passes them to `SweepRunOptions` through `SessionExecution`, the Plan lists them, and the
-Execution section shows them read-only beside a clear button. `MIN_TIMEOUT_SECONDS` bounds only
-the Timeout field, and a loaded shorter timeout, 0 included, is kept, as `henad-cli` takes it.
+that is not finite, and reads its own TOML back as a check. The draft keeps a loaded spec's
+`[execution]` `memory` and `gpu_memory` (`memory_budget`, `gpu_memory_budget`). Save spec writes
+them back, Start passes them to `SweepRunOptions` through `SessionExecution`, the Plan lists them,
+and the Execution section shows them read-only beside a clear button. `MIN_TIMEOUT_SECONDS` bounds
+only the Timeout field, and a loaded shorter timeout, 0 included, is kept, as `henad-cli` takes it.
 `CheckSummary` turns the check into the lines the footer, its chips and the Plan panel list.
 `plan.rs` (`PlanSummary`) is the plan the panel, the narrow Plan section
 and a session draw. `layout.rs` holds `FormLayout`, the label column every section shares,

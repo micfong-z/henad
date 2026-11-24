@@ -160,20 +160,20 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     last (blue 700, or red 900 under red 200 for Rebuild, Replace and Delete). Enter presses the
     primary unless another button took the key or the dialog opened on that frame, and Escape closes
     through `Modal`. `dialog_title` marks the dialog's AccessKit node modal and makes the title a
-    heading (`heading_caption`, a `caption` of role `Heading` named by its words as written). A list
-    of choices is `choice_row`s: full-width radio buttons with a weak description under the name,
-    the theme's hover fill under the pointer or the focus, the selection fill with a check and its
-    words in the selection's text colour when chosen, as an overlay's current item (`list_row_fill`
-    and `paint_list_row_marks` paint both). A list that can outgrow the window scrolls in
-    `dialog_list`, which keeps the buttons in view.
+    heading (`heading_caption`, a `title_text` label of role `Heading` named by its words as
+    written). A list of choices is `choice_row`s: full-width radio buttons with a weak description
+    under the name, the theme's hover fill under the pointer or the focus, the selection fill with a
+    check and its words in the selection's text colour when chosen, as an overlay's current item
+    (`list_row_fill` and `paint_list_row_marks` paint both). A list that can outgrow the window
+    scrolls in `dialog_list`, which keeps the buttons in view.
   - Notice (`Notice`, `notice_ui` for information): an icon in the hue of its kind at step 500
     before the text in the text colour, one label, with no bar at its left: blue and an
     information icon for information, orange and a triangle for a warning, red and an exclamation
     mark for an error. Small buttons follow the text, and weak notes sit under it inside the row.
     Every message of the Editor is one, in the status area under the panes or, for a converted
     copy's banner, under the header.
-  The theme in `init.rs` is unchanged by the Card pane. The primary action is blue 700, never the
-  prototype's orange.
+  The theme in `init.rs` is unchanged by the Card pane. The primary action is blue 700, never
+  orange.
 - **The Sheet pane's sections** (`ui/editor/sheet/sheet_pane/layout.rs` over the components of
   `widgets.rs`). Each section stands on the pane's own ground with no frame, `REGION_GAP` 12 from
   the next, its title a `title_text` with a hairline to its "?" at the right edge
@@ -195,10 +195,11 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   a state: blue the primary action and a result, orange a warning, red a failure.
 - **Swatches of the Sheet pane** (`ui/editor/sheet/widgets.rs`). A swatch button is a 14 point
   square of the state's own colour inside gray 700, the theme's hover outline while hovered, the
-  selection's outline while its picker is open, and the focus outline while focused. A swatch beside a state's name
-  (`swatch_ui`) is the chip's 9 point square inside gray 700. "Choose a colour" offers
-  the twelve `henad_graph::sheet::edit::PALETTE_COLORS`, named by `COLOR_NAMES` (Black, Dark grey,
-  Grey, White, Red, Orange, Yellow, Brown, Green, Dark green, Blue and Purple). They are data
+  selection's outline while its picker is open, and the focus outline while focused. A swatch
+  beside a state's name (`swatch_ui`) is the chip's 9 point square inside gray 700.
+  "Choose a colour" offers the twelve `henad_graph::sheet::edit::PALETTE_COLORS`, named by
+  `COLOR_NAMES` (Black, Dark grey, Grey, White, Red, Orange, Yellow, Brown, Green, Dark green, Blue
+  and Purple). They are data
   colours a state is drawn in, taken from MCS entries, so they live in the sheet
   and not in `ui/mcs.rs`. New states take them in the neutral order of `STATE_COLORS`. A colour
   that is not in the palette, as in a starter, is named by the nearest one. "+ Add property" is
@@ -210,7 +211,7 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
 - **The words rule of sheet mode.** The Editor tab in sheet mode and the text a sheet puts in the
   world tabs (names, measures, buttons, the tick counter) never show a word of
   `henad_graph::sheet::sentence::FORBIDDEN_WORDS` ("node", "seed", "compile" and the rest), nor one
-with a plural or verb ending (`is_forbidden_word`). The
+  with a plural or verb ending (`is_forbidden_word`). The
   Model, Performance and System tabs are outside it, and so are the world tabs' own controls
   (Seed, Build, Unlimited TPS) and the controls that open or create a node graph: New node
   graph, Convert to node graph, Edit as node graph, the conversion dialog and the sheet's line

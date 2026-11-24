@@ -13,13 +13,22 @@ wasm32 with `RUSTFLAGS="-C target-feature=+atomics,+bulk-memory"` and a `CARGO_T
 own, over `-p henad-app` and over `-p henad --features app,example-models` (`lint`), `actionlint`
 over `templates/model-project/.github/workflows/*.yml` (`lint`), and every published crate's docs
 as docs.rs builds them, through `scripts/docs_rs.py` from each crate's `[package.metadata.docs.rs]`
-table on the pinned nightly (`docs`). `msrv`, `features` and `docs` run on a pull request and on a
-dispatch, and `package` on a pull request alone. The `downstream` job runs on `workflow_dispatch`
-alone, with `CARGO_TERM_COLOR=never`, and the release checklist starts it. It runs the verified
-packaging in two fresh target directories, the second with the facade's features, and deletes both
-builds, copies the template outside the checkout, pins `henad` and `henad-build` to `=<version>`
-(three lines), patches every crate it uses to the unpacked tarballs under the verify directory's
-`package/`, and generates a lock.
+table on the pinned nightly (`docs`). The `test` job runs on Ubuntu, macOS and Windows under
+`HENAD_REQUIRE_GPU=1`, and prints the adapter with `cargo run -p henad-cli -- --info` first. The
+`web` job builds with `build_web.sh build --release`, then checks that `dist/henad-app.js` holds
+`wbg_rayon_start_worker` and `initThreadPool` and that `dist/snippets/` holds wasm-bindgen-rayon's
+`workerHelpers.no-bundler.js`. The `ports` job checks the reference ports outside the workspace:
+`cargo check --all-targets` over `benchmarks/krabmaga`, with and without its `parallel` feature,
+the Mesa models imported through `uv run --project benchmarks/mesa`, and two Game of Life steps on
+a 16 by 16 grid through `benchmarks/mesa/bench.py` and `benchmarks/agents_jl/bench.jl` (Julia
+1.12). To run a `ports` or `web` step by hand, run its script from `ci.yml` at the repository root.
+`lint`, `test`, `web` and `ports` run on every event, `msrv`, `features` and `docs` on a pull
+request and on a dispatch, and `package` on a pull request alone. The `downstream` job runs on
+`workflow_dispatch` alone, with `CARGO_TERM_COLOR=never`, and the release checklist starts it. It
+runs the verified packaging in two fresh target directories, the second with the facade's features,
+and deletes both builds, copies the template outside the checkout, pins `henad` and `henad-build`
+to `=<version>` (three lines), patches every crate it uses to the unpacked tarballs under the verify
+directory's `package/`, and generates a lock.
 Then, in order: both `henad` and `henad-build` resolve with a null `source`, henad-models is
 absent, strict clippy (`-D unreachable_pub -D unused_qualifications`), `scripts/ci.sh test` under
 `HENAD_REQUIRE_GPU=1`, a second `cargo build -v` with nothing `Dirty`, `Compiling` or `Running`, a
@@ -55,7 +64,7 @@ Regenerate the third-party licence page: `cargo about generate about.hbs -o docs
 dependency tree disagree). A crate shipping two files under one licence gets a `clarify` entry in
 `about.toml`, as `rfd` and `miniz_oxide` have. Left alone, cargo-about keeps whichever file its
 directory walk finds first, and walk order depends on the filesystem. A page generated on macOS can
-then fail the check on Linux, or pass it by luck, as `miniz_oxide` did. The app's four fonts are no
+then fail the check on Linux, or pass it by luck, as `miniz_oxide` did. The app's five fonts are no
 crates, and their section of the page is static HTML in `about.hbs`. Their sources, licences and the
 procedure that rebuilds Henad Sans and Henad Mono from IBM Plex are in
 `crates/henad-app/assets/fonts/SOURCES.md`.
@@ -65,12 +74,12 @@ procedure that rebuilds Henad Sans and Henad Mono from IBM Plex are in
 Toolchain is pinned via `rust-toolchain` (1.97, with rustfmt/clippy/wasm32-unknown-unknown target).
 The web build is the exception and runs on one dated nightly, named in
 `templates/model-project/scripts/web-toolchain` and selected by `scripts/build_web.sh`, which prints
-the install line in `AGENTS.md` when the toolchain or its `rust-src` is missing. The Trunk release sits beside
-it in `templates/model-project/scripts/trunk-version`. CI, vercel.json and the docs read both files,
-and the repository holds one pin. `trunk-sha256` beside them holds the SHA-256 of that release's Linux
-x86_64 tarball, which Henad's CI and the template's both check before extracting it, so a Trunk bump
-changes both files. Threads on wasm need
-`-C target-feature=+atomics,+bulk-memory,+mutable-globals` and a std rebuilt to match, so the nightly
-needs `rust-src`. That script is the only supported way to build for the web; a bare `trunk build`
-produces a binary whose thread pool cannot start. It also unsets `CARGO_ENCODED_RUSTFLAGS`, which
-would otherwise outrank the `RUSTFLAGS` it sets.
+the install line in `AGENTS.md` when the toolchain or its `rust-src` is missing. The Trunk release
+sits beside it in `templates/model-project/scripts/trunk-version`. CI, vercel.json and the docs read
+both files, and the repository holds one pin. `trunk-sha256` beside them holds the SHA-256 of that
+release's Linux x86_64 tarball, which Henad's CI and the template's both check before extracting it,
+so a Trunk bump changes both files. Threads on wasm need
+`-C target-feature=+atomics,+bulk-memory,+mutable-globals` and a std rebuilt to match, so the
+nightly needs `rust-src`. That script is the only supported way to build for the web; a bare
+`trunk build` produces a binary whose thread pool cannot start. It also unsets
+`CARGO_ENCODED_RUSTFLAGS`, which would otherwise outrank the `RUSTFLAGS` it sets.

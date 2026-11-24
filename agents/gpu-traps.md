@@ -10,8 +10,8 @@ is about not undoing them.
 - **One oversized submission silently returns zeros.** Enough passes in a single command buffer
   trips the OS GPU watchdog — no error, no panic, and every later readback reads zero. Batch at 64
   steps per submission, as `GpuAgentState::run_batched` and the real runner do. This first showed up
-  as a flaky test. The kit's `FullSubmission` compares one full submission of every GPU model at its
-  defaults with single steps run before it. 64 steps can still be too many when a step's work
+  as a flaky test. The kit's `FullSubmission` compares one full submission of each GPU model that
+  replays exactly with single steps run before it. 64 steps can still be too many when a step's work
   depends on where agents stand: a crowd in one cell walks every agent. Every host holds each
   command buffer to `GpuSimState::submission_steps`. A graph of agents with a radius fold sizes
   it from the largest bucket of its index, measured after the first step
@@ -55,16 +55,16 @@ is about not undoing them.
   model's buffer sizes, texture dimensions and per-pass storage-binding counts from what it already
   declares, and checks them first. The app disables Build and both engines assert with a readable
   message. That covers sizes and binding counts. The cheap half.
-- **Everything else the device rejects reaches the UI instead of the process.** wgpu's default handler panics on any
-  error no scope claims. `gpu::fault::catching_on` wraps model construction in error scopes for all
-  three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as the floor under
-  every path no scope covers, egui's own rendering included. Contracts `capacity.rs` cannot see
-  (uniform layout, an allocation the device has no memory for) now reach the UI as a modal, and
-  `contracts.rs` turns a workgroup size or a buffer label the device would accept into a panic
-  at construction. Do not undo either half — remove the handler and the next validation error ends the
-  process. Note error scopes are **thread-local**, so a scope pushed on the UI thread never sees
-  what a sim thread does. The sink exists to cover that asymmetry.
-- **A panicking kernel is caught too, and its location needs help.** Both sim threads wrap
+- **Everything else the device rejects reaches the UI instead of the process.** wgpu's default
+  handler panics on any error no scope claims. `gpu::fault::catching_on` wraps model construction in
+  error scopes for all three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as
+  the floor under every path no scope covers, egui's own rendering included. Contracts `capacity.rs`
+  cannot see (uniform layout, an allocation the device has no memory for) now reach the UI as a
+  modal, and `contracts.rs` turns a workgroup size or a buffer label the device would accept into a
+  panic at construction. Do not undo either half — remove the handler and the next validation error
+  ends the process. Note error scopes are **thread-local**, so a scope pushed on the UI thread never
+  sees what a sim thread does. The sink exists to cover that asymmetry.
+- **A panicking kernel is caught too, and its location needs help.** `runner/thread.rs` wraps
   `run()` once at thread start, outside the loop, so the catch costs nothing per tick. Rayon
   catches a worker's panic and re-raises it on the caller with `resume_unwind`, which does not run
   the panic hook again, so `fault.rs` keeps a global fallback alongside its thread-local record.
@@ -131,9 +131,10 @@ is about not undoing them.
   (`INEXACT_REPLAY`). In a model that replays, a computation over whole numbers alone gives the
   same result on every device and the host evaluator, and float results may differ in their last
   places between devices and between two shapes of one computation. A whole number worked out from
-  floats can differ where the floats do. A2's contraction probe (henad-models' `graph_ants_parity.rs`) found `a * b + c`
-  written as one expression and as two `let`s rounded alike, both fused, on every one of 6216 inputs where
-  a fused and a rounded result differ, so a `let` boundary does not stop contraction. A field
+  floats can differ where the floats do. On an Apple M4 Pro the contraction probe of henad-models'
+  `graph_ants_parity.rs` (record #68) found `a * b + c` written as one expression and as two `let`s
+  rounded alike, both fused, on every one of 6216 inputs where a fused and a rounded result differ,
+  so a `let` boundary does not stop contraction. A field
   that adds up (henad-graph's `combine = "sum"`) keeps to a power-of-two resolution 2^-k for this:
   the deposit's product by 2^k and the merge's `f32(word) * 2^-k` are exact below 2^24, so a
   contraction of the merge's add has nothing to round differently, and the integer `atomicAdd` in
@@ -159,18 +160,18 @@ is about not undoing them.
 - **WARP crashes while it compiles a storage atomic after a barrier inside an `if` from FXC.**
   Windows' software adapter (Microsoft Basic Render Driver, the adapter of CI's Windows runner)
   compiles a compute pipeline at its first dispatch, and
-  `d3d10warp!ComputeShaderTransformer::ConstructLoadStoreSets` writes out of bounds when an atomic on
-  a storage buffer follows a `workgroupBarrier()` inside the same `if`. A barrier inside an `if`
+  `d3d10warp!ComputeShaderTransformer::ConstructLoadStoreSets` writes out of bounds when an atomic
+  on a storage buffer follows a `workgroupBarrier()` inside the same `if`. A barrier inside an `if`
   with no storage atomic after it in the block compiles, and so do the atomics after a barrier at
   the top level of `main`. The process dies with `STATUS_ACCESS_VIOLATION` (0xc0000005), with no
   error and no panic, and a uniform condition does not help. The probe tallies of henad-graph once
   held both their barriers inside `if (params.henad_count_fires != 0u)`, the second followed by the
   flush into `counters`, and every test that stepped a sheet with fire counts died on Windows. On
   dx12, wgpu compiles HLSL with FXC (`d3dcompiler_47.dll`), Direct3D's older compiler, unless it can
-  load `dxcompiler.dll`, which no user has by default. Through DXC the same shaders run. Every barrier
-  henad-graph's compiler writes now sits at the top level of `main`. The same FXC path returns a
-  negative zero for `abs(-0.0)` on WARP, and the compiler writes a float `math.abs` as a clear of
-  the sign bit.
+  load `dxcompiler.dll`, which no user has by default. Through DXC the same shaders run. Every
+  barrier henad-graph's compiler writes now sits at the top level of `main`. The same FXC path
+  returns a negative zero for `abs(-0.0)` on WARP, and the compiler writes a float `math.abs` as a
+  clear of the sign bit.
 - **Uniform layouts and a model's binding slots are generated.** The `build.rs` of henad-compute,
   henad-models and henad-app runs henad-build's `ShaderBuild` over that crate's shaders, and
   `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as
@@ -199,8 +200,9 @@ is about not undoing them.
   the pass when the FNV-1a stamp of its inputs and of `output.rs` itself matches
   `shader_bindings.stamp`, and writes each file only when its bytes change. The inputs are every
   file `wgsl_bindgen`'s dependency tree reads, a quoted path import outside the root or a file
-  without the `.wgsl` extension included. A crate with no shaders gets an empty `shader_bindings.rs` and loses its
-  stamp. Otherwise the shaders' return would match the old stamp and keep the empty file.
+  without the `.wgsl` extension included. A crate with no shaders gets an empty `shader_bindings.rs`
+  and loses its stamp. Otherwise the shaders' return would match the old stamp and keep the empty
+  file.
   `ShaderBuildError`'s `Debug` writes its `Display`. Uniform structs, workgroup sizes and bind group
   layouts therefore come from the WGSL, and each model asserts its own struct against the generated
   one. Shared WGSL is reached with `#import henad::<module>`, resolved at build time for every

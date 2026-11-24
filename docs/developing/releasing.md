@@ -71,7 +71,7 @@ The shared modules under `crates/henad-core/src/` form a separate interface, and
 1. **Bump the version.**
    Set `[workspace.package] version`, every `henad-*` entry of `[workspace.dependencies]`, and the template's three requirements in `templates/model-project/Cargo.toml`: `henad` and `henad-build`, and `henad` under `[dev-dependencies]`.
    Set the tag in the `fetch` region of `templates/model-project/README.md` as well.
-   A breaking release also sets its major and minor in the `// Cargo.toml:` line that opens both `crates/henad/README.md` and `crates/henad/examples/complete.rs`, in the `!!! info "Henad 0.x"` admonitions, and in the dependency snippets typed into `docs/guide/library.md`, `docs/authoring/testing.md` and `docs/reference/cli.md`.
+   A breaking release also sets its major and minor in the `// Cargo.toml:` line that opens both the program in `crates/henad/README.md` and `crates/henad/examples/complete.rs`, in the `!!! info "Henad 0.x"` admonitions, and in the dependency snippets typed into `docs/guide/library.md`, `docs/authoring/testing.md` and `docs/reference/cli.md`.
    `git grep -nE 'Henad 0\.[0-9]+|version = "0\.[0-9]+"' -- docs crates/henad ':!docs/developing/agent-record'` lists the lines to check.
    `scripts/check_packaging.sh` checks that the workspace requirements match the version, and that the template's three requirements and the README's dependency line match its major and minor.
    Set `version` in the root `pyproject.toml`, the documentation site's project, and run `uv lock`.
@@ -125,7 +125,7 @@ The shared modules under `crates/henad-core/src/` form a separate interface, and
 ## Publishing to crates.io
 
 The crates publish in dependency order.
-crates.io allows five new crates in a burst and then one every ten minutes, and the first release creates nine crates:
+crates.io allows five new crates in a burst and then one every ten minutes, and nine new crates publish in five rounds:
 
 ```bash
 CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --workspace --dry-run --locked
@@ -145,11 +145,13 @@ henad-models comes before the two hosts, whose optional dependency on it has to 
 A rate limit hit part way leaves the earlier crates published, and the run resumes with `-p` for the remaining crates.
 `cargo publish --workspace` skips the tutorial crate.
 
-A later release adds versions to existing crates, and crates.io allows thirty new versions in a burst:
+A release whose crates all exist adds versions, and crates.io allows thirty new versions in a burst:
 
 ```bash
 CARGO_TARGET_DIR="$(mktemp -d)" cargo publish --workspace --locked
 ```
+
+The first release with henad-graph publishes the same way, since its one new crate fits in the burst of five.
 
 Cargo 1.97 or later is required.
 Cargo 1.96 raised a false deadlock error while waiting for the registry.
@@ -159,8 +161,9 @@ A broken release is yanked, and a patch release of all nine follows.
 ### The crates.io account
 
 - crates.io requires a verified email before any publish, and the maintainer's account has one.
-- The first release publishes with a token scoped to `publish-new`, since it creates nine crates.
-  Every later release publishes with a token scoped to `publish-update`.
+- A release that creates a crate publishes with a token scoped to `publish-new`, as the first release did.
+  The first release with henad-graph creates that crate, and its token takes `publish-update` as well for the other eight.
+  Every other release publishes with a token scoped to `publish-update`.
   Each token is limited to the `henad*` crates and carries an expiry.
 - The maintainer is the sole owner of every crate.
 
@@ -233,8 +236,10 @@ A **patch release** goes from 0.x.y to 0.x.(y+1) and stays compatible, as Cargo'
 - A struct with public fields gains a field, and an enum gains a variant, in a breaking release only.
   That covers the enums that the engine produces and hosts match on, such as `ProgressEvent`, `SweepEvent`, `SweepWarning`, `RunStatus`, `StopReason` and `ModelState`, and the output structs such as `SweepRecord`, `SweepReport`, `ResultCounts` and `Manifest`.
 - `#[non_exhaustive]` marks the types built through `new`: `SweepOptions`, `SweepRunOptions`, `BenchmarkSettings`, `TestDeviceRequest`, `SimulationViews` and `ModelMetadata`.
-  So does each spec type behind `runtime-wgsl`, such as `GpuAgentSpec`, `GpuGridSpec`, `ShaderSpec` and `EntryDeclarations`, with `GpuBufferInfo` and `GpuPassInfo` in henad-core. `SideTable` has a private field in place of the attribute. A new hook of `AgentHooks` or `GridHooks` takes a default body.
-  It also marks the types that are lists by nature: the error enums `SetupError`, `ExportError`, `ModelSetError`, `ModelLookupError` and `ShaderBuildError`, `AppOpening`, `OpenAt`, `ModelCheck`, `SkipReason` and `Structure`.
+  So does each spec type behind `runtime-wgsl`, such as `GpuAgentSpec`, `GpuGridSpec`, `ShaderSpec` and `EntryDeclarations`, with `GpuBufferInfo` and `GpuPassInfo` in henad-core.
+  `SideTable` has a private field in place of the attribute.
+  A new hook of `AgentHooks` or `GridHooks` takes a default body.
+  `#[non_exhaustive]` also marks the types that are lists by nature: the error enums `SetupError`, `ExportError`, `ModelSetError`, `ModelLookupError` and `ShaderBuildError`, `AppOpening`, `OpenAt`, `ModelCheck`, `SkipReason` and `Structure`.
   `ExploreError` and `SweepOutput` carry it as well, since their variants differ between targets.
   `FaultKind` carries it too, and gains a variant when the engine learns to report a new kind of fault.
   So do the benchmark's `BenchmarkEvent`, `BenchmarkReport` and `RepetitionReport`.

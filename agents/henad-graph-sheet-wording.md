@@ -8,17 +8,19 @@ comparisons, conditions and blanks, the Lines help and `FORBIDDEN_WORDS`), `pick
 pickers, their messages, typed numbers and result names, `notes.rs` the notes under a line and
 "otherwise", `rates.rs` the words and notes of rates and chances, competing rates, the long tick and
 rate conversion, `errors.rs` the errors and refusals with the cost words and fire counts, `sheet.rs`
-the sheet's sections and forms, `editor.rs` the New model, unsaved changes and New parameter
-dialogs, the top bar, the world tabs and the Diagram, `convert.rs` the conversion words, `grammar.rs` lists, articles,
-capitals, possessives, plurals and `thing_word`, `parts.rs` the part types and `sentences.rs` the
-`Parts` builder, `Sentences` and `competing_parts`. `agents/henad-graph-sheet.md` holds the rest of
-the sheet module, and `agents/henad-app-card.md` the card that draws the parts.
+the sheet's sections and forms, `editor.rs` the New model, unsaved changes, replace, delete and New
+parameter dialogs, the top bar, the world tabs and the Diagram, `convert.rs` the conversion words,
+`grammar.rs` lists, articles, capitals, possessives, plurals and `thing_word`, `parts.rs` the part
+types and `sentences.rs` the `Parts` builder, `Sentences` and `competing_parts`.
+`agents/henad-graph-sheet.md` holds the rest of the sheet module, and `agents/henad-app-card.md` the
+card that draws the parts.
 
-**The wording table.** `sheet::sentence` holds every word the sheet editor shows, from the final
-editor's wording table: constants for fixed text and functions for templates, each named for what it
+**The wording table.** `sheet::sentence` holds every word the sheet editor shows: constants for
+fixed text and functions for templates, each named for what it
 words (`card_header`, `otherwise_words`, `not_run_choose`, `gap_note`, `for_each_words`), with the
 enums `AddButton` and `AddItem` (labels, tooltips, headings, patterns; `+ Chance` has the tooltip
-"Change a state by chance"), `ConditionItem` ("Choose when"), `Blank` (visible word, `want`,
+"Change a state by chance or at a rate"), `ConditionItem` ("Choose when"), `Blank` (visible word,
+`want`,
 accessible name, picker title), `LineSelect` (`words` in the accessible name, `want` with its
 article in a skip note: "Not run yet: choose a unit of time"), `DrawKind` and `ConditionKind`. A
 template takes the
@@ -31,9 +33,9 @@ words), the New model and New parameter dialogs (`STARTER_CHOICES` with every st
 description), the Editor's unsaved changes dialog (`UNSAVED_HEADING`, `unsaved_changes`,
 `SAVE_MODEL`, `DISCARD_CHANGES`) and the mark beside the name of a model with unsaved changes
 (`UNSAVED_MARK`, `UNSAVED_MARK_TOOLTIP`), the top bar, the world tabs (`tick_counter`, the
-tried-value words, `PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion. Rows the wording
-table marks "Not built" are left out. Shown text takes the proper characters: "…" in a menu item,
-a pattern or a button ("+ Repeat…", "New parameter…", "when … is …"), "→" between a state and its
+tried-value words, `PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion. Shown text takes
+the proper characters: "…" in a menu item, a pattern or a button ("+ Repeat…", "New parameter…",
+"when … is …"), "→" between a state and its
 value in a Depending on, and "×" and "−" in a note. A blank reads `BLANK_TEXT`, "…", in shown
 text and in an automatic name. An automatic name that an older sheet stores with "..." for a blank
 still counts as automatic (`names::read_blanks`), and the next edit writes it with "…". The rate
@@ -52,7 +54,7 @@ at agents (`look_name`, "line 3, Flockmates") and of its cost (`look_costs_too_m
 `card_costs_too_much`, `start_costs_too_much`, counts written with thousands commas, and for a pass
 past its cost per element `line_costs_too_much`, `smaller_maximum`, `FEWER_TIMES` and
 `FEWER_LINES`). `plural` (the rules of English and `IRREGULAR_PLURALS`) is crate-visible for
-`SheetFile::shortfalls`. Every editor milestone and
+`SheetFile::shortfalls`. Every editor and
 the writer's comments draw their words from here and from no literal of their own. `FORBIDDEN_WORDS`
 lists the words sheet mode never shows, and `is_forbidden_word` also matches their endings ("nodes",
 "compiled"). A note or tooltip about what a card runs on takes `thing_word` ("cell", "bird"): the
@@ -86,7 +88,9 @@ bold `ConditionWord`, `From`, a `Chip` (`ChipKind` and a grey `lead` such as "my
 `Select`, `Always`, `Otherwise`, the empty `ForEachBlank`, which reads as nothing, and `ForEach`,
 the words "for each" once on (`FOR_EACH_WORDS`). A `Keyword` is a lead word the card sets in the
 semibold face: the verb of a change ("Become", "Set", "Steer", "Keep", "Move", "Leave", "Record"),
-"When" and "Repeat" before their condition or times, and the words that name what a result line
+"Repeat" before its times, "When" before a blank or "always" (a When with any other condition
+opens with the `ConditionWord` "When", "When with chance" or "When at rate"), and the words that
+name what a result line
 works out ("count of", "look at", "all of", "any of", "none of", "choose, first that applies" with
 its "otherwise", "depending on"). A phrase inside a slot writes the same words as plain `Text`
 (`Parts::lead`). A `ResultName` is the name before " = " on a named result line, which the card
@@ -99,12 +103,14 @@ in the card alone. One builder (`Parts`) writes both forms, so the card and the 
 sets: a `target` (`PlaceTarget::Slot` with its slot path, `ListItem` with the list's slot path and
 the item's index, or `Field` with the phrase's slot path and a `FieldPlace`: `Property`, `NewState`,
 `StartState`, `Test`, `Around`, `RateUnit`, `Summary`, `SummaryValue`, `Operation`, `FirstOperand`,
-`SecondOperand`) and the `want`, the `Blank` the place shows while empty (`None` for a select).
+`SecondOperand`, `Mode`, `Pick`, `RankedBy`, `Which`, `GroundProperty`, `Event`,
+`LookSummary(index)`) and the `want`, the `Blank` the place shows while empty (`None` for a select).
 `Parts` places a value relative to its slot and `Parts::under(key, want)` puts it under the slot's
 key, so a phrase's places compose (`condition.left`). Words, `From`, `Otherwise` and a hand-written
 formula of more than one operation have no place. A Count's `whose` comparison wants a property on
 its left and, while that is empty or a States property, a state on its right, and an empty Calculate
-line reads "[number] [operation] [number]", both values and the select placed. Agent lines place
+line shows a number blank, the operation select and a number blank ("Result = … … …" as text),
+both values and the select placed. Agent lines place
 their property (`property_part`), modes, picks and cells as selects, each summary of a look at
 agents (`LineSelect::LookSummary`), a Leave's and a pick's ground property, a Record's event
 (`ChipKind::Event`), every state of a Depending on, Keep between and Random number bounds as the
@@ -117,13 +123,14 @@ formula of one operation between two values, and `Sentences::formula_operand` re
 one value as a formula writes it.
 
 **Tests** of the wording table and the sentences sit in `src/tests/sheet_sentence.rs`:
-`every_wording_table_entry_equals_the_final_words` holds the final wording table's rows as literals
-copied in and compares each entry, a template called with the table's example; the starters' and
+`every_wording_table_entry_equals_the_final_words` holds every entry's words as literals and
+compares each entry, a template called with an example; the starters' and
 test sheets' sentences, Game of Life's three exactly; the parts of its lines, blanks, "otherwise"
 and the empty "for each"; `for_each_words`; and no fixed entry holding a forbidden word, and
 `lead_words_result_names_and_alternatives_leave_every_sentence_as_written`, which holds every line
-of every starter and test sheet to the sentence its comment holds, with and without the new parts'
-words, each change line to a lead word, each named result line to its `ResultName` and each Choose
+of every starter and test sheet to the sentence its comment holds, both through `sentence_text` and
+with its `Keyword`, `ResultName` and `Alternative` parts read as their words, each change line to a
+lead word, each named result line to its `ResultName` and each Choose
 and Depending on to its alternatives. The places of parts are held by
 `every_control_of_a_life_line_is_placed_at_the_slot_or_field_it_shows`,
 `a_new_count_wants_a_property_then_a_state_and_an_empty_calculate_its_two_values`,

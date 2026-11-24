@@ -35,8 +35,8 @@ Network models run on the CPU only, and none of the three has a counterpart in `
 Each engine implements the whole of `SimState` for its trait.
 A model therefore never implements `SimState` itself, which keeps the runner interface out of the authoring surface.
 
-`GridModelState<M>` owns the `Grid2D<u8>`, the parameter store and the tick counter.
-Its step dispatches on `M::NEIGHBORHOOD` once, outside the row loop, so the choice costs no per-cell work.
+`GridModelState<M>` owns a `CaField<M>` holding the `Grid2D<u8>`, the parameter store, the action seed and the tick counter.
+The field's step dispatches on `M::NEIGHBORHOOD` once, outside the row loop, so the choice costs no per-cell work.
 
 `AgentModelState<A>` owns rather more: the lanes, the field, the neighbour index, the deposit lanes, the tally and the seed.
 One tick runs through a fixed sequence.
@@ -96,7 +96,7 @@ The repack reclaims the space that relocations left behind and lays the rows out
 
 ## The row loop
 
-`CaField::step_grid` is the hot inner loop behind every grid model, and small changes to its shape show up in every model's step time.
+`step_grid` in `field/ca.rs` is the hot inner loop behind every grid model, and small changes to its shape show up in every model's step time.
 
 Three row slices are taken per row, wrapped vertically, and sliced to exactly one row wide.
 Because each slice is exactly one row, a neighbour access is a single index instead of a `row * stride + x` multiply-add.

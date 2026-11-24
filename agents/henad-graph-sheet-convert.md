@@ -33,7 +33,8 @@ The copy's `[editor]` region, written through `EditorRegion`'s typed setters:
   `copy_code` the code hashes, each 16 lowercase hex digits, and `converted`.
 - `node.<id>.label` only, never `pos`: the result node of each named line
   (`LineMap::result_node`, the fold for a Look around) takes the line's name, a sheet-owned
-  `lane.get` at path `cells.<property>` or `agents.<property>` (`property_read`, roots in
+  `lane.get` at path `cells.<property>`, `agents.<property>` or `ground.<property>`
+  (`property_read`, roots in
   `PROPERTY_ROOTS`, the lowering's `property_path`) takes "my Status" (`my_property_item`), a
   `lane.get_at` "their Status". Property names come from the cells', every kind of agent's and the
   ground's properties (`property_name`). Such an entry has a label and no `pos`, and
@@ -47,7 +48,8 @@ The copy's `[editor]` region, written through `EditorRegion`'s typed setters:
   Keep between by their `property`, Move for the kind's Position and Heading properties);
   `<root>.<p>.count` (the shared `stat.count_by`) to the count measures of `p`;
   `<root>.<p>.starts_as...` to the start; `measure.<id>`, `button.<id>`, `color.<thing>` to that
-  part. `<root>` is `cells` or `agents`. The rest resolve from links, in rounds to a fixed point:
+  part. `<root>` is `cells`, `agents` or `ground`. The rest resolve from links, in rounds to a
+  fixed point:
   the read `<root>.<p>`, the part of a card several looks share (`card.<card>`, the agent lowering's
   shared radius and cell size, and its folds) and a `card.<card>.<property>` no line writes. Each
   round settles a node whose readers (nodes linking to it in the pass) all have a group, with the
@@ -84,9 +86,9 @@ frames, then the untitled groups, each list in id order. Declarations are not co
 `SetVariantColor` changes the code and lists nothing.
 
 **The lowering's half.** `Builder::record_result` keeps the temporary id of each result line's
-`Operand::Link` node (`CardLowering::line`) and each Look around's fold (`look.rs`), and `finish`
-renumbers them into `LineMap::insert_result`. The table is outside the document, so code identity is
-untouched.
+`Operand::Link` node (`CardLowering::line`) and each Look around's fold (`look.rs`, `agents.rs`),
+and `finish` renumbers them into `LineMap::insert_result`. The table is outside the document, so
+code identity is untouched.
 
 **Tests** sit in `src/tests/sheet_convert.rs`: the copy's header and its passes equal to the lowered
 graph's, `a_taken_id_or_name_numbers_the_copy`, `the_copy_has_its_own_code_and_names_the_sheets`,
@@ -104,7 +106,7 @@ comparisons: one changed node under line 2's frame, two added in no frame; a rem
 line 3's), `changes_need_the_sheet_the_copy_was_converted_from`,
 `make_function_keeps_frame_members`, `copy_carries_frame_membership` and
 `set_variant_color_round_trips_and_changes_the_code`. The inline test of `convert.rs`
-(`agent_paths_group_and_title_like_cell_paths`) reads the boids test sheet through
+(`agent_paths_group_and_title_like_cell_paths`) reads the boids sheet starter through
 `tests::sheet_support::sheet_text` and checks `writers`, `sheet_origins`, `sheet_title` and
 `property_read` on agent paths, since the grid lowering writes none. henad-models'
 `src/tests/sheet_convert.rs` runs the copy and the sheet on the device at 128 by 128 with the same

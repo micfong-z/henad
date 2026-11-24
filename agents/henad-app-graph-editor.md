@@ -96,7 +96,7 @@ edit leaves unplaced, such as a new function port's node or an import from a fil
 placement, reaches `BodyCanvas::moved` as a move, an edit of its own that clears redo after each
 undo.
 
-**Regions** (E2 step 1). A region draws as two canvas nodes (`NodePart`): the input half
+**Regions**. A region draws as two canvas nodes (`NodePart`): the input half
 (`BodyCanvas::nodes`, the region's inputs and inner outputs) and the output half
 (`BodyCanvas::output_halves`, its accumulator outputs, titled "<title> output", no badge). Both map
 to the region's id, so selecting or deleting either half acts on the region. The output half sits at
@@ -115,23 +115,24 @@ a node whose region moves with it. `settle` runs those `SetRegion`s in the drag'
 but its current one) and Move out of region (to the region around its region). Move out of region
 also moves the node, with every node inside it, right of the frame it leaves by `COLUMN_GAP`
 (`moves_out_of_frame`, in the same edit) when any of them lies within `FRAME_MARGIN` of the frame
-drawn without them. Otherwise a non-member stays drawn inside the frame and reads as a member. `can_join` filters
-drop targets, both menus' targets and Move out of region by library 1's nesting: a plain node joins
-any region, a Repeat holds a Repeat or a `grid.fold`, a `grid.fold` a Repeat, a radius fold holds no
-region and sits in none, and the chain of regions stays within `MAX_REGION_DEPTH` (3). The toolbar's
-Repeat (`MDI_REPEAT`) sends `GraphRequest::WrapInRepeat` of the selection, and `GraphEditor::wrap`
-runs `EditCommand::WrapInRepeat` with the selection's drawn bounds, then `fit_wrap` moves the halves
-clear of the wrapped nodes and the puts once the canvas has drawn them at one size for two frames,
-inside the wrap's undo step. The input half of a region holds the region controls
-(`region_controls`): a Repeat's Max (`SetConfig`, coalesced, `clamp_existing_to_range(false)` so
-an out-of-range `max` is drawn as it is and left to the checker), one row per accumulator of any region
-with `acc` (a name field that renames on losing focus, the type menu `accumulator_types`, the
-combine menu filtered by `Combine::applies_to`, a type change keeping the combine when it applies
-and taking `carry` otherwise, and Remove accumulator), and Add accumulator (`acc`, `f32`, `sum`).
-`GraphEditor::edit` adds `max` = count clamped to 1 to 65536 after every constant `count` of a
-Repeat (`fill_repeat_max`). `settings_lines` leaves out the keys the controls show.
+drawn without them. Otherwise a non-member stays drawn inside the frame and reads as a member.
+`can_join` filters drop targets, both menus' targets and Move out of region by library 1's nesting:
+a plain node joins any region, a Repeat holds a Repeat or a `grid.fold`, a `grid.fold` a Repeat, a
+radius fold holds no region and sits in none, and the chain of regions stays within
+`MAX_REGION_DEPTH` (3). The toolbar's Repeat (`MDI_REPEAT`) sends `GraphRequest::WrapInRepeat` of
+the selection, and `GraphEditor::wrap` runs `EditCommand::WrapInRepeat` with the selection's drawn
+bounds, then `fit_wrap` moves the halves clear of the wrapped nodes and the puts once the canvas has
+drawn them at one size for two frames, inside the wrap's undo step. The input half of a region holds
+the region controls (`region_controls`): a Repeat's Max (`SetConfig`, coalesced,
+`clamp_existing_to_range(false)` so an out-of-range `max` is drawn as it is and left to the
+checker), one row per accumulator of any region with `acc` (a name field that renames on losing
+focus, the type menu `value_types`, the combine menu filtered by `Combine::applies_to`, a type
+change keeping the combine when it applies and taking `carry` otherwise, and Remove accumulator),
+and Add accumulator (`acc`, `f32`, `sum`). `GraphEditor::edit` adds `max` = count clamped to 1 to
+65536 after every constant `count` of a Repeat (`fill_repeat_max`). `settings_lines` leaves out the
+keys the controls show.
 
-**Functions** (E2 step 2). `functions.rs` is the functions panel under the pass stack: a row per
+**Functions**. `functions.rs` is the functions panel under the pass stack: a row per
 function (open, issue badges, `from <file>` with the origin's hash as hover), the open function's
 forms (Name renames, each input and output with a name field, a type menu of `canvas::value_types`
 and Remove, Add input and Add output, which `GraphEditor::add_function_port` runs as the port and a
@@ -166,4 +167,4 @@ everything it reads, regions whole) into it, and colours the value (a category b
 `u32` as an index, an `i32` and an `f32` through `view.ramp`, a flag as 0 or 8). The document never
 changes, and a refusal (a draw, which a view pass cannot make) is `status`. `preview_program`
 compiles the view file while `viewing` holds, and drops a view the document no longer allows with
-"Stopped viewing ...". `preview_key` (load, revision, view changes) is what the preview compares.
+"Stopped viewing ...". The preview compares `preview_key` (load, code revision, view changes).

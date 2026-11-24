@@ -32,8 +32,8 @@ and the named region is marked in the source with a pair of comments:
 ```
 
 Those two lines are a build directive rather than a comment, and are the one exception to the
-comment rules in `AGENTS.md`. Do not include by line range, which is also supported and drifts silently.
-A whole-file include strips the markers, so a page can show a file whole and in parts.
+comment rules in `AGENTS.md`. Do not include by line range, which is also supported and drifts
+silently. A whole-file include strips the markers, so a page can show a file whole and in parts.
 
 The template's regions take each file's comment form, `# --8<-- [start:profile]` in TOML and
 shell and `<!-- --8<-- [start:fetch] -->` in HTML and Markdown, so a user's copy stays readable.

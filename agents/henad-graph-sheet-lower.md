@@ -1,12 +1,13 @@
 # henad-graph: the sheet lowering
 
 `agents/henad-graph-sheet.md` holds the rest of the sheet module: the document, reader, writer,
-relations, checker and `SheetFile`, and `agents/henad-graph-sheet-wording.md` the wording table.
+relations and `SheetFile`, `agents/henad-graph-sheet-check.md` the checker, and
+`agents/henad-graph-sheet-wording.md` the wording table.
 `agents/henad-graph-sheet-lower-agents.md` holds what a sheet of agents adds to the lowering here:
 looks at agents, motion, Repeat and the ground.
-`sheet/lower/` is private, and `sheet` re-exports `LineMap`, `NodeOrigin` and `NodeOwner` from
-`lower/table.rs`. `Lowered` holds the document, the
-`LineMap` and the `FaultNames` of the looks at agents.
+`sheet/lower/` is private, and `sheet` re-exports `FireLines`, `LineMap`, `NodeOrigin` and
+`NodeOwner` from `lower/table.rs`. `Lowered` holds the document, the `LineMap`, the `FaultNames` of
+the looks at agents and the `FireLines` of the change lines (`fires`).
 
 The `Builder` (`lower/mod.rs`) lowers over one kind of thing, `check::Thing`: the cells, or the one
 kind of agent (the checker's `ONE_AGENT_KIND` refuses a second), and for a sheet of agents on a
@@ -60,9 +61,9 @@ grid and is 0 below about 3e-8, and draws by `rng.threshold` and `rand.below` at
 `a_rate_below_the_resolution_of_a_float_draw_recovers_its_share` on the device). Every other rate
 keeps `rand.chance`, resolved to 2^-24. A "for each" over a grid count
 (`count_bound`) with a rate the same for every element is `1 - powi(e^(-h), n)` with `max_exponent`
-8, 4 or 9. Any other count, agents included, is `1 - select(n <= 0, 1, exp(-h * n))` in `f32`, P's
-guard, since `exp(0)` is not exactly 1 on every device. A rate that differs per element with no "for
-each" takes the same guard, `1 - select(h <= 0, 1, exp(-h))`
+8, 4 or 9. Any other count, agents included, is `1 - select(n <= 0, 1, exp(-h * n))` in `f32`,
+guarded since `exp(0)` is not exactly 1 on every device. A rate that differs per element with no
+"for each" takes the same guard, `1 - select(h <= 0, 1, exp(-h))`
 (`a_rate_worked_out_per_cell_with_no_count_keeps_a_cell_with_no_hazard`). A competing group is
 `CardRelations::competing_groups` less its skipped lines, two or more left (`CardLowering::groups`,
 set before the lines lower). Each Become of a group lowers at its turn through `group_line`: its
@@ -103,7 +104,7 @@ diagnostics and the editor: indices count from 0 (`items.0`, `row.0.condition`, 
 past the slot a path may name an item of a listed right side (`right.1`). The nodes of a line that
 sit in no slot take `""` (the line itself), `when` (the join with a When around it), `change` (its
 share of a change chain), `formula` (a Calculate's expression) and `row.<index>` (a Choose row's
-select). A test holds the two together over the grid sheets and `values.toml`. These paths feed draw
+select). A test holds the two together over every starter and `values.toml`. These paths feed draw
 keys, so a change to the grammar changes code identity.
 
 Keys (`keys.rs`): an owner's key is the stored one or the low 32 bits of
@@ -147,7 +148,7 @@ chips (`count` and each summary id). An average divides by `count` through
 a chance of a number, a percent or a parameter with no `tries` is `rng.threshold` and `rand.below`
 at 2^-32, joined by `logic.or` with `cmp.ge(p, 1)`, since the threshold tops out at `u32::MAX`
 (`a_small_chance_keeps_its_value_in_the_threshold`). Any other chance is one `rand.chance`, resolved
-to 2^-24, and with `tries` it holds with `1 - (1 - p)^n` (P), through
+to 2^-24, and with `tries` it holds with `1 - (1 - p)^n`, through
 `math.powi` with `max_exponent` 8, 4 or 9 when `p` is a number, percent or parameter and `n` is a
 grid Count or a grid Look around's `count` part or Count summary, and `math.pow` with `n` in `f32`
 otherwise behind a `logic.select` that takes 1 (missed every try) for `n <= 0`, since `pow(0, 0)` is
@@ -204,13 +205,13 @@ measure's label, `the_life_sheet_blinker_has_period_2` and
 `a_rebuild_at_one_seed_replays_the_same_start`,
 `a_start_again_button_draws_a_new_layout_each_press`,
 `a_skipped_line_and_its_dependents_are_left_out`, `each_interim_refusal_gives_one_located_error`
-(Repeat), `each_lifted_refusal_now_lowers_checks_and_compiles` (the seven line kinds grid sheets
+(Repeat), `each_lifted_refusal_now_lowers_checks_and_compiles` (seven lines of the kinds grid sheets
 first refused), the second tick card, the empty grid,
 `the_largest_grid_sheet_lowers_under_half_the_node_limit` (a card of `MAX_LINES_PER_CARD` count and
 Become lines over four properties), both node limits named,
 `the_sheet_lowering_never_panics_on_the_mutation_corpus` (one in five edits of the sheets that lower
 still lowers) and the placements below. `src/tests/sheet_identity.rs` holds one test per identity
-row of the author format, each asserting the code and the schema hash through `changes` (a result
+row of the author format, most asserting the code and the schema hash through `changes` (a result
 rename, a reorder of independent lines or of Steers of one property, a note, `purpose` or comment, a
 measure's id, a parameter's unit or `means` and the `rate_unit_from_tick` mark keep both; a
 parameter, state or model rename, a colour, new numbers, a step, a tick unit, a reorder of

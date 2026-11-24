@@ -21,15 +21,16 @@ Read before touching a kernel, a chunk driver, the spatial hash or the scatter g
   `#[inline]` did not help. Same trap applies to any new hot-loop driver.
 - Determinism: a chunk's RNG comes from `chunk_seed(base, tick, chunk_index)`, never from anything
   a worker mutates, so results don't depend on how rayon schedules chunks. This now has to hold on
-  the web too, where the pool width is whatever `navigator.hardwareConcurrency` reported. `base` is advanced once
-  per tick on the sequential path by `advance_tick_seed` — folding the tick in only through
-  `chunk_seed` measured 14% slower on SIR with identical content, and that was never explained.
-  Boids, ants, Virus on a Network and Team Assembly each have a
+  the web too, where the pool width is whatever `navigator.hardwareConcurrency` reported. `base`
+  is advanced once per tick on the sequential path by `advance_tick_seed` — folding the tick in only
+  through `chunk_seed` measured 14% slower on SIR with identical content, and that was never
+  explained. Boids, ants, Virus on a Network and Team Assembly each have a
   `results_do_not_depend_on_the_thread_count` test, as do the foraging tutorial (in its `tests/`),
-  `cpu/grid_engine.rs`, `cpu/layout.rs` and `cpu/primitives/components.rs`. Keep them. The kit's `ThreadCount` compares
-  every CPU model of a set the same way, at 14 jobs. `a_build_that_reads_the_pool_width_fails_the_thread_count_check`
-  pins it deterministically. `a_shared_accumulator_fails_the_thread_count_check` retries up to five
-  times, since a pool can take a shared lock in the single thread's order by chance.
+  `cpu/grid_engine.rs`, `cpu/layout.rs` and `cpu/primitives/components.rs`. Keep them. The kit's
+  `ThreadCount` compares every CPU model of a set the same way, at 14 jobs.
+  `a_build_that_reads_the_pool_width_fails_the_thread_count_check` pins it deterministically.
+  `a_shared_accumulator_fails_the_thread_count_check` retries up to five times, since a pool can
+  take a shared lock in the single thread's order by chance.
 - `AgentModel::CHUNK` is per-model on purpose. It sets both the RNG seeding granularity and the
   parallel load balance, so it must be a fixed const (not derived from the thread count) but still
   small enough to split across every core — 4096 gave only 13 chunks for 50k boids and cost 20%.
@@ -46,14 +47,14 @@ Read before touching a kernel, a chunk driver, the spatial hash or the scatter g
   The GPU hash's `LargestBucket` pass reads the counts once per measurement (after the first step
   and a press, and in a stats readback at most once per 64 ticks), never once per step. A step
   pays nothing for it.
-- `henad-compute/src/cpu/primitives/scatter.rs` (`ScatterGrid`) handles the one write pattern the rest of the
-  engine can't: many agents depositing into the same cell. Read its module docs before changing
-  it — the strategy choice is measured (`benches/scatter.rs`), not assumed, and **atomics are not
-  an option**: `fetch_max` scales negatively under contention (7.1 ms at one thread, 99.2 ms at
-  four). Its three arms must stay bit-identical, because the arm is picked from the worker count
+- `henad-compute/src/cpu/primitives/scatter.rs` (`ScatterGrid`) handles the one write pattern the
+  rest of the engine can't: many agents depositing into the same cell. Read its module docs before
+  changing it — the strategy choice is measured (`benches/scatter.rs`), not assumed, and **atomics
+  are not an option**: `fetch_max` scales negatively under contention (7.1 ms at one thread, 99.2 ms
+  at four). Its three arms must stay bit-identical, because the arm is picked from the worker count
   and the deposit count, so any divergence would make a model's results depend on the machine.
-  Re-run the bench rather than reasoning about it. The sparse arm (`Banded`) is what a field layer
-  takes: measured 2.3x to 12.3x over the dense ones wherever there are more cells than deposits,
+  Re-run the bench rather than reasoning about it. A field layer takes the sparse arm (`Banded`),
+  measured 2.3x to 12.3x over the dense ones wherever there are more cells than deposits,
   and behind them at one deposit per cell even on one worker.
 - **A graph model's lanes pack only past the binding budget of 8, and each lane stays a contiguous
   segment.** henad-graph gives every lane its own buffer while each shader binds at most 8 storage

@@ -1,7 +1,7 @@
 # henad-core
 
-**henad-core**: no dependencies on other crates — not even wgpu or bytemuck, which is why the two
-GPU traits describe their shaders as `&'static str` and their buffers as plain bytes. Defines the
+**henad-core**: no dependencies on other crates, wgpu and bytemuck included. The two GPU traits
+then describe their shaders as `&'static str` and their buffers as plain bytes. Defines the
 abstractions everything else builds on. `authoring/` is the model authoring API and splits in two.
 `authoring/model/` holds the five traits a model implements,
 one per (topology × backend): `GridModel` (`authoring/model/grid_model.rs`) for cellular automata,
@@ -29,8 +29,8 @@ two callers, henad-graph's draw core and the seed of a grid rule's `rng` in
 henad-compute's template, and both run two rounds over four counters. Its words are pinned in
 henad-graph (`the_draw_core_keeps_its_words`), since the graph library's case words hang on them.
 `SimState` (`model.rs`) is the _runner_
-interface the sim thread drives, not an authoring API — that split is why the traits live under
-`authoring/model/` and this one does not. `provenance.rs` holds `BuildInfo`, the identity of one
+interface the sim thread drives. It is no authoring API, and stays out of `authoring/model/`,
+the home of the traits a model implements. `provenance.rs` holds `BuildInfo`, the identity of one
 compiled crate that `build_info!` returns for the crate it expands in, and `ModelSource`, an
 entry's type path and the build of the crate that registered it. A build script stamps the
 commit, the dirty flag and the source hash through henad-build, and they read as unknown in a
@@ -120,7 +120,7 @@ checks it against a `ModelSchema` and lists every `Config`, its param values and
 action, into a `Plan`, where run `run_id` is replicate `run_id % replicates` of config
 `run_id / replicates`. It refuses an unknown id, a value out of bounds, a param both fixed and
 varied or varied twice in a block, a zip of unequal lengths, an `F32` range with no step outside
-a sampled design, a factor with no levels (`DesignError::NoLevels`), an undeclared action, a
+a sampled design, a factor with no levels (`FactorError::NoLevels`), an undeclared action, a
 name two actions share, a stop or `first` threshold that is not finite (`MeasurePlan::check`,
 through `StopSpec::check_threshold` and `Comparison::check`), and more than `MAX_RUNS` runs
 (2^24, equal to `MAX_CONFIGS`, `PlanError::TooManyRuns`), all before any run. An action due

@@ -8,7 +8,7 @@ icon: material/crane
 
 Henad is a workspace of nine crates, all published to crates.io at one version.
 henad-core depends on no other crate, and henad-build on henad-core alone.
-Every other dependency runs from a crate to a crate drawn above it in the graph below, and a crate with WGSL or a commit stamp takes henad-build as a build dependency.
+Every other dependency runs from a crate to a crate drawn above it in the graph below, and a crate with shader bindings or a commit stamp takes henad-build as a build dependency.
 henad-models and henad-explore take no normal dependency on each other, and the two front ends reach the example models only for `example_models()`, behind their default `example-models` feature.
 The facade, `henad`, sits over all of them, and is the one crate a program depends on.
 
@@ -34,6 +34,7 @@ graph LR
   models -. "example-models" .-> facade
   cli -. "cli" .-> facade
   app -. "app" .-> facade
+  graphcrate -. "model-files" .-> facade
 ```
 
 The layers are easiest to follow from the bottom up, since each layer depends only on the layers below it.
@@ -42,7 +43,7 @@ The layers are easiest to follow from the bottom up, since each layer depends on
 With those dependencies absent, the two GPU traits describe their shaders as `&'static str` strings and their buffers as plain bytes.
 Alongside the authoring API, the crate holds the `Grid2D<T>` double-buffered grid, the counting-sort `SpatialHash`, the `Network` graph, parameter and action descriptors, the stat and view types the UI reads, and the provenance types that identify a build.
 
-**henad-build** runs from the build scripts of the crates with WGSL or a commit stamp.
+**henad-build** runs from the build scripts of the crates with shader bindings or a commit stamp.
 It composes each crate's shaders with the shared modules that henad-core holds as text, and writes the Rust bindings that `include_shaders!` brings into the crate.
 A shader imports a shared module with `#import henad::<module>`.
 Its `stamp_commit` records the commit a crate was built from, whether its sources differed from that commit, and a hash of the sources.
@@ -72,13 +73,14 @@ It also acquires a headless GPU device for the command line and for any sweep th
 The parts of a sweep that need no engine, such as designs, seeds, reducers and summaries, sit in `henad_core::explore`, and so do the search methods.
 **henad-app** and **henad-cli** are the two front ends, one graphical and one headless, each a library over a host's model set with Henad's own binary on top.
 
-**henad** re-exports the other crates under one module tree, the example models, the app, the command line and the testing kit each behind a feature.
+**henad** re-exports the other crates under one module tree, the example models, the app, the command line, the testing kit, and grid rules with graph models each behind a feature.
 It defines nothing of its own.
 [The API reference](../reference/api.md) lists its modules.
 
 Two dev-dependencies run against the graph.
 henad-explore's tests run the example models, and henad-models' tests run the testing kit.
-These two are the only dev-only edges that the normal graph does not hold, and neither normal graph reaches the other.
+Neither normal graph reaches the other.
+henad-models' tests also take henad-graph, which sits beside henad-models in the graph, to run graph models and lower sheets.
 
 Two more crates sit outside the published set.
 `examples/tutorial` holds the finished code of the first-model guide, depends on the facade as a reader's crate does, and tests each tutorial model against the example model it teaches.

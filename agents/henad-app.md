@@ -19,21 +19,21 @@ wasm-bindgen-rayon pool at the crate-private `requested_threads` before it calls
 closure, then looks up `the_canvas_id` and `loading_text`, and `init_web_logger`. A pool that
 fails to start leaves `thread_pool_note`, which the Performance tab shows. wasm-bindgen-rayon and
 the `init_thread_pool` re-export exist only with `target_feature = "atomics"`. A wasm32 build
-without it, as docs.rs makes, has no pool and leaves a note of its own. A start failure is returned, a missing window
-included, and the caller logs it once. In a window, it is also written into `loading_text` where
-the page has one. Both entry points check the opening against the set before any device exists
-(`AppOptions::check_opening`, `OpeningError`): the set has to hold the id, a run has to pass
-`RunSetup::from_replay`, and a setup's entry has to declare the same `schema_hash`. `AppError` is
-native only and `WebStartError` wasm only. henad-app re-exports no eframe item. `state`, `ui`, `HenadApp` and
-`wgpu_configuration` are private. `HenadApp` (`lib.rs`) owns the `SimThread` and polls snapshots each frame.
-`HenadApp::new` takes the options and hands the opening to `AppState::open`, and
-`wgpu_configuration` takes `AppOptions::gpu_needs`, the set's `GpuNeeds`, for the device request.
+without it, as docs.rs makes, has no pool and leaves a note of its own. A start failure is returned,
+a missing window included, and the caller logs it once. In a window, it is also written into
+`loading_text` where the page has one. Both entry points check the opening against the set before
+any device exists (`AppOptions::check_opening`, `OpeningError`): the set has to hold the id, a run
+has to pass `RunSetup::from_replay`, and a setup's entry has to declare the same `schema_hash`.
+`AppError` is native only and `WebStartError` wasm only. henad-app re-exports no eframe item.
+`state`, `ui`, `HenadApp` and `wgpu_configuration` are private. `HenadApp` (`lib.rs`) owns the
+`AppState` and polls snapshots each frame. `HenadApp::new` takes the options and hands the opening
+to `AppState::open`, and `wgpu_configuration` takes `ModelSet::gpu_needs` for the device request.
 henad-models and the binary's env_logger are optional behind the default
-`example-models` feature, which the `[[bin]]` requires, and `main.rs` builds the official options over
-`example_models()`: "Henad", the icon, the links, the licence, `cli_command("henad-cli")` and `__official()`. The
-eframe app name "Henad" names the native storage folder, which left 0.2.0's `Henad-Engine` behind,
-and a browser keeps eframe's one key per origin. `ui/` has one file per panel or window
-(`menu_bar.rs`, `model.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
+`example-models` feature, which the `[[bin]]` requires, and `main.rs` builds the official options
+over `example_models()`: "Henad", the icon, the links, the licence, `cli_command("henad-cli")` and
+`__official()`. The eframe app name "Henad" names the native storage folder, which left 0.2.0's
+`Henad-Engine` behind, and a browser keeps eframe's one key per origin. `ui/` has one file per panel
+or window (`menu_bar.rs`, `model.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
 `charts.rs`, `performance.rs`, `system.rs`, `fault.rs`, `rebuild.rs`, `about.rs`), and
 `time_axis.rs` holds the time axis the Charts tab, the Results tab's Series view and Playback
 share. `focus.rs` holds the keyboard focus order: `without_focus_stop` takes the divider of each
@@ -46,8 +46,8 @@ the focus. egui passes no input events to the second pass, so a key or a click c
 frame whose Tab does not wrap takes one pass (`focus::tests`, `every_tab_stop_has_a_name`). The
 Parameters tab, the Export tab and the Editor live in directories, `params/`, `export/` and
 `editor/`. The Parameters tab's `mod.rs` draws the panel, its action buttons and its notice,
-`values.rs` the widget and text of one value (`value_widget`, `display_value`, `sheet_number`;
-an `f32` marked integer slides in whole steps, `parameter_slider_step`). An `f32` slider snaps
+`values.rs` the widget and text of one value (`value_widget`, `display_value`, `sheet_number`),
+and an `f32` marked integer slides in whole steps (`parameter_slider_step`). An `f32` slider snaps
 through `snapped`: the steps start at the minimum, a maximum off them is a step of its own, and no
 value leaves the range. egui snaps a typed number from the minimum before the slider's setter sees
 it, so the slider's parser keeps the number as typed for the setter, and a typed minimum or maximum
@@ -87,9 +87,9 @@ the Viewport brought to the front of its stack, the Editor of the Editor layout 
 of Sweep or Results (else in a leaf of its own on the left at `EDITOR_LEAF_SHARE`), and any other
 tab into the focused leaf. `Workspace::focus` of the Editor switches to the Editor layout first
 while the checkbox holds, and every site that opens a model in the Editor sets `focus_request` to
-the Editor. Nothing switches back. The View menu (`menu_bar::view_menu`) lists the tabs of the
-layout that shows, then "Default layout" and "Editor layout" as radio buttons, the checkbox and
-Reset layout (`Workspace::reset`, the layout that shows alone). Both layouts draw under one
+the Editor. Nothing switches back. The View menu (`menu_bar::view_menu`) holds a toggle per tab
+for the layout that shows, then "Default layout" and "Editor layout" as radio buttons, the checkbox
+and Reset layout (`Workspace::reset`, the layout that shows alone). Both layouts draw under one
 `DockArea` id, so a tab body keeps its egui id across a switch, and `HenadApp::ui` copies the layout
 into `AppState::layout` before the dock draws for the Sheet pane's stored width
 (`henad-app-sheet.md`). `dock.rs` holds the eight tests of the default layout, their Editor layout
@@ -317,13 +317,13 @@ capitalised, "Day"), and `plot_x` a sample's x, `TimeScale::time_at` of its tick
 the `time` column of `--export-stats`. The Charts tab plots every stat at `plot_x`, includes 0 in
 the y range, and draws a series of one sample as `Points` of radius 3, since a `Line` of one point
 draws nothing. Its x range then spans the sample's tick to the next (`single_sample_x_range`).
-Otherwise egui_plot widens the zero-width range to the height of the y range. `tests/time_axis.rs` holds the app-level tests over henad-models'
-`sir_rates.toml` fixture (`support::sir_rates`). Above the plot, the Charts tab's History length
-slider draws its value box apart, `DragValue` beside a `Slider` with no value, since egui's slider
-names its box only through `labelled_by` and keeps the box's id inside. Each takes the name
-`HISTORY_LENGTH` (`the_history_length_slider_and_its_box_have_names`). `playback.rs` draws the Run
-to tick row, its box named `RUN_TO_TICK` as well as labelled by it
-(`the_run_to_tick_box_has_a_name`).
+Otherwise egui_plot widens the zero-width range to the height of the y range. `tests/time_axis.rs`
+holds the app-level tests over henad-models' `sir_rates.toml` fixture (`support::sir_rates`). Above
+the plot, the Charts tab's History length slider draws its value box apart, `DragValue` beside a
+`Slider` with no value, since egui's slider names its box only through `labelled_by` and keeps the
+box's id inside. Each takes the name `HISTORY_LENGTH`
+(`the_history_length_slider_and_its_box_have_names`). `playback.rs` draws the Run to tick row, its
+box named `RUN_TO_TICK` as well as labelled by it (`the_run_to_tick_box_has_a_name`).
 `AppState::run_to` rebuilds first for a tick behind the current one through `press_build` (a
 replay of the Editor's sheet preview while `build_replays_preview` holds), then sends
 `SimCommand::RunTo` and sets `run_to_target`. Run (`run_refusal`) is disabled while another model

@@ -29,20 +29,22 @@ same, through `register_gpu_agent_model`, `ModelEntry::from_agent_spec` and `Gpu
 Behind `runtime-wgsl`, `EntryDeclarations` (`entry/declarations.rs`, with `new`) is public, as are
 `ModelEntry::from_gpu_grid_spec` and `from_gpu_agent_spec`, which forward to those two.
 **Live parameters on the GPU**. `from_grid_spec` and `from_agent_spec` pass each declared
-parameter's `is_live` to the engine through the crate-private `with_live_params(Vec<bool>)`, and a
-model type's engine (`GpuGridState`, `GpuAgentState`) gets none, so every parameter of a
-registered GPU model stays reload-only. `SimState::set_param` rejects a reload-only index and an
-index past the parameters. For a live one the grid engine stores the value and writes the uniform
-block of every step pass (its counting block too), the display and the reduce pass again through
-`pass_params_bytes`, in `uniform_ctx`, the `GridPassCtx` of the build (tick 0, the build's press),
-so the bytes equal a fresh build's at the new value. The agent engine computes every block but the
-actions' first through `run_params_bytes` at `AgentRun::new(seed, 0, 0)` (`uniform_blocks`), and
-rejects the edit, keeping the old value and the run, when one fails. Each built pass keeps its pass
-id, its uniform and its counting uniform for this (`BuiltPass` in `gpu/built_pass.rs`, which both
-engines build through, the agent engine's id holding the invocations too). An action's block is
-written at each press from the current `params`, and the reruns and the stats read them. The writes go through `queue.write_buffer` between submissions, so
-the next step reads them, and the tick and the buffers stay. A live parameter therefore feeds
-nothing but those blocks, the reruns and the stat values. henad-graph marks the rest reload-only.
+parameter's `is_live` to the engine through the crate-private `with_live_params(Vec<bool>)`.
+`register_gpu_grid_model` and `register_gpu_agent_model` declare every parameter `on_reload`, so
+every parameter of a registered GPU model stays reload-only, and a model type's engine
+(`GpuGridState`, `GpuAgentState`) gets no live flags. `SimState::set_param` rejects a reload-only
+index and an index past the parameters. For a live one the grid engine stores the value and writes
+the uniform block of every step pass (its counting block too), the display and the reduce pass again
+through `pass_params_bytes`, in `uniform_ctx`, the `GridPassCtx` of the build (tick 0, the build's
+press), so the bytes equal a fresh build's at the new value. The agent engine computes every block
+but the actions' first through `run_params_bytes` at `AgentRun::new(seed, 0, 0)` (`uniform_blocks`),
+and rejects the edit, keeping the old value and the run, when one fails. Each built pass keeps its
+pass id, its uniform and its counting uniform for this (`BuiltPass` in `gpu/built_pass.rs`, which
+both engines build through, the agent engine's id holding the invocations too). An action's block is
+written at each press from the current `params`, and the reruns and the stats read them. The writes
+go through `queue.write_buffer` between submissions, so the next step reads them, and the tick and
+the buffers stay. A live parameter therefore feeds nothing but those blocks, the reruns and the stat
+values. henad-graph marks the rest reload-only.
 `gpu/tests/live_params.rs` holds `a_live_edit_keeps_the_run_and_later_steps_read_the_new_value`
 (both engines, the counting step included), `an_engine_without_live_parameters_rejects_every_edit`
 and `a_value_whose_blocks_fail_is_rejected_and_the_run_keeps_its_value`.
@@ -83,15 +85,16 @@ types an unsuffixed literal falls back to.
   (`agent_lanes!`, for node lanes too), `chunked.rs` (chunk drivers and RNG seeding), `scatter.rs`
   (the many-agents-one-cell write path) and `components.rs` (connected components by min-label
   propagation). `AgentModelState` counts its model's own params once at construction, and a step
-  builds no descriptor list. `cpu/sim_thread.rs` is the sim runner, a `SimLoop` with play/pause/TPS-capping,
-  driven by whichever `runner::Driver` the target has. Its tests sit in `cpu/tests/`, one file
-  each for pacing, stopping and snapshots. `support.rs` holds their poll, and the random network
-  and sized rayon pool that the inline tests of the engines, layout and components share.
+  builds no descriptor list. `cpu/sim_thread.rs` is the sim runner, a `SimLoop` with
+  play/pause/TPS-capping, driven by whichever `runner::Driver` the target has. Its tests sit in
+  `cpu/tests/`, one file each for pacing, stopping and snapshots. `support.rs` holds their poll,
+  and the random network and sized rayon pool that the inline tests of the grid engine, layout and
+  components share.
 - `gpu/grid_engine.rs` (`GpuGridState`) and `gpu/agent_engine.rs` (`GpuAgentState`) are the
   engines for the two GPU traits, mirroring their `cpu/` namesakes. `gpu/sim_thread.rs` is the
-  batching GPU runner and `gpu/timing.rs` its adaptive-batch controller. `gpu/view/` is what a
-  model hands the UI (`display.rs` for a texture layer, `agents.rs` for lane buffers drawn in
-  place). `gpu/primitives/` holds the GPU counterparts of henad-core's data structures —
+  batching GPU runner and `gpu/timing.rs` its adaptive-batch controller. `gpu/view/` holds the
+  views a model hands the UI (`display.rs` for a texture layer, `agents.rs` for lane buffers drawn
+  in place). `gpu/primitives/` holds the GPU counterparts of henad-core's data structures —
   `spatial_hash.rs`, `prefix_scan.rs`, `reduce.rs`, `readback.rs` — plus `dispatch.rs` and
   `pipeline.rs`. The `henad::dispatch` module a pass imports and the `reduce_tree` fold a reduce
   leaf repeats are WGSL in henad-core's `authoring/primitives/wgsl/`. `gpu/grid_dims.wgsl` is an
@@ -99,7 +102,7 @@ types an unsuffixed literal falls back to.
   bindings, and `grid_engine.rs`'s `Dims` is a `pub(crate)` alias of that struct.
   Both engines are non-generic. `gpu/shader_spec.rs` holds `ShaderSpec` (WGSL source and
   `ShaderBinding`s, whose names are `Cow`s, unlike the `&'static` of `BindingDecl`).
-  `gpu/grid_spec.rs` holds `GpuGridSpec`, lowering section 7.3's generalised grid spec, and its
+  `gpu/grid_spec.rs` holds `GpuGridSpec`, a GPU grid model's declarations held as values, and its
   functions behind the `GridHooks` trait. Its `GridBufferSpec`s fall into a dual set
   (`double_buffered`, two sides swapped once at the end of a step) and a plain set (one side,
   read and written in place). `steps` is a list of `GridPassSpec`s run in order over the step
@@ -110,13 +113,15 @@ types an unsuffixed literal falls back to.
   `write_buffer` (`gpu/press.rs` holds the seed step and the upload both engines run), then runs
   the passes in order, each rewriting its uniform first. A rerun's `Err` goes to `ctx.faults` as a
   refused fault, and no pass runs. `pass_params_bytes(GridPassId, GridPassCtx, params)` writes
-  every uniform block, and a pass gets a uniform only when its shader binds `params`. `GridPassCtx.tick` is the steps done: 0 at construction and at a live edit, the
-  engine's tick at a press, and the tick the reduce pass was recorded at (`stats_tick`) for
-  `GridHooks::stats(counts, ctx, params)`, which a graph's stats read through the host. `counters` is the length of the
-  reduce shader's `counters` array and of the readback, `stats.len().max(1)` from `new`, and a
-  graph sets its tally count. `sums` (0 from `new`) is the float lanes the reduce shader sums: it
-  then binds `partials` and writes one total per lane per cell workgroup, the engine folds them
-  with `GpuLaneReduce::over_blocks` after the counters' copy, reads both back together, and calls
+  every uniform block, and a pass gets a uniform only when its shader binds `params`.
+  `GridPassCtx.tick` is the steps done: 0 at construction and at a live edit, the engine's tick at
+  a press, and the tick the reduce pass was recorded at (`stats_tick`) for
+  `GridHooks::stats(counts, ctx, params)`, which a graph's stats read through the host. `counters`
+  is the length of the reduce shader's `counters` array and of the readback, `stats.len().max(1)`
+  from `new`, and a graph sets its tally count. `sums` (0 from `new`) is the float lanes the reduce
+  shader sums: it then binds `partials` and writes one total per lane per cell workgroup, the
+  engine folds them with `GpuLaneReduce::over_blocks` after the counters' copy, reads both back
+  together, and calls
   `GridHooks::stats_with_sums` (provided, default `stats`) with each lane's total. A spec with no
   sums builds no tree and runs as before, and `demand` counts the partials buffer. `init_cost` is
   the host's cost per cell at build. `fire_counters` (empty from `new`) is the range of `counters` a
@@ -135,11 +140,12 @@ types an unsuffixed literal falls back to.
   block, never in a storage binding. `gpu/tests/fire_counts.rs` holds
   `a_counted_step_reads_the_last_steps_count_in_calls_of_1_3_and_64` (both engines) and
   `a_grid_reads_its_tallies_and_its_fire_range_in_one_readback`. `from_model` and
-  `single_step` put every buffer in the dual set, one step pass labelled `step`, the swapping
-  table on step, display and reduce and the in-place table on actions, which is the orientation
-  stock shaders assume. `GpuGridEngine` builds every wgpu object from a spec and implements `SimState` and
-  `GpuSimState`, `read_buffer` included, and `GpuGridState<M>` reads a spec from `M` and forwards
-  every call. `demand`, `max_storage_bindings` and the contract asserts read the spec. The engine
+  `single_step` put every buffer in the dual set, one step pass labelled `step` and the swapping
+  table on step, display and reduce, and `from_model` puts the in-place table on actions, the
+  orientation stock shaders assume. `GpuGridEngine` builds every wgpu object from a spec and
+  implements `SimState` and `GpuSimState`, `read_buffer` included, and `GpuGridState<M>` reads a
+  spec from `M` and forwards every call. `demand`, `max_storage_bindings` and the contract asserts
+  read the spec. The engine
   computes each pass's workgroups and its buffer bytes at construction, and a step calls no hook.
   Unlike the agent spec, the grid spec does not refuse a double buffered buffer no step writes or
   a side bound both ways, since the stock grid models never went through those checks.
@@ -155,8 +161,8 @@ types an unsuffixed literal falls back to.
   the bind groups are built. Every double buffered buffer swaps once at the end of a step,
   whatever the tables say. `from_model` reproduces the one orientation stock shaders assume,
   `swapping` on every step, display and reduce pass and `in_place` on every action. A model
-  composed at run time points a pass after a writer at `Next`, the per-pass commit of
-  `lowering.md`. `GpuAgentSpec::assert_contracts` also refuses a table of another length, a
+  composed at run time points a pass after a writer at `Next`, and the pass reads the writer's
+  values. `GpuAgentSpec::assert_contracts` also refuses a table of another length, a
   position or colour index past the buffers, a position or colour buffer that is not drawable,
   a double buffered buffer with no writable binding reaching `Next` in a step pass, and one side
   of a buffer bound both read-only and writable in one pass, which wgpu rejects only at the
@@ -166,7 +172,8 @@ types an unsuffixed literal falls back to.
   items `gpu/mod.rs` re-exports only behind `runtime-wgsl`. Each struct and enum is
   `#[non_exhaustive]`, each struct has a `new`, and `SideTable` keeps its field private instead.
   The engines stay `pub(crate)`. `GpuSimState::read_buffer` is a blocking read of a buffer's
-  current side for a parity test or an export, `None` by default, and the runner never calls it. `an_owned_spec_entry_reads_like_the_registered_one`
+  current side for a parity test or an export, `None` by default, and the runner never calls it.
+  `an_owned_spec_entry_reads_like_the_registered_one`
   (`henad-models/src/tests/gpu_agent_adapter.rs`) holds `gpu_ants` and `gpu_boids` built through
   the public constructors from owned strings equal to their registered entries in `Debug`, schema
   hash, needs, demand and stepped stats. Keep it.
@@ -222,8 +229,8 @@ types an unsuffixed literal falls back to.
   the action stream from `action_seed(seed)`, as the grid engine does.
   `gpu/tests/parity.wgsl` is the parity test's shader, with a `CODES` array that references
   each boundary and table code the test reads.
-  `gpu/limits.rs` is what raises the device past the WebGPU baseline, and `gpu/capacity.rs`
-  is what asks whether a model fits the device before anything is allocated. A `PassBindings`
+  `gpu/limits.rs` raises the device limits past the WebGPU baseline, and `gpu/capacity.rs`
+  checks whether a model fits the device before anything is allocated. A `PassBindings`
   holds a pass's `PassKind` (`Step`, `Display`, `Reduce`, `Action(index)`) and its `work`, cost
   per invocation times invocations (texels for a display), zero for a hand-written shader, and
   `Demand.host` holds `HostWork` runs (a graph's init, an action's rerun). `Demand::shortfalls`
@@ -260,8 +267,8 @@ types an unsuffixed literal falls back to.
   else), and no buffer label is reserved or ends in `_in` or `_out`. Either mismatch validates
   and runs wrong.
   `gpu/stepping.rs` steps a `GpuSimState` from a host with no sim thread, native only. It submits
-  at most `GpuSimState::submission_steps(true)` steps per command buffer (`submit_in_chunks`,
-  which `run_batched` shares), fires a `Schedule` under either
+  at most `GpuSimState::submission_steps(true)` steps per command buffer (`submit_in_chunks` in
+  `gpu/sim_thread.rs`, which `GpuAgentState::run_batched` shares), fires a `Schedule` under either
   `Fire` rule, waits once at the end of a run, and blocks on a stats readback. `submit_slice`
   submits one command buffer of steps, with the stats passes when sampling, and returns its
   `SubmissionIndex` without waiting. Its stats passes are `GpuSimState::encode_stats_passes`, the
@@ -291,7 +298,7 @@ types an unsuffixed literal falls back to.
   `fn min` behind one would pass every text check unread. The call into
   naga_oil also runs inside `catching`, a backstop on native. Diagnostics point into the caller's
   text (see the GPU traps). `runtime_composition_matches_build_time_shader_strings`
-  (`gpu/tests/compose.rs`, henad-compute's seven entries) and henad-models'
+  (`gpu/tests/compose.rs`, henad-compute's eight entries) and henad-models'
   `runtime_composition_matches_every_stock_shader` and
   `compose_never_panics_on_the_mutation_corpus` (`src/tests/runtime_parity.rs`, 3600 edits) hold
   it. Keep them.

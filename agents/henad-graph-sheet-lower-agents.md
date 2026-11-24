@@ -10,10 +10,11 @@ card moves agents by an arrow (`NOT_YET_AGENT_WALLS` at `[world]`), and the firs
 display order when the ground blocks some states (`NOT_YET_BLOCKED_MOVE_BY` at its line). Agents
 that move to places walk the cells and stop at walls and blocked cells on their own. `world.rs`
 writes `[agents]` from the kind (`count`, `max_count`, the world's width and height in `f32`),
-Position as the `vec2f` lane with `role = "position"`, an Arrow and a Heading as `vec2f`, and the
-Heading dropped (no lane, in `dropped`) when nothing reads it: no `my`, `my_new` or `their` chip of
-it in any line, phrase or formula (`formula::references`), no measure of it, and no colour rule by
-heading or of it. A read of a dropped property is an error. A Heading holds the last move that was
+Position as the `vec2f` lane with `role = "position"`, an Arrow and a Heading as `vec2f` (a Heading
+`vec2i` when a card moves agents to places), and the Heading dropped (no lane, in `dropped`) when
+nothing reads it: no `my`, `my_new` or `their` chip of it in any line, phrase or formula
+(`formula::references`), no measure of it, no colour rule by heading or of it, and no look at the
+cell ahead. A read of a dropped property is an error. A Heading holds the last move that was
 not 0, the form of the hand-lowered files in henad-models' `tests/fixtures/lowered/round1/`, and
 starts at none, (0, 0).
 
@@ -32,7 +33,7 @@ Steer (`steered_already`), Move to below Move by (`moved_by_already`) and Move b
 refusal, so a refusal gives one located error. The checker refuses a Count, Look around or Pick a
 cell inside a Repeat. A Count over agents in a slot is an error ("must be on a line of its own").
 
-Looks (`agents.rs`, A): at the card's first look at agents, `open_looks` takes every look that runs,
+Looks (`agents.rs`): at the card's first look at agents, `open_looks` takes every look that runs,
 in line id order, and groups them into folds: by `include_me` and by depth, then a new fold past
 `MAX_ACCUMULATORS` (16). A look's depth (`look_depths`) is the most looks at agents along a chain of
 results it reads (`lines_read`: the lines its result chips and formulas name at any depth, and for a
@@ -53,8 +54,9 @@ of the looks keeps the code. Each look holds `<line>_count` (`u32` `count`) and 
 `math.mul(d, d)` at the line's `distance` path outside the region, and `cmp.le(dist_sq, d^2)`
 inside, joined with `only` (and a Count's `whose`, always yes when blank, so a Count with no test
 counts everyone within its distance) into each `region.put`. `their` is `lane.get_at`
-at the fold's `other`, read once per look (`Fold::agents`), `offset_to_them` the fold's `delta`,
-`offset_away_from_them` its `math.neg`, `distance_to_them` the `math.sqrt` of its `dist_sq`. The
+at the fold's `other` (`FoldKind::Agents`), read once per look (`Fold::reads`), the relation chip
+`offset_to_them` the fold's `delta`, `offset_away_from_them` its `math.neg`, `distance_to_them` the
+`math.sqrt` of its `dist_sq`. The
 fold's `delta` wraps, so in a world with walls (`walled_offset`, kept in `Fold::walled`) each look
 reads their Position, takes `math.sub` of mine and its `vec.dot` with itself inside the fold, uses
 those for the three relations, and filters every put by `cmp.le` of that square against its own
@@ -66,7 +68,7 @@ largest or smallest of no one is the zero of its type through `guard_by_count`. 
 count sits in `CardLowering::empty`. Each fold's `FaultNames` words come from `sentence::look_name`
 over its looks' display numbers and names ("lines 1 and 2, Flockmates and Too close").
 
-Draws (P): a chance once for each of a count over agents is never `math.powi` (`count_bound` gives
+Draws: a chance once for each of a count over agents is never `math.powi` (`count_bound` gives
 no bound for agents within a distance), always the guarded `math.pow`.
 
 Motion (`motion.rs`): a Steer's term is `value * strength` (`vec.scale` for an arrow, `math.mul` for
@@ -115,7 +117,7 @@ take its region through `line_site`. A Keep between, When, Repeat, Leave, Record
 Repeat is refused (`NOT_YET_REPEAT_CHANGE`).
 
 Agent lowering tests sit in `src/tests/sheet_agents.rs`, on the host:
-`every_agent_sheet_lowers_checks_and_compiles_on_the_host` (the three agent starters and
+`every_agent_sheet_lowers_checks_and_compiles_on_the_host` (the four agent starters and
 `mobile_sir.toml`: no warning, no graph diagnostic, an entry, canonical, deterministic, ids in their
 line blocks, the map covers every node), the worlds and the dropped Heading, one shared fold for the
 boids' two looks with its accumulators, its name and two `cmp.le` filters, a look reorder keeping
@@ -123,9 +125,9 @@ the code, `the_radius_index_follows_the_current_largest_distance` (one `cell_siz
 `AgentHooks::index_cell_size` at 50 and 8, then 9 and 30), the power rule on the host (0.488 within
 five standard errors over 4 people and 5000 ticks, 0 for a chance of 0 for each of 1000),
 `for_each_of_zero_with_chance_1_is_0_on_host_and_device` (the device through `support::device_for`
-and `support::context`), `each_agent_refusal_gives_one_located_error` (walls, Pick a cell, Record,
-Move to below Move by, Set below Steer, a Become in a Repeat, a look in a Repeat, a second kind), a
-look at the cells around, `the_shortfalls_of_a_sheet_name_its_looks_in_the_model_words` (boids at
+and `support::context`), `each_agent_refusal_gives_one_located_error` (walls, Move to below Move
+by, Set below Steer, a Record in a Repeat, a look in a Repeat, a second kind),
+`the_shortfalls_of_a_sheet_name_its_looks_in_the_model_words` (boids at
 1,000,000 birds and a Visual range of 200),
 `a_count_of_agents_with_no_test_lowers_and_compiles`,
 `a_look_at_agents_that_reads_an_earlier_look_opens_its_own_fold` (a Count over the average of line
@@ -136,8 +138,7 @@ number or towards a count, and a largest of their Velocity, each one checker err
 `a_pass_cost_past_the_limit_names_its_line_in_the_model_words` (the random walk with a Steps per
 tick maximum of 65536: one V22 error, placed at the Repeat line in `line_costs_too_much`'s words
 with no note and no forbidden word, and another finding's words kept), and the fold as a node the
-sheet owns. The refusal test holds walls, Move to below Move by, Set below Steer, a Record in a
-Repeat, a look in a Repeat and a second kind. henad-models' device gates are in `agents/models.md`.
+sheet owns. henad-models' device gates are in `agents/models.md`.
 
 **The ground** (`ground.rs`; its starts in `paint.rs`, its colours in `shades.rs`, places and the
 lines that read and mark it in `place.rs`). `declare` writes a `[[counter]]` per event and the
@@ -152,7 +153,7 @@ covers function nodes too. The ground's passes run over the cells: `start_ground
 `painted`: the base state then a `logic.select` per shape in order, each shape one `math.expr` over
 the cell's column and row and `ctx.grid`, a cell shape the cell at `floor(center * size)`, an
 ellipse or rectangle in a frame turned by `angle` degrees from the x axis towards smaller rows with
-sides `size * grid / 2`), `colours_ground` (`by_state` through the category's palette, or with
+half-sides `size * grid / 2`), `colours_ground` (`by_state` through the category's palette, or with
 `shade_state` and `shades` a palette `shades_<property>` of the states then `SHADE_BANDS` (6) blends
 per shade, the largest shade's band from `log10(max(v, 1e-30)) / decades + 1` or `v` on a linear
 scale, through a `cat.switch`; `shaded` a Number property linearly), `measures_ground` and Set

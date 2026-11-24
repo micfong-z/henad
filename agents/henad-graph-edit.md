@@ -33,8 +33,8 @@ literals, `action`, `runs` and the canvas scope `pass.<id>`. A remove with refer
 parameter the target lacks. The copied text also holds each frame of the canvas that holds a copied
 node (`EditorRegion::copy_of`, every key kept, members cut to the copied nodes), and `Paste`
 adds a frame of its own on the target canvas for each, around the pasted ids
-(`EditorRegion::push_renamed_frames`, `copy_carries_frame_membership`). Category rename and remove and the edits of a `[[palette]]`
-are not written yet.
+(`EditorRegion::push_renamed_frames`, `copy_carries_frame_membership`). No command renames or
+removes a category or a `[[palette]]`, or changes a palette's colours.
 
 **Function edits** (`edit/functions.rs`). `AddFunction` (no ports, empty body), `RenameFunction`
 (every call's `config.function`, the canvas scope, the `[editor] function.<id>` entry),
@@ -59,7 +59,8 @@ draws what the call drew. A call inside the body takes the composed key as its o
 draws inside it draw other numbers. `ImportFunction { text, source, function, id }` copies the
 function and every function it calls (`imported_functions`) from another graph file with fresh node
 ids, placement and keys kept, refuses an id the file holds ("Import it under another name"), a
-new id one of its callees already takes, a newer library, and text that does not read (`EditError::Import`), and records
+new id one of its callees already takes, a newer library, and text that does not read
+(`EditError::Import`), and records
 `[editor] function.<id>.origin = { name, hash }` per copied function (`FunctionOrigin`,
 `EditorRegion::function_origin`, `set_function_origin`), the hash FNV-1a 64 of
 `writer::function_text` in the source file, as 16 hex digits. An import copies no declaration, so

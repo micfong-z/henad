@@ -5,8 +5,9 @@ a dependency between Henad crates.
 
 The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core alone.
 Every other normal or build dependency runs from a crate to one drawn above it in the graph in
-`AGENTS.md`: henad-explore and henad-models onto henad-compute, the hosts onto henad-explore, henad-compute and, for
-`example_models()`, henad-models, and any crate with WGSL or a build stamp onto henad-build.
+`AGENTS.md`: henad-explore and henad-models onto henad-compute, the hosts onto henad-explore,
+henad-compute and, for `example_models()`, henad-models, and any crate with shader bindings or a
+build stamp onto henad-build.
 henad-cli and henad-app take henad-models only behind their default `example-models` feature, and
 `cargo tree -p henad-cli --no-default-features -e normal -i henad-models` prints nothing, as does
 the same line for henad-app. The facade takes henad-models, henad-app and henad-cli only behind its
@@ -28,11 +29,12 @@ keeps it out of the package, which matters: the publish order puts henad-models 
 henad-app and henad-cli take henad-explore with `model-files`.
 
 henad-graph sits on henad-core and henad-compute, and outside egui. Three normal edges run onto it.
-henad-explore takes it as an optional dependency behind `model-files`, which turns on `dep:henad-graph`
-beside `henad-compute/runtime-wgsl`. With the feature off, `cargo tree -p henad-explore -e normal -i
-henad-graph` reports that no package matches `henad-graph` and exits 101. henad-app takes it directly,
-for the editor. The facade takes it as an optional dependency behind its own `model-files`, for
-`henad::graph`. henad-graph takes no dependency on henad-explore, henad-models or either host, and
+henad-explore takes it as an optional dependency behind `model-files`, which turns on
+`dep:henad-graph` beside `henad-compute/runtime-wgsl`. With the feature off,
+`cargo tree -p henad-explore -e normal -i henad-graph` reports that no package matches
+`henad-graph` and exits 101. henad-app takes it directly, for the editor. The facade takes it as an
+optional dependency behind its own `model-files`, for `henad::graph`. henad-graph takes no
+dependency on henad-explore, henad-models or either host, and
 `cargo tree -p henad-graph -e normal` names only henad-core and henad-compute among Henad's crates.
 
 The pair between henad-models and

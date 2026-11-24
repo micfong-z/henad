@@ -16,9 +16,10 @@ re-export fixes its item's one documented path, and the guides name items by the
 modules flat, under `#![deny(ambiguous_glob_reexports)]`, so a name two of them share fails the
 build. `binding` is the exception. The facade names its `BindingDecl` and `BindingKind`, as it
 names each item of `helpers`, and leaves the engine's `buffer_target`, `RESERVED` and
-`fmt_bytes` out. `params!` is a macro of the facade's own that forwards to henad-core's through
-the hidden `__macro_support`. A `use` of henad-core's would bring its `params` module along, and
-docs.rs would show that module at `henad::params`. The other root macros are plain re-exports.
+`fmt_bytes` out. `params!` is a macro of the facade's own that forwards to the `params!` macro in
+henad-core through the hidden `__macro_support`. A `use` of that macro would bring henad-core's
+`params` module along, and docs.rs would show that module at `henad::params`. The other root
+macros are plain re-exports.
 henad-cli sits under a native target table, and `cli` adds nothing on wasm32. docs.rs builds the
 facade for wasm32 too, without atomics, for the app's web entry point.
 No feature changes a bound,
@@ -65,6 +66,5 @@ the foraging tutorial's thread-count test, outside `foraging/mod.rs`, which the 
 whole and a reader's crate, without `rayon`, has to build. The modules in `lib.rs` are `pub`, and
 a reader's crate declares them private, so a dead item shows only there. A change to a page is
 checked by following it in a copy of the template, patched to the workspace by path. The
-`package` job excludes it,
-`scripts/check_packaging.sh` reads `crates/` alone, and `about.toml`'s `[private] ignore` keeps
-it off the licence page. Keep the five test files.
+`package` job excludes it, `scripts/check_packaging.sh` never reads `examples/tutorial`, and
+`about.toml`'s `[private] ignore` keeps it off the licence page. Keep the five test files.

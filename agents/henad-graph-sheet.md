@@ -7,37 +7,42 @@ of the crate.
 
 Modules. `sheet/mod.rs` holds the module doc (sheet, card, line, slot, chip, phrase, formula),
 `KIND_SHEET`, `SHEET_VERSION` (1) and `SheetFileError` (`Toml` and `Format`, each a
-`CodeDiagnostic`, as `GraphFileError`). `sheet/document.rs` holds `SheetDocument` and its tables as
-plain public data, every type `#[non_exhaustive]` with a constructor (`new`, or `Default` for
-`SheetGround`, `StartsAsRow` and `ChooseRow`), every enum with `ALL`, `as_str` and `parse` from the
+`CodeDiagnostic`, as `GraphFileError`, and `Invalid`). `sheet/document.rs` holds `SheetDocument`
+and its tables as plain public data, every type `#[non_exhaustive]` with a constructor (`new`, or
+`Default` for `SheetGround` and `ChooseRow`, and both for `StartsAsRow`), every enum a sheet stores
+by name with `ALL`, `as_str` and `parse` from the
 private `stored_names!` macro, which also implements the crate-private `StoredName` trait the reader
 reads names through. `SheetDocument` writes its own `Debug` ending in `finish_non_exhaustive`.
 `CELLS_ID` and `GROUND_ID` are the ids of the two fixed kinds of thing, `cells` and `ground`.
 `sheet/reader.rs` is private, and `sheet` re-exports `ParsedSheet`, `SheetPlaces` and `TablePlaces`.
 `sheet/starters.rs` is private, and `sheet` re-exports `starters`. `sheet/sentence/` is public
 (`sheet::sentence`), the wording table and `Sentences`. `sheet/writer.rs` is private, and `sheet`
-re-exports `format_number`. `sheet/relations.rs` is public (`sheet::relations`), `CardRelations`.
+re-exports `format_number` and `SheetWriteError`. `sheet/relations.rs` is public
+(`sheet::relations`), `CardRelations`.
 `sheet/check/` is public (`sheet::check`): `mod.rs` holds `check`, `SheetReport`, `SheetDiagnostic`,
 `ParsedSheet::check`, the private `Checker`, and `Place`, `Thing` and `span_of`, visible to `sheet`
 for the lowering's errors, with `formula::references` visible to `sheet` for the lowering's read of
 an unread Heading; `declarations.rs` the tables outside the cards; `lines.rs` the cards,
 lines and values; `formula.rs` the Calculate formula parser, visible to `sheet` with `formula_chip`
-for the lowering (`references` for the checker, `parse` returning a `FormulaTree`, built only by
-`parse`, so a long sum read for its references takes no stack to drop). `sheet/file.rs` is private,
+for the lowering (`checked_references` for the checker and `parse` returning a `FormulaTree`, both
+building the tree to check its depth, and `references`, which builds no tree, so a long sum read
+for its references takes no stack to drop). `sheet/file.rs` is private,
 and `sheet` re-exports `SheetFile`. `sheet/lower/` is private, and `sheet` re-exports `LineMap`,
-`NodeOrigin` and `NodeOwner` from `lower/table.rs`. `SheetLine::slot_values` (crate-private,
-`document.rs`) returns every value in a line's slots, for the checker and the lowering.
+`NodeOrigin`, `NodeOwner` and `FireLines` from `lower/table.rs`. `SheetLine::slot_values`
+(crate-private, `document.rs`) returns every value in a line's slots, for the checker and the
+lowering.
 `sheet/edit/` is public (`sheet::edit`), the edit commands that `agents/henad-graph-sheet-edit.md`
 describes: `mod.rs` holds `SheetBuilder` and re-exports `SheetEdit`, `LineField`, `SheetItem`,
-`MoveDirection` and `SheetEditError` from `command.rs`, `IdSpace` and `mint_id` from `ids.rs`, and
-`STATE_COLORS`, `MEASURE_COLORS` and `suggested_state_color` from `colors.rs`; `names.rs`
+`MoveDirection` and `SheetEditError` from `command.rs`, `IdSpace`, `mint_id` and
+`is_reserved_name` from `ids.rs`, and `STATE_COLORS`, `MEASURE_COLORS`, `PALETTE_COLORS` and
+`suggested_state_color` from `colors.rs`; `names.rs`
 `automatic_name` and the rule that keeps names up to date; `references.rs` every place an id is
 named; `lines.rs` slot paths, phrase depth and the outline moves.
 `sheet/convert.rs` and `sheet/changes.rs` are private, the conversion to a node graph copy that
 `agents/henad-graph-sheet-convert.md` describes.
 `sheet/rates.rs` is public (`sheet::rates`): `chance_from_rate`, `rate_from_chance`, `tick_in` (one
 tick in a unit, through `TimeUnit::days`), `chance_per_tick`, `mean_stay`, `parameter_defaults`,
-`chance_words` (the number rule of the final wording table: three significant figures, more until
+`chance_words` (the number rule of a note: three significant figures, more until
 the chance prints differently from `r dt n`), `LONG_TICK_CHANCE` (0.5), `largest_count_chance`
 (`LargestCount` with `is_long` and `words`, "up to 0.909 with 8" or "almost 1 with 8"; a fixed rate
 with a "for each" of a Count over the cells around, or a Calculate of a fixed number times such a
@@ -148,17 +153,16 @@ reaches a line table. Places are offsets into the text with line ends made `\n`,
 **Starters.** `sheet::starters()` returns the sheet starters as `crate::starters::Starter` values
 (file name and text), embedded with `include_str!` from the crate's `sheets/` directory, since the
 packaging check refuses a path out of the crate: the grid sheets `game_of_life.toml`, `sir.toml`
-("SIR epidemic", rates per day and one tick of 1 day, which entered with the rates' lowering),
-`vote.toml` ("Majority vote") and `forest_fire.toml`, which entered with the chances' lowering, then
-the agent sheets `random_walk.toml`, `boids.toml` and `bounded_confidence.toml`, which entered with
-the agent lowering, and `ants.toml`, which entered with the ground and holds a note under its last
-line on its slower trail formation (answer 13a). A starter of a model henad-models also holds takes
+("SIR epidemic", rates per day and one tick of 1 day), `vote.toml` ("Majority vote") and
+`forest_fire.toml`, then the agent sheets `random_walk.toml`, `boids.toml`,
+`bounded_confidence.toml` and `ants.toml`, which holds a note under its last line on its slower
+trail formation. A starter of a model henad-models also holds takes
 the id `sheet_<model>` (`sheet_game_of_life`, `sheet_sir`, `sheet_boids`, `sheet_ants`), as the
 graph starters take `node_<model>`, so Apply or `--model-file` adds it beside the example instead of
 replacing it. The vote, forest fire, random walk and bounded confidence keep their file names
 as ids. henad-models' `no_starter_takes_the_id_of_an_example_model` holds every sheet and graph
-starter's id apart from `example_models()`. A sheet enters `sheets/` and `starters()` only in
-the milestone whose lowering runs it, and a test looping over `starters()` passes at every merge.
+starter's id apart from `example_models()`. A sheet enters `sheets/` and `starters()` only once
+the lowering runs it, and a test looping over `starters()` passes at every merge.
 Until then a sheet is test data in `src/tests/sheets/`. The app's New model dialog lists Blank, then
 every starter, grid and agent alike (`starter_choices`). `sir_chance.toml`,
 `mobile_sir.toml` (chances once for each infected person nearby) and `sird.toml` (SIR with a Dead
@@ -219,8 +223,9 @@ placed at their tables through `check::span_of`) and reads the lowered document 
 (`to_toml`), the checker's warnings placed (`warnings`, skip warnings included), the lowered
 `GraphFile` (`lowered`), the `LineMap` (`line_map`) and the `FaultNames` of its looks at agents
 (`fault_names`), and the `FireLines` of its change lines (`fire_lines`). `code()` is the lowered
-graph's `code()`: the IR's `name` is `[sheet] name`, both descriptions stay empty, and nothing else
-of the sheet text enters it. The lowered `GraphFile` records the canonical text as its author text
+graph's `code()`: the IR's `name` and target name are `[sheet] name`, both descriptions stay empty,
+and notes, comments, `purpose` and result names stay out of it. The lowered `GraphFile` records
+the canonical text as its author text
 (`GraphFile::author`, crate-private `with_author`) in `SHEET_CODE_FORMAT` (`henad-sheet/1`), and
 `GraphFile::source` adds it to the `ModelSource` every entry of the graph records.
 `GraphFile::from_code` and a graph read as a graph carry none
@@ -231,15 +236,18 @@ each on its line. `SheetFile` and `LineMap` write their own `Debug`.
 `SheetFile::place_graph_diagnostic` maps a diagnostic of the lowered graph (its checker, host
 evaluator or compiler) back into the sheet: a node through `LineMap` to its line's table, found by
 the card whose `line_tables` hold the line, a node the sheet owns by the first two segments of its
-slot path (`cells.<property>`, `agents.<property>`, `measure.<id>`, `button.<id>`, `card.<id>`,
-`color.<thing>`), a node the map does not know (a normalisation copy, a planted node) to `[sheet]`,
+slot path (`cells.<property>`, `agents.<property>`, `ground.<property>`, `measure.<id>`,
+`button.<id>`, `card.<id>`, `color.<thing>`), a node the map does not know (a normalisation copy,
+a planted node) to `[sheet]`,
 and a diagnostic with a pass and no node by the pass id (`tick_<card>`, `button_<id>`,
 `restart_<id>`) or to `[sheet]`. Its old span, line and column are replaced and its `pass` and
 `node` cleared, so henad-cli's `located` prints no node id, and `--print-lowered` keeps the graph
 within reach. henad-explore's `ModelFile` calls it for a sheet's entry errors, and leaves the
-lowered graph's warnings out of a sheet's warnings. For a sheet of agents it compiles the lowered
-graph through `AgentProgram::compile_with_fault_names` with `fault_names`, so a capped fold's fault
-names its author lines. `SheetFile::shortfalls(entry, params, limits)` is the one cost mapping: the
+lowered graph's warnings out of a sheet's warnings. It compiles the lowered graph with the probes
+of `fire_lines` (`sheet_probes`), a grid through `GridProgram::compile_with_probes` and agents
+through `AgentProgram::compile_with_probes_and_fault_names` with `fault_names`, so a capped fold's
+fault names its author lines. `SheetFile::shortfalls(entry, params, limits)` is the one cost
+mapping: the
 entry's shortfalls, with the work lines (any line holding "units of work") replaced when the
 heaviest submission or a host run passes its budget. A submission past `SUBMISSION_WORK_BUDGET`
 names each fold of the heaviest step's pass (label `<sheet id>_<pass id>`) by its `FaultNames` words
@@ -249,8 +257,9 @@ no fold. A host run past `HOST_WORK_BUDGET` reads `start_costs_too_much`. The po
 `num_agents`, or `grid_width` times `grid_height`, read from the entry's parameters. A buffer a line
 names takes its properties' names (`with_property_names`). The checker's per-element cost (V22) is
 placed at the heaviest node's line by `place_graph_diagnostic`, which recognises it by
-`check::is_pass_cost` (the message's start and its `MAX_PASS_COST` end, built in `check/cost.rs`
-beside the message), rewords it through `SheetFile::cost_words` and drops its note:
+`crate::check::is_pass_cost` (the message's start and its `MAX_PASS_COST` end, built in
+`src/check/cost.rs` beside the message), rewords it through `SheetFile::cost_words` and drops
+its note:
 `line_costs_too_much` names the line by `look_name` ("Line 1: too much work for one walker. Set a
 smaller maximum for Steps per tick."), with `smaller_maximum` for a Repeat over a parameter,
 `FEWER_TIMES` for a Repeat of a number and `FEWER_LINES` for any other line, or names the card by
@@ -291,7 +300,8 @@ conversion commands and their refusals (a chance on a card that runs once and on
 among them, where the card offers no rate), the unit mismatch warning, and
 `a_chance_for_each_has_its_note_and_a_count_as_a_chance_is_named`. Reader tests sit in
 `src/tests/sheet_document.rs`, over eleven sheets: the eight starters, and three test sheets in
-`src/tests/sheets/`. `sir.toml`, `boids.toml` and `ants.toml` are the author format's examples, and
+`src/tests/sheets/`. `game_of_life.toml`, `sir.toml`, `boids.toml` and `ants.toml` are the author
+format's examples, and
 `random_walk.toml`, `bounded_confidence.toml` and `sir_chance.toml` (SIR with chances per tick,
 sheet id `sir_chance`) were written from the models of henad-models'
 `tests/fixtures/lowered/round1/`, as `vote.toml` and `forest_fire.toml` were. The random walk's
@@ -301,7 +311,8 @@ wide so every person reaches every other. Every sheet holds `always` and `any_st
 Game of Life's Clear is a Run once card holding "Become Dead from any state, always", and both SIR
 sheets name their button `new_outbreak`, "New outbreak". The written sheets' keys were minted at
 random. Their text is the writer's canonical text, comments included. The bounded confidence colour
-rule is `shaded` over `opinion` with no colours, since the schema holds no ramp. The test helper
+rule is `shaded` over `opinion` with no `hue`, so the lowering shades it in its default palette
+(`SHADE_COLORS` in `lower/colors.rs`). The test helper
 `sheets()` in `src/tests/sheet_support.rs` lists the starters from `starters()`, then the test
 sheets, so every starter is among the sheets the tests read.
 `starters_returns_the_grid_sheets_then_the_agent_sheets` holds the list and each starter's world,

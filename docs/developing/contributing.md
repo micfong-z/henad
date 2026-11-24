@@ -40,7 +40,7 @@ The release checklist does.
 
 This project is assisted by AI, though most code generated has been reviewed by a human.
 
-This project was initially fully human-coded in early 2026. Before Octobor 2026, every line of code in Henad has been reviewed by a human and almost always edited. However due to the size of the codebase and as a sole maintainer, this is no longer sustainable nor realistic. I have tried my very best to still review as much as I could, but any help on this would be much appreciated.
+This project was initially fully human-coded in early 2026. Before October 2026, every line of code in Henad has been reviewed by a human and almost always edited. However due to the size of the codebase and as a sole maintainer, this is no longer sustainable nor realistic. I have tried my very best to still review as much as I could, but any help on this would be much appreciated.
 
 We recognise that LLM-assisted coding is evolving increasingly rapidly, but the quality of the code generated is not always guaranteed.
 In general, we support the [LLVM AI Tool Use Policy](https://llvm.org/docs/AIToolPolicy.html) for coding (and for some documentation), but discourage the use of AI for communication except purely for translation.
