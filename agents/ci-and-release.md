@@ -37,7 +37,7 @@ Linux alone. `ci_tiers.py check` then fails when a line of the list names no tes
 than one crate, since a `--skip` applies to every test binary. The nightly schedule (03:17 UTC,
 `master` alone, nothing when no commit landed since the last successful nightly run) and
 `workflow_dispatch` run the full tier: every job, `docs` and `downstream` included, and `cargo test
---all-targets` with every doc test on the three platforms. A test that takes 30 seconds or more on
+--all-targets` with every doc test on the three platforms. A test that takes 20 seconds or more on
 the Windows runner goes into the slow list, while the tests that guard a Windows-only fault (the
 text comparisons of embedded files, the probe tests, `gpu_cases`) stay in the quick tier.
 `./check.sh` runs the full tier's tests, and `./check.sh --quick` the quick tier's. The `downstream`

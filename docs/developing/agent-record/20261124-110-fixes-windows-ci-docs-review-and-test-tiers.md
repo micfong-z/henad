@@ -19,7 +19,7 @@ delta_state: "committed on `37-node-editor`: 21 signed commits pushed up to `d3a
 > CI runs on `master`, on pull requests and on a dispatch, so this branch had never run it. Its Windows job found three faults that no other platform shows.
 > Git checked out embedded WGSL and TOML with CRLF line ends, WARP crashed on the probe tallies' barrier inside an `if`, and FXC returned `-0.0` for `abs(-0.0)`.
 > Four reviewers checked every published page against the code and fixed about 80 wrong facts, and five agents reworded about 300 sentences that read as generated.
-> CI now runs a quick tier on every push, which leaves out 29 slow tests and the jobs a change does not need, and runs everything nightly and on a dispatch.
+> CI now runs a quick tier on every push, which leaves out 37 slow tests and the jobs a change does not need, and runs everything nightly and on a dispatch.
 
 ## State before
 
@@ -116,7 +116,8 @@ The Windows job had grown to 93 minutes, and the maintainer asked for a check of
 Per-test times from a nextest run on the Windows runner showed 21 tests of 60 seconds or more holding 67% of the test time.
 
 - **The quick tier** runs on every push to any branch and on a pull request from a fork.
-  It runs every test target but the benchmarks, with a `--skip` for each of the 29 tests in `scripts/slow_tests.txt`, each 30 seconds or more on WARP.
+  It runs every test target but the benchmarks, with a `--skip` for each of the 37 tests in `scripts/slow_tests.txt`, each 20 seconds or more on WARP.
+  The first quick run took 13.2 minutes on Windows with a threshold of 30 seconds, and the threshold came down to 20.
   The tests that caught this session's Windows faults stay in it.
   The doc tests and the facade's README program run on Linux alone.
 - **The scope job** diffs a push against its previous commit.
@@ -162,7 +163,7 @@ docs/
 └── reference/models.md                        Ant Foraging in larger worlds
 scripts/
 ├── ci_tiers.py                                new: the tiers' cargo commands, the list check, a change's scope
-├── slow_tests.txt                             new: the 29 tests the quick tier skips
+├── slow_tests.txt                             new: the 37 tests the quick tier skips
 ├── test_ci_tiers.py                           new: tests of ci_tiers.py
 └── uv.lock                                    pillow 13.0.0 (PR #52)
 templates/model-project/                       LF line ends, the new icon, the README's wording

@@ -343,7 +343,7 @@ rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" 
 `./check.sh` runs every line above but the install, and skips `cargo deny` where cargo-deny is not
 installed. CI runs in two tiers. A push to any branch runs the quick tier, which skips the tests in
 `scripts/slow_tests.txt` and the jobs its change does not need. The nightly schedule on `master`
-and a dispatch run the full tier, every job and every test. A test that takes 30 seconds or more
+and a dispatch run the full tier, every job and every test. A test that takes 20 seconds or more
 on the Windows runner goes into `scripts/slow_tests.txt`. CI runs further jobs (`package`, `msrv`,
 `features`, `lint`, `ports`, `docs` and `downstream`), which `agents/ci-and-release.md` describes
 with how to run each by hand.

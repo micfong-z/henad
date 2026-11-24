@@ -1,5 +1,6 @@
-# Tests that the quick tier of CI skips. Each took 30 seconds or more on the Windows runner's software adapter, WARP.
-# The full tier runs them nightly and on a dispatch, and `./check.sh` runs them unless given `--quick`.
+# Tests that the quick tier of CI skips. Each took 20 seconds or more on the Windows runner's software adapter, WARP.
+# The full tier runs them nightly and on a dispatch, and `./check.sh` runs them unless given `--quick`. The tests that
+# guard a fault seen on Windows alone stay in the quick tier, such as `gpu_cases` and `graph_probes`.
 #
 # A line is a test's whole path inside its crate, as `cargo test -- --list` prints it. `ci_tiers.py check` fails when a
 # line names no test or a test in more than one crate, so a renamed test cannot leave both tiers.
@@ -10,6 +11,7 @@ tests::graph_agent_parity::the_boids_graphs_keep_the_stock_ports_invariants
 tests::graph_agent_runs::every_agent_corpus_entry_conforms
 tests::graph_ants_parity::the_exact_ants_graph_equals_gpu_ants_every_tick
 tests::graph_corpus::every_grid_corpus_entry_conforms
+tests::graph_grid_parity::the_game_of_life_graph_actions_equal_gpu_game_of_life_press_by_press
 tests::graph_grid_parity::the_game_of_life_graph_equals_gpu_game_of_life_every_tick
 tests::graph_sir_parity::the_exact_sir_graph_equals_gpu_sir_every_tick
 tests::graph_sir_parity::the_sir_graph_equals_gpu_sir_at_tick_0_and_under_the_rate_gates
@@ -23,7 +25,9 @@ tests::sheet_agents::the_ants_sheet_delivers_food_in_band
 tests::sheet_agents::the_boids_sheet_keeps_its_speeds_and_flocks_in_band
 tests::sheet_agents::the_bounded_confidence_sheet_forms_its_opinion_groups_in_band
 tests::sheet_grid::every_grid_sheet_entry_conforms
+tests::sheet_grid::every_grid_sheet_steps_alike_on_the_host_and_the_device
 tests::sheet_grid::the_drawless_sheets_equal_their_hand_lowered_files_every_tick_on_the_device
+tests::sheet_grid::the_drawless_sheets_equal_their_hand_lowered_files_every_tick_on_the_host
 tests::sheet_grid::the_forest_fire_and_the_chance_sir_sheets_sit_within_their_hand_lowered_bands
 tests::sheet_rates::a_rate_below_the_resolution_of_a_float_draw_recovers_its_share
 tests::sheet_rates::the_rates_sir_converges_as_the_tick_halves_and_the_chance_sir_does_not
@@ -34,7 +38,14 @@ tests::kit::a_state_that_records_no_stats_passes_fails_the_sampled_slice_check
 tests::kit::an_inexact_full_submission_that_reads_zeros_fails_the_full_submission_check
 tests::replay::a_replayed_gpu_run_from_a_result_set_matches_its_row
 tests::search::a_gpu_search_writes_the_same_tables_on_any_track_count
+tests::search::a_search_refuses_each_candidate_past_the_device_without_building_it
 tests::tracks::an_interleaved_queue_executes_every_step
 
 # henad-app
+tests::expert::an_edit_of_the_copy_drops_the_comparison_of_the_copy_before_it
+tests::expert::an_unedited_copy_matches_its_sheet_at_every_tick_of_compare_runs
+tests::expert::compare_runs_names_the_first_tick_at_which_a_highlife_edit_differs
 tests::expert::compare_runs_of_a_model_that_does_not_replay_exactly_names_no_first_difference
+
+# henad-graph
+tests::mutation::the_reader_and_checker_never_panic_on_the_mutation_corpus
