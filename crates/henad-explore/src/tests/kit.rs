@@ -314,8 +314,8 @@ fn a_seed_that_moves_the_state_alone_passes_the_seed_sensitivity_check() {
 /// Checks the shared accumulator up to [`SHARED_ACCUMULATOR_ATTEMPTS`] times, until `ThreadCount` reports it.
 ///
 /// Note that the model's result depends on the order in which its chunks take a lock, and a pool of seven workers can
-/// take the lock in the single thread's order by chance, under a loaded machine most of all. Any one check can then
-/// pass. [`a_build_that_reads_the_pool_width_fails_the_thread_count_check`] pins `ThreadCount` deterministically.
+/// still take the lock in the single thread's order by chance, despite the model's pause at each chunk. Any one check
+/// can then pass. [`a_build_that_reads_the_pool_width_fails_the_thread_count_check`] pins `ThreadCount` deterministically.
 #[test]
 fn a_shared_accumulator_fails_the_thread_count_check() {
     let model = register_agent_model::<SharedAccumulator>();

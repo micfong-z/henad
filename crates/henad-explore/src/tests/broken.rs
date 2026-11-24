@@ -4,6 +4,8 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
+use std::thread;
+use std::time::Duration;
 
 use henad_core::action::ActionDescriptor;
 use henad_core::authoring::model::agent_model::{AgentModel, NoIndex, StepCtx};
@@ -225,7 +227,12 @@ henad_compute::agent_lanes! {
 /// which the workers reach the agents.
 ///
 /// One worker takes the chunks in order, and several interleave them. The positions then depend on the thread count.
+/// Each chunk sleeps for [`CHUNK_PAUSE`] before its first agent. Without the pause, the calling thread can finish every
+/// chunk in order before another worker wakes, as on a loaded machine.
 pub struct SharedAccumulator;
+
+/// Pause at the start of each chunk of [`SharedAccumulator`], long enough for an idle worker to steal a chunk.
+const CHUNK_PAUSE: Duration = Duration::from_millis(1);
 
 /// World side of [`SharedAccumulator`], and the modulus of its positions.
 const COUNTER_SIDE: u64 = 128;
@@ -262,6 +269,9 @@ impl AgentModel for SharedAccumulator {
     fn run_step_pass(lanes: &mut CounterLanes, ctx: &StepCtx<'_, Self>, seed: u64, tick: u64) {
         let counter = ctx.params;
         lanes.run_pass(Self::CHUNK, seed, tick, |_, k, _read, chunk, _rng| {
+            if k == 0 {
+                thread::sleep(CHUNK_PAUSE);
+            }
             let mut next = counter.lock().unwrap_or_else(PoisonError::into_inner);
             // Both terms stay below the side, and every value is exact in an `f32`.
             let moved = (chunk.pos_x[k] as u64 + *next % COUNTER_SIDE) % COUNTER_SIDE;
