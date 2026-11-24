@@ -162,8 +162,8 @@ The canvas, its panels, regions, functions, the expression editor and the WGSL v
 ## The expert mode
 
 `ui/editor/expert.rs`. Convert to node graph in the sheet toolbar's
-Model actions menu and Edit as node graph beside the Diagram send `EditorRequest::Convert`, and
-`open_convert` opens the dialog (`EditorPanel::convert` holds the sheet's name) unless
+Model actions menu and Edit as node graph at the top of the Diagram send `EditorRequest::Convert`,
+and `open_convert` opens the dialog (`EditorPanel::convert` holds the sheet's name) unless
 `convert_refusal` (`ConvertRefusal::of` the report, or `Errors` for a sheet that does not lower)
 holds. Both controls are disabled then, with `ConvertRefusal::tooltip`. `convert_modal` is a dialog
 named `CONVERT_HEADING`, the two paragraphs of `convert_text` one label per line, Cancel and Convert

@@ -528,7 +528,7 @@ pub struct Field {
     pub value_type: ValueType,
     /// Layer names.
     pub layers: Vec<String>,
-    /// Whether the field is written only in init and action passes and never deposited into.
+    /// Whether the field is written only in init passes and never deposited into.
     pub is_static: bool,
     /// Rule that merges deposits. Absent on a static field. A file writes a sum's resolution as the key `resolution`.
     pub combine: Option<FieldCombine>,

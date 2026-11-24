@@ -67,7 +67,7 @@ A parameter that `--params` marks `integer`, such as a sheet's whole number that
 A parameter that `--params` marks `hidden`, such as a model file's tick length, is reached by `--set`, `--vary` and a spec file as any other parameter is.
 The app leaves such a parameter off its Parameters tab, and its Sweep tab still varies it.
 
-Both export formats are shared with the app (see [:material-application-export: Export tab](../guide/app.md#export-tab) for details).
+Both export formats are shared with the app (see [:material-export: Export tab](../guide/app.md#export-tab) for details).
 
 ## Examples
 

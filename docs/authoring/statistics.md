@@ -16,6 +16,8 @@ You declare the series once as a const and then return bare values in the same o
 A descriptor is just a label and a colour, read back through `label()` and `color()`.
 `StatDescriptor::new` is a `const fn` over a `&'static str`, and `StatDescriptor::owned` takes a `String`, for a model whose declarations are read at run time.
 Take the colour from the model's own palette, and each chart line then keeps the same colour as the thing it counts.
+A stat cannot be labelled `tick`, the first column of the exported stats, `run_id`, the first column of `series.csv`, or `time` in a model with a time scale.
+A debug build panics on a stat that uses one.
 
 ```rust
 --8<-- "crates/henad-models/src/sir.rs:stats"
