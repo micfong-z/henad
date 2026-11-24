@@ -317,12 +317,14 @@ sentence case, widget names, tense, tooltips, the square corners and the Micfong
 
 ```bash
 ./check.sh                    # all CI checks except the slow ones — run this before considering work done
+./check.sh --quick           # the same, with the tests of CI's quick tier (scripts/slow_tests.txt left out)
 cargo check --workspace --all-targets
 cargo check -p henad-core -p henad-compute -p henad-models -p henad-graph -p henad-explore -p henad-app --all-features \
   --lib --target wasm32-unknown-unknown    # without atomics, henad-app without its thread pool
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all
 cargo test --workspace --all-targets --all-features
+python3 scripts/ci_tiers.py check   # every line of scripts/slow_tests.txt skips exactly one test
 cargo test --workspace --doc
 cargo check -p henad --lib --target wasm32-unknown-unknown   # the facade, without atomics
 cargo check -p henad --all-features --lib --target wasm32-unknown-unknown
@@ -339,8 +341,12 @@ rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" 
 ```
 
 `./check.sh` runs every line above but the install, and skips `cargo deny` where cargo-deny is not
-installed. CI runs further jobs (`package`, `msrv`, `features`, `lint`, `ports`, `docs` and
-`downstream`), which `agents/ci-and-release.md` describes with how to run each by hand.
+installed. CI runs in two tiers. A push to any branch runs the quick tier, which skips the tests in
+`scripts/slow_tests.txt` and the jobs its change does not need. The nightly schedule on `master`
+and a dispatch run the full tier, every job and every test. A test that takes 30 seconds or more
+on the Windows runner goes into `scripts/slow_tests.txt`. CI runs further jobs (`package`, `msrv`,
+`features`, `lint`, `ports`, `docs` and `downstream`), which `agents/ci-and-release.md` describes
+with how to run each by hand.
 
 Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`

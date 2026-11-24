@@ -22,12 +22,29 @@ table on the pinned nightly (`docs`). The `test` job runs on Ubuntu, macOS and W
 the Mesa models imported through `uv run --project benchmarks/mesa`, and two Game of Life steps on
 a 16 by 16 grid through `benchmarks/mesa/bench.py` and `benchmarks/agents_jl/bench.jl` (Julia
 1.12). To run a `ports` or `web` step by hand, run its script from `ci.yml` at the repository root.
-`lint`, `test`, `web` and `ports` run on every event, `msrv`, `features` and `docs` on a pull
-request and on a dispatch, and `package` on a pull request alone. The `downstream` job runs on
-`workflow_dispatch` alone, with `CARGO_TERM_COLOR=never`, and the release checklist starts it. It
-runs the verified packaging in two fresh target directories, the second with the facade's features,
-and deletes both builds, copies the template outside the checkout, pins `henad` and `henad-build`
-to `=<version>` (three lines), patches every crate it uses to the unpacked tarballs under the verify
+CI runs in two tiers. The `scope` job decides which jobs run, and `scripts/ci_tiers.py` holds both
+tiers, with its own tests in `scripts/test_ci_tiers.py`. A push to any branch, and a pull request
+from a fork, run the quick tier. A pull request from a branch of this repository runs nothing, since
+its push already ran. The quick tier diffs the push against its previous commit (a new branch
+against `master`) and passes the changed paths to `ci_tiers.py scope`. A base it cannot fetch, such
+as one a force-push dropped, turns on every quick job. A change that only the docs site reads
+(`docs/` but `docs/guide/first-model/`, `agents/`, `AGENTS.md`, `README.md`, `zensical.toml`, the
+docs workflow) runs no workspace job, a change under `benchmarks/` runs `ports`, and a manifest or
+lock change runs `package`. Every other change runs `lint`, `test`, `web`, `features` and `msrv`.
+The quick `test` runs `ci_tiers.py test quick`: every target but the benchmarks, with `--exact` and
+a `--skip` for each line of `scripts/slow_tests.txt`, and the doc tests and the facade doc test on
+Linux alone. `ci_tiers.py check` then fails when a line of the list names no test, or a test in more
+than one crate, since a `--skip` applies to every test binary. The nightly schedule (03:17 UTC,
+`master` alone, nothing when no commit landed since the last successful nightly run) and
+`workflow_dispatch` run the full tier: every job, `docs` and `downstream` included, and `cargo test
+--all-targets` with every doc test on the three platforms. A test that takes 30 seconds or more on
+the Windows runner goes into the slow list, while the tests that guard a Windows-only fault (the
+text comparisons of embedded files, the probe tests, `gpu_cases`) stay in the quick tier.
+`./check.sh` runs the full tier's tests, and `./check.sh --quick` the quick tier's. The `downstream`
+job runs with `CARGO_TERM_COLOR=never`, and the release checklist dispatches it. It runs the
+verified packaging in two fresh target directories, the second with the facade's features, and
+deletes both builds, copies the template outside the checkout, pins `henad` and `henad-build` to
+`=<version>` (three lines), patches every crate it uses to the unpacked tarballs under the verify
 directory's `package/`, and generates a lock.
 Then, in order: both `henad` and `henad-build` resolve with a null `source`, henad-models is
 absent, strict clippy (`-D unreachable_pub -D unused_qualifications`), `scripts/ci.sh test` under
