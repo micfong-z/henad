@@ -194,6 +194,7 @@ nav = [
             { "#107, 2026-11-11" = "developing/agent-record/20261111-107-open-questions-restyle-cleanup.md" },
             { "#108, 2026-11-22" = "developing/agent-record/20261122-108-strings-and-audit-fixes.md" },
             { "#109, 2026-11-22" = "developing/agent-record/20261122-109-editor-look-decisions-and-fold.md" },
+            { "#110, 2026-11-24" = "developing/agent-record/20261124-110-fixes-windows-ci-docs-review-and-test-tiers.md" },
         ] },
     ] },
 ]
