@@ -272,7 +272,7 @@ jobs:
           cargo check --locked --manifest-path benchmarks/krabmaga/Cargo.toml --all-targets --features parallel
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.0.1
 
       # Imports every model, which is as close to compiling as Python gets.
       - name: Mesa
@@ -336,8 +336,8 @@ jobs:
           ls dist/snippets/wasm-bindgen-rayon-*/src/workerHelpers.no-bundler.js
 
   # The template, built against the crates as cargo packages them, in a copy outside any git work tree. The full tier
-  # runs it, and the release checklist dispatches it before a publish. The wasm32 steps run on the template as shipped, `gpu_vote` included, before
-  # any step changes the copy.
+  # runs it, and the release checklist dispatches it before a publish. The wasm32 steps run on the template as
+  # shipped, `gpu_vote` included, before any step changes the copy.
   downstream:
     name: downstream template
     needs: scope
