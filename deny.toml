@@ -86,6 +86,9 @@ ignore = [
 # Setting this to true can be helpful if you have special authentication requirements that cargo-deny does not support.
 # See Git Authentication for more information about setting up git authentication.
 #git-fetch-with-cli = true
+# The lint level for a crate version yanked from its registry. `cargo install --locked` builds
+# henad-app and henad-cli from the lock they publish, and only warns on a yanked version.
+yanked = "deny"
 
 # This section is considered when running `cargo deny check licenses`
 # More documentation for the licenses section can be found here:
