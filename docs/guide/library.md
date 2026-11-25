@@ -9,9 +9,9 @@ icon: material/code-tags
 A Rust program can do the work of the app and the command line through the `henad` crate.
 It builds a model, steps it, reads its statistics, edits its parameters while it runs, sweeps it, reads the results back, and opens the app on any run.
 
-!!! info "Henad 0.3"
+!!! info "Henad 0.4"
 
-    This page describes Henad 0.3.
+    This page describes Henad 0.4.
 
 ## Adding Henad
 
@@ -19,7 +19,7 @@ A program depends on the `henad` crate alone, with the features it needs:
 
 ```toml title="Cargo.toml"
 [dependencies]
-henad = { version = "0.3", features = ["example-models", "app"] }
+henad = { version = "0.4", features = ["example-models", "app"] }
 ```
 
 | Feature | Adds |

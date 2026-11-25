@@ -5,6 +5,8 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-25
+
 ### Added
 
 - Descriptors that own their strings, for models read at run time: `ParamDescriptor::new`, `StatDescriptor::owned`, `ActionDescriptor::owned`, `StatEntry::new`, `ChoiceOptions` (`from_static`, `new`; `henad::params::ChoiceOptions`); `StatDescriptor::entry`.
@@ -236,7 +238,8 @@ This is the initial release.
 - Benchmarking harness and cross-ABM implementations for comparison.
 - Model authoring tools, primitives, and consistency tests.
 
-[Unreleased]: https://github.com/micfong-z/henad/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/micfong-z/henad/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/micfong-z/henad/releases/tag/v0.4.0
 [0.3.0]: https://github.com/micfong-z/henad/releases/tag/v0.3.0
 [0.2.0]: https://github.com/micfong-z/henad/releases/tag/v0.2.0
 [0.1.0]: https://github.com/micfong-z/henad/releases/tag/v0.1.0

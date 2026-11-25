@@ -9,9 +9,9 @@ icon: material/bug-outline
 In this tutorial we'll build the Ant Foraging model on the CPU from scratch, and it will automatically use all available cores.
 This is classified as an **agent model** (as opposed to a **grid model**).
 
-!!! info "Henad 0.3"
+!!! info "Henad 0.4"
 
-    This page describes Henad 0.3.
+    This page describes Henad 0.4.
 
 This page assumes you have worked through our [CPU Grid model](game-of-life.md) tutorial first.
 Every file on this page goes under `src/` in the same project, made from the template as [Your own project](../your-project.md) describes.

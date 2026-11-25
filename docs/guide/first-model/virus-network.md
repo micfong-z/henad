@@ -9,9 +9,9 @@ icon: material/graph-outline
 In this tutorial we'll build the Virus on a Network model on the CPU from scratch, and it will automatically use all available cores.
 This is classified as a **network model**, where every agent is a node and nodes are joined by edges.
 
-!!! info "Henad 0.3"
+!!! info "Henad 0.4"
 
-    This page describes Henad 0.3.
+    This page describes Henad 0.4.
 
 This page assumes you have worked through our [CPU Agent model](ants.md) tutorial first, since a network model keeps its nodes in lanes the same way.
 Every file on this page goes under `src/` in the project you set up from the template, as [Your own project](../your-project.md) describes.

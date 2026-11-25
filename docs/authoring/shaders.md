@@ -9,9 +9,9 @@ icon: material/code-braces
 Both GPU traits supply WGSL to the engine as a `&'static str`, because `henad-core` depends on nothing, not even wgpu, and therefore cannot refer to wgpu types.
 Most of what surrounds that string is generated at build time, and this page covers the generated part.
 
-!!! info "Henad 0.3"
+!!! info "Henad 0.4"
 
-    This page describes Henad 0.3.
+    This page describes Henad 0.4.
 
 ## Generated from the WGSL
 

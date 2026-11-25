@@ -10,8 +10,8 @@ The template is fetched from the release it belongs to, and requires that releas
 <!-- --8<-- [start:fetch] -->
 ```bash
 mkdir my-model && cd my-model
-curl -L https://github.com/micfong-z/henad/archive/refs/tags/v0.3.0.tar.gz \
-  | tar -xzf - --strip-components=3 henad-0.3.0/templates/model-project
+curl -L https://github.com/micfong-z/henad/archive/refs/tags/v0.4.0.tar.gz \
+  | tar -xzf - --strip-components=3 henad-0.4.0/templates/model-project
 git init
 ```
 <!-- --8<-- [end:fetch] -->

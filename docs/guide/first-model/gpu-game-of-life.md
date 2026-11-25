@@ -8,9 +8,9 @@ icon: material/expansion-card
 
 In this tutorial we'll build Conway's Game of Life (Life) on the GPU from scratch, where the grid lives in a storage buffer, every step is a compute dispatch, and the cells never leave the GPU.
 
-!!! info "Henad 0.3"
+!!! info "Henad 0.4"
 
-    This page describes Henad 0.3.
+    This page describes Henad 0.4.
 
 This page assumes you have worked through our [CPU Grid model](game-of-life.md) tutorial first.
 We will reuse its palette, and use it as a cross-check for correctness.

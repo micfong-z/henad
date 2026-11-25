@@ -8,9 +8,9 @@ icon: material/expansion-card-variant
 
 In this tutorial we'll take the Ant Foraging model we built on the CPU to the GPU from scratch, where the colony lives in storage buffers, a step is a list of compute passes, and neither the ants nor the field ever visit the CPU.
 
-!!! info "Henad 0.3"
+!!! info "Henad 0.4"
 
-    This page describes Henad 0.3.
+    This page describes Henad 0.4.
 
 This page assumes you have worked through our [CPU Agent model](ants.md) and [GPU Grid model](gpu-game-of-life.md) tutorials first, in a project of your own made from the template, as [Your own project](../your-project.md) describes.
 Every file on this page goes under that project's `src/`, beside the `foraging` module the CPU page wrote.

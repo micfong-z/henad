@@ -9,9 +9,9 @@ icon: material/test-tube
 Henad's **testing kit** checks a model's declarations against what its state actually does.
 A project made from the template already runs it over every model in `models()`, and a model added there is checked by the next `cargo test`.
 
-!!! info "Henad 0.3"
+!!! info "Henad 0.4"
 
-    This page describes Henad 0.3.
+    This page describes Henad 0.4.
 
 ## The template's test
 
@@ -25,7 +25,7 @@ The kit is `henad::testing`, behind the facade's `testing` feature, and the temp
 
 ``` toml title="Cargo.toml"
 [dev-dependencies]
-henad = { version = "0.3", features = ["testing"] }
+henad = { version = "0.4", features = ["testing"] }
 ```
 
 `assert_set_conforms` runs every check that applies to each model, and panics with every failure of the set.

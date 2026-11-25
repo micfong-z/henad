@@ -8,9 +8,9 @@ icon: material/grid
 
 In this tutorial we'll build Conway's Game of Life (Life) on the CPU from scratch, and it will automatically use all available cores.
 
-!!! info "Henad 0.3"
+!!! info "Henad 0.4"
 
-    This page describes Henad 0.3.
+    This page describes Henad 0.4.
 
 Before starting, set up your own project from the template, as [Your own project](../your-project.md) describes.
 Every file on this page goes under that project's `src/`.

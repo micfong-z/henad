@@ -20,7 +20,7 @@ No feature is on by default, and no feature changes a result.
 The program below builds an example model, runs it, reads its statistics, edits a parameter live, fires an action, runs a small sweep, reads the sweep back, rebuilds one run, and opens the app on it.
 
 ```rust,no_run
-// Cargo.toml: henad = { version = "0.3", features = ["example-models", "app"] }
+// Cargo.toml: henad = { version = "0.4", features = ["example-models", "app"] }
 // Copy the template's profile block, `[profile.dev] opt-level = 1`, `[profile.dev.package."*"] opt-level = 2` and
 // `[profile.release] opt-level = 2`. Without it a debug build runs the example kernels at opt-level 0, and a release
 // build at 3 where Henad measures at 2. A crate that registers its own models also calls `henad_build::stamp_commit()`

@@ -9,9 +9,9 @@ icon: material/format-list-bulleted
 A model joins the app and the command line through a **model set**, the `ModelSet` that a host receives.
 The template's `models()` in `src/lib.rs` builds a project's set, and the app, the command line and the test all read their models from it.
 
-!!! info "Henad 0.3"
+!!! info "Henad 0.4"
 
-    This page describes Henad 0.3.
+    This page describes Henad 0.4.
 
 ``` rust title="src/lib.rs"
 --8<-- "templates/model-project/src/lib.rs"

@@ -13,10 +13,9 @@ A sweep builds a model many times over a set of parameter values, and writes eve
 A search picks its parameter values a batch at a time, from the results of the batches before.
 A project with its own models can [host the same command line](#hosting-the-command-line) over them.
 
-!!! info "Henad 0.3"
+!!! info "Henad 0.4"
 
-    This page describes Henad 0.3.
-    `--model-file`, `--print-lowered`, values with a `%` sign, the `integer` and `hidden` marks and the `time` column arrive in Henad 0.4.
+    This page describes Henad 0.4.
 
 ```text
 henad-cli [OPTIONS] [MODEL]
@@ -1207,7 +1206,7 @@ The host then depends on neither the example models nor the binary:
 
 ```toml
 [dependencies.henad-cli]
-version = "0.3"
+version = "0.4"
 default-features = false
 ```
 

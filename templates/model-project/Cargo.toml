@@ -22,7 +22,7 @@ path = "src/bin/my-model-cli.rs"
 required-features = ["cli"]
 
 [dependencies]
-henad = "0.3"
+henad = "0.4"
 log = "0.4"
 
 # The app alone uses these two dependencies. A crate that turns `app` off builds neither dependency.
@@ -33,10 +33,10 @@ env_logger = { version = "0.11", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 
 [build-dependencies]
-henad-build = "0.3"
+henad-build = "0.4"
 
 [dev-dependencies]
-henad = { version = "0.3", features = ["testing"] }
+henad = { version = "0.4", features = ["testing"] }
 
 [lints.rust]
 # The generated shader bindings allow this lint in their own module. Under `forbid`, that `allow` is an error.

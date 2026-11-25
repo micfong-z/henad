@@ -9,9 +9,9 @@ icon: material/folder-plus-outline
 Your own project holds your models, and runs them in its own app, command line and web build, on the Henad crates published to crates.io.
 It starts as a copy of the template in Henad's repository, `templates/model-project`.
 
-!!! info "Henad 0.3"
+!!! info "Henad 0.4"
 
-    This page describes Henad 0.3.
+    This page describes Henad 0.4.
 
 ## Getting the template
 
