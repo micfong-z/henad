@@ -55,7 +55,7 @@ wgpu = { version = "30.0", features = [
     "fragile-send-sync-non-atomic-wasm",
 ] }
 flume = "0.12"
-rfd = "0.17"
+rfd = "0.18"
 # henad-app's edit of the macOS app menu, at the versions eframe and rfd already build.
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
