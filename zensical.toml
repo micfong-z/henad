@@ -266,6 +266,7 @@ features = [
     "search.highlight",
 ]
 logo = "assets/logo.svg"
+favicon = "assets/favicon.ico"
 
 [project.theme.icon]
 menu = "material/menu"

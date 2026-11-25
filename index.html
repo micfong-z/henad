@@ -28,8 +28,7 @@
 
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="assets/icon_ios_touch_192.png">
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="white">
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#404040">
+    <meta name="theme-color" content="#151515">
 
     <style>
         html {
@@ -38,17 +37,9 @@
         }
 
         body {
-            /* Light mode background color for what is not covered by the egui canvas,
-            or where the egui canvas is translucent. */
-            background: #909090;
-        }
-
-        @media (prefers-color-scheme: dark) {
-            body {
-                /* Dark mode background color for what is not covered by the egui canvas,
-                or where the egui canvas is translucent. */
-                background: #404040;
-            }
+            /* Background colour for what is not covered by the egui canvas, or where the egui canvas is
+            translucent. It matches the app's panel fill, in both colour schemes. */
+            background: #151515;
         }
 
         /* Allow canvas to fill entire web page: */
