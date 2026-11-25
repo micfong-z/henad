@@ -7,6 +7,8 @@ It holds the CPU engines, which step a model's struct-of-arrays lanes in paralle
 It also holds the sim threads that step a model off the UI thread, and the snapshots they publish.
 A model is registered as an entry that a host can list and build.
 A program builds an entry with checked values into a `Simulation` and steps it.
+With the `runtime-wgsl` feature it also composes WGSL while a program runs and builds grid rules from it.
+The same feature makes public the GPU model specs, such as `GpuGridSpec` and `GpuAgentSpec`, and the `ModelEntry` constructors that build an entry from a spec.
 
 The [developer documentation](https://micfong-z.github.io/henad/developing/architecture/) describes both backends.
 

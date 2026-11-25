@@ -13,6 +13,12 @@
 //! [`ModelCode`](henad_core::provenance::ModelCode) in the format [`CODE_FORMAT`]. Moving a node therefore leaves the
 //! identity alone.
 //!
+//! [`GraphFile::check`] reports every problem of a graph at once. [`wgsl::GridProgram`] compiles a graph on a grid to
+//! WGSL and builds the model entry that runs it, and [`wgsl::AgentProgram`] does the same for a graph of agents.
+//! [`host::HostEvaluator`] runs a checked graph's passes on the CPU, and a GPU target runs its init passes with it.
+//! [`edit::GraphBuilder`] applies one [`edit::EditCommand`] per gesture of the node editor. [`starters::starters`] and
+//! [`starters::agent_starters`] return the graph files a new graph model begins from.
+//!
 //! ```
 //! use henad_graph::GraphFile;
 //!

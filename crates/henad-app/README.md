@@ -4,9 +4,10 @@
 
 This crate is the desktop and web app.
 It runs a model live in a viewport, with its parameters, statistics, charts, sweeps and results in dockable tabs.
+Its Editor tab edits a model written as a sheet of sentences, a node graph or a grid rule, and runs it without a restart.
 The web build runs at [henad.micfong.space](https://henad.micfong.space).
 
-The [app guide](https://micfong-z.github.io/henad/guide/app/) walks through each tab.
+The [app guide](https://micfong-z.github.io/henad/guide/app/) walks through each tab, and the [Editor guide](https://micfong-z.github.io/henad/guide/editor/) covers writing a model in the app.
 
 The crate is also a library.
 `henad_app::run_native` and, in a browser, `henad_app::start_web` open the same app over a project's own models, and the `henad-app` binary calls them with Henad's example models.

@@ -8,6 +8,9 @@ A sweep can be sharded across machines, merged and resumed.
 
 The [sweeps guide](https://micfong-z.github.io/henad/guide/sweeps/) and the [search guide](https://micfong-z.github.io/henad/guide/search/) describe both.
 
+With the `model-files` feature the crate also reads and writes [model files](https://micfong-z.github.io/henad/reference/model-files/), the TOML files that hold grid rules, graph models and sheets, and builds their models while the program runs.
+The `testing` feature adds the [checks](https://micfong-z.github.io/henad/authoring/testing/) that a model's tests run against its entry.
+
 ## License
 
 Licensed under [MIT](https://github.com/micfong-z/henad/blob/master/LICENSE-MIT) or [Apache-2.0](https://github.com/micfong-z/henad/blob/master/LICENSE-APACHE), at your option.

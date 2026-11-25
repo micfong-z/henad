@@ -1130,7 +1130,7 @@ With `--seed`, rep `i` is built from `base + i`, so `--reps` measures independen
 Without it every rep starts from the engine default and they all replay the same run.
 
 ```json
-{"kind":"info","engine":"henad","engine_version":"0.3.0","model":"boids","variant":"cpu","threads":1,"parallel_jobs":782,"adapter":null,"debug_build":false}
+{"kind":"info","engine":"henad","engine_version":"0.4.0","model":"boids","variant":"cpu","threads":1,"parallel_jobs":782,"adapter":null,"debug_build":false}
 {"kind":"rep","rep":0,"seed":42,"steps":100,"warmup":10,"elapsed_s":1.234,"population":50000,"heap_bytes":2050020}
 ```
 

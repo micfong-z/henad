@@ -4,6 +4,7 @@
 
 This crate is the command-line program.
 It benchmarks a model headlessly, exports its state and statistics, and runs sweeps and searches.
+With `--model-file` it also runs a [model file](https://micfong-z.github.io/henad/reference/model-files/), a grid rule, graph model or sheet written as one TOML file.
 
 ```bash
 henad-cli --list

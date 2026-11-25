@@ -7,6 +7,11 @@
 //!
 //! [`entry`] type-erases a model behind one entry a host can list and build, and [`simulation`] builds one with
 //! checked values and steps it from a program.
+//!
+//! The `runtime-wgsl` feature adds `gpu::compose`, the composition of WGSL while the program runs, and
+//! `gpu::runtime_grid`, the grid rules composed with it. It also makes public the GPU model specs, such as
+//! `gpu::GpuGridSpec` and `gpu::GpuAgentSpec`, and the constructors `entry::ModelEntry::from_gpu_grid_spec` and
+//! `entry::ModelEntry::from_gpu_agent_spec` that build an entry from a spec.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]

@@ -352,8 +352,9 @@ impl SheetFile {
     /// the card or button the pass was lowered from, or at `[sheet]`.
     ///
     /// The pass and node of the finding are cleared, since neither is in the sheet, and its place in the lowered
-    /// graph's text is replaced. A pass whose cost per element passes the limit (rule V22) is reworded in the model's
-    /// words, as [`sentence::line_costs_too_much`] writes it for the line or card at its place, and loses its notes.
+    /// graph's text is replaced. A pass whose cost per element exceeds [`crate::limits::MAX_PASS_COST`] is reworded in
+    /// the model's words, as [`sentence::line_costs_too_much`] writes it for the line or card at its place, and loses
+    /// its notes.
     pub fn place_graph_diagnostic(&self, mut diagnostic: CodeDiagnostic) -> CodeDiagnostic {
         let node = diagnostic.node.take();
         let pass = diagnostic.pass.take();
